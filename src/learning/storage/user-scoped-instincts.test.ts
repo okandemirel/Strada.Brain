@@ -250,7 +250,13 @@ describe("user-scoped learning keeps its owner (item 3.1)", () => {
     }
   });
 
-  it("a user-scoped row with no recorded owner (written before this fix) stays reachable", () => {
+  // Round 10 #3 — this test used to assert the OPPOSITE ("stays reachable"), on
+  // the theory that hiding an ownerless private row would make learning go dark.
+  // It does not make learning go dark; it makes one person's correction
+  // everybody's rule. A private row that names no owner belongs to nobody, so it
+  // reaches nobody — see instinct-ownership.test.ts for the recovery path and the
+  // guard that shared project/global learning stays reachable for everyone.
+  it("a user-scoped row with no recorded owner (written before this fix) reaches nobody", () => {
     const legacy = makeInstinct({ name: "legacy user rule", triggerPattern: "legacy trigger" });
     storage.createInstinct(legacy);
     storage.addInstinctScopeV2(legacy.id, PROJECT, "user");
@@ -259,7 +265,7 @@ describe("user-scoped learning keeps its owner (item 3.1)", () => {
       const ids = storage
         .getInstinctsForScope({ projectPath: PROJECT, scopeFilter: "project-only", userId })
         .map((i) => i.id);
-      expect(ids).toContain(legacy.id);
+      expect(ids, `an unowned private rule was served to ${userId}`).not.toContain(legacy.id);
     }
   });
 

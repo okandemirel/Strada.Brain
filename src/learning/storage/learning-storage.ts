@@ -53,13 +53,59 @@ import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
  */
 const NARROWEST_SCOPE_ORDER = `ORDER BY CASE COALESCE(s2.scope_type, 'project')
       WHEN 'user' THEN 0 WHEN 'project' THEN 1 ELSE 2 END, s2.project_path`;
+
+/**
+ * Round 10 #3: rows in instinct_scopes that are NOT scopes. 'session_hit' is a
+ * cross-session dedup marker keyed by session id (incrementCrossSessionHitCount).
+ * Such a row carries no scope_type of its own beyond the marker and no owner, so
+ * letting it take part in a scope or ownership decision is how a private
+ * instinct escaped: one bookkeeping row satisfied the per-row owner clause and
+ * Alice's rule came back for Bob. ONE list, used by every clause below.
+ */
+const BOOKKEEPING_SCOPE_TYPES = ['session_hit'] as const;
+const BOOKKEEPING_SCOPE_SQL_LIST = BOOKKEEPING_SCOPE_TYPES.map((t) => `'${t}'`).join(', ');
+/** Bookkeeping exclusion for the aliased scope row `s` of the main query. */
+const NOT_BOOKKEEPING_S = `COALESCE(s.scope_type, 'project') NOT IN (${BOOKKEEPING_SCOPE_SQL_LIST})`;
+/** Bookkeeping exclusion for the correlated subquery alias `s2`. */
+const NOT_BOOKKEEPING_S2 = `COALESCE(s2.scope_type, 'project') NOT IN (${BOOKKEEPING_SCOPE_SQL_LIST})`;
+
+/**
+ * The instinct's OWN scope type and owner — the narrowest real (non-bookkeeping)
+ * scope row it has. Round 10 #3: ownership is a property of the instinct, so
+ * every ownership decision reads these, never the row the query happened to join.
+ */
+const EFFECTIVE_SCOPE_TYPE_SQL = `(SELECT COALESCE(s2.scope_type, 'project') FROM instinct_scopes s2
+      WHERE s2.instinct_id = i.id AND ${NOT_BOOKKEEPING_S2}
+      ${NARROWEST_SCOPE_ORDER} LIMIT 1)`;
+const EFFECTIVE_OWNER_SQL = `(SELECT s2.user_id FROM instinct_scopes s2
+      WHERE s2.instinct_id = i.id AND ${NOT_BOOKKEEPING_S2}
+      ${NARROWEST_SCOPE_ORDER} LIMIT 1)`;
+
 const NARROWEST_SCOPE_SUBQUERIES = `
-    (SELECT s2.scope_type FROM instinct_scopes s2
-      WHERE s2.instinct_id = i.id AND COALESCE(s2.scope_type, 'project') != 'session_hit'
-      ${NARROWEST_SCOPE_ORDER} LIMIT 1) AS scope_type,
-    (SELECT s2.user_id FROM instinct_scopes s2
-      WHERE s2.instinct_id = i.id AND COALESCE(s2.scope_type, 'project') != 'session_hit'
-      ${NARROWEST_SCOPE_ORDER} LIMIT 1) AS user_id`;
+    ${EFFECTIVE_SCOPE_TYPE_SQL} AS scope_type,
+    ${EFFECTIVE_OWNER_SQL} AS user_id`;
+
+/**
+ * Round 10 #3 — the ownership clause, at the instinct level.
+ *
+ * A private ('user') instinct is a candidate ONLY for the identity that owns it.
+ * A private instinct whose owner was never recorded (`user_id IS NULL`, written
+ * before the owner was carried in) belongs to NOBODY, so it reaches nobody: the
+ * Wave 3 reading — "keep it reachable or learning goes dark" — made one person's
+ * correction everybody's rule. {@link LearningStorage.quarantineOwnerlessPrivateInstincts}
+ * recovers such an owner where it can and quarantines the rest.
+ *
+ * Project- and global-scoped rows are untouched by this clause in both branches.
+ */
+function ownershipClause(userId: string | undefined): { sql: string; params: string[] } {
+  if (userId === undefined) {
+    return { sql: ` AND COALESCE(${EFFECTIVE_SCOPE_TYPE_SQL}, 'project') != 'user'`, params: [] };
+  }
+  return {
+    sql: ` AND (COALESCE(${EFFECTIVE_SCOPE_TYPE_SQL}, 'project') != 'user' OR ${EFFECTIVE_OWNER_SQL} = ?)`,
+    params: [userId],
+  };
+}
 
 // ─── Database Schema ────────────────────────────────────────────────────────────
 
@@ -285,6 +331,15 @@ export class LearningStorage {
 
     // Run schema migrations for existing databases
     this.migrateSchema();
+
+    // Round 10 #3: a private instinct that lost its owner reached every caller.
+    // Recover the owner where the scope rows still hold it, quarantine the rest.
+    // Never fatal — a failed sweep must not take the learning store down with it.
+    try {
+      this.quarantineOwnerlessPrivateInstincts();
+    } catch {
+      // Best-effort: the ownership CLAUSE already refuses to serve these rows.
+    }
 
     // Prepare commonly used statements
     this.prepareStatements();
@@ -1186,24 +1241,27 @@ export class LearningStorage {
   getInstincts(options: { status?: Instinct["status"]; type?: Instinct["type"]; minConfidence?: number } = {}): Instinct[] {
     this.ensureConnection();
     
-    // Build optimized query
-    let sql = "SELECT * FROM instincts WHERE 1=1";
+    // Build optimized query. Round 10 #12: the scope/owner subqueries travel
+    // with every row here too — the creation-side duplicate check reads this
+    // path, and without them every candidate looked unowned, so one person's
+    // private rule blocked everybody else's identical learning.
+    let sql = `SELECT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i WHERE 1=1`;
     const params: (string | number)[] = [];
     
     if (options.status) {
-      sql += " AND status = ?";
+      sql += " AND i.status = ?";
       params.push(options.status);
     }
     if (options.type) {
-      sql += " AND type = ?";
+      sql += " AND i.type = ?";
       params.push(options.type);
     }
     if (options.minConfidence !== undefined) {
-      sql += " AND confidence >= ?";
+      sql += " AND i.confidence >= ?";
       params.push(options.minConfidence);
     }
     
-    sql += " ORDER BY confidence DESC";
+    sql += " ORDER BY i.confidence DESC";
     
     const stmt = this.db!.prepare(sql);
     const rows = stmt.all(...params) as InstinctRow[];
@@ -1255,12 +1313,12 @@ export class LearningStorage {
       eventBus,
     } = options;
 
-    // The owner clause: another user's private row is never a candidate, with or
-    // without an identity on this side of the call.
-    const ownerSql = userId === undefined
-      ? " AND (COALESCE(s.scope_type, 'project') != 'user' OR s.user_id IS NULL)"
-      : " AND (COALESCE(s.scope_type, 'project') != 'user' OR s.user_id IS NULL OR s.user_id = ?)";
-    const ownerParams: string[] = userId === undefined ? [] : [userId];
+    // The owner clause (round 10 #3): decided from the INSTINCT's own narrowest
+    // real scope row, not from whichever row this query joined — a bookkeeping
+    // 'session_hit' row used to satisfy it and hand another owner's private
+    // instinct over — and an ownerless private row is nobody's, so nobody's
+    // candidate.
+    const { sql: ownerSql, params: ownerParams } = ownershipClause(userId);
 
     // If maxAgeDays and eventBus provided, emit age_expired events for filtered instincts
     if (maxAgeDays !== undefined && eventBus) {
@@ -1269,7 +1327,7 @@ export class LearningStorage {
         // Find instincts that WOULD be excluded by age (non-permanent, older than cutoff)
         let expiredSql = `SELECT DISTINCT i.* FROM instincts i
           INNER JOIN instinct_scopes s ON i.id = s.instinct_id
-          WHERE i.status != 'permanent' AND i.created_at < ?`;
+          WHERE i.status != 'permanent' AND i.created_at < ? AND ${NOT_BOOKKEEPING_S}`;
         const expiredParams: (string | number)[] = [cutoff];
 
         // Apply scope filter to expired query too
@@ -1309,7 +1367,9 @@ export class LearningStorage {
 
     // Build the main retrieval query. The scope row's type/owner travel with the
     // instinct (item 3.1) so the caller sees what it is scoped to.
-    let sql = `SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE 1=1`;
+    // `AND ${NOT_BOOKKEEPING_S}`: a session_hit marker is not a scope, so it can
+    // neither admit an instinct into a scope nor speak for its ownership (#3).
+    let sql = `SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE ${NOT_BOOKKEEPING_S}`;
     const params: (string | number)[] = [];
 
     // Scope filter
@@ -1348,6 +1408,64 @@ export class LearningStorage {
 
     const rows = this.db!.prepare(sql).all(...params) as InstinctRow[];
     return rows.map(r => this.rowToInstinct(r));
+  }
+
+  /**
+   * ROUND 10 #3 — RECOVER OR QUARANTINE EVERY OWNERLESS PRIVATE INSTINCT.
+   *
+   * A row with `scope_type='user'` and `user_id IS NULL` is a private rule that
+   * lost its owner (written before the owner was carried through teachExplicit /
+   * mergeInstincts). It used to be returned to EVERY caller, which is the leak:
+   * one person's correction became everybody's rule. It cannot simply be
+   * deleted — it is somebody's learning — so:
+   *
+   *  - if ANY other real (non-bookkeeping) scope row for the same instinct names
+   *    an owner, that owner is written onto the ownerless rows and the instinct
+   *    keeps working, for that person only;
+   *  - otherwise the instinct is QUARANTINED: held out of retrieval and
+   *    suggestion (the same status a permanent teaching that kept being wrong
+   *    gets), still present to be audited or re-owned by hand.
+   *
+   * Idempotent — safe on every boot. Returns what it did, so a caller never
+   * mistakes a no-op for a sweep.
+   */
+  quarantineOwnerlessPrivateInstincts(): { ownerRecovered: number; quarantined: number } {
+    this.ensureConnection();
+
+    const ownerless = this.db!.prepare(`
+      SELECT DISTINCT i.id AS id FROM instincts i
+      INNER JOIN instinct_scopes s ON i.id = s.instinct_id
+      WHERE COALESCE(s.scope_type, 'project') = 'user' AND s.user_id IS NULL
+        AND i.status NOT IN ('quarantined', 'deprecated', 'evolved')
+    `).all() as Array<{ id: string }>;
+
+    let ownerRecovered = 0;
+    let quarantined = 0;
+
+    const recoverOwner = this.db!.prepare(`
+      SELECT s2.user_id AS user_id FROM instinct_scopes s2
+      WHERE s2.instinct_id = ? AND s2.user_id IS NOT NULL AND ${NOT_BOOKKEEPING_S2}
+      ORDER BY s2.created_at ASC LIMIT 1
+    `);
+    const adoptOwner = this.db!.prepare(
+      "UPDATE instinct_scopes SET user_id = ? WHERE instinct_id = ? AND COALESCE(scope_type, 'project') = 'user' AND user_id IS NULL"
+    );
+    const quarantine = this.db!.prepare(
+      "UPDATE instincts SET status = 'quarantined', updated_at = ? WHERE id = ?"
+    );
+
+    for (const { id } of ownerless) {
+      const recovered = recoverOwner.get(id) as { user_id: string | null } | undefined;
+      if (recovered?.user_id) {
+        adoptOwner.run(recovered.user_id, id);
+        ownerRecovered++;
+      } else {
+        quarantine.run(Date.now(), id);
+        quarantined++;
+      }
+    }
+
+    return { ownerRecovered, quarantined };
   }
 
   /**
