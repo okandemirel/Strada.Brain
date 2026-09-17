@@ -37,7 +37,7 @@
  * restart that this improvement exists for.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { DaemonStorage, ProjectHistoryRow } from "../daemon/daemon-storage.js";
 
 // =============================================================================
@@ -127,6 +127,26 @@ export function isProjectHistoryEventId(value: unknown): value is string {
 /** Mint an id for a new event of `kind`. */
 export function newProjectHistoryEventId(kind: ProjectHistoryEventKind, now = Date.now()): string {
   return `hist_${kind}_${now.toString(36)}_${randomBytes(4).toString("hex")}`;
+}
+
+/**
+ * THE ID A FACT ALWAYS GETS.
+ *
+ * Producers are called repeatedly on the same fact: `persist()` runs on every
+ * campaign save and a delivery report is rebuilt whenever it is re-sent. Derive
+ * the id from what the event IS (campaign + milestone + outcome, campaign +
+ * package revision) and the append-only table becomes the dedupe: the second
+ * attempt is refused instead of writing a duplicate row, and that holds across
+ * restarts, which an in-memory guard cannot.
+ */
+export function projectHistoryEventIdFor(kind: ProjectHistoryEventKind, key: string): string {
+  const digest = createHash("sha256").update(`${kind}:${key}`).digest("hex");
+  return `hist_${kind}_${digest.slice(0, 10)}_${digest.slice(10, 18)}`;
+}
+
+/** True when `error` is the append-only table refusing a fact it already holds. */
+export function isAlreadyRecordedError(error: unknown): boolean {
+  return error instanceof Error && /already recorded/.test(error.message);
 }
 
 /** True for one of the three kinds. */

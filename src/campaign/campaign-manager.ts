@@ -67,6 +67,10 @@ import {
   type DeliveryPackageView,
   type StoredDeliveryPackage,
 } from "./delivery-package.js";
+import {
+  safeRecordProjectHistory,
+  type ProjectHistoryRecorder,
+} from "../history/project-history-recorder.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified, asksForFlatArt, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
@@ -1072,6 +1076,28 @@ export class CampaignManager {
       campaign.gddSha256 = sha256Of(approvedText);
       campaign.gddRevision = (campaign.gddRevision ?? 0) + 1;
       this.persist(campaign);
+      // THE ONE HUMAN GATE OF A WHOLE CAMPAIGN (plan 6.6). This is a decision a
+      // person took, on a document with a hash, at a revision — exactly the
+      // thing "show me that decision" means. Owned by the person whose campaign
+      // it is; the approved document's hash and the tree it was approved on are
+      // the version it refers to.
+      safeRecordProjectHistory(this.projectHistory, {
+        kind: "decision",
+        summary: `GDD approved for ${campaign.id}`,
+        owner: { userId: campaign.userId },
+        version: { campaignRevision: `gdd-r${campaign.gddRevision}`, commitSha: this.projectRevision() },
+        payload: {
+          campaignId: campaign.id,
+          decision: "approved",
+          gate: "gdd-approval",
+          ...(campaign.gddPath ? { gddPath: campaign.gddPath } : {}),
+          ...(campaign.gddSha256 ? { gddSha256: campaign.gddSha256 } : {}),
+          gddRevision: campaign.gddRevision,
+          draftAttempts: campaign.draftAttempts,
+          channelType: campaign.channelType,
+        },
+        dedupeKey: `${campaign.id}:gdd-approval:${campaign.gddRevision}:${campaign.gddSha256 ?? ""}`,
+      });
       await this.tell(
         campaign,
         "GDD approved — planning the milestone ladder, then the build starts. First stop after this is the delivery report.",
@@ -7094,6 +7120,28 @@ export class CampaignManager {
     try {
       const stored = store.put(assembleDeliveryPackage(this.deliveryPackageFacts(campaign, howToRun)));
       const c = stored.package.completeness;
+      // WHICH BUILD WAS THIS (plan 6.6). The package row is keyed by campaign
+      // and revision; the durable history is what lets a person ask for it by
+      // name later, so it records the same revision AND the commit the project
+      // stood at when the package was assembled. Re-sending an identical report
+      // re-uses the stored revision, and the derived id makes that a no-op
+      // rather than a second delivery in the history.
+      safeRecordProjectHistory(this.projectHistory, {
+        kind: "delivery",
+        summary: `${stored.package.title} — delivery package revision ${stored.revision}`,
+        owner: { userId: campaign.userId },
+        version: { campaignRevision: `pkg-r${stored.revision}`, commitSha: this.projectRevision() },
+        payload: {
+          campaignId: campaign.id,
+          campaignState: stored.package.campaignState,
+          packageRevision: stored.revision,
+          documentSha256: stored.documentSha256,
+          gddRevision: campaign.gddRevision ?? 0,
+          completeness: { present: c.present, of: c.of, failed: c.failed, missing: c.missing, notMeasured: c.notMeasured },
+          ...(stored.package.taskId ? { taskId: stored.package.taskId } : {}),
+        },
+        dedupeKey: `${campaign.id}:delivery:${stored.revision}:${stored.documentSha256}`,
+      });
       return (
         `**Delivery package** — revision ${stored.revision} for ${campaign.id}, on this machine and surviving a restart: ` +
         `${c.present} of ${c.of} pieces present, ${c.failed} failed, ${c.missing} missing, ${c.notMeasured} never measured. ` +
@@ -7503,6 +7551,78 @@ export class CampaignManager {
     this.campaignSpend = reader;
   }
 
+  /**
+   * THE DURABLE PROJECT HISTORY (plan 6.6). Injected for the same reason as the
+   * spend reader: this layer has no business opening daemon.db, and the history
+   * module is the only place that knows the schema. Absent ⇒ nothing is
+   * recorded, which is how every runtime without a daemon behaves.
+   *
+   * What the campaign contributes: the human decision at the GDD gate, the
+   * delivery package (its revision AND the commit it was assembled on), and
+   * every milestone that reaches a terminal state. All of it is owned by
+   * `campaign.userId` — the person whose campaign it is.
+   */
+  private projectHistory?: ProjectHistoryRecorder;
+
+  setProjectHistoryRecorder(recorder: ProjectHistoryRecorder | undefined): void {
+    this.projectHistory = recorder;
+  }
+
+  /**
+   * Every milestone of this campaign that has reached a terminal state, and the
+   * campaign's own terminal state, recorded once each.
+   *
+   * WHY THIS HANGS OFF persist(). A milestone is marked green or failed in nine
+   * different places (a spent gap sprint, a cancelled lineage, a completion the
+   * gates refused, …), and every one of them saves afterwards. Recording from
+   * the save catches all of them — including the ones added after this was
+   * written — and the id is derived from the fact (campaign, milestone,
+   * outcome, attempt count), so the append-only table refuses the repeats that
+   * every later save would otherwise produce.
+   */
+  private recordCampaignHistory(campaign: Campaign): void {
+    if (!this.projectHistory) return;
+    const version = {
+      campaignRevision: `gdd-r${campaign.gddRevision ?? 0}`,
+    };
+    for (const milestone of campaign.milestones) {
+      if (milestone.status !== "green" && milestone.status !== "failed") continue;
+      const landedAs = milestone.commits?.[milestone.commits.length - 1];
+      safeRecordProjectHistory(this.projectHistory, {
+        kind: "milestone",
+        summary: `${milestone.title} — ${milestone.status}`,
+        owner: { userId: campaign.userId },
+        version: { ...version, ...(landedAs ? { commitSha: landedAs } : {}) },
+        payload: {
+          campaignId: campaign.id,
+          milestoneId: milestone.id,
+          status: milestone.status,
+          attempts: milestone.attempts,
+          ...(milestone.taskId ? { taskId: milestone.taskId } : {}),
+          ...(milestone.testVerdict ? { testVerdict: milestone.testVerdict } : {}),
+          ...(milestone.commitNote ? { commitNote: milestone.commitNote } : {}),
+        },
+        dedupeKey: `${campaign.id}:${milestone.id}:${milestone.status}:${milestone.attempts}`,
+      });
+    }
+    if (campaign.state === "done" || campaign.state === "failed" || campaign.state === "cancelled") {
+      safeRecordProjectHistory(this.projectHistory, {
+        kind: "milestone",
+        summary: `Campaign ${campaign.id} — ${campaign.state}`,
+        owner: { userId: campaign.userId },
+        version,
+        payload: {
+          campaignId: campaign.id,
+          state: campaign.state,
+          milestones: campaign.milestones.length,
+          green: campaign.milestones.filter((m) => m.status === "green").length,
+          ...(campaign.lastError ? { lastError: campaign.lastError.slice(0, 500) } : {}),
+        },
+        dedupeKey: `${campaign.id}:campaign:${campaign.state}`,
+      });
+    }
+  }
+
   private ledger(): EvidenceLedger | null {
     if (this.evidenceLedger !== undefined) return this.evidenceLedger;
     try {
@@ -7724,6 +7844,10 @@ export class CampaignManager {
       }
     }
     this.storage.save(campaign);
+    // Only what was actually SAVED becomes history: every early return above
+    // dropped the write, and a history row for a dropped save would claim an
+    // outcome the stored campaign does not have.
+    this.recordCampaignHistory(campaign);
     return true;
   }
 

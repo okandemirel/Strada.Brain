@@ -90,6 +90,7 @@ import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { createProjectHistoryRecorder } from "../history/project-history-recorder.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import { configureContextCeilingStore, CONTEXT_CEILINGS_FILE } from "../agents/context-ceilings.js";
@@ -1759,6 +1760,15 @@ async function bootstrapImpl(
       return undefined;
     }
   });
+  // WHICH DECISION, ON WHICH BUILD, BY WHOM (plan 6.6). The durable history
+  // lives in daemon.db, which only this file may open; the producers — the
+  // campaign manager and (below) the daemon's approval queue — are handed a
+  // recorder. The project is identified by its root, since that is the only
+  // project identity this system has.
+  const projectHistoryRecorder = createProjectHistoryRecorder(sharedDaemonStorage, {
+    projectId: config.unityProjectPath || process.cwd(),
+  });
+  campaignManager?.setProjectHistoryRecorder(projectHistoryRecorder);
   // Reservations of runs that did not survive: their unbilled remainder is
   // booked as spend before anything new reserves (Codex round 8 #2).
   sharedUnifiedBudgetManager.reconcileOrphanedReservations();
@@ -1837,6 +1847,9 @@ async function bootstrapImpl(
         unifiedBudgetManager: sharedUnifiedBudgetManager,
       });
       heartbeatLoop = activeHeartbeatLoop;
+      // An approval or a denial is a decision somebody took: recorded in the
+      // durable history, owned by whoever decided it (plan 6.6).
+      approvalQueueInstance.setProjectHistoryRecorder(projectHistoryRecorder);
       // shutdown() (not stop()) — process exit releases trigger resources;
       // the user-facing pause keeps them armed (audited 2026-09-02).
       disposables.push("heartbeatLoop", () => heartbeatLoop?.shutdown());

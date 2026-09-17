@@ -15,6 +15,10 @@ import type { DaemonStorage } from "../daemon-storage.js";
 import type { ApprovalEntry, ApprovalStatus, AuditEntry } from "../daemon-types.js";
 import type { IEventBus } from "../../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon-events.js";
+import {
+  safeRecordProjectHistory,
+  type ProjectHistoryRecorder,
+} from "../../history/project-history-recorder.js";
 
 /**
  * Outcome of approve()/deny(). `applied: false` means the decision did NOT
@@ -31,6 +35,16 @@ export class ApprovalQueue {
   private readonly timeoutMinutes: number;
   private readonly eventBus?: IEventBus<DaemonEventMap>;
 
+  /**
+   * DURABLE HISTORY (plan 6.6). The audit_log already recorded that a tool was
+   * approved, but nothing could answer "who decided this, and when" to the
+   * person who decided it — the audit log has no owner and no reader. An
+   * approval or a denial IS a decision, so it is recorded in the project history
+   * too, attributed to whoever decided it. Injected at bootstrap; absent means
+   * nothing is recorded, which is how every non-daemon runtime behaves.
+   */
+  private projectHistory?: ProjectHistoryRecorder;
+
   constructor(
     storage: DaemonStorage,
     timeoutMinutes: number,
@@ -39,6 +53,11 @@ export class ApprovalQueue {
     this.storage = storage;
     this.timeoutMinutes = timeoutMinutes;
     this.eventBus = eventBus;
+  }
+
+  /** Wire (or unwire) the durable project history. */
+  setProjectHistoryRecorder(recorder: ProjectHistoryRecorder | undefined): void {
+    this.projectHistory = recorder;
   }
 
   /**
@@ -104,6 +123,22 @@ export class ApprovalQueue {
         triggerName: entry.triggerName,
         timestamp: now,
       });
+      // An auto-denial on timeout is a decision nobody took: the clock did. It
+      // is recorded (it is why the tool never ran) with NO owner, so it reaches
+      // nobody until something can prove whose request it was — never widened
+      // to 'shared' just to make it visible.
+      safeRecordProjectHistory(this.projectHistory, {
+        kind: "decision",
+        summary: `Expired without a decision: ${entry.toolName}`,
+        payload: {
+          approvalId: entry.id,
+          toolName: entry.toolName,
+          decision: "expired",
+          ...(entry.triggerName ? { triggerName: entry.triggerName } : {}),
+          requestedAt: entry.createdAt,
+          expiredAt: now,
+        },
+      });
     }
 
     // Prune resolved entries older than 7 days to prevent unbounded table growth
@@ -164,6 +199,23 @@ export class ApprovalQueue {
       decision,
       decidedBy,
       timestamp: Date.now(),
+    });
+
+    // WHO DECIDED WHAT (plan 6.6). `decidedBy` is the owner; a decision that
+    // arrived without one is recorded unattributed (scope 'unknown', reaching
+    // nobody) rather than shared with everybody.
+    safeRecordProjectHistory(this.projectHistory, {
+      kind: "decision",
+      summary: `${decision === "approved" ? "Approved" : "Denied"} ${entry.toolName}`,
+      ...(decidedBy ? { owner: { userId: decidedBy } } : {}),
+      payload: {
+        approvalId: id,
+        toolName: entry.toolName,
+        decision,
+        ...(decidedBy ? { decidedBy } : {}),
+        ...(entry.triggerName ? { triggerName: entry.triggerName } : {}),
+        paramsSummary: this.summarizeParams(entry.params),
+      },
     });
 
     return { applied: true, status: decision };
