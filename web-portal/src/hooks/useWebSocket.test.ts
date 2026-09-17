@@ -182,6 +182,49 @@ describe('buildModelSwitchCommand', () => {
     expect(messages.find((m) => m.id === 'm-txt')?.isMarkdown).toBe(false)
   })
 
+  it('keeps the confirmation dialog and queues the reply while the socket is closed, sending it on reconnect (audit 11.5 / D35)', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf', profileId: 'p-cf' })
+      socket!.emit('message', { type: 'confirmation', confirmId: 'cf-1', question: 'Deploy?', options: ['yes', 'no'] })
+    })
+    expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-1')
+
+    act(() => { socket!.close() })
+    act(() => { result.current.sendConfirmation('cf-1', 'yes') })
+
+    // The answer is not lost: the dialog is still up and nothing was sent on the dead socket.
+    expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-1')
+    expect(socket!.sent.map((s) => JSON.parse(s).type)).not.toContain('confirmation_response')
+
+    // Reconnect: the queued reply is flushed once the session handshake completes.
+    act(() => { vi.advanceTimersByTime(30000) })
+    const next = MockWebSocket.instances[1]
+    expect(next).toBeDefined()
+    act(() => {
+      next!.emit('open')
+      next!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf2', profileId: 'p-cf' })
+    })
+    expect(next!.sent.map((s) => JSON.parse(s))).toContainEqual({ type: 'confirmation_response', confirmId: 'cf-1', option: 'yes' })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+
+  it('sends a confirmation reply immediately and clears the dialog when the socket is open (guard)', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-cf2', reconnectToken: 'r', profileId: 'p' })
+      socket!.emit('message', { type: 'confirmation', confirmId: 'cf-2', question: 'Deploy?', options: ['yes', 'no'] })
+    })
+    act(() => { result.current.sendConfirmation('cf-2', 'no') })
+    expect(JSON.parse(socket!.sent.at(-1)!)).toEqual({ type: 'confirmation_response', confirmId: 'cf-2', option: 'no' })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+
   it('marks queued outbound messages as failed when no receipt arrives in time', () => {
     vi.useFakeTimers()
 

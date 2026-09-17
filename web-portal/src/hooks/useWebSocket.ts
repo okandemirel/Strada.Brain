@@ -113,6 +113,7 @@ export function useWebSocket(): UseWebSocketReturn {
     payload: Record<string, unknown>
     clientMessageId?: string
     expectedChatId?: string | null
+    onSettled?: (outcome: 'sent' | 'dropped') => void
   }>>([])
   const sessionReadyRef = useRef(false)
   const mountedRef = useRef(true)
@@ -199,6 +200,7 @@ export function useWebSocket(): UseWebSocketReturn {
     payload: Record<string, unknown>
     clientMessageId?: string
     expectedChatId?: string | null
+    onSettled?: (outcome: 'sent' | 'dropped') => void
   }): 'sent' | 'defer' | 'failed' => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !sessionReadyRef.current) {
@@ -210,6 +212,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (entry.clientMessageId) {
         armPendingMessageTimer(entry.clientMessageId)
       }
+      entry.onSettled?.('sent')
       return 'sent'
     } catch {
       if (entry.clientMessageId) {
@@ -228,6 +231,7 @@ export function useWebSocket(): UseWebSocketReturn {
         chatIdRef.current !== next.expectedChatId
       ) {
         pendingOutboundMessagesRef.current.shift()
+        next.onSettled?.('dropped')
         continue
       }
       const outcome = deliverOutboundMessage(next)
@@ -578,6 +582,7 @@ export function useWebSocket(): UseWebSocketReturn {
     payload: Record<string, unknown>
     clientMessageId?: string
     expectedChatId?: string | null
+    onSettled?: (outcome: 'sent' | 'dropped') => void
   }): boolean => {
     const delivery = deliverOutboundMessage(outbound)
     if (delivery === 'sent') return true
@@ -632,16 +637,24 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [enqueueOrReconnect])
 
   const sendConfirmation = useCallback((confirmId: string, option: string) => {
-    try {
-      const ws = wsRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) return
-      ws.send(JSON.stringify({ type: 'confirmation_response', confirmId, option }))
-    } catch {
-      // Connection closed between check and send -- silently fail
-    } finally {
-      useSessionStore.getState().setConfirmation(null)
+    // Audit 11.5 / D35: this used to return early when the socket was not
+    // OPEN and clear the dialog in `finally` regardless — the user's answer
+    // vanished and the daemon waited on a confirmation nobody could give
+    // again. The reply now travels the same reconnect queue as chat, and the
+    // dialog stays up until the reply has actually left (or the session it
+    // belonged to is gone, in which case the question is dead anyway).
+    const clearDialog = () => {
+      const store = useSessionStore.getState()
+      if (store.confirmation?.confirmId === confirmId) {
+        store.setConfirmation(null)
+      }
     }
-  }, [])
+    enqueueOrReconnect({
+      payload: { type: 'confirmation_response', confirmId, option },
+      expectedChatId: chatIdRef.current,
+      onSettled: clearDialog,
+    })
+  }, [enqueueOrReconnect])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
     return sendMessage(buildModelSwitchCommand(provider, model))
