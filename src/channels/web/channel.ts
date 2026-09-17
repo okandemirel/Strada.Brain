@@ -202,6 +202,14 @@ export class WebChannel
   private shuttingDown = false;
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
+  /**
+   * Confirmations already answered (confirmId → option), kept for
+   * CONFIRMATION_TTL_MS and capped at MAX_SETTLED_CONFIRMATIONS, so a reply the
+   * client re-sends after losing the ack is acked "accepted" again instead of
+   * "unknown" (which the portal shows as expired). Codex wave 0-A review
+   * 2026-09-17 #6.
+   */
+  private settledConfirmations = new Map<string, { option: string; expiresAt: number }>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private postSetupBootstrapHandler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null = null;
@@ -248,6 +256,9 @@ export class WebChannel
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
+  /** How long a confirmation prompt waits for an answer; settled ids are remembered as long. */
+  private static readonly CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+  private static readonly MAX_SETTLED_CONFIRMATIONS = 100;
   /** Interval between WebSocket liveness pings (terminates dead half-open sockets). */
   private static readonly WS_HEARTBEAT_MS = 30 * 1000;
   private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
@@ -257,8 +268,12 @@ export class WebChannel
   private static readonly DEFAULT_MONITOR_ROOT = "__default__";
   /** Max buffered undelivered answer frames per chat before oldest is evicted. */
   private static readonly MAX_PENDING_DELIVERY_FRAMES = 20;
-  /** Frame types worth buffering for offline replay (answer-bearing only). */
-  private static readonly REPLAYABLE_FRAME_TYPES = new Set(["markdown", "text", "system"]);
+  /**
+   * Frame types worth buffering for offline replay (answer-bearing only, plus
+   * confirmation_ack: the terminal verdict on an answer the client is holding
+   * a dialog open for — Codex wave 0-A review 2026-09-17 #6).
+   */
+  private static readonly REPLAYABLE_FRAME_TYPES = new Set(["markdown", "text", "system", "confirmation_ack"]);
   private static readonly CACHEABLE_MONITOR_TYPES = new Set([
     "monitor:task_update",
     "monitor:substep",
@@ -633,6 +648,7 @@ export class WebChannel
       pending.resolve("timeout");
     }
     this.pendingConfirmations.clear();
+    this.settledConfirmations.clear();
     this.streamSentLengths.clear();
     this.streamChatIds.clear();
 
@@ -911,12 +927,40 @@ export class WebChannel
         () => {
           this.pendingConfirmations.delete(confirmId);
           done("timeout");
+          // Codex wave 0-A review 2026-09-17 #6: tell the client the question
+          // is dead so a dialog still waiting on its ack is released. The
+          // frame is replayable, so an offline client gets it on reconnect.
+          this.sendToClient(req.chatId, { type: "confirmation_ack", confirmId, status: "unknown" });
         },
-        5 * 60 * 1000,
+        WebChannel.CONFIRMATION_TTL_MS,
       );
 
       this.pendingConfirmations.set(confirmId, { resolve: done, timer, chatId: req.chatId });
     });
+  }
+
+  /** Remember an answered confirmation so a re-sent reply is acked idempotently. */
+  private recordSettledConfirmation(confirmId: string, option: string): void {
+    const now = Date.now();
+    for (const [id, entry] of this.settledConfirmations) {
+      if (entry.expiresAt <= now) this.settledConfirmations.delete(id);
+    }
+    while (this.settledConfirmations.size >= WebChannel.MAX_SETTLED_CONFIRMATIONS) {
+      const oldest = this.settledConfirmations.keys().next().value;
+      if (oldest === undefined) break;
+      this.settledConfirmations.delete(oldest);
+    }
+    this.settledConfirmations.set(confirmId, { option, expiresAt: now + WebChannel.CONFIRMATION_TTL_MS });
+  }
+
+  private getSettledConfirmation(confirmId: string): string | undefined {
+    const entry = this.settledConfirmations.get(confirmId);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      this.settledConfirmations.delete(confirmId);
+      return undefined;
+    }
+    return entry.option;
   }
 
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
@@ -1458,6 +1502,12 @@ export class WebChannel
         const option = String(data.option ?? "");
         const pending = this.pendingConfirmations.get(confirmId);
         if (!pending) {
+          // Already answered (the client lost our ack and re-sent the reply):
+          // ack it again, idempotently. Codex wave 0-A review 2026-09-17 #6.
+          if (this.getSettledConfirmation(confirmId) !== undefined) {
+            this.sendToClient(chatId, { type: "confirmation_ack", confirmId, status: "accepted" });
+            break;
+          }
           // Expired (5-minute window) or never ours: say so instead of
           // ignoring it, so the client can stop showing the answer as sent.
           this.sendToClient(chatId, { type: "confirmation_ack", confirmId, status: "unknown" });
@@ -1474,6 +1524,7 @@ export class WebChannel
         }
         clearTimeout(pending.timer);
         this.pendingConfirmations.delete(confirmId);
+        this.recordSettledConfirmation(confirmId, option);
         pending.resolve(option);
         // The awaiting orchestrator has the answer: only now may the client
         // drop its dialog.

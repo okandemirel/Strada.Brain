@@ -116,6 +116,11 @@ export function useWebSocket(): UseWebSocketReturn {
     expectedChatId?: string | null
     onSettled?: (outcome: 'sent' | 'dropped') => void
   }>>([])
+  // Codex wave 0-A review 2026-09-17 #6: a confirmation reply that left the
+  // socket (settled 'sent') but was never acked is re-sent on the next
+  // `connected`, otherwise a drop between ws.send and confirmation_ack leaves
+  // the dialog pending:true forever (buttons and Escape disabled).
+  const inflightConfirmationRef = useRef<{ confirmId: string; option: string; chatId: string | null } | null>(null)
   const sessionReadyRef = useRef(false)
   const mountedRef = useRef(true)
   const connectRef = useRef<(() => void) | null>(null)
@@ -243,6 +248,45 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [deliverOutboundMessage])
 
+  const buildConfirmationOutbound = useCallback((confirmId: string, option: string, chatId: string | null) => {
+    const onSettled = (outcome: 'sent' | 'dropped') => {
+      const store = useSessionStore.getState()
+      const current = store.confirmation
+      if (outcome === 'dropped') {
+        if (inflightConfirmationRef.current?.confirmId === confirmId) {
+          inflightConfirmationRef.current = null
+        }
+        // The session this question belonged to is gone: nobody can answer it.
+        if (current && current.confirmId === confirmId) store.setConfirmation(null)
+        return
+      }
+      // Sent is not applied: wait for the server's confirmation_ack, and keep
+      // the reply so a reconnect before that ack can send it again.
+      inflightConfirmationRef.current = { confirmId, option, chatId }
+      if (!current || current.confirmId !== confirmId) return
+      store.setConfirmation({ ...current, pending: true, error: undefined })
+    }
+    return {
+      payload: { type: 'confirmation_response', confirmId, option },
+      expectedChatId: chatId,
+      onSettled,
+    }
+  }, [])
+
+  const resendInflightConfirmation = useCallback(() => {
+    const inflight = inflightConfirmationRef.current
+    if (!inflight) return
+    const current = useSessionStore.getState().confirmation
+    if (!current || current.confirmId !== inflight.confirmId || !current.pending) {
+      inflightConfirmationRef.current = null
+      return
+    }
+    pendingOutboundMessagesRef.current.push(
+      buildConfirmationOutbound(inflight.confirmId, inflight.option, inflight.chatId),
+    )
+    flushPendingOutboundMessages()
+  }, [buildConfirmationOutbound, flushPendingOutboundMessages])
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return
 
@@ -360,6 +404,7 @@ export function useWebSocket(): UseWebSocketReturn {
               acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
               sessionReadyRef.current = true
               flushPendingOutboundMessages()
+              resendInflightConfirmation()
             }, SESSION_RECLAIM_GRACE_MS)
             break
           }
@@ -373,6 +418,7 @@ export function useWebSocket(): UseWebSocketReturn {
           acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
           sessionReadyRef.current = true
           flushPendingOutboundMessages()
+          resendInflightConfirmation()
           break
         }
 
@@ -391,6 +437,10 @@ export function useWebSocket(): UseWebSocketReturn {
           // server says the orchestrator got the answer; "unknown" means the
           // confirmation expired server-side and the answer did NOT apply.
           const ackId = typeof data.confirmId === 'string' ? data.confirmId : ''
+          if (ackId && inflightConfirmationRef.current?.confirmId === ackId) {
+            // Terminal either way: nothing left to re-send on a reconnect.
+            inflightConfirmationRef.current = null
+          }
           const store = useSessionStore.getState()
           const current = store.confirmation
           if (!ackId || !current || current.confirmId !== ackId) break
@@ -532,6 +582,7 @@ export function useWebSocket(): UseWebSocketReturn {
     clearPendingMessageTimer,
     flushPendingOutboundMessages,
     markAllPendingMessagesFailed,
+    resendInflightConfirmation,
   ])
 
   useEffect(() => {
@@ -566,6 +617,7 @@ export function useWebSocket(): UseWebSocketReturn {
       }
       pendingMessageTimersRef.current.clear()
       pendingOutboundMessagesRef.current = []
+      inflightConfirmationRef.current = null
       sessionReadyRef.current = false
       if (wsRef.current) {
         wsRef.current.close()
@@ -660,24 +712,11 @@ export function useWebSocket(): UseWebSocketReturn {
     // again. The reply now travels the same reconnect queue as chat, and the
     // dialog stays up until the reply has actually left (or the session it
     // belonged to is gone, in which case the question is dead anyway).
-    const onSettled = (outcome: 'sent' | 'dropped') => {
-      const store = useSessionStore.getState()
-      const current = store.confirmation
-      if (!current || current.confirmId !== confirmId) return
-      if (outcome === 'dropped') {
-        // The session this question belonged to is gone: nobody can answer it.
-        store.setConfirmation(null)
-        return
-      }
-      // Sent is not applied: wait for the server's confirmation_ack.
-      store.setConfirmation({ ...current, pending: true, error: undefined })
-    }
-    enqueueOrReconnect({
-      payload: { type: 'confirmation_response', confirmId, option },
-      expectedChatId: chatIdRef.current,
-      onSettled,
-    })
-  }, [enqueueOrReconnect])
+    // Codex wave 0-A review 2026-09-17 #6: once sent, the reply is also held
+    // in inflightConfirmationRef until the ack, so a socket drop in between
+    // re-sends it on reconnect instead of freezing the dialog.
+    enqueueOrReconnect(buildConfirmationOutbound(confirmId, option, chatIdRef.current))
+  }, [buildConfirmationOutbound, enqueueOrReconnect])
 
   const dismissConfirmation = useCallback(() => {
     useSessionStore.getState().setConfirmation(null)

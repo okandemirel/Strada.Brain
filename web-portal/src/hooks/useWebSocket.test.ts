@@ -245,6 +245,66 @@ describe('buildModelSwitchCommand', () => {
     expect(useSessionStore.getState().confirmation?.confirmId).toBe('cf-3')
   })
 
+  // Codex wave 0-A review 2026-09-17 #6 (follow-up to 0ee86669): a reply that
+  // left the socket but whose confirmation_ack never arrived used to be gone
+  // for good — sendConfirmation set pending:true, the entry was not kept in
+  // the outbound queue, and the close handler never touched confirmation
+  // state, so the dialog stayed frozen after reconnect.
+  it('re-sends a confirmation reply once on reconnect when the socket dropped before the ack', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf', profileId: 'p-cf' })
+      socket!.emit('message', { type: 'confirmation', confirmId: 'cf-1', question: 'Deploy?', options: ['yes', 'no'] })
+    })
+    // Approve while connected: ws.send succeeds locally.
+    act(() => { result.current.sendConfirmation('cf-1', 'yes') })
+    expect(socket!.sent.map((s) => JSON.parse(s))).toContainEqual({ type: 'confirmation_response', confirmId: 'cf-1', option: 'yes' })
+    expect(useSessionStore.getState().confirmation).toEqual(expect.objectContaining({ confirmId: 'cf-1', pending: true }))
+
+    // Socket dies before the confirmation_ack arrives.
+    act(() => { socket!.close() })
+    act(() => { vi.advanceTimersByTime(30000) })
+    const next = MockWebSocket.instances[1]
+    act(() => {
+      next!.emit('open')
+      next!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf2', profileId: 'p-cf' })
+    })
+
+    const replies = next!.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'confirmation_response')
+    expect(replies).toEqual([{ type: 'confirmation_response', confirmId: 'cf-1', option: 'yes' }])
+    // Still up and pending until the server's ack, exactly as for a first send.
+    expect(useSessionStore.getState().confirmation).toEqual(expect.objectContaining({ confirmId: 'cf-1', pending: true }))
+
+    act(() => { next!.emit('message', { type: 'confirmation_ack', confirmId: 'cf-1', status: 'accepted' }) })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+
+  it('does not re-send a confirmation reply on a later reconnect once its ack has arrived (guard)', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf', profileId: 'p-cf' })
+      socket!.emit('message', { type: 'confirmation', confirmId: 'cf-1', question: 'Deploy?', options: ['yes', 'no'] })
+    })
+    act(() => { result.current.sendConfirmation('cf-1', 'yes') })
+    act(() => { socket!.emit('message', { type: 'confirmation_ack', confirmId: 'cf-1', status: 'accepted' }) })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+
+    act(() => { socket!.close() })
+    act(() => { vi.advanceTimersByTime(30000) })
+    const next = MockWebSocket.instances[1]
+    act(() => {
+      next!.emit('open')
+      next!.emit('message', { type: 'connected', chatId: 'chat-cf', reconnectToken: 'r-cf2', profileId: 'p-cf' })
+    })
+    expect(next!.sent.map((s) => JSON.parse(s).type)).not.toContain('confirmation_response')
+  })
+
   it('marks queued outbound messages as failed when no receipt arrives in time', () => {
     vi.useFakeTimers()
 
