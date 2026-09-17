@@ -33,12 +33,14 @@ export class FrameworkPromptGenerator {
   private readonly sourceBinding: FrameworkSourceBinding | undefined;
 
   /**
-   * `sourceBinding` names the trees THIS project resolved. Without it the
-   * generator asked for "the latest snapshot" of each package, which on a
+   * `sourceBinding` names THIS project and the trees it resolved. Without it
+   * the generator asked for "the latest snapshot" of each package, which on a
    * machine with two projects is whichever synced last — so a worker's system
    * prompt described another project's classes and told it "This project has
    * Strada installed" on the strength of that project's install
-   * (r9 finding 29).
+   * (r9 finding 29). The project id in the binding is what makes the
+   * "installed here" half of that claim answerable when two projects resolve
+   * the same physical directory (r10 finding 11).
    */
   constructor(
     private readonly store: FrameworkKnowledgeStore,
@@ -51,7 +53,7 @@ export class FrameworkPromptGenerator {
   /** The snapshot of `packageId` this project's prompt may describe. */
   private snapshotFor(packageId: FrameworkPackageId): FrameworkAPISnapshot | null {
     return this.sourceBinding
-      ? this.store.getProjectSnapshot(packageId, this.sourceBinding.resolve(packageId))
+      ? this.store.getProjectSnapshot(packageId, this.sourceBinding)
       : this.store.getLatestSnapshot(packageId);
   }
 

@@ -5,12 +5,13 @@
  * and git fallback for packages not installed locally.
  */
 
-import { existsSync, statSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { FSWatcher } from "chokidar";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type {
+  FrameworkProjectId,
   FrameworkSourceBinding,
   FrameworkSyncConfig,
   FrameworkSyncResult,
@@ -51,9 +52,35 @@ export function resolveDepsSourcePath(
   }
 }
 
-/** Bind readers to a project's own source paths (r9 finding 29). */
-export function createFrameworkSourceBinding(deps: StradaDepsStatus): FrameworkSourceBinding {
-  return { resolve: (pkgId) => resolveDepsSourcePath(deps, pkgId) };
+/**
+ * Canonical identity of a project: the realpath of its root.
+ *
+ * Realpath, not the configured path — on macOS the same project arrives as
+ * /var/... and /private/var/..., and two spellings of one root would be two
+ * projects with separate installation status. Falls back to the absolute
+ * lexical path when the root does not exist (yet).
+ */
+export function frameworkProjectId(projectRoot: string): FrameworkProjectId {
+  try {
+    return realpathSync(projectRoot);
+  } catch {
+    return resolve(projectRoot);
+  }
+}
+
+/**
+ * Bind readers to a project's own source paths (r9 finding 29) and to its
+ * identity (r10 finding 11) — the latter is what says whether a source that
+ * two projects share is the INSTALLATION here.
+ */
+export function createFrameworkSourceBinding(
+  deps: StradaDepsStatus,
+  projectRoot: string,
+): FrameworkSourceBinding {
+  return {
+    projectId: frameworkProjectId(projectRoot),
+    resolve: (pkgId) => resolveDepsSourcePath(deps, pkgId),
+  };
 }
 
 /**
@@ -93,15 +120,37 @@ export class FrameworkSyncPipeline {
    */
   private readonly syncedSourcePaths = new Map<FrameworkPackageId, string>();
   private flushChain: Promise<void> = Promise.resolve();
+  /**
+   * WHOSE sync this is. Every per-project fact this pipeline writes (where the
+   * package comes from, and whether that is an installation) is keyed by it,
+   * because one store serves every project on the machine and two projects can
+   * resolve the SAME directory with opposite installation status (r10 finding
+   * 11).
+   */
+  private readonly projectId: FrameworkProjectId;
 
+  /**
+   * `projectRoot` is the project this sync belongs to (config.unityProjectPath
+   * at boot). Defaults to the process working directory so an ad-hoc pipeline
+   * still has ONE identity rather than sharing every other project's — but a
+   * caller that knows the project must pass it, or two projects driven from one
+   * cwd would share their installation status again.
+   */
   constructor(
     store: FrameworkKnowledgeStore,
     config: FrameworkSyncConfig,
     stradaDeps: StradaDepsStatus,
+    projectRoot?: string | null,
   ) {
     this.store = store;
     this.config = config;
     this.stradaDeps = stradaDeps;
+    this.projectId = frameworkProjectId(projectRoot ?? process.cwd());
+  }
+
+  /** The project every per-project row this pipeline writes belongs to. */
+  getProjectId(): FrameworkProjectId {
+    return this.projectId;
   }
 
   /**
@@ -112,6 +161,7 @@ export class FrameworkSyncPipeline {
    */
   getSourceBinding(): FrameworkSourceBinding {
     return {
+      projectId: this.projectId,
       resolve: (pkgId) => this.syncedSourcePaths.get(pkgId) ?? resolveDepsSourcePath(this.stradaDeps, pkgId),
     };
   }
@@ -138,7 +188,7 @@ export class FrameworkSyncPipeline {
    * Audited 2026-09-02.
    */
   private storeAndNotify(snapshot: Parameters<FrameworkKnowledgeStore["storeSnapshot"]>[0]): void {
-    this.store.storeSnapshot(snapshot);
+    this.store.storeSnapshot(snapshot, this.projectId);
     getFrameworkSchemaProvider()?.invalidateCache();
     for (const listener of this.snapshotListeners) {
       try {
@@ -184,9 +234,9 @@ export class FrameworkSyncPipeline {
       // tree used to stay "cached, not installed here" for as long as the code
       // did not change, and a legacy row wrongly stamped "local" went on
       // claiming to be the live installation (r9 finding 30).
-      if (this.store.reconcileSourceOrigin(pkgId, sourcePath, sourceOrigin)) {
+      if (this.store.reconcileSourceOrigin(this.projectId, pkgId, sourcePath, sourceOrigin)) {
         logger.info(
-          `Framework source origin reconciled for ${pkgConfig.displayName}: ${sourcePath} is ${sourceOrigin}` +
+          `Framework source origin reconciled for ${pkgConfig.displayName} in ${this.projectId}: ${sourcePath} is ${sourceOrigin}` +
             `${sourceOrigin === "local" ? " (installed here — it is this project's live source)" : " (not installed here)"} — ` +
             "corrected without any API change",
         );

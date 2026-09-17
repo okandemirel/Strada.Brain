@@ -659,7 +659,15 @@ async function bootstrapImpl(
         // closes these (via daemonStorage-style wiring below).
         disposables.push("frameworkStore", () => frameworkStore?.close());
 
-        frameworkSyncPipeline = new FrameworkSyncPipeline(frameworkStore, frameworkSyncConfig, stradaDeps);
+        // The project this sync belongs to: one store serves every project on
+        // the machine, and whether a shared source directory is the
+        // INSTALLATION is a fact about the project, not the path (r10 #11).
+        frameworkSyncPipeline = new FrameworkSyncPipeline(
+          frameworkStore,
+          frameworkSyncConfig,
+          stradaDeps,
+          config.unityProjectPath,
+        );
         disposables.push("frameworkSyncPipeline", () => frameworkSyncPipeline?.stop());
         const syncResult = await frameworkSyncPipeline.bootSync();
 

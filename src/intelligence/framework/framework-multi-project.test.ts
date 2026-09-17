@@ -256,9 +256,13 @@ describe("origin reconciliation is independent of the API fingerprint (r9 findin
 
     // Rewrite history: this tree was only ever a cached clone. Nothing about
     // the extracted API changes — version, git HEAD and fingerprint all stay.
+    // The claim now lives on the PROJECT's binding (r10 finding 11), so that
+    // is the row this scenario has to be wrong about; the shared rows are
+    // rewritten too, as a pre-upgrade database has them.
     rawExec(`
       UPDATE framework_snapshots SET source_origin = 'cached' WHERE package_id = 'core';
       UPDATE framework_source_metadata SET source_origin = 'cached' WHERE package_id = 'core';
+      UPDATE framework_project_source SET source_origin = 'cached' WHERE package_id = 'core';
       DELETE FROM framework_live_source WHERE package_id = 'core';
     `);
     expect(store.getLiveSnapshot("core")).toBeNull();
@@ -269,10 +273,13 @@ describe("origin reconciliation is independent of the API fingerprint (r9 findin
     // Still skipped — the API really is unchanged, and nothing was re-stored…
     expect(second.reports).toHaveLength(0);
     expect(store.getMetadata("core")!.syncCount).toBe(syncCount);
-    // …but the origin/installation binding is corrected anyway.
-    expect(store.getLatestSnapshot("core", corePath)!.sourceOrigin).toBe("local");
+    // …but the origin/installation binding is corrected anyway. Measured on
+    // what THIS project's reader sees, which is where installation status
+    // lives — not on the snapshot row, which every project at this path shares.
+    const binding = pipeline.getSourceBinding();
+    expect(store.getProjectSnapshot("core", binding)!.sourceOrigin).toBe("local");
+    expect(store.getProjectLiveSourcePath(binding.projectId, "core")).toBe(corePath);
     expect(store.getLiveSourcePath("core")).toBe(corePath);
-    expect(store.getLiveSnapshot("core")).not.toBeNull();
     const line = [...logSpy.info.mock.calls, ...logSpy.debug.mock.calls]
       .map((c) => String(c[0]))
       .find((m) => m.includes("origin") && m.includes(corePath));
@@ -297,10 +304,12 @@ describe("origin reconciliation is independent of the API fingerprint (r9 findin
     expect(store.getLiveSourcePath("core")).toBeUndefined();
 
     // What the per-source upgrade backfill does with a legacy database: trust
-    // the stamp, and make the "local" row the live installation.
+    // the stamp, and make the "local" row the live installation — including the
+    // project binding the project-origin backfill derives from it.
     rawExec(`
       UPDATE framework_snapshots SET source_origin = 'local' WHERE package_id = 'core';
       UPDATE framework_source_metadata SET source_origin = 'local' WHERE package_id = 'core';
+      UPDATE framework_project_source SET source_origin = 'local' WHERE package_id = 'core';
       INSERT OR REPLACE INTO framework_live_source (package_id, source_path, updated_at)
         VALUES ('core', '${cachedCore}', 1);
     `);
@@ -310,8 +319,11 @@ describe("origin reconciliation is independent of the API fingerprint (r9 findin
 
     // Core's content is unchanged, so nothing is re-extracted for it…
     expect(second.reports.map((r) => r.packageId)).not.toContain("core");
-    // …yet the origin claim is corrected.
-    expect(store.getLatestSnapshot("core", cachedCore)!.sourceOrigin).toBe("cached");
+    // …yet the origin claim is corrected, for this project and for the
+    // package-wide pointer no other project has claimed.
+    const binding = pipeline.getSourceBinding();
+    expect(store.getProjectSnapshot("core", binding)!.sourceOrigin).toBe("cached");
+    expect(store.getProjectLiveSourcePath(binding.projectId, "core")).toBeUndefined();
     expect(store.getLiveSourcePath("core")).toBeUndefined();
     expect(store.getLiveSnapshot("core")).toBeNull();
     // …and no prompt claims the framework is installed here.
@@ -335,5 +347,146 @@ describe("origin reconciliation is independent of the API fingerprint (r9 findin
     expect(
       [...logSpy.info.mock.calls].map((c) => String(c[0])).filter((m) => m.includes("origin")),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One physical source, two projects, opposite installation status
+// (adversarial review round 10, finding 11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a directory is the INSTALLATION is a fact about a PROJECT, not about
+ * the directory. Until now origin lived on the shared rows: every snapshot at a
+ * source path was re-stamped by whichever project synced last, and the readers
+ * bound only the path — so project A, which explicitly installs the shared
+ * framework-cache directory, was told its framework is "not installed here" the
+ * moment project B synced that same directory as fallback knowledge, and in the
+ * reverse order B inherited A's "live".
+ *
+ * The content is byte-identical (it is literally one directory), so no
+ * fingerprint, version or git HEAD can carry the difference.
+ */
+describe("one physical source, two projects with opposite installation status (r10 finding 11)", () => {
+  let tmp: string;
+  let sharedCacheDir: string;
+  let sharedCore: string;
+  let projectARoot: string;
+  let projectBRoot: string;
+  let store: FrameworkKnowledgeStore;
+
+  beforeEach(() => {
+    logSpy.info.mockClear();
+    logSpy.debug.mockClear();
+    tmp = realpathSync(mkdtempSync(join(tmpdir(), "fw-shared-source-")));
+    // The shared framework cache: one physical directory.
+    sharedCacheDir = join(tmp, "framework-cache");
+    sharedCore = writeCorePackage(join(sharedCacheDir, "core"), ONE_BASE);
+    // The other packages exist in the cache too, so the git fallback never
+    // reaches for the network.
+    writeCorePackage(join(sharedCacheDir, "modules"), ONE_BASE);
+    writeCorePackage(join(sharedCacheDir, "mcp"), ONE_BASE);
+    projectARoot = join(tmp, "project-a");
+    projectBRoot = join(tmp, "project-b");
+    mkdirSync(projectARoot, { recursive: true });
+    mkdirSync(projectBRoot, { recursive: true });
+    store = new FrameworkKnowledgeStore(join(tmp, "framework-knowledge.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** A installs the shared directory as its own Strada.Core. */
+  function installingProject(): FrameworkSyncPipeline {
+    return new FrameworkSyncPipeline(store, makeConfig(), makeDeps(sharedCore), projectARoot);
+  }
+
+  /** B has no Core of its own and falls back to the same shared directory. */
+  function fallbackProject(): FrameworkSyncPipeline {
+    return new FrameworkSyncPipeline(
+      store,
+      makeConfig({ gitFallbackEnabled: true, gitCacheDir: sharedCacheDir, gitCacheMaxAgeMs: 10 * 60_000 }),
+      makeDeps(null),
+      projectBRoot,
+    );
+  }
+
+  function coreHeader(pipeline: FrameworkSyncPipeline): string {
+    const section = new FrameworkPromptGenerator(store, { sourceBinding: pipeline.getSourceBinding() })
+      .buildFrameworkKnowledgeSection();
+    const header = (section ?? "").split("\n").find((l) => l.startsWith("## Strada.Core"));
+    return header ?? "(no Strada.Core section)";
+  }
+
+  it("the installing project still reads its framework as installed after the fallback project syncs the same directory", async () => {
+    const installing = installingProject();
+    const fallback = fallbackProject();
+
+    await installing.bootSync();
+    expect(coreHeader(installing)).toContain("(live —");
+
+    // B uses the very same directory as fallback knowledge. Its content is
+    // unchanged, so nothing is re-extracted…
+    const bSync = await fallback.bootSync();
+    expect(bSync.reports.map((r) => r.packageId)).not.toContain("core");
+
+    // …and A's installation is still A's installation.
+    expect(coreHeader(installing)).toContain("(live —");
+    expect(coreHeader(fallback)).toContain("not installed here");
+  });
+
+  it("guard: one project alone, installing that directory, reads it as its installation", async () => {
+    const installing = installingProject();
+    await installing.bootSync();
+
+    expect(coreHeader(installing)).toContain("(live —");
+    expect(store.getProjectLiveSourcePath(installing.getProjectId(), "core")).toBe(sharedCore);
+    // Restarting with nothing changed must not lose the installation.
+    await installing.bootSync();
+    expect(coreHeader(installing)).toContain("(live —");
+  });
+
+  it("guard: one project alone, only falling back to that directory, never reads it as installed", async () => {
+    const fallback = fallbackProject();
+    await fallback.bootSync();
+
+    const header = coreHeader(fallback);
+    expect(header).toContain("not installed here");
+    expect(header).not.toContain("(live —");
+    expect(store.getProjectLiveSourcePath(fallback.getProjectId(), "core")).toBeUndefined();
+    const section = new FrameworkPromptGenerator(store, { sourceBinding: fallback.getSourceBinding() })
+      .buildFrameworkKnowledgeSection()!;
+    expect(section).not.toContain("This project has Strada installed");
+  });
+
+  it("each project's own binding is recorded, and neither reads the other's", async () => {
+    const installing = installingProject();
+    const fallback = fallbackProject();
+    await installing.bootSync();
+    await fallback.bootSync();
+
+    expect(store.getProjectSourceOrigin(installing.getProjectId(), "core", sharedCore)).toBe("local");
+    expect(store.getProjectSourceOrigin(fallback.getProjectId(), "core", sharedCore)).toBe("cached");
+    expect(store.getProjectLiveSourcePath(installing.getProjectId(), "core")).toBe(sharedCore);
+    expect(store.getProjectLiveSourcePath(fallback.getProjectId(), "core")).toBeUndefined();
+    // The shared knowledge itself is still shared — one directory, one API.
+    expect(store.getLatestSnapshot("core", sharedCore)!.classes.map((c) => c.name)).toEqual(["SystemBase"]);
+  });
+
+  it("the fallback project does not inherit the installing project's 'installed here' in the reverse order", async () => {
+    const fallback = fallbackProject();
+    const installing = installingProject();
+
+    await fallback.bootSync();
+    expect(coreHeader(fallback)).toContain("not installed here");
+
+    const aSync = await installing.bootSync();
+    expect(aSync.reports.map((r) => r.packageId)).not.toContain("core");
+
+    expect(coreHeader(fallback)).toContain("not installed here");
+    expect(coreHeader(installing)).toContain("(live —");
   });
 });

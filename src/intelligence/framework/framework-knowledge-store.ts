@@ -14,10 +14,12 @@ import type {
   FrameworkAPISnapshot,
   FrameworkPackageId,
   FrameworkPackageMetadata,
+  FrameworkProjectId,
+  FrameworkSourceBinding,
   SourceLanguage,
   SourceOrigin,
 } from "./framework-types.js";
-import { FRAMEWORK_SCHEMA_VERSION } from "./framework-types.js";
+import { FRAMEWORK_SCHEMA_VERSION, UNATTRIBUTED_PROJECT_ID } from "./framework-types.js";
 
 // ─── Schema ─────────────────────────────────────────────────────────────────
 
@@ -69,11 +71,43 @@ CREATE TABLE IF NOT EXISTS framework_source_metadata (
 -- The source a package is actually INSTALLED from: set only by a local sync,
 -- so a git clone can be stored and read, but never presents itself as the
 -- project's live framework.
+--
+-- LEGACY / PACKAGE-WIDE. One row per package cannot describe two projects, so
+-- this pointer is only the best-effort answer for a reader with no project
+-- identity (getLiveSnapshot / getLatestSnapshot with no source). Bound readers
+-- use framework_project_source below. Last writer wins here, by construction.
 CREATE TABLE IF NOT EXISTS framework_live_source (
   package_id TEXT PRIMARY KEY,
   source_path TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- WHERE A PROJECT GETS A PACKAGE FROM, AND WHETHER THAT IS AN INSTALLATION.
+--
+-- Origin used to live on the shared rows (every snapshot at a path, plus one
+-- package-wide live pointer), and a reader bound only the path — so two
+-- projects resolving the SAME physical directory with opposite installation
+-- status overwrote each other: the project that explicitly installs the shared
+-- framework-cache directory was told "not installed here" as soon as the
+-- project that only falls back to it synced, and in the reverse order the
+-- fallback project inherited "live" (r10 finding 11). The content is one
+-- directory, so no fingerprint, version or git HEAD can carry the difference.
+--
+-- A real project has at most ONE row per package (it resolves one source path
+-- at a time; recordProjectSource drops the others). The UNATTRIBUTED project
+-- may hold several — one per source — because that is how a pre-upgrade
+-- database's rows arrive.
+CREATE TABLE IF NOT EXISTS framework_project_source (
+  project_id TEXT NOT NULL,
+  package_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  source_origin TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, package_id, source_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_source_by_source
+  ON framework_project_source(package_id, source_path);
 
 CREATE TABLE IF NOT EXISTS framework_metadata (
   package_id TEXT PRIMARY KEY,
@@ -192,6 +226,7 @@ export class FrameworkKnowledgeStore {
     }
     this.migrateSnapshotPrimaryKey();
     this.backfillSourceKeying();
+    this.backfillProjectSources();
   }
 
   /**
@@ -279,8 +314,51 @@ export class FrameworkKnowledgeStore {
     })();
   }
 
-  /** Store a new snapshot */
-  storeSnapshot(snapshot: FrameworkAPISnapshot): void {
+  /**
+   * A database written before origin became project-relative records it on the
+   * shared rows only: framework_source_metadata.source_origin per (package,
+   * source), and one package-wide live pointer. Those rows belong to no
+   * project, so they are attributed to UNATTRIBUTED_PROJECT_ID, which ANY
+   * binding may claim: a bound reader that has no row of its own falls back to
+   * the unattributed row (so an upgrade changes nothing about what a project
+   * already saw), and the first sync that resolves that (package, source)
+   * claims it — its own row is written and the unattributed one removed.
+   *
+   * Consequence for an upgrade: nothing is re-extracted and no project has to
+   * re-sync to keep its labels. A project that never syncs again keeps reading
+   * the inherited label; the first boot sync of each project replaces it with
+   * that project's own observation.
+   */
+  private backfillProjectSources(): void {
+    const already = this.db.prepare("SELECT COUNT(*) AS n FROM framework_project_source").get() as { n: number };
+    if (already.n > 0) return;
+    const rows = this.db.prepare(
+      "SELECT package_id, source_path, source_origin FROM framework_source_metadata",
+    ).all() as Array<{ package_id: string; source_path: string; source_origin: string }>;
+    if (rows.length === 0) return;
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO framework_project_source
+        (project_id, package_id, source_path, source_origin, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const now = Date.now();
+    this.db.transaction(() => {
+      for (const row of rows) {
+        insert.run(UNATTRIBUTED_PROJECT_ID, row.package_id, row.source_path, row.source_origin, now);
+      }
+    })();
+  }
+
+  /**
+   * Store a new snapshot.
+   *
+   * `projectId` is the project that OBSERVED this source. It records that
+   * project's binding (source path + origin), which is what bound readers use
+   * to decide "installed here"; omitted, only the shared rows are written, as
+   * an ad-hoc writer with no project identity can say nothing about any
+   * project's installation.
+   */
+  storeSnapshot(snapshot: FrameworkAPISnapshot, projectId?: FrameworkProjectId): void {
     const insert = this.prepare(`
       INSERT OR REPLACE INTO framework_snapshots
         (package_id, package_name, version, git_hash, snapshot_json,
@@ -353,7 +431,89 @@ export class FrameworkKnowledgeStore {
       if (snapshot.sourceOrigin === "local") {
         setLive.run(snapshot.packageId, snapshot.sourcePath, now);
       }
+      if (projectId !== undefined) {
+        this.recordProjectSource(projectId, snapshot.packageId, snapshot.sourcePath, snapshot.sourceOrigin, now);
+      }
     })();
+  }
+
+  // ─── Per-project source bindings (r10 finding 11) ─────────────────────────
+
+  /**
+   * Record what ONE project resolved for a package: the source path and
+   * whether that path is its installation. A project resolves one source per
+   * package at a time, so any other row it held for the package is dropped —
+   * a moved tree must not leave a second "installed here" claim behind.
+   */
+  private recordProjectSource(
+    projectId: FrameworkProjectId,
+    packageId: FrameworkPackageId,
+    sourcePath: string,
+    origin: SourceOrigin,
+    now: number = Date.now(),
+  ): void {
+    this.prepare(`
+      INSERT INTO framework_project_source (project_id, package_id, source_path, source_origin, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, package_id, source_path) DO UPDATE SET
+        source_origin = excluded.source_origin,
+        updated_at = excluded.updated_at
+    `).run(projectId, packageId, sourcePath, origin, now);
+    this.prepare(
+      "DELETE FROM framework_project_source WHERE project_id = ? AND package_id = ? AND source_path != ?",
+    ).run(projectId, packageId, sourcePath);
+    // The legacy row for this (package, source) has now been attributed.
+    if (projectId !== UNATTRIBUTED_PROJECT_ID) {
+      this.prepare(
+        "DELETE FROM framework_project_source WHERE project_id = ? AND package_id = ? AND source_path = ?",
+      ).run(UNATTRIBUTED_PROJECT_ID, packageId, sourcePath);
+    }
+  }
+
+  /**
+   * What THIS project believes about a (package, source): the origin it
+   * observed, or — when it has never recorded one — the unattributed row an
+   * upgrade left for any binding to claim. Undefined when nothing is recorded.
+   */
+  getProjectSourceOrigin(
+    projectId: FrameworkProjectId,
+    packageId: FrameworkPackageId,
+    sourcePath: string,
+  ): SourceOrigin | undefined {
+    const stmt = this.prepare(
+      "SELECT source_origin FROM framework_project_source WHERE project_id = ? AND package_id = ? AND source_path = ?",
+    );
+    const own = stmt.get(projectId, packageId, sourcePath) as { source_origin: string } | undefined;
+    if (own) return own.source_origin as SourceOrigin;
+    if (projectId === UNATTRIBUTED_PROJECT_ID) return undefined;
+    const inherited = stmt.get(UNATTRIBUTED_PROJECT_ID, packageId, sourcePath) as { source_origin: string } | undefined;
+    return inherited ? (inherited.source_origin as SourceOrigin) : undefined;
+  }
+
+  /**
+   * The source THIS project has the package INSTALLED from, or undefined when
+   * it has none — the per-project answer the package-wide live pointer cannot
+   * give. Derived from the project's own binding, so it can never disagree
+   * with the origin a reader is shown.
+   */
+  getProjectLiveSourcePath(
+    projectId: FrameworkProjectId,
+    packageId: FrameworkPackageId,
+  ): string | undefined {
+    const stmt = this.prepare(`
+      SELECT source_path FROM framework_project_source
+      WHERE project_id = ? AND package_id = ? AND source_origin = 'local'
+      ORDER BY updated_at DESC LIMIT 1
+    `);
+    const own = stmt.get(projectId, packageId) as { source_path: string } | undefined;
+    if (own) return own.source_path;
+    if (projectId === UNATTRIBUTED_PROJECT_ID) return undefined;
+    const hasOwnOpinion = this.prepare(
+      "SELECT 1 AS present FROM framework_project_source WHERE project_id = ? AND package_id = ? LIMIT 1",
+    ).get(projectId, packageId) as { present: number } | undefined;
+    if (hasOwnOpinion) return undefined;
+    const inherited = stmt.get(UNATTRIBUTED_PROJECT_ID, packageId) as { source_path: string } | undefined;
+    return inherited?.source_path;
   }
 
   /**
@@ -370,17 +530,30 @@ export class FrameworkKnowledgeStore {
   }
 
   /**
-   * The snapshot a reader in a PARTICULAR project must see.
+   * The snapshot a reader in a PARTICULAR project must see, labelled with the
+   * origin THAT project observed.
    *
-   * `sourcePath` is that project's resolved source for the package, as
-   * FrameworkSourceBinding reports it. When the project has none (null), a
-   * snapshot stored by a LOCAL sync belongs to some other project's tree and
-   * must never answer here; knowledge extracted from a clone or a cache still
-   * does, carrying its origin so the reader can say "not installed here"
-   * (r9 finding 29).
+   * The binding names the project and its resolved source for the package. When
+   * the project has no source (resolve → null), a snapshot stored by a LOCAL
+   * sync belongs to some other project's tree and must never answer here;
+   * knowledge extracted from a clone or a cache still does, carrying its origin
+   * so the reader can say "not installed here" (r9 finding 29).
+   *
+   * Snapshot CONTENT is shared — two projects reading one directory really do
+   * get the same API — but `sourceOrigin` is not: it is re-labelled from this
+   * project's own binding, because the stored column records whichever project
+   * happened to write the row (r10 finding 11).
    */
-  getProjectSnapshot(packageId: FrameworkPackageId, sourcePath: string | null): FrameworkAPISnapshot | null {
-    if (sourcePath !== null) return this.getSnapshotByOffset(packageId, 0, sourcePath);
+  getProjectSnapshot(packageId: FrameworkPackageId, binding: FrameworkSourceBinding): FrameworkAPISnapshot | null {
+    const sourcePath = binding.resolve(packageId);
+    if (sourcePath !== null) {
+      const snapshot = this.getSnapshotByOffset(packageId, 0, sourcePath);
+      if (!snapshot) return null;
+      const origin = this.getProjectSourceOrigin(binding.projectId, packageId, sourcePath);
+      return origin === undefined || origin === snapshot.sourceOrigin
+        ? snapshot
+        : { ...snapshot, sourceOrigin: origin };
+    }
     const row = this.prepare(`
       SELECT * FROM framework_snapshots
       WHERE package_id = ? AND source_origin != 'local'
@@ -579,10 +752,14 @@ export class FrameworkKnowledgeStore {
   deleteSource(packageId: FrameworkPackageId, sourcePath: string): number {
     const snapshots = this.prepare("DELETE FROM framework_snapshots WHERE package_id = ? AND source_path = ?");
     const sourceMeta = this.prepare("DELETE FROM framework_source_metadata WHERE package_id = ? AND source_path = ?");
+    const projectSources = this.prepare("DELETE FROM framework_project_source WHERE package_id = ? AND source_path = ?");
     let removed = 0;
     this.db.transaction(() => {
       removed = Number(snapshots.run(packageId, sourcePath).changes);
       sourceMeta.run(packageId, sourcePath);
+      // The directory is gone: no project binds it any more, whatever each of
+      // them believed about it.
+      projectSources.run(packageId, sourcePath);
       this.rebindLiveSource(packageId, sourcePath);
       this.refreshPackageMetadata(packageId);
     })();
@@ -599,35 +776,48 @@ export class FrameworkKnowledgeStore {
     const metadata = this.prepare("DELETE FROM framework_metadata WHERE package_id = ?");
     const sourceMeta = this.prepare("DELETE FROM framework_source_metadata WHERE package_id = ?");
     const live = this.prepare("DELETE FROM framework_live_source WHERE package_id = ?");
+    const projectSources = this.prepare("DELETE FROM framework_project_source WHERE package_id = ?");
     let removed = 0;
     this.db.transaction(() => {
       removed = Number(snapshots.run(packageId).changes);
       metadata.run(packageId);
       sourceMeta.run(packageId);
       live.run(packageId);
+      projectSources.run(packageId);
     })();
     return removed;
   }
 
   /**
-   * Reconcile where a package is INSTALLED from, and what each of its stored
-   * snapshots claims, with what the caller just observed on disk — without
-   * consulting any API fingerprint.
+   * Reconcile ONE PROJECT's binding for a package — where it gets the package
+   * from, and whether that is its installation — with what the caller just
+   * observed on disk, without consulting any API fingerprint.
    *
    * The sync pipeline skips extraction when version, git HEAD and content
    * fingerprint all match, and the origin of a source is none of those three:
    * a cached clone that became the project's installed tree stayed "cached and
    * not installed here" forever, and a legacy row wrongly stamped "local" (the
    * upgrade backfill trusts that stamp) went on claiming to be the live
-   * installation (r9 finding 30). Returns true when something was corrected.
+   * installation (r9 finding 30).
+   *
+   * It writes the PROJECT's row, never the snapshot rows. Re-stamping every
+   * snapshot at a path was the r10 finding 11 defect: two projects sharing one
+   * physical directory with opposite installation status overwrote each other's
+   * answer, and the content — one directory — could never reveal it. The
+   * package-wide live pointer is still maintained for readers with no project
+   * identity, and is explicitly last-writer-wins.
+   *
+   * Returns true when an EXISTING claim was corrected. Recording a binding for
+   * the first time is not a correction — nothing was wrong, the store simply
+   * did not know yet — but inheriting a wrong label from an unattributed
+   * (pre-upgrade) row is.
    */
-  reconcileSourceOrigin(packageId: FrameworkPackageId, sourcePath: string, origin: SourceOrigin): boolean {
-    const stampSnapshots = this.prepare(
-      "UPDATE framework_snapshots SET source_origin = ? WHERE package_id = ? AND source_path = ? AND source_origin != ?",
-    );
-    const stampMeta = this.prepare(
-      "UPDATE framework_source_metadata SET source_origin = ? WHERE package_id = ? AND source_path = ? AND source_origin != ?",
-    );
+  reconcileSourceOrigin(
+    projectId: FrameworkProjectId,
+    packageId: FrameworkPackageId,
+    sourcePath: string,
+    origin: SourceOrigin,
+  ): boolean {
     const setLive = this.prepare(`
       INSERT INTO framework_live_source (package_id, source_path, updated_at)
       VALUES (?, ?, ?)
@@ -637,25 +827,52 @@ export class FrameworkKnowledgeStore {
     `);
     let changed = false;
     this.db.transaction(() => {
+      // What this project claimed until now: its own row, or the unattributed
+      // row it would have been reading.
+      const previousOrigin = this.getProjectSourceOrigin(projectId, packageId, sourcePath);
+      const previousPath = this.getProjectSourcePath(projectId, packageId);
       changed =
-        Number(stampSnapshots.run(origin, packageId, sourcePath, origin).changes) > 0 ||
-        Number(stampMeta.run(origin, packageId, sourcePath, origin).changes) > 0;
+        (previousOrigin !== undefined && previousOrigin !== origin) ||
+        (previousPath !== undefined && previousPath !== sourcePath);
+      this.recordProjectSource(projectId, packageId, sourcePath, origin);
+
       const live = this.getLiveSourcePath(packageId);
       if (origin === "local") {
-        // This source IS the installation. Only claim it once something of it
-        // is stored — storeSnapshot sets the pointer for a first sync.
+        // This source IS the installation. Only claim the package-wide pointer
+        // once something of it is stored — storeSnapshot sets it for a first
+        // sync.
         if (live !== sourcePath && this.hasSnapshots(packageId, sourcePath)) {
           setLive.run(packageId, sourcePath, Date.now());
-          changed = true;
         }
-      } else if (live === sourcePath) {
+      } else if (live === sourcePath && !this.anyProjectInstalls(packageId, sourcePath)) {
         // A clone or a cache is knowledge about the package, never evidence
-        // that this project has it installed.
+        // that THIS project has it installed — but another project may really
+        // install this very directory, and its claim on the package-wide
+        // pointer is not ours to release (r10 finding 11).
         this.rebindLiveSource(packageId, sourcePath);
-        changed = true;
       }
     })();
     return changed;
+  }
+
+  /** The one source path this project currently binds for a package. */
+  private getProjectSourcePath(
+    projectId: FrameworkProjectId,
+    packageId: FrameworkPackageId,
+  ): string | undefined {
+    const row = this.prepare(
+      "SELECT source_path FROM framework_project_source WHERE project_id = ? AND package_id = ? ORDER BY updated_at DESC LIMIT 1",
+    ).get(projectId, packageId) as { source_path: string } | undefined;
+    return row?.source_path;
+  }
+
+  /** Does any project have this package INSTALLED from this exact source? */
+  private anyProjectInstalls(packageId: FrameworkPackageId, sourcePath: string): boolean {
+    const row = this.prepare(`
+      SELECT 1 AS present FROM framework_project_source
+      WHERE package_id = ? AND source_path = ? AND source_origin = 'local' LIMIT 1
+    `).get(packageId, sourcePath) as { present: number } | undefined;
+    return row !== undefined;
   }
 
   private hasSnapshots(packageId: FrameworkPackageId, sourcePath: string): boolean {

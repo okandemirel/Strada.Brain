@@ -14,13 +14,15 @@ export class FrameworkSchemaProvider {
   private cachedCoreSnapshot: FrameworkAPISnapshot | null | undefined = undefined;
 
   /**
-   * `sourceBinding` names the Strada.Core tree THIS project resolved. Without
-   * it the provider asked the store for "the latest core snapshot", which on a
-   * machine with two projects is whichever synced last — so project A validated
-   * and generated code against project B's API after B synced, and A's own
-   * unchanged restart never corrected it (r9 finding 29). Omitted only by
-   * callers that have no project identity (tests, ad-hoc readers), which keep
-   * the old live-pointer behaviour.
+   * `sourceBinding` names THIS project and the Strada.Core tree it resolved.
+   * Without it the provider asked the store for "the latest core snapshot",
+   * which on a machine with two projects is whichever synced last — so project
+   * A validated and generated code against project B's API after B synced, and
+   * A's own unchanged restart never corrected it (r9 finding 29). The project
+   * id in the binding is what decides whether that tree counts as installed
+   * HERE (r10 finding 11). Omitted only by callers that have no project
+   * identity (tests, ad-hoc readers), which keep the old live-pointer
+   * behaviour.
    */
   constructor(
     private readonly store: FrameworkKnowledgeStore,
@@ -35,7 +37,7 @@ export class FrameworkSchemaProvider {
   private getCoreSnapshot(): FrameworkAPISnapshot | null {
     if (this.cachedCoreSnapshot === undefined) {
       this.cachedCoreSnapshot = this.sourceBinding
-        ? this.store.getProjectSnapshot("core", this.sourceBinding.resolve("core"))
+        ? this.store.getProjectSnapshot("core", this.sourceBinding)
         : this.store.getLatestSnapshot("core");
     }
     return this.cachedCoreSnapshot;

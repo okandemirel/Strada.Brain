@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { FrameworkKnowledgeStore, computeSnapshotFingerprint } from "./framework-knowledge-store.js";
 import type { FrameworkAPISnapshot, FrameworkPackageId } from "./framework-types.js";
+import { UNATTRIBUTED_PROJECT_ID } from "./framework-types.js";
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -553,6 +554,150 @@ describe("one machine, several sources", () => {
     } finally {
       upgraded.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Origin is project-relative (adversarial review round 10, finding 11)
+// ---------------------------------------------------------------------------
+
+describe("per-project source bindings (r10 finding 11)", () => {
+  let tmpDir: string;
+  let store: FrameworkKnowledgeStore;
+  const projectA = "/projects/a";
+  const projectB = "/projects/b";
+  const shared = "/shared/framework-cache/core";
+
+  function bindingFor(projectId: string, sourcePath: string | null) {
+    return { projectId, resolve: () => sourcePath };
+  }
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "fks-project-"));
+    store = new FrameworkKnowledgeStore(join(tmpDir, "test.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("labels one shared directory by the reading project, not by whoever stored it", () => {
+    // A installs the shared cache directory; B only falls back to it. Same
+    // bytes, same snapshot — opposite installation status.
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "core", sourcePath: shared, sourceOrigin: "local", version: "1.0.0" }),
+      projectA,
+    );
+    store.reconcileSourceOrigin(projectB, "core", shared, "cached");
+
+    expect(store.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("local");
+    expect(store.getProjectSnapshot("core", bindingFor(projectB, shared))!.sourceOrigin).toBe("cached");
+    // …and the content really is shared.
+    expect(store.getProjectSnapshot("core", bindingFor(projectB, shared))!.version).toBe("1.0.0");
+    expect(store.getProjectLiveSourcePath(projectA, "core")).toBe(shared);
+    expect(store.getProjectLiveSourcePath(projectB, "core")).toBeUndefined();
+  });
+
+  it("a project whose tree moves keeps exactly one binding for the package", () => {
+    store.reconcileSourceOrigin(projectA, "core", "/projects/a/Packages/Strada.Core", "local");
+    store.reconcileSourceOrigin(projectA, "core", "/projects/a/Submodules/Strada.Core", "local");
+
+    expect(store.getProjectLiveSourcePath(projectA, "core")).toBe("/projects/a/Submodules/Strada.Core");
+    expect(store.getProjectSourceOrigin(projectA, "core", "/projects/a/Packages/Strada.Core")).toBeUndefined();
+  });
+
+  it("a first recording is not a correction; a changed claim is", () => {
+    expect(store.reconcileSourceOrigin(projectA, "core", shared, "cached")).toBe(false);
+    expect(store.reconcileSourceOrigin(projectA, "core", shared, "cached")).toBe(false);
+    expect(store.reconcileSourceOrigin(projectA, "core", shared, "local")).toBe(true);
+  });
+
+  it("one project's reconcile does not release another project's installation pointer", () => {
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "core", sourcePath: shared, sourceOrigin: "local", version: "1.0.0" }),
+      projectA,
+    );
+    expect(store.getLiveSourcePath("core")).toBe(shared);
+
+    store.reconcileSourceOrigin(projectB, "core", shared, "cached");
+
+    // A really does install this directory: the package-wide pointer is not
+    // B's to clear.
+    expect(store.getLiveSourcePath("core")).toBe(shared);
+    expect(store.getProjectLiveSourcePath(projectA, "core")).toBe(shared);
+  });
+
+  it("attributes a pre-upgrade database's origins to no project, and the first sync claims them", () => {
+    const dbPath = join(tmpDir, "pre-r10.db");
+    // A database written by the per-source (pre-per-project) code: origin lives
+    // on framework_source_metadata and one package-wide live pointer.
+    const legacy = new FrameworkKnowledgeStore(dbPath);
+    legacy.initialize();
+    legacy.storeSnapshot(makeSnapshot({
+      packageId: "core", sourcePath: shared, sourceOrigin: "local", version: "1.0.0",
+    }));
+    legacy.close();
+    const raw = new Database(dbPath);
+    raw.exec("DROP TABLE framework_project_source");
+    raw.close();
+
+    const upgraded = new FrameworkKnowledgeStore(dbPath);
+    upgraded.initialize();
+    try {
+      // Nothing is re-extracted and nobody has to re-sync: a bound reader with
+      // no recorded binding inherits the unattributed label…
+      expect(upgraded.getProjectSourceOrigin(UNATTRIBUTED_PROJECT_ID, "core", shared)).toBe("local");
+      expect(upgraded.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("local");
+      expect(upgraded.getProjectLiveSourcePath(projectA, "core")).toBe(shared);
+
+      // …and the first project that actually syncs that source claims it, so
+      // the inherited label can never outlive a real observation.
+      upgraded.reconcileSourceOrigin(projectB, "core", shared, "cached");
+      expect(upgraded.getProjectSourceOrigin(UNATTRIBUTED_PROJECT_ID, "core", shared)).toBeUndefined();
+      expect(upgraded.getProjectSnapshot("core", bindingFor(projectB, shared))!.sourceOrigin).toBe("cached");
+      // A, which never synced, no longer inherits anything: it has no evidence
+      // of its own, so it falls back to the origin the row was stored with.
+      expect(upgraded.getProjectSnapshot("core", bindingFor(projectA, shared))!.sourceOrigin).toBe("local");
+    } finally {
+      upgraded.close();
+    }
+  });
+
+  it("guard: a writer with no project identity records no project's installation", () => {
+    store.storeSnapshot(makeSnapshot({ packageId: "core", sourcePath: shared, sourceOrigin: "local" }));
+    expect(store.getProjectSourceOrigin(projectA, "core", shared)).toBeUndefined();
+    // The package-wide view still answers, as it did before.
+    expect(store.getLiveSourcePath("core")).toBe(shared);
+  });
+
+  it("guard: a project with no source for the package is served a clone, never another project's install", () => {
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "core", sourcePath: "/projects/a/Strada.Core", sourceOrigin: "local" }),
+      projectA,
+    );
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "mcp", sourcePath: "/cache/mcp", sourceOrigin: "git-clone" }),
+      projectA,
+    );
+
+    expect(store.getProjectSnapshot("core", bindingFor(projectB, null))).toBeNull();
+    expect(store.getProjectSnapshot("mcp", bindingFor(projectB, null))!.sourceOrigin).toBe("git-clone");
+  });
+
+  it("guard: dropping the directory drops every project's binding to it", () => {
+    store.storeSnapshot(
+      makeSnapshot({ packageId: "core", sourcePath: shared, sourceOrigin: "local" }),
+      projectA,
+    );
+    store.reconcileSourceOrigin(projectB, "core", shared, "cached");
+
+    store.deleteSource("core", shared);
+
+    expect(store.getProjectSourceOrigin(projectA, "core", shared)).toBeUndefined();
+    expect(store.getProjectSourceOrigin(projectB, "core", shared)).toBeUndefined();
+    expect(store.getProjectLiveSourcePath(projectA, "core")).toBeUndefined();
   });
 });
 

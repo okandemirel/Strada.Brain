@@ -81,15 +81,41 @@ export interface FrameworkAPISnapshot {
 }
 
 /**
- * The source paths the CURRENT project resolves for each framework package.
+ * Canonical identity of a project: the realpath of its root.
+ *
+ * The knowledge store is per MACHINE, so every per-project fact in it needs a
+ * project to belong to. Realpath, not the configured path, so /var and
+ * /private/var are one project (see \`frameworkProjectId\`).
+ */
+export type FrameworkProjectId = string;
+
+/**
+ * The project id legacy rows are attributed to on upgrade: rows written before
+ * origin became project-relative belong to no project, and any binding may
+ * claim them (see FrameworkKnowledgeStore.reconcileSourceOrigin). Never a real
+ * project id — a canonical project root is an absolute path.
+ */
+export const UNATTRIBUTED_PROJECT_ID: FrameworkProjectId = "(unattributed)";
+
+/**
+ * WHICH project is reading, and the source paths it resolves for each package.
  *
  * One knowledge store is per MACHINE (~/.strada-memory/framework-knowledge.db)
  * while a source tree is per project, so "the latest snapshot of core" is a
  * question with no answer once two projects have synced: the package-wide
  * "live" pointer names whichever synced last (r9 finding 29). A reader carries
  * this binding so it asks about ITS project's source instead.
+ *
+ * \`projectId\` is the other half (r10 finding 11): two projects can resolve the
+ * SAME physical directory with opposite installation status — one installs the
+ * shared framework cache, the other only falls back to it — so whether that
+ * directory is "installed here" is a fact about the (project, package) pair,
+ * not a property of the path. Binding the path alone let whichever project
+ * synced last decide the answer for both.
  */
 export interface FrameworkSourceBinding {
+  /** The project whose view of the store this is. */
+  readonly projectId: FrameworkProjectId;
   /** This project's source path for a package, or null when it has none. */
   resolve(packageId: FrameworkPackageId): string | null;
 }

@@ -5,6 +5,7 @@
 // Types
 export type {
   FrameworkPackageId,
+  FrameworkProjectId,
   SourceLanguage,
   SourceOrigin,
   FrameworkAPISnapshot,
@@ -19,7 +20,7 @@ export type {
   FrameworkPackageMetadata,
   SerializedFrameworkSnapshot,
 } from "./framework-types.js";
-export { FRAMEWORK_SCHEMA_VERSION } from "./framework-types.js";
+export { FRAMEWORK_SCHEMA_VERSION, UNATTRIBUTED_PROJECT_ID } from "./framework-types.js";
 
 // Package configs
 export {
@@ -45,6 +46,7 @@ export { validateFrameworkDrift, formatFrameworkDriftReport } from "./framework-
 export {
   FrameworkSyncPipeline,
   createFrameworkSourceBinding,
+  frameworkProjectId,
   resolveDepsSourcePath,
 } from "./framework-sync-pipeline.js";
 
