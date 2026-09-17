@@ -319,3 +319,67 @@ describe("CSharpSymbolExtractor — wikilinks", () => {
     expect(wikilinks).toEqual([]);
   });
 });
+
+// =============================================================================
+// TESTS — overloads are distinct symbols (plan 3.11 / audit 05.F4 / D49)
+// =============================================================================
+
+describe("CSharpSymbolExtractor — callable identity", () => {
+  it("gives each overload its own symbol, separated by parameter TYPES not arity", async () => {
+    // Save(int) and Save(string) used to collapse into one `Repo.Save`: one
+    // doc, one span, one set of callers for two different methods.
+    const out = await extract(`
+namespace Game {
+  public class Repo {
+    /// <summary>by id</summary>
+    public void Save(int id) { }
+    /// <summary>by name</summary>
+    public void Save(string name) { }
+    public void Save() { }
+    public T Load<T>(string key, int version) { return default(T); }
+  }
+}
+`);
+    const methods = out.symbols.filter((s) => s.kind === "method");
+    const ids = methods.map((s) => s.symbolId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.some((id) => id.endsWith("Game.Repo.Save(int)"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("Game.Repo.Save(string)"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("Game.Repo.Save()"))).toBe(true);
+    // The generic arity is part of the identity too.
+    expect(ids.some((id) => id.includes("Game.Repo.Load`1(string,int)"))).toBe(true);
+    // The bare name stays searchable, and the display carries the signature.
+    expect(methods.every((s) => s.name === "Save" || s.name === "Load")).toBe(true);
+    expect(methods.find((s) => s.symbolId.endsWith("Save(string)"))!.display).toBe("Save(string)");
+    // Each overload keeps its OWN doc comment and span.
+    const byId = methods.find((s) => s.symbolId.endsWith("Save(int)"))!;
+    expect(byId.doc).toContain("by id");
+    expect(methods.find((s) => s.symbolId.endsWith("Save(string)"))!.doc).toContain("by name");
+    expect(byId.startLine).not.toBe(methods.find((s) => s.symbolId.endsWith("Save(string)"))!.startLine);
+  });
+
+  it("separates a ref/out parameter from its by-value overload, and keeps a plain method simple (guard)", async () => {
+    const out = await extract(`
+public class P {
+  public void Try(int v) { }
+  public void Try(ref int v) { }
+  public void Plain() { }
+}
+`);
+    const ids = out.symbols.filter((s) => s.kind === "method").map((s) => s.symbolId);
+    expect(ids.some((id) => id.endsWith("P.Try(int)"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("P.Try(ref int)"))).toBe(true);
+    expect(ids.some((id) => id.endsWith("P.Plain()"))).toBe(true);
+  });
+
+  it("a call edge still leaves the method's own symbol as its source", async () => {
+    const out = await extract(`
+public class C {
+  public void A(int x) { B(); }
+  public void B() { }
+}
+`);
+    const a = out.symbols.find((s) => s.symbolId.endsWith("C.A(int)"))!;
+    expect(out.edges.some((e) => e.fromSymbol === a.symbolId && e.kind === "calls")).toBe(true);
+  });
+});

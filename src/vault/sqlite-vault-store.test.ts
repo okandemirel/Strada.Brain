@@ -405,7 +405,8 @@ describe("SqliteVaultStore — edges", () => {
     store.upsertEdge(makeEdge());
     const callers = store.findCallersOf("sym-002");
     expect(callers).toHaveLength(1);
-    expect(callers[0]).toEqual(makeEdge());
+    // An extractor-emitted symbol id is an EXACT binding, not a guess (3.11).
+    expect(callers[0]).toEqual({ ...makeEdge(), resolved: "exact" });
     store.close();
   });
 

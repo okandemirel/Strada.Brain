@@ -162,3 +162,51 @@ describe("unresolvedTailName", () => {
     expect(unresolvedTailName("typescript::src/a.ts::helper")).toBeNull();         // already a symbol id
   });
 });
+
+// =============================================================================
+// Plan 3.11 (audit 05.F4 / D49, Codex #26): a name-only link is a GUESS, and
+// the graph presented it exactly like an extractor-emitted symbol id. With
+// overloads now distinct symbols, several methods legitimately share a name.
+// =============================================================================
+
+describe("SqliteVaultStore — an edge says how it was bound", () => {
+  let dir: string;
+  let store: SqliteVaultStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "vault-edge-resolution-"));
+    store = new SqliteVaultStore(join(dir, "db.sqlite"));
+    store.migrate();
+  });
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("marks a unique-name match as heuristic, and an emitted symbol id as exact", () => {
+    indexCallee(store);
+    indexCaller(store);
+    const [linked] = store.findCallersOf(CALLEE_SYM);
+    expect(linked).toMatchObject({ toSymbol: CALLEE_SYM, resolved: "heuristic" });
+
+    // An edge the extractor targeted by symbol id needs no guessing.
+    store.upsertEdge({ fromSymbol: CALLEE_SYM, toSymbol: TWIN_SYM, kind: "calls", atLine: 9 });
+    expect(store.listEdges().find((e) => e.atLine === 9)).toMatchObject({ toSymbol: TWIN_SYM, resolved: "exact" });
+  });
+
+  it("stops claiming a binding at all once the name is ambiguous, and says so again when it is not", () => {
+    indexCallee(store);
+    indexCaller(store);
+    expect(store.findCallersOf(CALLEE_SYM)[0]).toMatchObject({ resolved: "heuristic" });
+
+    // A second symbol of the same name — two overloads, or two classes.
+    indexTwin(store);
+    const ambiguous = store.listEdges().find((e) => e.kind === "calls" && e.fromSymbol === CALLER_SYM)!;
+    expect(ambiguous.toSymbol).toBe(RAW_TARGET);
+    expect(ambiguous.resolved).toBeUndefined();
+
+    // The ambiguity goes away: the guess comes back, still labelled a guess.
+    store.deleteFile(TWIN.path);
+    expect(store.findCallersOf(CALLEE_SYM)[0]).toMatchObject({ toSymbol: CALLEE_SYM, resolved: "heuristic" });
+  });
+});

@@ -142,6 +142,11 @@ export class SqliteVaultStore {
     if (!edgeCols.some((c) => c.name === 'resolved_to')) {
       this.db.prepare('ALTER TABLE vault_edges ADD COLUMN resolved_to TEXT').run();
     }
+    // How a link was made (plan 3.11): a unique-name match is a GUESS, and the
+    // graph used to present it exactly like an extractor-emitted symbol id.
+    if (!edgeCols.some((c) => c.name === 'resolution')) {
+      this.db.prepare('ALTER TABLE vault_edges ADD COLUMN resolution TEXT').run();
+    }
     this.db.prepare('CREATE INDEX IF NOT EXISTS idx_edges_to_name ON vault_edges(to_name)').run();
     this.db.prepare('CREATE INDEX IF NOT EXISTS idx_edges_resolved_to ON vault_edges(resolved_to)').run();
     // Prepare cached statements now that tables exist.
@@ -192,8 +197,8 @@ export class SqliteVaultStore {
     this._stmtFindSymbolsByName = this.db.prepare('SELECT * FROM vault_symbols WHERE name = ? ORDER BY path LIMIT ?');
     this._stmtDeleteSymbolsByPath = this.db.prepare('DELETE FROM vault_symbols WHERE path = ?');
     this._stmtUpsertEdge = this.db.prepare(`
-      INSERT INTO vault_edges (from_symbol, to_symbol, kind, at_line, to_name)
-      VALUES (@fromSymbol, @toSymbol, @kind, @atLine, @toName)
+      INSERT INTO vault_edges (from_symbol, to_symbol, kind, at_line, to_name, resolution)
+      VALUES (@fromSymbol, @toSymbol, @kind, @atLine, @toName, @resolution)
       ON CONFLICT(from_symbol, to_symbol, kind, at_line) DO NOTHING
     `);
     // A caller is found through the derived link OR a raw target that already
@@ -208,8 +213,8 @@ export class SqliteVaultStore {
     `);
     this._stmtSymbolNamesByPath = this.db.prepare('SELECT DISTINCT name FROM vault_symbols WHERE path = ?');
     this._stmtSymbolIdsNamed = this.db.prepare('SELECT symbol_id FROM vault_symbols WHERE name = ? LIMIT 2');
-    this._stmtLinkEdgesByName = this.db.prepare('UPDATE vault_edges SET resolved_to = ? WHERE to_name = ?');
-    this._stmtUnlinkEdgesByName = this.db.prepare('UPDATE vault_edges SET resolved_to = NULL WHERE to_name = ? AND resolved_to IS NOT NULL');
+    this._stmtLinkEdgesByName = this.db.prepare("UPDATE vault_edges SET resolved_to = ?, resolution = 'heuristic' WHERE to_name = ?");
+    this._stmtUnlinkEdgesByName = this.db.prepare('UPDATE vault_edges SET resolved_to = NULL, resolution = NULL WHERE to_name = ? AND resolved_to IS NOT NULL');
     this._stmtUpsertWikilink = this.db.prepare(`
       INSERT INTO vault_wikilinks (from_note, target, resolved)
       VALUES (@fromNote, @target, @resolved)
@@ -467,7 +472,7 @@ export class SqliteVaultStore {
   upsertEdge(e: VaultEdge): void {
     const toName = unresolvedTailName(e.toSymbol);
     const txn = this.db.transaction(() => {
-      this._stmtUpsertEdge!.run({ ...e, toName });
+      this._stmtUpsertEdge!.run({ ...e, toName, resolution: toName ? null : "exact" });
       if (toName) this.relinkName(toName);
     });
     txn();
@@ -535,14 +540,23 @@ export class SqliteVaultStore {
     doc: (row['doc'] as string | null) ?? null,
   });
 
-  private mapEdge = (row: Record<string, unknown>): VaultEdge => ({
-    fromSymbol: row['from_symbol'] as string,
-    // The linked symbol id when the target resolved, else the raw
-    // '<lang>::unresolved::<name>' — self-describing either way.
-    toSymbol: (row['resolved_to'] as string | null) ?? (row['to_symbol'] as string),
-    kind: row['kind'] as VaultEdge['kind'],
-    atLine: row['at_line'] as number,
-  });
+  private mapEdge = (row: Record<string, unknown>): VaultEdge => {
+    const resolvedTo = row['resolved_to'] as string | null;
+    const stored = row['resolution'] as string | null;
+    const resolution: VaultEdge['resolved'] | undefined = resolvedTo
+      ? (stored === 'exact' ? 'exact' : 'heuristic')
+      : (row['to_symbol'] as string).includes(UNRESOLVED_MARKER) ? undefined : 'exact';
+    return {
+      fromSymbol: row['from_symbol'] as string,
+      // The linked symbol id when the target resolved, else the raw
+      // '<lang>::unresolved::<name>' — self-describing either way.
+      toSymbol: resolvedTo ?? (row['to_symbol'] as string),
+      kind: row['kind'] as VaultEdge['kind'],
+      atLine: row['at_line'] as number,
+      // A NAME match is a guess; an extractor-emitted symbol id is not (3.11).
+      ...(resolution ? { resolved: resolution } : {}),
+    };
+  };
 
   listTableNamesForTest(): string[] {
     const rows = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
@@ -682,7 +696,7 @@ export class SqliteVaultStore {
         for (const s of input.symbols) this._stmtUpsertSymbol!.run(s);
         for (const e of input.edges) {
           const toName = unresolvedTailName(e.toSymbol);
-          this._stmtUpsertEdge!.run({ ...e, toName });
+          this._stmtUpsertEdge!.run({ ...e, toName, resolution: toName ? null : "exact" });
           if (toName) relink.add(toName);
         }
         for (const w of input.wikilinks) {

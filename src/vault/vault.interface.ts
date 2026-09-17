@@ -68,6 +68,19 @@ export interface VaultEdge {
   toSymbol: string;
   kind: EdgeKind;
   atLine: number;
+  /**
+   * HOW the target was bound (plan 3.11 / audit 05.F4 / D49, Codex #26):
+   *
+   * - `exact`: the extractor emitted the symbol id itself.
+   * - `heuristic`: only a NAME was available and exactly one symbol in the
+   *   whole vault carries it. A guess — with overloads now distinct symbols,
+   *   several `Save` symbols make the name ambiguous and nothing is bound.
+   * - absent: unresolved.
+   *
+   * A reader that treats a heuristic binding as fact (a call graph, a
+   * blast-radius estimate) must say so; the field exists to make that possible.
+   */
+  resolved?: "exact" | "heuristic";
 }
 
 export interface VaultWikilink {

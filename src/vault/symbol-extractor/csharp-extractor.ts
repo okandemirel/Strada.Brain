@@ -10,6 +10,42 @@ function unresolvedId(qualified: string): string {
   return `csharp::unresolved::${qualified}`;
 }
 
+/**
+ * THE CALLABLE SIGNATURE IS PART OF A METHOD'S IDENTITY (plan 3.11 / audit
+ * 05.F4 / D49, Codex #26).
+ *
+ * `Save(int)` and `Save(string)` used to collapse into one symbol
+ * `Class.Save`: one doc, one span, one set of callers for two different
+ * methods, and the graph bound every call to whichever body was indexed last.
+ * Arity alone does not separate them either, so the parameter TYPES and the
+ * generic arity go into the id.
+ *
+ * Returns e.g. `(int)`, `(string,int)`, ``1(T)` for `Save<T>(T value)`,
+ * or `()` for a method with no parameters.
+ */
+export function callableSignature(node: SyntaxNode): string {
+  const typeParams = node.childForFieldName("type_parameters");
+  const generic = typeParams ? `\`${Math.max(1, typeParams.namedChildCount)}` : "";
+  const params = node.childForFieldName("parameters");
+  const types: string[] = [];
+  if (params) {
+    for (let i = 0; i < params.namedChildCount; i++) {
+      const param = params.namedChild(i);
+      if (!param || (param.type !== "parameter" && param.type !== "_parameter")) continue;
+      const type = param.childForFieldName("type");
+      // A modifier changes the call: ref int and int are different overloads.
+      const modifiers: string[] = [];
+      for (let m = 0; m < param.namedChildCount; m++) {
+        const c = param.namedChild(m);
+        if (c && (c.type === "parameter_modifier" || c.type === "modifier")) modifiers.push(c.text.trim());
+      }
+      const text = `${modifiers.join(" ")}${modifiers.length ? " " : ""}${type?.text ?? "?"}`;
+      types.push(text.replace(/\s+/g, " ").trim());
+    }
+  }
+  return `${generic}(${types.join(",")})`;
+}
+
 function leadingXmlDoc(n: SyntaxNode): string | null {
   let p = n.previousSibling;
   const lines: string[] = [];
@@ -118,10 +154,14 @@ export class CSharpSymbolExtractor implements ISymbolExtractor {
               const mNameNode = mem.childForFieldName('name');
               if (!mNameNode) continue;
               const mName = mNameNode.text;
-              const mQualified = `${qualified}.${mName}`;
+              // Overloads are DIFFERENT symbols (plan 3.11): the signature is
+              // part of the id, the bare name stays searchable, and the
+              // display carries the signature a person reads.
+              const signature = callableSignature(mem);
+              const mQualified = `${qualified}.${mName}${signature}`;
               symbols.push({
                 symbolId: symId(input.path, mQualified),
-                path: input.path, kind: 'method', name: mName, display: mName,
+                path: input.path, kind: 'method', name: mName, display: `${mName}${signature}`,
                 startLine: mem.startPosition.row + 1, endLine: mem.endPosition.row + 1,
                 doc: leadingXmlDoc(mem),
               });
