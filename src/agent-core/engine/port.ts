@@ -519,9 +519,13 @@ export function createAgentCorePort(
         // terminal verdict — the same three signals the recorded metric phase is
         // built from above — so an instinct is never reinforced for a run that
         // failed, was cancelled, or was cut short by an arbiter.
-        deps.clearRunInstinctCredits(c.chatId, {
-          success: !(cancelled || failedVerdict || stoppedShortByArbiter),
-        });
+        // Round 10 #13: settle THIS run (the same taskRunId the instinct-scope key
+        // above uses), not the whole chat — siblings settle their own.
+        deps.clearRunInstinctCredits(
+          c.chatId,
+          { success: !(cancelled || failedVerdict || stoppedShortByArbiter) },
+          deps.getTaskExecutionContext()?.taskRunId,
+        );
         deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
           // audited 2026-09-02: SelfVerification publishes into a process-wide

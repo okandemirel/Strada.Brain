@@ -1317,8 +1317,8 @@ export class Orchestrator {
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
-      clearRunInstinctCredits: (chatId, terminal) =>
-        this.learningPipeline?.clearRunInstinctCredits(chatId, terminal),
+      clearRunInstinctCredits: (chatId, terminal, taskRunId) =>
+        this.learningPipeline?.clearRunInstinctCredits(chatId, terminal, taskRunId),
       settleGoalTree: (conversationScope, status) => this.settleGoalTree(conversationScope, status),
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
@@ -5743,6 +5743,9 @@ export class Orchestrator {
       retryCount: 0,
       // audited 2026-09-02: the instincts THIS run retrieved, not whichever
       // sibling node on this chatId wrote to the map last.
+      // Round 10 #13: the same run scope the set is stored under travels with the
+      // event, so the learning pipeline credits THIS run and not the chat.
+      taskRunId: this.getTaskExecutionContext()?.taskRunId,
       appliedInstinctIds:
         this.currentSessionInstinctIds.get(
           instinctScopeKey(chatId, this.getTaskExecutionContext()?.taskRunId),

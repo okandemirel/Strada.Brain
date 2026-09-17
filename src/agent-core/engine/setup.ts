@@ -112,8 +112,12 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
    * terminal verdict, instead of being applied by whichever tool result came
    * first. `terminal` is that verdict — omit it only where the run's ending is
    * genuinely unknown (the pipeline then falls back to the evidence it observed).
+   *
+   * Round 10 #13: `taskRunId` names WHICH run is ending — sibling wave nodes
+   * share one chatId, and without it the first to finish settled its sibling's
+   * credit too.
    */
-  clearRunInstinctCredits(chatId: string, terminal?: { readonly success: boolean }): void;
+  clearRunInstinctCredits(chatId: string, terminal?: { readonly success: boolean }, taskRunId?: string): void;
 }
 
 /**

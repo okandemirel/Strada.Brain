@@ -49,6 +49,14 @@ export interface ToolResultEvent {
     readonly message: string;
   };
   readonly retryCount?: number;
+  /**
+   * Round 10 #13: WHICH RUN produced this result. `sessionId` carries the CHAT
+   * id, and sibling wave nodes share one chat on one Orchestrator — so without
+   * this the learning pipeline could not tell two concurrent runs apart, and the
+   * first to finish settled (and deleted) its sibling's credit. Absent off-run
+   * (v1 revert paths, tests), where the chat is the only honest scope.
+   */
+  readonly taskRunId?: string;
   readonly appliedInstinctIds?: string[];
   readonly timestamp: number;
 }

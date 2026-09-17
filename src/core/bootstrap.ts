@@ -2658,6 +2658,15 @@ async function initializeLearning(
       });
     });
 
+    // Round 10 #14: terminal settlement goes on the SAME serial queue, so it runs
+    // behind the tool events of the run it is judging. Called directly (as the
+    // engine teardown did), it could settle before its own evidence arrived.
+    pipeline.setSettlementBarrier((task) => {
+      learningQueue.enqueue(async () => {
+        await task();
+      });
+    });
+
     logger.info("Learning pipeline initialized", {
       dbPath: learningDbPath,
       stats: pipeline.getStats(),
