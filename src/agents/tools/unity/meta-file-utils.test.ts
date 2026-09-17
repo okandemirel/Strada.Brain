@@ -6,10 +6,10 @@
  * orphaned by delete. The project root must count in both forms.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { shouldGenerateMeta } from "./meta-file-utils.js";
+import { shouldGenerateMeta, writeImporterMeta } from "./meta-file-utils.js";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -47,5 +47,85 @@ describe("shouldGenerateMeta across a symlinked project root", () => {
   it("does not need the project to exist (lexical roots only)", () => {
     expect(shouldGenerateMeta("/nowhere/proj/Assets/a.cs", "/nowhere/proj")).toBe(true);
     expect(shouldGenerateMeta("/nowhere/other/Assets/a.cs", "/nowhere/proj")).toBe(false);
+  });
+});
+
+/**
+ * Audit A5 / D56 (Codex #14): regeneration rewrote the whole .meta from the
+ * template; only the guid was recovered. Pivot, PPU, slices, mesh scale and
+ * audio load settings authored in the Inspector were reset on every re-draw.
+ */
+describe("writeImporterMeta keeps an authored meta of the right importer (audit A5 / D56)", () => {
+  const GUID = "0123456789abcdef0123456789abcdef";
+  const template = (importer: string) => (guid: string): string =>
+    `fileFormatVersion: 2\nguid: ${guid}\n${importer}:\n  externalObjects: {}\n  textureType: 8\n  spritePixelsToUnits: 100\n`;
+  const authoredSprite = [
+    "fileFormatVersion: 2",
+    `guid: ${GUID}`,
+    "TextureImporter:",
+    "  externalObjects: {}",
+    "  spriteMode: 2",
+    "  alignment: 9",
+    "  spritePivot: {x: 0.25, y: 0}",
+    "  spritePixelsToUnits: 16",
+    "  textureType: 8",
+    "  spriteSheet:",
+    "    sprites:",
+    "    - name: Hero_0",
+    "      rect: {x: 0, y: 0, width: 32, height: 32}",
+    "    - name: Hero_1",
+    "      rect: {x: 32, y: 0, width: 32, height: 32}",
+    "",
+  ].join("\n");
+  function metaFile(content?: string): string {
+    const base = mkdtempSync(join(tmpdir(), "meta-keep-"));
+    dirs.push(base);
+    const path = join(base, "Hero.png.meta");
+    if (content !== undefined) writeFileSync(path, content, "utf8");
+    return path;
+  }
+
+  it("a TextureImporter meta with PPU 16, a custom pivot and two slices survives byte for byte", () => {
+    const path = metaFile(authoredSprite);
+    const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"));
+    expect(r).toEqual({ guid: GUID, kept: true });
+    expect(readFileSync(path, "utf8")).toBe(authoredSprite);
+  });
+
+  it("only textureType is enforced on a TextureImporter: a plain texture becomes a Sprite, the rest stays", () => {
+    const path = metaFile(authoredSprite.replace("  textureType: 8", "  textureType: 0"));
+    const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"));
+    expect(r.kept).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(authoredSprite);
+  });
+
+  it("Model and Audio importer metas are kept untouched", () => {
+    for (const importer of ["ModelImporter", "AudioImporter"] as const) {
+      const authored = `fileFormatVersion: 2\nguid: ${GUID}\n${importer}:\n  externalObjects: {}\n  globalScale: 0.01\n  loadType: 1\n`;
+      const path = metaFile(authored);
+      expect(writeImporterMeta(path, importer, template(importer))).toEqual({ guid: GUID, kept: true });
+      expect(readFileSync(path, "utf8")).toBe(authored);
+    }
+  });
+
+  it("guard: a meta of the WRONG importer type is replaced by the template — with its guid", () => {
+    const path = metaFile(`fileFormatVersion: 2\nguid: ${GUID}\nDefaultImporter:\n  externalObjects: {}\n`);
+    const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"));
+    expect(r).toEqual({ guid: GUID, kept: false });
+    expect(readFileSync(path, "utf8")).toBe(template("TextureImporter")(GUID));
+    // …and a texture meta on what is now a mesh is replaced the same way.
+    const path2 = metaFile(authoredSprite);
+    expect(writeImporterMeta(path2, "ModelImporter", template("ModelImporter"))).toEqual({ guid: GUID, kept: false });
+    expect(readFileSync(path2, "utf8")).toBe(template("ModelImporter")(GUID));
+  });
+
+  it("guard: no meta at all gets the template with a fresh guid; a meta with no guid gets one too", () => {
+    const path = metaFile();
+    const r = writeImporterMeta(path, "TextureImporter", template("TextureImporter"));
+    expect(r.kept).toBe(false);
+    expect(r.guid).toMatch(/^[0-9a-f]{32}$/);
+    expect(readFileSync(path, "utf8")).toBe(template("TextureImporter")(r.guid));
+    const noGuid = metaFile("fileFormatVersion: 2\nTextureImporter:\n  textureType: 8\n");
+    expect(writeImporterMeta(noGuid, "TextureImporter", template("TextureImporter")).kept).toBe(false);
   });
 });

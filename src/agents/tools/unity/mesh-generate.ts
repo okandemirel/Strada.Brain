@@ -18,7 +18,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { reuseOrMintGuid } from "./meta-file-utils.js";
+import { writeImporterMeta } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { PreviousAsset, outsideAssetsError } from "./generated-asset-guard.js";
@@ -732,8 +732,8 @@ export class MeshGenerateTool implements ITool {
     const previous = new PreviousAsset(pathCheck.fullPath);
     // Meta BEFORE art — see sprite-generate: torn pairs must fail toward an
     // orphan meta (cleaned), never meta-less art (random-guid Texture import).
-    const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
-    writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
+    // An authored ModelImporter meta is kept whole (audit A5 / D56).
+    writeImporterMeta(`${pathCheck.fullPath}.meta`, "ModelImporter", modelMeta);
     const lifted = await runner.imageToMesh(model3d, imageAbs, pathCheck.fullPath);
     if (!lifted.ok) {
       previous.restore();
@@ -964,10 +964,10 @@ export class MeshGenerateTool implements ITool {
 
     try {
       // Reuse the existing guid on regeneration — a fresh guid orphans every
-      // prefab/scene binding to the previous version of this mesh.
-      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
+      // prefab/scene binding to the previous version of this mesh — and keep
+      // an authored ModelImporter meta whole (audit A5 / D56).
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      writeFileSync(`${pathCheck.fullPath}.meta`, modelMeta(guid), "utf8");
+      const { guid } = writeImporterMeta(`${pathCheck.fullPath}.meta`, "ModelImporter", modelMeta);
       writeFileSync(pathCheck.fullPath, toObj(mesh!, rawName), "utf8");
       return {
         content:

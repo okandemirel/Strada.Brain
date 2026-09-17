@@ -13,7 +13,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { reuseOrMintGuid } from "./meta-file-utils.js";
+import { writeImporterMeta } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { outsideAssetsError } from "./generated-asset-guard.js";
@@ -373,9 +373,10 @@ export class AudioGenerateTool implements ITool {
     }
 
     try {
-      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
+      // The guid is reused and an authored AudioImporter meta is kept whole
+      // (audit A5 / D56); only a missing or wrong-importer meta is templated.
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      writeFileSync(`${pathCheck.fullPath}.meta`, audioMeta(guid), "utf8");
+      const { guid } = writeImporterMeta(`${pathCheck.fullPath}.meta`, "AudioImporter", audioMeta);
       writeFileSync(pathCheck.fullPath, encodeWav(samples));
       return {
         content:

@@ -248,3 +248,39 @@ describe("a failed lift does not degrade existing art (Codex 2026-09-12 AE#9)", 
     expect(result.content).toContain("PLACEHOLDER");
   });
 });
+
+/** Audit A5 / D56: a regenerated mesh had its ModelImporter meta reset to the template. */
+describe("regeneration keeps an authored ModelImporter .meta (audit A5 / D56)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "mesh-meta-keep-"));
+    mkdirSync(join(dir, "Assets"), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("globalScale and addCollider set in the Inspector survive a re-generation", async () => {
+    const tool = new MeshGenerateTool({ localAvailable: () => false });
+    const metaPath = join(dir, "Assets", "Art", "Generated", "Meshes", "Crate.obj.meta");
+    await tool.execute({ name: "Crate", shape: "rounded-box" }, makeContext(dir));
+    const first = readFileSync(metaPath, "utf8");
+    expect(first).toContain("globalScale: 1");
+    const authored = first.replace("globalScale: 1", "globalScale: 0.01").replace("addCollider: 0", "addCollider: 1");
+    writeFileSync(metaPath, authored, "utf8");
+    const r = await tool.execute({ name: "Crate", shape: "sphere", provider: "procedural", acceptPlaceholder: true }, makeContext(dir));
+    expect(r.isError).toBeFalsy();
+    expect(readFileSync(metaPath, "utf8")).toBe(authored);
+  });
+
+  it("guard: a TextureImporter meta on a mesh path is replaced by the model template, guid kept", async () => {
+    const tool = new MeshGenerateTool({ localAvailable: () => false });
+    const metaPath = join(dir, "Assets", "Art", "Generated", "Meshes", "Crate.obj.meta");
+    mkdirSync(join(dir, "Assets", "Art", "Generated", "Meshes"), { recursive: true });
+    const guid = "fedcbafedcbafedcbafedcbafedcba98";
+    writeFileSync(metaPath, `fileFormatVersion: 2\nguid: ${guid}\nTextureImporter:\n  textureType: 8\n`, "utf8");
+    await tool.execute({ name: "Crate", shape: "rounded-box" }, makeContext(dir));
+    const meta = readFileSync(metaPath, "utf8");
+    expect(meta).toContain(`guid: ${guid}`);
+    expect(meta).toContain("ModelImporter:");
+    expect(meta).not.toContain("TextureImporter");
+  });
+});

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SpriteGenerateTool, encodePng, SPRITE_SHAPES } from "./sprite-generate.js";
+import { SpriteGenerateTool, encodePng, SPRITE_SHAPES, spriteMeta } from "./sprite-generate.js";
 import type { ToolContext } from "../tool.interface.js";
 
 function makeContext(projectPath: string, readOnly = false): ToolContext {
@@ -182,5 +182,75 @@ describe("SpriteGenerateTool", () => {
     );
     expect(result.isError).toBeFalsy();
     expect(existsSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "Pig_Red.png"))).toBe(true);
+  });
+});
+
+/**
+ * Audit A5 / D56 (Codex #14): a regenerated sprite had its .meta rewritten
+ * from the template — PPU 100, centre pivot, no slices — whatever a person
+ * had set in the Inspector. Only the guid survived.
+ */
+describe("regeneration keeps an authored sprite .meta (audit A5 / D56)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "sprite-meta-keep-"));
+    mkdirSync(join(dir, "Assets"), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const GUID = "abcdefabcdefabcdefabcdefabcdef12";
+  /** The tool's own template with PPU 16, a bottom-left-ish pivot and two slices authored into it. */
+  const authored = spriteMeta(GUID)
+    .replace("spritePixelsToUnits: 100", "spritePixelsToUnits: 16")
+    .replace("spritePivot: {x: 0.5, y: 0.5}", "spritePivot: {x: 0.25, y: 0}")
+    .replace("    sprites: []", "    sprites:\n    - name: Hero_0\n      rect: {x: 0, y: 0, width: 32, height: 32}\n    - name: Hero_1\n      rect: {x: 32, y: 0, width: 32, height: 32}");
+  const metaPath = (): string => join(dir, "Assets", "Art", "Generated", "Hero.png.meta");
+  function expectAuthoredKept(): void {
+    const meta = readFileSync(metaPath(), "utf8");
+    expect(meta).toBe(authored);
+    expect(meta).toContain("spritePixelsToUnits: 16");
+    expect(meta).toContain("spritePivot: {x: 0.25, y: 0}");
+    expect(meta).toContain("name: Hero_1");
+    expect(meta).toContain(`guid: ${GUID}`);
+  }
+
+  it("procedural regeneration: PPU 16, the custom pivot and both slices survive", async () => {
+    mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
+    writeFileSync(metaPath(), authored, "utf8");
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Hero" }, makeContext(dir));
+    expect(r.isError).toBeFalsy();
+    expectAuthoredKept();
+  });
+
+  it("local regeneration: the meta written before the draw is the authored one", async () => {
+    mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
+    writeFileSync(metaPath(), authored, "utf8");
+    let metaAtDrawTime = "";
+    const runner = {
+      isModelInstalled: () => true,
+      textToImage: async (_s: unknown, _p: string, out: string) => {
+        metaAtDrawTime = readFileSync(`${out}.meta`, "utf8");
+        // A 64² noise PNG so the draw is not judged blank.
+        const rgba = new Uint8Array(64 * 64 * 4);
+        let seed = 3;
+        for (let i = 0; i < rgba.length; i++) { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; rgba[i] = i % 4 === 3 ? 255 : seed & 0xff; }
+        writeFileSync(out, encodePng(64, 64, rgba));
+        return { ok: true, detail: out };
+      },
+      imageToMesh: async () => ({ ok: false, detail: "unused" }),
+    } as never;
+    const specFor = () => ({ id: "sd15", kind: "text-to-image", label: "stub", weightsRef: "stub" }) as never;
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Hero", provider: "local" }, makeContext(dir));
+    expect(String(r.content)).toContain("Sprite written by local diffusion");
+    expect(metaAtDrawTime).toBe(authored);
+    expectAuthoredKept();
+  });
+
+  it("guard: a meta of the wrong importer type is replaced by the sprite template, guid kept", async () => {
+    mkdirSync(join(dir, "Assets", "Art", "Generated"), { recursive: true });
+    writeFileSync(metaPath(), `fileFormatVersion: 2\nguid: ${GUID}\nDefaultImporter:\n  externalObjects: {}\n`, "utf8");
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Hero" }, makeContext(dir));
+    expect(r.isError).toBeFalsy();
+    expect(readFileSync(metaPath(), "utf8")).toBe(spriteMeta(GUID));
   });
 });

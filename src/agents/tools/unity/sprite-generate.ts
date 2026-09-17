@@ -23,7 +23,7 @@ import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync, existsSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
-import { reuseOrMintGuid } from "./meta-file-utils.js";
+import { writeImporterMeta } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
 import { installedModelFor, type DeviceCapability } from "../../../assets-local/model-catalog.js";
@@ -833,8 +833,8 @@ export class SpriteGenerateTool implements ITool {
       // Meta BEFORE art: if the pair is ever torn, a meta without art is
       // cleaned up (here, and by Unity); art without meta gets a random guid
       // and imports as a plain Texture — the binding-churn failure class.
-      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
-      writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
+      // An authored sprite meta (pivot, PPU, slices) is kept, not re-templated.
+      writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta);
       const localOpts = {
         negative,
         size: 512,
@@ -1067,7 +1067,7 @@ export class SpriteGenerateTool implements ITool {
     const restoreAll = (): void => { for (const p of previous.values()) p.restore(); };
     try {
       for (const job of jobs) {
-        writeFileSync(`${job.fullPath}.meta`, spriteMeta(reuseOrMintGuid(`${job.fullPath}.meta`)), "utf8");
+        writeImporterMeta(`${job.fullPath}.meta`, "TextureImporter", spriteMeta);
       }
       const opts = { negative, size: 512, removeBackground: input["keepBackground"] !== true };
       // "Produced by this call" = the file's mtime changed since the call
@@ -1303,10 +1303,10 @@ export class SpriteGenerateTool implements ITool {
         : undefined);
       const png = encodePng(size, size, gridToRgba(grid));
       // Reuse the existing guid on regeneration — a fresh guid orphans every
-      // prefab/scene binding to the previous version of this sprite.
-      const guid = reuseOrMintGuid(`${pathCheck.fullPath}.meta`);
+      // prefab/scene binding to the previous version of this sprite — and
+      // keep an authored sprite meta whole (audit A5 / D56).
       mkdirSync(dirname(pathCheck.fullPath), { recursive: true });
-      writeFileSync(`${pathCheck.fullPath}.meta`, spriteMeta(guid), "utf8");
+      const { guid } = writeImporterMeta(`${pathCheck.fullPath}.meta`, "TextureImporter", spriteMeta);
       writeFileSync(pathCheck.fullPath, png);
       return {
         content:

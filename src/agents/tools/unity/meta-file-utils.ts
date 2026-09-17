@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { basename, dirname, isAbsolute, normalize, relative, sep } from "node:path";
 
@@ -32,6 +32,61 @@ export function reuseOrMintGuid(metaFilePath: string): string {
     // No existing meta — mint below.
   }
   return generateUnityGuid();
+}
+
+/** The importers the generation tools write for their own asset kinds. */
+export type AssetImporter = "TextureImporter" | "ModelImporter" | "AudioImporter";
+
+/**
+ * Write a generated asset's .meta without discarding what a person authored.
+ *
+ * Audit A5 / D56 (Codex #14): every regeneration rewrote the whole .meta from
+ * the tool's template. The guid survived (reuseOrMintGuid), but a sprite's
+ * spritePixelsToUnits, custom pivot and slices, a mesh's scale and collider
+ * settings, an audio clip's load type — anything set in the Inspector since
+ * the first generation — were silently reset to the template on every
+ * re-draw.
+ *
+ * If a .meta exists and already carries the right importer, it is KEPT as
+ * is; for a TextureImporter only `textureType: 8` (Sprite) is enforced, so a
+ * regenerated sprite still imports as a sprite while every other setting
+ * stays authored. A missing meta, or one of the WRONG importer type (a plain
+ * DefaultImporter left by an earlier tool, a texture meta on what is now a
+ * mesh), is replaced by the template — with the existing guid, so bindings
+ * never churn.
+ */
+export function writeImporterMeta(
+  metaFilePath: string,
+  importer: AssetImporter,
+  template: (guid: string) => string,
+): { guid: string; kept: boolean } {
+  let existing: string | undefined;
+  try {
+    existing = readFileSync(metaFilePath, "utf8");
+  } catch {
+    existing = undefined;
+  }
+  const guidMatch = existing !== undefined ? /guid:\s*([0-9a-f]{32})/i.exec(existing) : null;
+  const guid = guidMatch ? guidMatch[1]!.toLowerCase() : generateUnityGuid();
+  const sameImporter = existing !== undefined && new RegExp(`^${importer}:\\s*$`, "m").test(existing);
+
+  if (existing !== undefined && guidMatch && sameImporter) {
+    if (importer === "TextureImporter") {
+      // Only the one setting that makes the file a Sprite; a meta without the
+      // line at all is not one this tool understands, so it gets the template.
+      const typeLine = /^([ \t]+textureType:[ \t]*)(\d+)[ \t]*$/m;
+      if (!typeLine.test(existing)) {
+        writeFileSync(metaFilePath, template(guid), "utf8");
+        return { guid, kept: false };
+      }
+      const enforced = existing.replace(typeLine, (_m, prefix: string) => `${prefix}8`);
+      if (enforced !== existing) writeFileSync(metaFilePath, enforced, "utf8");
+    }
+    return { guid, kept: true };
+  }
+
+  writeFileSync(metaFilePath, template(guid), "utf8");
+  return { guid, kept: false };
 }
 
 /** Get the .meta file path for a given file or directory path. */

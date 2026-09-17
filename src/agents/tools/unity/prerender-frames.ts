@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, re
 import { join, basename } from "node:path";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
-import { reuseOrMintGuid } from "./meta-file-utils.js";
+import { writeImporterMeta } from "./meta-file-utils.js";
 import { spriteMeta } from "./sprite-generate.js";
 import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
 
@@ -488,7 +488,7 @@ export class PrerenderFramesTool implements ITool {
       for (const frame of frames) {
         const framePath = join(outCheck.fullPath, frame);
         try {
-          writeFileSync(`${framePath}.meta`, spriteMeta(reuseOrMintGuid(`${framePath}.meta`)), "utf8");
+          writeImporterMeta(`${framePath}.meta`, "TextureImporter", spriteMeta);
         } catch {
           // Meta emission is best-effort per frame.
         }

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { PrerenderFramesTool, buildRenderScript, materialForShading, resolvePrerenderStyle } from "./prerender-frames.js";
 import { resolveUnityCliPath } from "./unity-cli-path.js";
+import { spriteMeta } from "./sprite-generate.js";
 import type { ToolContext } from "../tool.interface.js";
 
 function makeContext(projectPath: string, readOnly = false): ToolContext {
@@ -175,5 +176,68 @@ describe("PrerenderFramesTool launch semantics", () => {
 
     expect(result.isError).toBeUndefined();
     expect(String(result.content)).toContain("2 frames rendered");
+  }, 30_000);
+});
+
+/**
+ * Audit A5 / D56: every re-render rewrote each frame's sprite .meta from the
+ * template, so a pivot/PPU/slice set on a rendered angle was lost on the next
+ * prerender. Frame metas of the right importer are kept now.
+ */
+describe("PrerenderFramesTool keeps an authored frame .meta (audit A5 / D56)", () => {
+  let dir: string;
+  let cliDir: string;
+  const savedCli = process.env["STRADA_UNITY_CLI"];
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "prerender-meta-"));
+    mkdirSync(join(dir, "Assets"), { recursive: true });
+    writeFileSync(join(dir, "Assets", "Boar.prefab"), "yaml");
+    cliDir = mkdtempSync(join(tmpdir(), "prerender-meta-cli-"));
+  });
+
+  afterEach(() => {
+    if (savedCli === undefined) delete process.env["STRADA_UNITY_CLI"];
+    else process.env["STRADA_UNITY_CLI"] = savedCli;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(cliDir, { recursive: true, force: true });
+  });
+
+  it("a frame meta with PPU 16, a custom pivot and two slices survives a re-render; a wrong-importer one is replaced", async () => {
+    const fakeCli = join(cliDir, "unity");
+    writeFileSync(
+      fakeCli,
+      [
+        "#!/bin/sh",
+        'ARGS="$4"',
+        "OUT=$(printf '%s' \"$ARGS\" | sed -n 's/.*-outDir \"\\([^\"]*\\)\".*/\\1/p')",
+        "LOG=$(printf '%s' \"$ARGS\" | sed -n 's/.*-logFile \"\\([^\"]*\\)\".*/\\1/p')",
+        '( sleep 1; mkdir -p "$OUT"; : > "$OUT/frame_000.png"; : > "$OUT/frame_045.png"; echo STRADA-RENDER-OK > "$LOG" ) >/dev/null 2>&1 &',
+        "exit 0",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    process.env["STRADA_UNITY_CLI"] = fakeCli;
+    const outDir = join(dir, "Assets", "Art", "Prerendered", "Boar");
+    mkdirSync(outDir, { recursive: true });
+    const GUID = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
+    const authored = spriteMeta(GUID)
+      .replace("spritePixelsToUnits: 100", "spritePixelsToUnits: 16")
+      .replace("spritePivot: {x: 0.5, y: 0.5}", "spritePivot: {x: 0.25, y: 0}")
+      .replace("    sprites: []", "    sprites:\n    - name: Boar_0\n      rect: {x: 0, y: 0, width: 32, height: 32}\n    - name: Boar_1\n      rect: {x: 32, y: 0, width: 32, height: 32}");
+    writeFileSync(join(outDir, "frame_000.png.meta"), authored, "utf8");
+    const WRONG = "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b";
+    writeFileSync(join(outDir, "frame_045.png.meta"), `fileFormatVersion: 2\nguid: ${WRONG}\nDefaultImporter:\n  externalObjects: {}\n`, "utf8");
+
+    vi.resetModules();
+    const { PrerenderFramesTool: FreshTool } = await import("./prerender-frames.js");
+    const result = await new FreshTool().execute({ prefab: "Assets/Boar.prefab" }, makeContext(dir));
+    expect(result.isError).toBeUndefined();
+    expect(String(result.content)).toContain("2 frames rendered");
+
+    expect(readFileSync(join(outDir, "frame_000.png.meta"), "utf8")).toBe(authored);
+    const replaced = readFileSync(join(outDir, "frame_045.png.meta"), "utf8");
+    expect(replaced).toBe(spriteMeta(WRONG));
   }, 30_000);
 });
