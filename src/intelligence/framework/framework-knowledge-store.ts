@@ -322,6 +322,23 @@ export class FrameworkKnowledgeStore {
     })();
   }
 
+  /**
+   * Drop every snapshot and the sync metadata of a package whose source is
+   * gone. Metadata goes too: a package that comes back must be re-extracted
+   * and stored, never skipped as "identical" to a fingerprint it no longer
+   * has a snapshot for. Returns the number of snapshots removed.
+   */
+  deletePackage(packageId: FrameworkPackageId): number {
+    const snapshots = this.prepare("DELETE FROM framework_snapshots WHERE package_id = ?");
+    const metadata = this.prepare("DELETE FROM framework_metadata WHERE package_id = ?");
+    let removed = 0;
+    this.db.transaction(() => {
+      removed = Number(snapshots.run(packageId).changes);
+      metadata.run(packageId);
+    })();
+    return removed;
+  }
+
   /** Get all package IDs that have snapshots */
   getStoredPackageIds(): FrameworkPackageId[] {
     const rows = this.db.prepare(

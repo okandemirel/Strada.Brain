@@ -14,6 +14,7 @@ import { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 import { FrameworkSyncPipeline } from "./framework-sync-pipeline.js";
 import { initializeFrameworkSchemaProvider, getFrameworkSchemaProvider } from "./framework-schema-provider.js";
 import { FrameworkPromptGenerator } from "./framework-prompt-generator.js";
+import { STRADA_API } from "../../agents/context/strada-api-reference.js";
 import type { FrameworkSyncConfig } from "./framework-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
@@ -417,34 +418,89 @@ describe("FrameworkSyncPipeline keeps an edit that lands mid-flush (audited 2026
     }
   });
 
-  it("an added Runtime file, and an unlinked one, each schedule a sync of the package (audit U3)", async () => {
+  it("an added Runtime file, and an unlinked one, each re-extract the package (audit U3; real syncPackage)", async () => {
     const pipeline = new FrameworkSyncPipeline(
       store,
       makeConfig({ watchEnabled: true, watchDebounceMs: 50 }),
       makeDeps(corePath),
     );
-    const synced: string[] = [];
-    vi.spyOn(pipeline, "syncPackage").mockImplementation(async (pkg) => {
-      synced.push(pkg);
-      return null;
-    });
+    await pipeline.bootSync();
+    const names = (): string[] => store.getLatestSnapshot("core")!.classes.map((c) => c.name);
+    expect(names()).toEqual(["SystemBase"]);
     await pipeline.startWatcher();
-    vi.useFakeTimers();
     try {
-      const added = join(corePath, "Runtime", "NewBase.cs");
-      writeFileSync(added, CORE_ONE_BASE);
+      // The watcher's own handler marks the package pending; the flush is
+      // driven directly (real timers: the extractor's fs work must run).
+      const added = join(corePath, "Runtime", "RenderSystemBase.cs");
+      writeFileSync(added, `
+namespace Strada.Core.ECS
+{
+    public abstract class RenderSystemBase : SystemBase { public abstract void OnRender(); }
+}
+`);
       fakeWatches[0]!.emit("add", added);
-      await vi.advanceTimersByTimeAsync(60);
-      expect(synced).toEqual(["core"]);
+      await pipeline.flushPendingSync();
+      expect(names()).toContain("RenderSystemBase");
 
       rmSync(added);
       fakeWatches[0]!.emit("unlink", added);
-      await vi.advanceTimersByTimeAsync(60);
-      expect(synced).toEqual(["core", "core"]);
+      await pipeline.flushPendingSync();
+      expect(names()).toEqual(["SystemBase"]);
+    } finally {
       await pipeline.stop();
+    }
+  });
+
+  /**
+   * Codex review 2026-09-17: unlinking the WHOLE package directory scheduled
+   * an extraction on a path that no longer existed; realpath threw,
+   * flushPendingSync caught it, and the old snapshot stayed served.
+   */
+  it("a package whose directory is gone stops being served: snapshot dropped, readers invalidated, logged", async () => {
+    const pipeline = new FrameworkSyncPipeline(
+      store,
+      makeConfig({ watchEnabled: true, watchDebounceMs: 50 }),
+      makeDeps(corePath),
+    );
+    await pipeline.bootSync();
+    initializeFrameworkSchemaProvider(store);
+    expect(getFrameworkSchemaProvider()!.getSystemBaseClasses()).toEqual(["SystemBase"]);
+    const notified: string[] = [];
+    pipeline.onSnapshotStored((pkg) => notified.push(pkg));
+    await pipeline.startWatcher();
+    vi.useFakeTimers();
+    try {
+      rmSync(corePath, { recursive: true, force: true });
+      fakeWatches[0]!.emit("unlink", join(corePath, "Runtime", "SystemBase.cs"));
+      await vi.advanceTimersByTimeAsync(60);
+      await pipeline.flushPendingSync();
+      await pipeline.stop();
+      expect(store.getLatestSnapshot("core")).toBeNull();
+      expect(store.getMetadata("core")).toBeNull();
+      // The singleton the tools read through falls back to the static reference, not the stale snapshot.
+      expect(getFrameworkSchemaProvider()!.getSystemBaseClasses()).toEqual([...STRADA_API.baseClasses.systems]);
+      expect(notified).toEqual(["core"]);
+      const line = logSpy.warn.mock.calls.map((c) => String(c[0])).find((m) => m.includes("is gone from"));
+      expect(line).toBeDefined();
+      expect(line).toMatch(/1 stored snapshot\(s\) dropped/);
+      expect(line).toContain(corePath);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("guard: a package that comes back after being dropped is extracted and stored again, not skipped as identical", async () => {
+    const pipeline = new FrameworkSyncPipeline(store, makeConfig(), makeDeps(corePath));
+    await pipeline.bootSync();
+    rmSync(corePath, { recursive: true, force: true });
+    expect(await pipeline.syncPackage("core")).toBeNull();
+    expect(store.getLatestSnapshot("core")).toBeNull();
+    mkdirSync(join(corePath, "Runtime"), { recursive: true });
+    writeFileSync(join(corePath, "package.json"), JSON.stringify({ name: "com.strada.core", version: "1.0.0" }));
+    writeFileSync(join(corePath, "Runtime", "SystemBase.cs"), CORE_ONE_BASE);
+    const back = await pipeline.bootSync();
+    expect(back.reports).toHaveLength(1);
+    expect(store.getLatestSnapshot("core")!.classes.map((c) => c.name)).toEqual(["SystemBase"]);
   });
 
   it("guard: an add or unlink outside every package schedules nothing (audit U3)", async () => {

@@ -274,12 +274,38 @@ export class FrameworkSyncPipeline {
     const sourcePath = this.resolveSourcePath(packageId);
     if (!sourcePath) return null;
 
+    // The package directory itself is gone (an unlink of the whole tree).
+    // Extraction used to throw on the missing path, flushPendingSync caught
+    // it, and the OLD snapshot stayed served as if nothing had happened
+    // (Codex 2026-09-17). Drop it and say so instead.
+    if (!existsSync(sourcePath)) {
+      this.dropPackage(packageId, sourcePath);
+      return null;
+    }
+
     const extractor = await createExtractor(sourcePath, pkgConfig);
     const snapshot = await extractor.extract();
     const previous = this.store.getLatestSnapshot(packageId);
 
     this.storeAndNotify(snapshot);
     return validateFrameworkDrift(packageId, snapshot, previous);
+  }
+
+  /** Forget a package whose source no longer exists, and tell every reader. */
+  private dropPackage(packageId: FrameworkPackageId, sourcePath: string): void {
+    const logger = getLoggerSafe();
+    const removed = this.store.deletePackage(packageId);
+    getFrameworkSchemaProvider()?.invalidateCache();
+    for (const listener of this.snapshotListeners) {
+      try {
+        listener(packageId);
+      } catch (err) {
+        logger.warn(`Framework snapshot listener failed for ${packageId}: ${(err as Error).message}`);
+      }
+    }
+    const line = `Framework package ${packageId} is gone from ${sourcePath}: ${removed} stored snapshot(s) dropped and readers invalidated — its previous API is no longer served`;
+    if (removed > 0) logger.warn(line);
+    else logger.debug(line);
   }
 
   /** Stop watcher and clean up */
