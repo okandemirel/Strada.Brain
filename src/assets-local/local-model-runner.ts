@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_REMOVAL_PACKAGES, type LocalModelSpec } from "./model-catalog.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
 // PYTHON DRIVERS (written into the venv area on demand)
@@ -142,6 +143,15 @@ const WEIGHTS = (): string => join(ROOT_DIR(), "weights");
 const RMBG_READY = (): string => join(ROOT_DIR(), ".rmbg-ready");
 /** The import the txt2img driver performs under --rmbg; probed with the same names. */
 export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
+/**
+ * Bound on the in-place rembg/onnxruntime repair. Codex review 2026-09-17:
+ * the repair ran under the process-wide inference lock with pip's 30-minute
+ * budget, so one missing package on a slow or offline network held every
+ * generation — keepBackground batches included — for up to ~34 minutes
+ * with no progress line. Ten minutes covers the two wheels on any working
+ * connection; past that the answer is "unavailable", not a hung sprint.
+ */
+export const RMBG_REPAIR_TIMEOUT_MS = 600_000;
 
 export type SpawnImpl = (
   cmd: string,
@@ -191,6 +201,19 @@ export class LocalModelRunner {
   private async inference<T>(run: () => Promise<T>): Promise<T> {
     const turn = LocalModelRunner.inferenceQueue.then(run, run);
     LocalModelRunner.inferenceQueue = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /**
+   * Dependency preflight/repair runs on ITS OWN queue, never the inference
+   * lock: two --rmbg callers repair once between them, while a keepBackground
+   * batch or a mesh lift is free to run meanwhile (Codex review 2026-09-17).
+   */
+  private static preflightQueue: Promise<unknown> = Promise.resolve();
+
+  private async preflight<T>(run: () => Promise<T>): Promise<T> {
+    const turn = LocalModelRunner.preflightQueue.then(run, run);
+    LocalModelRunner.preflightQueue = turn.catch(() => undefined);
     return turn;
   }
 
@@ -301,7 +324,7 @@ export class LocalModelRunner {
     spec: LocalModelSpec,
     prompt: string,
     outPath: string,
-    opts: { negative?: string; size?: number; steps?: number; removeBackground?: boolean; seed?: number } = {},
+    opts: { negative?: string; size?: number; steps?: number; removeBackground?: boolean; seed?: number; onProgress?: (line: string) => void } = {},
   ): Promise<{ ok: boolean; detail: string }> {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
@@ -321,18 +344,12 @@ export class LocalModelRunner {
       "--seed", String(opts.seed ?? -1),
     ];
     const env = this.envWithWeights();
-    let unavailable: string | undefined;
-    const run = await this.inference(async () => {
-      if (opts.removeBackground) {
-        const rmbg = await this.ensureBackgroundRemoval(env);
-        if (!rmbg.ok) {
-          unavailable = rmbg.detail;
-          return { code: -1, stdout: "", stderr: rmbg.detail };
-        }
-      }
-      return this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env });
-    });
-    if (unavailable !== undefined) return { ok: false, detail: unavailable };
+    if (opts.removeBackground) {
+      // BEFORE the inference lock — see preflight().
+      const rmbg = await this.preflight(() => this.ensureBackgroundRemoval(env, opts.onProgress));
+      if (!rmbg.ok) return { ok: false, detail: rmbg.detail };
+    }
+    const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: 1_200_000, env }));
     if (run.code !== 0 || !existsSync(outPath)) {
       return { ok: false, detail: `inference failed: ${(run.stderr || run.stdout).slice(-400)}` };
     }
@@ -347,7 +364,7 @@ export class LocalModelRunner {
   async textToImageBatch(
     spec: LocalModelSpec,
     jobs: ReadonlyArray<{ prompt: string; out: string; negative?: string; seed?: number }>,
-    opts: { size?: number; steps?: number; removeBackground?: boolean } = {},
+    opts: { size?: number; steps?: number; removeBackground?: boolean; onProgress?: (line: string) => void } = {},
   ): Promise<{ ok: boolean; detail: string; written: string[]; missing: string[]; keptBackground: string[] }> {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.`, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
@@ -381,20 +398,12 @@ export class LocalModelRunner {
       }
       // Budget scales with the batch: one sprite is ~45-60 s at 512² on MPS.
       const env = this.envWithWeights();
-      let unavailable: string | undefined;
-      const run = await this.inference(async () => {
-        if (opts.removeBackground) {
-          const rmbg = await this.ensureBackgroundRemoval(env);
-          if (!rmbg.ok) {
-            unavailable = rmbg.detail;
-            return { code: -1, stdout: "", stderr: rmbg.detail };
-          }
-        }
-        return this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env });
-      });
-      if (unavailable !== undefined) {
-        return { ok: false, detail: unavailable, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
+      if (opts.removeBackground) {
+        // BEFORE the inference lock — see preflight().
+        const rmbg = await this.preflight(() => this.ensureBackgroundRemoval(env, opts.onProgress));
+        if (!rmbg.ok) return { ok: false, detail: rmbg.detail, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
       }
+      const run = await this.inference(() => this.spawn(venvPython(), args, { timeoutMs: Math.min(3_600_000, 300_000 + 120_000 * jobs.length), env }));
       const producedNow = (o: string): boolean => {
         try {
           const m = statSync(o).mtimeMs;
@@ -478,16 +487,25 @@ export class LocalModelRunner {
    * bearing install that lacks the packages is repaired in place (one pip
    * install), and when even that fails the answer names the fix.
    */
-  async ensureBackgroundRemoval(env: NodeJS.ProcessEnv = this.envWithWeights()): Promise<{ ok: true } | { ok: false; detail: string }> {
+  async ensureBackgroundRemoval(
+    env: NodeJS.ProcessEnv = this.envWithWeights(),
+    onProgress?: (line: string) => void,
+  ): Promise<{ ok: true } | { ok: false; detail: string }> {
     if (existsSync(RMBG_READY())) return { ok: true };
+    const progress = (line: string): void => {
+      onProgress?.(line);
+      getLoggerSafe().info(`assets-local: ${line}`);
+    };
     const probe = (): Promise<{ code: number; stdout: string; stderr: string }> =>
       this.spawn(venvPython(), ["-c", RMBG_IMPORT_PROBE], { timeoutMs: 120_000, env });
+    progress(`checking the venv for ${BACKGROUND_REMOVAL_PACKAGES.join("/")} (background removal)…`);
     let check = await probe();
     if (check.code !== 0) {
+      progress(`installing ${BACKGROUND_REMOVAL_PACKAGES.join(" ")} into the venv (bounded to ${Math.round(RMBG_REPAIR_TIMEOUT_MS / 60_000)} min)…`);
       const install = await this.spawn(
         venvPython(),
         ["-m", "pip", "install", ...BACKGROUND_REMOVAL_PACKAGES],
-        { timeoutMs: 1_800_000, env },
+        { timeoutMs: RMBG_REPAIR_TIMEOUT_MS, env },
       );
       check = install.code === 0 ? await probe() : install;
       if (check.code !== 0) {

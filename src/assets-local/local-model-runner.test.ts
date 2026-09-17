@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { LocalModelRunner, RMBG_IMPORT_PROBE, type SpawnImpl } from "./local-model-runner.js";
+import { LocalModelRunner, RMBG_IMPORT_PROBE, RMBG_REPAIR_TIMEOUT_MS, type SpawnImpl } from "./local-model-runner.js";
 import { getModelSpec, LOCAL_MODEL_CATALOG } from "./model-catalog.js";
 
 function spawnOk(): { spawn: SpawnImpl; calls: Array<{ cmd: string; args: string[] }> } {
@@ -431,6 +431,54 @@ describe("background removal is installed, or repaired, or refused by name (audi
     expect(r.detail).toMatch(/background removal unavailable/);
     expect(r.missing).toEqual(jobs.map((j) => j.out));
     expect(seq).not.toContain("infer");
+  });
+
+  it("a hung pip repair does not hold the inference lock: a keepBackground batch runs meanwhile, and the repair gives up at the bound (Codex 2026-09-17)", async () => {
+    existingInstall();
+    vi.useFakeTimers();
+    try {
+      const seq: string[] = [];
+      let pipTimeout = -1;
+      const spawn: SpawnImpl = (_cmd, args, opts) => {
+        if (isProbe(args)) { seq.push("probe"); return Promise.resolve({ code: 1, stdout: "", stderr: "No module named 'rembg'" }); }
+        if (isPip(args)) {
+          // pip never returns on its own: only the spawn's own timeout ends it.
+          seq.push("pip");
+          pipTimeout = opts.timeoutMs;
+          return new Promise((resolve) => setTimeout(() => resolve({ code: -1, stdout: "", stderr: `killed by timeout after ${opts.timeoutMs} ms` }), opts.timeoutMs));
+        }
+        if (isInference(args)) {
+          seq.push("infer");
+          const jobs = args[args.indexOf("--jobs") + 1];
+          if (args.includes("--jobs") && jobs) for (const j of JSON.parse(readFileSync(jobs, "utf8")) as Array<{ out: string }>) writeFileSync(j.out, "png");
+          return Promise.resolve({ code: 0, stdout: "WROTE", stderr: "" });
+        }
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      };
+      const runner = new LocalModelRunner(spawn);
+      const progress: string[] = [];
+      const rmbg = runner.textToImage(getModelSpec("sd15")!, "a hero", join(dir, "hero.png"), { removeBackground: true, onProgress: (l) => progress.push(l) });
+      let batchDone = false;
+      const batch = runner
+        .textToImageBatch(getModelSpec("sd15")!, [{ prompt: "a", out: join(dir, "a.png") }], { removeBackground: false })
+        .then((r) => { batchDone = true; return r; });
+      // Only microtasks pass — the pip is still hanging — and the batch is done.
+      for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0);
+      expect([...seq].sort()).toEqual(["infer", "pip", "probe"]);
+      expect(batchDone).toBe(true);
+      expect((await batch).ok).toBe(true);
+      expect(progress.some((l) => /installing rembg onnxruntime/.test(l))).toBe(true);
+      // The repair is bounded: at the bound it gives up with the named fix.
+      expect(pipTimeout).toBe(RMBG_REPAIR_TIMEOUT_MS);
+      expect(pipTimeout).toBeLessThanOrEqual(600_000);
+      await vi.advanceTimersByTimeAsync(RMBG_REPAIR_TIMEOUT_MS);
+      const r = await rmbg;
+      expect(r.ok).toBe(false);
+      expect(r.detail).toMatch(/background removal unavailable/);
+      expect(r.detail).toMatch(/killed by timeout/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("guard: keepBackground (removeBackground false) never probes or installs anything and runs with --rmbg 0", async () => {
