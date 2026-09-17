@@ -16,25 +16,165 @@ passing (`FAIL_TO_PASS`), and the tests that must not break (`PASS_TO_PASS`).
 | Repo-spread subset selection | `src/bench/swe-sharp-dataset.ts` | same |
 | `dotnet test` TRX report parsing | `src/bench/trx-report.ts` | `src/bench/trx-report.test.ts` |
 | Resolution scoring and run summary | `src/bench/swe-sharp-resolution.ts` | `src/bench/swe-sharp.test.ts` |
+| Execution loop: clone → testPatch → candidate → `dotnet test` → score | `scripts/bench/swe-sharp/run-tasks.mjs`, `src/bench/swe-sharp-runner.ts` | `src/bench/swe-sharp-runner.test.ts` |
 
-**Not implemented:** the execution loop — clone each repo at `baseCommit`, apply
-`testPatch`, run the agent, apply its patch, `dotnet test`, feed the TRX to the
-scorer. That step needs the .NET SDK, which was not available on the machine
-this was built on, so writing it would have meant shipping orchestration code
-nobody had ever run. The scoring half above is the part that fails *silently*
-when it is wrong, so that is the part that was built and tested; process
-orchestration fails loudly and can be written against a working toolchain.
+The execution loop was missing until 2026-09-18 for a stated reason: the machine
+had no .NET SDK, and shipping orchestration nobody had ever run would have been
+worse than shipping nothing. .NET 10.0.400 is installed now, the loop exists,
+and it has been run for real — see **Proof it ran** below.
 
 ## Running it
 
 ```
 node scripts/bench/swe-sharp/fetch-tasks.mjs           # pin the subset
 node scripts/bench/swe-sharp/fetch-tasks.mjs --check   # has upstream changed?
+
+# the control run: does the harness score the reference solution as resolved?
+npm run bench:swe-sharp:run -- --task autofac__autofac-1362 --candidate gold
+
+# evaluate an agent (any command; see the candidate contract below)
+npm run bench:swe-sharp:run -- --candidate 'my-agent --fix' --limit 5
 ```
 
 `--check` re-fetches and compares content hashes. A changed hash means scores
 from before and after are not comparable — re-pin deliberately rather than
 absorbing the change into an improvement narrative.
+
+### Exit codes
+
+Same contract as `scripts/eval/learning-eval.mjs`:
+
+| code | meaning |
+|---|---|
+| 0 | every requested task RAN and the run met its budget |
+| 1 | the run happened and came out below its `--min-resolved-rate` floor |
+| 2 | bad invocation, unreadable task set, harness error |
+| 3 | a requested task did NOT run, or a pass could not be proven |
+
+### The candidate contract
+
+`--candidate <command>` runs with the checkout as its working directory and
+
+```
+STRADA_BENCH_INSTANCE_ID  STRADA_BENCH_REPO      STRADA_BENCH_BASE_COMMIT
+STRADA_BENCH_WORKDIR      STRADA_BENCH_PATCH_OUT STRADA_BENCH_PROBLEM_FILE
+STRADA_BENCH_TIMEOUT_MS
+```
+
+Write a unified diff to `$STRADA_BENCH_PATCH_OUT`, or just edit the working tree
+— the harness takes `git diff` (new files included) when no patch file appears.
+
+Two candidates are built in. `gold` applies the task's reference patch: a CONTROL
+run that measures the harness, labelled as such in every report, never an agent
+score. The default candidate is `strada`, and it is an explicit **not-run**: a
+real Strada worker run makes paid provider calls and this harness does not spend
+credit on its own. Wire Strada in as `--candidate '<your worker command>'`.
+
+## What the loop refuses to do
+
+**A task that did not run is not a failed task and not a pass.** `not-run` is a
+third status with a named reason (`no-network`, `clone-failed`,
+`test-patch-failed`, `no-solution`, `build-failed-before-candidate`,
+`candidate-timeout`, `test-timeout`, `runtime-unavailable`, `no-test-report`,
+`fail-to-pass-already-passing`, `not-attempted`, `harness-error`), it stays out of the rate's denominator, and it
+exits 3. Folding a failed clone into the unresolved column produces a real number
+over an invented denominator, and nothing in the output would say so.
+
+**A candidate that produced no patch is a scored attempt.** "The agent declined"
+and "the harness broke" are different columns. Collapsing them shrinks the
+denominator every time a model gives up, which flatters the score.
+
+**FAIL_TO_PASS is observed failing first.** Every task runs its tests BEFORE the
+candidate, so `resolved` means *fixed* rather than *was already green*. Two cases
+matter and are handled separately: a FAIL_TO_PASS test that already passes makes
+the task unscoreable (`fail-to-pass-already-passing`, not-run), while a test
+patch that does not *compile* before the fix is the expected failing state — a
+test that cannot compile cannot pass — and not a broken environment. Telling
+those apart needs a build of the checkout before the test patch, which the loop
+does. `--no-baseline` skips the pre-run and then every pass is reported UNPROVEN
+and exits 3 unless `--allow-unproven` is passed.
+
+**Competitor comparison is NOT MEASURED.** The improvement plan names Hermes
+v0.21.2 and Bezi 1.36.0. Neither is installed here and neither publishes a
+SWE-Sharp-Bench score, so every report prints them as `NOT MEASURED` with that
+reason. The row's type makes a number impossible to add by accident.
+
+## Environment deviations, recorded per task
+
+These tasks were authored against .NET 6/7 and run here on the .NET 10 SDK, so
+the loop has to relax what the repos pin and it records each change on the
+attempt:
+
+- `global.json` `rollForward` is set to `latestMajor`, then **committed inside the
+  throwaway checkout** — an uncommitted harness edit would show up in `git diff`
+  and be attributed to the candidate.
+- `DOTNET_ROLL_FORWARD=LatestMajor` lets a `net7.0` test assembly run on the
+  installed .NET 10 runtime. Without it every one of these tasks is `not-run`.
+- Only the newest .NET-Core-family target framework is tested; `net472` cannot
+  run on macOS and `netstandard2.0` is not runnable at all.
+- By default only the test projects that root the required test names are built,
+  and `--filter` narrows the run to the required tests. Both are what scoring
+  reads. `--no-filter` and `--project` override it.
+
+## Proof it ran
+
+All numbers below are from real runs on 2026-09-18, macOS arm64, .NET SDK
+10.0.400 (the only SDK installed). TRX counts come from the TRX files the runs
+produced.
+
+### Six tasks, six repositories, gold control
+
+`--candidate gold`, 76 s wall for all six, per-task wall times shown:
+
+| task | result | wall | TRX |
+|---|---|---|---|
+| `autofac__autofac-1362` | RESOLVED, proven | 12.8 s | 3 / 3 passed |
+| `gui-cs__terminal-gui-3195` | RESOLVED, proven | 14.7 s | 1 / 1 passed |
+| `restsharp__restsharp-1676` | RESOLVED, proven | 9.5 s | 1 / 1 passed |
+| `spectreconsole__spectre-console-1303` | RESOLVED, proven | 17.9 s | 1 / 1 passed |
+| `serilog__serilog-1897` | RESOLVED, proven | 13.5 s | 15 / 15 passed |
+| `devlooped__moq-1079` | **NOT RUN** (`runtime-unavailable`) | 7.1 s | — |
+
+`resolved 5/5 (rate 1.0), proven fail→pass 5/5, NOT RUN 1`, **exit 3** — because
+a requested task did not run. The Moq task targets `netcoreapp3.1`, whose test
+host needs an x64 .NET that does not exist for arm64 macOS (`Could not find
+'dotnet' host for the 'X64' architecture`). That is an environment gap, so it is
+reported as one.
+
+Both of those rows were wrong in an earlier revision of this harness, and the
+failures are worth recording because each produced a *number* rather than an
+error: the Moq task was scored `unresolved` (a missing runtime read as a failed
+patch), and Terminal.Gui was scored `unresolved` because the loop tested
+`Terminal.Gui.csproj` — the library whose name roots `Terminal.Gui.ViewTests.…` —
+which runs no tests and so reports every required test absent. `classifyTestRun`
+and `looksLikeTestProject` exist because of those two false scores.
+
+### One task, five candidates (`autofac__autofac-1362` @ 0c79d7bc)
+
+| candidate | wall | TRX | status | exit |
+|---|---|---|---|---|
+| `gold` (control) | 12.8 s | 3 / 3 passed | RESOLVED, proven | 0 |
+| `gold`, cold clone cache | 25.0 s | 3 / 3 passed | RESOLVED, proven | 0 |
+| `echo "I decline to fix this."` | 12.5 s | — | unresolved, "candidate produced no patch — scored attempt, not a harness error" | 0 |
+| a real but wrong edit (appends a comment) | 14.1 s | total 3, passed 2, **failed 1** | unresolved, "1 FAIL_TO_PASS not passing" | 0 |
+| default (`strada`) | 11.7 s | — | NOT RUN (`candidate-unavailable`) | 3 |
+| `gold --no-baseline` | 12 s | 3 / 3 passed | resolved but **UNPROVEN** | 3 |
+| `gold --no-baseline --allow-unproven` | 12 s | 3 / 3 passed | resolved, unproven, accepted on request | 0 |
+
+The pre-patch TRX for that task recorded
+`DefaultConstructorFinderTests.SupportsZeroPublicConstructorTypes` as `Failed`
+and the two PASS_TO_PASS tests as `Passed`; after the gold patch all three are
+`Passed`. That is an observed fail→pass transition, not an inferred one — and the
+wrong-edit row is the check that the harness can tell a fix from a non-fix at
+all.
+
+### What has NOT been run
+
+The full pinned 50-task subset has not been run end to end, and no agent has been
+scored on it: the default candidate is `not-run` by design. Six of fifty tasks
+have been executed. Repos with heavy test suites (efcore, Avalonia, jellyfin) and
+tasks pinned to frameworks with no arm64 runtime are expected to produce more
+`not-run` rows; each will name its reason rather than depress a score.
 
 ## Decisions worth knowing
 
