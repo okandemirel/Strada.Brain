@@ -47,6 +47,73 @@ import {
 import { createBrand, type ToolName, type TimestampMs, type JsonObject } from "../../types/index.js";
 import { seedAllFrameworkConventions } from "../seeds/framework-seeds.js";
 
+/**
+ * What a tool call acted on. A repair has to act on the same thing as the
+ * failure it claims to repair (D39 / audit 04.2a), so the pair is compared on
+ * this and not on the tool name alone.
+ */
+export type RepairTarget = { kind: "path"; value: string } | { kind: "command"; value: string };
+
+/** Input keys that NAME the resource a tool acted on. */
+const TARGET_INPUT_KEYS = [
+  "path", "file_path", "filePath", "file", "filename", "fileName", "target_file", "notebook_path",
+] as const;
+
+/**
+ * Read the target out of a tool input: the named resource when there is one,
+ * else the command line. Deliberately NOT a guess — a tool input that names
+ * neither yields null, and a null target can never be repaired (see
+ * {@link isRepairOf}), because "the same tool succeeded later" is not evidence
+ * that anything was fixed.
+ *
+ * Content-bearing keys (content, text, body, …) are never read: a file body is
+ * not a target and must never become the action text of an instinct.
+ */
+export function repairTarget(input: unknown): RepairTarget | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  for (const key of TARGET_INPUT_KEYS) {
+    const raw = record[key];
+    if (typeof raw === "string" && raw.trim()) {
+      return { kind: "path", value: raw.trim().replace(/\\/g, "/").replace(/^\.\//, "") };
+    }
+  }
+  const command = record["command"];
+  if (typeof command === "string" && command.trim()) {
+    return { kind: "command", value: command.trim() };
+  }
+  return null;
+}
+
+/**
+ * program + sub-command of the LAST segment of a (possibly compound) command
+ * line: the repair's recheck is what it ends with, so
+ * "dotnet restore && dotnet build" re-runs "dotnet build".
+ */
+function commandOperation(command: string): string {
+  const lastSegment = command.split(/&&|\|\||;|\|/).pop() ?? command;
+  return lastSegment
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0 && !/^\w+=/.test(token))
+    .slice(0, 2)
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * Whether `success` repairs `failure`: the same named resource, or a command
+ * that explicitly re-runs the failed operation. Anything else — an unrelated
+ * command, a read of another file, a pair naming no target at all — is NOT a
+ * repair, however close in time and however identical the tool name.
+ */
+export function isRepairOf(failure: RepairTarget | null, success: RepairTarget | null): boolean {
+  if (!failure || !success || failure.kind !== success.kind) return false;
+  if (failure.kind === "path") return failure.value === success.value;
+  const failedOperation = commandOperation(failure.value);
+  return failedOperation.length > 0 && failedOperation === commandOperation(success.value);
+}
+
 const VERDICT_SCORE = {
   HIGH: 0.7,
   PERFECT: 1.0,
@@ -99,6 +166,8 @@ export class LearningPipeline {
     toolName: string;
     errorOutput: string;
     timestamp: number;
+    /** What the FAILING call acted on; only a success on the same thing repairs it (D39). */
+    target: RepairTarget | null;
   }>();
 
   /**
@@ -356,17 +425,28 @@ export class LearningPipeline {
         toolName: event.toolName,
         errorOutput: event.output,
         timestamp: Date.now(),
+        target: repairTarget(event.input),
       });
     } else if (this.pendingResolutions.has(resolutionKey)) {
-      // Same tool in the same session succeeded after a previous failure — auto-record resolution
+      // D39 (audit 04.2a): a success on the same tool in the same session was
+      // enough to call the pair an error→fix. So an unrelated `git push`, or a
+      // read of a different file, was minted as the "resolution" of a build
+      // error — a learned solution never observed to fix anything. A repair now
+      // has to act on the SAME target (same file) or explicitly re-run the same
+      // command operation ({@link isRepairOf}).
       const pending = this.pendingResolutions.get(resolutionKey)!;
-      this.pendingResolutions.delete(resolutionKey);
-
-      // Only link if the resolution happened within 5 minutes of the error
       const elapsed = Date.now() - pending.timestamp;
-      if (elapsed < LearningPipeline.RESOLUTION_LINK_WINDOW_MS) {
-        await this.recordAutoResolution(pending.errorObservation, observation, event.toolName);
+      const target = repairTarget(event.input);
+      if (elapsed >= LearningPipeline.RESOLUTION_LINK_WINDOW_MS) {
+        // Past the link window: the error is no longer repairable by this run.
+        this.pendingResolutions.delete(resolutionKey);
+      } else if (isRepairOf(pending.target, target)) {
+        this.pendingResolutions.delete(resolutionKey);
+        await this.recordAutoResolution(pending.errorObservation, observation, event.toolName, target);
       }
+      // Otherwise the pending error STAYS: an unrelated success on the same tool
+      // used to consume it, so the call that actually repaired it was never
+      // linked. It is evicted by the stale sweep or at session end.
     }
 
     if (!event.success && event.errorDetails) {
@@ -610,6 +690,8 @@ export class LearningPipeline {
     toolName?: string;
     contextConditions?: ContextCondition[];
     scopeType?: ScopeType;
+    /** Owner of a user-scoped instinct (item 3.1) — carried into the scope row. */
+    userId?: string;
     confidence?: number;
   }): Promise<Instinct | null> {
     if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
@@ -645,12 +727,14 @@ export class LearningPipeline {
       sourceTrajectoryIds: [],
       tags: [],
       scopeType,
+      ...(params.userId ? { userId: params.userId } : {}),
     };
 
-    // Store instinct row without old-style scope, then add v2 scope entry with scopeType
+    // Store instinct row without old-style scope, then add v2 scope entry with
+    // scopeType and the owner (item 3.1).
     this.storage.createInstinct(instinct, undefined);
     if (this.projectPath) {
-      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType);
+      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType, params.userId);
     }
     this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
@@ -662,7 +746,7 @@ export class LearningPipeline {
     return instinct;
   }
 
-  createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags"> & { scopeType?: ScopeType }): Instinct {
+  createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags"> & { scopeType?: ScopeType; userId?: string }): Instinct {
     const scopeType: ScopeType = params.scopeType ?? 'project';
     const instinct: Instinct = {
       ...params,
@@ -673,12 +757,15 @@ export class LearningPipeline {
       sourceTrajectoryIds: [],
       tags: [],
       scopeType,
+      ...(params.userId ? { userId: params.userId } : {}),
     };
 
-    // Store instinct row without old-style scope, then add v2 scope entry with scopeType
+    // Store instinct row without old-style scope, then add v2 scope entry with
+    // scopeType AND the owner (item 3.1): a 'user' scope row with no user_id is
+    // a rule nobody owns, which every user then sees.
     this.storage.createInstinct(instinct, undefined);
     if (this.projectPath) {
-      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType);
+      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType, undefined /* MUTANT */);
     }
     this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
@@ -1218,6 +1305,7 @@ export class LearningPipeline {
     errorObs: Observation,
     successObs: Observation,
     toolName: string,
+    target: RepairTarget | null,
   ): Promise<void> {
     const correction = `Auto-resolved: ${toolName} failed with "${(errorObs.output ?? '').slice(0, 100)}" then succeeded with "${(successObs.output ?? '').slice(0, 100)}"`;
 
@@ -1242,11 +1330,20 @@ export class LearningPipeline {
     // Consider creating an instinct from this error→resolution pattern
     const errorPattern = this.extractTriggerPattern(errorObs.output ?? '');
     if (errorPattern) {
-      const rawAction = String((successObs.input as Record<string, unknown>)?.["command"] ?? (successObs.input as Record<string, unknown>)?.["content"] ?? "retrying with corrected input");
+      // D39 (audit 04.2a): this read input.content when there was no command —
+      // so for file_write the learned "solution" was the ENTIRE FILE BODY, a
+      // blob no future task could act on (and a leak of whatever the file held).
+      // The action now describes the OPERATION that repaired the failure; a file
+      // body is never an instruction.
+      const rawAction = target?.kind === "command"
+        ? `re-run \`${target.value.slice(0, 200)}\``
+        : target?.kind === "path"
+          ? `re-run ${toolName} on ${target.value.slice(0, 200)} once the cause is removed`
+          : "retry with corrected input";
       await this.considerInstinctCreation({
         type: "error_fix" as InstinctType,
         triggerPattern: errorPattern,
-        action: `When ${toolName} fails with this pattern, the resolution involved: ${sanitizePromptInjection(rawAction.slice(0, 300))}`,
+        action: `When ${toolName} fails with this pattern, the resolution was to ${sanitizePromptInjection(rawAction.slice(0, 300))}`,
         toolName,
       });
     }
@@ -1308,7 +1405,7 @@ export class LearningPipeline {
   /**
    * Store an explicit user teaching as a new instinct.
    */
-  async teachExplicit(content: string, scopeType: ScopeType, _userId?: string): Promise<string> {
+  async teachExplicit(content: string, scopeType: ScopeType, userId?: string): Promise<string> {
     const instinct = this.createInstinct({
       name: `teaching:explicit:${Date.now()}`,
       type: 'user_teaching',
@@ -1318,6 +1415,10 @@ export class LearningPipeline {
       action: content,
       contextConditions: [],
       scopeType,
+      // item 3.1 (audit 04.4 / D42): the teacher's identity used to stop here
+      // (`_userId`), so a rule taught by one person was stored unowned and
+      // handed to everybody working on the project.
+      userId,
     });
     return instinct.id;
   }
@@ -1344,6 +1445,9 @@ export class LearningPipeline {
       triggerPattern: this.sanitizePattern(params.corrected),
       action: params.corrected,
       scopeType: 'user',
+      // item 3.1: a correction is scoped to the person who made it; without the
+      // id the 'user' scope row is unowned and reaches every user.
+      userId: params.userId,
       confidence: Math.min(confidence, CONFIDENCE_THRESHOLDS.MAX_INITIAL),
     });
   }

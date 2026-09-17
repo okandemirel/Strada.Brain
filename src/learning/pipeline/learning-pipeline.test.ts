@@ -2572,3 +2572,117 @@ describe("LearningPipeline semantic retrieval wiring (audited 2026-09-02)", () =
     expect(call).toContain("embedderFromProvider(embeddingProvider)");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D39 / audit 04.2a — "a repair" was: anything in the same session that touched
+// the same tool and succeeded within five minutes. The error→fix instinct it
+// minted claimed a fix that was never observed to fix anything, and for
+// file_write the ACTION text was the whole file body (input.content).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("an auto-resolution must share the failure's target (D39 / audit 04.2a)", () => {
+  let storage: LearningStorage;
+  let pipeline: LearningPipeline;
+  let tempDir: string;
+
+  const buildFailure = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+  const writeFailure = "error: EACCES permission denied while writing 'Assets/Board.cs' — write failed.";
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pipeline-repair-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    pipeline = new LearningPipeline(storage, {
+      enabled: true,
+      detectionIntervalMs: 1000,
+      evolutionIntervalMs: 5000,
+      minConfidenceForCreation: 0.5,
+      batchSize: 5,
+    });
+  });
+
+  afterEach(() => {
+    pipeline.stop();
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const result = (
+    toolName: string,
+    input: Record<string, unknown>,
+    output: string,
+    success: boolean,
+  ): ToolResultEvent => ({ sessionId: "chat-A", toolName, input, output, success, timestamp: Date.now() });
+
+  function errorFixes() {
+    storage.flush();
+    return storage.getInstincts({ type: "error_fix" });
+  }
+
+  it("an unrelated command that merely succeeded on the same tool is not a repair", async () => {
+    await pipeline.handleToolResult(result("shell_exec", { command: "dotnet build" }, buildFailure, false));
+    await pipeline.handleToolResult(
+      result("shell_exec", { command: "git push origin feature/unrelated" }, "Everything up-to-date", true),
+    );
+
+    expect(errorFixes(), "an unrelated success was booked as the repair").toHaveLength(0);
+    expect(storage.getInstincts().some((i) => i.action.includes("git push"))).toBe(false);
+  });
+
+  it("an unrelated read of a DIFFERENT file is not a repair", async () => {
+    await pipeline.handleToolResult(
+      result("file_read", { path: "Assets/Board.cs" }, "error: ENOENT no such file — read failed", false),
+    );
+    await pipeline.handleToolResult(
+      result("file_read", { path: "Assets/Player.cs" }, "public class Player {}", true),
+    );
+
+    expect(errorFixes(), "reading another file was booked as the repair").toHaveLength(0);
+  });
+
+  it("never lets a file body become the action text of an instinct", async () => {
+    const fileBody = "using UnityEngine;\n\npublic class Board : MonoBehaviour { void Start() { Debug.Log(\"secret body\"); } }";
+    await pipeline.handleToolResult(
+      result("file_write", { path: "Assets/Board.cs", content: fileBody }, writeFailure, false),
+    );
+    await pipeline.handleToolResult(
+      result("file_write", { path: "Assets/Board.cs", content: fileBody }, "Wrote 118 bytes", true),
+    );
+
+    const created = errorFixes();
+    expect(created, "a same-target retry is a repair and should still be learned").toHaveLength(1);
+    expect(created[0]!.action, "the file body became the learned solution").not.toContain("secret body");
+    expect(created[0]!.action, "the file body became the learned solution").not.toContain("MonoBehaviour");
+    expect(created[0]!.action).toContain("Assets/Board.cs");
+  });
+
+  it("a re-run of the same command operation IS a repair (legitimate behaviour still accepted)", async () => {
+    await pipeline.handleToolResult(result("shell_exec", { command: "dotnet build" }, buildFailure, false));
+    await pipeline.handleToolResult(
+      result("shell_exec", { command: "dotnet restore && dotnet build" }, "Build succeeded.", true),
+    );
+
+    const created = errorFixes();
+    expect(created).toHaveLength(1);
+    expect(created[0]!.action).toContain("dotnet restore && dotnet build");
+    expect(created[0]!.triggerPattern).toContain("CS0246");
+  });
+
+  it("an unrelated success does not consume the pending error, so the real repair still lands", async () => {
+    await pipeline.handleToolResult(result("shell_exec", { command: "dotnet build" }, buildFailure, false));
+    await pipeline.handleToolResult(result("shell_exec", { command: "git status" }, "clean", true));
+    await pipeline.handleToolResult(
+      result("shell_exec", { command: "dotnet build" }, "Build succeeded.", true),
+    );
+
+    const created = errorFixes();
+    expect(created, "the unrelated success evicted the pending error").toHaveLength(1);
+    expect(created[0]!.triggerPattern).toContain("CS0246");
+  });
+
+  it("a tool call whose input names no target at all cannot be repaired by guesswork", async () => {
+    await pipeline.handleToolResult(result("mystery_tool", {}, buildFailure, false));
+    await pipeline.handleToolResult(result("mystery_tool", {}, "done", true));
+
+    expect(errorFixes(), "a targetless pair was booked as an error→fix").toHaveLength(0);
+  });
+});
