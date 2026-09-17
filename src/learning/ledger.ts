@@ -92,12 +92,39 @@ export interface LedgerEffect {
   retiredReason?: string;
   /** Generated artifacts still carrying the guidance after the rule was retired. */
   liveArtifacts: ReadonlyArray<{ id: string; name: string; state: string }>;
-  /** The plan's measure: first dated evidence against it → the moment it stopped. */
+  /**
+   * First dated evidence against it → the STATUS change. Only that: while a
+   * generated artifact still carries the guidance the effect has not ended, and
+   * this number must not be read as "time until it stopped" (round 11 #8).
+   * {@link msFromFirstNegativeToNoEffect} is that measure.
+   */
   msFromFirstNegativeToRetirement?: number;
+  /**
+   * THE PLAN'S MEASURE (round 11 #8): first dated evidence against it → the
+   * moment EVERY carrier stopped. Absent while any carrier is still live, and
+   * {@link noEffectPendingReason} says which one.
+   */
+  msFromFirstNegativeToNoEffect?: number;
+  /** When the last carrier of the guidance stopped. Absent while one is live. */
+  noEffectAt?: number;
+  /** Why the time-to-no-effect measure could not be completed, when it could not. */
+  noEffectPendingReason?: string;
   /** Still in effect with evidence against it: how long it has been wrong so far. */
   msWrongAndStillInEffect?: number;
-  /** Runs it influenced AFTER the retirement. Anything above 0 is a leak. */
+  /**
+   * Runs SHOWN the guidance after the retirement. Anything above 0 is a leak.
+   *
+   * Round 11 #8: this counted credit rows by SETTLEMENT time, and settlement
+   * rides a serial queue behind the run's own events (round 10 #14) — so the
+   * ordinary case of retiring a rule while a run that already saw it finishes
+   * was reported as "something is still applying it", indistinguishable from the
+   * real leak this measure exists to catch.
+   */
   runsAfterRetirement: number;
+  /** Exposed BEFORE the retirement, credit settled after. Not a leak — a queue hop. */
+  runsSettledAfterRetirementExposedBefore: number;
+  /** Settled after the retirement with no recorded exposure time: unplaceable, not clean. */
+  runsAfterRetirementExposureUnknown: number;
 }
 
 export interface InstinctLedgerEntry {
@@ -181,10 +208,14 @@ export function buildInstinctLedger(
 
   const retirement = [...logs].reverse().find((l) => l.toStatus === "deprecated" || l.toStatus === "quarantined");
   const retiredAt = isRetrievableStatus(instinct.status) ? undefined : retirement?.timestamp ?? instinct.updatedAt;
-  // Credit settled AFTER the rule was retired means something is still
-  // applying it — the leak this measure exists to catch.
-  const runsAfterRetirement =
-    retiredAt === undefined ? 0 : storage.getInstinctCredits({ instinctId, since: retiredAt + 1 }).length;
+  // A run SHOWN the guidance after the rule was retired means something is still
+  // applying it — the leak this measure exists to catch. A run shown it BEFORE,
+  // whose credit merely settled afterwards, is a queue hop and is reported
+  // separately (round 11 #8); a row with no recorded exposure time cannot be
+  // placed on either side and is reported as unknown.
+  const across = retiredAt === undefined
+    ? { exposedAfter: 0, settledAfterExposedBefore: 0, exposureUnknown: 0 }
+    : storage.countInstinctCreditsAcross(instinctId, retiredAt);
 
   const statusRetrievable = isRetrievableStatus(instinct.status);
   const inEffect = statusRetrievable || artifacts.length > 0;
@@ -196,6 +227,15 @@ export function buildInstinctLedger(
         .join(", ")}`
     : `status '${instinct.status}' is never offered to a run`;
 
+  // ROUND 11 #8 — WHEN DID EVERY CARRIER STOP?
+  //
+  // The retirement duration measured the STATUS change alone, which reads as
+  // "it stopped" while a generated artifact is still active — the ledger's own
+  // second honesty rule. So the measure runs to the LAST carrier: the status
+  // change and every artifact derived from the rule. It is reported only when
+  // none is live, and says which one is holding it open otherwise.
+  const noEffect = measureNoEffect(storage, instinctId, instinct.status, retiredAt, artifacts);
+
   const effect: LedgerEffect = {
     inEffect,
     why,
@@ -205,10 +245,17 @@ export function buildInstinctLedger(
     ...(retiredAt !== undefined && evidence.firstNegativeAt !== undefined && retiredAt >= evidence.firstNegativeAt
       ? { msFromFirstNegativeToRetirement: retiredAt - evidence.firstNegativeAt }
       : {}),
+    ...(noEffect.at === undefined ? {} : { noEffectAt: noEffect.at }),
+    ...(noEffect.pendingReason === undefined ? {} : { noEffectPendingReason: noEffect.pendingReason }),
+    ...(noEffect.at !== undefined && evidence.firstNegativeAt !== undefined && noEffect.at >= evidence.firstNegativeAt
+      ? { msFromFirstNegativeToNoEffect: noEffect.at - evidence.firstNegativeAt }
+      : {}),
     ...(inEffect && evidence.firstNegativeAt !== undefined
       ? { msWrongAndStillInEffect: Math.max(0, now - evidence.firstNegativeAt) }
       : {}),
-    runsAfterRetirement,
+    runsAfterRetirement: across.exposedAfter,
+    runsSettledAfterRetirementExposedBefore: across.settledAfterExposedBefore,
+    runsAfterRetirementExposureUnknown: across.exposureUnknown,
   };
 
   return {
@@ -238,6 +285,48 @@ export function buildInstinctLedger(
     })),
     effect,
   };
+}
+
+/**
+ * WHEN DID THE GUIDANCE STOP HAVING AN EFFECT — across every carrier of it
+ * (round 11 #8)?
+ *
+ * A carrier is anything a run can still be shown the guidance through: the rule
+ * itself (its status) and every runtime artifact generated from it. The answer
+ * is the moment the LAST of them stopped, and it exists only when none is live.
+ * While one is, this returns the reason instead of a number: a duration here
+ * would be read as "it stopped", which is exactly the false reassurance the
+ * ledger exists to refuse.
+ */
+function measureNoEffect(
+  storage: LearningStorage,
+  instinctId: string,
+  status: string,
+  retiredAt: number | undefined,
+  liveArtifacts: ReadonlyArray<{ id: string; name: string; state: string }>,
+): { at?: number; pendingReason?: string } {
+  if (isRetrievableStatus(status)) {
+    return { pendingReason: `the rule's status '${status}' is still offered to runs` };
+  }
+  if (liveArtifacts.length > 0) {
+    return {
+      pendingReason: `${liveArtifacts.length} generated artifact(s) still carry the guidance: ${liveArtifacts
+        .map((a) => `${a.name} (${a.state})`)
+        .join(", ")}`,
+    };
+  }
+  if (retiredAt === undefined) {
+    return { pendingReason: "the moment the rule stopped being offered is not recorded" };
+  }
+  // Every artifact is retired/rejected by now; the effect ended with whichever
+  // carrier stopped LAST — a skill that outlived the rule's status change is the
+  // case that made the status-only duration misleading.
+  let last = retiredAt;
+  for (const artifact of storage.getRuntimeArtifactsBySourceInstinct(instinctId)) {
+    const stopped = artifact.retiredAt ?? artifact.rejectedAt ?? artifact.updatedAt;
+    if (typeof stopped === "number" && stopped > last) last = stopped;
+  }
+  return { at: last };
 }
 
 export interface SuspectGuidance {
@@ -470,13 +559,35 @@ export function renderLedgerEntry(entry: InstinctLedgerEntry): string {
       `  time from the first evidence against it to the retirement: ${formatDurationMs(entry.effect.msFromFirstNegativeToRetirement)}`,
     );
   }
+  if (entry.effect.msFromFirstNegativeToNoEffect !== undefined) {
+    lines.push(
+      `  time from the first evidence against it to no effect (every carrier stopped): ` +
+        `${formatDurationMs(entry.effect.msFromFirstNegativeToNoEffect)}`,
+    );
+  } else if (entry.effect.noEffectPendingReason !== undefined) {
+    lines.push(`  it has NOT stopped having an effect: ${entry.effect.noEffectPendingReason}`);
+  }
   if (entry.effect.msWrongAndStillInEffect !== undefined) {
     lines.push(
       `  ⚠️ it has carried evidence against it for ${formatDurationMs(entry.effect.msWrongAndStillInEffect)} and is STILL in effect`,
     );
   }
   if (entry.effect.runsAfterRetirement > 0) {
-    lines.push(`  ⚠️ ${entry.effect.runsAfterRetirement} run(s) settled credit for it AFTER it was retired — something is still applying it.`);
+    lines.push(
+      `  ⚠️ ${entry.effect.runsAfterRetirement} run(s) were SHOWN it after it was retired — something is still applying it.`,
+    );
+  }
+  if (entry.effect.runsSettledAfterRetirementExposedBefore > 0) {
+    lines.push(
+      `  ${entry.effect.runsSettledAfterRetirementExposedBefore} run(s) settled after the retirement but were shown it before ` +
+        `— that is the settlement queue, not continued use.`,
+    );
+  }
+  if (entry.effect.runsAfterRetirementExposureUnknown > 0) {
+    lines.push(
+      `  ${entry.effect.runsAfterRetirementExposureUnknown} run(s) settled after the retirement whose exposure time was never ` +
+        `recorded — they cannot be placed on either side.`,
+    );
   }
   return lines.join("\n");
 }

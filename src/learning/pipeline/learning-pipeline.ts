@@ -209,9 +209,15 @@ export class LearningPipeline {
    *
    * Value per instinct: the evidence observed in-run, used only when the caller
    * supplies no terminal verdict (any observed failure wins — never the first
-   * event's opinion).
+   * event's opinion), plus `exposedAt` — WHEN the run was shown this guidance.
+   *
+   * Round 11 #8: the exposure time is a different fact from the settlement time,
+   * and the ledger needs both. Settlement rides the serial queue behind the run's
+   * own events (#14), so a rule retired between the two looked to the ledger like
+   * a rule a run had applied AFTER its retirement. The earliest application in
+   * the run wins: that is when the guidance first reached it.
    */
-  private readonly runPendingCredits = new Map<string, Map<string, { success: boolean; verdictScore: number }>>();
+  private readonly runPendingCredits = new Map<string, Map<string, { success: boolean; verdictScore: number; exposedAt: number }>>();
 
   /**
    * ROUND 10 #14 — A RUN'S TERMINAL VERDICT IS FINAL, INCLUDING FOR LATE EVENTS.
@@ -364,8 +370,10 @@ export class LearningPipeline {
         sessionId,
         run,
         instinctId,
-        settled ?? observed,
+        settled ?? { success: observed.success, verdictScore: observed.verdictScore },
         settled ? "terminal" : "observed",
+        // r11 #8: when the run was SHOWN the rule, which is not now.
+        observed.exposedAt,
       );
     }
   }
@@ -406,6 +414,8 @@ export class LearningPipeline {
     instinctId: string,
     outcome: { success: boolean; verdictScore: number },
     creditSource: "terminal" | "observed",
+    /** When the run was SHOWN this guidance (round 11 #8). */
+    exposedAt?: number,
   ): void {
     const instinct = this.storage.getInstinct(instinctId as InstinctId);
     if (!instinct) return;
@@ -413,7 +423,7 @@ export class LearningPipeline {
     // unaccountable: the run's outcome feeds the quarantine counter.
     if (instinct.status === "permanent") {
       this.recordPermanentEvidence(instinct, outcome.success);
-      this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, instinct.confidence, runId);
+      this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, instinct.confidence, runId, exposedAt);
       return;
     }
     // Increment coolingFailures for failures on cooling instincts
@@ -432,7 +442,7 @@ export class LearningPipeline {
     // caller. Without this row "which runs did this guidance influence, and
     // how did they end" is unanswerable, and a wrong rule is found only by
     // somebody noticing it.
-    this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, updated.confidence, runId);
+    this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, updated.confidence, runId, exposedAt);
   }
 
   /**
@@ -446,7 +456,10 @@ export class LearningPipeline {
   ): void {
     if (settled.credited.has(instinctId)) return;
     settled.credited.add(instinctId);
-    this.applyInstinctCredit(settled.sessionId, settled.runId, instinctId, settled.terminal, "terminal");
+    // r11 #8: the event reporting this application is arriving now, so now is
+    // the exposure. It is genuinely after the run's settlement — the ledger
+    // records both times and lets a reader see that, rather than inferring one.
+    this.applyInstinctCredit(settled.sessionId, settled.runId, instinctId, settled.terminal, "terminal", Date.now());
   }
 
   /**
@@ -461,12 +474,15 @@ export class LearningPipeline {
     confidenceAfter: number,
     /** #13: which run settled it. The column existed; nothing ever filled it. */
     taskRunId?: string,
+    /** r11 #8: when the run was shown the guidance, as opposed to now. */
+    exposedAt?: number,
   ): void {
     try {
       this.storage.recordInstinctCredit({
         instinctId: String(instinct.id),
         sessionId,
         ...(taskRunId ? { taskRunId } : {}),
+        ...(exposedAt === undefined ? {} : { exposedAt }),
         success: outcome.success,
         verdictScore: outcome.verdictScore,
         source,
@@ -766,16 +782,18 @@ export class LearningPipeline {
 
         let pending = this.runPendingCredits.get(creditKey);
         if (!pending) {
-          pending = new Map<string, { success: boolean; verdictScore: number }>();
+          pending = new Map<string, { success: boolean; verdictScore: number; exposedAt: number }>();
           this.runPendingCredits.set(creditKey, pending);
         }
         const already = pending.get(instinctId);
         if (!already) {
-          pending.set(instinctId, { success: verdict.success, verdictScore: verdict.verdictScore });
+          // r11 #8: the first application in this run IS the exposure.
+          pending.set(instinctId, { success: verdict.success, verdictScore: verdict.verdictScore, exposedAt: Date.now() });
         } else if (already.success && !verdict.success) {
           // A later failure in the same run downgrades the observed evidence:
           // the FIRST event never decides the run's outcome on its own (D40).
-          pending.set(instinctId, { success: false, verdictScore: verdict.verdictScore });
+          // The exposure time is the EARLIEST one and does not move with it.
+          pending.set(instinctId, { success: false, verdictScore: verdict.verdictScore, exposedAt: already.exposedAt });
         }
       }
     }

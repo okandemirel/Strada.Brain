@@ -370,14 +370,28 @@ describe("retiring a piece of guidance, and proving it stopped", () => {
     expect(findSuspectGuidance(storage).map((r) => r.id)).toEqual([String(i.id)]);
   });
 
-  it("credit settled AFTER a retirement is flagged as something still applying the rule", () => {
+  it("a run SHOWN the rule after a retirement is flagged as something still applying it", () => {
+    const i = instinct();
+    storage.createInstinct(i);
+    retireGuidance(storage, String(i.id), { reason: "wrong", actor: "okan", now: T0 + HOUR });
+    // Round 11 #8: the flag is about EXPOSURE, not about when the credit
+    // settled. A row dated by settlement alone cannot tell the two apart, and
+    // this test used to assert the settlement reading.
+    credit(String(i.id), T0 + 3 * HOUR, false, { exposedAt: T0 + 2 * HOUR });
+    const entry = buildInstinctLedger(storage, String(i.id))!;
+    expect(entry.effect.runsAfterRetirement).toBe(1);
+    expect(renderLedgerEntry(entry)).toContain("after it was retired");
+  });
+
+  it("credit settled after a retirement with no recorded exposure is reported as unplaceable", () => {
     const i = instinct();
     storage.createInstinct(i);
     retireGuidance(storage, String(i.id), { reason: "wrong", actor: "okan", now: T0 + HOUR });
     credit(String(i.id), T0 + 2 * HOUR, false);
     const entry = buildInstinctLedger(storage, String(i.id))!;
-    expect(entry.effect.runsAfterRetirement).toBe(1);
-    expect(renderLedgerEntry(entry)).toContain("AFTER it was retired");
+    expect(entry.effect.runsAfterRetirement).toBe(0);
+    expect(entry.effect.runsAfterRetirementExposureUnknown).toBe(1);
+    expect(renderLedgerEntry(entry)).toContain("exposure time was never recorded");
   });
 
   it("a SUPERSEDED rule explains itself in the timeline (a merge used to log nothing)", () => {
