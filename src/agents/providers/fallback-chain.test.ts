@@ -200,6 +200,17 @@ describe("FallbackChainProvider", () => {
     expect(result.auxiliaryUsage).toEqual(expect.objectContaining({ inputTokens: 5000 }));
   });
 
+  it("an empty answer followed by a THROWN retry still hangs its tokens on the error (Codex 2026-09-17 round 3)", async () => {
+    const p1 = { ...createMockProvider(), name: "only-provider" };
+    (p1.chat as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } })
+      .mockRejectedValueOnce(new Error("network reset"));
+    const chain = new FallbackChainProvider([p1]);
+    let thrown: unknown;
+    try { await chain.chat("sys", [], []); } catch (err) { thrown = err; }
+    expect((thrown as { usage?: { inputTokens: number } }).usage?.inputTokens).toBe(5000);
+  });
+
   it("when nothing answers, the error carries what was spent (Codex 2026-09-17 #5)", async () => {
     const p1 = { ...createMockProvider(), name: "only-provider" };
     (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } });

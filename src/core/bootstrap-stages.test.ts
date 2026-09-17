@@ -881,6 +881,8 @@ describe("bootstrap-stages", () => {
       _tag: "agent-orchestrator",
     });
     expect(taskManager.submit).toHaveBeenCalledWith("chat-123", "web", "Fix the broken flow", {
+      // The agent whose allowance the task spends travels with it (audit 03.5).
+      agentId: "agent-123",
       attachments: [{ type: "image", name: "shot.png" }],
       conversationId: "conv-123",
       userId: "user-123",

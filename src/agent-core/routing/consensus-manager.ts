@@ -409,7 +409,18 @@ export class ConsensusManager {
     responseSchema?: ResponseSchema,
     spent?: ConsensusUsageEntry[],
   ): Promise<ProviderResponse> {
-    const response = await this.chatWithTimeoutRaw(provider, systemPrompt, content, responseSchema);
+    let response: ProviderResponse;
+    try {
+      response = await this.chatWithTimeoutRaw(provider, systemPrompt, content, responseSchema);
+    } catch (err) {
+      // A reviewer chain that failed after spending (two empty answers)
+      // hangs the spend on the error (Codex 2026-09-17 #2 on 6b0d8d6f).
+      const usage = (err as { usage?: ProviderResponse["usage"] } | null)?.usage;
+      if (spent && usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
+        spent.push({ provider: provider.name ?? undefined, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+      }
+      throw err;
+    }
     // WHAT THIS CALL SPENT, attributed to who served it, the superseded
     // attempt's tokens included (Codex 2026-09-17 #1, #2).
     if (spent) {

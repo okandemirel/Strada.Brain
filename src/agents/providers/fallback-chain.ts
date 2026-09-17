@@ -710,6 +710,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     let lostUsage: TokenUsage | undefined;
     const withLost = (r: ProviderResponse): ProviderResponse =>
       lostUsage ? { ...r, auxiliaryUsage: mergeTokenUsage(r.auxiliaryUsage, lostUsage) } : r;
+    const attachLost = <E>(err: E): E => (lostUsage && err && typeof err === "object" ? Object.assign(err, { usage: lostUsage }) : err);
     let attempted = 0;
     // What was measured when nothing was attempted (audited 2026-09-02): a provider
     // skipped by a FAILED recovery probe or by a probe another call already had in
@@ -854,18 +855,17 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             provider: provider.name,
           });
           await sleep(EMPTY_RESPONSE_RETRY_DELAY_MS, externalSignal);
-          // The empty attempt's tokens are still spend (audit 03.4 / D22).
+          // The empty attempt's tokens are still spend (audit 03.4 / D22) —
+          // counted BEFORE the retry, so a retry that throws does not lose
+          // them (Codex 2026-09-17 #1 on 6b0d8d6f).
           const discarded = response.usage;
+          if (discarded) lostUsage = mergeTokenUsage(lostUsage, discarded);
           response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
           if (isEmptyProviderResponse(response)) {
             // Twice running is not a blip; a provider with nothing to say twice
             // really has nothing to say.
-            if (discarded) lostUsage = mergeTokenUsage(lostUsage, discarded);
             if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
-          }
-          if (discarded && (discarded.inputTokens > 0 || discarded.outputTokens > 0)) {
-            response = { ...response, auxiliaryUsage: mergeTokenUsage(response.auxiliaryUsage, discarded) };
           }
         }
         health.recordSuccess(provider.name);
@@ -943,7 +943,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // failure handling below, so stall recovery is unchanged and the decision keys
         // on the signal, never the error-message text (audit #6).
         if (externalSignal?.aborted) {
-          throw lastError;
+          throw attachLost(lastError);
         }
 
         // A first-response timeout (provider stayed silent) is a strong "this model
@@ -1051,7 +1051,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             provider: provider.name,
             error: sanitizeSecrets(errorMsg),
           });
-          throw error;
+          throw attachLost(error);
         }
 
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
@@ -1107,10 +1107,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             error: sanitizeSecrets(errorMsg),
             totalProviders: this.providers.length,
           });
-          throw Object.assign(
-            new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`, { cause: error instanceof Error ? error : undefined }),
-            lostUsage ? { usage: lostUsage } : {},
-          );
+          throw attachLost(new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`, { cause: error instanceof Error ? error : undefined }));
         }
 
         logger.warn(`Provider failed (${label}), trying next healthy provider`, {
@@ -1139,10 +1136,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     } else {
       detail = "All providers are in cooldown. Try again later.";
     }
-    throw Object.assign(
-      new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined }),
-      lostUsage ? { usage: lostUsage } : {},
-    );
+    throw attachLost(new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined }));
   }
 }
 

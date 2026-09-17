@@ -654,6 +654,18 @@ describe("ConsensusManager carries the reviewer's usage (audit 03.3 / D22)", () 
     ]);
   });
 
+  it("a reviewer error that carries usage is spend too (Codex 2026-09-17 round 3)", async () => {
+    const cm = new ConsensusManager({ reviewTimeoutMs: 0 } as never);
+    vi.spyOn(cm, "shouldConsult").mockReturnValue("review" as never);
+    const chat = vi.fn().mockRejectedValueOnce(Object.assign(new Error("All providers failed"), { usage: { inputTokens: 10_000, outputTokens: 0, totalTokens: 10_000 } }));
+    const result = await cm.verify({
+      originalOutput: { text: "answer A" }, originalProvider: "claude", confidence: 0.1,
+      reviewProvider: { name: "reviewer", chat } as never, prompt: "p", task,
+    });
+    expect(result.agreed).toBe(false);
+    expect(result.usages).toEqual([expect.objectContaining({ provider: "reviewer", inputTokens: 10_000 })]);
+  });
+
   it("a failure after the first call still reports what that call spent (Codex 2026-09-17 #3)", async () => {
     const cm = new ConsensusManager(new ConfidenceEstimator(), { reviewTimeoutMs: 0 } as never);
     vi.spyOn(cm, "shouldConsult").mockReturnValue("re-execute" as never);
