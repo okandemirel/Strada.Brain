@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
+  <strong>AI-Powered Development Agent for Unity 6 / Strada.Core Projects</strong><br/>
+  <em>Unity 6 (&ge; 6000.0.0f1) projects only &mdash; the live Unity surface (console reads, Unity builds, playthrough verdicts) needs Strada.MCP and a Unity editor on the machine that runs it. See <a href="#supported-project-matrix">Supported project matrix</a>; <code>strada doctor</code> checks every row and names what is missing.</em><br/>
   An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, an extensible skill ecosystem with SKILL.md manifests and a git-based registry, and Strada.MCP integration.
 </p>
 
@@ -59,6 +60,12 @@ restart-surviving and unmanned:
 - A GDD-coverage audit gates delivery; skipped audits are declared on the
   delivery report, never silent.
 
+Every claim in this section is scoped to the [supported project
+matrix](#supported-project-matrix): the capture frames and the play-through gate
+need Strada.MCP and a Unity 6 editor on the machine that runs the sprint, and on
+a project that does not satisfy the matrix those verdicts read as not measured
+rather than green.
+
 Status and evidence for every claim in this README live in
 [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operations: restart, commands, where every piece of evidence is written, how to read a delivery report.
 
@@ -74,7 +81,36 @@ says so.
 
 - **Node.js 20.19+** (or **22.12+**) — if Node.js is not installed, the launcher will offer to download a portable copy automatically (Windows only, ~30 MB one-time download, stored in `%LOCALAPPDATA%\Strada\node`). You can also point to a custom binary with `STRADA_NODE_PATH`.
 - At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), a Claude subscription token (`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`), an OpenAI ChatGPT/Codex subscription session (`OPENAI_AUTH_MODE=chatgpt-subscription`), or an `ollama`-only `PROVIDER_CHAIN`
-- A **Unity project** (the path you give the agent). Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
+- A **Unity 6 project** (the path you give the agent) that satisfies the matrix below. Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
+
+### Supported project matrix
+
+This is the whole list of what a project must have. It is not prose: the rows
+are read from `SUPPORTED_UNITY_VERSIONS` / `SUPPORTED_PROJECT_PACKAGES` in
+[`src/config/strada-deps.ts`](src/config/strada-deps.ts), `strada doctor`
+evaluates every row against the project you configured, and a contract test
+fails if this table and that data disagree.
+
+| Row | Requirement | Supported | Without it |
+|---|---|---|---|
+| **Unity Editor version (project)** | required | `>= 6000.0.0f1` (tested: `6000.3.22f1`) | Scene/prefab writing and the editor launcher target Unity 6 serialized shapes; older projects are **unsupported**, not degraded |
+| **Unity project layout** | required | `Assets`, `ProjectSettings/ProjectVersion.txt`, `Packages/manifest.json` | The directory is not a Unity project root and nothing can be read |
+| **Project is a git repository** | required | any git checkout | Leased tasks cannot take worktrees and the Strada packages cannot be added as submodules |
+| **Strada.Core** | recommended | any version (no floor is enforced; the detected version is reported, not gated) | Framework-aware guidance and Strada-shaped codegen degrade to generic C# assistance |
+| **Strada.Modules** | optional | any version (no floor enforced) | Module-specific APIs are unavailable; everything else is unaffected |
+| **Strada.MCP** | recommended | any version (no floor enforced) | No console reads, no editor commands, no Unity builds and no playthrough verdict — the play-through delivery gate cannot be met |
+| **Strada.MCP dependencies installed** | recommended | `node_modules` plus a loadable `src/` or `dist/` in the Strada.MCP root | The tool loader registers zero Unity tools and says nothing about why |
+| **Unity Editor installed on this machine** | recommended | `UNITY_EDITOR_PATH` / `STRADA_UNITY_BIN` pointing at an existing binary (presence only — the version is not launched or compared) | Unity builds, scene verification and playthrough verdicts cannot run |
+
+Host requirements (Node.js and provider access) are the two bullets above this
+table; they are not project properties.
+
+**What the matrix does not check.** `strada doctor` can only look at the machine
+it runs on, so "another machine satisfies this matrix" is reported as **NOT
+MEASURED**, never as a pass — run `strada doctor` on that machine and compare
+the two matrices. A row the checker could not decide (an unreadable
+`ProjectVersion.txt`, no configured editor path) is reported as *not determined*
+and warns; it is never reported as ok.
 
 ### 1. Install
 

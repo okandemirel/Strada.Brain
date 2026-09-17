@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
 import { collectDoctorReport } from "./setup-doctor.js";
+import { SUPPORTED_UNITY_VERSIONS } from "../config/strada-deps.js";
 
 const { preflightResponseProvidersMock } = vi.hoisted(() => ({
   preflightResponseProvidersMock: vi.fn().mockResolvedValue({
@@ -35,8 +36,34 @@ vi.mock("../config/strada-deps.js", async (importOriginal) => {
   };
 });
 
+/**
+ * A Unity 6 project that satisfies every REQUIRED row of the supported project
+ * matrix (plan 6.10): the layout, a readable ProjectVersion.txt inside the
+ * supported range, and a git checkout. The doctor now judges the configured
+ * project, so the fixture config has to point at a real one — "/Users/test/Game"
+ * (what this suite used before) is exactly the case the matrix fails.
+ */
+function makeSupportedUnityProject(
+  version: string = SUPPORTED_UNITY_VERSIONS.tested[0]!,
+): { projectPath: string; editorPath: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-doctor-project-"));
+  fs.mkdirSync(path.join(dir, "Assets"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "ProjectSettings"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "Packages"), { recursive: true });
+  fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "Packages", "manifest.json"), JSON.stringify({ dependencies: {} }));
+  fs.writeFileSync(
+    path.join(dir, "ProjectSettings", "ProjectVersion.txt"),
+    `m_EditorVersion: ${version}\n`,
+  );
+  const editorPath = path.join(dir, "Unity");
+  fs.writeFileSync(editorPath, "#!/bin/sh\n");
+  return { projectPath: dir, editorPath };
+}
+
 describe("setup doctor", () => {
   const tmpDirs: string[] = [];
+  const supportedProject = makeSupportedUnityProject();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,8 +146,8 @@ describe("setup doctor", () => {
         heartbeatIntervalMs: 300000,
         escalationPolicy: "hard-blockers-only",
       },
-      unityProjectPath: "/Users/test/Game",
-      strada: {} as Config["strada"],
+      unityProjectPath: supportedProject.projectPath,
+      strada: { unityEditorPath: supportedProject.editorPath } as Config["strada"],
       dashboard: { enabled: true, port: 3100 },
       websocketDashboard: { enabled: true, port: 3001 },
       prometheus: { enabled: false, port: 9090 },
@@ -245,9 +272,16 @@ describe("setup doctor", () => {
       configResult: { kind: "ok", value: makeConfig() },
     });
 
-    expect(report.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "embeddings")?.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "capability-truth")?.status).toBe("pass");
+    // The only non-pass check is the supported project matrix: this fixture is a
+    // valid Unity 6 project with no Strada.Core and no Strada.MCP, which the
+    // matrix now says out loud instead of reporting a clean bill of health
+    // (plan 6.10). Asserting the exact set keeps this test as strict as the
+    // `status === "pass"` it replaced.
+    expect(report.checks.filter((check) => check.status !== "pass").map((check) => check.id))
+      .toEqual(["project-matrix"]);
+    expect(report.status).toBe("warn");
   });
 
   it("does not report an enabled Supervisor Brain as a truthfulness gap (audited 2026-09-02)", async () => {
@@ -281,7 +315,9 @@ describe("setup doctor", () => {
     const capabilityTruth = report.checks.find((check) => check.id === "capability-truth");
     expect(capabilityTruth?.detail ?? "").not.toContain("Supervisor Brain");
     expect(capabilityTruth?.status).toBe("pass");
-    expect(report.status).toBe("pass");
+    // Same as above: the project matrix is the only warning on this fixture.
+    expect(report.checks.filter((check) => check.status !== "pass").map((check) => check.id))
+      .toEqual(["project-matrix"]);
   });
 
   it("warns when deployment is enabled without runtime wiring", async () => {
@@ -371,6 +407,92 @@ describe("setup doctor", () => {
     expect(names).toEqual(["opencode"]);
     expect(models).toEqual({ opencode: "vendor/chosen-model" });
     expect(baseUrls).toEqual({ opencode: "https://opencode.example.test/v1" });
+  });
+
+  /**
+   * Supported project matrix in the doctor (plan 6.10). The doctor used to say
+   * nothing about the project it was pointed at: an unsupported Unity version, a
+   * directory that is not a Unity project, and an unreadable ProjectVersion.txt
+   * all produced the same clean report and failed vaguely later.
+   */
+  describe("supported project matrix check", () => {
+    async function matrixCheck(configOverrides: Partial<Config> = {}) {
+      const installRoot = makeBuiltInstallRoot();
+      const report = await collectDoctorReport({
+        installRoot,
+        configRoot: installRoot,
+        configResult: { kind: "ok", value: makeConfig(configOverrides) },
+      });
+      const check = report.checks.find((candidate) => candidate.id === "project-matrix");
+      expect(check, "project-matrix check").toBeDefined();
+      return { report, check: check! };
+    }
+
+    it("fails and names the unsupported Unity version instead of failing vaguely", async () => {
+      const old = makeSupportedUnityProject("2022.3.1f1");
+      tmpDirs.push(old.projectPath);
+      const { report, check } = await matrixCheck({ unityProjectPath: old.projectPath });
+
+      expect(check.status).toBe("fail");
+      expect(check.detail).toContain("2022.3.1f1");
+      expect(check.detail).toContain(SUPPORTED_UNITY_VERSIONS.minInclusive);
+      expect(check.fix ?? "").toContain("Upgrade the Unity project");
+      expect(report.status).toBe("fail");
+    });
+
+    it("fails and names the missing layout paths when the project path is not a Unity project", async () => {
+      const empty = fs.mkdtempSync(path.join(os.tmpdir(), "strada-doctor-empty-"));
+      tmpDirs.push(empty);
+      const { check } = await matrixCheck({ unityProjectPath: empty });
+
+      expect(check.status).toBe("fail");
+      expect(check.detail).toContain("ProjectSettings/ProjectVersion.txt");
+      expect(check.detail).toContain("not a git checkout");
+    });
+
+    it("warns rather than passing when the Unity version could not be determined", async () => {
+      const project = makeSupportedUnityProject();
+      tmpDirs.push(project.projectPath);
+      // The file is there (so the layout row stays ok) but says nothing about a
+      // version — the case that must warn instead of passing.
+      fs.writeFileSync(
+        path.join(project.projectPath, "ProjectSettings", "ProjectVersion.txt"),
+        "m_EditorVersionWithRevision: (abcdef123456)\n",
+      );
+      const { check } = await matrixCheck({
+        unityProjectPath: project.projectPath,
+        strada: { unityEditorPath: project.editorPath } as Config["strada"],
+      });
+
+      expect(check.status).toBe("warn");
+      expect(check.status).not.toBe("pass");
+      expect(check.detail).toContain("NOT checked, not passed");
+    });
+
+    it("always carries the not-measured second-machine row, which is the item's own measure", async () => {
+      const { check } = await matrixCheck();
+
+      expect(check.detail).toContain("NOT MEASURED — Another machine satisfies this matrix");
+      expect(check.matrix?.notMeasured).toContain("Another machine satisfies this matrix");
+      // Nothing in the detail may claim the other machine is fine.
+      expect(check.matrix?.rows.find((row) => row.id === "second-machine")?.status)
+        .toBe("not-measured");
+    });
+
+    it("reports the Unity editor binary as not determined when no path is configured", async () => {
+      // Empty, not "whatever this machine happens to export": the row's point is
+      // that an unconfigured editor is undetermined, not assumed present.
+      vi.stubEnv("STRADA_UNITY_BIN", "");
+      try {
+        const { check } = await matrixCheck({ strada: {} as Config["strada"] });
+
+        expect(check.matrix?.rows.find((row) => row.id === "unity-editor-binary")?.status)
+          .toBe("unknown");
+        expect(check.status).toBe("warn");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
   });
 
   it("passes no base URLs to preflight when the config declares none (guard)", async () => {

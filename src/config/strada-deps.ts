@@ -507,3 +507,516 @@ function runExecFile(command: string, args: string[], cwd: string): Promise<void
 function formatExecError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/* ------------------------------------------------------------------------- *
+ * Supported project matrix (plan 6.10)
+ *
+ * "Works on a Unity project" was never written down, so nothing could be
+ * checked and the README claimed a surface nobody had bounded: the measure of
+ * this item is that the demo moves to a SECOND MACHINE, and that only happens
+ * when what a project must have is data rather than folklore.
+ *
+ * Everything below is data the doctor reads and the README contract test
+ * compares against, so the three cannot drift: the matrix, the checker and the
+ * claim are one source.
+ *
+ * Two honesty rules apply and are encoded in the row states:
+ *   - `unknown` is what a check that could not decide returns. It is NOT `ok`.
+ *   - `not-measured` is what a check that was never attempted returns — the
+ *     second machine itself is the standing example: this process can only
+ *     look at the project in front of it.
+ * ------------------------------------------------------------------------- */
+
+/** How much a matrix entry matters. */
+export type ProjectRequirement = "required" | "recommended" | "optional";
+
+/**
+ * Per-row outcome.
+ *
+ * `missing` (the thing is not there) and `not-measured` (nothing looked) are
+ * different answers and must never collapse — the same distinction
+ * `delivery-package.ts` makes for evidence.
+ */
+export type MatrixRowStatus = "ok" | "missing" | "unsupported" | "unknown" | "not-measured";
+
+/** The Unity Editor versions this system is bounded to. */
+export interface SupportedUnityVersions {
+  /** Inclusive floor. Anything below is `unsupported`, not `warn`. */
+  readonly minInclusive: string;
+  /** Exclusive ceiling, or null when none is declared. */
+  readonly maxExclusive: string | null;
+  /** Versions this checkout was actually exercised against. */
+  readonly tested: readonly string[];
+  /** Why the floor is where it is. */
+  readonly reason: string;
+}
+
+/**
+ * Unity 6 only.
+ *
+ * Not a preference: `scene-binding.ts` writes scenes and prefabs in Unity 6's
+ * serialized shapes (`PrefabInstance` + stripped Transform + `SceneRoots`,
+ * copied from a 6000.3 project file), and `unity-link-runner.ts` defaults to a
+ * 6000.3 editor. A 2022 LTS project would be written in shapes its editor does
+ * not read, and nothing in this repository has ever run against one.
+ */
+export const SUPPORTED_UNITY_VERSIONS: SupportedUnityVersions = {
+  minInclusive: "6000.0.0f1",
+  maxExclusive: null,
+  tested: ["6000.3.22f1"],
+  reason:
+    "Scene/prefab writing and the editor launcher target Unity 6 serialized shapes (measured against 6000.3.22f1).",
+};
+
+/** Files/directories that make a directory a Unity project Brain can read. */
+export const SUPPORTED_PROJECT_LAYOUT: readonly string[] = [
+  "Assets",
+  "ProjectSettings/ProjectVersion.txt",
+  "Packages/manifest.json",
+];
+
+/** One Strada package in the matrix. */
+export interface SupportedPackageSpec {
+  /** Matrix row id — also the doctor's row id. */
+  readonly id: string;
+  /** Human label, and the string the README table must carry. */
+  readonly label: string;
+  readonly requirement: ProjectRequirement;
+  /**
+   * Version floor Brain ENFORCES, or null when it enforces none.
+   *
+   * Null is the honest answer for all three today: nothing in this repository
+   * compares a Strada package version against a floor, so declaring one here
+   * would be a claim no code makes. The detected version is still reported —
+   * see `testedVersions` for what was actually exercised.
+   */
+  readonly minVersion: string | null;
+  /** Versions this checkout has actually been exercised against, if any. */
+  readonly testedVersions: readonly string[];
+  /** What the system cannot do without it. Printed by the doctor as the cost. */
+  readonly withoutIt: string;
+}
+
+/**
+ * The Strada packages, with what each one buys.
+ *
+ * Strada.Core is `recommended`, not `required`, because Brain demonstrably runs
+ * without it (reduced framework guidance) — that is the README's own claim and
+ * `checkStradaDeps` already reports it as a warning rather than an error.
+ * Strada.MCP is `recommended` for the same reason and named as required for the
+ * live Unity surface: without it there is no console read, no build and no
+ * playthrough verdict, so the play-through delivery gate can never be met.
+ */
+export const SUPPORTED_PROJECT_PACKAGES: readonly SupportedPackageSpec[] = [
+  {
+    id: "strada-core",
+    label: "Strada.Core",
+    requirement: "recommended",
+    minVersion: null,
+    testedVersions: [],
+    withoutIt: "framework-aware guidance and Strada-shaped codegen degrade to generic C# assistance",
+  },
+  {
+    id: "strada-modules",
+    label: "Strada.Modules",
+    requirement: "optional",
+    minVersion: null,
+    testedVersions: [],
+    withoutIt: "module-specific APIs are unavailable; everything else is unaffected",
+  },
+  {
+    id: "strada-mcp",
+    label: "Strada.MCP",
+    requirement: "recommended",
+    minVersion: null,
+    testedVersions: [],
+    withoutIt:
+      "the live Unity surface is gone: no console reads, no editor commands, no Unity builds and no playthrough verdict, so the play-through delivery gate cannot be met",
+  },
+];
+
+/** One evaluated row of the matrix. */
+export interface ProjectMatrixRow {
+  readonly id: string;
+  readonly label: string;
+  readonly requirement: ProjectRequirement;
+  readonly status: MatrixRowStatus;
+  /** What was found, naming the concrete path/version. */
+  readonly detail: string;
+  /** How to satisfy the row. Absent when there is nothing to do. */
+  readonly fix?: string;
+}
+
+/** The whole matrix, evaluated against one project on this machine. */
+export interface ProjectSupportVerdict {
+  /** True only when every `required` row is `ok`. Never true on `unknown`. */
+  readonly supported: boolean;
+  readonly rows: readonly ProjectMatrixRow[];
+  /** Row labels by outcome, so a caller can name exactly what is wrong. */
+  readonly missing: readonly string[];
+  readonly unsupported: readonly string[];
+  readonly unknown: readonly string[];
+  readonly notMeasured: readonly string[];
+  /** One sentence naming counts and every non-ok row. */
+  readonly summary: string;
+}
+
+export interface ProjectSupportOptions {
+  /** The project to judge — `config.unityProjectPath`. */
+  readonly unityProjectPath: string;
+  readonly config?: Partial<StradaDependencyConfig>;
+  /** Reuse an existing {@link checkStradaDeps} result instead of re-scanning. */
+  readonly deps?: StradaDepsStatus;
+  /**
+   * Editor binary to look for (`UNITY_EDITOR_PATH` / `STRADA_UNITY_BIN`, or the
+   * launcher's default). Omitted means "nothing configured" — reported as
+   * `unknown`, never as ok.
+   */
+  readonly unityEditorPath?: string | null;
+}
+
+/** A Unity version split into comparable parts. */
+export interface UnityVersionParts {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  /** `f1`, `b3`, … — recorded, never compared. */
+  readonly suffix: string;
+}
+
+/** Parse `6000.3.22f1`. Returns null on anything that is not a Unity version. */
+export function parseUnityVersion(raw: string): UnityVersionParts | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)([a-z]\d+)?/iu.exec(raw.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    suffix: match[4] ?? "",
+  };
+}
+
+/** -1 / 0 / 1 on the numeric triple. Lexicographic sort put 6000.3.9 above 6000.3.22. */
+export function compareUnityVersions(a: UnityVersionParts, b: UnityVersionParts): number {
+  if (a.major !== b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
+  return 0;
+}
+
+/** What `ProjectSettings/ProjectVersion.txt` says, or why it does not say it. */
+export interface UnityProjectVersionRead {
+  readonly version: string | null;
+  /** Absolute path that was read. */
+  readonly path: string;
+  /** Present when `version` is null: why nothing could be read. */
+  readonly problem?: string;
+}
+
+export function readUnityProjectVersion(unityProjectPath: string): UnityProjectVersionRead {
+  const file = join(unityProjectPath, "ProjectSettings", "ProjectVersion.txt");
+  let content: string;
+  try {
+    content = readFileSync(file, "utf-8");
+  } catch {
+    return { version: null, path: file, problem: "file is missing or unreadable" };
+  }
+  const match = /^m_EditorVersion:\s*(\S+)/mu.exec(content);
+  if (!match?.[1]) {
+    return { version: null, path: file, problem: "no m_EditorVersion line" };
+  }
+  return { version: match[1], path: file };
+}
+
+function unityVersionRangeText(): string {
+  const { minInclusive, maxExclusive } = SUPPORTED_UNITY_VERSIONS;
+  return maxExclusive ? `>= ${minInclusive} and < ${maxExclusive}` : `>= ${minInclusive}`;
+}
+
+function evaluateUnityEditorVersionRow(unityProjectPath: string): ProjectMatrixRow {
+  const base = {
+    id: "unity-editor-version",
+    label: "Unity Editor version (project)",
+    requirement: "required" as const,
+  };
+  const read = readUnityProjectVersion(unityProjectPath);
+  const range = unityVersionRangeText();
+  if (!read.version) {
+    return {
+      ...base,
+      status: "unknown",
+      detail: `Could not read the project's Unity version: ${read.path} — ${read.problem}. Supported: ${range}. NOT checked, not passed.`,
+      fix: `Open the project in a supported Unity Editor once so it writes ProjectSettings/ProjectVersion.txt, or point UNITY_PROJECT_PATH at a real Unity project root.`,
+    };
+  }
+  const parsed = parseUnityVersion(read.version);
+  if (!parsed) {
+    return {
+      ...base,
+      status: "unknown",
+      detail: `${read.path} says m_EditorVersion: ${read.version}, which is not a version this checker can compare. Supported: ${range}.`,
+      fix: "Report the version string — the matrix comparison needs to learn its shape.",
+    };
+  }
+  const min = parseUnityVersion(SUPPORTED_UNITY_VERSIONS.minInclusive);
+  if (min && compareUnityVersions(parsed, min) < 0) {
+    return {
+      ...base,
+      status: "unsupported",
+      detail: `Project is on Unity ${read.version}; the supported range is ${range} (tested: ${SUPPORTED_UNITY_VERSIONS.tested.join(", ")}). ${SUPPORTED_UNITY_VERSIONS.reason}`,
+      fix: `Upgrade the Unity project to ${SUPPORTED_UNITY_VERSIONS.minInclusive} or newer, or use a project that is already on Unity 6.`,
+    };
+  }
+  const max = SUPPORTED_UNITY_VERSIONS.maxExclusive
+    ? parseUnityVersion(SUPPORTED_UNITY_VERSIONS.maxExclusive)
+    : null;
+  if (max && compareUnityVersions(parsed, max) >= 0) {
+    return {
+      ...base,
+      status: "unsupported",
+      detail: `Project is on Unity ${read.version}, at or above the declared ceiling ${SUPPORTED_UNITY_VERSIONS.maxExclusive} (tested: ${SUPPORTED_UNITY_VERSIONS.tested.join(", ")}).`,
+      fix: `Use a project within ${range}.`,
+    };
+  }
+  const tested = SUPPORTED_UNITY_VERSIONS.tested.includes(read.version);
+  return {
+    ...base,
+    status: "ok",
+    detail: tested
+      ? `Project is on Unity ${read.version}, inside ${range} and in the tested set.`
+      : `Project is on Unity ${read.version}, inside ${range} but NOT in the tested set (${SUPPORTED_UNITY_VERSIONS.tested.join(", ")}) — in range is not the same as measured.`,
+  };
+}
+
+function evaluateLayoutRow(unityProjectPath: string): ProjectMatrixRow {
+  const missing = SUPPORTED_PROJECT_LAYOUT.filter(
+    (relative) => !existsSync(join(unityProjectPath, ...relative.split("/"))),
+  );
+  if (missing.length === 0) {
+    return {
+      id: "unity-project-layout",
+      label: "Unity project layout",
+      requirement: "required",
+      status: "ok",
+      detail: `${unityProjectPath} has ${SUPPORTED_PROJECT_LAYOUT.join(", ")}.`,
+    };
+  }
+  return {
+    id: "unity-project-layout",
+    label: "Unity project layout",
+    requirement: "required",
+    status: "missing",
+    detail: `${unityProjectPath} is missing ${missing.join(", ")} — a Unity project root must have ${SUPPORTED_PROJECT_LAYOUT.join(", ")}.`,
+    fix: "Point UNITY_PROJECT_PATH at the directory that contains Assets/ and ProjectSettings/.",
+  };
+}
+
+function evaluateGitRow(unityProjectPath: string): ProjectMatrixRow {
+  const gitPath = join(unityProjectPath, ".git");
+  if (existsSync(gitPath)) {
+    return {
+      id: "project-git",
+      label: "Project is a git repository",
+      requirement: "required",
+      status: "ok",
+      detail: `${gitPath} exists — task leases can take worktrees and the Strada packages can be added as submodules.`,
+    };
+  }
+  return {
+    id: "project-git",
+    label: "Project is a git repository",
+    requirement: "required",
+    status: "missing",
+    detail: `${unityProjectPath} is not a git checkout. Every leased task runs in its own git worktree off the project root, and installStradaDep/installStradaMcpSubmodule refuse without a repository.`,
+    fix: `Run \`git init\` in ${unityProjectPath} and commit, or clone the project instead of copying it.`,
+  };
+}
+
+function evaluatePackageRow(
+  spec: SupportedPackageSpec,
+  installed: boolean,
+  path: string | null,
+  version: string | null | undefined,
+  source: StradaDepInstallSource | null | undefined,
+): ProjectMatrixRow {
+  const floor = spec.minVersion
+    ? `Minimum ${spec.minVersion}.`
+    : "No version floor is enforced by Brain — the version is recorded, not gated.";
+  if (!installed) {
+    return {
+      id: spec.id,
+      label: spec.label,
+      requirement: spec.requirement,
+      status: "missing",
+      detail: `${spec.label} was not found. Without it, ${spec.withoutIt}.`,
+      fix:
+        spec.id === "strada-mcp"
+          ? "Install Strada.MCP (submodule under Packages/Submodules or Assets/, or STRADA_MCP_PATH), wire com.strada.mcp into Packages/manifest.json and run npm install in it."
+          : `Add ${spec.label} to the Unity project (git submodule under Packages/Submodules + a Packages/manifest.json dependency).`,
+    };
+  }
+  const versionText = version
+    ? `v${version}`
+    : "version not declared in its package.json";
+  return {
+    id: spec.id,
+    label: spec.label,
+    requirement: spec.requirement,
+    status: "ok",
+    detail: `${spec.label} installed at ${path ?? "an unrecorded path"} (${versionText}${source ? `, via ${source}` : ""}). ${floor}`,
+  };
+}
+
+/**
+ * Whether an installed Strada.MCP can actually be loaded.
+ *
+ * `strada-mcp-tool-loader.ts` imports `<root>/src/**.ts` through tsx or
+ * `<root>/dist/**.js`; either way the module's own imports resolve against
+ * `<root>/node_modules`. A checkout without it registers zero Unity tools and
+ * says nothing about why (observed on a vendored submodule), so this is the one
+ * row that catches a present-but-inert install.
+ */
+function evaluateMcpRuntimeRow(mcpInstalled: boolean, mcpPath: string | null): ProjectMatrixRow {
+  const base = {
+    id: "strada-mcp-runnable",
+    label: "Strada.MCP dependencies installed",
+    requirement: "recommended" as const,
+  };
+  if (!mcpInstalled || !mcpPath) {
+    return {
+      ...base,
+      status: "not-measured",
+      detail: "Strada.MCP is not installed, so nothing looked at its dependency tree.",
+    };
+  }
+  const hasNodeModules = existsSync(join(mcpPath, "node_modules"));
+  const hasSource = existsSync(join(mcpPath, "src")) || existsSync(join(mcpPath, "dist"));
+  const problems: string[] = [];
+  if (!hasNodeModules) problems.push(`${join(mcpPath, "node_modules")} is absent`);
+  if (!hasSource) problems.push(`neither ${join(mcpPath, "src")} nor ${join(mcpPath, "dist")} exists`);
+  if (problems.length > 0) {
+    return {
+      ...base,
+      status: "missing",
+      detail: `Strada.MCP is present at ${mcpPath} but cannot be loaded: ${problems.join("; ")}. The tool loader would register zero Unity tools without saying why.`,
+      fix: `Run \`npm install\` in ${mcpPath} (and \`npm run build\` if it ships dist/ only).`,
+    };
+  }
+  return {
+    ...base,
+    status: "ok",
+    detail: `${mcpPath} has node_modules and a loadable src/ or dist/.`,
+  };
+}
+
+function evaluateEditorBinaryRow(unityEditorPath: string | null | undefined): ProjectMatrixRow {
+  const base = {
+    id: "unity-editor-binary",
+    label: "Unity Editor installed on this machine",
+    requirement: "recommended" as const,
+  };
+  if (!unityEditorPath) {
+    return {
+      ...base,
+      status: "unknown",
+      detail:
+        "No Unity Editor path is configured (UNITY_EDITOR_PATH / STRADA_UNITY_BIN), so whether a supported editor is installed here was not determined. Unity builds, scene verification and playthrough verdicts need one.",
+      fix: "Set UNITY_EDITOR_PATH (or STRADA_UNITY_BIN) to the Unity 6 editor binary on this machine.",
+    };
+  }
+  if (!existsSync(unityEditorPath)) {
+    return {
+      ...base,
+      status: "missing",
+      detail: `The configured Unity Editor binary is not at ${unityEditorPath}. Unity builds and playthrough verdicts cannot run.`,
+      fix: "Install the Unity 6 editor or correct UNITY_EDITOR_PATH / STRADA_UNITY_BIN.",
+    };
+  }
+  return {
+    ...base,
+    status: "ok",
+    detail: `Unity Editor binary present at ${unityEditorPath}. Its version was NOT launched or compared — presence only.`,
+  };
+}
+
+/**
+ * The row that exists because the measure of this item is a second machine.
+ *
+ * A process can only look at the machine it runs on. Claiming the matrix holds
+ * elsewhere would be exactly the false green this project keeps finding, so the
+ * row is permanently `not-measured` and says what to do about it.
+ */
+function secondMachineRow(unityProjectPath: string): ProjectMatrixRow {
+  return {
+    id: "second-machine",
+    label: "Another machine satisfies this matrix",
+    requirement: "optional",
+    status: "not-measured",
+    detail: `Everything above was measured against ${unityProjectPath} on this host only. Whether a second machine has the Unity Editor, initialized submodules and Strada.MCP dependencies is not measured here.`,
+    fix: "Run `strada doctor` on that machine and compare the two matrices.",
+  };
+}
+
+/**
+ * Judge one project against {@link SUPPORTED_PROJECT_PACKAGES} and
+ * {@link SUPPORTED_UNITY_VERSIONS}.
+ *
+ * Never throws; every row carries the concrete path or version it looked at so
+ * a failure names the thing instead of "setup incomplete".
+ */
+export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupportVerdict {
+  const deps = opts.deps ?? checkStradaDeps(opts.unityProjectPath, opts.config);
+  const byId = new Map(SUPPORTED_PROJECT_PACKAGES.map((spec) => [spec.id, spec]));
+  const core = byId.get("strada-core")!;
+  const modules = byId.get("strada-modules")!;
+  const mcp = byId.get("strada-mcp")!;
+
+  const rows: ProjectMatrixRow[] = [
+    evaluateLayoutRow(opts.unityProjectPath),
+    evaluateUnityEditorVersionRow(opts.unityProjectPath),
+    evaluateGitRow(opts.unityProjectPath),
+    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource),
+    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource),
+    evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource),
+    evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath),
+    evaluateEditorBinaryRow(opts.unityEditorPath),
+    secondMachineRow(opts.unityProjectPath),
+  ];
+
+  const labelsWith = (status: MatrixRowStatus): string[] =>
+    rows.filter((row) => row.status === status).map((row) => row.label);
+  const missing = labelsWith("missing");
+  const unsupported = labelsWith("unsupported");
+  const unknown = labelsWith("unknown");
+  const notMeasured = labelsWith("not-measured");
+  const supported = rows
+    .filter((row) => row.requirement === "required")
+    .every((row) => row.status === "ok");
+
+  const parts = [
+    `Supported project matrix: ${rows.filter((r) => r.status === "ok").length}/${rows.length} rows ok`,
+  ];
+  if (unsupported.length > 0) parts.push(`unsupported: ${unsupported.join(", ")}`);
+  if (missing.length > 0) parts.push(`missing: ${missing.join(", ")}`);
+  if (unknown.length > 0) parts.push(`not determined: ${unknown.join(", ")}`);
+  if (notMeasured.length > 0) parts.push(`not measured: ${notMeasured.join(", ")}`);
+
+  return {
+    supported,
+    rows,
+    missing,
+    unsupported,
+    unknown,
+    notMeasured,
+    summary: `${parts.join("; ")}.`,
+  };
+}
+
+/** One `- [STATUS] label — detail` line per row, for a CLI to print. */
+export function formatProjectMatrix(verdict: ProjectSupportVerdict): string[] {
+  return verdict.rows.map((row) => {
+    const status = row.status === "not-measured" ? "NOT MEASURED" : row.status.toUpperCase();
+    const fix = row.fix && row.status !== "ok" ? ` Fix: ${row.fix}` : "";
+    return `- [${status}] ${row.label} (${row.requirement}) — ${row.detail}${fix}`;
+  });
+}

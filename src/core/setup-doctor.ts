@@ -10,7 +10,12 @@ import {
 import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
 import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
-import { checkStradaDeps } from "../config/strada-deps.js";
+import {
+  checkStradaDeps,
+  evaluateProjectSupport,
+  formatProjectMatrix,
+  type ProjectSupportVerdict,
+} from "../config/strada-deps.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
 import { AutoUpdater } from "./auto-updater.js";
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
@@ -34,6 +39,8 @@ export interface DoctorCheck {
   fix?: string;
   /** Provider-chain verdict shared with setup and boot (plan 2.2). */
   readiness?: ChainReadinessVerdict;
+  /** Per-row supported-project matrix, when this check evaluated it (plan 6.10). */
+  matrix?: ProjectSupportVerdict;
 }
 
 export interface DoctorReport {
@@ -93,6 +100,59 @@ function summarizeResponseWorker(config: Config): string {
   return providerChain
     ? `Strada control plane ready. Primary orchestration pool: ${providerChain}. ${claudeMode} ${openaiMode}`
     : `Strada control plane ready. ${claudeMode} ${openaiMode}`;
+}
+
+/**
+ * Turn the supported project matrix into one doctor check (plan 6.10).
+ *
+ * The doctor used to say nothing about whether the project it was pointed at is
+ * one this system supports: a Unity 2022 project, a directory that is not a
+ * Unity project at all, or a Strada.MCP checkout with no node_modules all
+ * produced a clean bill of health and failed later with something vague. Each
+ * of those is now a named row.
+ *
+ * Status policy, deliberately narrow:
+ *   - a `required` row that is missing or unsupported FAILS;
+ *   - anything the checker could not determine (`unknown`) or a `recommended`
+ *     gap WARNS — an undetermined row must never read as a pass;
+ *   - `not-measured` rows (the second machine, and Strada.MCP's dependency tree
+ *     when Strada.MCP itself is absent) are printed as not measured and do not
+ *     move the status, because nothing was attempted. That is the same
+ *     distinction `delivery-package.ts` draws and the reason the doctor stopped
+ *     warning about the supervisor it never constructed.
+ */
+function buildProjectMatrixCheck(matrix: ProjectSupportVerdict): DoctorCheck {
+  const blocking = matrix.rows.filter(
+    (row) => row.requirement === "required" && (row.status === "missing" || row.status === "unsupported"),
+  );
+  const recommendedGaps = matrix.rows.filter(
+    (row) => row.requirement === "recommended" && (row.status === "missing" || row.status === "unsupported"),
+  );
+  const undetermined = matrix.rows.filter((row) => row.status === "unknown");
+  const notMeasured = matrix.rows.filter((row) => row.status === "not-measured");
+
+  const status: DoctorStatus = blocking.length > 0
+    ? "fail"
+    : (undetermined.length > 0 || recommendedGaps.length > 0 ? "warn" : "pass");
+
+  const named = [...blocking, ...recommendedGaps, ...undetermined]
+    .map((row) => `${row.label} — ${row.detail}`)
+    .join(" ");
+  const unmeasuredText = notMeasured
+    .map((row) => `NOT MEASURED — ${row.label}: ${row.detail}`)
+    .join(" ");
+  const fixes = [...blocking, ...recommendedGaps, ...undetermined]
+    .map((row) => row.fix)
+    .filter((fix): fix is string => Boolean(fix));
+
+  return {
+    id: "project-matrix",
+    label: "Supported project matrix",
+    status,
+    detail: [matrix.summary, named, unmeasuredText].filter(Boolean).join(" "),
+    ...(fixes.length > 0 ? { fix: fixes.join(" ") } : {}),
+    matrix,
+  };
 }
 
 export async function collectDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -187,6 +247,20 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       status: "pass",
       detail: `Loaded .env successfully. Language=${configResult.value.language}, web port=${configResult.value.web.port}.`,
     });
+
+    // One dependency scan feeds both the matrix and the capability snapshot
+    // below; two scans of the same project would only invite them to disagree.
+    const stradaDeps = checkStradaDeps(
+      configResult.value.unityProjectPath,
+      configResult.value.strada,
+    );
+    checks.push(buildProjectMatrixCheck(evaluateProjectSupport({
+      unityProjectPath: configResult.value.unityProjectPath,
+      config: configResult.value.strada,
+      deps: stradaDeps,
+      unityEditorPath:
+        configResult.value.strada.unityEditorPath ?? process.env["STRADA_UNITY_BIN"] ?? null,
+    })));
 
     const providerCheck: DoctorCheck = {
       id: "providers",
@@ -302,7 +376,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
 
     const capabilities = buildCapabilitySnapshot({
       stradaMcpRuntime: (() => {
-        const deps = checkStradaDeps(configResult.value.unityProjectPath, configResult.value.strada);
+        const deps = stradaDeps;
         return {
           installed: deps.mcpInstalled,
           sourcePath: deps.mcpPath,
@@ -367,6 +441,14 @@ export async function runDoctorCommand(): Promise<number> {
   for (const check of report.checks) {
     console.log(`[${formatStatus(check.status)}] ${check.label}`);
     console.log(`  ${check.detail}`);
+    // The matrix is the one check whose value is per-row: "which of the eight
+    // things this project needs is missing" is what someone moving the demo to
+    // another machine has to read (plan 6.10).
+    if (check.matrix) {
+      for (const line of formatProjectMatrix(check.matrix)) {
+        console.log(`  ${line}`);
+      }
+    }
     if (check.fix) {
       console.log(`  Fix: ${check.fix}`);
     }
