@@ -12,9 +12,11 @@
 // else the first member — and that last fallback is logged once per id, because
 // a reply that lands on the wrong channel is a bug worth seeing.
 //
-// Ownership is persisted as {chatId → member name} through HubOwnerStore and
-// restored at construction (plan 2.10, audit 12F2/D59), so a restart does not
-// demote every known chat to shape-guessing.
+// Ownership is persisted as {chatId → member name} through HubOwnerStore (one
+// keyed SQLite row per chat) and restored at construction (plan 2.10, audit
+// 12F2/D59), so a restart does not demote every known chat to shape-guessing.
+// Only the binding that changed is ever written, so a second daemon over the
+// same store cannot lose it (round 9 #31).
 //
 // Setters and broadcasts that carry no chat id fan out to every member that
 // implements them. Per-chat capabilities a member lacks degrade explicitly:
@@ -55,7 +57,7 @@ type Member = IChannelAdapter & MemberExtras;
 export interface HubChannelOptions {
   /**
    * Where {chatId → member name} is persisted. Defaults to
-   * `<strada home>/hub-owners.json`; pass `null` for an in-memory hub.
+   * `<strada home>/hub-owners.db`; pass `null` for an in-memory hub.
    */
   ownerStore?: HubOwnerStore | null;
 }

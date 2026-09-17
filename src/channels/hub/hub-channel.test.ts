@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HubChannel } from "./hub-channel.js";
-import { HubOwnerStore } from "./owner-store.js";
+import { HubOwnerStore, HUB_OWNERS_DB_FILE } from "./owner-store.js";
 import type { IChannelAdapter } from "../channel.interface.js";
 import type { IncomingMessage } from "../channel-messages.interface.js";
 
@@ -177,7 +177,8 @@ describe("HubChannel", () => {
   // restored, so a new hub from the same storage routes a chat it never saw.
   it("restores chat ownership from the owner store after a simulated restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hub-owners-"));
-    const store = new HubOwnerStore(join(dir, "hub-owners.json"));
+    const dbPath = join(dir, HUB_OWNERS_DB_FILE);
+    const store = new HubOwnerStore(dbPath);
     try {
       const slack1 = fake("slack");
       const tg1 = fake("telegram");
@@ -185,11 +186,13 @@ describe("HubChannel", () => {
       hub1.onMessage(async () => undefined);
       await slack1.handler!(incoming("C123:1700000000.000100", "slack"));
       await hub1.disconnect();
+      store.close();
 
-      // Restart: fresh adapters, no inbound, no claimsChatId on either member.
+      // Restart: fresh adapters and a fresh store over the same database, no
+      // inbound, no claimsChatId on either member.
       const slack2 = fake("slack");
       const tg2 = fake("telegram");
-      const hub2 = new HubChannel([tg2, slack2], { ownerStore: store });
+      const hub2 = new HubChannel([tg2, slack2], { ownerStore: new HubOwnerStore(dbPath) });
       hub2.onMessage(async () => undefined);
       await hub2.sendMarkdown("C123:1700000000.000100", "goal finished");
       expect(slack2.sent).toEqual([["C123:1700000000.000100", "markdown", "goal finished"]]);
@@ -201,28 +204,19 @@ describe("HubChannel", () => {
     }
   });
 
-  it("persists ownership under the Strada home by default and tolerates a corrupt file", async () => {
+  it("persists ownership under the Strada home by default", async () => {
     const web = fake("web");
     const tg = fake("telegram");
     const hub = new HubChannel([web, tg]);
     hub.onMessage(async () => undefined);
     await tg.handler!(incoming("4242", "telegram"));
-    const file = join(fakeHome, ".strada", "hub-owners.json");
-    expect(existsSync(file)).toBe(true);
-    const persisted = JSON.parse(readFileSync(file, "utf8")) as { version: number; owners: Record<string, string> };
-    expect(persisted.version).toBe(1);
-    expect(persisted.owners["4242"]).toBe("telegram");
-
-    const dir = mkdtempSync(join(tmpdir(), "hub-owners-corrupt-"));
+    const dbPath = join(fakeHome, ".strada", HUB_OWNERS_DB_FILE);
+    expect(existsSync(dbPath)).toBe(true);
+    const persisted = new HubOwnerStore(dbPath);
     try {
-      const path = join(dir, "hub-owners.json");
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync(path, "{not json", "utf8");
-      const store = new HubOwnerStore(path);
-      expect(store.load().size).toBe(0);
-      expect(loggerStub.warn).toHaveBeenCalledWith(expect.stringMatching(/corrupt/), expect.objectContaining({ path }));
+      expect(persisted.load().get("4242")).toBe("telegram");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      persisted.close();
     }
   });
 
@@ -239,11 +233,12 @@ describe("HubChannel", () => {
     await ok.disconnect();
   });
 
-  // Codex round 8 #7: two hubs both loaded {} and each saved its own binding,
-  // so the file kept only the last writer's and the other chat lost its owner.
-  it("two hubs writing at once keep both bindings", async () => {
+  // Codex round 8 #7 / round 9 #31: two hubs both loaded the whole map and each
+  // wrote its own snapshot back, so the store kept only the last writer's and
+  // the other chat lost its owner. Each hub now writes only what it changed.
+  it("two hubs writing at once keep both bindings, and neither resurrects a chat the other rebound", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hub-owners-race-"));
-    const path = join(dir, "hub-owners.json");
+    const path = join(dir, HUB_OWNERS_DB_FILE);
     try {
       const storeA = new HubOwnerStore(path);
       const storeB = new HubOwnerStore(path);
@@ -260,9 +255,28 @@ describe("HubChannel", () => {
       await slackA.handler!(incoming("C111:1700000000.000100", "slack"));
       await tgB.handler!(incoming("222333", "telegram"));
 
-      const onDisk = new HubOwnerStore(path).load();
-      expect(onDisk.get("C111:1700000000.000100")).toBe("slack");
-      expect(onDisk.get("222333")).toBe("telegram");
+      const onDisk = new HubOwnerStore(path);
+      try {
+        expect(onDisk.load().get("C111:1700000000.000100")).toBe("slack");
+        expect(onDisk.load().get("222333")).toBe("telegram");
+      } finally {
+        onDisk.close();
+      }
+
+      // Hub B re-binds hub A's chat by owner row; hub A then learns a THIRD
+      // chat while its own in-memory map still says "slack". Hub A must write
+      // only the chat it learned, never assert its whole stale view (#31).
+      expect(hubB.bindOwner("C111:1700000000.000100", "telegram")).toBe(true);
+      await tgA.handler!(incoming("444555", "telegram"));
+      const after = new HubOwnerStore(path);
+      try {
+        expect(after.load().get("C111:1700000000.000100")).toBe("telegram");
+        expect(after.load().get("444555")).toBe("telegram");
+      } finally {
+        after.close();
+      }
+      storeA.close();
+      storeB.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
