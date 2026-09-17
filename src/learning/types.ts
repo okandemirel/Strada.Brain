@@ -80,7 +80,8 @@ export type InstinctStatus =
   | "active"     // Validated and active
   | "permanent"  // Proven instinct, confidence frozen
   | "deprecated" // No longer effective
-  | "evolved";   // Evolved to a higher form (skill/command/agent)
+  | "evolved"    // Evolved to a higher form (skill/command/agent)
+  | "quarantined"; // Was permanent, then kept being wrong: held out of use until reviewed
 
 /** Milliseconds per calendar day */
 export const MS_PER_DAY = 86_400_000;

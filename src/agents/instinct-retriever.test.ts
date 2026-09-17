@@ -189,6 +189,25 @@ describe("InstinctRetriever", () => {
     expect(result.matchedInstinctIds).toHaveLength(0);
   });
 
+  // improvement on audit 04.6: a quarantined instinct is a permanent one that
+  // kept being wrong. It is held out of use, so it must not be suggested either
+  // — the unscoped retrieval path dropped only 'deprecated'.
+  it("excludes quarantined instincts from results", async () => {
+    const quarantinedInstinct = createMockInstinct({
+      id: "instinct_quarantined" as Instinct["id"],
+      status: "quarantined",
+      action: JSON.stringify({ description: "Quarantined insight" }),
+      confidence: 0.97,
+    });
+
+    const matches = [createMockMatch(quarantinedInstinct, 0.9)];
+    const { retriever } = setup([quarantinedInstinct], matches);
+    const result = await retriever.getInsightsForTask("some task");
+
+    expect(result.insights).toHaveLength(0);
+    expect(result.matchedInstinctIds).toHaveLength(0);
+  });
+
   it("includes permanent instincts in results (not filtered out)", async () => {
     const permanentInstinct = createMockInstinct({
       id: "instinct_perm" as Instinct["id"],
@@ -780,7 +799,11 @@ describe("InstinctRetriever", () => {
       expect(calls).toEqual(["factor", "outcome:instinct_outcome:false"]);
     });
 
-    it("does not call onOutcome for a permanent instinct", async () => {
+    // improvement on audit 04.6: a permanent instinct's outcome now REACHES the
+    // pipeline. Its confidence is still frozen there — but consecutive failures
+    // are what quarantine a permanent teaching that has become wrong, and this
+    // early return used to drop them.
+    it("hands a permanent instinct's outcome to onOutcome as well", async () => {
       const instinct = createMockInstinct({ id: "instinct_perm" as Instinct["id"], status: "permanent" });
       const mockStorage = {
         getInstinct: vi.fn().mockReturnValue(instinct),
@@ -790,9 +813,9 @@ describe("InstinctRetriever", () => {
       const onOutcome = vi.fn();
 
       const retriever = new InstinctRetriever(mockMatcher, { storage: mockStorage, onOutcome });
-      await retriever.recordOutcome("instinct_perm", true);
+      await retriever.recordOutcome("instinct_perm", false);
 
-      expect(onOutcome).not.toHaveBeenCalled();
+      expect(onOutcome).toHaveBeenCalledWith("instinct_perm", false);
     });
   });
 });

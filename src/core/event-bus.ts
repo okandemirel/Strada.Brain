@@ -220,6 +220,8 @@ export interface LearningEventMap {
   "instinct:cooling-started": InstinctLifecycleEvent;
   "instinct:deprecated": InstinctLifecycleEvent;
   "instinct:promoted": InstinctLifecycleEvent;
+  /** A permanent instinct held out of use after repeated negative evidence. */
+  "instinct:quarantined": InstinctLifecycleEvent;
   "goal:status-changed": GoalLifecycleEvent;
   "chain:detected": ChainDetectedEvent;
   "chain:executed": ChainExecutionEvent;

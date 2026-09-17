@@ -2921,3 +2921,180 @@ describe("pending error resolutions end with the run (audit 04.cap)", () => {
     expect(pendingSize()).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// improvement on audit 04.6 — a 'permanent' instinct was frozen against ALL
+// evidence: confidence, status, cooling and every outcome path skipped it, so a
+// teaching that had become wrong went on being applied at the highest
+// intervention tier forever, with nothing anywhere saying so.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("a permanent instinct can be quarantined (improvement on audit 04.6)", () => {
+  let storage: LearningStorage;
+  let pipeline: LearningPipeline;
+  let tempDir: string;
+  let eventBus: TypedEventBus<any>;
+  let quarantined: any[];
+  const PROJECT = "/projects/pixelflow";
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pipeline-quarantine-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    eventBus = new TypedEventBus();
+    quarantined = [];
+    eventBus.on("instinct:quarantined", (e: any) => quarantined.push(e));
+    pipeline = new LearningPipeline(
+      storage,
+      { enabled: true, detectionIntervalMs: 1000, evolutionIntervalMs: 5000, minConfidenceForCreation: 0.5, batchSize: 5 },
+      undefined,
+      undefined,
+      eventBus,
+    );
+    pipeline.setProjectPath(PROJECT);
+  });
+
+  afterEach(() => {
+    pipeline.stop();
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function permanent(id: string): Instinct {
+    return {
+      id: id as any,
+      name: "Proven teaching",
+      type: "user_teaching",
+      status: "permanent",
+      confidence: 0.97 as any,
+      triggerPattern: "Any tool",
+      action: "Always regenerate the module from the template",
+      contextConditions: [],
+      stats: { timesSuggested: 60, timesApplied: 58, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+      bayesianAlpha: 40,
+      bayesianBeta: 1,
+      createdAt: Date.now() as TimestampMs,
+      updatedAt: Date.now() as TimestampMs,
+      sourceTrajectoryIds: [],
+      tags: [],
+    };
+  }
+
+  const event = (sessionId: string, ids: string[], success: boolean): ToolResultEvent => ({
+    sessionId, toolName: "shell", input: {}, output: success ? "ok" : "boom", success,
+    appliedInstinctIds: ids, timestamp: Date.now(),
+  });
+
+  /** One run that applied the instinct and ended with the given verdict. */
+  async function run(id: string, sessionId: string, success: boolean) {
+    await pipeline.handleToolResult(event(sessionId, [id], success));
+    pipeline.clearRunInstinctCredits(sessionId, { success });
+  }
+
+  it("three consecutive failed runs quarantine it", async () => {
+    const instinct = permanent(`instinct_quar_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    await run(instinct.id, "run-1", false);
+    expect(storage.getInstinct(instinct.id)!.status, "quarantined on the first failure").toBe("permanent");
+    await run(instinct.id, "run-2", false);
+    await run(instinct.id, "run-3", false);
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.status, "a permanent instinct kept applying after three failed runs").toBe("quarantined");
+  });
+
+  it("says so: a lifecycle event, a lifecycle log entry, and a reportable row", async () => {
+    const instinct = permanent(`instinct_report_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    for (const session of ["r1", "r2", "r3"]) await run(instinct.id, session, false);
+
+    expect(quarantined, "the quarantine was silent").toHaveLength(1);
+    expect(quarantined[0].instinct.id).toBe(instinct.id);
+    expect(quarantined[0].fromStatus).toBe("permanent");
+    expect(quarantined[0].toStatus).toBe("quarantined");
+    expect(String(quarantined[0].reason)).toMatch(/3/);
+
+    const logs = storage.getLifecycleLogs({ instinctId: instinct.id });
+    expect(logs.some((l: any) => l.toStatus === "quarantined"), "no lifecycle log entry").toBe(true);
+
+    expect(pipeline.getQuarantinedInstincts().map((i) => i.id)).toContain(instinct.id);
+  });
+
+  it("is no longer retrieved or applied once quarantined", async () => {
+    const instinct = permanent(`instinct_gone_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+    for (const session of ["r1", "r2", "r3"]) await run(instinct.id, session, false);
+
+    const retrievable = storage.getInstinctsForScope({ projectPath: PROJECT, scopeFilter: "all" });
+    expect(retrievable.map((i) => i.id), "a quarantined instinct is still being retrieved").not.toContain(instinct.id);
+  });
+
+  it("a permanent instinct that keeps working is never quarantined and stays frozen", async () => {
+    const instinct = permanent(`instinct_good_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    for (const session of ["g1", "g2", "g3", "g4", "g5"]) await run(instinct.id, session, true);
+
+    const after = storage.getInstinct(instinct.id)!;
+    expect(after.status).toBe("permanent");
+    expect(after.confidence).toBeCloseTo(0.97, 5);
+    expect(after.stats.timesApplied, "a frozen instinct's stats moved").toBe(58);
+    expect(quarantined).toHaveLength(0);
+  });
+
+  it("a successful run resets the consecutive count (only CONSECUTIVE evidence quarantines)", async () => {
+    const instinct = permanent(`instinct_reset_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    await run(instinct.id, "r1", false);
+    await run(instinct.id, "r2", false);
+    await run(instinct.id, "r3", true); // recovered
+    await run(instinct.id, "r4", false);
+    await run(instinct.id, "r5", false);
+
+    expect(storage.getInstinct(instinct.id)!.status, "two failures after a recovery quarantined it").toBe("permanent");
+
+    await run(instinct.id, "r6", false);
+    expect(storage.getInstinct(instinct.id)!.status).toBe("quarantined");
+  });
+
+  it("repeated thumbs-down quarantines a permanent instinct too", () => {
+    const instinct = permanent(`instinct_thumbs_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    for (let i = 0; i < 3; i++) {
+      eventBus.emit("feedback:reaction", {
+        type: "thumbs_down",
+        instinctIds: [instinct.id],
+        userId: "u1",
+        source: "reaction",
+      } as any);
+    }
+
+    expect(storage.getInstinct(instinct.id)!.status).toBe("quarantined");
+  });
+
+  it("the outcome of a task a permanent instinct informed still counts against it", () => {
+    const instinct = permanent(`instinct_outcome_${Date.now()}`);
+    storage.createInstinct(instinct, PROJECT);
+
+    pipeline.recordInstinctOutcomeEvidence(instinct.id, false);
+    pipeline.recordInstinctOutcomeEvidence(instinct.id, false);
+    expect(storage.getInstinct(instinct.id)!.status).toBe("permanent");
+    pipeline.recordInstinctOutcomeEvidence(instinct.id, false);
+
+    expect(storage.getInstinct(instinct.id)!.status).toBe("quarantined");
+  });
+
+  it("the retriever hands a permanent instinct's failed outcome to the pipeline", () => {
+    const retriever = readFileSync("src/agents/instinct-retriever.ts", "utf8");
+    const at = retriever.indexOf("async recordOutcome(");
+    expect(at).toBeGreaterThan(0);
+    const body = retriever.slice(at, at + 800);
+    expect(
+      body.includes('instinct.status === "permanent"'),
+      "recordOutcome drops a permanent instinct's outcome before the pipeline can count it",
+    ).toBe(false);
+  });
+});

@@ -273,8 +273,12 @@ export class LearningPipeline {
       const instinct = this.storage.getInstinct(instinctId as InstinctId);
       if (!instinct) continue;
       const outcome = settled ?? observed;
-      // Permanent instincts are frozen — confidence is not updated.
-      if (instinct.status === "permanent") continue;
+      // Permanent instincts are frozen against confidence updates — but not
+      // unaccountable: the run's outcome feeds the quarantine counter.
+      if (instinct.status === "permanent") {
+        this.recordPermanentEvidence(instinct, outcome.success);
+        continue;
+      }
       // Increment coolingFailures for failures on cooling instincts
       const instinctForUpdate = !outcome.success && instinct.coolingStartedAt
         ? { ...instinct, coolingFailures: (instinct.coolingFailures ?? 0) + 1 }
@@ -858,7 +862,10 @@ export class LearningPipeline {
    * reaction is not an application.
    */
   private applyReactionEvidence(instinct: Instinct, positive: boolean): void {
-    if (instinct.status === "permanent") return;
+    if (instinct.status === "permanent") {
+      this.recordPermanentEvidence(instinct, positive);
+      return;
+    }
     const updated = this.confidenceScorer.applyEvidence(
       instinct,
       positive ? EVIDENCE_WEIGHTS.reactionUp : EVIDENCE_WEIGHTS.reactionDown,
@@ -874,12 +881,86 @@ export class LearningPipeline {
    */
   recordInstinctOutcomeEvidence(instinctId: string, success: boolean): void {
     const instinct = this.storage.getInstinct(instinctId);
-    if (!instinct || instinct.status === "permanent") return;
+    if (!instinct) return;
+    if (instinct.status === "permanent") {
+      this.recordPermanentEvidence(instinct, success);
+      return;
+    }
     const updated = this.confidenceScorer.applyEvidence(
       instinct,
       success ? EVIDENCE_WEIGHTS.outcomeSuccess : EVIDENCE_WEIGHTS.outcomeFailure,
     );
     this.updateInstinctStatus(updated);
+  }
+
+  /**
+   * The only thing a 'permanent' instinct is accountable for (improvement on
+   * audit 04.6). Its confidence is frozen, its stats do not move, every
+   * lifecycle transition skips it and its intervention tier is the highest
+   * there is — so a teaching that had BECOME wrong went on being applied
+   * forever, with nothing anywhere saying so.
+   *
+   * Consecutive negative evidence (a failed run that applied it, a thumbs-down,
+   * a failed task it informed) is counted in coolingFailures — the existing
+   * persisted consecutive-failure counter — and any positive evidence resets it.
+   * At bayesianConfig.coolingMaxFailures (the same N the cooling path uses) the
+   * instinct becomes 'quarantined': out of every retrieval path, out of the
+   * intervention tiers (maxTierForLifecycle returns null for it), and REPORTED —
+   * a lifecycle event, a lifecycle log row, and a warn log naming it.
+   *
+   * Quarantine is not deprecation: the row keeps its confidence and its history
+   * so a human can see what was trusted, and why it was held.
+   */
+  private recordPermanentEvidence(instinct: Instinct, positive: boolean): void {
+    const consecutive = instinct.coolingFailures ?? 0;
+
+    if (positive) {
+      if (consecutive === 0) return;
+      this.storage.updateInstinct({
+        ...instinct,
+        coolingFailures: 0,
+        updatedAt: Date.now() as TimestampMs,
+      });
+      return;
+    }
+
+    const failures = consecutive + 1;
+    const threshold = Math.max(1, this.bayesianConfig.coolingMaxFailures);
+    if (failures < threshold) {
+      this.storage.updateInstinct({
+        ...instinct,
+        coolingFailures: failures,
+        updatedAt: Date.now() as TimestampMs,
+      });
+      return;
+    }
+
+    const reason = `Quarantined: ${failures} consecutive negative outcomes on a permanent instinct (>= ${threshold})`;
+    const quarantinedInstinct: Instinct = {
+      ...instinct,
+      status: "quarantined",
+      coolingFailures: failures,
+      updatedAt: Date.now() as TimestampMs,
+    };
+    this.storage.updateInstinct(quarantinedInstinct);
+    this.emitLifecycleEvent("instinct:quarantined", quarantinedInstinct, "permanent", "quarantined", reason);
+    this.writeLifecycleLogSafe(instinct, "quarantined", reason);
+    try {
+      getLoggerSafe().warn("instinct quarantined: a permanent teaching kept being wrong", {
+        instinctId: instinct.id,
+        name: instinct.name,
+        consecutiveFailures: failures,
+        threshold,
+        confidence: instinct.confidence,
+      });
+    } catch {
+      // Logger may not be available in test environments
+    }
+  }
+
+  /** Every instinct currently held in quarantine, so a report can name them. */
+  getQuarantinedInstincts(): Instinct[] {
+    return this.storage.getInstincts({ status: "quarantined" });
   }
 
   updateInstinctStatus(instinct: Instinct): void {
@@ -1032,7 +1113,7 @@ export class LearningPipeline {
 
   /** Emit a lifecycle event on the event bus (fire-and-forget) */
   private emitLifecycleEvent(
-    eventName: "instinct:cooling-started" | "instinct:deprecated" | "instinct:promoted",
+    eventName: "instinct:cooling-started" | "instinct:deprecated" | "instinct:promoted" | "instinct:quarantined",
     instinct: Instinct,
     fromStatus: string,
     toStatus: string,

@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS instincts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain')),
-  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent', 'quarantined')),
   confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
   trigger_pattern TEXT NOT NULL,
   action TEXT NOT NULL,
@@ -655,17 +655,22 @@ export class LearningStorage {
 
   /**
    * Migrate the CHECK constraint on instincts.type to include v2 types:
-   * 'error_pattern', 'workflow_pattern', 'user_teaching', 'seed'.
+   * 'error_pattern', 'workflow_pattern', 'user_teaching', 'seed' — and the
+   * 'quarantined' status (improvement on audit 04.6: a permanent instinct that
+   * keeps being wrong is held out of use instead of applying forever). Both live
+   * in the same recreation because this is the LAST status/type migration to
+   * run, so the table it writes has every v2 column.
    * Uses table recreation since SQLite cannot ALTER CHECK constraints.
-   * Idempotent -- only runs if the new types are not already valid.
+   * Idempotent -- only runs if the new types AND statuses are not already valid.
    */
   private migrateTypeConstraintV2(): void {
     if (!this.db) return;
 
-    // Check if 'error_pattern' is already accepted (representative new type)
+    // Check if 'error_pattern' (new type) AND 'quarantined' (new status) are
+    // both already accepted — one probe row exercises both CHECKs.
     try {
       this.db.prepare("INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-        "__check_error_pattern__", "__test__", "error_pattern", "proposed", 0.5, "__test__", "__test__", "[]", "{}", 0, 0
+        "__check_error_pattern__", "__test__", "error_pattern", "quarantined", 0.5, "__test__", "__test__", "[]", "{}", 0, 0
       );
       // If we get here, new types are already in CHECK -- delete test row and return
       this.db.prepare("DELETE FROM instincts WHERE id = ?").run("__check_error_pattern__");
@@ -685,7 +690,7 @@ export class LearningStorage {
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
           type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain', 'error_pattern', 'workflow_pattern', 'user_teaching', 'seed')),
-          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent', 'quarantined')),
           confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
           trigger_pattern TEXT NOT NULL,
           action TEXT NOT NULL,

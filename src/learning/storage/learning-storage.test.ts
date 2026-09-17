@@ -1397,3 +1397,71 @@ describe("LearningStorage", () => {
     });
   });
 });
+
+// improvement on audit 04.6: 'quarantined' is a new instinct status, and the
+// status column carries a CHECK constraint — an existing database has to be
+// migrated to accept it, without losing a single row on the way.
+describe("the status CHECK migration accepts 'quarantined' (improvement on audit 04.6)", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "learning-quarantine-migration-"));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("migrates a database whose status CHECK predates 'quarantined', keeping its rows", () => {
+    const dbPath = join(tempDir, "legacy.db");
+
+    // 1. a current database, with one instinct in it
+    const first = new LearningStorage(dbPath);
+    first.initialize();
+    const kept: Instinct = {
+      id: "instinct_legacy" as Instinct["id"],
+      name: "Legacy",
+      type: "error_fix",
+      status: "permanent",
+      confidence: 0.97 as Instinct["confidence"],
+      triggerPattern: "legacy trigger",
+      action: "legacy action",
+      contextConditions: [],
+      stats: { timesSuggested: 9, timesApplied: 8, timesFailed: 1, successRate: 0.89, averageExecutionMs: 0 },
+      createdAt: Date.now() as Instinct["createdAt"],
+      updatedAt: Date.now() as Instinct["updatedAt"],
+      sourceTrajectoryIds: [],
+      tags: [],
+    };
+    first.createInstinct(kept, "/projects/legacy");
+    first.close();
+
+    // 2. rewind the table to the pre-quarantine CHECK, keeping every column and row
+    const raw = new Database(dbPath);
+    const createSql = (raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='instincts'").get() as { sql: string }).sql;
+    expect(createSql).toContain("'quarantined'");
+    const legacySql = createSql
+      .replace("CREATE TABLE instincts", "CREATE TABLE instincts_legacy")
+      .replace(", 'quarantined'", "");
+    raw.pragma("foreign_keys = OFF");
+    raw.exec(legacySql);
+    raw.exec("INSERT INTO instincts_legacy SELECT * FROM instincts");
+    raw.exec("DROP TABLE instincts");
+    raw.exec("ALTER TABLE instincts_legacy RENAME TO instincts");
+    expect(() =>
+      raw.prepare("UPDATE instincts SET status = 'quarantined' WHERE id = ?").run("instinct_legacy"),
+    ).toThrow();
+    raw.close();
+
+    // 3. reopening migrates it
+    const second = new LearningStorage(dbPath);
+    second.initialize();
+    const survivor = second.getInstinct("instinct_legacy");
+    expect(survivor, "the migration dropped the existing rows").not.toBeNull();
+    expect(survivor!.confidence).toBeCloseTo(0.97, 5);
+
+    second.updateInstinct({ ...survivor!, status: "quarantined" });
+    expect(second.getInstinct("instinct_legacy")!.status).toBe("quarantined");
+    second.close();
+  });
+});
