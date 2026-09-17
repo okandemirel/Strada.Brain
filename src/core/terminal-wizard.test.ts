@@ -1,6 +1,8 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildWebSetupUpgradeShellScript,
@@ -16,7 +18,10 @@ import {
   validateChannelCredentials,
   hasAutoEmbeddingCandidate,
   resolveRagSetup,
+  TERMINAL_WIZARD_OWNED_ENV_KEYS,
 } from "./terminal-wizard.js";
+import { SETUP_DEFAULT_ENV_KEYS } from "./setup-wizard.js";
+import { persistSetup } from "./setup-env-persistence.js";
 
 describe("generateEnvContent", () => {
   it("uses EMBEDDING_PROVIDER for Gemini and aligns dashboard port defaults", () => {
@@ -447,5 +452,38 @@ describe("the terminal wizard's setup contract", () => {
     });
     expect(content).toContain("RAG_ENABLED=false");
     expect(content).toContain("# RAG stays off until an embedding-capable provider is configured");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex round 9 #16, through the CLI: `strada setup` must not delete a budget
+// it never asked about.
+// ---------------------------------------------------------------------------
+describe("the terminal wizard states nothing about the budget", () => {
+  it("does not own STRADA_BUDGET_DAILY_USD, so an existing limit survives a re-run", async () => {
+    expect(TERMINAL_WIZARD_OWNED_ENV_KEYS.has("STRADA_BUDGET_DAILY_USD")).toBe(false);
+    // …while everything the wizard does write is still owned, so a de-selected
+    // provider key is still removed.
+    expect(TERMINAL_WIZARD_OWNED_ENV_KEYS.has("PROVIDER_CHAIN")).toBe(true);
+    expect(TERMINAL_WIZARD_OWNED_ENV_KEYS.has("KIMI_API_KEY")).toBe(true);
+
+    const dir = mkdtempSync(join(tmpdir(), "strada-cli-budget-"));
+    try {
+      const envPath = join(dir, ".env");
+      writeFileSync(envPath, "STRADA_BUDGET_DAILY_USD=0\nKIMI_API_KEY=old\nDEEPSEEK_API_KEY=drop-me\n");
+      // What a CLI run emits: a chain and its key, never a budget.
+      const result = await persistSetup(envPath, ['PROVIDER_CHAIN="kimi"', 'KIMI_API_KEY="sk-new"'], {
+        ownedKeys: TERMINAL_WIZARD_OWNED_ENV_KEYS,
+        defaultKeys: SETUP_DEFAULT_ENV_KEYS,
+      });
+      // The freeze the person set is still there…
+      expect(result.effective["STRADA_BUDGET_DAILY_USD"]).toBe("0");
+      // …the emitted keys are replaced, and a key the wizard owns but no
+      // longer emits is still removed.
+      expect(result.effective["KIMI_API_KEY"]).toBe("sk-new");
+      expect(result.effective["DEEPSEEK_API_KEY"]).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -118,3 +118,16 @@ describe('ReviewStep budget summary (Codex 2026-09-17 round 8 #12)', () => {
     expect(limited).toContain('$12/day')
   })
 })
+
+describe('ReviewStep budget before hydration (round 9 #16)', () => {
+  it('says the budget is unchanged when it has not been loaded, never "Unlimited"', async () => {
+    await i18n.changeLanguage('en')
+    // -2 is the unknown state the hook starts in: the Save sends no budget at
+    // all, so claiming "Unlimited" would promise a change it does not make.
+    const unknown = renderReview({ globalDailyBudget: -2 })
+    expect(unknown).toContain('unchanged')
+    expect(unknown).not.toContain('Unlimited')
+    // Guard: an explicit unlimited still reads as unlimited.
+    expect(renderReview({ globalDailyBudget: -1 })).toContain('Unlimited')
+  })
+})

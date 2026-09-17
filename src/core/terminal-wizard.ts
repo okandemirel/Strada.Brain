@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildSetupAccessUrl,
   SETUP_DEFAULT_ENV_KEYS,
-  SETUP_OWNED_ENV_KEYS,
+  setupOwnedEnvKeysFor,
   type SetupWizard,
 } from "./setup-wizard.js";
 import {
@@ -1018,6 +1018,17 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
  * Writes a .env file with the collected configuration.
  * Alternatively, launches the web-based SetupWizard if the user prefers.
  */
+/**
+ * What the TERMINAL wizard is the authority for.
+ *
+ * It never asks about the daily budget, so it states nothing about it — and a
+ * key the wizard owns but does not emit is REMOVED, which is why running
+ * `strada setup` used to delete an existing STRADA_BUDGET_DAILY_USD and turn
+ * a deliberate freeze into no limit at all (Codex round 9 #16, through the CLI
+ * entry point instead of the portal's).
+ */
+export const TERMINAL_WIZARD_OWNED_ENV_KEYS = setupOwnedEnvKeysFor({});
+
 export async function runTerminalWizard(
   options?: { mode?: "terminal" | "web" },
 ): Promise<SetupWizard | undefined> {
@@ -1520,7 +1531,7 @@ export async function runTerminalWizard(
     // Merge, never rewrite: hand-added keys survive, and the file is read
     // back so the summary shows what the runtime will load (plan 2.1).
     const persisted = await persistSetup(envPath, envContent.split("\n"), {
-      ownedKeys: SETUP_OWNED_ENV_KEYS,
+      ownedKeys: TERMINAL_WIZARD_OWNED_ENV_KEYS,
       defaultKeys: SETUP_DEFAULT_ENV_KEYS,
     });
 

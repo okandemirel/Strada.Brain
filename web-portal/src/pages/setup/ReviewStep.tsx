@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { PRESETS, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 import type { SaveStatus } from '../../types/setup'
-import { isUnlimitedBudget } from '../../hooks/useSetupWizard'
+import { isUnknownBudget, isUnlimitedBudget } from '../../hooks/useSetupWizard'
 import { buildSetupRetryHref } from '../../../../src/common/setup-state.ts'
 
 interface ReviewStepProps {
@@ -257,7 +257,9 @@ export default function ReviewStep({
 
         <div className="review-item">
           <span className="review-label">{t('review.labels.dailyBudget')}</span>
-          <span className="review-value">{isUnlimitedBudget(globalDailyBudget)
+          <span className="review-value">{isUnknownBudget(globalDailyBudget)
+            ? t('review.values.budgetUnchanged')
+            : isUnlimitedBudget(globalDailyBudget)
             ? t('review.values.budgetUnlimited')
             : globalDailyBudget === 0
               ? t('review.values.budgetFrozen')

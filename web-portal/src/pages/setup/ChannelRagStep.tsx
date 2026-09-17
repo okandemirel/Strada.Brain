@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
-import { BUDGET_UNLIMITED, isUnlimitedBudget } from '../../hooks/useSetupWizard'
+import { BUDGET_UNLIMITED, isUnknownBudget, isUnlimitedBudget } from '../../hooks/useSetupWizard'
 
 interface ChannelRagStepProps {
   channel: string
@@ -270,7 +270,11 @@ export default function ChannelRagStep({
             <span>{t('channels.budget.unlimited')}</span>
             {/* Unlimited is the leftmost stop; $0 is the stop beside it and
                 means nothing may spend (round 8 #12). */}
-            <span className="autonomy-value">{isUnlimitedBudget(globalDailyBudget)
+            {/* Not loaded yet is NOT "unlimited": saying so would promise a
+                change the Save does not make (round 9 #16). */}
+            <span className="autonomy-value">{isUnknownBudget(globalDailyBudget)
+              ? t('channels.budget.valueUnknown')
+              : isUnlimitedBudget(globalDailyBudget)
               ? t('channels.budget.valueUnlimited')
               : globalDailyBudget === 0
                 ? t('channels.budget.valueFrozen')
