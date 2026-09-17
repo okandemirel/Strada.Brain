@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { MemoryConsolidationEngine, summaryOwnership } from "./consolidation-engine.js";
+import { MemoryConsolidationEngine, summaryOwnership, ownershipKey } from "./consolidation-engine.js";
+import { matchesRetrievalFilters } from "../retrieval-filters.js";
 import type { ConsolidationEngineOptions } from "./consolidation-engine.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { ConsolidationConfig } from "./consolidation-types.js";
@@ -46,6 +47,9 @@ interface MemEntry {
   tags: string[];
   archived: boolean;
   chatId: string;
+  userId?: string;
+  projectId?: string;
+  shared?: boolean;
   version?: number;
 }
 
@@ -1370,15 +1374,23 @@ describe("TF-IDF index mirroring", () => {
 // inherited the first member's chatId, so a merge of two chats' memories was
 // hidden behind one chat instead of being shared by construction.
 describe("consolidation summary ownership (Codex round 7 #19)", () => {
-  it("summaryOwnership: a cross-owner cluster is shared; a single-chat cluster keeps its chat; unowned stays unowned", () => {
-    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-2" }])).toEqual({ chatId: "chat-1", shared: true });
-    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "default" }])).toEqual({ chatId: "chat-1", shared: true });
+  // Superseded by finding 17: round 7 #19 made a cross-owner summary
+  // `shared: true`, which published the merged private rows. A cross-owner
+  // cluster is now never consolidated at all; summaryOwnership keeps the
+  // summary private to the first member if one reaches it anyway.
+  it("summaryOwnership: a single-chat cluster keeps its chat; unowned stays unowned; a cross-owner list is never shared", () => {
     expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-1" }])).toEqual({ chatId: "chat-1" });
     expect(summaryOwnership([{ chatId: "default" }, { chatId: "default" }])).toEqual({ chatId: "default" });
-    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-1", shared: true }])).toEqual({ chatId: "chat-1", shared: true });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-2" }])).toEqual({ chatId: "chat-1" });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "default" }])).toEqual({ chatId: "chat-1" });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-1", shared: true }])).toEqual({ chatId: "chat-1" });
+    // only an all-shared list stays shared
+    expect(summaryOwnership([{ chatId: "chat-1", shared: true }, { chatId: "chat-2", shared: true }]))
+      .toEqual({ chatId: "chat-1", shared: true });
+    expect(summaryOwnership([])).toEqual({ chatId: "default" });
   });
 
-  it("a cluster spanning two chats produces a summary that is shared by construction, in memory and in the SQLite row", async () => {
+  it("a cluster spanning two chats is not consolidated at all — neither chat's memory is published (finding 17)", async () => {
     const entries = new Map<string, unknown>();
     entries.set("x1", makeMemEntry("x1", "content A", { tier: MemoryTier.Ephemeral, chatId: "chat-1" }));
     entries.set("x2", makeMemEntry("x2", "content B", { tier: MemoryTier.Ephemeral, chatId: "chat-2" }));
@@ -1387,10 +1399,8 @@ describe("consolidation summary ownership (Codex round 7 #19)", () => {
 
     await engine.processCluster({ seedId: "x1", memberIds: ["x1", "x2"], avgSimilarity: 0.9, tier: MemoryTier.Ephemeral });
 
-    const summary = entries.values().next().value as any;
-    expect(summary.shared).toBe(true);
-    const row = tables.memories.find((r: any) => r.id === summary.id) as any;
-    expect(JSON.parse(row.value).shared).toBe(true);
+    expect([...entries.keys()].sort()).toEqual(["x1", "x2"]);
+    expect(tables.memories.filter((r: any) => r.value !== undefined)).toEqual([]);
   });
 
   it("a cluster owned by one chat stays that chat's memory (not shared)", async () => {
@@ -1404,5 +1414,233 @@ describe("consolidation summary ownership (Codex round 7 #19)", () => {
     const summary = entries.values().next().value as any;
     expect(summary.chatId).toBe("chat-7");
     expect(summary.shared).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 17: consolidation published private memories
+// ---------------------------------------------------------------------------
+// Consolidating a cluster that mixed Alice/project-A/chat-A with
+// Bob/project-B/chat-B produced a summary with `shared: true` and NO
+// userId/projectId, so the merged private content matched an unrelated third
+// person's scoped search. Combining private rows must never grant sharing.
+
+/** A FilterableEntry carrying only the ownership under test. */
+function ownedRow(ownership: Record<string, unknown>) {
+  return {
+    type: "note" as const,
+    tags: [] as string[],
+    importance: "medium" as const,
+    archived: false,
+    createdAt: Date.now(),
+    metadata: {},
+    ...ownership,
+  };
+}
+
+describe("consolidation ownership (finding 17)", () => {
+  it("summaryOwnership keeps a mixed-owner summary private and preserves userId/projectId", () => {
+    const mixed = summaryOwnership([
+      { chatId: "chat-A", userId: "alice", projectId: "proj-A" },
+      { chatId: "chat-B", userId: "bob", projectId: "proj-B" },
+    ]);
+    expect(mixed.shared).toBeUndefined();
+    expect(mixed).toEqual({ chatId: "chat-A", userId: "alice", projectId: "proj-A" });
+  });
+
+  it("a mixed-owner summary does not match an unrelated third person's scoped search", () => {
+    const summary = ownedRow(
+      summaryOwnership([
+        { chatId: "chat-A", userId: "alice", projectId: "proj-A" },
+        { chatId: "chat-B", userId: "bob", projectId: "proj-B" },
+      ]) as Record<string, unknown>,
+    );
+    const carol = { scope: { userId: "carol", chatId: "chat-C", projectId: "proj-C" } };
+    expect(matchesRetrievalFilters(summary, carol)).toBe(false);
+  });
+
+  it("ownershipKey separates owners and joins identical ones", () => {
+    const a = { chatId: "chat-A", userId: "alice", projectId: "proj-A" };
+    const b = { chatId: "chat-B", userId: "bob", projectId: "proj-B" };
+    expect(ownershipKey(a)).toBe(ownershipKey({ ...a }));
+    expect(ownershipKey(a)).not.toBe(ownershipKey(b));
+    // an unowned row is its own partition, never the same as an owned chat
+    expect(ownershipKey({ chatId: "default" })).not.toBe(ownershipKey({ chatId: "chat-A" }));
+    // identity carried through metadata counts the same as a top-level field
+    expect(ownershipKey({ chatId: "chat-A", metadata: { userId: "alice" } })).toBe(
+      ownershipKey({ chatId: "chat-A", userId: "alice" }),
+    );
+  });
+
+  it("findClusters never puts two owners in one cluster", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("o1", makeMemEntry("o1", "alpha beta gamma", { chatId: "chat-A", userId: "alice", projectId: "proj-A" }));
+    entries.set("o2", makeMemEntry("o2", "alpha beta delta", { chatId: "chat-B", userId: "bob", projectId: "proj-B" }));
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "o1", score: 0.99 },
+        { id: "o2", score: 0.98 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, hnswStore }));
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("processCluster refuses a mixed-owner cluster: nothing summarized, both rows left live", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("m1", makeMemEntry("m1", "content A", { chatId: "chat-A", userId: "alice", projectId: "proj-A" }));
+    entries.set("m2", makeMemEntry("m2", "content B", { chatId: "chat-B", userId: "bob", projectId: "proj-B" }));
+    const { db, tables } = makeFakeDb();
+    const summarizeWithLLM = vi.fn(async () => ({ summary: "s", cost: 0.5, model: "test-model" }));
+    const logger = makeLogger();
+    const engine = new MemoryConsolidationEngine(
+      makeOpts({ entries, sqliteDb: db as any, summarizeWithLLM, logger }),
+    );
+
+    const res = await engine.processCluster({
+      seedId: "m1",
+      memberIds: ["m1", "m2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(res.cost).toBe(0);
+    expect(summarizeWithLLM).not.toHaveBeenCalled();
+    expect(entries.size).toBe(2);
+    expect(entries.has("m1")).toBe(true);
+    expect(entries.has("m2")).toBe(true);
+    expect(tables.memories.filter((r: any) => r.consolidated_into != null)).toEqual([]);
+    expect(tables.consolidation_log).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("mixed ownership"),
+      expect.anything(),
+    );
+  });
+});
+
+// The opposite direction: a stricter ownership rule must not silently drop
+// legitimate consolidation work.
+describe("consolidation ownership does not drop legitimate clusters (finding 17 guard)", () => {
+  it("two owners produce two single-owner clusters, no member lost", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("g1", makeMemEntry("g1", "alpha one", { chatId: "chat-A", userId: "alice" }));
+    entries.set("g2", makeMemEntry("g2", "alpha two", { chatId: "chat-A", userId: "alice" }));
+    entries.set("g3", makeMemEntry("g3", "alpha three", { chatId: "chat-B", userId: "bob" }));
+    entries.set("g4", makeMemEntry("g4", "alpha four", { chatId: "chat-B", userId: "bob" }));
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "g1", score: 0.99 },
+        { id: "g2", score: 0.98 },
+        { id: "g3", score: 0.97 },
+        { id: "g4", score: 0.96 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, hnswStore }));
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toHaveLength(2);
+    const members = clusters.map((c) => [...c.memberIds].sort().join(","));
+    expect(members.sort()).toEqual(["g1,g2", "g3,g4"]);
+  });
+
+  it("a single-owner cluster still consolidates and the summary keeps the owner (memory + SQLite row)", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("s1", makeMemEntry("s1", "content A", { chatId: "chat-7", userId: "alice", projectId: "proj-A" }));
+    entries.set("s2", makeMemEntry("s2", "content B", { chatId: "chat-7", userId: "alice", projectId: "proj-A" }));
+    const { db, tables } = makeFakeDb();
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, sqliteDb: db as any }));
+
+    await engine.processCluster({
+      seedId: "s1",
+      memberIds: ["s1", "s2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(entries.size).toBe(1);
+    const summary = entries.values().next().value as any;
+    expect(summary.chatId).toBe("chat-7");
+    expect(summary.userId).toBe("alice");
+    expect(summary.projectId).toBe("proj-A");
+    expect(summary.shared).toBeUndefined();
+    const row = tables.memories.find((r: any) => r.id === summary.id) as any;
+    const parsed = JSON.parse(row.value);
+    expect(parsed.userId).toBe("alice");
+    expect(parsed.projectId).toBe("proj-A");
+    expect(parsed.chatId).toBe("chat-7");
+    expect(parsed.shared).toBeUndefined();
+    // the owner still finds it
+    expect(
+      matchesRetrievalFilters(ownedRow({ chatId: summary.chatId, userId: summary.userId, projectId: summary.projectId }), {
+        scope: { userId: "alice", chatId: "chat-7", projectId: "proj-A" },
+      }),
+    ).toBe(true);
+  });
+
+  it("a summary of explicitly shared rows stays shared", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("h1", makeMemEntry("h1", "content A", { chatId: "chat-1", shared: true }));
+    entries.set("h2", makeMemEntry("h2", "content B", { chatId: "chat-2", shared: true }));
+    const { db, tables } = makeFakeDb();
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, sqliteDb: db as any }));
+
+    await engine.processCluster({
+      seedId: "h1",
+      memberIds: ["h1", "h2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(entries.size).toBe(1);
+    const summary = entries.values().next().value as any;
+    expect(summary.shared).toBe(true);
+    const row = tables.memories.find((r: any) => r.id === summary.id) as any;
+    expect(JSON.parse(row.value).shared).toBe(true);
+  });
+
+  it("undo restores the owner it soft-deleted, so a restored row is not an unowned match for everybody", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("u1", makeMemEntry("u1", "content A", { chatId: "chat-9", userId: "alice", projectId: "proj-A" }));
+    entries.set("u2", makeMemEntry("u2", "content B", { chatId: "chat-9", userId: "alice", projectId: "proj-A" }));
+    const { db, tables } = makeFakeDb();
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, sqliteDb: db as any }));
+
+    // the source rows have to exist in the fake table for undo to read them back
+    for (const id of ["u1", "u2"]) {
+      const e = entries.get(id) as any;
+      tables.memories.push({
+        id,
+        key: "note",
+        value: JSON.stringify({
+          type: e.type, content: e.content, tags: e.tags, importance: e.importance,
+          tier: e.tier, chatId: e.chatId, userId: e.userId, projectId: e.projectId, version: 1,
+        }),
+        metadata: "{}",
+        created_at: e.createdAt,
+        updated_at: e.createdAt,
+      });
+    }
+
+    await engine.processCluster({
+      seedId: "u1",
+      memberIds: ["u1", "u2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+    const logId = (tables.consolidation_log[0] as any).id as string;
+    await engine.undo(logId);
+
+    const restored = entries.get("u1") as any;
+    expect(restored.userId).toBe("alice");
+    expect(restored.projectId).toBe("proj-A");
+    expect(
+      matchesRetrievalFilters(ownedRow({ chatId: restored.chatId, userId: restored.userId, projectId: restored.projectId }), {
+        scope: { userId: "bob", chatId: "chat-9", projectId: "proj-A" },
+      }),
+    ).toBe(false);
   });
 });

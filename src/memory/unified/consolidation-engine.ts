@@ -20,6 +20,8 @@ import type {
 import { MemoryTier } from "./unified-memory.interface.js";
 import { toVectorEntry } from "./agentdb-vector.js";
 import { extractTerms } from "../text-index.js";
+import { UNSCOPED_CHAT_ID, isExplicitlyShared } from "../retrieval-filters.js";
+import type { FilterableEntry } from "../retrieval-filters.js";
 
 // =============================================================================
 // TYPES FOR CONSTRUCTOR DEPENDENCIES
@@ -91,34 +93,112 @@ interface MemoryEntryLike {
   tags: string[];
   archived: boolean;
   chatId: string;
+  /** Identity scope (plan 3.9) — absent = unowned (Codex round 6 #16). */
+  userId?: string;
+  projectId?: string;
   /** Explicitly shared across chats (Codex round 6 #16 / round 7 #19). */
   shared?: boolean;
   version?: number;
 }
 
 /**
- * Ownership of a consolidation summary (Codex round 7 #19). A summary that
- * merges memories of several owners (two chats, or a chat and an unowned
- * row) is cross-chat by construction and is written `shared: true`
- * explicitly — it used to inherit the first member's chatId, which hid the
- * other members' content behind one chat. A cluster owned by a single chat
- * keeps that chat (no share: the summary is still that chat's memory), and a
- * cluster of only unowned rows stays unowned (a share here would stamp an
- * ownership nobody recorded — the leak round 6 #16 forbids). Any explicitly
- * shared member makes the summary shared.
+ * The ownership a consolidation summary can carry: the identity scope
+ * `matchesRetrievalFilters` compares a scoped query against.
  */
-export function summaryOwnership(
-  members: ReadonlyArray<{ chatId?: string; shared?: boolean }>,
-): { chatId: string; shared?: true } {
-  const owners = new Set<string>();
-  let anyShared = false;
-  for (const m of members) {
-    if (m.shared === true) anyShared = true;
-    owners.add(m.chatId === undefined || m.chatId === "" ? "default" : m.chatId);
+export interface SummaryOwnership {
+  chatId: string;
+  userId?: string;
+  projectId?: string;
+  shared?: true;
+}
+
+/** The ownership-bearing fields of a row, however they were written. */
+export interface OwnedRow {
+  readonly chatId?: string;
+  readonly userId?: string;
+  readonly projectId?: string;
+  readonly shared?: boolean;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Identity read the same way the retrieval filter reads it (plan 3.9): the
+ * top-level field, else the metadata key callers that cannot set top-level
+ * fields use. A partition that read only the top-level field would merge
+ * Alice's metadata-scoped row into Bob's cluster.
+ */
+function identityOf(row: OwnedRow, key: "userId" | "projectId"): string | undefined {
+  const direct = row[key];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const fromMeta = row.metadata?.[key];
+  return typeof fromMeta === "string" && fromMeta.length > 0 ? fromMeta : undefined;
+}
+
+/** Normalized ownership of one row. */
+export function entryOwnership(row: OwnedRow): SummaryOwnership {
+  const chatId = row.chatId === undefined || row.chatId === "" ? UNSCOPED_CHAT_ID : row.chatId;
+  const userId = identityOf(row, "userId");
+  const projectId = identityOf(row, "projectId");
+  const shared = isExplicitlyShared(row as unknown as FilterableEntry);
+  return {
+    chatId,
+    ...(userId !== undefined ? { userId } : {}),
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(shared ? { shared: true as const } : {}),
+  };
+}
+
+/**
+ * Partition key for consolidation (finding 17). Rows that do not share this
+ * key are not the same owner's memories and must never be merged into one
+ * summary: the merge would have to either publish the private rows or hide
+ * the others behind one owner.
+ *
+ * A share crosses CHATS only (Codex round 7 #18), so two explicitly shared
+ * rows of the same user/project are one partition whatever chat wrote them —
+ * but a shared row is never in the same partition as a private one.
+ */
+export function ownershipKey(row: OwnedRow): string {
+  const o = entryOwnership(row);
+  return JSON.stringify([
+    o.userId ?? "",
+    o.projectId ?? "",
+    o.shared === true ? "*shared*" : o.chatId,
+  ]);
+}
+
+/**
+ * Ownership of a consolidation summary. The summary carries the ownership of
+ * the rows it merges — chatId AND userId/projectId — so a scoped search sees
+ * exactly what it saw before the merge.
+ *
+ * Finding 17: a summary of several owners used to be written `shared: true`
+ * with no userId/projectId, on the reasoning that a cross-chat merge is
+ * cross-chat by construction (Codex round 7 #19). But combining PRIVATE rows
+ * must never grant sharing: the shared summary of Alice/project-A/chat-A plus
+ * Bob/project-B/chat-B carried no identity at all, and a shared entry with no
+ * identity matches every scope — so an unrelated third person's scoped search
+ * returned the merged private content. Clusters are now partitioned by
+ * `ownershipKey` before consolidating (findClusters) and a mixed cluster is
+ * refused outright (processCluster), so a homogeneous member list is the
+ * normal case and this function simply returns that one owner.
+ *
+ * A summary of explicitly shared rows may stay shared; a member list that is
+ * mixed anyway (a caller that built its own cluster) keeps the FIRST member's
+ * ownership and is never shared.
+ */
+export function summaryOwnership(members: ReadonlyArray<OwnedRow>): SummaryOwnership {
+  if (members.length === 0) return { chatId: UNSCOPED_CHAT_ID };
+  const first = entryOwnership(members[0]!);
+  const keys = new Set(members.map(ownershipKey));
+  if (keys.size === 1) return first;
+  // Mixed despite the partition: the one safe answer is "private to the first
+  // member". A share here is exactly the leak this finding closes.
+  if (members.every((m) => entryOwnership(m).shared === true)) {
+    return { ...first, shared: true };
   }
-  const chatId = members[0]?.chatId ?? "default";
-  if (anyShared || owners.size > 1) return { chatId, shared: true };
-  return { chatId };
+  const { shared: _dropped, ...privateOwnership } = first;
+  return privateOwnership;
 }
 
 /** Minimal HNSW write mutex interface */
@@ -368,7 +448,12 @@ export class MemoryConsolidationEngine {
         this.config.batchSize,
       );
 
-      // Filter neighbors: same tier, above threshold, eligible, not visited
+      // Finding 17: a cluster covers ONE owner. A neighbour of another owner
+      // is skipped (not visited), so it still seeds its own cluster on a later
+      // iteration — the partition narrows clusters, it never drops rows.
+      const seedOwnership = ownershipKey(entry);
+
+      // Filter neighbors: same tier, same owner, above threshold, eligible, not visited
       const clusterMembers: string[] = [entry.id];
       let totalSimilarity = 0;
       let scoreCount = 0;
@@ -381,6 +466,7 @@ export class MemoryConsolidationEngine {
         const neighborEntry = this.entries.get(neighbor.id);
         if (!neighborEntry) continue;
         if (neighborEntry.tier !== tier) continue;
+        if (ownershipKey(neighborEntry) !== seedOwnership) continue;
         if (this.isExempt(neighborEntry)) continue;
         if (this.getDepth(neighborEntry) >= this.config.maxDepth) continue;
         if (now - neighborEntry.createdAt < this.config.minAgeMs) continue;
@@ -424,6 +510,21 @@ export class MemoryConsolidationEngine {
     const memberEntries = cluster.memberIds
       .map((id) => this.entries.get(id))
       .filter((e): e is MemoryEntryLike => e !== undefined);
+
+    // Finding 17: defence in depth behind findClusters' partition. A cluster
+    // whose members do not share one ownership is refused rather than merged:
+    // the merge could only publish the private rows (a shared summary with no
+    // identity matches every scope) or hide the rest behind one owner. Nothing
+    // is summarized, soft-deleted or logged, so every row stays retrievable to
+    // its own scope and the next cycle re-clusters it within its partition.
+    const owners = new Set(memberEntries.map(ownershipKey));
+    if (owners.size > 1) {
+      this.logger.warn(
+        "[Consolidation] Cluster spans mixed ownership — not consolidated (a summary of private rows must not be shared)",
+        { clusterId: cluster.seedId, memberIds: cluster.memberIds, owners: owners.size },
+      );
+      return { cost: 0 };
+    }
 
     const contents = memberEntries.map((e) => e.content);
 
@@ -511,6 +612,11 @@ export class MemoryConsolidationEngine {
       importanceScore: summaryEntry.importanceScore,
       domain: summaryEntry.domain,
       chatId: summaryEntry.chatId,
+      // Identity scope travels with the summary (finding 17) — loadEntries
+      // reads userId/projectId back out of this blob, and a summary that lost
+      // them would be an identity-less row that matches every scope.
+      ...(summaryEntry.userId !== undefined ? { userId: summaryEntry.userId } : {}),
+      ...(summaryEntry.projectId !== undefined ? { projectId: summaryEntry.projectId } : {}),
       ...(summaryEntry.shared === true ? { shared: true } : {}),
       version: 1,
     });
@@ -824,6 +930,12 @@ export class MemoryConsolidationEngine {
           tags: (parsed.tags as string[]) ?? [],
           archived: (parsed.archived as boolean) ?? false,
           chatId: (parsed.chatId as string) ?? "default",
+          // Restore the identity scope too (finding 17): a restored row that
+          // lost its userId/projectId carries NO identity, and an entry with
+          // no identity matches every scoped search — undo would publish what
+          // consolidation merged.
+          ...(typeof parsed.userId === "string" ? { userId: parsed.userId } : {}),
+          ...(typeof parsed.projectId === "string" ? { projectId: parsed.projectId } : {}),
           ...(parsed.shared === true ? { shared: true } : {}),
           version: (parsed.version as number) ?? 1,
         });
