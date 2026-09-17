@@ -27,6 +27,11 @@
  * through unscoped queries and the "default" scope; and a backfill could only
  * stamp an owner it does not know — exactly the leak #16 forbids. An
  * explicit share is a deliberate write (`shared: true`), never a migration.
+ *
+ * A share crosses CHATS only (Codex round 7 #18): `shared: true` bypasses the
+ * chatId comparison and nothing else. It used to short-circuit the whole scope
+ * check, so Alice's project-A note matched Bob's project-B scope. The userId
+ * and projectId comparisons always apply.
  */
 
 import type {
@@ -154,12 +159,12 @@ export function isUnownedByChat(entry: FilterableEntry): boolean {
 /**
  * Identity scope check (plan 3.9). A userId/projectId the entry does not carry
  * is not a mismatch; a DIFFERENT value is. For chatId (Codex round 6 #16) an
- * unowned entry matches only the "default" scope unless explicitly shared.
+ * unowned entry matches only the "default" scope unless explicitly shared —
+ * and the share bypasses ONLY the chat comparison (Codex round 7 #18).
  */
 export function matchesScope(entry: FilterableEntry, scope: MemoryScope | undefined): boolean {
   if (!scope) return true;
-  if (isExplicitlyShared(entry)) return true;
-  if (scope.chatId !== undefined) {
+  if (scope.chatId !== undefined && !isExplicitlyShared(entry)) {
     const scopeChat = String(scope.chatId);
     if (isUnownedByChat(entry)) {
       if (scopeChat !== UNSCOPED_CHAT_ID) return false;

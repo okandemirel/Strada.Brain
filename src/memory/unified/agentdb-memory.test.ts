@@ -918,4 +918,43 @@ describe("AgentDBMemory provenance + scope (plan 0-B.9 / 3.9)", () => {
       await reopened.shutdown();
     }
   });
+
+  // Codex adversarial review 2026-09-17 round 7 #19: storeNote wrote no chatId,
+  // so an ordinary note vanished from every chat-scoped recall.
+  it("storeNote with { chatId: 'A' } is recalled in A's scope and not in B's; an unowned note in neither (round 7 #19)", async () => {
+    const owned = await store.storeNote("staging deploy pipeline owned by chat A", ["n"], MemoryTier.Persistent, {
+      chatId: "chat-A" as never,
+    });
+    const unowned = await store.storeNote("staging deploy pipeline owned by nobody", ["n"]);
+    expect((owned as any).chatId).toBe("chat-A");
+    expect((unowned as any).chatId).toBe("default");
+
+    const inA = await store.retrieveSemantic("staging deploy pipeline", { limit: 10, scope: { chatId: "chat-A" as never } });
+    expect(inA.map((h) => h.entry.id)).toEqual([owned.id]);
+
+    const inB = await store.retrieveSemantic("staging deploy pipeline", { limit: 10, scope: { chatId: "chat-B" as never } });
+    expect(inB.map((h) => h.entry.id)).toEqual([]);
+
+    const unscoped = await store.retrieveSemantic("staging deploy pipeline", { limit: 10 });
+    expect(unscoped.map((h) => h.entry.id).sort()).toEqual([owned.id, unowned.id].sort());
+  });
+
+  it("cacheAnalysis writes the analysis row shared: true — global by nature, recalled by every chat (round 7 #19)", async () => {
+    const analysis = {
+      modules: [], systems: [], components: [], services: [], mediators: [], controllers: [], events: [],
+      csFileCount: 1, analyzedAt: new Date(),
+    } as never;
+    const cached = await store.cacheAnalysis(analysis, "/some/project");
+    expect(cached.kind).toBe("ok");
+
+    const rows = Array.from((store as any).entries.values() as Iterable<any>).filter((e) => e.type === "analysis");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].shared).toBe(true);
+
+    const scoped = await store.retrieve("modules systems components", {
+      mode: "type", types: ["analysis"], query: "modules systems components", limit: 10,
+      scope: { chatId: "chat-Z" as never },
+    });
+    expect(scoped.map((h) => h.entry.type)).toEqual(["analysis"]);
+  });
 });

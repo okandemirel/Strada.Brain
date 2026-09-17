@@ -67,6 +67,12 @@ interface BaseMemoryEntry {
   /** Additional metadata */
   readonly metadata: MemoryMetadata;
   /**
+   * Chat that owns the entry (Codex round 7 #19). Absent/"default" = unknown
+   * ownership: such an entry is NOT returned to a chat-scoped recall unless it
+   * is explicitly `shared`. Required (not optional) on conversation entries.
+   */
+  readonly chatId?: ChatId;
+  /**
    * Identity the entry belongs to (plan 3.9). Absent = shared memory. Also
    * read from metadata.userId / metadata.projectId for callers that can only
    * set metadata.
@@ -93,6 +99,21 @@ export interface MemoryScope {
   readonly userId?: string;
   readonly chatId?: ChatId;
   readonly projectId?: string;
+}
+
+/**
+ * Ownership / sharing of a stored entry (Codex round 7 #19). Every
+ * note-storing API accepts it, so an ordinary note can be written INTO a
+ * chat's scope. Before this the three `storeNote` implementations stored no
+ * chatId, so every note was of unknown ownership and vanished from
+ * chat-scoped recall. `shared: true` is the deliberate cross-chat write; it
+ * never bypasses the userId/projectId comparisons (round 7 #18).
+ */
+export interface MemoryOwnershipOptions {
+  readonly chatId?: ChatId;
+  readonly userId?: string;
+  readonly projectId?: string;
+  readonly shared?: boolean;
 }
 
 /** Conversation memory entry */
@@ -471,10 +492,15 @@ export interface IMemoryManager {
 
   // --- General Memory Storage ---
 
-  /** Store a general note or insight */
+  /**
+   * Store a general note or insight. Ownership (Codex round 7 #19): pass
+   * `chatId` to write into a chat's scope, `shared: true` for a note every
+   * chat may recall; a note with neither is of unknown ownership and is
+   * returned only to unscoped recall.
+   */
   storeNote(
     content: string, 
-    options?: {
+    options?: MemoryOwnershipOptions & {
       title?: string;
       tags?: string[];
       importance?: MemoryImportance;

@@ -558,3 +558,46 @@ describe("FileMemoryManager tokenization cache", () => {
     });
   });
 });
+
+// Codex adversarial review 2026-09-17 round 7 #19: the file backend's storeNote
+// stored no ownership either, and a reload dropped chatId for every non-conversation row.
+describe("storeNote ownership (Codex round 7 #19)", () => {
+  it("a note stored with { chatId: 'A' } is recalled in A's scope, not in B's, and survives a reload", async () => {
+    await withTempDir(async (dir) => {
+      const mm = new FileMemoryManager(join(dir, "db"));
+      await mm.initialize();
+      const ownedId = unwrap(await mm.storeNote("combat damage system note for chat A", { chatId: "A" as never, userId: "alice" }));
+      await mm.storeNote("combat damage system note of unknown ownership");
+
+      const inA = unwrap(await mm.retrieve({ mode: "text", query: "combat damage system", scope: { chatId: "A" as never } }));
+      expect(inA.map((r) => r.entry.id)).toEqual([ownedId]);
+      const inB = unwrap(await mm.retrieve({ mode: "text", query: "combat damage system", scope: { chatId: "B" as never } }));
+      expect(inB).toEqual([]);
+      const bob = unwrap(await mm.retrieve({ mode: "text", query: "combat damage system", scope: { userId: "bob" } }));
+      expect(bob.map((r) => r.entry.id)).not.toContain(ownedId);
+      await mm.shutdown();
+
+      const reopened = new FileMemoryManager(join(dir, "db"));
+      await reopened.initialize();
+      const again = unwrap(await reopened.retrieve({ mode: "text", query: "combat damage system", scope: { chatId: "A" as never } }));
+      expect(again.map((r) => r.entry.id)).toEqual([ownedId]);
+      expect((again[0]!.entry as any).userId).toBe("alice");
+      await reopened.shutdown();
+    });
+  });
+
+  it("a note stored shared: true is recalled by every chat, and the flag survives a reload", async () => {
+    await withTempDir(async (dir) => {
+      const mm = new FileMemoryManager(join(dir, "db"));
+      await mm.initialize();
+      const sharedId = unwrap(await mm.storeNote("shared inventory ScriptableObject note", { shared: true }));
+      await mm.shutdown();
+
+      const reopened = new FileMemoryManager(join(dir, "db"));
+      await reopened.initialize();
+      const hits = unwrap(await reopened.retrieve({ mode: "text", query: "inventory ScriptableObject", scope: { chatId: "any-chat" as never } }));
+      expect(hits.map((r) => r.entry.id)).toEqual([sharedId]);
+      await reopened.shutdown();
+    });
+  });
+});

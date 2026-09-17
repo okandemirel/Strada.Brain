@@ -26,7 +26,7 @@ import type {
   HnswHealth,
 } from "./unified-memory.interface.js";
 import { MemoryTier, DEFAULT_MEMORY_CONFIG } from "./unified-memory.interface.js";
-import type { RetrievalOptions, RetrievalResult } from "../memory.interface.js";
+import type { RetrievalOptions, RetrievalResult, MemoryOwnershipOptions } from "../memory.interface.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import { getLogger } from "../../utils/logger.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
@@ -92,6 +92,26 @@ import { sanitizeSecrets, sanitizeSecretsDeep } from "../../security/secret-sani
 import type { ProvenancedEmbedding } from "./agentdb-vector.js";
 
 /** Spread an embedWithProvenance result into storeEntry's embedding fields (plan 0-B.9). */
+/**
+ * Ownership fields for a note-storing API (Codex round 7 #19). Only the keys
+ * the caller set are written, so an entry with no ownership stays exactly as
+ * before (chatId "default", unknown ownership, not shared).
+ */
+function ownershipFields(ownership: MemoryOwnershipOptions | undefined): {
+  chatId?: ChatId;
+  userId?: string;
+  projectId?: string;
+  shared?: true;
+} {
+  if (!ownership) return {};
+  return {
+    ...(ownership.chatId !== undefined ? { chatId: ownership.chatId } : {}),
+    ...(ownership.userId !== undefined ? { userId: ownership.userId } : {}),
+    ...(ownership.projectId !== undefined ? { projectId: ownership.projectId } : {}),
+    ...(ownership.shared === true ? { shared: true as const } : {}),
+  };
+}
+
 function embeddingFields(e: ProvenancedEmbedding): { embedding: Vector<number>; embeddingProvenance: string } {
   return { embedding: e.embedding, embeddingProvenance: e.provenance };
 }
@@ -490,7 +510,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     try {
       this.cachedAnalysis = { projectPath, analysis };
 
-      // Also store in persistent memory for long-term retention
+      // Also store in persistent memory for long-term retention. A project
+      // analysis is global by nature — every chat may recall it — so it is
+      // written `shared: true` explicitly (Codex round 7 #19); a row without
+      // the flag is of unknown ownership and stays out of chat-scoped recall.
       const storeResult = await this.storeEntry({
         type: "analysis",
         content: JSON.stringify(analysis),
@@ -502,6 +525,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         tier: MemoryTier.Persistent,
         importanceScore: createBrand(0.9, "NormalizedScore" as const),
         domain: "analysis-cache",
+        shared: true,
       } as unknown as Omit<
         UnifiedMemoryEntry,
         "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
@@ -579,7 +603,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     content: string,
     tags: string[] = [],
     tier: MemoryTier = MemoryTier.Persistent,
+    ownership?: MemoryOwnershipOptions,
   ): Promise<import("../memory.interface.js").MemoryEntry> {
+    // Codex round 7 #19: the note used to carry no chatId, so it was of
+    // unknown ownership and never returned to a chat-scoped recall.
     const result = await this.storeEntry({
       type: "note",
       content,
@@ -590,6 +617,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       ...embeddingFields(await embedWithProvenance(this.config, content)),
       tier,
       importanceScore: calculateImportanceScore(content, tier),
+      ...ownershipFields(ownership),
     } as unknown as Omit<
       UnifiedMemoryEntry,
       "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"

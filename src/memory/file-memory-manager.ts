@@ -9,6 +9,7 @@ import type {
   ConversationMemoryEntry,
   MemoryImportance,
   MemoryMetadata,
+  MemoryOwnershipOptions,
 } from "./memory.interface.js";
 import { getImportanceValue } from "./memory.interface.js";
 import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
@@ -208,6 +209,10 @@ interface PersistedMemory {
     id: string;
     type: MemoryEntry["type"];
     chatId?: string;
+    /** Ownership / sharing (Codex round 7 #19) — persisted for every type. */
+    userId?: string;
+    projectId?: string;
+    shared?: boolean;
     content: string;
     createdAt: string;
     tags: string[];
@@ -300,6 +305,12 @@ export class FileMemoryManager implements IMemoryManager {
               lastAccessedAt: e.lastAccessedAt ? createBrand(new Date(e.lastAccessedAt).getTime(), "TimestampMs" as const) : undefined,
               archived: e.archived ?? false,
               metadata: {},
+              // Ownership survives a reload for every type (Codex round 7 #19);
+              // it used to be re-read for conversations only.
+              ...(e.chatId ? { chatId: createBrand(e.chatId, "ChatId" as const) } : {}),
+              ...(e.userId ? { userId: e.userId } : {}),
+              ...(e.projectId ? { projectId: e.projectId } : {}),
+              ...(e.shared === true ? { shared: true } : {}),
             };
             
             // Add type-specific fields
@@ -549,7 +560,7 @@ export class FileMemoryManager implements IMemoryManager {
 
   async storeNote(
     content: string,
-    options?: {
+    options?: MemoryOwnershipOptions & {
       title?: string;
       tags?: string[];
       importance?: MemoryImportance;
@@ -573,6 +584,12 @@ export class FileMemoryManager implements IMemoryManager {
         accessCount: 0,
         archived: false,
         metadata: options?.metadata ?? {},
+        // Codex round 7 #19: ownership is stored, so the note is recalled in
+        // its chat's scope (and in no other).
+        ...(options?.chatId !== undefined ? { chatId: options.chatId } : {}),
+        ...(options?.userId !== undefined ? { userId: options.userId } : {}),
+        ...(options?.projectId !== undefined ? { projectId: options.projectId } : {}),
+        ...(options?.shared === true ? { shared: true } : {}),
       };
 
       const terms = extractTerms(mutableEntry.content);
@@ -1172,6 +1189,9 @@ export class FileMemoryManager implements IMemoryManager {
         id: e.id as string,
         type: e.type,
         chatId: "chatId" in e ? (e.chatId as string) : undefined,
+        userId: e.userId,
+        projectId: e.projectId,
+        shared: e.shared === true ? true : undefined,
         content: e.content,
         createdAt: new Date(e.createdAt as number).toISOString(),
         tags: e.tags,

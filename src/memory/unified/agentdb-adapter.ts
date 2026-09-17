@@ -15,6 +15,7 @@ import type {
   MemoryHealth,
   MemoryImportance,
   MemoryMetadata,
+  MemoryOwnershipOptions,
   MemoryEntryType,
   PaginatedRetrievalResult,
   SemanticRetrievalOptions,
@@ -312,7 +313,7 @@ export class AgentDBAdapter implements IMemoryManager {
 
   async storeNote(
     content: string,
-    options?: {
+    options?: MemoryOwnershipOptions & {
       title?: string;
       tags?: string[];
       importance?: MemoryImportance;
@@ -321,6 +322,8 @@ export class AgentDBAdapter implements IMemoryManager {
     },
   ): Promise<Result<MemoryId, Error>> {
     try {
+      // Codex round 7 #19: ownership travels to storeEntry — without a chatId
+      // the note was of unknown ownership and vanished from scoped recall.
       const result = await this.agentdb.storeEntry({
         type: "note",
         content,
@@ -338,6 +341,10 @@ export class AgentDBAdapter implements IMemoryManager {
           "NormalizedScore" as const,
         ),
         domain: options?.source,
+        ...(options?.chatId !== undefined ? { chatId: options.chatId } : {}),
+        ...(options?.userId !== undefined ? { userId: options.userId } : {}),
+        ...(options?.projectId !== undefined ? { projectId: options.projectId } : {}),
+        ...(options?.shared === true ? { shared: true } : {}),
       } as unknown as Parameters<typeof this.agentdb.storeEntry>[0]);
 
       if (result.kind === "err") {

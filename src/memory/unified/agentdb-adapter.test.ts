@@ -1112,6 +1112,40 @@ describe("AgentDBAdapter", () => {
 
   // Codex adversarial review 2026-09-17 round 6 #20: importing an exported
   // entry of type "project" was dropped (count zero).
+  // Codex adversarial review 2026-09-17 round 7 #19: storeNote stored no
+  // chatId, so every note was of unknown ownership and vanished from
+  // chat-scoped recall.
+  describe("storeNote() ownership (Codex round 7 #19)", () => {
+    it("passes chatId / userId / projectId / shared through to storeEntry", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        kind: "ok", value: { id: "mem_owned" as MemoryId } as unknown as MemoryEntry,
+      });
+
+      const result = await adapter.storeNote("owned note", {
+        chatId: "chat-A" as ChatId, userId: "alice", projectId: "proj-1", shared: true,
+      });
+
+      expect(result).toEqual({ kind: "ok", value: "mem_owned" });
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "note", chatId: "chat-A", userId: "alice", projectId: "proj-1", shared: true,
+      }));
+    });
+
+    it("writes no ownership keys when none is given (unknown ownership, not shared)", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        kind: "ok", value: { id: "mem_plain" as MemoryId } as unknown as MemoryEntry,
+      });
+
+      await adapter.storeNote("plain note", { shared: false });
+
+      const arg = (mockDb.storeEntry as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty("chatId");
+      expect(arg).not.toHaveProperty("userId");
+      expect(arg).not.toHaveProperty("projectId");
+      expect(arg).not.toHaveProperty("shared");
+    });
+  });
+
   describe("import() of project entries (Codex round 6 #20)", () => {
     it("accepts type 'project' and preserves projectId", async () => {
       (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({

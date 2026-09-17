@@ -451,6 +451,85 @@ export interface ReEmbedResult {
   foreignDetected: number;
 }
 
+/** Rows per provider call when the provider accepts arrays (Codex round 7 #21). */
+export const RE_EMBED_BATCH_SIZE = 64;
+
+/**
+ * A row as it was when its embedding was requested (Codex round 7 #22). The
+ * migration upserts only while the SAME object is still in the map with the
+ * same version and content: a row deleted (or rewritten) while its embedding
+ * was in flight is skipped, never resurrected.
+ */
+interface InFlightRow {
+  readonly entry: UnifiedMemoryEntry;
+  readonly version: unknown;
+  readonly content: string;
+  newEmbedding: Vector<number>;
+}
+
+/** The row's write version (analysis rows carry a string; compared as-is). */
+function rowVersion(entry: UnifiedMemoryEntry): unknown {
+  return (entry as { version?: unknown }).version;
+}
+
+/** True when the row is still the live one in the store. */
+export function isStillLive(ctx: { entries: Map<string, UnifiedMemoryEntry> }, row: Omit<InFlightRow, "newEmbedding">): boolean {
+  const live = ctx.entries.get(row.entry.id as string);
+  return live === row.entry && rowVersion(live) === row.version && live.content === row.content;
+}
+
+/**
+ * Embed the contents of `rows` — through the provider's array form in
+ * chunks when configured, else one call per row. Rows the provider could not
+ * embed are dropped and counted.
+ */
+async function embedRows(
+  ctx: AgentDBVectorContext,
+  rows: Array<Omit<InFlightRow, "newEmbedding">>,
+): Promise<{ embedded: InFlightRow[]; failed: number }> {
+  const embedded: InFlightRow[] = [];
+  let failed = 0;
+  const batchFn = ctx.config.embeddingProviderBatch;
+  const single = ctx.config.embeddingProvider!;
+
+  const embedOneByOne = async (chunk: Array<Omit<InFlightRow, "newEmbedding">>): Promise<void> => {
+    for (const row of chunk) {
+      try {
+        const newEmbedding = await single(row.content) as Vector<number>;
+        embedded.push({ ...row, newEmbedding });
+      } catch (entryError) {
+        failed++;
+        getLoggerSafe().warn("[AgentDB] Failed to re-embed entry, skipping", {
+          entryId: row.entry.id as string,
+          error: String(entryError),
+        });
+      }
+    }
+  };
+
+  for (let start = 0; start < rows.length; start += RE_EMBED_BATCH_SIZE) {
+    const chunk = rows.slice(start, start + RE_EMBED_BATCH_SIZE);
+    if (!batchFn) {
+      await embedOneByOne(chunk);
+      continue;
+    }
+    try {
+      const vectors = await batchFn(chunk.map((row) => row.content));
+      if (!Array.isArray(vectors) || vectors.length !== chunk.length) {
+        throw new Error(`batch provider returned ${Array.isArray(vectors) ? vectors.length : "no"} vectors for ${chunk.length} texts`);
+      }
+      chunk.forEach((row, i) => embedded.push({ ...row, newEmbedding: vectors[i] as Vector<number> }));
+    } catch (batchError) {
+      getLoggerSafe().warn("[AgentDB] Batch re-embed failed, retrying rows one by one", {
+        batchSize: chunk.length,
+        error: String(batchError),
+      });
+      await embedOneByOne(chunk);
+    }
+  }
+  return { embedded, failed };
+}
+
 /**
  * Re-embed all hash-based entries using the current embedding provider.
  *
@@ -462,6 +541,13 @@ export interface ReEmbedResult {
  * returned {0,0,0} without looking, so a hash vector written during a
  * provider outage after that point (generateEmbedding's fallback) was
  * never repaired and no report said so (audited 2026-09-02).
+ *
+ * Codex round 7 #21: rows go through `embeddingProviderBatch` in chunks of
+ * RE_EMBED_BATCH_SIZE when the provider accepts arrays. Round 7 #22: a row
+ * is persisted and indexed only while it is still live (same object,
+ * version and content) — the check runs before the SQLite write and again
+ * under the HNSW write mutex, so a delete that landed while the embedding
+ * was in flight is not undone.
  */
 export async function reEmbedHashEntries(
   ctx: AgentDBVectorContext,
@@ -469,7 +555,7 @@ export async function reEmbedHashEntries(
   setMigrationMarker: (key: string, metadata?: Record<string, unknown>) => Promise<void>,
 ): Promise<ReEmbedResult> {
   const MARKER_KEY = "re_embed_complete_v1";
-  const BATCH_SIZE = 50;
+  const BATCH_SIZE = RE_EMBED_BATCH_SIZE;
 
   if (!ctx.config.embeddingProvider) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — no embedding provider configured");
@@ -502,10 +588,7 @@ export async function reEmbedHashEntries(
   // Process in batches
   for (let batchStart = 0; batchStart < allEntries.length; batchStart += BATCH_SIZE) {
     const batch = allEntries.slice(batchStart, batchStart + BATCH_SIZE);
-    const entriesToPersist: Array<{
-      entry: UnifiedMemoryEntry;
-      newEmbedding: Vector<number>;
-    }> = [];
+    const toEmbed: Array<Omit<InFlightRow, "newEmbedding">> = [];
 
     for (const entry of batch) {
       // Histogram, unknown (#18) and foreign-provider (#17) vectors all need
@@ -518,15 +601,22 @@ export async function reEmbedHashEntries(
       if (reason === "histogram") hashDetected++;
       else if (reason === "unknown") unknownDetected++;
       else foreignDetected++;
+      toEmbed.push({ entry, version: rowVersion(entry), content: entry.content });
+    }
 
-      try {
-        const newEmbedding = await ctx.config.embeddingProvider!(entry.content) as Vector<number>;
-        entriesToPersist.push({ entry, newEmbedding });
-      } catch (entryError) {
+    const { embedded, failed } = await embedRows(ctx, toEmbed);
+    skipped += failed;
+
+    // Round 7 #22: drop rows that were deleted or rewritten while their
+    // embedding was in flight — persisting them would resurrect the row.
+    const entriesToPersist: InFlightRow[] = [];
+    for (const row of embedded) {
+      if (isStillLive(ctx, row)) {
+        entriesToPersist.push(row);
+      } else {
         skipped++;
-        getLoggerSafe().warn("[AgentDB] Failed to re-embed entry, skipping", {
-          entryId: entry.id as string,
-          error: String(entryError),
+        getLoggerSafe().debug("[AgentDB] Re-embed skipped a row deleted or rewritten while in flight", {
+          entryId: row.entry.id as string,
         });
       }
     }
@@ -569,9 +659,13 @@ export async function reEmbedHashEntries(
       if (ctx.hnswStore) {
         const store = ctx.hnswStore;
         try {
-          await ctx.writeMutex.withLock(() =>
-            store.upsert(
-              entriesToPersist.map(({ entry, newEmbedding }) => ({
+          await ctx.writeMutex.withLock(async () => {
+            // Round 7 #22: re-check under the mutex — a delete that took the
+            // lock between the SQLite write and here must win.
+            const live = entriesToPersist.filter((row) => isStillLive(ctx, row));
+            if (live.length === 0) return;
+            await store.upsert(
+              live.map(({ entry, newEmbedding }) => ({
                 id: entry.id as string,
                 vector: newEmbedding,
                 chunk: {
@@ -588,8 +682,8 @@ export async function reEmbedHashEntries(
                 addedAt: entry.createdAt as TimestampMs,
                 accessCount: entry.accessCount,
               })),
-            ),
-          );
+            );
+          });
         } catch (indexError) {
           getLoggerSafe().warn("[AgentDB] Failed to update HNSW during re-embed", {
             error: String(indexError),

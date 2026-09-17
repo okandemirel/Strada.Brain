@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { MemoryConsolidationEngine } from "./consolidation-engine.js";
+import { MemoryConsolidationEngine, summaryOwnership } from "./consolidation-engine.js";
 import type { ConsolidationEngineOptions } from "./consolidation-engine.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { ConsolidationConfig } from "./consolidation-types.js";
@@ -1363,5 +1363,46 @@ describe("TF-IDF index mirroring", () => {
     delete (opts as Partial<ConsolidationEngineOptions>).textIndex;
     new MemoryConsolidationEngine(opts);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("No TF-IDF index supplied"));
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 7 #19: a consolidation summary
+// inherited the first member's chatId, so a merge of two chats' memories was
+// hidden behind one chat instead of being shared by construction.
+describe("consolidation summary ownership (Codex round 7 #19)", () => {
+  it("summaryOwnership: a cross-owner cluster is shared; a single-chat cluster keeps its chat; unowned stays unowned", () => {
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-2" }])).toEqual({ chatId: "chat-1", shared: true });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "default" }])).toEqual({ chatId: "chat-1", shared: true });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-1" }])).toEqual({ chatId: "chat-1" });
+    expect(summaryOwnership([{ chatId: "default" }, { chatId: "default" }])).toEqual({ chatId: "default" });
+    expect(summaryOwnership([{ chatId: "chat-1" }, { chatId: "chat-1", shared: true }])).toEqual({ chatId: "chat-1", shared: true });
+  });
+
+  it("a cluster spanning two chats produces a summary that is shared by construction, in memory and in the SQLite row", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("x1", makeMemEntry("x1", "content A", { tier: MemoryTier.Ephemeral, chatId: "chat-1" }));
+    entries.set("x2", makeMemEntry("x2", "content B", { tier: MemoryTier.Ephemeral, chatId: "chat-2" }));
+    const { db, tables } = makeFakeDb();
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, sqliteDb: db as any }));
+
+    await engine.processCluster({ seedId: "x1", memberIds: ["x1", "x2"], avgSimilarity: 0.9, tier: MemoryTier.Ephemeral });
+
+    const summary = entries.values().next().value as any;
+    expect(summary.shared).toBe(true);
+    const row = tables.memories.find((r: any) => r.id === summary.id) as any;
+    expect(JSON.parse(row.value).shared).toBe(true);
+  });
+
+  it("a cluster owned by one chat stays that chat's memory (not shared)", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("y1", makeMemEntry("y1", "content A", { tier: MemoryTier.Ephemeral, chatId: "chat-7" }));
+    entries.set("y2", makeMemEntry("y2", "content B", { tier: MemoryTier.Ephemeral, chatId: "chat-7" }));
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries }));
+
+    await engine.processCluster({ seedId: "y1", memberIds: ["y1", "y2"], avgSimilarity: 0.9, tier: MemoryTier.Ephemeral });
+
+    const summary = entries.values().next().value as any;
+    expect(summary.chatId).toBe("chat-7");
+    expect(summary.shared).toBeUndefined();
   });
 });

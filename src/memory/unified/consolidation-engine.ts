@@ -91,7 +91,34 @@ interface MemoryEntryLike {
   tags: string[];
   archived: boolean;
   chatId: string;
+  /** Explicitly shared across chats (Codex round 6 #16 / round 7 #19). */
+  shared?: boolean;
   version?: number;
+}
+
+/**
+ * Ownership of a consolidation summary (Codex round 7 #19). A summary that
+ * merges memories of several owners (two chats, or a chat and an unowned
+ * row) is cross-chat by construction and is written `shared: true`
+ * explicitly — it used to inherit the first member's chatId, which hid the
+ * other members' content behind one chat. A cluster owned by a single chat
+ * keeps that chat (no share: the summary is still that chat's memory), and a
+ * cluster of only unowned rows stays unowned (a share here would stamp an
+ * ownership nobody recorded — the leak round 6 #16 forbids). Any explicitly
+ * shared member makes the summary shared.
+ */
+export function summaryOwnership(
+  members: ReadonlyArray<{ chatId?: string; shared?: boolean }>,
+): { chatId: string; shared?: true } {
+  const owners = new Set<string>();
+  let anyShared = false;
+  for (const m of members) {
+    if (m.shared === true) anyShared = true;
+    owners.add(m.chatId === undefined || m.chatId === "" ? "default" : m.chatId);
+  }
+  const chatId = members[0]?.chatId ?? "default";
+  if (anyShared || owners.size > 1) return { chatId, shared: true };
+  return { chatId };
 }
 
 /** Minimal HNSW write mutex interface */
@@ -441,7 +468,8 @@ export class MemoryConsolidationEngine {
       metadata: summaryMetadata,
       tags: [],
       archived: false,
-      chatId: memberEntries[0]?.chatId ?? "default",
+      // Codex round 7 #19: a cross-owner summary is shared by construction.
+      ...summaryOwnership(memberEntries),
     };
 
     // =========================================================================
@@ -483,6 +511,7 @@ export class MemoryConsolidationEngine {
       importanceScore: summaryEntry.importanceScore,
       domain: summaryEntry.domain,
       chatId: summaryEntry.chatId,
+      ...(summaryEntry.shared === true ? { shared: true } : {}),
       version: 1,
     });
     const summaryMetaStr = JSON.stringify(summaryMetadata);
@@ -795,6 +824,7 @@ export class MemoryConsolidationEngine {
           tags: (parsed.tags as string[]) ?? [],
           archived: (parsed.archived as boolean) ?? false,
           chatId: (parsed.chatId as string) ?? "default",
+          ...(parsed.shared === true ? { shared: true } : {}),
           version: (parsed.version as number) ?? 1,
         });
         this.textIndex?.addDocument(extractTerms((parsed.content as string) ?? ""));

@@ -332,7 +332,10 @@ export class MemoryMigrator {
       return;
     }
 
-    // Store analysis as persistent memory entry
+    // Store analysis as persistent memory entry. A project analysis is
+    // global by nature, so it is written `shared: true` explicitly (Codex
+    // round 7 #19) — an unflagged row is of unknown ownership and would stay
+    // out of every chat-scoped recall.
     await this.config.targetMemory.storeEntry({
       type: "analysis",
       content: JSON.stringify(legacyAnalysis.analysis),
@@ -342,6 +345,7 @@ export class MemoryMigrator {
       projectPath: this.config.sourcePath,
       category: "structure",
       analysisVersion: "1.0",
+      shared: true,
     } as unknown as Parameters<typeof this.config.targetMemory.storeEntry>[0]);
 
     getLoggerSafe().info("[MemoryMigrator] Migrated analysis cache");

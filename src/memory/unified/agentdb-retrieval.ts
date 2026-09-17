@@ -92,6 +92,8 @@ export function retrieveTFIDF(
   ctx: AgentDBRetrievalContext,
   query: string,
   options: RetrievalFilterSource & { limit?: number; minScore?: number },
+  /** Restrict candidates (Codex round 7 #21: rows the provider index cannot serve yet). */
+  candidate?: (entry: UnifiedMemoryEntry) => boolean,
 ): RetrievalResult<MemoryEntry>[] {
   const limit = options.limit ?? 5;
   const minScore = options.minScore ?? 0.1;
@@ -106,6 +108,7 @@ export function retrieveTFIDF(
   const scored: RetrievalResult<MemoryEntry>[] = [];
 
   for (const entry of ctx.entries.values()) {
+    if (candidate && !candidate(entry)) continue;
     // One filter layer shared with retrieveSemantic — the fallback returns
     // exactly the filtered set the vector path would have.
     if (!matchesRetrievalFilters(entry, filters, now)) continue;
@@ -223,6 +226,23 @@ export async function retrieveSemantic(
     candidateCount = Math.min(candidateCount * 4, indexSize);
   }
 
+  // Codex round 7 #21: while vectors of another origin (histogram, unknown,
+  // foreign provider) are being re-embedded, the provider index holds fewer
+  // rows than the store and semantic recall returned nothing from the rest.
+  // Serve those rows through the scoped text path and merge — both scores
+  // are cosine similarities in [0, 1] — so a 50k-row migration does not
+  // blank out recall for hours. Rows with no vector at all are not "awaiting
+  // migration" and are left to the text-only paths as before.
+  const awaiting = (entry: UnifiedMemoryEntry): boolean => awaitingMigration(entry, expectedProvenance);
+  if (query.length > 0 && hasAwaitingMigration(ctx, expectedProvenance)) {
+    for (const hit of retrieveTFIDF(ctx, query, { ...options, limit }, awaiting)) {
+      const id = hit.entry.id as string;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      results.push(hit);
+    }
+  }
+
   results.sort((a, b) => (b.score as number) - (a.score as number));
 
   // Record search time for all paths
@@ -238,6 +258,27 @@ export async function retrieveSemantic(
   }
 
   return results.slice(0, options.limit ?? 5).map(sanitizeResult);
+}
+
+/**
+ * True when the row carries a vector the provider index cannot hold
+ * (Codex round 7 #21): a provenance other than the index's. Such a row is
+ * queued for `reEmbedHashEntries` and, until then, is served by text.
+ */
+export function awaitingMigration(
+  entry: { embedding?: readonly number[] | null; embeddingProvenance?: EmbeddingProvenance },
+  expected: EmbeddingProvenance,
+): boolean {
+  if (!entry.embedding || entry.embedding.length === 0) return false;
+  return entry.embeddingProvenance !== undefined && entry.embeddingProvenance !== expected;
+}
+
+/** True when the provider index holds fewer eligible rows than the store. */
+function hasAwaitingMigration(ctx: AgentDBRetrievalContext, expected: EmbeddingProvenance): boolean {
+  for (const entry of ctx.entries.values()) {
+    if (awaitingMigration(entry, expected)) return true;
+  }
+  return false;
 }
 
 /**

@@ -19,21 +19,88 @@ import type { IMemoryManager } from "../memory/memory.interface.js";
 import type * as winston from "winston";
 
 /**
+ * What an embedding provider may expose about its identity (Codex round 7
+ * #20). All optional: `describeIdentity()` is the strongest (the provider
+ * names itself), then a `modelId` / `model` string. A wrapper (the embedding
+ * cache) is unwrapped through its `inner` / `provider` / `wrapped` field so
+ * the identity is the INNER model's, not the wrapper's name.
+ */
+export interface EmbeddingIdentitySource {
+  readonly name?: unknown;
+  readonly dimensions?: unknown;
+  readonly describeIdentity?: unknown;
+  readonly modelId?: unknown;
+  readonly model?: unknown;
+  readonly inner?: unknown;
+  readonly provider?: unknown;
+  readonly wrapped?: unknown;
+}
+
+/** Logged once per process: the identity fell back to name:dimensions. */
+let weakIdentityLogged = false;
+
+/** @internal test hook */
+export function _resetWeakIdentityLog(): void {
+  weakIdentityLogged = false;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The explicit model id a provider (or the provider it wraps) exposes, or
+ * undefined when none does. Walks at most four wrapper levels.
+ */
+export function embeddingModelId(provider: EmbeddingIdentitySource | undefined): string | undefined {
+  let current: EmbeddingIdentitySource | undefined = provider;
+  for (let depth = 0; current && depth < 5; depth++) {
+    if (typeof current.describeIdentity === "function") {
+      try {
+        const described = nonEmptyString((current.describeIdentity as () => unknown).call(current));
+        if (described !== undefined) return described;
+      } catch {
+        // a throwing describer is no identity
+      }
+    }
+    const explicit = nonEmptyString(current.modelId) ?? nonEmptyString(current.model);
+    if (explicit !== undefined) return explicit;
+    const next = [current.inner, current.provider, current.wrapped].find(
+      (candidate) => candidate !== undefined && candidate !== null && typeof candidate === "object",
+    );
+    current = next as EmbeddingIdentitySource | undefined;
+  }
+  return undefined;
+}
+
+/**
  * Stable identity of an embedding provider for vector provenance (Codex round 6
- * #17): name (the built-in providers fold the model id into it, e.g.
- * "openai:text-embedding-3-small"), a public `model` field when the name does
- * not already carry it, and the dimensions. Two providers that would produce
- * incomparable vectors never share an id; the same model always gets the same
- * id, so a restart does not re-embed the store.
+ * #17, round 7 #20): the explicit model id when the provider — or the inner
+ * provider a cache wrapper hides — exposes one (`describeIdentity()`,
+ * `modelId`, `model`), joined with the name when the name does not already
+ * carry it, plus the dimensions. Only when nothing else is available does it
+ * fall back to name:dimensions, and it logs once that the identity is weak:
+ * two custom models with the same name and dimension used to collide as
+ * "custom:8d". The same model always gets the same id, so a restart does not
+ * re-embed the store.
  */
 export function embeddingProviderIdentity(
-  provider: Pick<CachedEmbeddingProvider, "name" | "dimensions"> & { model?: unknown },
+  provider: EmbeddingIdentitySource,
+  logger?: Pick<winston.Logger, "warn">,
 ): string {
-  const name = typeof provider.name === "string" && provider.name.length > 0 ? provider.name : "provider";
-  const model = typeof provider.model === "string" && provider.model.length > 0 ? provider.model : undefined;
+  const name = nonEmptyString(provider.name) ?? "provider";
+  const dimensions = typeof provider.dimensions === "number" ? provider.dimensions : Number(provider.dimensions);
+  const model = embeddingModelId(provider);
   const parts = [name];
-  if (model !== undefined && !name.includes(model)) parts.push(model);
-  parts.push(`${provider.dimensions}d`);
+  if (model !== undefined) {
+    if (!name.includes(model)) parts.push(model);
+  } else if (!weakIdentityLogged) {
+    weakIdentityLogged = true;
+    logger?.warn(
+      `[Bootstrap] Embedding provider "${name}" exposes no model id; vector provenance falls back to name:dimensions, so two models with the same name and dimensions would share one index`,
+    );
+  }
+  parts.push(`${dimensions}d`);
   return parts.join(":");
 }
 
@@ -80,10 +147,17 @@ export async function initializeMemory(
           return batch.embeddings[0]!;
         }
       : undefined,
+    // Codex round 7 #21: the re-embed migration sends rows in chunks through
+    // the provider's array form instead of one serial call per row.
+    embeddingProviderBatch: embeddingProvider
+      ? async (texts: string[]) => (await embeddingProvider.embed(texts)).embeddings
+      : undefined,
     // Codex round 6 #17: every model's vectors used to share provenance
     // "provider"; a model swap could then search one model's index with
     // another's query. The provenance gate compares this id.
-    embeddingProviderId: embeddingProvider ? embeddingProviderIdentity(embeddingProvider) : undefined,
+    embeddingProviderId: embeddingProvider
+      ? embeddingProviderIdentity(embeddingProvider as unknown as EmbeddingIdentitySource, logger)
+      : undefined,
   };
 
   // Post-init steps shared between first attempt and repair path

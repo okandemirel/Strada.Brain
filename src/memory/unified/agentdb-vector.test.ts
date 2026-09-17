@@ -481,7 +481,8 @@ describe("reEmbedHashEntries", () => {
 // Tests: embedding provenance (plan 0-B.9: audit 05.cap + Codex #18)
 // ---------------------------------------------------------------------------
 
-import { embedWithProvenance, canEnterIndex, indexProvenance, inferProvenance, needsReEmbedding } from "./agentdb-vector.js";
+import { embedWithProvenance, canEnterIndex, indexProvenance, inferProvenance, needsReEmbedding, isStillLive, RE_EMBED_BATCH_SIZE } from "./agentdb-vector.js";
+import { upsertEntryRow } from "./agentdb-sqlite.js";
 
 describe("embedWithProvenance (plan 0-B.9)", () => {
   it("stamps provider vectors with the provider id", async () => {
@@ -580,5 +581,141 @@ describe("unknown and foreign provenance (Codex round 6 #17/#18)", () => {
       expect(entries.get(id)!.embedding).toEqual(fresh);
     }
     expect(entries.get("current")!.embedding).toEqual(realVec);
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 7 #22: the background migration
+// upserted a row that was deleted while its embedding was in flight,
+// resurrecting it.
+describe("a delete during migration is not undone (Codex round 7 #22)", () => {
+  const hashVec = [0.35, 0.36, 0.35, 0.36, 0.35, 0.36, 0.35, 0.36];
+  const fresh = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8];
+
+  function build() {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("doomed", makeEntry("doomed", { embedding: hashVec }));
+    entries.set("kept", makeEntry("kept", { embedding: hashVec }));
+    entries.set("late", makeEntry("late", { embedding: hashVec }));
+    const store = { upsert: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
+    const stmts = new Map<string, any>();
+    stmts.set("upsertMemory", { run: vi.fn() });
+    return { entries, store, stmts };
+  }
+
+  it("a row deleted while its embedding was in flight is neither persisted nor indexed", async () => {
+    const { entries, store, stmts } = build();
+    vi.mocked(upsertEntryRow).mockClear();
+    const provider = vi.fn(async (text: string) => {
+      if (text === "content for doomed") {
+        // the delete lands while this row's embedding is in flight
+        entries.delete("doomed");
+        await store.remove(["doomed"]);
+      }
+      return fresh;
+    });
+    const ctx = makeVectorCtx({
+      entries,
+      config: makeConfig({ dimensions: 8, embeddingProvider: provider } as any),
+      sqliteDb: { transaction: vi.fn((fn: any) => () => fn()) } as any,
+      sqliteStatements: stmts,
+      hnswStore: store as any,
+    });
+
+    const result = await reEmbedHashEntries(ctx, async () => false, async () => {});
+
+    expect(entries.has("doomed")).toBe(false);
+    const persistedIds = vi.mocked(upsertEntryRow).mock.calls.map((c) => (c[1] as { id: string }).id);
+    expect(persistedIds).not.toContain("doomed");
+    expect(persistedIds).toContain("kept");
+    const indexedIds = store.upsert.mock.calls.flatMap((c: any[]) => (c[0] as Array<{ id: string }>).map((v) => v.id));
+    expect(indexedIds).not.toContain("doomed");
+    expect(indexedIds).toEqual(expect.arrayContaining(["kept", "late"]));
+    expect(result.migrated).toBe(2);
+    expect(result.hashDetected).toBe(3);
+  });
+
+  it("a delete that takes the write mutex before the HNSW upsert wins: the row is not indexed", async () => {
+    const { entries, store, stmts } = build();
+    entries.delete("doomed");
+    const ctx = makeVectorCtx({
+      entries,
+      config: makeConfig({ dimensions: 8, embeddingProvider: vi.fn(async () => fresh) } as any),
+      sqliteDb: { transaction: vi.fn((fn: any) => () => fn()) } as any,
+      sqliteStatements: stmts,
+      hnswStore: store as any,
+      writeMutex: {
+        withLock: async (fn: any) => {
+          // a concurrent delete() ran under the mutex just before us
+          entries.delete("late");
+          await store.remove(["late"]);
+          return fn();
+        },
+      } as any,
+    });
+
+    await reEmbedHashEntries(ctx, async () => false, async () => {});
+
+    const indexedIds = store.upsert.mock.calls.flatMap((c: any[]) => (c[0] as Array<{ id: string }>).map((v) => v.id));
+    expect(indexedIds).toEqual(["kept"]);
+  });
+
+  it("isStillLive: same object, version and content; a replaced or rewritten row is not live", () => {
+    const entry = makeEntry("e", { embedding: hashVec, version: 3 });
+    const entries = new Map<string, UnifiedMemoryEntry>([["e", entry]]);
+    const snapshot = { entry, version: 3, content: entry.content };
+    expect(isStillLive({ entries }, snapshot)).toBe(true);
+    (entry as any).version = 4;
+    expect(isStillLive({ entries }, snapshot)).toBe(false);
+    (entry as any).version = 3;
+    entries.set("e", makeEntry("e", { embedding: hashVec, version: 3 }));
+    expect(isStillLive({ entries }, snapshot)).toBe(false);
+    entries.delete("e");
+    expect(isStillLive({ entries }, snapshot)).toBe(false);
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 7 #21: one serial provider call per
+// row made a 50k-row migration take hours.
+describe("re-embedding batches rows through the provider's array form (Codex round 7 #21)", () => {
+  const hashVec = [0.35, 0.36, 0.35, 0.36, 0.35, 0.36, 0.35, 0.36];
+  const fresh = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8];
+
+  function buildCtx(count: number, config: Record<string, unknown>) {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < count; i++) entries.set(`h${i}`, makeEntry(`h${i}`, { embedding: hashVec }));
+    const stmts = new Map<string, any>();
+    stmts.set("upsertMemory", { run: vi.fn() });
+    return { entries, ctx: makeVectorCtx({
+      entries,
+      config: makeConfig({ dimensions: 8, ...config } as any),
+      sqliteDb: { transaction: vi.fn((fn: any) => () => fn()) } as any,
+      sqliteStatements: stmts,
+    }) };
+  }
+
+  it("sends chunks of RE_EMBED_BATCH_SIZE and never calls the single-text provider", async () => {
+    const single = vi.fn(async () => fresh);
+    const batch = vi.fn(async (texts: string[]) => texts.map(() => fresh));
+    const { entries, ctx } = buildCtx(130, { embeddingProvider: single, embeddingProviderBatch: batch });
+
+    const result = await reEmbedHashEntries(ctx, async () => false, async () => {});
+
+    expect(RE_EMBED_BATCH_SIZE).toBe(64);
+    expect(batch.mock.calls.map((c) => c[0].length)).toEqual([64, 64, 2]);
+    expect(single).not.toHaveBeenCalled();
+    expect(result.migrated).toBe(130);
+    for (const e of entries.values()) expect(e.embedding).toEqual(fresh);
+  });
+
+  it("a failing or short batch falls back to one call per row for that chunk", async () => {
+    const single = vi.fn(async () => fresh);
+    const batch = vi.fn(async (texts: string[]) => texts.slice(1).map(() => fresh)); // one vector short
+    const { ctx } = buildCtx(3, { embeddingProvider: single, embeddingProviderBatch: batch });
+
+    const result = await reEmbedHashEntries(ctx, async () => false, async () => {});
+
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(single).toHaveBeenCalledTimes(3);
+    expect(result.migrated).toBe(3);
   });
 });

@@ -164,3 +164,31 @@ describe("project knowledge is not personal recall (plan 3.9)", () => {
     expect(matchesRetrievalFilters(project, { scope: { projectId: "p2" } })).toBe(false);
   });
 });
+
+// Codex adversarial review 2026-09-17 round 7 #18: `shared: true` bypassed the
+// user and project comparisons, not only chat ownership — an Alice/project-A
+// note matched Bob/project-B.
+describe("a share crosses chats only (Codex round 7 #18)", () => {
+  const aliceProjectA = entry({ chatId: "A", userId: "alice", projectId: "project-A", shared: true });
+
+  it("a shared note with a different userId is excluded from that user's scope", () => {
+    expect(matchesScope(aliceProjectA, { userId: "bob" })).toBe(false);
+    expect(matchesScope(aliceProjectA, { userId: "bob", chatId: "B" as never })).toBe(false);
+    expect(matchesRetrievalFilters(aliceProjectA, { scope: { userId: "bob", chatId: "B" as never } })).toBe(false);
+  });
+
+  it("a shared note with a different projectId is excluded from that project's scope", () => {
+    expect(matchesScope(aliceProjectA, { projectId: "project-B" })).toBe(false);
+    expect(matchesRetrievalFilters(aliceProjectA, { scope: { chatId: "B" as never, projectId: "project-B" } })).toBe(false);
+    // metadata-supplied identity is compared the same way
+    const viaMeta = entry({ chatId: "A", shared: true, metadata: { userId: "alice", shared: true } });
+    expect(matchesScope(viaMeta, { userId: "bob", chatId: "B" as never })).toBe(false);
+  });
+
+  it("the share still bypasses the chat comparison for the same user and project", () => {
+    expect(matchesScope(aliceProjectA, { userId: "alice", projectId: "project-A", chatId: "B" as never })).toBe(true);
+    expect(matchesScope(aliceProjectA, { chatId: "B" as never })).toBe(true);
+    // an entry carrying no user is not a mismatch for a user scope (plan 3.9)
+    expect(matchesScope(entry({ chatId: "A", shared: true }), { userId: "bob", chatId: "B" as never })).toBe(true);
+  });
+});

@@ -64,6 +64,8 @@ import {
   triggerLegacyMigration,
   initializeFileMemory,
   embeddingProviderIdentity,
+  embeddingModelId,
+  _resetWeakIdentityLog,
 } from "./bootstrap-memory.js";
 import { existsSync } from "node:fs";
 import Database from "better-sqlite3";
@@ -440,5 +442,67 @@ describe("bootstrap-memory", () => {
         expect.objectContaining({ error: "permission denied" }),
       );
     });
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 7 #20: two custom models with the
+// same name and dimension collided as "custom:8d", and the cache wrapper hid
+// the inner provider's model.
+describe("embedding provider identity uses the model id (Codex round 7 #20)", () => {
+  beforeEach(() => _resetWeakIdentityLog());
+
+  it("uses modelId when present, so two same-name same-dimension models get different ids", () => {
+    const a = embeddingProviderIdentity({ name: "custom", dimensions: 8, modelId: "model-a" });
+    const b = embeddingProviderIdentity({ name: "custom", dimensions: 8, modelId: "model-b" });
+    expect(a).toBe("custom:model-a:8d");
+    expect(b).toBe("custom:model-b:8d");
+    expect(a).not.toBe(b);
+    // the same model always gets the same id
+    expect(embeddingProviderIdentity({ name: "custom", dimensions: 8, modelId: "model-a" })).toBe(a);
+  });
+
+  it("describeIdentity() wins over modelId/model; a describer that throws is ignored", () => {
+    expect(embeddingModelId({ describeIdentity: () => "described-1", modelId: "m", model: "n" })).toBe("described-1");
+    expect(embeddingModelId({ describeIdentity: () => { throw new Error("no"); }, modelId: "m" })).toBe("m");
+    expect(embeddingModelId({ model: "plain-model" })).toBe("plain-model");
+    expect(embeddingModelId({ name: "x" })).toBeUndefined();
+  });
+
+  it("a wrapper delegates to its inner provider's model id (cache wrapper case)", () => {
+    const wrappedA = { name: "custom", dimensions: 8, inner: { name: "custom", dimensions: 8, modelId: "model-a" } };
+    const wrappedB = { name: "custom", dimensions: 8, inner: { name: "custom", dimensions: 8, modelId: "model-b" } };
+    expect(embeddingProviderIdentity(wrappedA)).toBe("custom:model-a:8d");
+    expect(embeddingProviderIdentity(wrappedB)).toBe("custom:model-b:8d");
+    // nested wrappers, and the other conventional field names
+    expect(embeddingModelId({ provider: { wrapped: { modelId: "deep" } } })).toBe("deep");
+  });
+
+  it("falls back to name:dimensions only when nothing else is available, and logs the weak identity once", () => {
+    const logger = createMockLogger();
+    expect(embeddingProviderIdentity({ name: "custom", dimensions: 8 }, logger)).toBe("custom:8d");
+    expect(embeddingProviderIdentity({ name: "other", dimensions: 8 }, logger)).toBe("other:8d");
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("exposes no model id"));
+    // a strong identity never logs
+    const quiet = createMockLogger();
+    _resetWeakIdentityLog();
+    embeddingProviderIdentity({ name: "custom", dimensions: 8, modelId: "m" }, quiet);
+    expect(quiet.warn).not.toHaveBeenCalled();
+  });
+
+  it("initializeMemory wires the batch embedder (round 7 #21) and the model-aware id into the AgentDB config", async () => {
+    const embed = vi.fn(async (texts: string[]) => ({
+      embeddings: texts.map(() => [0.1, 0.2]), usage: { totalTokens: texts.length },
+    }));
+    const provider = { name: "custom", dimensions: 2, modelId: "model-z", embed } as unknown as CachedEmbeddingProvider;
+    await initializeMemory(makeConfig(), createMockLogger(), provider);
+    const cfg = vi.mocked(AgentDBMemory).mock.calls[0]![0] as {
+      embeddingProviderId?: string;
+      embeddingProviderBatch?: (texts: string[]) => Promise<number[][]>;
+    };
+    expect(cfg.embeddingProviderId).toBe("custom:model-z:2d");
+    expect(cfg.embeddingProviderBatch).toBeTypeOf("function");
+    await expect(cfg.embeddingProviderBatch!(["a", "b", "c"])).resolves.toEqual([[0.1, 0.2], [0.1, 0.2], [0.1, 0.2]]);
+    expect(embed).toHaveBeenCalledWith(["a", "b", "c"]);
   });
 });

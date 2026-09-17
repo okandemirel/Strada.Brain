@@ -14,6 +14,7 @@ import type {
   MemoryImportance,
   MemoryMetadata,
   MemoryEntry,
+  MemoryOwnershipOptions,
 } from "../memory.interface.js";
 import type { MemoryId } from "../../types/index.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
@@ -442,8 +443,17 @@ export interface IUnifiedMemory {
     tier?: MemoryTier,
   ): Promise<MemoryEntry>;
 
-  /** Store a general note or insight */
-  storeNote(content: string, tags?: string[], tier?: MemoryTier): Promise<MemoryEntry>;
+  /**
+   * Store a general note or insight. `ownership` (Codex round 7 #19) names the
+   * chat/user/project the note belongs to or marks it `shared`; without it the
+   * note is of unknown ownership and stays out of chat-scoped recall.
+   */
+  storeNote(
+    content: string,
+    tags?: string[],
+    tier?: MemoryTier,
+    ownership?: MemoryOwnershipOptions,
+  ): Promise<MemoryEntry>;
 
   /** Store an entry with full control over metadata */
   storeEntry(
@@ -580,6 +590,12 @@ export interface UnifiedMemoryConfig {
   readonly autoCompactThreshold?: NormalizedScore;
   /** Optional embedding provider function — when not set, a hash-based fallback is used */
   readonly embeddingProvider?: (text: string) => Promise<number[]>;
+  /**
+   * Optional batch form of `embeddingProvider` (Codex round 7 #21): the
+   * re-embed migration sends chunks of rows through it instead of one serial
+   * call per row. Must return one vector per input text, in order.
+   */
+  readonly embeddingProviderBatch?: (texts: string[]) => Promise<number[][]>;
   /**
    * Provider model id recorded as the provenance of every vector the provider
    * produces (plan 0-B.9). Defaults to "provider" when unset.

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AgentDBRetrievalContext } from "./agentdb-retrieval.js";
-import { retrieveTFIDF, retrieveSemantic, retrieveHybrid, applyMMR } from "./agentdb-retrieval.js";
+import { retrieveTFIDF, retrieveSemantic, retrieveHybrid, applyMMR, awaitingMigration } from "./agentdb-retrieval.js";
 import type { UnifiedMemoryEntry } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import { TextIndex, extractTerms } from "../text-index.js";
@@ -890,5 +890,76 @@ describe("identity scope on retrieve (plan 3.9)", () => {
       .map((h) => h.entry.id as string);
     expect(ids).toContain("a1");
     expect(ids).not.toContain("b1");
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 7 #21: while unknown/foreign
+// vectors were being re-embedded (one serial call per row) semantic recall
+// returned nothing from them and no text fallback kicked in.
+describe("text fallback serves rows the provider index cannot hold yet (Codex round 7 #21)", () => {
+  const realVec = [0.5, -0.5, 0.25, -0.25];
+
+  function build() {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("a1", makeEntry("a1", "staging deploy pipeline via the provider", {
+      chatId: "chat-A" as any, embedding: realVec as any, embeddingProvenance: "provider",
+    } as any));
+    entries.set("legacy", makeEntry("legacy", "staging deploy checklist from a legacy vector", {
+      chatId: "chat-A" as any, embedding: realVec as any, embeddingProvenance: "unknown",
+    } as any));
+    entries.set("foreign", makeEntry("foreign", "staging deploy runbook from another model", {
+      chatId: "chat-B" as any, embedding: realVec as any, embeddingProvenance: "other-model:4d",
+    } as any));
+    entries.set("novec", makeEntry("novec", "staging deploy note without any vector", {
+      chatId: "chat-A" as any, embedding: [] as any,
+    } as any));
+    // the provider index holds a1 only
+    const search = vi.fn(async () => [{ chunk: { id: "a1" }, score: 0.9 }]);
+    const ctx = makeCtx(entries, { search, count: () => 1 } as any);
+    (ctx.config as any).embeddingProvider = vi.fn(async () => [1, 0, 0, 0]);
+    return { ctx, search, entries };
+  }
+
+  it("awaitingMigration names rows with a vector of another provenance; empty vectors are not awaiting", () => {
+    expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "unknown" }, "provider")).toBe(true);
+    expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "other" }, "provider")).toBe(true);
+    expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "provider" }, "provider")).toBe(false);
+    expect(awaitingMigration({ embedding: [], embeddingProvenance: "unknown" }, "provider")).toBe(false);
+    expect(awaitingMigration({ embedding: realVec }, "provider")).toBe(false);
+  });
+
+  it("returns the index hit plus the unknown/foreign rows through text; a row with no vector is left to the text-only paths", async () => {
+    const { ctx, search } = build();
+    const ids = (await retrieveSemantic(ctx, "staging deploy", { limit: 10 })).map((h) => h.entry.id as string);
+    expect(search).toHaveBeenCalled();
+    expect(ids).toContain("a1");
+    expect(ids).toContain("legacy");
+    expect(ids).toContain("foreign");
+    expect(ids).not.toContain("novec");
+  });
+
+  it("the fallback honours the scope: chat-A sees its legacy row, never chat-B's foreign row", async () => {
+    const { ctx } = build();
+    const ids = (await retrieveSemantic(ctx, "staging deploy", { limit: 10, scope: { chatId: "chat-A" as any } }))
+      .map((h) => h.entry.id as string);
+    expect(ids).toContain("a1");
+    expect(ids).toContain("legacy");
+    expect(ids).not.toContain("foreign");
+  });
+
+  it("respects the limit after merging and keeps the semantic hit ranked by its score", async () => {
+    const { ctx } = build();
+    const hits = await retrieveSemantic(ctx, "staging deploy", { limit: 1 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.entry.id).toBe("a1");
+  });
+
+  it("once every vector carries the index provenance, no text fallback runs", async () => {
+    const { ctx, entries } = build();
+    for (const e of entries.values()) {
+      if ((e.embedding as number[]).length > 0) (e as any).embeddingProvenance = "provider";
+    }
+    const ids = (await retrieveSemantic(ctx, "staging deploy", { limit: 10 })).map((h) => h.entry.id as string);
+    expect(ids).toEqual(["a1"]);
   });
 });
