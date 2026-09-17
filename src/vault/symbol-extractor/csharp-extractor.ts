@@ -28,63 +28,67 @@ export function callableSignature(node: SyntaxNode): string {
   const generic = typeParams ? `${String.fromCharCode(96)}${Math.max(1, typeParams.namedChildCount)}` : '';
   const params = node.childForFieldName('parameters');
   if (!params) return `${generic}()`;
-  // THE PARAMETER LIST IS READ AS TEXT, NOT AS `parameter` NODES.
+  // THE TYPES COME FROM THE SYNTAX, NEVER FROM THE TEXT.
   //
-  // The installed grammar does not wrap a `params` parameter in a `parameter`
-  // node — it hangs the type and the name directly off the parameter list —
-  // so a node-typed walk skipped it and `F()`, `F(params int[])` and
-  // `F(params string[])` all collapsed into `C.F()` (Codex round 10 #15).
-  const inner = params.text.trim().replace(/^\(/u, '').replace(/\)$/u, '');
-  const types = splitTopLevel(inner).map(normalizeParameter).filter((t) => t.length > 0);
+  // Reading the parameter list as text and splitting on commas was wrong in
+  // both directions (Codex round 11 #18): a default value containing a comma
+  // (`F(string s = "a,b", int n = 0)`) produced `F(string,b",int)`, and one
+  // containing '<' swallowed the rest of the list — `F(string s = "a<b", int n)`
+  // became `F(string)`, colliding with a real `F(string)` overload. A
+  // parameter node's `type` field is exact: no name, no default, no attribute.
+  //
+  // The grammar also FLATTENS a variadic parameter — `params`, then the type,
+  // then the name, straight off the parameter list — so both shapes are read
+  // here, in order.
+  const types: string[] = [];
+  let modifiers: string[] = [];
+  let looseType: string | undefined;
+  const flushLoose = (): void => {
+    if (looseType !== undefined) types.push([...modifiers, looseType].join(' '));
+    modifiers = [];
+    looseType = undefined;
+  };
+  for (let i = 0; i < params.childCount; i++) {
+    const child = params.child(i);
+    if (!child) continue;
+    if (child.type === ',') {
+      flushLoose();
+      continue;
+    }
+    if (child.type === '(' || child.type === ')') continue;
+    if (child.type === 'parameter') {
+      const declaredType = child.childForFieldName('type');
+      const own: string[] = [];
+      for (let j = 0; j < child.childCount; j++) {
+        const sub = child.child(j);
+        // A modifier is a `modifier` node here, not an anonymous keyword.
+        if (sub && (sub.type === "modifier" || !sub.isNamed) && PARAMETER_MODIFIERS.has(sub.text)) own.push(sub.text);
+      }
+      types.push([...modifiers, ...own, collapseType(declaredType?.text ?? '?')].join(' '));
+      modifiers = [];
+      looseType = undefined;
+      continue;
+    }
+    if ((child.type === "modifier" || !child.isNamed) && PARAMETER_MODIFIERS.has(child.text)) {
+      modifiers.push(child.text);
+      continue;
+    }
+    // The flattened variadic shape: a type node, then its name.
+    if (child.isNamed && child.type !== 'identifier') {
+      looseType = collapseType(child.text);
+      continue;
+    }
+  }
+  flushLoose();
   return `${generic}(${types.join(',')})`;
 }
 
-/** Split on commas that are not inside <>, [] or (). */
-function splitTopLevel(text: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of text) {
-    if (ch === '<' || ch === '[' || ch === '(') depth++;
-    else if (ch === '>' || ch === ']' || ch === ')') depth--;
-    if (ch === ',' && depth === 0) {
-      out.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim().length > 0) out.push(current);
-  return out.map((piece) => piece.trim()).filter((piece) => piece.length > 0);
+/** A type as it identifies a callable: no incidental whitespace. */
+function collapseType(text: string): string {
+  return text.replace(/\s+/gu, ' ').replace(/\s*,\s*/gu, ',').trim();
 }
 
 const PARAMETER_MODIFIERS = new Set(['params', 'ref', 'out', 'in', 'this', 'scoped', 'readonly']);
-
-/**
- * One parameter reduced to what makes it a distinct overload: its modifiers
- * and its type. The name and any default value are dropped — `F(int a)` and
- * `F(int b = 3)` are the same callable.
- */
-function normalizeParameter(piece: string): string {
-  let text = piece.trim();
-  // Attributes lead: [CallerMemberName] string caller.
-  while (text.startsWith('[')) {
-    const close = text.indexOf(']');
-    if (close < 0) break;
-    text = text.slice(close + 1).trim();
-  }
-  const defaultAt = text.indexOf('=');
-  if (defaultAt >= 0) text = text.slice(0, defaultAt).trim();
-  if (text.length === 0) return '';
-  const words = text.split(/\s+/u);
-  const modifiers: string[] = [];
-  while (words.length > 0 && PARAMETER_MODIFIERS.has(words[0]!)) modifiers.push(words.shift()!);
-  // The last word is the parameter's NAME when a type precedes it.
-  if (words.length > 1) words.pop();
-  const type = words.join(' ').replace(/,\s+/gu, ',').trim();
-  if (type.length === 0) return '';
-  return [...modifiers, type].join(' ');
-}
 
 function leadingXmlDoc(n: SyntaxNode): string | null {
   let p = n.previousSibling;

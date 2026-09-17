@@ -428,3 +428,39 @@ public class C {
     expect(ids).toContain("C.Attr(string)");
   });
 });
+
+// =============================================================================
+// Round 11 #18: a default VALUE is not part of a callable's identity, and
+// reading the parameter list as text let one corrupt the signature — a comma
+// inside a string default split it, and a '<' swallowed the rest of the list
+// until the signature collided with a different overload.
+// =============================================================================
+
+describe("CSharpSymbolExtractor — an optional default never changes the identity", () => {
+  it("keeps a quoted comma, angle bracket or parenthesis out of the signature", async () => {
+    const out = await extract(`
+public class C {
+  public void F(string s = "a,b", int n = 0) { }
+  public void G(string s = "a<b", int n = 0) { }
+  public void H(string s) { }
+  public void I(int[] xs, string s = ")") { }
+}
+`);
+    const ids = out.symbols.filter((sym) => sym.kind === "method").map((sym) => sym.symbolId.split("::").at(-1));
+    expect(ids).toContain("C.F(string,int)");
+    expect(ids).toContain("C.G(string,int)");
+    // …and the one-parameter overload keeps its own identity: G must not
+    // collapse onto it.
+    expect(ids).toContain("C.H(string)");
+    expect(ids).toContain("C.I(int[],string)");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("the same method with and without a default is the SAME callable (guard)", async () => {
+    const withDefault = await extract("public class C { public void F(int a = 3) { } }");
+    const without = await extract("public class C { public void F(int a) { } }");
+    const id = (o: Awaited<ReturnType<typeof extract>>) =>
+      o.symbols.filter((s2) => s2.kind === "method").map((s2) => s2.symbolId)[0];
+    expect(id(withDefault)).toBe(id(without));
+  });
+});
