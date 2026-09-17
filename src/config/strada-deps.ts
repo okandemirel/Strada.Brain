@@ -964,23 +964,63 @@ function secondMachineRow(unityProjectPath: string): ProjectMatrixRow {
  * Never throws; every row carries the concrete path or version it looked at so
  * a failure names the thing instead of "setup incomplete".
  */
+/**
+ * The deps shape for "nothing was scanned": no project path means no package
+ * could be looked for, and each row says so instead of claiming absence.
+ */
+const UNSCANNED_DEPS: StradaDepsStatus = {
+  coreInstalled: false,
+  corePath: null,
+  coreVersion: null,
+  coreSource: null,
+  modulesInstalled: false,
+  modulesPath: null,
+  modulesVersion: null,
+  modulesSource: null,
+  mcpInstalled: false,
+  mcpPath: null,
+  mcpVersion: null,
+  mcpSource: null,
+  warnings: ["No Unity project is configured, so no Strada package was looked for."],
+};
+
 export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupportVerdict {
-  const deps = opts.deps ?? checkStradaDeps(opts.unityProjectPath, opts.config);
+  // NO PROJECT IS AN ANSWER, NOT A CRASH. `unityProjectPath` is optional in a
+  // loaded config, and every project row joins paths onto it: judging an
+  // unconfigured install threw `The "path" argument must be of type string`
+  // out of the doctor, which took the whole report down with it.
+  const projectPath = (opts.unityProjectPath ?? "").trim();
+  const deps = opts.deps ?? (projectPath ? checkStradaDeps(projectPath, opts.config) : UNSCANNED_DEPS);
   const byId = new Map(SUPPORTED_PROJECT_PACKAGES.map((spec) => [spec.id, spec]));
   const core = byId.get("strada-core")!;
   const modules = byId.get("strada-modules")!;
   const mcp = byId.get("strada-mcp")!;
 
+  const projectRows: ProjectMatrixRow[] = projectPath
+    ? [
+        evaluateLayoutRow(projectPath),
+        evaluateUnityEditorVersionRow(projectPath),
+        evaluateGitRow(projectPath),
+      ]
+    : [
+        {
+          id: "unity-project-layout",
+          label: "Unity project layout",
+          requirement: "required",
+          status: "missing",
+          detail: "No Unity project is configured (UNITY_PROJECT_PATH is unset), so no project row could be judged.",
+          fix: "Set UNITY_PROJECT_PATH to the directory that contains Assets/ and ProjectSettings/.",
+        },
+      ];
+
   const rows: ProjectMatrixRow[] = [
-    evaluateLayoutRow(opts.unityProjectPath),
-    evaluateUnityEditorVersionRow(opts.unityProjectPath),
-    evaluateGitRow(opts.unityProjectPath),
+    ...projectRows,
     evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource),
     evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource),
     evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource),
     evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath),
     evaluateEditorBinaryRow(opts.unityEditorPath),
-    secondMachineRow(opts.unityProjectPath),
+    ...(projectPath ? [secondMachineRow(projectPath)] : []),
   ];
 
   const labelsWith = (status: MatrixRowStatus): string[] =>

@@ -473,3 +473,21 @@ describe("Unity version comparison", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("the matrix on an install with no project configured", () => {
+  it("says no project is configured instead of throwing the doctor's report away", () => {
+    // `unityProjectPath` is optional in a loaded config, and every project row
+    // joins onto it: an unset one threw `The "path" argument must be of type
+    // string` out of evaluateProjectSupport and took collectDoctorReport with it.
+    const verdict = evaluateProjectSupport({ unityProjectPath: undefined as unknown as string });
+    expect(verdict.supported).toBe(false);
+    expect(verdict.missing).toContain("Unity project layout");
+    const layout = verdict.rows.find((row) => row.id === "unity-project-layout");
+    expect(layout?.detail).toContain("UNITY_PROJECT_PATH is unset");
+    // Nothing about a project is claimed: no version, git, or second-machine row.
+    expect(verdict.rows.map((row) => row.id)).not.toContain("project-unity-version");
+    expect(verdict.rows.map((row) => row.id)).not.toContain("project-git");
+    // And no package is reported as measured-and-absent without a scan.
+    expect(verdict.summary).toContain("rows ok");
+  });
+});
