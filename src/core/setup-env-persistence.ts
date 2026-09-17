@@ -19,7 +19,8 @@
  * Nothing here touches process.env.
  */
 
-import { link, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { link, open, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
 import * as dotenv from "dotenv";
@@ -282,6 +283,41 @@ async function claimLockPath(lockPath: string, body: string): Promise<boolean> {
   }
 }
 
+/**
+ * Remove a lock file ONLY IF it is still the one whose bytes were judged.
+ *
+ * `unlink` cannot be conditional, so the removal is a rename followed by a
+ * byte check: a file that turns out to be somebody else's live lock is linked
+ * straight back, and we took nothing. Codex round 12 #4 walked the other way:
+ * two processes judged the same stale recovery file, one replaced it, and the
+ * other's delayed `unlink` deleted the LIVE replacement — after which two
+ * recoverers were inside the critical section at once.
+ *
+ * Returns true only when the judged file was the one removed.
+ */
+async function removeLockIfUnchanged(lockPath: string, expected: string): Promise<boolean> {
+  const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
+  try {
+    await rename(lockPath, grave);
+  } catch {
+    // Gone, or replaced by someone who got there first.
+    return false;
+  }
+  const moved = await readFile(grave, "utf-8").catch(() => null);
+  if (moved !== expected) {
+    // Not the file we judged: put it back. A newer file at the pathname makes
+    // the link fail, which is the fail-closed answer.
+    await link(grave, lockPath).catch(() => undefined);
+    await unlink(grave).catch(() => undefined);
+    return false;
+  }
+  await unlink(grave).catch(() => undefined);
+  return true;
+}
+
+/** Exposed so a test can drive the interleaving the byte check exists for. */
+export const __testing = { removeLockIfUnchanged };
+
 /** What a recovery attempt achieved. */
 export type LockRecovery = "acquired" | "retry" | "live";
 
@@ -313,6 +349,12 @@ export async function recoverAbandonedLock(
   lockPath: string,
   body: string,
   judged: { verdict: LockVerdict; raw?: string },
+  /**
+   * Test seam, and the reason this function is exported at all: the defects
+   * here live between an inspection and the action taken on it, so a test has
+   * to be able to change the world in that gap. Production passes nothing.
+   */
+  pauses?: { afterJudgingBreaker?: () => Promise<void> },
 ): Promise<LockRecovery> {
   if (judged.verdict === "gone") return "retry";
   if (judged.verdict === "live") return "live";
@@ -322,30 +364,22 @@ export async function recoverAbandonedLock(
     // Somebody else is recovering. Only a recoverer that is itself gone (or
     // one nobody here can ask about, long past staleMs) may be cleared.
     const breaker = await judgeLock(breakerPath);
-    if (breaker.verdict === "abandoned") await unlink(breakerPath).catch(() => undefined);
+    await pauses?.afterJudgingBreaker?.();
+    // NEVER a bare unlink (round 12 #4): between judging it and removing it,
+    // another recoverer can have replaced it with its own LIVE file.
+    if (breaker.verdict === "abandoned" && breaker.raw !== undefined) {
+      await removeLockIfUnchanged(breakerPath, breaker.raw);
+    }
     return "retry";
   }
   try {
     const now = await judgeLock(lockPath);
     if (now.verdict === "live") return "live";
     if (now.verdict === "gone" || now.raw !== judged.raw) return "retry";
-    const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
-    try {
-      await rename(lockPath, grave);
-    } catch {
-      // Someone else broke or replaced it first.
-      return "retry";
-    }
-    // Confirm the bytes we actually moved BEFORE claiming the name: a lock
-    // that turns out to be someone else's is linked straight back, and we
-    // take nothing.
-    const moved = await readFile(grave, "utf-8").catch(() => null);
-    if (moved !== now.raw) {
-      await link(grave, lockPath).catch(() => undefined);
-      await unlink(grave).catch(() => undefined);
-      return "retry";
-    }
-    await unlink(grave).catch(() => undefined);
+    // The bytes are confirmed BEFORE the pathname is claimed, so a lock that
+    // turns out to be someone else's is linked straight back and we take
+    // nothing; then the name is claimed for us so it is never left vacant.
+    if (!(await removeLockIfUnchanged(lockPath, now.raw!))) return "retry";
     return (await claimLockPath(lockPath, body)) ? "acquired" : "retry";
   } finally {
     await unlink(breakerPath).catch(() => undefined);
@@ -397,18 +431,63 @@ async function releaseEnvSaveLock(lock: EnvSaveLock): Promise<void> {
   }
 }
 
+/**
+ * THE FILE, NOT THE NAME THAT POINTS AT IT (Codex round 12 #5).
+ *
+ * With `.env -> shared.env`, reading followed the link while the atomic
+ * rename replaced the LINK: the daemon's real configuration stayed stale and
+ * the symlink the operator put there was silently destroyed. Two names for one
+ * file also took two different locks and two different in-process queues, so
+ * they could interleave freely.
+ *
+ * Resolving to the target fixes all three at once. An unresolvable path (the
+ * file does not exist yet, a dangling link) keeps the path as given, which is
+ * the create case.
+ */
+async function resolveEnvTarget(envPath: string): Promise<string> {
+  try {
+    return await realpath(envPath);
+  } catch {
+    // Not there yet: resolve the DIRECTORY so two spellings of the same
+    // parent (a symlinked home, /tmp vs /private/tmp) still share one lock.
+    try {
+      return join(await realpath(dirname(envPath)), basename(envPath));
+    } catch {
+      return envPath;
+    }
+  }
+}
+
 export async function persistSetup(
   envPath: string,
   lines: readonly string[],
   options: PersistSetupOptions,
 ): Promise<PersistSetupResult> {
+  // THE QUEUE ENTRY IS TAKEN SYNCHRONOUSLY. Resolving the target first would
+  // mean two saves issued back to back both await realpath before either has
+  // joined the chain, and they then run concurrently — exactly the readback
+  // race round 9 #15 closed. So: chain on the name we were given, and resolve
+  // the target INSIDE that turn.
+  const run = () => persistSetupResolved(envPath, lines, options);
   const previous = saveChains.get(envPath) ?? Promise.resolve();
-  const mine = previous.then(
-    () => persistSetupOnce(envPath, lines, options),
-    () => persistSetupOnce(envPath, lines, options),
-  );
+  const mine = previous.then(run, run);
   saveChains.set(envPath, mine.catch(() => undefined));
   return mine;
+}
+
+/**
+ * Save the FILE the name resolves to.
+ *
+ * Two spellings of one file therefore take the same lock pathname, and the
+ * kernel's O_EXCL — not this process's queue — is what keeps them apart; the
+ * loser waits for the lock exactly as a second process would.
+ */
+async function persistSetupResolved(
+  envPath: string,
+  lines: readonly string[],
+  options: PersistSetupOptions,
+): Promise<PersistSetupResult> {
+  return persistSetupOnce(await resolveEnvTarget(envPath), lines, options);
 }
 
 /** Read, merge, commit and read back with the cross-process lock held. */

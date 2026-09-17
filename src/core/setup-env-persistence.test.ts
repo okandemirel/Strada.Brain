@@ -14,6 +14,7 @@ import {
   ENV_SAVE_LOCK,
   mergeEnvContent,
   parseEnvLines,
+  __testing as ENV_SAVE_LOCK_TESTING,
   persistSetup,
   recoverAbandonedLock,
   redactEffectiveConfig,
@@ -419,4 +420,147 @@ describe("abandoned-lock recovery never leaves the pathname unlocked (round 11 #
     expect(fs.readFileSync(`${envPath}.lock.recovery`, "utf-8")).toBe(live);
     expect(fs.readdirSync(dir).filter((n) => n.includes(".abandoned.") || n.endsWith(".tmp"))).toEqual([]);
   });
+});
+
+/**
+ * Codex round 12 #5. A symlinked `.env` is a deliberate operator setup (one
+ * shared configuration, several checkouts). Reading followed the link while the
+ * atomic rename replaced the LINK, so the real configuration stayed stale and
+ * the link was destroyed; two names for one file also took two locks.
+ */
+describe("a symlinked .env is the file it points at (round 12 #5)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  function dir(): string {
+    const made = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-link-"));
+    tmpDirs.push(made);
+    return made;
+  }
+
+  it("writes through the link and leaves the link in place", async () => {
+    const root = dir();
+    const shared = path.join(root, "shared.env");
+    const link = path.join(root, ".env");
+    fs.writeFileSync(shared, "HAND_ADDED=yes\nKIMI_API_KEY=old\n");
+    fs.symlinkSync(shared, link);
+
+    const result = await persistSetup(link, ['KIMI_API_KEY="new"'], { ownedKeys: ["KIMI_API_KEY"] });
+    expect(result.effective.KIMI_API_KEY).toBe("new");
+    expect(result.diskMatchesCommit).toBe(true);
+    // The target carries the new configuration…
+    expect(dotenvParse(fs.readFileSync(shared, "utf-8")).KIMI_API_KEY).toBe("new");
+    expect(dotenvParse(fs.readFileSync(shared, "utf-8")).HAND_ADDED).toBe("yes");
+    // …and the operator's link is still a link.
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(link)).toBe(fs.realpathSync(shared));
+    // Nothing was left beside either name.
+    expect(fs.readdirSync(root).filter((n) => n.endsWith(".tmp") || n.includes(".lock"))).toEqual([]);
+  });
+
+  it("both names take ONE lock, so the two saves cannot interleave", async () => {
+    const root = dir();
+    const shared = path.join(root, "shared.env");
+    const link = path.join(root, ".env");
+    fs.writeFileSync(shared, "HAND_ADDED=yes\nKIMI_API_KEY=old\n");
+    fs.symlinkSync(shared, link);
+
+    const viaLink = persistSetup(link, ['KIMI_API_KEY="first"'], { ownedKeys: ["KIMI_API_KEY"] });
+    const viaTarget = persistSetup(shared, ['KIMI_API_KEY="second"'], { ownedKeys: ["KIMI_API_KEY"] });
+    const [a, b] = await Promise.all([viaLink, viaTarget]);
+    // Each readback describes ITS OWN save (that is what serialization buys),
+    // and the hand-added key survived both.
+    expect([a.effective.KIMI_API_KEY, b.effective.KIMI_API_KEY].sort()).toEqual(["first", "second"]);
+    expect(a.diskMatchesCommit).toBe(true);
+    expect(b.diskMatchesCommit).toBe(true);
+    expect(a.preserved).toEqual(["HAND_ADDED"]);
+    expect(b.preserved).toEqual(["HAND_ADDED"]);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+});
+
+/**
+ * Codex round 12 #4. Two recoverers judged the same stale `.recovery` file; one
+ * replaced it with its own, and the other's delayed `unlink` deleted that LIVE
+ * replacement — after which two recoverers were inside the critical section at
+ * once and the pathname could change hands under them.
+ */
+describe("a lock is only removed if it is still the lock that was judged (round 12 #4)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  function lockPath(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-toctou-"));
+    tmpDirs.push(dir);
+    return path.join(dir, ".env.lock.recovery");
+  }
+  const remove = (p: string, expected: string) => ENV_SAVE_LOCK_TESTING.removeLockIfUnchanged(p, expected);
+
+  it("refuses to delete a file that was replaced since it was judged, and leaves it intact", async () => {
+    const target = lockPath();
+    const judged = JSON.stringify({ pid: 0x7ffffffe, host: os.hostname(), startedAt: 0 });
+    const replacement = JSON.stringify({ pid: process.pid, host: os.hostname(), startedAt: Date.now() });
+    // We judged `judged`; by the time we act, B's live file is there.
+    fs.writeFileSync(target, replacement);
+    expect(await remove(target, judged)).toBe(false);
+    expect(fs.readFileSync(target, "utf-8")).toBe(replacement);
+    // Nothing was left beside it either — no grave, no half-move.
+    expect(fs.readdirSync(path.dirname(target))).toEqual([path.basename(target)]);
+  });
+
+  it("removes exactly the file it judged, and reports a file that is already gone", async () => {
+    const target = lockPath();
+    const judged = JSON.stringify({ pid: 0x7ffffffe, host: os.hostname(), startedAt: 0 });
+    fs.writeFileSync(target, judged);
+    expect(await remove(target, judged)).toBe(true);
+    expect(fs.existsSync(target)).toBe(false);
+    // A second attempt claims nothing.
+    expect(await remove(target, judged)).toBe(false);
+  });
+
+  it("a live recoverer's file survives a second recoverer's whole attempt", async () => {
+    // The end-to-end shape: B holds the critical section; A arrives, finds the
+    // breaker, judges it (dead? no — live) and must leave everything alone.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-toctou2-"));
+    tmpDirs.push(dir);
+    const lock = path.join(dir, ".env.lock");
+    const dead = JSON.stringify({ token: "dead", pid: 0x7ffffffe, host: os.hostname(), startedAt: 0 });
+    const liveBreaker = JSON.stringify({ pid: process.pid, host: os.hostname(), startedAt: Date.now() });
+    fs.writeFileSync(lock, dead);
+    fs.writeFileSync(`${lock}.recovery`, liveBreaker);
+    const verdict = await recoverAbandonedLock(lock, "mine", { verdict: "abandoned", raw: dead });
+    expect(verdict).toBe("retry");
+    expect(fs.readFileSync(`${lock}.recovery`, "utf-8")).toBe(liveBreaker);
+    expect(fs.readFileSync(lock, "utf-8")).toBe(dead);
+  });
+});
+
+it("round 12 #4 a recovery file replaced between judging and removing survives", async () => {
+  // THE REPORTED CHAIN: A and B both find the same stale recovery file. B
+  // replaces it with its own live one. A, still holding its old judgement,
+  // must not delete B's — that is what put two recoverers in the critical
+  // section at once.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-env-breaker-"));
+  try {
+    const lock = path.join(dir, ".env.lock");
+    const dead = JSON.stringify({ token: "dead", pid: 0x7ffffffe, host: os.hostname(), startedAt: 0 });
+    const staleBreaker = JSON.stringify({ pid: 0x7ffffffd, host: os.hostname(), startedAt: 0 });
+    const liveBreaker = JSON.stringify({ pid: process.pid, host: os.hostname(), startedAt: Date.now() });
+    fs.writeFileSync(lock, dead);
+    fs.writeFileSync(`${lock}.recovery`, staleBreaker);
+    const verdict = await recoverAbandonedLock(lock, "mine", { verdict: "abandoned", raw: dead }, {
+      afterJudgingBreaker: async () => {
+        // B takes over the critical section in the gap.
+        fs.writeFileSync(`${lock}.recovery`, liveBreaker);
+      },
+    });
+    expect(verdict).toBe("retry");
+    // B's critical section is intact, and the lock it is recovering untouched.
+    expect(fs.readFileSync(`${lock}.recovery`, "utf-8")).toBe(liveBreaker);
+    expect(fs.readFileSync(lock, "utf-8")).toBe(dead);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
