@@ -6,6 +6,36 @@ import { deflateSync } from "node:zlib";
 import { SpriteGenerateTool , type LocalRunnerLike } from "./sprite-generate.js";
 import { MeshGenerateTool } from "./mesh-generate.js";
 import type { ToolContext } from "../tool.interface.js";
+import { getModelSpec } from "../../../assets-local/model-catalog.js";
+import { hfWeightsDir } from "../../../assets-local/local-model-runner.js";
+
+/**
+ * A COMPLETE local install of `id` under an isolated assets-local root: the
+ * marker, a repo-shipped model's clone and the cached weight files. Since item
+ * 2.15 a marker alone is not an installation — isModelInstalled measures the
+ * weights on disk, because a deleted or half-downloaded model used to read as
+ * installed and every sprite it "drew" was a placeholder.
+ */
+function installModel(root: string, id: string): void {
+  const prev = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+  process.env["STRADA_ASSETS_LOCAL_ROOT"] = root;
+  try {
+    const spec = getModelSpec(id)!;
+    writeFileSync(join(root, `.installed-${id}`), "now\n");
+    if (spec.installMethod === "repo") {
+      mkdirSync(join(root, "src", id, "tsr"), { recursive: true });
+      writeFileSync(join(root, "src", id, "tsr", "system.py"), "# TSR\n");
+    }
+    for (const f of spec.weightFiles ?? ["unet/diffusion_pytorch_model.safetensors"]) {
+      const path = join(hfWeightsDir(spec.weightsRef), "snapshots", "rev1", f);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "weight-bytes");
+    }
+  } finally {
+    if (prev === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prev;
+  }
+}
 
 /**
  * Measured 2026-09-06: sd15 and TripoSR were installed (6.7 GB of weights
@@ -243,18 +273,22 @@ describe("realLocalAvailability is a measurement, not a require() that cannot ru
     process.env["STRADA_ASSETS_LOCAL_ROOT"] = root;
     try {
       const mac = { totalRamGb: 32, appleSilicon: true };
-      // A marker without a venv is not an installation.
-      writeFileSync(join(root, ".installed-triposr"), "now\n");
+      // An install without a venv is not an installation.
+      installModel(root, "triposr");
       expect(realLocalAvailability(mac)("image-to-3d")).toBe(false);
       mkdirSync(join(root, "venv", "bin"), { recursive: true });
       writeFileSync(join(root, "venv", "bin", "python3"), "");
       expect(realLocalAvailability(mac)("image-to-3d")).toBe(true);
-      // A marker for a model this device cannot run (CUDA-only) counts for nothing.
+      // Weights without a marker are not an installation either.
       rmSync(join(root, ".installed-triposr"));
+      expect(realLocalAvailability(mac)("image-to-3d")).toBe(false);
+      // A marker for a model that is not in the catalogue at all (trellis was
+      // removed in item 2.15 — CUDA-only, nothing probed for CUDA) counts for
+      // nothing.
       writeFileSync(join(root, ".installed-trellis"), "now\n");
       expect(realLocalAvailability(mac)("image-to-3d")).toBe(false);
       // …and off Apple Silicon nothing is available, whatever is installed.
-      writeFileSync(join(root, ".installed-sd15"), "now\n");
+      installModel(root, "sd15");
       expect(realLocalAvailability({ totalRamGb: 64, appleSilicon: false })("text-to-image")).toBe(false);
       expect(realLocalAvailability(mac)("text-to-image")).toBe(true);
     } finally {
@@ -580,7 +614,7 @@ describe("AUTO runs the model that is installed, not the smallest the device cou
       mkdirSync(join(root, "venv", "bin"), { recursive: true });
       writeFileSync(join(root, "venv", "bin", "python3"), "");
       expect(realLocalAvailability(bigMac)("text-to-image")).toBe(false);
-      writeFileSync(join(root, ".installed-sdxl"), "now\n");
+      installModel(root, "sdxl");
       expect(realLocalAvailability(bigMac)("text-to-image")).toBe(true);
       // The 3D kind is judged on its own installs, not the 2D marker.
       expect(realLocalAvailability(bigMac)("image-to-3d")).toBe(false);

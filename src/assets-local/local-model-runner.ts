@@ -6,7 +6,10 @@
  *   venv/                 one shared venv (torch is the heavy shared dep)
  *   scripts/              the inference drivers this runner writes
  *   weights/              HF_HOME cache for downloaded model weights
- *   .installed-<modelId>  marker per successfully installed model
+ *   .installed-<modelId>  marker per successfully installed model (the marker
+ *                         alone is NOT the installed check — see
+ *                         isModelInstalled: the weights under weights/ and a
+ *                         repo-shipped model's src/<id> clone are measured too)
  *
  * Everything is optional: with nothing installed the generation tools fall
  * back to their procedural providers, and the setup menu is the only place
@@ -14,11 +17,11 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { BACKGROUND_REMOVAL_PACKAGES, type LocalModelSpec } from "./model-catalog.js";
+import { BACKGROUND_REMOVAL_PACKAGES, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
@@ -100,6 +103,37 @@ for job in jobs:
     print("WROTE", job["out"], flush=True)
 `;
 
+/**
+ * Pull a model's weights into the HF cache at INSTALL time (item 2.15).
+ *
+ * Before this, weights were fetched lazily by the first inference, so
+ * "installed" meant "a marker file exists" — a model whose weights had never
+ * been downloaded, or had been deleted, or whose download died halfway read as
+ * installed, the generation tools chose the local path, python failed inside
+ * the driver and the sprint got a placeholder. Fetching here is also what lets
+ * a sprint's first sprite be a draw instead of a 7 GB download inside the
+ * inference timeout.
+ *
+ * Named files (`--files`) for models the driver loads by name (TripoSR);
+ * otherwise the diffusers pipeline folder, which is exactly what
+ * `from_pretrained` would have fetched.
+ */
+export const FETCH_WEIGHTS_SCRIPT = `import argparse, sys
+p = argparse.ArgumentParser()
+p.add_argument("--model", required=True)
+p.add_argument("--files", default="")
+a = p.parse_args()
+
+names = [f for f in a.files.split(",") if f]
+if names:
+    from huggingface_hub import hf_hub_download
+    for name in names:
+        print("FETCHED", hf_hub_download(repo_id=a.model, filename=name), flush=True)
+else:
+    from diffusers import DiffusionPipeline
+    print("FETCHED", DiffusionPipeline.download(a.model), flush=True)
+`;
+
 export const IMG2MESH_SCRIPT = `import argparse, sys
 p = argparse.ArgumentParser()
 p.add_argument("--weights", required=True)
@@ -157,6 +191,89 @@ export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
  * connection; past that the answer is "unavailable", not a hung sprint.
  */
 export const RMBG_REPAIR_TIMEOUT_MS = 600_000;
+
+/**
+ * Where huggingface_hub caches one repo's files under HF_HOME=weights/:
+ * `weights/hub/models--<org>--<name>/` (blobs + snapshots).
+ */
+export function hfWeightsDir(weightsRef: string): string {
+  return join(WEIGHTS(), "hub", `models--${weightsRef.split("/").join("--")}`);
+}
+
+/** Every file under `dir`, depth-bounded, resolving symlinks for the sizes. */
+function filesUnder(dir: string, depth = 8): Array<{ rel: string; size: number }> {
+  if (depth < 0) return [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: Array<{ rel: string; size: number }> = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    // isDirectory() is false for a symlink to one, and the HF cache is built
+    // out of symlinks: stat (not lstat) is what follows them.
+    let isDir = entry.isDirectory();
+    let size = 0;
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      try {
+        const st = statSync(full);
+        isDir = st.isDirectory();
+        size = st.size;
+      } catch {
+        continue; // a dangling link is not a weight file
+      }
+    } else {
+      try { size = statSync(full).size; } catch { continue; }
+    }
+    if (isDir) {
+      for (const nested of filesUnder(full, depth - 1)) {
+        out.push({ rel: `${entry.name}/${nested.rel}`, size: nested.size });
+      }
+    } else {
+      out.push({ rel: entry.name, size });
+    }
+  }
+  return out;
+}
+
+/**
+ * Are this model's weights actually on disk? (item 2.15)
+ *
+ * The check `isModelInstalled` used to be was "a marker file exists", which a
+ * never-downloaded, half-downloaded or deleted model satisfies just as well as
+ * a working one. Here:
+ *   - the model's HF cache directory must exist,
+ *   - it must carry no `*.incomplete` blob — that is a download huggingface_hub
+ *     stopped partway, and the driver would load nothing,
+ *   - the file(s) the driver loads BY NAME (spec.weightFiles) must be present
+ *     and non-empty; without named files, at least one non-empty file must be
+ *     cached (a pipeline folder of zero-byte placeholders is not weights).
+ */
+export function modelWeightsPresent(spec: LocalModelSpec): boolean {
+  const dir = hfWeightsDir(spec.weightsRef);
+  if (!existsSync(dir)) return false;
+  const files = filesUnder(dir);
+  if (files.some((f) => f.rel.endsWith(".incomplete"))) return false;
+  const named = spec.weightFiles ?? [];
+  if (named.length > 0) {
+    return named.every((name) => files.some((f) => (f.rel === name || f.rel.endsWith(`/${name}`)) && f.size > 0));
+  }
+  return files.some((f) => f.size > 0);
+}
+
+/**
+ * The local artifacts an install left behind, beyond the weights: a
+ * repo-shipped model (TripoSR) runs from the clone under `src/<id>`, which the
+ * driver imports through PYTHONPATH. A deleted clone is not an installation
+ * however intact the marker is.
+ */
+function installArtifactsPresent(spec: LocalModelSpec): boolean {
+  if (spec.installMethod !== "repo") return true;
+  const repoDir = join(ROOT_DIR(), "src", spec.id);
+  return existsSync(repoDir) && filesUnder(repoDir, 2).length > 0;
+}
 
 /**
  * What identifies THIS venv: the interpreter link and pyvenv.cfg as they were
@@ -251,8 +368,32 @@ export class LocalModelRunner {
     return existsSync(venvPython());
   }
 
+  /**
+   * Can this model actually run right now? (item 2.15)
+   *
+   * "The marker exists" was the whole test, so a model whose weights were
+   * never downloaded, were deleted, or stopped halfway reported installed:
+   * the generation tools then chose the local path, python died inside the
+   * driver, and the run produced a placeholder that blamed nothing. The
+   * measurement is now the venv, a marker with content, the install's own
+   * local artifacts (a repo-shipped model's clone) and the weights on disk.
+   *
+   * An id that is not in the catalogue is not installed — there is no spec to
+   * measure against, and nothing can run it.
+   */
   isModelInstalled(modelId: string): boolean {
-    return this.venvReady() && existsSync(join(ROOT_DIR(), `.installed-${modelId}`));
+    if (!this.venvReady()) return false;
+    const markerPath = join(ROOT_DIR(), `.installed-${modelId}`);
+    let marked = false;
+    try {
+      marked = statSync(markerPath).size > 0;
+    } catch {
+      return false;
+    }
+    if (!marked) return false;
+    const spec = getModelSpec(modelId);
+    if (!spec) return false;
+    return installArtifactsPresent(spec) && modelWeightsPresent(spec);
   }
 
   /** Create the venv and install a model (idempotent). */
@@ -284,6 +425,9 @@ export class LocalModelRunner {
         { timeoutMs: 1_800_000, env },
       );
       if (install.code !== 0) return { ok: false, detail: `pip install failed: ${install.stderr.slice(-500)}` };
+
+      const weights = await this.fetchWeights(spec, env, onProgress);
+      if (!weights.ok) return weights;
 
       writeFileSync(join(ROOT_DIR(), `.installed-${spec.id}`), new Date().toISOString() + "\n");
       return { ok: true, detail: `${spec.label} installed.` };
@@ -346,8 +490,35 @@ export class LocalModelRunner {
     );
     if (install.code !== 0) return { ok: false, detail: `repo requirements failed: ${install.stderr.slice(-500)}` };
 
+    const weights = await this.fetchWeights(spec, env, onProgress);
+    if (!weights.ok) return weights;
+
     writeFileSync(join(ROOT_DIR(), `.installed-${spec.id}`), new Date().toISOString() + "\n");
     return { ok: true, detail: `${spec.label} installed (from source).` };
+  }
+
+  /**
+   * Download the weights into the HF cache as part of the install, so a
+   * finished install is a model that can draw offline (item 2.15). The
+   * download's exit code is the verdict here — the same authority pip gets —
+   * while `isModelInstalled` independently measures the bytes on disk, so a
+   * later deletion or a partial cache is caught even if this step once
+   * reported success.
+   */
+  private async fetchWeights(
+    spec: LocalModelSpec,
+    env: NodeJS.ProcessEnv,
+    onProgress?: (line: string) => void,
+  ): Promise<{ ok: boolean; detail: string }> {
+    this.writeScripts();
+    onProgress?.(`downloading ${spec.label} weights (~${spec.diskGb} GB, resumable)…`);
+    const args = [join(SCRIPTS(), "fetch_weights.py"), "--model", spec.weightsRef];
+    if (spec.weightFiles && spec.weightFiles.length > 0) args.push("--files", spec.weightFiles.join(","));
+    const run = await this.spawn(venvPython(), args, { timeoutMs: 3_600_000, env });
+    if (run.code !== 0) {
+      return { ok: false, detail: `weights download failed: ${(run.stderr || run.stdout).slice(-400)}` };
+    }
+    return { ok: true, detail: `${spec.label} weights cached.` };
   }
 
   /** text → PNG. Returns the written path on success. */
@@ -648,6 +819,7 @@ def marching_cubes(density, level: float = 0.0):
     mkdirSync(SCRIPTS(), { recursive: true });
     refresh(join(SCRIPTS(), "txt2img.py"), TXT2IMG_SCRIPT);
     refresh(join(SCRIPTS(), "img2mesh.py"), IMG2MESH_SCRIPT);
+    refresh(join(SCRIPTS(), "fetch_weights.py"), FETCH_WEIGHTS_SCRIPT);
   }
 }
 

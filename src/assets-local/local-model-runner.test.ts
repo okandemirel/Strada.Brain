@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync, utimesSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { LocalModelRunner, RMBG_IMPORT_PROBE, RMBG_REPAIR_TIMEOUT_MS, type SpawnImpl } from "./local-model-runner.js";
+import {
+  LocalModelRunner,
+  RMBG_IMPORT_PROBE,
+  RMBG_REPAIR_TIMEOUT_MS,
+  hfWeightsDir,
+  modelWeightsPresent,
+  type SpawnImpl,
+} from "./local-model-runner.js";
 import { getModelSpec, LOCAL_MODEL_CATALOG } from "./model-catalog.js";
 
 function spawnOk(): { spawn: SpawnImpl; calls: Array<{ cmd: string; args: string[] }> } {
@@ -106,7 +113,7 @@ describe("LocalModelRunner", () => {
 
   it("refuses inference for a model that is not installed", async () => {
     const runner = new LocalModelRunner(spawnOk().spawn);
-    const fresh = getModelSpec("trellis")!;
+    const fresh = getModelSpec("triposr")!;
     // The isolated root has no marker; nothing is deleted from anywhere.
     const result = await runner.imageToMesh(fresh, join(dir, "in.png"), join(dir, "out.obj"));
     expect(result.ok).toBe(false);
@@ -121,7 +128,9 @@ describe("LocalModelRunner", () => {
  * bytes were reported as a newly generated mesh.
  */
 describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () => {
-  const spec = { id: "trellis", label: "trellis", kind: "image-to-mesh", weightsRef: "w", installMethod: "hub" } as never;
+  // A hand-built spec: this suite stubs isModelInstalled, so the id need not be
+  // a catalogue row (trellis was removed in item 2.15).
+  const spec = { id: "mesh-model", label: "mesh-model", kind: "image-to-mesh", weightsRef: "org/mesh-model", installMethod: "hub" } as never;
   const OBJ = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
 
   const runnerWith = (spawn: SpawnImpl): LocalModelRunner => {
@@ -350,11 +359,26 @@ describe("background removal is installed, or repaired, or refused by name (audi
     rmSync(fakeHome, { recursive: true, force: true });
   });
 
-  /** An EXISTING marker-bearing install: venv python present, model marker written, no .rmbg-ready. */
+  /**
+   * An EXISTING complete install: venv python, the model marker, the cloned
+   * source for a repo-shipped model and the cached weights — everything
+   * isModelInstalled measures (item 2.15) — but no .rmbg-ready, which is what
+   * these tests are about.
+   */
   function existingInstall(modelId = "sd15"): void {
     mkdirSync(join(dir, "venv", "bin"), { recursive: true });
     writeFileSync(join(dir, "venv", "bin", "python3"), "");
     writeFileSync(join(dir, `.installed-${modelId}`), "2026-09-01\n");
+    const spec = getModelSpec(modelId)!;
+    if (spec.installMethod === "repo") {
+      mkdirSync(join(dir, "src", modelId, "tsr"), { recursive: true });
+      writeFileSync(join(dir, "src", modelId, "tsr", "system.py"), "# TSR\n");
+    }
+    for (const f of spec.weightFiles ?? ["unet/diffusion_pytorch_model.safetensors"]) {
+      const path = join(hfWeightsDir(spec.weightsRef), "snapshots", "rev1", f);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "weight-bytes");
+    }
   }
   const isProbe = (args: string[]): boolean => args[0] === "-c" && args[1] === RMBG_IMPORT_PROBE;
   const isPip = (args: string[]): boolean => args.includes("pip") && args.includes("install") && args.includes("rembg") && args.includes("onnxruntime");
@@ -555,5 +579,153 @@ describe("background removal is installed, or repaired, or refused by name (audi
     expect(batch.ok).toBe(true);
     expect(seq).toEqual(["infer", "infer"]);
     for (const args of calls) expect(args[args.indexOf("--rmbg") + 1]).toBe("0");
+  });
+});
+
+// =============================================================================
+// ITEM 2.15 — "installed" must mean the weights are on disk, not that a marker
+// file exists. A deleted or half-downloaded model read as installed, the tool
+// picked the local path, the inference died inside python and the sprint got a
+// placeholder with no idea why.
+// =============================================================================
+
+describe("isModelInstalled measures the weights, not just the marker (item 2.15)", () => {
+  let dir: string;
+  let prevRoot: string | undefined;
+  let prevHome: string | undefined;
+  let fakeHome: string;
+
+  const venv = (): void => {
+    mkdirSync(join(dir, "venv", "bin"), { recursive: true });
+    writeFileSync(join(dir, "venv", "bin", "python3"), "#!/bin/sh\n");
+  };
+  const marker = (id: string, body = "2026-09-17\n"): void => {
+    writeFileSync(join(dir, `.installed-${id}`), body);
+  };
+  /** A file inside the HF cache directory for this model's weights ref. */
+  const weightFile = (id: string, rel: string, body: string): void => {
+    const spec = getModelSpec(id)!;
+    const path = join(hfWeightsDir(spec.weightsRef), rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, body);
+  };
+  /** What a complete install of this model looks like on disk. */
+  const fullyInstall = (id: string): void => {
+    venv();
+    marker(id);
+    const spec = getModelSpec(id)!;
+    if (spec.installMethod === "repo") {
+      mkdirSync(join(dir, "src", id, "tsr"), { recursive: true });
+      writeFileSync(join(dir, "src", id, "tsr", "system.py"), "# TSR\n");
+    }
+    for (const f of spec.weightFiles ?? ["unet/diffusion_pytorch_model.safetensors"]) {
+      weightFile(id, join("snapshots", "rev1", f), "weight-bytes");
+    }
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lmr-weights-"));
+    fakeHome = mkdtempSync(join(tmpdir(), "lmr-weights-home-"));
+    prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    prevHome = process.env["HOME"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    process.env["HOME"] = fakeHome;
+  });
+
+  afterEach(() => {
+    if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it("GUARD: a complete install (venv + marker + weights) is installed", () => {
+    fullyInstall("sd15");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(true);
+  });
+
+  it("a marker with no weights anywhere is NOT an installation", () => {
+    venv();
+    marker("sd15");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+  });
+
+  it("weights that are all zero bytes are NOT an installation", () => {
+    venv();
+    marker("sd15");
+    weightFile("sd15", join("snapshots", "rev1", "unet", "diffusion_pytorch_model.safetensors"), "");
+    expect(modelWeightsPresent(getModelSpec("sd15")!)).toBe(false);
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+  });
+
+  it("an interrupted download (.incomplete) is NOT an installation", () => {
+    fullyInstall("sdxl");
+    weightFile("sdxl", join("blobs", "abc123.incomplete"), "half a tensor");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sdxl")).toBe(false);
+  });
+
+  it("deleting the weights after install turns installed back to false", () => {
+    fullyInstall("sd15");
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    expect(runner.isModelInstalled("sd15")).toBe(true);
+    rmSync(hfWeightsDir(getModelSpec("sd15")!.weightsRef), { recursive: true, force: true });
+    expect(runner.isModelInstalled("sd15")).toBe(false);
+  });
+
+  it("a repo-shipped model needs the weight file the driver loads BY NAME", () => {
+    // TripoSR's driver asks for model.ckpt + config.yaml. A cache holding only
+    // the config is not a usable install.
+    venv();
+    marker("triposr");
+    mkdirSync(join(dir, "src", "triposr", "tsr"), { recursive: true });
+    writeFileSync(join(dir, "src", "triposr", "tsr", "system.py"), "# TSR\n");
+    weightFile("triposr", join("snapshots", "rev1", "config.yaml"), "cfg");
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    expect(runner.isModelInstalled("triposr")).toBe(false);
+    weightFile("triposr", join("snapshots", "rev1", "model.ckpt"), "ckpt-bytes");
+    expect(runner.isModelInstalled("triposr")).toBe(true);
+  });
+
+  it("a repo-shipped model needs its cloned source too", () => {
+    fullyInstall("triposr");
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    expect(runner.isModelInstalled("triposr")).toBe(true);
+    rmSync(join(dir, "src", "triposr"), { recursive: true, force: true });
+    expect(runner.isModelInstalled("triposr")).toBe(false);
+  });
+
+  it("an empty marker file is not an installation", () => {
+    fullyInstall("sd15");
+    writeFileSync(join(dir, ".installed-sd15"), "");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+  });
+
+  it("GUARD: the venv is still required — weights alone are not an installation", () => {
+    fullyInstall("sd15");
+    rmSync(join(dir, "venv"), { recursive: true, force: true });
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+  });
+
+  it("install fetches the weights, so a finished install can be a ready one", async () => {
+    const { spawn, calls } = spawnOk();
+    const result = await new LocalModelRunner(spawn).install(getModelSpec("sd15")!);
+    expect(result.ok).toBe(true);
+    const fetch = calls.find((c) => c.args.some((a) => a.endsWith("fetch_weights.py")));
+    expect(fetch, "install never fetched the weights").toBeDefined();
+    expect(fetch!.args).toContain(getModelSpec("sd15")!.weightsRef);
+  });
+
+  it("a failed weights download is an honest failure, not a marker", async () => {
+    // Everything up to the download works; the download itself does not.
+    const spawn: SpawnImpl = async (_cmd, args) =>
+      args.some((a) => a.endsWith("fetch_weights.py"))
+        ? { code: 1, stdout: "", stderr: "OSError: connection reset" }
+        : { code: 0, stdout: "ok", stderr: "" };
+    const result = await new LocalModelRunner(spawn).install(getModelSpec("sd15")!);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toMatch(/weights/i);
+    expect(existsSync(join(dir, ".installed-sd15"))).toBe(false);
   });
 });

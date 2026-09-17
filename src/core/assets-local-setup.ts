@@ -37,7 +37,7 @@ export async function runAssetsLocalSetup(options: AssetsLocalSetupOptions = {})
   for (const m of catalog) {
     const mark = m.supported ? "✓" : "✗";
     const installed = runner.isModelInstalled(m.id) ? " [installed]" : "";
-    const why = m.supported ? "" : m.requiresCuda ? "  (needs CUDA)" : `  (needs ≥${m.minRamGb} GB RAM)`;
+    const why = m.supported ? "" : `  (needs ≥${m.minRamGb} GB RAM)`;
     console.log(`  ${mark} ${m.id.padEnd(13)} ${m.kind.padEnd(13)} ${m.license.padEnd(14)} ${m.blurb}${why}${installed}`);
   }
   console.log("");
@@ -56,7 +56,7 @@ export async function runAssetsLocalSetup(options: AssetsLocalSetupOptions = {})
       return 1;
     }
     if (!supported.some((m) => m.id === spec.id)) {
-      console.error(`'${spec.id}' is not supported on this device (needs ≥${spec.minRamGb} GB RAM${spec.requiresCuda ? " + CUDA" : ""}).`);
+      console.error(`'${spec.id}' is not supported on this device (needs ≥${spec.minRamGb} GB RAM on Apple Silicon).`);
       return 1;
     }
     toInstall = [spec.id];

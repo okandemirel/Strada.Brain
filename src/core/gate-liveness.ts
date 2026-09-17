@@ -12,7 +12,7 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { deflateSync } from "node:zlib";
 import {
   assessBuiltAsSpecified,
@@ -22,7 +22,7 @@ import {
 import { assessSpecScope, findDesignDoc } from "../agents/autonomy/spec-scope.js";
 import { realLocalAvailability } from "../agents/tools/unity/sprite-generate.js";
 import { LOCAL_MODEL_CATALOG, defaultModelFor } from "../assets-local/model-catalog.js";
-import { LocalModelRunner } from "../assets-local/local-model-runner.js";
+import { LocalModelRunner, hfWeightsDir } from "../assets-local/local-model-runner.js";
 import { bindSprite, placePrefab, prefabRoot } from "../agents/tools/unity/scene-binding.js";
 
 export interface GateProbe {
@@ -201,7 +201,19 @@ export function probeGateLiveness(): GateProbe[] {
         must(!new LocalModelRunner().isModelInstalled(anySpec!.id), "the runner saw a marker in an empty root");
         put(fake, "venv/bin/python3", "");
         put(fake, `.installed-${anySpec!.id}`, "probe\n");
-        must(new LocalModelRunner().isModelInstalled(anySpec!.id), "the runner did not see the installed marker");
+        // A marker is NOT an installation since item 2.15: the weights have to
+        // be on disk. The probe proves BOTH directions — marker-without-weights
+        // is false, marker-with-weights is true — so a weight check that always
+        // answered "present" would fail here too.
+        must(
+          !new LocalModelRunner().isModelInstalled(anySpec!.id),
+          "the runner called a model with no weights installed",
+        );
+        const cached = relative(fake, join(hfWeightsDir(anySpec!.weightsRef), "snapshots", "probe"));
+        for (const name of anySpec!.weightFiles ?? ["unet/diffusion_pytorch_model.safetensors"]) {
+          put(fake, join(cached, name), "weights\n");
+        }
+        must(new LocalModelRunner().isModelInstalled(anySpec!.id), "the runner did not see the installed model");
         if (spec !== undefined) {
           must(realLocalAvailability()("text-to-image"), `availability said false with venv and .installed-${spec.id} present`);
         }
@@ -210,10 +222,10 @@ export function probeGateLiveness(): GateProbe[] {
         else process.env["STRADA_ASSETS_LOCAL_ROOT"] = previous;
       }
       if (spec === undefined) {
-        return `catalog offers no text-to-image model on this device (availability is false by design); runner marker path proven with ${anySpec!.id}`;
+        return `catalog offers no text-to-image model on this device (availability is false by design); runner marker+weights path proven with ${anySpec!.id}`;
       }
       const installed = new LocalModelRunner().isModelInstalled(spec.id);
-      return `turns true with a marker, false without; this machine: ${installed ? "installed" : "not installed"} (${spec.id})`;
+      return `turns true with a marker AND cached weights, false without either; this machine: ${installed ? "installed" : "not installed"} (${spec.id})`;
     }));
 
     probes.push(probe("scene binding (bind + place)", () => {

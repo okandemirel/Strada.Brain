@@ -12,6 +12,12 @@
  * open-source pipeline. SDXL 1.0 base is OpenRAIL++-M (commercial use
  * allowed with restrictions), FLUX.1-schnell is Apache-2.0, TripoSR is MIT,
  * SD 1.5 is OpenRAIL.
+ *
+ * Item 2.15 (2026-09-17): TRELLIS and Hunyuan3D were removed. They were
+ * flagged `requiresCuda`, nothing in this codebase ever probed for CUDA, the
+ * device filter could not offer them on any platform, and the runner's only
+ * image-to-3d driver is TripoSR's. A menu entry nothing can install or run is
+ * a promise the product cannot keep.
  */
 
 import { totalmem } from "node:os";
@@ -45,16 +51,19 @@ export interface LocalModelSpec {
   readonly repoUrl?: string;
   /** Path to the requirements file inside the cloned repo. */
   readonly repoRequirements?: string;
-  /** HF repo or URL the runner pulls weights from at first run. */
+  /** HF repo the runner pulls weights from at INSTALL time (item 2.15). */
   readonly weightsRef: string;
   /** Relative speed on Apple Silicon (menu hint). */
   readonly speedHint: "fast" | "medium" | "slow";
   /**
-   * Requires CUDA-only kernels (custom ops compiled for NVIDIA). TRELLIS and
-   * Hunyuan3D ship CUDA-tuned ops that do not run on Apple Silicon's MPS —
-   * they stay on the menu for CUDA machines but are never offered on Mac.
+   * The weight file(s) the inference driver loads BY NAME, when it loads named
+   * files rather than a whole pipeline folder (TripoSR:
+   * `TSR.from_pretrained(..., config_name="config.yaml", weight_name="model.ckpt")`).
+   * The runner fetches exactly these at install time and requires them on disk
+   * before it will call the model installed (item 2.15). Absent = the model
+   * ships as a diffusers pipeline folder and the whole folder is fetched.
    */
-  readonly requiresCuda?: boolean;
+  readonly weightFiles?: readonly string[];
 }
 
 export interface DeviceCapability {
@@ -95,38 +104,13 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     diskGb: 5,
     pipPackages: [],
     weightsRef: "stabilityai/TripoSR",
+    // Exactly what img2mesh.py asks TSR.from_pretrained for.
+    weightFiles: ["config.yaml", "model.ckpt"],
     speedHint: "fast",
     installMethod: "repo",
     repoUrl: "https://github.com/VAST-AI-Research/TripoSR.git",
     repoRequirements: "requirements.txt",
   },
-  {
-    id: "trellis",
-    kind: "image-to-3d",
-    label: "TRELLIS — higher-quality image to 3D",
-    blurb: "Better geometry and texture than TripoSR, heavier and slower.",
-    license: "MIT",
-    minRamGb: 16,
-    diskGb: 12,
-    pipPackages: ["torch", "torchvision", "trellis"],
-    weightsRef: "microsoft/TRELLIS-image-large",
-    speedHint: "slow",
-    requiresCuda: true,
-  },
-  {
-    id: "hunyuan3d",
-    kind: "image-to-3d",
-    label: "Hunyuan3D 2 — text/image to textured 3D",
-    blurb: "The open-weights ceiling: textured meshes with PBR maps.",
-    license: "Tencent Hunyuan Community",
-    minRamGb: 24,
-    diskGb: 20,
-    pipPackages: ["torch", "torchvision", "hunyuan3d"],
-    weightsRef: "tencent/Hunyuan3D-2",
-    speedHint: "slow",
-    requiresCuda: true,
-  },
-
   // ---- 2D (text → image) ----
   {
     id: "sd15",
@@ -174,13 +158,18 @@ export function getModelSpec(id: string): LocalModelSpec | undefined {
  * What this device may install: every model whose RAM bar clears, smallest
  * first. Apple Silicon is required for all of them (the MPS backend); on
  * anything else the menu is empty and the cloud/procedural tiers take over.
+ *
+ * Item 2.15: this filter used to also exclude `requiresCuda` rows on Apple
+ * Silicon while offering nothing whatsoever off it — so the two CUDA-only
+ * entries (TRELLIS, Hunyuan3D) could not be reached on ANY device, no code
+ * ever probed for CUDA, and the only image-to-3d driver the runner ships
+ * loads TripoSR's `tsr.system`. They were removed rather than given a
+ * probe: an honest menu lists what this runner can actually drive.
  */
 export function supportedModels(device: DeviceCapability = probeDevice()): LocalModelSpec[] {
+  if (!device.appleSilicon) return [];
   return LOCAL_MODEL_CATALOG
     .filter((m) => device.totalRamGb >= m.minRamGb)
-    // CUDA-only models are never offered on Apple Silicon; on non-Apple
-    // machines nothing is offered at all (this catalog targets MPS).
-    .filter((m) => (device.appleSilicon && !m.requiresCuda) || (!device.appleSilicon && false))
     .sort((a, b) => a.minRamGb - b.minRamGb);
 }
 
