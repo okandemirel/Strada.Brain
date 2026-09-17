@@ -426,6 +426,31 @@ export class LearningStorage {
       CREATE INDEX IF NOT EXISTS idx_lifecycle_log_instinct ON instinct_lifecycle_log(instinct_id, timestamp DESC);
     `);
 
+    // THE LEDGER'S MISSING HALF (plan 6.4). The lifecycle log says WHEN a
+    // rule's status changed; nothing said which RUNS the rule influenced or
+    // how those runs ended. Credit was settled from the run's terminal verdict
+    // (D40) out of an in-memory map and left no row anywhere, and
+    // trajectory_instincts is written with an empty set by every production
+    // caller — so "this guidance was applied in 9 runs, the last 4 failed" was
+    // unanswerable, and a wrong rule could only be found by noticing it.
+    // One row per (run, instinct) settlement, with the confidence it moved.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS instinct_credit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instinct_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        task_run_id TEXT,
+        success INTEGER NOT NULL,
+        verdict_score REAL NOT NULL,
+        source TEXT NOT NULL,
+        confidence_before REAL NOT NULL,
+        confidence_after REAL NOT NULL,
+        status_at TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_credit_log_instinct ON instinct_credit_log(instinct_id, timestamp DESC);
+    `);
+
     // Phase 6: Create weekly counters table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS instinct_weekly_counters (
@@ -1408,6 +1433,11 @@ export class LearningStorage {
   mergeInstincts(winnerId: string, loserId: string): void {
     this.ensureConnection();
 
+    // The loser's own numbers, read BEFORE the update, so the ledger row says
+    // what it was worth when it was superseded.
+    const loser = this.getInstinct(loserId as InstinctId);
+    const now = Date.now();
+
     const merge = this.db!.transaction(() => {
       // Transfer loser's scopes to winner (INSERT OR IGNORE avoids duplicates)
       this.db!.prepare(
@@ -1417,7 +1447,30 @@ export class LearningStorage {
       // Soft-retire the loser, naming the successor that superseded it (D43).
       this.db!.prepare(
         "UPDATE instincts SET status = 'deprecated', evolved_to = ?, updated_at = ? WHERE id = ?"
-      ).run(winnerId, Date.now(), loserId);
+      ).run(winnerId, now, loserId);
+
+      // …AND SAY SO IN THE LIFECYCLE LOG (plan 6.4). Promotion, cooling,
+      // deprecation and quarantine all logged their transition; a supersede
+      // logged nothing, so the one status change a reader is most likely to
+      // ask about ("why is this deprecated? I never retired it") had no entry
+      // and the ledger's timeline simply skipped it.
+      if (loser) {
+        this.db!.prepare(`
+          INSERT INTO instinct_lifecycle_log
+          (instinct_id, from_status, to_status, reason, confidence_at_transition, bayesian_alpha, bayesian_beta, observation_count, timestamp)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          loserId,
+          loser.status,
+          "deprecated",
+          `Superseded by ${winnerId}: merged as a duplicate and soft-retired`,
+          loser.confidence,
+          loser.bayesianAlpha ?? 1,
+          loser.bayesianBeta ?? 1,
+          (loser.stats?.timesApplied ?? 0) + (loser.stats?.timesFailed ?? 0),
+          now,
+        );
+      }
     });
 
     merge();
@@ -2015,6 +2068,192 @@ export class LearningStorage {
       observationCount: row.observation_count,
       timestamp: row.timestamp,
     }));
+  }
+
+  // ─── Credit Ledger Operations (plan 6.4) ───────────────────────────────────
+
+  /**
+   * One run's settled credit for one instinct.
+   *
+   * `source` is the honest part: "terminal" means the run's own terminal
+   * verdict decided this, "observed" means the caller knew no terminal verdict
+   * and the worst evidence seen during the run was used instead. A reader must
+   * never have to guess which.
+   */
+  recordInstinctCredit(entry: {
+    instinctId: string;
+    sessionId: string;
+    taskRunId?: string;
+    success: boolean;
+    verdictScore: number;
+    source: "terminal" | "observed";
+    confidenceBefore: number;
+    confidenceAfter: number;
+    statusAt: string;
+    timestamp: number;
+  }): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO instinct_credit_log
+      (instinct_id, session_id, task_run_id, success, verdict_score, source,
+       confidence_before, confidence_after, status_at, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.instinctId,
+      entry.sessionId,
+      entry.taskRunId ?? null,
+      entry.success ? 1 : 0,
+      entry.verdictScore,
+      entry.source,
+      entry.confidenceBefore,
+      entry.confidenceAfter,
+      entry.statusAt,
+      entry.timestamp,
+    );
+  }
+
+  /** The runs one instinct influenced, newest first. */
+  getInstinctCredits(options?: { instinctId?: string; since?: number; limit?: number }): InstinctCreditRecord[] {
+    this.ensureConnection();
+    let sql = "SELECT * FROM instinct_credit_log WHERE 1=1";
+    const params: (string | number)[] = [];
+    if (options?.instinctId) {
+      sql += " AND instinct_id = ?";
+      params.push(options.instinctId);
+    }
+    if (options?.since !== undefined) {
+      sql += " AND timestamp >= ?";
+      params.push(options.since);
+    }
+    sql += " ORDER BY timestamp DESC, id DESC";
+    if (options?.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+    const rows = this.db!.prepare(sql).all(...params) as Array<{
+      instinct_id: string;
+      session_id: string;
+      task_run_id: string | null;
+      success: number;
+      verdict_score: number;
+      source: string;
+      confidence_before: number;
+      confidence_after: number;
+      status_at: string;
+      timestamp: number;
+    }>;
+    return rows.map((row) => ({
+      instinctId: row.instinct_id,
+      sessionId: row.session_id,
+      ...(row.task_run_id === null ? {} : { taskRunId: row.task_run_id }),
+      success: row.success === 1,
+      verdictScore: row.verdict_score,
+      source: row.source === "terminal" ? "terminal" : "observed",
+      confidenceBefore: row.confidence_before,
+      confidenceAfter: row.confidence_after,
+      statusAt: row.status_at,
+      timestamp: row.timestamp,
+    }));
+  }
+
+  /** Drop credit rows older than a cutoff; returns how many went. */
+  pruneInstinctCredits(olderThanMs: number): number {
+    this.ensureConnection();
+    const info = this.db!.prepare("DELETE FROM instinct_credit_log WHERE timestamp < ?").run(olderThanMs);
+    return info.changes;
+  }
+
+  /** Every runtime artifact generated FROM this instinct, whatever its state. */
+  getRuntimeArtifactsBySourceInstinct(instinctId: string): RuntimeArtifact[] {
+    this.ensureConnection();
+    const rows = this.db!.prepare(`
+      SELECT * FROM runtime_artifacts
+      WHERE EXISTS (SELECT 1 FROM json_each(source_instinct_ids) WHERE json_each.value = ?)
+      ORDER BY updated_at DESC
+    `).all(instinctId) as RuntimeArtifactRow[];
+    return rows.map((row) => this.rowToRuntimeArtifact(row));
+  }
+
+  /**
+   * RETIRE A PIECE OF GUIDANCE, AND MAKE THE RETIREMENT VISIBLE (plan 6.4).
+   *
+   * The plan's measure for the ledger is how long it takes wrong guidance to
+   * stop having an effect, so this is one atomic action that ends every effect
+   * it can and leaves the record a reader needs:
+   *   - the instinct's status becomes 'deprecated' (or 'quarantined' for one
+   *     that must never come back), which is what the retriever and the
+   *     scope query already exclude;
+   *   - every runtime artifact GENERATED from it is retired too — a rule
+   *     retired while its generated skill stayed active kept having an effect;
+   *   - a lifecycle-log row names the actor and the reason, so afterwards the
+   *     ledger can say when and why it stopped.
+   *
+   * Never silent: an unknown id, or one already retired, is reported as such
+   * rather than answered with a cheerful no-op.
+   */
+  retireInstinct(
+    instinctId: string,
+    opts: { reason: string; actor: string; quarantine?: boolean; now?: number },
+  ): {
+    ok: boolean;
+    detail: string;
+    from?: InstinctStatus;
+    to?: InstinctStatus;
+    retiredArtifacts: string[];
+  } {
+    this.ensureConnection();
+    const instinct = this.getInstinct(instinctId as InstinctId);
+    if (!instinct) {
+      return { ok: false, detail: `no instinct with id ${instinctId}`, retiredArtifacts: [] };
+    }
+    const to: InstinctStatus = opts.quarantine === true ? "quarantined" : "deprecated";
+    if (instinct.status === to) {
+      return {
+        ok: false,
+        detail: `${instinctId} is already ${to} — nothing changed`,
+        from: instinct.status,
+        to,
+        retiredArtifacts: [],
+      };
+    }
+    const now = opts.now ?? Date.now();
+    const reason = `Retired by ${opts.actor}: ${opts.reason}`.slice(0, 500);
+    const artifacts = this.getRuntimeArtifactsBySourceInstinct(instinctId).filter(
+      (a) => a.state === "active" || a.state === "shadow",
+    );
+    const run = this.db!.transaction(() => {
+      this.db!.prepare("UPDATE instincts SET status = ?, updated_at = ? WHERE id = ?").run(to, now, instinctId);
+      for (const artifact of artifacts) {
+        this.db!.prepare(
+          "UPDATE runtime_artifacts SET state = 'retired', retired_at = ?, last_state_reason = ?, updated_at = ? WHERE id = ?",
+        ).run(now, `source instinct retired: ${reason}`.slice(0, 500), now, artifact.id);
+      }
+      this.db!.prepare(`
+        INSERT INTO instinct_lifecycle_log
+        (instinct_id, from_status, to_status, reason, confidence_at_transition, bayesian_alpha, bayesian_beta, observation_count, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        instinctId,
+        instinct.status,
+        to,
+        reason,
+        instinct.confidence,
+        instinct.bayesianAlpha ?? 1,
+        instinct.bayesianBeta ?? 1,
+        (instinct.stats?.timesApplied ?? 0) + (instinct.stats?.timesFailed ?? 0),
+        now,
+      );
+    });
+    run();
+    return {
+      ok: true,
+      detail:
+        `${instinctId}: ${instinct.status} → ${to}` +
+        (artifacts.length > 0 ? `, and ${artifacts.length} generated artifact(s) retired with it` : ""),
+      from: instinct.status,
+      to,
+      retiredArtifacts: artifacts.map((a) => String(a.id)),
+    };
   }
 
   // ─── Weekly Counter Operations ─────────────────────────────────────────────
@@ -2716,4 +2955,25 @@ export interface LearningStats {
   unprocessedObservationCount: number;
   runtimeArtifactCount: number;
   activeRuntimeArtifactCount: number;
+}
+
+// ─── Credit Ledger (plan 6.4) ───────────────────────────────────────────────
+
+/**
+ * One run's settled credit for one instinct — the durable answer to "which
+ * runs did this guidance influence, and how did they end".
+ */
+export interface InstinctCreditRecord {
+  instinctId: string;
+  sessionId: string;
+  taskRunId?: string;
+  success: boolean;
+  verdictScore: number;
+  /** "terminal" = the run's own terminal verdict; "observed" = in-run evidence. */
+  source: "terminal" | "observed";
+  confidenceBefore: number;
+  confidenceAfter: number;
+  /** The instinct's status when the credit settled. */
+  statusAt: string;
+  timestamp: number;
 }

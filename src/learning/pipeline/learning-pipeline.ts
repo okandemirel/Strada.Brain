@@ -273,10 +273,15 @@ export class LearningPipeline {
       const instinct = this.storage.getInstinct(instinctId as InstinctId);
       if (!instinct) continue;
       const outcome = settled ?? observed;
+      // WAS THIS THE RUN'S OWN VERDICT, OR A GUESS FROM WHAT THE RUN SHOWED?
+      // The ledger has to say which; a reader judging a rule by the runs it
+      // influenced must not be shown inferred outcomes as terminal ones.
+      const creditSource = settled ? "terminal" : "observed";
       // Permanent instincts are frozen against confidence updates — but not
       // unaccountable: the run's outcome feeds the quarantine counter.
       if (instinct.status === "permanent") {
         this.recordPermanentEvidence(instinct, outcome.success);
+        this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, instinct.confidence);
         continue;
       }
       // Increment coolingFailures for failures on cooling instincts
@@ -289,6 +294,41 @@ export class LearningPipeline {
         outcome.verdictScore,
       );
       this.updateInstinctStatus(updated);
+      // THE LEDGER ROW (plan 6.4). The settlement moved a rule's confidence
+      // and left no trace of the run that moved it: the pending map is memory
+      // only, and trajectory_instincts is written empty by every production
+      // caller. Without this row "which runs did this guidance influence, and
+      // how did they end" is unanswerable, and a wrong rule is found only by
+      // somebody noticing it.
+      this.recordCreditLedgerSafe(sessionId, instinct, outcome, creditSource, updated.confidence);
+    }
+  }
+
+  /**
+   * Record one settled credit in the audit ledger. Fire-and-forget: a ledger
+   * write must never break a run's teardown.
+   */
+  private recordCreditLedgerSafe(
+    sessionId: string,
+    instinct: Instinct,
+    outcome: { success: boolean; verdictScore: number },
+    source: "terminal" | "observed",
+    confidenceAfter: number,
+  ): void {
+    try {
+      this.storage.recordInstinctCredit({
+        instinctId: String(instinct.id),
+        sessionId,
+        success: outcome.success,
+        verdictScore: outcome.verdictScore,
+        source,
+        confidenceBefore: instinct.confidence,
+        confidenceAfter,
+        statusAt: instinct.status,
+        timestamp: Date.now(),
+      });
+    } catch {
+      // Fire-and-forget: the run's teardown continues either way.
     }
   }
 

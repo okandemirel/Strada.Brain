@@ -426,6 +426,12 @@ registerDaemonCommands(program, () => appResult?.daemonContext);
 import { registerSkillCommands } from "./skills/skill-cli.js";
 registerSkillCommands(program);
 
+// Register the learning ledger (suspects, search, ledger, retire) — plan 6.4.
+// How long wrong guidance keeps having an effect is the measure; these commands
+// are the find -> read -> retire -> verify loop a person needs to shorten it.
+import { registerLearningCommands } from "./learning/ledger-cli.js";
+registerLearningCommands(program);
+
 program.action(async (opts: RootLaunchOptions) => {
   await runRootLauncher(opts);
 });
