@@ -14,7 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -152,6 +152,31 @@ export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
  * connection; past that the answer is "unavailable", not a hung sprint.
  */
 export const RMBG_REPAIR_TIMEOUT_MS = 600_000;
+
+/**
+ * What identifies THIS venv: the interpreter link and pyvenv.cfg as they were
+ * created. A rebuilt venv gets new ones; the same venv keeps them. "" when
+ * there is no venv. (lstat: the interpreter is a symlink to the system
+ * python, whose own mtime never changes when a venv is recreated.)
+ */
+export function venvIdentity(): string {
+  try {
+    const py = lstatSync(venvPython());
+    let cfg = "";
+    try { cfg = String(statSync(join(VENV(), "pyvenv.cfg")).mtimeMs); } catch { /* no cfg in a test venv */ }
+    return `${py.mtimeMs}:${py.ino}:${cfg}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A repair that failed is not retried on the next call (Codex 2026-09-17:
+ * "once" was once per CALL — import fails, pip exits 0, import still fails,
+ * and every sprite paid probe → pip → probe again). Keyed by the venv path
+ * and bound to the venv's identity: a rebuilt venv is tried afresh.
+ */
+const failedRepairs = new Map<string, { identity: string; detail: string }>();
 
 export type SpawnImpl = (
   cmd: string,
@@ -492,6 +517,10 @@ export class LocalModelRunner {
     onProgress?: (line: string) => void,
   ): Promise<{ ok: true } | { ok: false; detail: string }> {
     if (existsSync(RMBG_READY())) return { ok: true };
+    const remembered = failedRepairs.get(VENV());
+    if (remembered !== undefined && remembered.identity === venvIdentity()) {
+      return { ok: false, detail: `${remembered.detail} (repair already attempted for this venv; not retried until it is reinstalled)` };
+    }
     const progress = (line: string): void => {
       onProgress?.(line);
       getLoggerSafe().info(`assets-local: ${line}`);
@@ -509,13 +538,12 @@ export class LocalModelRunner {
       );
       check = install.code === 0 ? await probe() : install;
       if (check.code !== 0) {
-        return {
-          ok: false,
-          detail:
-            `background removal unavailable — the venv cannot import ${BACKGROUND_REMOVAL_PACKAGES.join("/")} and ` +
-            `installing them failed (${(check.stderr || check.stdout).slice(-300).trim() || "no output"}). ` +
-            "Reinstall the model with `strada assets-local-setup --model <id>`, or pass keepBackground: true.",
-        };
+        const detail =
+          `background removal unavailable — the venv cannot import ${BACKGROUND_REMOVAL_PACKAGES.join("/")} and ` +
+          `installing them failed (${(check.stderr || check.stdout).slice(-300).trim() || "no output"}). ` +
+          "Reinstall the model with `strada assets-local-setup --model <id>`, or pass keepBackground: true.";
+        failedRepairs.set(VENV(), { identity: venvIdentity(), detail });
+        return { ok: false, detail };
       }
     }
     try { writeFileSync(RMBG_READY(), new Date().toISOString() + "\n"); } catch { /* marker is a cache */ }

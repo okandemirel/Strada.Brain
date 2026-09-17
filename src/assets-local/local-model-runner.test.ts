@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { LocalModelRunner, RMBG_IMPORT_PROBE, RMBG_REPAIR_TIMEOUT_MS, type SpawnImpl } from "./local-model-runner.js";
@@ -420,6 +420,28 @@ describe("background removal is installed, or repaired, or refused by name (audi
     expect(seq).toEqual(["probe", "pip"]);
     expect(seq).not.toContain("infer");
     expect(existsSync(join(dir, ".rmbg-ready"))).toBe(false);
+  });
+
+  it("a failed repair is remembered per venv: the next call (even from a new runner) spawns nothing, until the venv changes (Codex 2026-09-17)", async () => {
+    existingInstall();
+    const { spawn, seq } = scriptedVenv(false);
+    const spec = getModelSpec("sd15")!;
+    const first = await new LocalModelRunner(spawn).textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(first.ok).toBe(false);
+    expect(seq).toEqual(["probe", "pip"]);
+    const second = await new LocalModelRunner(spawn).textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(second.ok).toBe(false);
+    expect(second.detail).toMatch(/background removal unavailable/);
+    expect(second.detail).toMatch(/already attempted/);
+    expect(seq).toEqual(["probe", "pip"]); // pip once across both calls
+    // Guard: a rebuilt venv (a different interpreter link) is tried afresh.
+    rmSync(join(dir, "venv", "bin", "python3"));
+    writeFileSync(join(dir, "venv", "bin", "python3"), "rebuilt");
+    const t = new Date(Date.now() + 5_000);
+    utimesSync(join(dir, "venv", "bin", "python3"), t, t);
+    const third = await new LocalModelRunner(spawn).textToImage(spec, "a hero", join(dir, "hero.png"), { removeBackground: true });
+    expect(third.ok).toBe(false);
+    expect(seq).toEqual(["probe", "pip", "probe", "pip"]);
   });
 
   it("the batch path refuses the same way, with every job reported missing", async () => {
