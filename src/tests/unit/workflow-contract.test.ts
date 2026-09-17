@@ -1,6 +1,16 @@
 /**
  * CI workflow contract (14F6 / D75).
  *
+ * THESE FIVE TESTS ARE RED ON PURPOSE UNTIL THE WORKFLOW FILES LAND.
+ * The change they describe was written and reviewed here, but the push that
+ * carried everything else was refused for the two files under
+ * .github/workflows: GitHub will not let this OAuth app create or update a
+ * workflow without the `workflow` scope. The diff is saved at
+ * ~/Desktop/strada-workflow-changes.patch — `git apply` it and commit from an
+ * account that has the scope, and these tests go green. Skipping them instead
+ * would turn a real, unlanded change into a green suite, which is the exact
+ * failure this project keeps closing.
+ *
  * Two holes this closes:
  *   - CI type-checked, linted, tested and built, but never started what it
  *     built. `npm run smoke:boot` existed and nothing ran it, so a boot-time
