@@ -212,6 +212,67 @@ export class AutoUpdater {
     return null;
   }
 
+  /**
+   * The package that OWNS an npm-local install (14F4 / D73).
+   *
+   * For an npm-local install the running code is at
+   * `<owner>/node_modules/strada-brain`, which is what `resolveInstallRoot()`
+   * returns — so `npm install strada-brain@…` run there installs the package
+   * into itself and edits the wrong package.json. The owner is the directory
+   * above the NEAREST `node_modules` ancestor, and it has to carry a
+   * package.json for that claim to mean anything.
+   *
+   * Returns the install root itself for a plain project directory (no
+   * node_modules in the path), and null when nothing above it looks like a
+   * package — the caller must not guess a cwd in that case.
+   */
+  static resolveOwningPackageRoot(installRoot: string): string | null {
+    const resolved = path.resolve(installRoot);
+    const segments = resolved.split(path.sep);
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      if (segments[i] !== "node_modules") continue;
+      const owner = segments.slice(0, i).join(path.sep) || path.sep;
+      return fs.existsSync(path.join(owner, "package.json")) ? owner : null;
+    }
+    return fs.existsSync(path.join(resolved, "package.json")) ? resolved : null;
+  }
+
+  /** The strada-brain version the owner currently has installed. */
+  private getInstalledVersionFor(ownerRoot: string): string {
+    const candidates = [
+      path.join(ownerRoot, "node_modules", "strada-brain", "package.json"),
+      path.join(this.installRoot, "package.json"),
+    ];
+    for (const candidate of candidates) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(candidate, "utf-8")) as { version?: string };
+        if (pkg.version) return pkg.version;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+    return "0.0.0";
+  }
+
+  /** The published version for a dist-tag, falling back to `latest`. */
+  private async fetchPublishedVersion(distTag: string): Promise<string | null> {
+    let output = await this.runCommand(
+      "npm",
+      ["view", `strada-brain@${distTag}`, "version"],
+      VERSION_CHECK_TIMEOUT,
+    );
+    let version = AutoUpdater.parseVersionFromOutput(output);
+    if (!version && distTag !== "latest") {
+      output = await this.runCommand(
+        "npm",
+        ["view", "strada-brain@latest", "version"],
+        VERSION_CHECK_TIMEOUT,
+      );
+      version = AutoUpdater.parseVersionFromOutput(output);
+    }
+    return version;
+  }
+
   private static isWithinPath(targetPath: string, parentPath: string): boolean {
     const relative = path.relative(parentPath, targetPath);
     return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -911,17 +972,46 @@ export class AutoUpdater {
     const buildArgs = (t: string) => method === "npm-global"
       ? ["install", "-g", `strada-brain@${t}`]
       : ["install", `strada-brain@${t}`];
-    const cwd = method === "npm-local" ? this.installRoot : undefined;
 
     let rollbackCommand: (() => Promise<void>) | null = null;
+    // For npm-local, every npm command and every backup belongs to the OWNING
+    // package, not to the installed copy the process is running from (14F4/D73).
+    let ownerRoot: string | undefined;
 
     if (method === "npm-local") {
-      const pkgBackup = path.join(this.installRoot, ".strada-update-backup-package.json");
-      const lockBackup = path.join(this.installRoot, ".strada-update-backup-package-lock.json");
-      const nmBackup = path.join(this.installRoot, ".strada-update-backup-node_modules");
-      const pkgPath = path.join(this.installRoot, "package.json");
-      const lockPath = path.join(this.installRoot, "package-lock.json");
-      const nmPath = path.join(this.installRoot, "node_modules", "strada-brain");
+      const resolvedOwner = AutoUpdater.resolveOwningPackageRoot(this.installRoot);
+      if (!resolvedOwner) {
+        if (this.notifyFn) {
+          this.notifyFn(
+            `Cannot update: no package.json owns ${this.installRoot}, so there is no project to install into.`,
+          );
+        }
+        return false;
+      }
+      ownerRoot = resolvedOwner;
+
+      // Compare versions BEFORE touching anything. An npm-local install used to
+      // reinstall on every cycle because nothing ever asked whether the owner
+      // already had the published version.
+      const installedVersion = this.getInstalledVersionFor(ownerRoot);
+      const publishedVersion = await this.fetchPublishedVersion(
+        tag === "latest" ? "latest" : "stable",
+      );
+      if (publishedVersion && !AutoUpdater.isNewerVersion(installedVersion, publishedVersion)) {
+        if (this.notifyFn) {
+          this.notifyFn(
+            `Strada ${installedVersion} in ${ownerRoot} is already at or ahead of the published ${publishedVersion} — nothing to install.`,
+          );
+        }
+        return false;
+      }
+
+      const pkgBackup = path.join(ownerRoot, ".strada-update-backup-package.json");
+      const lockBackup = path.join(ownerRoot, ".strada-update-backup-package-lock.json");
+      const nmBackup = path.join(ownerRoot, ".strada-update-backup-node_modules");
+      const pkgPath = path.join(ownerRoot, "package.json");
+      const lockPath = path.join(ownerRoot, "package-lock.json");
+      const nmPath = path.join(ownerRoot, "node_modules", "strada-brain");
 
       if (fs.existsSync(pkgPath)) {
         fs.copyFileSync(pkgPath, pkgBackup);
@@ -930,9 +1020,14 @@ export class AutoUpdater {
         fs.copyFileSync(lockPath, lockBackup);
       }
       if (fs.existsSync(nmPath)) {
-        fs.renameSync(nmPath, nmBackup);
+        // COPIED, not renamed: nmPath is the directory this process is running
+        // from, and moving it away mid-update breaks every dynamic import the
+        // bootstrap still has ahead of it.
+        fs.rmSync(nmBackup, { recursive: true, force: true });
+        fs.cpSync(nmPath, nmBackup, { recursive: true });
       }
 
+      const rollbackRoot = ownerRoot;
       rollbackCommand = async (): Promise<void> => {
         try {
           if (fs.existsSync(pkgBackup)) {
@@ -947,14 +1042,14 @@ export class AutoUpdater {
             }
             fs.renameSync(nmBackup, nmPath);
           }
-          await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+          await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, rollbackRoot);
         } catch (rollbackErr) {
           if (this.notifyFn) {
             this.notifyFn(`Rollback failed: ${(rollbackErr as Error).message}`);
           }
           throw rollbackErr;
         } finally {
-          this.cleanupNpmBackups();
+          this.cleanupNpmBackups(rollbackRoot);
         }
       };
     } else {
@@ -988,6 +1083,9 @@ export class AutoUpdater {
         };
       }
     }
+
+    // npm-local installs into the owning project; npm-global takes no cwd.
+    const cwd = ownerRoot;
 
     try {
       await this.runCommand("npm", buildArgs(tag), UPDATE_TIMEOUT, cwd);
@@ -1035,11 +1133,12 @@ export class AutoUpdater {
     return true;
   }
 
-  private cleanupNpmBackups(): void {
+  /** Remove update backups from `root` (the OWNING package for npm-local). */
+  private cleanupNpmBackups(root: string = this.installRoot): void {
     const backupFiles = [
-      path.join(this.installRoot, ".strada-update-backup-package.json"),
-      path.join(this.installRoot, ".strada-update-backup-package-lock.json"),
-      path.join(this.installRoot, ".strada-update-backup-node_modules"),
+      path.join(root, ".strada-update-backup-package.json"),
+      path.join(root, ".strada-update-backup-package-lock.json"),
+      path.join(root, ".strada-update-backup-node_modules"),
     ];
     for (const backup of backupFiles) {
       try {
