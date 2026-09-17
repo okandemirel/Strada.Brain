@@ -337,11 +337,15 @@ describe("artifactDigest over a build manifest", () => {
     mkdirSync(android, { recursive: true });
     writeFileSync(join(android, "Game.apk"), "the apk");
     writeFileSync(join(android, "Game.main.obb"), "the data");
+    writeFileSync(join(android, "Game2.main.obb"), "another game's data"); // a neighbour, not a companion (round 4 #10)
     const apk = join(android, "Game.apk");
     const walked = artifactDigest(apk);
     expect(walked).toMatch(HEX);
     writeFileSync(join(android, "Game.main.obb"), "THE DATA");
-    expect(artifactDigest(apk)).not.toBe(walked);
+    const changed = artifactDigest(apk);
+    expect(changed).not.toBe(walked);
+    writeFileSync(join(android, "Game2.main.obb"), "ANOTHER GAME'S DATA");
+    expect(artifactDigest(apk)).toBe(changed);
     writeFileSync(join(android, "Game.apk.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["Game.apk"] }));
     expect(artifactManifest(apk)).toBeUndefined();
     writeFileSync(join(android, "Game.apk.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["Game.apk", "Game.main.obb"] }));

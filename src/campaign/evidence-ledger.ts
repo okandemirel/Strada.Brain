@@ -263,9 +263,8 @@ export function artifactDigest(path: string | undefined): string | undefined {
     // .obb is the game's data, and a manifest-less digest of the .apk alone
     // left it out (round 3 #4).
     if (playerLayoutRoot(path) === path && !statSync(path).isDirectory()) {
-      const stem = basename(path).replace(/\.[^.]+$/u, "");
       for (const entry of readdirSync(dirname(path)).sort()) {
-        if (entry !== basename(path) && entry.startsWith(stem) && /\.obb$/iu.test(entry)) walk(join(dirname(path), entry), "/" + entry);
+        if (isCompanionObb(entry, basename(path))) walk(join(dirname(path), entry), "/" + entry);
       }
     }
     return hash.digest("hex");
@@ -416,7 +415,7 @@ function requiredRuntimeFiles(path: string, base: string, name: string, isDirect
     }
     if (directory) {
       if (isDataDir(entry) || RUNTIME_DIRS.has(entry.toLowerCase())) walk(join(base, entry), entry);
-    } else if (RUNTIME_FILE_RE.test(entry)) {
+    } else if (RUNTIME_FILE_RE.test(entry) || isCompanionObb(entry, name)) {
       required.push(entry);
     }
   }
@@ -431,7 +430,18 @@ const RUNTIME_DIRS = new Set(["monobleedingedge", "build", "templatedata", "plug
 // …and the companions Unity ships beside a player: an Android expansion
 // file (.obb) beside its .apk, the Windows crash handler (Codex 2026-09-17
 // round 3 #4).
-const RUNTIME_FILE_RE = /\.(?:dll|so|dylib|obb)$|^GameAssembly\.|^UnityCrashHandler.*\.exe$/i;
+const RUNTIME_FILE_RE = /\.(?:dll|so|dylib)$|^GameAssembly\.|^UnityCrashHandler.*\.exe$/i;
+
+/**
+ * THIS artifact's expansion files, and no other's: Unity writes
+ * `<Name>.main.obb` / `<Name>.patch.obb` beside `<Name>.apk`. A stem prefix
+ * made `Game2.main.obb` part of `Game.apk` (Codex 2026-09-17 round 4 #10).
+ */
+function isCompanionObb(entry: string, artifactName: string): boolean {
+  const stem = artifactName.replace(/\.[^.]+$/u, "").toLowerCase();
+  const lower = entry.toLowerCase();
+  return lower === `${stem}.main.obb` || lower === `${stem}.patch.obb`;
+}
 /** Unity writes `<Name>_Data` beside a player; the filesystem may serve it in any case. */
 function isDataDir(entry: string): boolean {
   return /_data$/i.test(entry);
