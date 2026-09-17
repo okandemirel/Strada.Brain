@@ -6,6 +6,7 @@
  */
 
 import { parseChannelSpec } from "../channels/channel-spec.js";
+import { indexFrameworkDocs } from "./bootstrap-docrag.js";
 import { withNodeScope } from "../supervisor/node-scope.js";
 import { describeEvidenceShortfall, missingRequiredEvidence } from "../supervisor/required-evidence.js";
 import { existsSync, readFileSync } from "node:fs";
@@ -785,6 +786,15 @@ async function bootstrapImpl(
         logger.info("DocRAG enabled: composite pipeline wraps code + framework docs", {
           packages: packageRoots.map((p) => p.name).join(", "),
         });
+        // …and actually POPULATED: the doc store was constructed and never
+        // initialized or indexed, so doc queries answered nothing until the
+        // rag_index tool was run by hand (audit 05.F1 / D45). Background,
+        // like the code side.
+        void indexFrameworkDocs(docPipeline, packageRoots, logger).catch((err) =>
+          logger.warn("Framework documentation indexing failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
       }
     } catch (docRagError) {
       logger.debug("DocRAG initialization skipped (non-fatal)", {
