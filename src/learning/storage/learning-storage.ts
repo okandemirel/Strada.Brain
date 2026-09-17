@@ -43,6 +43,24 @@ import { createBrand } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
+/**
+ * item 3.1 (audit 04.4 / D42): scope_type/user_id live on instinct_scopes, not on
+ * instincts, so every read that returns an Instinct has to fetch them — otherwise
+ * a user-scoped instinct comes back looking like an unowned project rule.
+ * Narrowest scope wins ('user' before 'project' before 'global'); 'session_hit'
+ * rows are cross-session dedup markers, not scopes. Correlated subqueries (not a
+ * JOIN) so `SELECT DISTINCT i.*` still returns one row per instinct.
+ */
+const NARROWEST_SCOPE_ORDER = `ORDER BY CASE COALESCE(s2.scope_type, 'project')
+      WHEN 'user' THEN 0 WHEN 'project' THEN 1 ELSE 2 END, s2.project_path`;
+const NARROWEST_SCOPE_SUBQUERIES = `
+    (SELECT s2.scope_type FROM instinct_scopes s2
+      WHERE s2.instinct_id = i.id AND COALESCE(s2.scope_type, 'project') != 'session_hit'
+      ${NARROWEST_SCOPE_ORDER} LIMIT 1) AS scope_type,
+    (SELECT s2.user_id FROM instinct_scopes s2
+      WHERE s2.instinct_id = i.id AND COALESCE(s2.scope_type, 'project') != 'session_hit'
+      ${NARROWEST_SCOPE_ORDER} LIMIT 1) AS user_id`;
+
 // ─── Database Schema ────────────────────────────────────────────────────────────
 
 const SCHEMA_SQL = `
@@ -888,7 +906,8 @@ export class LearningStorage {
           factor_recency = ?, factor_consistency = ?, factor_scope_breadth = ?, factor_user_validation = ?, factor_cross_session = ?, trust_level = ?, seed = ?
         WHERE id = ?
       `,
-      getInstinct: `SELECT * FROM instincts WHERE id = ?`,
+      // item 3.1: a single-instinct read carries its scope type and owner.
+      getInstinct: `SELECT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i WHERE i.id = ?`,
       listInstincts: `SELECT * FROM instincts WHERE status = ? ORDER BY confidence DESC`,
       insertTrajectory: `
         INSERT INTO trajectories 
@@ -1072,11 +1091,19 @@ export class LearningStorage {
       instinct.seed ? 1 : 0,
     );
 
-    // Insert scope row when projectPath is provided
+    // Insert scope row when projectPath is provided. item 3.1: the instinct's
+    // own scopeType/userId go into the row — a 'user' instinct stored as a
+    // project row is exactly the leak this closes.
     if (projectPath) {
       this.db!.prepare(
-        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at) VALUES (?, ?, ?)"
-      ).run(instinct.id, projectPath, Date.now());
+        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at, scope_type, user_id) VALUES (?, ?, ?, ?, ?)"
+      ).run(
+        instinct.id,
+        projectPath,
+        Date.now(),
+        instinct.scopeType ?? 'project',
+        instinct.userId ?? null,
+      );
     }
   }
 
@@ -1171,6 +1198,11 @@ export class LearningStorage {
   /**
    * Get instincts filtered by project scope, age, and status.
    * Does NOT modify getInstincts -- this is an independent retrieval path.
+   *
+   * `userId` (item 3.1 / audit 04.4 / D42) is the identity the retrieval happens
+   * for. A scope row of type 'user' that names an owner is returned ONLY to that
+   * owner; a 'user' row that names nobody (written before this fix) stays
+   * reachable, and project/global rows are unaffected.
    */
   getInstinctsForScope(options: {
     projectPath: string;
@@ -1178,6 +1210,7 @@ export class LearningStorage {
     maxAgeDays?: number;
     status?: InstinctStatus[];
     minConfidence?: number;
+    userId?: string;
     eventBus?: IEventBus;
   }): Instinct[] {
     this.ensureConnection();
@@ -1188,8 +1221,16 @@ export class LearningStorage {
       maxAgeDays,
       status = ['active', 'proposed', 'permanent'],
       minConfidence,
+      userId,
       eventBus,
     } = options;
+
+    // The owner clause: another user's private row is never a candidate, with or
+    // without an identity on this side of the call.
+    const ownerSql = userId === undefined
+      ? " AND (COALESCE(s.scope_type, 'project') != 'user' OR s.user_id IS NULL)"
+      : " AND (COALESCE(s.scope_type, 'project') != 'user' OR s.user_id IS NULL OR s.user_id = ?)";
+    const ownerParams: string[] = userId === undefined ? [] : [userId];
 
     // If maxAgeDays and eventBus provided, emit age_expired events for filtered instincts
     if (maxAgeDays !== undefined && eventBus) {
@@ -1211,6 +1252,11 @@ export class LearningStorage {
         }
         // 'all' -- no scope filter on expired query
 
+        // Owner filter (item 3.1) — the age-expiry notice must not name another
+        // user's private instinct either.
+        expiredSql += ownerSql;
+        expiredParams.push(...ownerParams);
+
         // Status filter
         const statusPlaceholders = status.map(() => "?").join(",");
         expiredSql += ` AND i.status IN (${statusPlaceholders})`;
@@ -1231,8 +1277,9 @@ export class LearningStorage {
       }
     }
 
-    // Build the main retrieval query
-    let sql = "SELECT DISTINCT i.* FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE 1=1";
+    // Build the main retrieval query. The scope row's type/owner travel with the
+    // instinct (item 3.1) so the caller sees what it is scoped to.
+    let sql = `SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE 1=1`;
     const params: (string | number)[] = [];
 
     // Scope filter
@@ -1244,6 +1291,10 @@ export class LearningStorage {
       params.push(projectPath);
     }
     // 'all' -- no scope filter (still requires JOIN to ensure at least one scope row)
+
+    // Owner filter (item 3.1)
+    sql += ownerSql;
+    params.push(...ownerParams);
 
     // Age filter with permanent exemption
     if (maxAgeDays !== undefined) {
@@ -1334,6 +1385,13 @@ export class LearningStorage {
   /**
    * Merge two instincts: winner keeps its data, loser's scopes transfer, loser is hard-deleted.
    * Winner keeps its own name/pattern/alpha/beta per locked decision.
+   *
+   * A merge CARRIES the loser's scope, it never widens it (item 3.1 / audit 04.4
+   * / D42): the transfer used to copy project_path only, so a row that said
+   * "alice's private rule in this project" arrived as "this project's rule,
+   * owner nobody" and one person's correction became everybody's. The
+   * OR IGNORE keeps the winner's own row on a conflict, so the merge can never
+   * widen either side.
    */
   mergeInstincts(winnerId: string, loserId: string): void {
     this.ensureConnection();
@@ -1341,7 +1399,7 @@ export class LearningStorage {
     const merge = this.db!.transaction(() => {
       // Transfer loser's scopes to winner (INSERT OR IGNORE avoids duplicates)
       this.db!.prepare(
-        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at) SELECT ?, project_path, created_at FROM instinct_scopes WHERE instinct_id = ?"
+        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at, scope_type, user_id) SELECT ?, project_path, created_at, scope_type, user_id FROM instinct_scopes WHERE instinct_id = ?"
       ).run(winnerId, loserId);
 
       // Hard-delete loser (CASCADE will clean up loser's scope rows)
@@ -2179,7 +2237,7 @@ export class LearningStorage {
   /** Get instincts by scope (joins instincts with instinct_scopes) */
   getInstinctsByScope(scopeType: string, userId?: string, projectPath?: string): Instinct[] {
     this.ensureConnection();
-    let sql = "SELECT DISTINCT i.* FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE s.scope_type = ?";
+    let sql = `SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE s.scope_type = ?`;
     const params: (string | number)[] = [scopeType];
 
     if (userId) {
@@ -2223,7 +2281,7 @@ export class LearningStorage {
 
     if (scopeType) {
       const row = this.db!.prepare(`
-        SELECT DISTINCT i.* FROM instincts i
+        SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i
         INNER JOIN instinct_scopes s ON i.id = s.instinct_id
         WHERE i.trigger_pattern = ? AND s.scope_type = ?
         LIMIT 1
@@ -2318,6 +2376,10 @@ export class LearningStorage {
       factorCrossSession: row.factor_cross_session ?? undefined,
       trustLevel: (row.trust_level as TrustLevel) ?? undefined,
       seed: row.seed ? true : undefined,
+      // item 3.1: the scope row's type and owner, when the query selected them.
+      // Without this every instinct read back looked unscoped and unowned.
+      scopeType: (row.scope_type as Instinct["scopeType"]) ?? undefined,
+      userId: row.user_id ?? undefined,
     };
   }
 
@@ -2542,6 +2604,13 @@ interface InstinctRow {
   factor_cross_session: number | null;
   trust_level: string | null;
   seed: number | null;
+  /**
+   * From instinct_scopes, selected alongside the instinct by the scope-aware
+   * queries (item 3.1). Absent (undefined) on queries that read the instincts
+   * table alone.
+   */
+  scope_type?: string | null;
+  user_id?: string | null;
 }
 
 interface TrajectoryRow {

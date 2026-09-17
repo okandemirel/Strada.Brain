@@ -210,6 +210,12 @@ export interface Instinct {
   readonly seed?: boolean;
   /** Scope type for this instinct */
   readonly scopeType?: ScopeType;
+  /**
+   * Owner of a user-scoped instinct (item 3.1 / audit 04.4 / D42). Set on the
+   * way in by the teaching / correction path and read back from the scope row,
+   * so one person's correction never becomes everybody's rule.
+   */
+  readonly userId?: string;
 }
 
 // --- Learning Pipeline v2 Types ---
@@ -834,6 +840,15 @@ export interface RuntimeArtifactEvaluationRecord {
 
 export interface RuntimeArtifactStats {
   readonly shadowSampleCount: number;
+  /**
+   * Shadow evaluations in which the artifact's guidance was ACTUALLY presented
+   * to the run (rendered into the prompt, or carried by a source instinct the
+   * run was shown). Promotion is measured on these alone — a match that nobody
+   * saw is not evidence that the guidance worked (D41 / audit 04.3a).
+   */
+  readonly exposureCount?: number;
+  /** Of {@link exposureCount}, how many the verifier judged clean. */
+  readonly exposedCleanCount?: number;
   readonly activeUseCount: number;
   readonly cleanCount: number;
   readonly retryCount: number;

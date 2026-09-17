@@ -119,6 +119,12 @@ export function embedderFromProvider(provider: BatchEmbedderLike): EmbedderLike 
 export interface ScopeContext {
   projectPath: string;
   scopeFilter: ScopeFilterMode;
+  /**
+   * Identity the retrieval happens for (item 3.1 / audit 04.4 / D42). User-scoped
+   * instincts owned by somebody else are never candidates; without it the
+   * candidate set holds only shared (project/global) and unowned learning.
+   */
+  userId?: string;
   maxAgeDays?: number;
   recencyBoost: number;   // default 1.0
   scopeBoost: number;     // default 1.1
@@ -224,6 +230,9 @@ export class PatternMatcher {
         projectPath: scope.projectPath,
         scopeFilter: scope.scopeFilter,
         maxAgeDays: scope.maxAgeDays,
+        // item 3.1: whose learning this is. Another user's teaching is not a
+        // candidate for this turn.
+        ...(scope.userId ? { userId: scope.userId } : {}),
         eventBus: this.eventBus,
       });
     } else {
