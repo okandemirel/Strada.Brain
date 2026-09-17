@@ -62,6 +62,17 @@ function payloadChunkId(hit: { payload?: unknown }): string | null {
   return null;
 }
 
+/**
+ * The bare callable name an id or an edge target ends in, with any signature
+ * and generic arity removed: `…::Game.Player.Move(float)` and
+ * `csharp::unresolved::Move` both answer `Move` (plan 3.11).
+ */
+function callableTailOf(id: string): string {
+  const tail = id.split('::').at(-1) ?? '';
+  const withoutSignature = tail.replace(/\(.*\)$/u, '').replace(/`\d+$/u, '');
+  return withoutSignature.split('.').at(-1) ?? '';
+}
+
 export class UnityProjectVault implements IVault {
   readonly id: VaultId;
   readonly kind: 'unity-project' | 'self' | 'knowledge' = 'unity-project';
@@ -469,15 +480,27 @@ export class UnityProjectVault implements IVault {
   async findCallers(symbolId: string): Promise<VaultEdge[]> {
     const direct = this.store.findCallersOf(symbolId);
     if (direct.length) return direct;
+    // A METHOD ID MAY OR MAY NOT CARRY ITS SIGNATURE (plan 3.11). Overloads are
+    // distinct symbols now — Player.Move() and Player.Move(float) — so an id
+    // asked for WITHOUT one ("who calls Player.Move") must still find them, and
+    // an edge that resolved to the signed id must still answer the short name.
+    const short = callableTailOf(symbolId);
+    if (!short) return [];
+    if (!symbolId.includes('(')) {
+      const overloads = this.store
+        .findSymbolsByName(short)
+        .filter((sym) => sym.symbolId.startsWith(symbolId + '(') || sym.symbolId.startsWith(symbolId + '`'));
+      const fromOverloads: VaultEdge[] = [];
+      for (const sym of overloads) fromOverloads.push(...this.store.findCallersOf(sym.symbolId));
+      if (fromOverloads.length) return fromOverloads;
+    }
     // Name-tail fallback for unresolved externs. Cap matches to avoid accidental fan-out
     // when the short name is common (phase2-review I6).
-    const short = symbolId.split('::').at(-1)?.split('.').at(-1) ?? '';
-    if (!short) return [];
     const FALLBACK_LIMIT = 50;
     const out: VaultEdge[] = [];
     for (const e of this.getCachedEdges()) {
       if (e.kind !== 'calls') continue;
-      if (e.toSymbol.endsWith(`::${short}`) || e.toSymbol.endsWith(`.${short}`)) {
+      if (callableTailOf(e.toSymbol) === short) {
         out.push(e);
         if (out.length >= FALLBACK_LIMIT) break;
       }

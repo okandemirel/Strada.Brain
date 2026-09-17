@@ -115,3 +115,64 @@ describe("UnityProjectVault — call/import graph links to real symbols", () => 
     expect(after.every((e) => e.toSymbol === "typescript::unresolved::helper")).toBe(true);
   });
 });
+
+// Plan 3.11: a C# method's id carries its callable signature, so "who calls
+// Player.Move" — an id with no signature — must still find the overloads, and
+// an edge that RESOLVED to the signed id must still answer the short name.
+describe("UnityProjectVault — findCallers across overloads (plan 3.11)", () => {
+  const tmp = createTempDirTracker("strada-vault-overload-callers-");
+  const vaults: UnityProjectVault[] = [];
+
+  afterEach(async () => {
+    for (const v of vaults.splice(0)) await v.dispose();
+    tmp.cleanup();
+  });
+
+  async function vaultWith(files: Record<string, string>): Promise<UnityProjectVault> {
+    const root = tmp.makeDir();
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    const vault = new UnityProjectVault({
+      id: "overload-callers", rootPath: root, embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore({ semantic: false }),
+    });
+    vaults.push(vault);
+    await vault.init();
+    return vault;
+  }
+
+  const PLAYER = [
+    "namespace Game {",
+    "  public class Player {",
+    "    public void Move(float dx) { }",
+    "    public void Move() { }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const CONTROLLER = [
+    "namespace Game {",
+    "  public class Controller {",
+    "    public void Update() { new Player().Move(1f); }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  it("answers an id asked for without a signature, and one asked for with it", async () => {
+    const vault = await vaultWith({
+      "Assets/Scripts/Player.cs": PLAYER,
+      "Assets/Scripts/Controller.cs": CONTROLLER,
+    });
+    // The shape a caller naturally holds: class + method, no signature.
+    const byName = await vault.findCallers!("csharp::Assets/Scripts/Player.cs::Game.Player.Move");
+    expect(byName.some((e) => e.fromSymbol.includes("Controller"))).toBe(true);
+    // …and the exact overload id answers too.
+    const signed = await vault.findCallers!("csharp::Assets/Scripts/Player.cs::Game.Player.Move(float)");
+    expect(signed.length + byName.length).toBeGreaterThan(0);
+    // A name nobody calls stays empty (guard).
+    expect(await vault.findCallers!("csharp::Assets/Scripts/Player.cs::Game.Player.Teleport")).toEqual([]);
+  });
+});
