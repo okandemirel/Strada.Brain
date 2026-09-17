@@ -159,9 +159,20 @@ export class ErrorLearningHooks {
     this.activeErrors.set(errorId, context);
     // Only guidance that actually reached the prompt counts as shown.
     if (recoveryInjection.length > 0 && matches.length > 0) {
-      this.shownGuidance.set(errorId, {
+      const shown = {
         instinctIds: matches.map((m) => String(m.instinct?.id ?? "")).filter((id) => id.length > 0),
         shownAt: Date.now(),
+      };
+      this.shownGuidance.set(errorId, shown);
+      // ROUND 12 #9: the SAME moment reaches the credit ledger's exposure column
+      // for this run's tool events. Without it that column was filled with the
+      // time the serial queue reached the event, and a rule retired in between
+      // read as "applied after it was retired". One notion of "when it was
+      // shown", not two.
+      this.pipeline.noteGuidanceShown({
+        sessionId: String(context.sessionId ?? ""),
+        instinctIds: shown.instinctIds,
+        shownAt: shown.shownAt,
       });
     }
 

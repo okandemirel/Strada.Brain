@@ -220,6 +220,26 @@ export class LearningPipeline {
   private readonly runPendingCredits = new Map<string, Map<string, { success: boolean; verdictScore: number; exposedAt: number }>>();
 
   /**
+   * ROUND 12 #9 — WHEN THE RUN WAS SHOWN THE GUIDANCE, FROM WHERE IT WAS SHOWN.
+   *
+   * Round 11 #8 split exposure from settlement and then filled the exposure
+   * column with `Date.now()` at the moment the tool event was PROCESSED. Tool
+   * events ride the same serial queue as the settlement (#14), so that is the
+   * very clock the fix was written to stop trusting: retire a rule between a
+   * run's exposure and its queued event, and the ledger reports the retired rule
+   * as still being applied — the alarm that is supposed to mean a leak.
+   *
+   * Keyed exactly like the pending credit, by {@link runCreditKey}, and reported
+   * by whoever puts the guidance in front of the model
+   * ({@link noteGuidanceShown}). Nothing here guesses: with no recorded exposure
+   * the tool event's OWN timestamp is used — later than the true exposure but
+   * still a fact from inside the run, never the processing clock.
+   */
+  private readonly runGuidanceShownAt = new Map<string, Map<string, number>>();
+  /** Bound on the exposure map: oldest run's exposures forgotten first. */
+  private static readonly MAX_SHOWN_RUNS = 200;
+
+  /**
    * ROUND 10 #14 — A RUN'S TERMINAL VERDICT IS FINAL, INCLUDING FOR LATE EVENTS.
    *
    * Tool results reach this pipeline through an asynchronous serial queue
@@ -280,6 +300,68 @@ export class LearningPipeline {
   }
 
   /**
+   * ROUND 12 #9 — "THIS GUIDANCE IS NOW IN FRONT OF THE MODEL", reported by
+   * whoever put it there. That moment is the exposure the credit ledger carries,
+   * and the ledger's leak measure ("applied AFTER it was retired") is only
+   * meaningful while it stays that moment and not a queue timestamp.
+   *
+   * Called for the SAME fact the error-recovery hooks already record as
+   * `shownGuidance` (97f7d92d), so there is one notion of "when it was shown"
+   * rather than two. The EARLIEST report for a run wins: a mid-run re-retrieval
+   * showing the same rule again does not move the exposure.
+   */
+  noteGuidanceShown(params: {
+    sessionId: string;
+    /** Which run was shown it (#13). Omitted off-run: the chat is the scope. */
+    taskRunId?: string;
+    instinctIds: readonly string[];
+    /** When it entered the prompt. Defaults to now — the caller IS the prompt. */
+    shownAt?: number;
+  }): void {
+    if (params.instinctIds.length === 0) return;
+    const shownAt = params.shownAt ?? Date.now();
+    const key = LearningPipeline.runCreditKey(params.sessionId, params.taskRunId);
+    let shown = this.runGuidanceShownAt.get(key);
+    if (!shown) {
+      shown = new Map<string, number>();
+      this.runGuidanceShownAt.set(key, shown);
+      while (this.runGuidanceShownAt.size > LearningPipeline.MAX_SHOWN_RUNS) {
+        const oldest = this.runGuidanceShownAt.keys().next();
+        if (oldest.done || oldest.value === key) break;
+        this.runGuidanceShownAt.delete(oldest.value);
+      }
+    }
+    for (const rawId of params.instinctIds) {
+      const id = String(rawId).trim();
+      if (!id) continue;
+      const already = shown.get(id);
+      if (already === undefined || shownAt < already) shown.set(id, shownAt);
+    }
+  }
+
+  /**
+   * When this run was shown `instinctId` (round 12 #9).
+   *
+   * The event's own timestamp is both the fallback and the ceiling: an event that
+   * reports applying a rule proves the run had already been shown it, so the
+   * earlier of the two is the honest answer — and the processing clock is never
+   * consulted. An event with no usable timestamp leaves nothing better than now.
+   */
+  private exposureFor(
+    sessionId: string,
+    runId: string | undefined,
+    instinctId: string,
+    eventTimestamp: unknown,
+  ): number {
+    const fromEvent =
+      typeof eventTimestamp === "number" && Number.isFinite(eventTimestamp) && eventTimestamp > 0
+        ? eventTimestamp
+        : Date.now();
+    const recorded = this.runGuidanceShownAt.get(LearningPipeline.runCreditKey(sessionId, runId))?.get(instinctId);
+    return recorded !== undefined && recorded < fromEvent ? recorded : fromEvent;
+  }
+
+  /**
    * Run teardown: settle this run's pending instinct credit from the run's
    * TERMINAL verdict, then forget the run. Called once per run (the engine's
    * persistTerminal, where the terminal status is already known).
@@ -326,6 +408,9 @@ export class LearningPipeline {
   ): void {
     this.settleRunInstinctCredits(sessionId, terminal, runId);
     this.runPendingCredits.delete(LearningPipeline.runCreditKey(sessionId, runId));
+    // Round 12 #9: the run is over, so what it was shown is no longer an open
+    // fact. Keeping it would date the NEXT run's exposure from this one's prompt.
+    this.runGuidanceShownAt.delete(LearningPipeline.runCreditKey(sessionId, runId));
     this.evictSessionPendingResolutions(sessionId, runId);
   }
 
@@ -481,13 +566,17 @@ export class LearningPipeline {
   private settleLateCredit(
     settled: { sessionId: string; runId: string; terminal: { success: boolean; verdictScore: number }; credited: Set<string> },
     instinctId: string,
+    /**
+     * When the run was SHOWN this rule (round 12 #9). The straggler is arriving
+     * now, but the run saw the rule while it was still running — stamping now was
+     * the same processing-clock mistake, and it made every late event look like a
+     * fresh post-retirement application.
+     */
+    exposedAt: number,
   ): void {
     if (settled.credited.has(instinctId)) return;
     settled.credited.add(instinctId);
-    // r11 #8: the event reporting this application is arriving now, so now is
-    // the exposure. It is genuinely after the run's settlement — the ledger
-    // records both times and lets a reader see that, rather than inferring one.
-    this.applyInstinctCredit(settled.sessionId, settled.runId, instinctId, settled.terminal, "terminal", Date.now());
+    this.applyInstinctCredit(settled.sessionId, settled.runId, instinctId, settled.terminal, "terminal", exposedAt);
   }
 
   /**
@@ -804,7 +893,13 @@ export class LearningPipeline {
         // tears down next.
         const settledRun = this.settledRuns.get(creditKey);
         if (settledRun) {
-          this.settleLateCredit(settledRun, instinctId);
+          this.settleLateCredit(
+            settledRun,
+            instinctId,
+            // r12 #9: dated by the run's exposure / this event, never by the
+            // moment the queue reached the straggler.
+            this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
+          );
           continue;
         }
 
@@ -815,8 +910,17 @@ export class LearningPipeline {
         }
         const already = pending.get(instinctId);
         if (!already) {
-          // r11 #8: the first application in this run IS the exposure.
-          pending.set(instinctId, { success: verdict.success, verdictScore: verdict.verdictScore, exposedAt: Date.now() });
+          // r11 #8: the exposure is a different fact from the settlement.
+          // r12 #9: and it is not NOW. `Date.now()` here was the moment the
+          // serial queue reached this event, so a rule retired between the run's
+          // prompt and its queued event read as "applied after retirement" — the
+          // alarm that is meant to mean a leak. The exposure comes from where the
+          // guidance was shown, falling back to the event's own in-run time.
+          pending.set(instinctId, {
+            success: verdict.success,
+            verdictScore: verdict.verdictScore,
+            exposedAt: this.exposureFor(event.sessionId, runId, instinctId, event.timestamp),
+          });
         } else if (already.success && !verdict.success) {
           // A later failure in the same run downgrades the observed evidence:
           // the FIRST event never decides the run's outcome on its own (D40).
