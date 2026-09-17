@@ -7637,42 +7637,67 @@ function withWorstPerf(last: PlaythroughEvidence, rounds: readonly PlaythroughEv
 }
 
 /** Is `rel`, resolved against the project, inside the project's real path (through existing ancestors)? */
+/** How many symlinks a GDD path may go through before we call it a loop. */
+const MAX_GDD_LINK_HOPS = 8;
+
+/**
+ * Whether `rel`, as a place to WRITE inside `projectRoot`, stays inside it.
+ *
+ * Three rules, each from a defect:
+ * - the LEAF is resolved too: `docs/GDD.md` as a link to /outside/victim.md
+ *   resolved only its parent and the victim was overwritten (round 7 #5);
+ * - a DANGLING link is not a missing path: existsSync follows the link and
+ *   answers false, so `docs/GDD.md → /outside/new.md` passed containment and
+ *   the write created a file outside the project (round 8 #13);
+ * - …but a dangling link whose target is INSIDE the project is legitimate:
+ *   `docs/GDD.md → ../design/GDD.md` with `design/` present and the file not
+ *   written yet was refused, and the document's own path was discarded
+ *   (round 9 #35). The chain is followed, hop by hop, and judged where it
+ *   lands; a loop runs out of hops and fails closed.
+ */
 function pathIsInsideProject(projectRoot: string, rel: string): boolean {
   try {
     const root = realpathSync.native(projectRoot);
-    const target = join(projectRoot, rel);
-    // THE LEAF TOO: docs/GDD.md as a symlink to /outside/victim.md resolved
-    // its parent only and was overwritten (round 7 #5). The nearest existing
-    // path — the leaf when it exists — is resolved, the rest appended.
-    let probe = target;
-    const tail: string[] = [];
-    while (!existsSync(probe)) {
-      // A DANGLING SYMLINK IS NOT A MISSING PATH: existsSync follows the link
-      // and answers false, so docs/GDD.md → /outside/new.md (absent) passed
-      // containment and the write created the file outside the project (Codex
-      // 2026-09-17 round 8 #13). A link whose target cannot be resolved fails
-      // closed.
-      try {
-        if (lstatSync(probe).isSymbolicLink()) return false;
-      } catch {
-        // not a link and not there: an ordinary missing path, walk up
+    let target = join(projectRoot, rel);
+    for (let hop = 0; hop <= MAX_GDD_LINK_HOPS; hop++) {
+      // Walk up to the nearest path that exists, remembering what hung below.
+      let probe = target;
+      const tail: string[] = [];
+      let dangling: string | undefined;
+      while (!existsSync(probe)) {
+        try {
+          if (lstatSync(probe).isSymbolicLink()) {
+            dangling = probe;
+            break;
+          }
+        } catch {
+          // not a link and not there: an ordinary missing path, walk up
+        }
+        tail.unshift(basename(probe));
+        const up = dirname(probe);
+        if (up === probe) return false;
+        probe = up;
       }
-      tail.unshift(basename(probe));
-      const up = dirname(probe);
-      if (up === probe) return false;
-      probe = up;
+      if (dangling !== undefined) {
+        // Follow this link ONE hop and judge where it points, keeping whatever
+        // path hung below it.
+        const dest = readlinkSync(dangling);
+        target = isAbsolute(dest) ? join(dest, ...tail) : join(dirname(dangling), dest, ...tail);
+        continue;
+      }
+      const real = join(realpathSync.native(probe), ...tail);
+      const inside = relative(root, real);
+      if (inside === "") return true;
+      if (isAbsolute(inside)) return false;
+      // By SEGMENT: "..design" is a name, ".." is an escape.
+      return !inside.split(sep).some((segment) => segment === "..");
     }
-    const real = join(realpathSync.native(probe), ...tail);
-    const inside = relative(root, real);
-    if (inside === "") return true;
-    if (isAbsolute(inside)) return false;
-    // By SEGMENT: "..design" is a name, ".." is an escape.
-    return !inside.split(sep).some((segment) => segment === "..");
+    // Out of hops: a loop, or a chain nobody should be writing through.
+    return false;
   } catch {
     return false;
   }
 }
-
 function min2(a: number | undefined, b: number | undefined): number | undefined {
   return a === undefined ? b : b === undefined ? a : Math.min(a, b);
 }

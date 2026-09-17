@@ -62,6 +62,11 @@ describe("windowGdd", () => {
 });
 
 /** Plan 0-B.3: a measured line is evidence only for a requirement it is about. */
+/** The stem a word gets, read through the exported tokenizer. */
+function stemOf(word: string): string {
+  return requirementTokens(`${word} thing: absent`)[0]!;
+}
+
 describe("quoteIsAbout", () => {
   it("stems the requirement's distinctive words and drops its verdict suffix", () => {
     expect(requirementTokens("Save progress across restarts: absent")).toEqual(["sav", "progress", "across", "restart"]);
@@ -105,6 +110,33 @@ describe("quoteIsAbout", () => {
     expect(quoteIsAbout("Analysis view: absent", "landed: Added Assets/UI/Analyses.cs")).toBe(true);
     expect(quoteIsAbout("Progress bar: absent", "landed: Added Assets/UI/Progress.cs")).toBe(true);
     expect(quoteIsAbout("Process queue: absent", "landed: Added Assets/Scripts/Processes.cs")).toBe(true);
+    // Round 9 #33: the -is/-es families are LISTED, so ordinary -xes/-ses
+    // plurals still meet their own singular. "boxes" became "boxis" while
+    // "box" stayed "box", and real implementation evidence was rejected.
+    expect(requirementTokens("Boxes stack: absent")).toContain(stemOf("box"));
+    expect(quoteIsAbout("Boxes stack: absent", "landed: Added Assets/Scripts/Box.cs")).toBe(true);
+    expect(quoteIsAbout("Box stacking: absent", "landed: Added Assets/Scripts/Boxes.cs")).toBe(true);
+    expect(quoteIsAbout("Houses on the map: absent", "landed: Added Assets/Prefabs/House.prefab present")).toBe(true);
+    expect(quoteIsAbout("Lens flares: absent", "landed: Added Assets/Art/Lens.cs")).toBe(true);
+    // …and the listed families still hold, including the -ices ones.
+    expect(requirementTokens("Matrices view: absent")).toContain("matrix");
+    expect(requirementTokens("Vertices count: absent")).toContain("vertex");
+    expect(quoteIsAbout("Matrix math: absent", "landed: Added Assets/Scripts/Matrices.cs")).toBe(true);
+
+    // Round 9 #34: ordinary formulations, not a phrase list. Each of these
+    // returned false because a word ("başarılı", "réussir", "pasar") was not
+    // in the whitelist, so a green suite could not close the requirement.
+    expect(quoteIsAbout("Tüm testler başarılı olmalı: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Tous les tests doivent réussir: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Todas las pruebas deben pasar: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Alle Tests müssen bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("The entire suite must succeed: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    // …and a requirement that names a FEATURE is still not closed by a total,
+    // in any of those languages (the guard the round 7 rule exists for).
+    expect(quoteIsAbout("Tüm testler kaydetmeyi kapsamalı: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Les tests de sauvegarde doivent réussir: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Todas las pruebas de guardado deben pasar: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+
     // Round 8 #15: a suite requirement in another language closes on a suite total.
     expect(quoteIsAbout("Tüm testler geçmeli: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
     expect(quoteIsAbout("Alle Tests bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);

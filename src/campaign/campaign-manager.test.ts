@@ -4475,6 +4475,23 @@ describe("CampaignManager", () => {
       const dangling = manager.startFromGdd({ ...ctx, chatId: "chat-dangling" }, "# GDD\n\nThrough a dangling link.", "docs/Dangling_GDD.md");
       expect(existsSync(join(dir, "absent-victim.md"))).toBe(false);
       expect(dangling.gddPath).toBeUndefined();
+      // Round 9 #35: a dangling link whose target is INSIDE the project is
+      // legitimate — the document has simply not been written yet — and was
+      // refused, losing the path the person gave.
+      mkdirSync(join(projectRoot, "design"), { recursive: true });
+      symlinkSync(join("..", "design", "Inside_GDD.md"), join(projectRoot, "docs", "Inside_GDD.md"));
+      const inside = manager.startFromGdd({ ...ctx, chatId: "chat-inside" }, "# GDD\n\nThrough a contained link.", "docs/Inside_GDD.md");
+      expect(inside.gddPath).toBe("docs/Inside_GDD.md");
+      expect(readFileSync(join(projectRoot, "design", "Inside_GDD.md"), "utf8")).toBe("# GDD\n\nThrough a contained link.");
+      // A chain of contained links is followed too…
+      symlinkSync(join("..", "docs", "Inside_GDD.md"), join(projectRoot, "design", "Chained_GDD.md"));
+      const chained = manager.startFromGdd({ ...ctx, chatId: "chat-chained" }, "# GDD\n\nChained.", "design/Chained_GDD.md");
+      expect(chained.gddPath).toBe("design/Chained_GDD.md");
+      // …and a LOOP runs out of hops instead of spinning.
+      symlinkSync(join(projectRoot, "docs", "LoopB_GDD.md"), join(projectRoot, "docs", "LoopA_GDD.md"));
+      symlinkSync(join(projectRoot, "docs", "LoopA_GDD.md"), join(projectRoot, "docs", "LoopB_GDD.md"));
+      const looped = manager.startFromGdd({ ...ctx, chatId: "chat-loop" }, "# GDD\n\nLoop.", "docs/LoopA_GDD.md");
+      expect(looped.gddPath).toBeUndefined();
       mkdirSync(join(projectRoot, "..design"), { recursive: true });
       const dotted = manager.startFromGdd({ ...ctx, chatId: "chat-dotted" }, "# GDD\n\nDotted.", "..design/GDD.md");
       expect(dotted.gddPath).toBe("..design/GDD.md");

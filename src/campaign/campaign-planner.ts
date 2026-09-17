@@ -779,20 +779,43 @@ const REQUIREMENT_STOPWORDS = new Set([
  * "saver" (ScreenSaver.png) does not meet "save" and "leverage" does not
  * meet "level" (Codex 2026-09-17 round 6 #1, #2).
  */
-const IRREGULAR_STEMS: Record<string, string> = { mice: "mous", children: "child", feet: "foot", teeth: "tooth", geese: "goos", men: "man", women: "woman", lives: "lif", knives: "knif" };
+/**
+ * Words whose plural the suffix rules cannot reach.
+ *
+ * The -is/-es pairs are LISTED, not inferred: a general "-ses → -sis" rule
+ * turned `houses` into `housis` while `house` stemmed to `hous`, and
+ * "-xes → -xis" turned `boxes` into `boxis` while `box` stayed `box` — so
+ * ordinary plurals stopped matching their own singular and real
+ * implementation evidence was rejected (Codex 2026-09-17 round 9 #33). Only
+ * words that genuinely take -is in the singular belong here.
+ */
+const IRREGULAR_STEMS: Record<string, string> = {
+  mice: "mous", children: "child", feet: "foot", teeth: "tooth", geese: "goos",
+  men: "man", women: "woman", lives: "lif", knives: "knif",
+  // Greek/Latin -is → -es (round 8 #14): both forms meet at the singular.
+  analysis: "analysis", analyses: "analysis",
+  axis: "axis", axes: "axis",
+  crisis: "crisis", crises: "crisis",
+  thesis: "thesis", theses: "thesis",
+  hypothesis: "hypothesis", hypotheses: "hypothesis",
+  diagnosis: "diagnosis", diagnoses: "diagnosis",
+  parenthesis: "parenthesis", parentheses: "parenthesis",
+  synopsis: "synopsis", synopses: "synopsis",
+  // …and -x → -ices, which no suffix rule reaches either.
+  matrix: "matrix", matrices: "matrix",
+  vertex: "vertex", vertices: "vertex",
+  index: "index", indices: "index", indexes: "index",
+  appendix: "appendix", appendices: "appendix",
+};
 function stemWord(word: string): string {
   const irregular = IRREGULAR_STEMS[word];
   if (irregular !== undefined) return irregular;
   // Canonical suffix rules: "progress" and "progresses" meet at "progres",
-  // "mouse" and "mice" at "mous" (Codex 2026-09-17 round 7 #1).
-  // …and a word that ENDS in a double s, or in -is, keeps it: the previous
-  // guard compared a string it had itself forced to end in "ss", so it never
-  // fired and "analysis"/"analyses" and "axis"/"axes" pulled apart (Codex
-  // 2026-09-17 round 8 #14).
+  // "mouse" and "mice" at "mous" (Codex 2026-09-17 round 7 #1). The -is/-es
+  // families are in IRREGULAR_STEMS above: as suffix rules they mangled every
+  // ordinary -xes/-ses plural (round 9 #33).
   let w = word.replace(/ies$/u, "y");
   if (/sses$/u.test(w)) return w.replace(/sses$/u, "ss"); // processes → process
-  if (/(?:sis|ses)$/u.test(w)) return w.replace(/(?:sis|ses)$/u, "sis"); // analysis/analyses → analysis
-  if (/(?:xis|xes)$/u.test(w)) return w.replace(/(?:xis|xes)$/u, "xis"); // axis/axes → axis
   if (/ss$/u.test(w)) return w; // progress, class
   w = w.replace(/(?:ing|ed)$/u, "");
   if (/(?:ch|sh|x|z|s)es$/u.test(w)) w = w.replace(/es$/u, "");
@@ -814,6 +837,37 @@ const SUITE_STEMS = new Set([
   "alle", "ganze", "testfälle", "bestehen", "grün",
   "todas", "todos", "pruebas", "pasan", "verde",
   "tous", "toutes", "réussissent", "vert","test", "tests", "suite", "unit", "playmode", "editmode", "green", "pass", "passes", "passing", "run", "runs", "unfiltered", "whole", "full", "entire", "all", "complete", "coverage", "cover", "clean", "every", "ran", "play", "mode", "edit", "the", "and", "for", "are", "our", "its", "case", "cases"].map(stemWord));
+
+/**
+ * ROOTS, not a phrase list (Codex 2026-09-17 round 9 #34).
+ *
+ * The suite rule demanded that every remaining word be a LISTED word, so
+ * `Tüm testler başarılı olmalı`, `Tous les tests doivent réussir` and
+ * `Todas las pruebas deben pasar` — ordinary formulations in languages the
+ * rule claims to support — could not be closed by a green suite at all. These
+ * are the roots of the two word families that say nothing about WHICH feature:
+ * how much of the suite ("all", "whole") and how it came out ("pass",
+ * "green", "succeed"), with the modal that carries them ("must", "should").
+ * A word outside both families is a feature word and still blocks the close.
+ */
+const SUITE_PREDICATE_ROOTS: readonly string[] = [
+  // quantity: English, Turkish, German, Spanish, French, Italian, Portuguese
+  "all", "alle", "whol", "entir", "everi", "every", "complet", "ganz", "tüm", "bütün",
+  "tod", "tous", "tout", "tutt", "sämtlich",
+  // outcome: pass / succeed / green / ok
+  "pass", "pasa", "pasar", "passa", "geç", "başar", "besteh", "bestand", "erfolg",
+  "réuss", "reuss", "succ", "green", "grün", "verd", "vert", "yeşil",
+  // the modal that carries the outcome
+  "must", "shall", "should", "olmalı", "olmasi", "olması", "doiv", "deb", "muss", "müss", "soll",
+  // the suite subject itself, in its inflected forms
+  "test", "suite", "prueb", "testfäll", "testler", "playmod", "editmod",
+];
+
+/** A word that reports on the suite rather than naming a feature. */
+function isSuitePredicateWord(stem: string): boolean {
+  if (SUITE_STEMS.has(stem)) return true;
+  return SUITE_PREDICATE_ROOTS.some((root) => stem.startsWith(root));
+}
 
 /** The stems of a text's words: Unicode letters, camelCase split BEFORE case folding, paths and dots as separators. */
 function stemsOf(text: string): string[] {
@@ -855,8 +909,8 @@ export function quoteIsAbout(requirement: string, fact: string): boolean {
     const suiteWords = new Set(
       ["test", "tests", "suite", "playmode", "editmode", "testler", "testleri", "testlerin", "testfälle", "pruebas"].map(stemWord),
     );
-    const mentionsSuite = stems.some((w) => suiteWords.has(w));
-    return mentionsSuite && stems.every((w) => SUITE_STEMS.has(w));
+    const mentionsSuite = stems.some((w) => suiteWords.has(w) || w.startsWith("test") || w.startsWith("prueb") || w.startsWith("suite"));
+    return mentionsSuite && stems.every(isSuitePredicateWord);
   }
   const tokens = requirementTokens(requirement);
   if (tokens.length === 0) return false;
