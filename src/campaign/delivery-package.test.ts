@@ -27,6 +27,7 @@ import {
   type DeliveryPieceId,
 } from "./delivery-package.js";
 import type { LedgerRow } from "./evidence-ledger.js";
+import { encodeRequirement } from "./requirement-identity.js";
 import type { CampaignMilestone } from "./types.js";
 
 function milestone(over: Partial<CampaignMilestone> = {}): CampaignMilestone {
@@ -244,6 +245,24 @@ describe("the checklist and the gaps", () => {
     const item = pieceOf(pkg, "checklist").items?.[0];
     expect(item).toMatchObject({ text: "Pigs must flee the player", state: "met", source: "the evidence audit" });
     expect(item?.cause).toContain("the sprint ended failed");
+  });
+
+  it("prints the requirement, never the plan-6.2 identity tail (the reader is a person)", () => {
+    const encoded = encodeRequirement({
+      id: "req-4-abc123",
+      lineage: "req-4-abc123",
+      text: "Pigs must flee the player",
+      gddSha256: "c".repeat(64),
+      gddRevision: 2,
+    });
+    const pkg = assembleDeliveryPackage({
+      campaign: campaign({
+        milestones: [milestone({ id: "m9", title: "Repair — pigs", status: "completed", coverageGap: encoded, coverageClosed: true })],
+      }),
+    });
+    const item = pieceOf(pkg, "checklist").items?.[0];
+    expect(item?.text).toBe("Pigs must flee the player");
+    expect(renderDeliveryPackage(pkg)).not.toContain("rid:");
   });
 
   it("lists the GDD's own numbers with the state the claim check gave them", () => {

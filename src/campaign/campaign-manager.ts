@@ -34,6 +34,7 @@ import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { COVERAGE_ASK_WINDOW } from "./campaign-planner.js";
+import { decodeRequirement, requirementText } from "./requirement-identity.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
@@ -574,6 +575,14 @@ function coverageGapOf(m: { title: string; prompt?: string; coverageGap?: string
  * reconciliation and closure.
  */
 export function requirementKey(text: string): string {
+  // AN IDENTITY OUTRANKS THE WORDING (plan 6.2). Once a requirement carries
+  // a stable id, that id — its lineage, so a reworded requirement keeps the
+  // history of what was proven about it — is the identity everywhere:
+  // scheduling, the repair budget, reconciliation and closure. A requirement
+  // stored before identities existed decodes to none and keeps the wording
+  // rule below, so a campaign mid-flight does not re-open its gaps.
+  const identity = decodeRequirement(text).identity;
+  if (identity) return `req:${identity.lineage ?? identity.id}`;
   // A REQUIREMENT IS NOT ITS DIAGNOSTICS. The whole text was the identity, so
   // the same missing capability reported as "…audio generator unavailable,
   // attempt 1" and "…attempt 2" were two different requirements: each
@@ -5923,15 +5932,18 @@ export class CampaignManager {
   /** One gap, one sprint — the audit's list is a ladder, not a prompt. */
   private gapSprint(campaign: Campaign, round: number, index: number, item: string): CampaignMilestone {
     const gddRef = campaign.gddPath ?? "the GDD";
+    // The id travels in the PERSISTED requirement, never in what a worker or a
+    // person reads: the title and the prompt carry the requirement itself.
+    const shown = requirementText(item);
     return {
       id: index === 0 ? `mcov${round}` : `mcov${round}-${index + 1}`,
-      title: `Coverage completion ${round}.${index + 1} — ${item.slice(0, 60)}`,
+      title: `Coverage completion ${round}.${index + 1} — ${shown.slice(0, 60)}`,
       // The requirement IN FULL, because the title is truncated and identity
       // by prefix merged different requirements (Codex 2026-09-11 J#13).
       coverageGap: item,
       prompt: [
         `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
-        `- ${item}`,
+        `- ${shown}`,
         "",
         `Implement it exactly as ${gddRef} specifies it, following the project's existing module pattern. This sprint is this one item; the other gaps have their own sprints.`,
         "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
@@ -6316,7 +6328,14 @@ export class CampaignManager {
       return undefined;
     }
     try {
-      const missing = await this.planner.auditCoverage(gddText, campaign.milestones);
+      const missing = await this.planner.auditCoverage(gddText, campaign.milestones, {
+        // Plan 6.2: every named requirement gets a stable id plus the GDD
+        // revision it was read from, so a rewording is a reworded requirement
+        // and not a brand new one.
+        identity: true,
+        ...(campaign.gddSha256 ? { gddSha256: campaign.gddSha256 } : {}),
+        ...(campaign.gddRevision === undefined ? {} : { gddRevision: campaign.gddRevision }),
+      });
       // THE AUDIT RAN, so the requirements are established again: whatever it
       // found replaces the queue nobody could read. The flag is a column now
       // (Codex 2026-09-13 AF#2), so it would otherwise outlive its cause.

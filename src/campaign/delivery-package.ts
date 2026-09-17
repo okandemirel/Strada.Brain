@@ -28,6 +28,7 @@
  */
 
 import Database from "better-sqlite3";
+import { requirementText } from "./requirement-identity.js";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -546,7 +547,9 @@ function checklistItems(campaign: DeliveryCampaignFacts): DeliveryItem[] {
     // A repair sprint exists to close ONE requirement; its own status is not
     // that requirement's verdict (Codex 2026-09-12 V#7), so the closure is
     // stated as what it is.
-    const text = m.coverageGap ?? m.title;
+    // The requirement as a person reads it: the plan-6.2 identity tail is
+    // carriage, not part of what was asked for.
+    const text = m.coverageGap === undefined ? m.title : requirementText(m.coverageGap);
     const source = `sprint ${m.id}`;
     if (m.coverageGap !== undefined && m.coverageClosed === true) {
       items.push({
