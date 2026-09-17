@@ -22,13 +22,34 @@
  *   --memory-root <dir>    where the `memory` root is restored to
  *   --strada-home <dir>    where the `strada-home` root is restored to
  *   --user-home <dir>      where the `user-home` root is restored to
+ *   --project-root <dir>   the project whose `.strada` holds the project databases
  *   --dry-run              print the plan, touch nothing
  *   --skip-checksums       do not verify the .sha256 sidecars backup.sh wrote
+ *   --allow-attached-users swap the files even though a database is still open
  *
  * Checksums are verified BEFORE anything is overwritten, and a file with no
  * sidecar is reported as `not verified` rather than as verified — restoring a
  * silently-corrupt copy over a live database is the one failure mode a restore
  * must not have.
+ *
+ * Round 12 closed three holes in that:
+ *
+ *   - #23: every root could be redirected EXCEPT the project's. A project owns
+ *     `<projectRoot>/.strada/delivery-packages.db` — every delivery revision a
+ *     reviewer can still open — and restoring onto another machine wrote it back
+ *     to the absolute directory the backup was taken from, which on the new
+ *     machine is somebody else's path or nothing at all. `--project-root` maps it.
+ *
+ *   - #19: the MANIFEST is what says where every byte goes, and its own
+ *     `.sha256` sidecar — which backup.sh writes, because the manifest is one of
+ *     the files the helper prints — was never verified. Nor was the archive's.
+ *     A member whose bytes are untouched passes every member check while the
+ *     manifest that places it has been rewritten, so both sidecars are verified
+ *     here, before anything is extracted or replaced.
+ *
+ *   - #22: a restore renames databases out from under whatever has them open.
+ *     The restore API refuses while a database still has a user attached;
+ *     `--allow-attached-users` is the operator's override and says so.
  *
  * Exit codes: 0 restored (or planned, with --dry-run); 1 the restore failed;
  * 2 bad arguments or nothing to restore from.
@@ -46,11 +67,12 @@ const repoRoot = path.resolve(here, "..");
 
 /** Parse argv. Exported so the flag contract is testable without spawning. */
 export function parseRestoreArgs(argv) {
-  const flags = { dryRun: false, skipChecksums: false, roots: {} };
+  const flags = { dryRun: false, skipChecksums: false, allowAttachedUsers: false, roots: {} };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dry-run") { flags.dryRun = true; continue; }
     if (arg === "--skip-checksums") { flags.skipChecksums = true; continue; }
+    if (arg === "--allow-attached-users") { flags.allowAttachedUsers = true; continue; }
     if (!arg.startsWith("--")) throw new Error(`Unexpected argument: ${arg}`);
     const eq = arg.indexOf("=");
     const name = eq > 0 ? arg.slice(2, eq) : arg.slice(2);
@@ -66,11 +88,16 @@ export function parseRestoreArgs(argv) {
       case "memory-root": flags.roots["memory"] = path.resolve(value); break;
       case "strada-home": flags.roots["strada-home"] = path.resolve(value); break;
       case "user-home": flags.roots["user-home"] = path.resolve(value); break;
+      // The PROJECT root is the directory the project databases live UNDER, not
+      // the directory they live in: the root label "project" maps to
+      // `<projectRoot>/.strada` (PROJECT_DATA_DIR). Kept raw here and joined once
+      // the module — which owns that directory name — is loaded (#23).
+      case "project-root": flags.projectRoot = path.resolve(value); break;
       default: throw new Error(`Unknown flag --${name}`);
     }
   }
   if (!flags.archive && !flags.backupDir) {
-    throw new Error("usage: restore.mjs (--archive <tar.gz> | --backup-dir <dir>) [--memory-root <dir>] [--strada-home <dir>] [--user-home <dir>] [--dry-run] [--skip-checksums]");
+    throw new Error("usage: restore.mjs (--archive <tar.gz> | --backup-dir <dir>) [--memory-root <dir>] [--strada-home <dir>] [--user-home <dir>] [--project-root <dir>] [--dry-run] [--skip-checksums] [--allow-attached-users]");
   }
   if (flags.archive && flags.backupDir) {
     throw new Error("Pass --archive or --backup-dir, not both");
@@ -100,31 +127,46 @@ function sha256(file) {
 }
 
 /**
- * Verify every `<file>.sha256` sidecar backup.sh wrote.
+ * Verify one file against the `<file>.sha256` sidecar backup.sh wrote.
  *
- * Returns one row per database: `verified`, `mismatch`, or `no-sidecar`.
- * `no-sidecar` is NOT a pass — the caller prints it as "not verified", because a
- * backup produced by something other than backup.sh has no sidecars at all and
- * pretending otherwise is the false green this project keeps finding.
+ * `absent`, `no-sidecar`, `verified` or `mismatch`. `no-sidecar` is NOT a pass —
+ * the caller prints it as "not verified", because a backup produced by something
+ * other than backup.sh has no sidecars at all and pretending otherwise is the
+ * false green this project keeps finding.
  */
-export function verifyBackupChecksums(backupDir, manifest) {
+export function verifyChecksumSidecar(file, label = path.basename(file)) {
+  if (!existsSync(file)) return { backup: label, state: "absent" };
+  const sidecar = `${file}.sha256`;
+  if (!existsSync(sidecar)) return { backup: label, state: "no-sidecar" };
+  const expected = readFileSync(sidecar, "utf8").trim().split(/\s+/u)[0];
+  const actual = sha256(file);
+  return {
+    backup: label,
+    state: expected === actual ? "verified" : "mismatch",
+    expected,
+    actual,
+  };
+}
+
+/**
+ * Verify every `<file>.sha256` sidecar backup.sh wrote — the MANIFEST included.
+ *
+ * Returns one row per database, per blob, and one for `databases.manifest.json`
+ * itself. That last one is round 12 #19: the manifest is the file that decides
+ * which root every member goes back to and under what name, backup.sh writes a
+ * sidecar for it like any other produced file, and nothing here ever read it. A
+ * manifest edited to point a member at `../../victim` leaves every member's bytes
+ * — and therefore every member's checksum — perfectly intact.
+ */
+export function verifyBackupChecksums(backupDir, manifest, manifestFile = "databases.manifest.json") {
   // Blobs are optional in the manifest (a backup taken before retained
   // attachment bytes existed has none) and are verified exactly like the
   // databases when they are there — backup.sh writes a sidecar per produced file.
-  return [...manifest.databases, ...(manifest.blobs ?? [])].map((entry) => {
-    const file = path.join(backupDir, entry.backup);
-    if (!existsSync(file)) return { backup: entry.backup, state: "absent" };
-    const sidecar = `${file}.sha256`;
-    if (!existsSync(sidecar)) return { backup: entry.backup, state: "no-sidecar" };
-    const expected = readFileSync(sidecar, "utf8").trim().split(/\s+/u)[0];
-    const actual = sha256(file);
-    return {
-      backup: entry.backup,
-      state: expected === actual ? "verified" : "mismatch",
-      expected,
-      actual,
-    };
-  });
+  const rows = [...manifest.databases, ...(manifest.blobs ?? [])].map((entry) =>
+    verifyChecksumSidecar(path.join(backupDir, entry.backup), entry.backup),
+  );
+  rows.push(verifyChecksumSidecar(path.join(backupDir, manifestFile), manifestFile));
+  return rows;
 }
 
 /**
@@ -164,6 +206,24 @@ async function main(argv) {
       process.stderr.write(`restore: archive not found: ${flags.archive}\n`);
       return 2;
     }
+    // The ARCHIVE's own sidecar, before a byte of it is unpacked (#19).
+    // backup.sh writes `<archive>.sha256` and verifies it at creation time; a
+    // restore that never checks it will happily unpack an archive that was
+    // truncated or replaced in transit and then overwrite live databases with it.
+    if (!flags.skipChecksums) {
+      const row = verifyChecksumSidecar(path.resolve(flags.archive));
+      if (row.state === "mismatch") {
+        process.stderr.write(
+          `restore: refusing to restore — ${row.backup} hashes ${row.actual}, its .sha256 says ${row.expected}\n`,
+        );
+        return 1;
+      }
+      console.log(
+        row.state === "verified"
+          ? `restore: archive ${row.backup} checksum-verified`
+          : `restore: archive ${row.backup} NOT VERIFIED (no .sha256 sidecar)`,
+      );
+    }
     workDir = mkdtempSync(path.join(tmpdir(), "strada-restore-"));
     try {
       execFileSync("tar", ["-xzf", path.resolve(flags.archive), "-C", workDir], { stdio: ["ignore", "pipe", "pipe"] });
@@ -191,13 +251,39 @@ async function main(argv) {
       return 2;
     }
     console.log(`restore: using ${source}`);
+    // The manifest's OWN sidecar, before its contents are trusted for anything
+    // (#19). It has to come first: the manifest is what every later check is
+    // derived from, so verifying it afterwards means whichever gate the edit
+    // happens to trip decides the message — and an edit that trips none of them
+    // (a redirected `roots` entry is perfectly well-formed) would never be
+    // checked at all.
+    if (!flags.skipChecksums) {
+      const row = verifyChecksumSidecar(path.join(backupDir, manifestFile), manifestFile);
+      if (row.state === "mismatch") {
+        console.log(`restore:   ${row.backup}: MISMATCH`);
+        process.stderr.write(
+          `restore: refusing to overwrite live databases — ${row.backup} hashes ${row.actual}, ` +
+            `its .sha256 says ${row.expected}: the file that decides where every byte goes has been changed\n`,
+        );
+        return 1;
+      }
+      // A missing sidecar is reported by the rows loop below, with the rest.
+    }
     const manifest = module.readBackupManifest(backupDir);
+    // The project's databases live in `<projectRoot>/.strada`, and the directory
+    // name belongs to the module, not to this script (#23).
+    const roots = { ...flags.roots };
+    if (flags.projectRoot) {
+      const label = module.PROJECT_ROOT_NAME ?? "project";
+      roots[label] = path.join(flags.projectRoot, module.PROJECT_DATA_DIR ?? ".strada");
+      console.log(`restore: project root redirected — ${label} -> ${roots[label]}`);
+    }
     console.log(
       `restore: manifest v${manifest.version} from ${manifest.createdAtIso} — ${manifest.databases.length} database(s), roots: ${Object.entries(manifest.roots).map(([name, dir]) => `${name}=${dir}`).join(", ")}`,
     );
 
     if (!flags.skipChecksums) {
-      const rows = verifyBackupChecksums(backupDir, manifest);
+      const rows = verifyBackupChecksums(backupDir, manifest, manifestFile);
       for (const row of rows) {
         if (row.state === "verified") continue;
         const label = row.state === "no-sidecar" ? "NOT VERIFIED (no .sha256 sidecar)" : row.state.toUpperCase();
@@ -217,7 +303,7 @@ async function main(argv) {
     }
 
     for (const entry of manifest.databases) {
-      const rootPath = flags.roots[entry.root] ?? manifest.roots[entry.root];
+      const rootPath = roots[entry.root] ?? manifest.roots[entry.root];
       console.log(`restore: ${entry.backup} -> ${rootPath ? path.join(rootPath, entry.relative) : `? (no directory for root "${entry.root}")`}`);
     }
 
@@ -226,9 +312,16 @@ async function main(argv) {
       return 0;
     }
 
+    if (flags.allowAttachedUsers) {
+      console.log(
+        "restore: --allow-attached-users — the files will be replaced even if a database is still open; " +
+          "anything holding a connection keeps writing to the file this restore moves aside",
+      );
+    }
     const options = {
       backupDir,
-      ...(Object.keys(flags.roots).length > 0 ? { roots: flags.roots } : {}),
+      ...(Object.keys(roots).length > 0 ? { roots } : {}),
+      ...(flags.allowAttachedUsers ? { allowAttachedUsers: true } : {}),
     };
     // `restoreRuntimeData` puts back the retained attachment BYTES as well as the
     // databases; `restoreRuntimeDatabases` narrows the result to the databases.

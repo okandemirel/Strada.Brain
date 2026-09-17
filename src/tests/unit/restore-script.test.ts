@@ -34,6 +34,7 @@ interface RestoreModule {
     backupDir: string,
     manifest: { databases: Array<{ backup: string }> },
   ) => Array<{ backup: string; state: string }>;
+  verifyChecksumSidecar: (file: string, label?: string) => { backup: string; state: string };
 }
 
 const restore = (await import(pathToFileURL(RESTORE_SCRIPT).href)) as RestoreModule;
@@ -106,11 +107,28 @@ describe("scripts/restore.mjs", () => {
       destDir: backupDir,
     });
     if (options.sidecars) {
-      for (const copy of produced) {
-        fs.writeFileSync(`${copy.destination}.sha256`, `${sha256(copy.destination)}  ${path.basename(copy.destination)}\n`);
+      // backup.sh writes a sidecar for every file the helper PRINTS, and the
+      // manifest is one of them — so the fixture writes that one too, or the
+      // manifest verification round 12 #19 added would have nothing to read.
+      const manifestFile = path.join(backupDir, "databases.manifest.json");
+      for (const copy of [...produced.map((c) => c.destination), manifestFile]) {
+        fs.writeFileSync(`${copy}.sha256`, `${sha256(copy)}  ${path.basename(copy)}\n`);
       }
     }
     return { root, memoryRoot, stradaHome, backupDir, memoryDb, campaignsDb, hubOwnersDb, produced };
+  }
+
+  /** The tar.gz backup.sh produces: a `backup_<timestamp>/` directory inside it. */
+  async function makeArchive(fixture: { root: string; backupDir: string }): Promise<string> {
+    const archiveDir = path.join(fixture.root, "archive-src", "backup_20260918_000000");
+    fs.mkdirSync(path.dirname(archiveDir), { recursive: true });
+    fs.cpSync(fixture.backupDir, archiveDir, { recursive: true });
+    const archive = path.join(fixture.root, "backup_20260918_000000.tar.gz");
+    spawnSync("tar", ["-czf", archive, "-C", path.dirname(archiveDir), path.basename(archiveDir)], {
+      encoding: "utf8",
+    });
+    expect(fs.existsSync(archive)).toBe(true);
+    return archive;
   }
 
   afterEach(() => {
@@ -241,6 +259,155 @@ describe("scripts/restore.mjs", () => {
     expect(restore.findManifestDir(fixture.backupDir)).toBe(fixture.backupDir);
     expect(restore.findManifestDir(path.dirname(fixture.backupDir))).toBe(fixture.backupDir);
     expect(restore.findManifestDir(fixture.memoryRoot)).toBeNull();
+  });
+
+  /**
+   * ROUND 12 #19 — the manifest is the file that decides where every byte goes.
+   *
+   * Its own `.sha256` sidecar (which backup.sh writes for it, because the helper
+   * prints it like every other produced file) was never read. The tamper here is
+   * deliberately one that NOTHING else can catch: a redirected `roots` entry is a
+   * perfectly well-formed manifest, every member's bytes are untouched, so every
+   * member checksum passes — and the restore writes the memory databases into a
+   * directory the operator never named.
+   */
+  it("refuses a manifest whose own sidecar disagrees, before touching a database", async () => {
+    const fixture = await installationWithBackup();
+    const manifestFile = path.join(fixture.backupDir, "databases.manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8")) as {
+      roots: Record<string, string>;
+    };
+    const victimRoot = path.join(fixture.root, "somewhere-else");
+    const victim = path.join(victimRoot, "memory.db");
+    fs.mkdirSync(victimRoot, { recursive: true });
+    fs.writeFileSync(victim, "a file of the operator's that is not a backup destination\n");
+    const victimBytes = fs.readFileSync(victim);
+    manifest.roots["memory"] = victimRoot;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
+    const liveBefore = read(fixture.memoryDb);
+
+    const { code, output } = runRestore(["--backup-dir", fixture.backupDir]);
+
+    // The BYTES first, because they are the finding: the redirected destination
+    // was not written and the real one was not restored over either.
+    expect(fs.readFileSync(victim)).toEqual(victimBytes);
+    expect(read(fixture.memoryDb)).toEqual(liveBefore);
+    expect(code).toBe(1);
+    expect(output).toContain("databases.manifest.json: MISMATCH");
+    expect(output).toContain("refusing to overwrite live databases");
+  });
+
+  it("refuses an archive whose own sidecar disagrees, before unpacking it", async () => {
+    const fixture = await installationWithBackup();
+    const archive = await makeArchive(fixture);
+    // What backup.sh writes beside the archive — with the digest of a DIFFERENT
+    // archive, which is what a truncated or swapped transfer leaves behind.
+    fs.writeFileSync(`${archive}.sha256`, `${"0".repeat(64)}  ${path.basename(archive)}\n`);
+    const live = new Database(fixture.memoryDb);
+    live.exec("DELETE FROM rows_under_test");
+    live.close();
+
+    const { code, output } = runRestore(["--archive", archive]);
+
+    expect(code).toBe(1);
+    expect(output).toMatch(/refusing to restore/u);
+    expect(output).not.toContain("extracted");
+    // Refused, so the rows it would have restored are still missing.
+    expect(read(fixture.memoryDb)).toHaveLength(0);
+  });
+
+  it("reports an archive with no sidecar as NOT VERIFIED rather than verified", async () => {
+    const fixture = await installationWithBackup();
+    const archive = await makeArchive(fixture);
+
+    const { code, output } = runRestore(["--archive", archive]);
+
+    expect(code).toBe(0);
+    expect(output).toContain("NOT VERIFIED (no .sha256 sidecar)");
+  });
+
+  /**
+   * ROUND 12 #22 — a restore renames databases out from under their users.
+   *
+   * Driven through the CLI, because that is what an operator runs: the refusal
+   * has to reach them as a non-zero exit with the live rows still in place, and
+   * the override has to exist for the case where they know better.
+   */
+  it("refuses while a database still has a user attached, and says how to proceed", async () => {
+    const fixture = await installationWithBackup();
+    const live = new Database(fixture.memoryDb);
+    live.pragma("journal_mode = WAL");
+    live.exec("DELETE FROM rows_under_test");
+    live.prepare("INSERT INTO rows_under_test (id, payload) VALUES (7, ?)").run("written while open");
+    try {
+      const refused = runRestore(["--backup-dir", fixture.backupDir]);
+
+      // The rows the attached connection committed are still what the file holds.
+      expect(read(fixture.memoryDb)).toEqual([{ id: 7, payload: "written while open" }]);
+      expect(refused.code).toBe(1);
+      expect(refused.output).toMatch(/still have a user attached/u);
+      expect(refused.output).toMatch(/strada kill/u);
+
+      // The override exists and is announced, because it is the operator taking
+      // the risk the refusal exists to describe.
+      const forced = runRestore(["--backup-dir", fixture.backupDir, "--allow-attached-users"]);
+      expect(forced.output).toMatch(/--allow-attached-users/u);
+      expect(forced.code).toBe(0);
+      expect(read(fixture.memoryDb)).toHaveLength(2);
+    } finally {
+      live.close();
+    }
+  });
+
+  /**
+   * ROUND 12 #23 — project data could not be redirected through the CLI.
+   *
+   * `delivery-packages.db` lives in `<projectRoot>/.strada`, and with every
+   * offered override given the restore still wrote it back to the absolute
+   * project directory of the machine the backup came from.
+   */
+  it("redirects the project root, so a project database lands on THIS machine", async () => {
+    const root = tempRoot();
+    const memoryRoot = path.join(root, "memory");
+    const stradaHome = path.join(root, "strada-home");
+    const originalProject = path.join(root, "original-project");
+    const backupDir = path.join(root, "backup");
+    const originalPackages = path.join(originalProject, ".strada", "delivery-packages.db");
+    seed(path.join(memoryRoot, "memory.db"), [[1, "campaign state"]]);
+    seed(originalPackages, [[1, "delivery revision"]]);
+
+    const produced = await backupRuntimeDatabases({
+      memoryRoot,
+      stradaHome,
+      userHome: path.join(root, "fake-home"),
+      projectRoot: originalProject,
+      destDir: backupDir,
+    });
+    for (const copy of [
+      ...produced.map((c) => c.destination),
+      path.join(backupDir, "databases.manifest.json"),
+    ]) {
+      fs.writeFileSync(`${copy}.sha256`, `${sha256(copy)}  ${path.basename(copy)}\n`);
+    }
+    // The machine the restore is happening ON: the original project directory is
+    // not where this operator keeps the project.
+    fs.rmSync(originalProject, { recursive: true, force: true });
+    const newProject = path.join(root, "this-machine-project");
+    const newMemory = path.join(root, "this-machine-memory");
+
+    const { code, output } = runRestore([
+      "--backup-dir", backupDir,
+      "--memory-root", newMemory,
+      "--project-root", newProject,
+    ]);
+
+    expect(code).toBe(0);
+    expect(output).toContain(newProject);
+    const restored = path.join(newProject, ".strada", "delivery-packages.db");
+    expect(fs.existsSync(restored)).toBe(true);
+    expect(read(restored)).toEqual([{ id: 1, payload: "delivery revision" }]);
+    // And nothing was written back to the absolute path the backup came from.
+    expect(fs.existsSync(originalPackages)).toBe(false);
   });
 
   it("classifies each copy as verified / mismatch / no-sidecar", async () => {
