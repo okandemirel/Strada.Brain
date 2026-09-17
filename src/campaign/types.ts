@@ -81,6 +81,8 @@ export interface CampaignMilestone {
    */
   playerRunsByTarget?: Array<{
     target?: string;
+    /** The artifact this target's run played: its coverage and its claims are its own (round 5 #2). */
+    artifactPath?: string;
     ok: boolean;
     detail: string;
     /**
@@ -196,7 +198,7 @@ export interface CampaignMilestone {
    */
   visualGateArmed?: boolean;
   /** What the compiler said at the delivery gate; absent = never measured. */
-  compileVerdict?: { ok: boolean; ran: boolean; errors?: number; detail?: string };
+  compileVerdict?: { ok: boolean; ran: boolean; errors?: number; detail?: string; refused?: string };
   /**
    * The player build the campaign itself ran from the project root at the
    * delivery gate (unity_build_player). A delivery is a runnable artifact;
@@ -517,6 +519,8 @@ export interface PlaythroughEvidence {
   unreadable?: boolean;
   /** sha256 of the exact bytes this reading parsed — what a receipt is held against. */
   bytesSha256?: string;
+  /** What the batch plan changed about the allowance this run was given (round 5 #11). */
+  allowanceNote?: string;
   ok?: boolean;
   reasons?: string[];
   scene?: string;

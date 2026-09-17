@@ -1836,8 +1836,8 @@ describe("CampaignManager", () => {
   ];
 
   /** Walk the ladder to the final sprint (task_3 in flight). */
-  const reachFinalSprint = async (): Promise<ReturnType<typeof manager.startFromGdd>> => {
-    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+  const reachFinalSprint = async (gddText = "# GDD"): Promise<ReturnType<typeof manager.startFromGdd>> => {
+    const campaign = manager.startFromGdd(ctx, gddText, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
@@ -1991,12 +1991,11 @@ describe("CampaignManager", () => {
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
       "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
     );
-    writeFileSync(
-      join(projectRoot, "docs", "Game_GDD.md"),
-      "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n",
-    );
+    const coreLoopGdd = "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n";
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), coreLoopGdd);
 
-    const campaign = await reachFinalSprint();
+    // The document on disk is the approved one (plan 1.9): the intake is given the same text.
+    const campaign = await reachFinalSprint(coreLoopGdd);
     tasks.verifications.set("task_3", {
       testsGreen: true,
       detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
@@ -2650,7 +2649,9 @@ describe("CampaignManager", () => {
     // after the baseline's second for "unchanged since sprint start" to hold.
     await new Promise((r) => setTimeout(r, 1100));
 
-    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    // The approved text is the file already committed: intake writes nothing,
+    // so the tree is exactly as untouched as the sprint left it (plan 1.9).
+    const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     // Completion with a clean tree and no commits since the sprint began.
@@ -3898,6 +3899,10 @@ describe("CampaignManager", () => {
     manager.attachEvents();
 
     const gdd = "# GDD\n\nThe game ships 30 levels. Each round lasts 300 seconds. You win a level by clearing it.";
+    // The document on disk is what the gates judge (plan 1.9): the fixture's
+    // sample GDD is replaced by this one, as intake does.
+    mkdirSync(join(projectRoot, "docs"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -4270,7 +4275,8 @@ describe("CampaignManager", () => {
       const measured = await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; ok?: boolean }> })
         .measurePlayerRun({ id: "m_gate", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
       expect(measured.found).toBe(true);
-      expect(asked).toEqual(["all", "13"]);
+      // Discovery with one session, then the rest of the catalogue (round 5 #1).
+      expect(asked).toEqual(["1", "2-13"]);
       const covered = (player as unknown as { verifiedSessionsFor(c: unknown, a: string): readonly number[] }).verifiedSessionsFor(campaign, artifact);
       expect(covered).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
       // …and a second measurement re-measures rather than looping: the game is covered
@@ -4280,6 +4286,81 @@ describe("CampaignManager", () => {
       await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> })
         .measurePlayerRun({ id: "m_gate2", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
       expect(asked).toEqual(["1-12"]);
+    });
+
+    it("a red round feeds no coverage, and the claims see the WORST round's timing (round 5 #3, #4)", async () => {
+      const artifact = join(projectRoot, "Builds", "worst", "Game.app");
+      mkdirSync(join(projectRoot, "Builds", "worst"), { recursive: true });
+      writeFileSync(artifact, "the bytes that were built");
+      const campaign = {
+        id: "c_worst", chatId: "chat", channelType: "cli", userId: "u", projectRoot, gddText: gdd,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      let redFirst = true;
+      const player = new CampaignManager({
+        storage,
+        runPlayer: async (root, _artifact, spec) => {
+          const indices = range(spec?.sessions, 13);
+          const fps = indices[0] === 1 ? 10 : 60;
+          writePlayerVerdict(!(redFirst && indices[0] === 1), { ...record(indices, 13), perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 600, avgFps: fps, worstFrameMs: fps === 10 ? 200 : 40 } }, root);
+          return {};
+        },
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+      const measure = (id: string) => (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<PlaythroughEvidence> })
+        .measurePlayerRun({ id, title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+      const covered = (player as unknown as { verifiedSessionsFor(c: unknown, a: string): readonly number[] });
+      // Round 1 is RED: nothing is remembered, and the gate does not walk on.
+      const red = await measure("m_red");
+      expect(red.ok).toBe(false);
+      expect(covered.verifiedSessionsFor(campaign, artifact)).toEqual([]);
+      // Now green: session 1 at 10 fps, then 2-13 at 60 fps — the claims must see 10.
+      redFirst = false;
+      const green = await measure("m_green");
+      expect(green.ok).toBe(true);
+      expect(covered.verifiedSessionsFor(campaign, artifact)).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
+      expect(green.perf?.avgFps).toBe(10);
+      expect(green.perf?.worstFrameMs).toBe(200);
+    });
+
+    it("a secondary target walks its own catalogue and answers for its own coverage (round 5 #2)", async () => {
+      const a = join(projectRoot, "Builds", "sec", "GameA.app");
+      const b = join(projectRoot, "Builds", "sec", "GameB.app");
+      mkdirSync(join(projectRoot, "Builds", "sec"), { recursive: true });
+      writeFileSync(a, "artifact A");
+      writeFileSync(b, "artifact B");
+      const campaign = {
+        id: "c_sec", chatId: "chat", channelType: "cli", userId: "u", projectRoot, gddText: gdd,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const askedB: Array<string | undefined> = [];
+      const player = new CampaignManager({
+        storage,
+        runPlayer: async (root, played, spec) => {
+          if (played === b) askedB.push(spec?.sessions);
+          writePlayerVerdict(true, record(range(spec?.sessions, 13), 13), root);
+          return {};
+        },
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const milestone = { id: "m_sec", title: "Delivery", prompt: "p", status: "running", attempts: 1 } as unknown as CampaignMilestone;
+      const build = {
+        ran: true, ok: true, target: "StandaloneOSX", artifactPath: a, sizeBytes: 25, durationMs: 1, scenes: 1,
+        artifacts: [{ target: "StandaloneOSX", artifactPath: a }, { target: "StandaloneLinux64", artifactPath: b }],
+      };
+      await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> }).measurePlayerRun(milestone, build, campaign);
+      expect(askedB).toEqual(["1", "2-13"]);
+      const covered = (player as unknown as { verifiedSessionsFor(c: unknown, a: string): readonly number[] });
+      expect(covered.verifiedSessionsFor(campaign, b)).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
+      // …and the per-target record names the artifact its claims are judged against.
+      expect(milestone.playerRunsByTarget?.map((r) => r.artifactPath)).toEqual([a, b]);
     });
 
     it("guard: two targets keep their own coverage — the sessions one played are not the other's", async () => {
@@ -5317,7 +5398,9 @@ describe("CampaignManager", () => {
 
     // 90 s with headroom for a driven run, the boot budget doubled (never
     // below the tool's own 30 s), and every level the document claims.
-    expect(specs[0]).toMatchObject({ deadlineSeconds: 150, bootDeadlineSeconds: 30, sessions: "all" });
+    // …and the catalogue is unknown, so the first run DISCOVERS it with one
+    // session (plan 0-B.4, round 5 #1) instead of asking "all".
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 150, bootDeadlineSeconds: 30, sessions: "1" });
     // …and this document states no win or lose condition, so the run is not
     // told to demand one: an endless session is a game behaving as designed
     // (Codex 2026-09-13 AG#3).
@@ -5348,9 +5431,11 @@ describe("CampaignManager", () => {
           ? []
           : [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount } }],
       } as never).sessions;
-    expect(askedFor(undefined)).toBe("all");
-    expect(askedFor(3)).toBe("all");
-    expect(askedFor(12)).toBe("all");
+    // …and the coordinator never asks "all" (round 5 #1): unknown is
+    // discovered with one session, a known catalogue is asked for by name.
+    expect(askedFor(undefined)).toBe("1");
+    expect(askedFor(3)).toBe("1-3");
+    expect(askedFor(12)).toBe("1-12");
     expect(askedFor(13)).toBe("1-12");
     expect(askedFor(3000)).toBe("1-12");
 
@@ -5415,9 +5500,11 @@ describe("CampaignManager", () => {
     // THE LATEST measurement is the one that counts: the game grows, so an
     // early run that found three levels does not describe it any more.
     expect(asked([{ found: true, sessionCount: 3 }, { found: true, sessionCount: 13 }])).toBe("1-12");
-    expect(asked([{ found: true, sessionCount: 13 }, { found: true, sessionCount: 3 }])).toBe("all");
-    expect(asked([{ found: false, sessionCount: 13 }])).toBe("all");
-    expect(asked([{ found: true }])).toBe("all");
+    // …and the coordinator never asks "all" (round 5 #1): a known small
+    // catalogue by name, an unknown one by discovery.
+    expect(asked([{ found: true, sessionCount: 13 }, { found: true, sessionCount: 3 }])).toBe("1-3");
+    expect(asked([{ found: false, sessionCount: 13 }])).toBe("1");
+    expect(asked([{ found: true }])).toBe("1");
   });
 
   it("a verdict file that cannot be cleared stops the run rather than measuring the old one (Codex 2026-09-12 Y#5)", async () => {

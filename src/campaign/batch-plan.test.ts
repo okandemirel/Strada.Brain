@@ -8,9 +8,10 @@ import { largestDeadlineThatFits, planSessionBatch } from "./batch-plan.js";
 import { PLAY_RUN_BUDGET_MS, sessionsThatFitOneRun } from "./producer-evidence.js";
 
 describe("planSessionBatch", () => {
-  it("discovers an unknown catalogue: 'all' only when the producer's whole cap fits, otherwise ONE session (AK#4)", () => {
-    // Short rounds: the cap fits, and the producer resolves "all" against what it reads now.
-    expect(planSessionBatch({ played: [], deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "discover", sessions: "all" });
+  it("discovers an unknown catalogue with ONE session — never 'all', never a range guessed from time (AK#4, round 5 #1)", () => {
+    // "all" made the producer play its cap and report the catalogue, and the
+    // receiver refused the run as SESSION_MISSING before it was remembered.
+    expect(planSessionBatch({ played: [], deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "discover", sessions: "1" });
     // Long rounds: five fit, twelve do not — a range guessed from time asked
     // a three-level game for levels 4 and 5, so the first run plays one
     // session and learns the catalogue.
@@ -24,8 +25,8 @@ describe("planSessionBatch", () => {
     expect(planSessionBatch({ catalogue: 13, played: [1, 3], deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "batch", sessions: "2,4,5,6,7,8,9,10,11,12,13" });
     // Everything played: a re-measurement, never a claim of coverage.
     expect(planSessionBatch({ catalogue: 13, played: Array.from({ length: 13 }, (_u, i) => i + 1), deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "covered", sessions: "1-12" });
-    // A small game nobody played yet, when the whole cap fits: "all", so a game that grew is played whole.
-    expect(planSessionBatch({ catalogue: 3, played: [], deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "batch", sessions: "all" });
+    // A small game nobody played yet is asked for by name; the coordinator never asks "all".
+    expect(planSessionBatch({ catalogue: 3, played: [], deadlineSeconds: 45, bootSeconds: 30 })).toMatchObject({ kind: "batch", sessions: "1-3" });
   });
 
   it("a legal 1800 s round whose headroom overshoots the budget is trimmed to what fits, and disclosed (AK#5)", () => {

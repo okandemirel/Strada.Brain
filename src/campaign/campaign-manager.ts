@@ -891,6 +891,18 @@ export class CampaignManager {
    * ladder and start building immediately.
    */
   startFromGdd(ctx: CampaignContext, gddText: string, gddPath?: string): Campaign {
+    // THE APPROVED DOCUMENT IS THE ONE ON DISK (plan 1.9). A supplied text
+    // that names a path is written there when the file differs, so the
+    // document the workers read and the gates judge is the one that was
+    // approved; a write that fails leaves a text-only intake, disclosed.
+    if (gddPath !== undefined && readGddFile(this.projectRoot, gddPath) !== gddText) {
+      try {
+        mkdirSync(dirname(join(this.projectRoot, gddPath)), { recursive: true });
+        writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
+      } catch (err) {
+        getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     const campaign = this.newCampaign(ctx, { gddText, gddPath });
     void this.planAndLaunch(campaign.id);
     return campaign;
@@ -3396,9 +3408,11 @@ export class CampaignManager {
       const perTargetClaims = isLast
         ? (milestone.playerRunsByTarget ?? []).slice(1).flatMap((run) => {
             if (!run.evidence) return [];
+            // …and against ITS artifact's coverage, not the primary's (round 5 #2).
             const judged = this.measureGddClaims(campaign, playthrough, run.evidence, {
               ...(build ?? { ran: false }),
               target: run.target ?? build?.target,
+              ...(run.artifactPath === undefined ? {} : { artifactPath: run.artifactPath }),
             });
             return judged.refusal !== undefined ? [`in the built player for ${run.target ?? "a second target"}: ${judged.refusal}`] : [];
           })
@@ -3608,7 +3622,9 @@ export class CampaignManager {
         // Lead with the compiler when the compiler is the problem: a tree that
         // does not build cannot be tested, so telling the sprint to run the
         // suite first would send it at the second problem.
-        const compileFirst = compileBroken
+        const compileFirst = compileBroken && compile.refused !== undefined
+          ? `THE COMPILE PROOF WAS REFUSED: ${compile.refused}. Re-run the compile check so its receipt is admitted; the tree is not judged broken by this.\n\n`
+          : compileBroken
           ? `THE PROJECT DOES NOT COMPILE${
               typeof compile.errors === "number" ? ` — ${compile.errors} error(s)` : ""
             }. Fix that before anything else; no test run means anything until it builds.${
@@ -5130,8 +5146,15 @@ export class CampaignManager {
     // player run has reported a catalogue, only a count for THIS digest is
     // used; a new artifact is discovered, not assumed.
     const stored = campaign?.verifiedSessions;
+    if (artifactPath !== undefined) {
+      // A NAMED ARTIFACT HAS ITS OWN CATALOGUE OR NONE: the fallback below
+      // let an old player count outrank a fresh editor count for a rebuilt
+      // game (round 5 #8). Unknown means discover.
+      const digest = artifactDigest(artifactPath);
+      return digest === undefined ? undefined : stored?.catalogueByArtifact?.[digest];
+    }
     if (stored?.catalogueByArtifact !== undefined) {
-      const digest = artifactDigest(artifactPath) ?? this.lastArtifactDigest(campaign);
+      const digest = this.lastArtifactDigest(campaign);
       return digest === undefined ? undefined : stored.catalogueByArtifact[digest];
     }
     // Rows from before the per-artifact record: the last count any run gave.
@@ -5330,6 +5353,7 @@ export class CampaignManager {
     const perTarget: Array<{ target?: string; ok: boolean; detail: string }> = [];
     let failure: string | undefined;
     let verdict: PlaythroughEvidence = { found: false };
+    const rounds: PlaythroughEvidence[] = [];
     // THE WHOLE CATALOGUE, IN ONE GATE. One run plays a batch, and the
     // shortfall beyond it was waived as "what one run cannot reach": a
     // 13-level game with twelve levels played delivered, session 13 never
@@ -5420,88 +5444,99 @@ export class CampaignManager {
       // next run then asks for the sessions nobody has played yet (AJ#11).
       // …from a run that FINISHED. A red verdict with a completed session in it
       // after a reported failure still fed the coverage (Codex 2026-09-17 #2).
-      if (verdict.found && failure === undefined) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
+      // …and only a run that PASSED: a red verdict with completed sessions
+      // in it fed the coverage, and later attempts skipped what it had
+      // failed at (round 5 #4).
+      if (verdict.found && verdict.ok === true && failure === undefined) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
+      if (verdict.found) rounds.push(verdict);
       const next = verdict.found && verdict.ok === true && failure === undefined && round < MAX_PLAYER_ROUNDS_PER_GATE
         ? this.nextPrimaryBatch(campaign, build.artifactPath, verdict, spec)
         : undefined;
       if (next === undefined) break;
       spec = { ...spec, sessions: next };
     }
-    for (const other of others) {
-      const at = Date.now();
+    // EVERY ROUND'S TIMING, not the last one's: sessions 1-12 at 10 fps and
+    // session 13 at 60 fps reached the claim check as 60 (round 5 #3). The
+    // worst frame rate, the longest boot and the slowest frame across rounds
+    // are what the document's numbers are held to.
+    if (verdict.found && rounds.length > 1) verdict = withWorstPerf(verdict, rounds);
+    // …and what the plan changed about the allowance is said with the evidence (round 5 #11).
+    if (verdict.found && spec.trimmed !== undefined) verdict = { ...verdict, allowanceNote: spec.trimmed };
+    // EVERY OTHER TARGET, the same way: its own cursor, its own rounds, its
+    // own coverage — a secondary target borrowed the primary's coverage and
+    // never walked its catalogue (round 5 #2).
+    const measureOther = async (other: { target?: string; artifactPath: string }): Promise<{ target?: string; artifactPath?: string; ok: boolean; detail: string; evidence?: PlaythroughEvidence }> => {
+      const notMeasured = (detail: string): { target?: string; artifactPath?: string; ok: boolean; detail: string } =>
+        ({ target: other.target, artifactPath: other.artifactPath, ok: false, detail });
+      let theirSpec = this.playerRunSpec(campaign, other.artifactPath);
+      if (theirSpec.unfit !== undefined) return notMeasured(`not measured: ${theirSpec.unfit}`);
+      let theirs: PlaythroughEvidence = { found: false };
       let why: string | undefined;
-      let theirDecision: EvidenceDecision | undefined;
-      let theirRunId: string | undefined;
-      // Its own cursor: the coverage THIS artifact has, not the primary's.
-      const theirSpec = this.playerRunSpec(campaign, other.artifactPath);
-      if (theirSpec.unfit !== undefined) {
-        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSpec.unfit}` });
-        continue;
-      }
-      const staleHere = clearVerdict();
-      if (staleHere !== undefined) {
-        perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
-        continue;
-      }
-      try {
-        await this.underTicket(
-          campaign,
-          milestone,
-          {
-            kind: "playthrough",
-            medium: "player",
-            ...(other.target === undefined ? {} : { target: other.target }),
-            artifactPath: other.artifactPath,
-            requestedSessions: sessionsRequested(theirSpec.sessions),
-          },
-          async (runId) => {
-            theirRunId = runId;
-            const played = await this.runPlayer!(this.projectRoot, other.artifactPath, theirSpec, {
-              runId,
+      const theirRounds: PlaythroughEvidence[] = [];
+      for (let round = 1; ; round += 1) {
+        const at = Date.now();
+        why = undefined;
+        let theirDecision: EvidenceDecision | undefined;
+        let theirRunId: string | undefined;
+        const staleHere = clearVerdict();
+        if (staleHere !== undefined) return notMeasured(`not run: ${staleHere}`);
+        try {
+          await this.underTicket(
+            campaign,
+            milestone,
+            {
+              kind: "playthrough",
+              medium: "player",
               ...(other.target === undefined ? {} : { target: other.target }),
-            });
-            return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
-          },
-          // …and THIS target's receipt is held against the verdict THIS
-          // target's read will judge: the secondary loop had no binding at
-          // all, so a receipt naming another file left it green (Codex
-          // 2026-09-13 AK#13).
-          (decision) => { theirDecision = decision; },
-        );
-      } catch (err) {
-        why = err instanceof Error ? err.message : String(err);
+              artifactPath: other.artifactPath,
+              requestedSessions: sessionsRequested(theirSpec.sessions),
+            },
+            async (runId) => {
+              theirRunId = runId;
+              const played = await this.runPlayer!(this.projectRoot, other.artifactPath, theirSpec, {
+                runId,
+                ...(other.target === undefined ? {} : { target: other.target }),
+              });
+              return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
+            },
+            // …and THIS target's receipt is held against the verdict THIS
+            // target's read will judge: the secondary loop had no binding at
+            // all, so a receipt naming another file left it green (Codex
+            // 2026-09-13 AK#13).
+            (decision) => { theirDecision = decision; },
+          );
+        } catch (err) {
+          why = err instanceof Error ? err.message : String(err);
+        }
+        const theirRefused = why === undefined ? this.refusedProof(theirDecision, "play-through") : undefined;
+        if (theirRefused !== undefined) return notMeasured(`not measured: ${theirRefused}`);
+        theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, theirRunId ?? attemptRunId(milestone));
+        // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
+        const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision, theirs);
+        if (theirSubstitution !== undefined) return notMeasured(`not measured: ${theirSubstitution}`);
+        // …and the same rule for every secondary target (Codex 2026-09-16 plan
+        // review #8: the secondary path used `why` for wording and accepted the
+        // green file regardless).
+        const theirForeign =
+          why !== undefined
+          && (UNRUNNABLE_HERE_RE.test(why) || NOT_A_PLAYER_HERE_RE.test(why))
+          && artifactIsForeign(other.artifactPath, hostTarget());
+        if (theirForeign) return notMeasured(`cannot run here: ${why!.slice(0, 120)}`);
+        const theirGreenAfterFailure = this.greenVerdictAfterFailure(theirs, why);
+        if (theirGreenAfterFailure !== undefined) return notMeasured(`not measured: ${theirGreenAfterFailure}`);
+        // What it played is remembered against IT (plan 1.10) — after the
+        // receipt and the digest were checked, and only from a run that
+        // passed (round 5 #4).
+        if (theirs.found && theirs.ok === true && why === undefined) this.rememberVerifiedSessions(campaign, other.artifactPath, theirs);
+        if (theirs.found) theirRounds.push(theirs);
+        const next = theirs.found && theirs.ok === true && why === undefined && round < MAX_PLAYER_ROUNDS_PER_GATE
+          ? this.nextPrimaryBatch(campaign, other.artifactPath, theirs, theirSpec)
+          : undefined;
+        if (next === undefined) break;
+        theirSpec = { ...theirSpec, sessions: next };
       }
-      const theirRefused = why === undefined ? this.refusedProof(theirDecision, "play-through") : undefined;
-      if (theirRefused !== undefined) {
-        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirRefused}` });
-        continue;
-      }
-      const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, theirRunId ?? attemptRunId(milestone));
-      // …and what it played is remembered against IT (plan 1.10): only the
-      // primary run fed the accumulator before.
-      if (theirs.found && why === undefined) this.rememberVerifiedSessions(campaign, other.artifactPath, theirs);
-      // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
-      const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision, theirs);
-      if (theirSubstitution !== undefined) {
-        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirSubstitution}` });
-        continue;
-      }
-      // …and the same rule for every secondary target (Codex 2026-09-16 plan
-      // review #8: the secondary path used `why` for wording and accepted the
-      // green file regardless).
-      const theirForeign =
-        why !== undefined
-        && (UNRUNNABLE_HERE_RE.test(why) || NOT_A_PLAYER_HERE_RE.test(why))
-        && artifactIsForeign(other.artifactPath, hostTarget());
-      if (theirForeign) {
-        perTarget.push({ target: other.target, ok: false, detail: `cannot run here: ${why!.slice(0, 120)}` });
-        continue;
-      }
-      const theirGreenAfterFailure = this.greenVerdictAfterFailure(theirs, why);
-      if (theirGreenAfterFailure !== undefined) {
-        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirGreenAfterFailure}` });
-        continue;
-      }
+      if (theirs.found && theirRounds.length > 1) theirs = withWorstPerf(theirs, theirRounds);
+      if (theirs.found && theirSpec.trimmed !== undefined) theirs = { ...theirs, allowanceNote: theirSpec.trimmed };
       // The producer's own refusal — "…is not a player this machine can run
       // (an .apk, WebGL folder or missing executable) — nothing was played" —
       // did not match the host-incapability wording, so an Android secondary
@@ -5512,8 +5547,9 @@ export class CampaignManager {
         && why !== undefined
         && (UNRUNNABLE_HERE_RE.test(why) || NOT_A_PLAYER_HERE_RE.test(why))
         && artifactIsForeign(other.artifactPath, hostTarget());
-      perTarget.push({
+      return {
         target: other.target,
+        artifactPath: other.artifactPath,
         // THE WHOLE EVIDENCE, not a sentence: the GDD's numbers have to be
         // held against each target's own measurement — "Windows and Linux; at
         // least 60 fps" with Windows at 60 and Linux at 10 passed, because
@@ -5526,11 +5562,12 @@ export class CampaignManager {
           : theirs.found
           ? describePlaythrough(theirs).slice(0, 160)
           : `no verdict${why !== undefined ? `: ${why.slice(0, 120)}` : ""}`,
-      });
-    }
+      };
+    };
+    for (const other of others) perTarget.push(await measureOther(other));
     if (perTarget.length > 0) {
       milestone.playerRunsByTarget = [
-        { target: build.target ?? build.requestedTarget, ok: verdict.found === true && verdict.ok === true, detail: describePlaythrough(verdict).slice(0, 160) },
+        { target: build.target ?? build.requestedTarget, artifactPath: build.artifactPath, ok: verdict.found === true && verdict.ok === true, detail: describePlaythrough(verdict).slice(0, 160) },
         ...perTarget,
       ];
     }
@@ -6744,6 +6781,11 @@ export class CampaignManager {
           caveats.push(
             `${m.title}: the project was never compiled at the delivery gate — ${c.detail ?? "no verifier"}`,
           );
+        } else if (c.refused !== undefined) {
+          // A REFUSED PROOF IS NOT A BROKEN TREE: "DOES NOT COMPILE (0
+          // errors)" said the code was broken when the receipt was (round 5 #12).
+          marks.push("COMPILE PROOF REFUSED");
+          caveats.push(`${m.title}: the compile proof was refused — ${c.refused}`);
         } else if (!c.ok) {
           marks.push(`DOES NOT COMPILE${typeof c.errors === "number" ? ` (${c.errors} errors)` : ""}`);
           caveats.push(`${m.title}: the project did not compile — ${c.detail ?? "no detail"}`);
@@ -7466,6 +7508,28 @@ export function gddNameDistance(rel: string): number {
   // copy won whatever its age (Codex 2026-09-12 P#14).
   const archived = ARCHIVED_DIR_RE.test(rel) ? 20 : 0;
   return extraTokens + inSubfolder + archived + (DERIVATIVE_DOC_RE.test(stem) ? 10 : 0);
+}
+
+/** The last round's verdict, with the timing of the WORST round across all of them (round 5 #3). */
+function withWorstPerf(last: PlaythroughEvidence, rounds: readonly PlaythroughEvidence[]): PlaythroughEvidence {
+  const perfs = rounds.map((r) => r.perf).filter((p): p is NonNullable<PlaythroughEvidence["perf"]> => p !== undefined);
+  if (perfs.length === 0 || last.perf === undefined) return last;
+  const min = (values: number[]): number | undefined => (values.length === 0 ? undefined : Math.min(...values));
+  const max = (values: number[]): number | undefined => (values.length === 0 ? undefined : Math.max(...values));
+  const avgFps = min(perfs.map((p) => p.avgFps).filter((v): v is number => typeof v === "number"));
+  const worstFrameMs = max(perfs.map((p) => p.worstFrameMs).filter((v): v is number => typeof v === "number"));
+  const bootSeconds = max(perfs.map((p) => p.bootSeconds).filter((v): v is number => typeof v === "number"));
+  return {
+    ...last,
+    perf: {
+      ...last.perf,
+      playSeconds: perfs.reduce((sum, p) => sum + p.playSeconds, 0),
+      playFrames: perfs.reduce((sum, p) => sum + p.playFrames, 0),
+      ...(avgFps === undefined ? {} : { avgFps }),
+      ...(worstFrameMs === undefined ? {} : { worstFrameMs }),
+      ...(bootSeconds === undefined ? {} : { bootSeconds }),
+    },
+  };
 }
 
 /** The identity of a document: sha256 of its exact bytes. */

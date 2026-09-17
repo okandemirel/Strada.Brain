@@ -294,7 +294,7 @@ export function describePlaythrough(e: PlaythroughEvidence | undefined): string 
         "(the game registers no Strada.Core.Play.IActiveSession)"
       : "";
   if (e.ok) {
-    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${played}${identity}${frames}${start}${perf}${catalog}`;
+    return `play-through OK${where}: session ${e.session ?? "?"} played to ${e.outcome ?? "an outcome"} in ${e.actions ?? "?"} actions${played}${identity}${frames}${start}${perf}${catalog}${e.allowanceNote === undefined ? "" : ` (${e.allowanceNote})`}`;
   }
   return `play-through FAILED${where}: ${e.reasons && e.reasons.length > 0 ? e.reasons.join("; ") : "no reason recorded"}${played}${identity}${frames}${start}${perf}${catalog}`;
 }

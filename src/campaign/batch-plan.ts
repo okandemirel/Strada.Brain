@@ -84,19 +84,16 @@ export function planSessionBatch(input: BatchPlanInput): BatchPlan {
   }
   const base = { deadlineSeconds: deadline, ...(trimmed === undefined ? {} : { trimmed }) };
   if (input.catalogue === undefined) {
-    // DISCOVERY (0-B.4). "all" is resolved by the producer against the
-    // catalogue it reads now — safe only when the producer's whole cap fits,
-    // because that is what it budgets "all" as. Otherwise ONE session: a
-    // guess at a range from what time allows asked for levels that do not
-    // exist (AK#4), and one played session tells the catalogue for the next.
-    return { kind: "discover", sessions: fits >= cap ? "all" : "1", ...base };
+    // DISCOVERY (0-B.4): ONE session. A range guessed from what time allows
+    // asked for levels that do not exist (AK#4), and "all" is no better —
+    // the producer plays its cap and reports the catalogue, the ticket
+    // asked for everything, and the receiver refuses the run as
+    // SESSION_MISSING before the catalogue is even remembered (Codex
+    // 2026-09-17 round 5 #1). One played session tells the catalogue for
+    // the next batch; the coordinator never asks "all".
+    return { kind: "discover", sessions: "1", ...base };
   }
   const batchSize = Math.max(1, Math.min(cap, fits, input.catalogue));
-  if (input.played.length === 0 && input.catalogue <= cap && fits >= cap) {
-    // Nothing played and the whole game fits: "all" lets the producer read
-    // the catalogue as it is now, so a game that grew is played whole.
-    return { kind: "batch", sessions: "all", ...base };
-  }
   const next = nextSessionBatch(input.catalogue, input.played, batchSize);
   if (next !== undefined) return { kind: "batch", sessions: next, ...base };
   return { kind: "covered", sessions: `1-${Math.min(batchSize, input.catalogue)}`, ...base };
