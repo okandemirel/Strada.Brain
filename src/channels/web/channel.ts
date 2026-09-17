@@ -91,6 +91,13 @@ interface PendingConfirmation {
   chatId?: string;
 }
 
+/** An answered confirmation: who settled it, with what, and until when it is remembered. */
+interface SettledConfirmation {
+  chatId: string;
+  option: string;
+  expiresAt: number;
+}
+
 interface WebChannelOptions {
   dashboardAuthToken?: string;
   identityDbPath?: string;
@@ -203,13 +210,15 @@ export class WebChannel
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /**
-   * Confirmations already answered (confirmId → option), kept for
+   * Confirmations already answered (confirmId → owner chat + option), kept for
    * CONFIRMATION_TTL_MS and capped at MAX_SETTLED_CONFIRMATIONS, so a reply the
    * client re-sends after losing the ack is acked "accepted" again instead of
    * "unknown" (which the portal shows as expired). Codex wave 0-A review
-   * 2026-09-17 #6.
+   * 2026-09-17 #6. The record keeps who answered and what, so only the
+   * identical reply from the owning chat is acked "accepted"; a different
+   * option or another chat gets "unknown" (Codex 2026-09-17 round 3 #5).
    */
-  private settledConfirmations = new Map<string, { option: string; expiresAt: number }>();
+  private settledConfirmations = new Map<string, SettledConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private postSetupBootstrapHandler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null = null;
@@ -940,7 +949,7 @@ export class WebChannel
   }
 
   /** Remember an answered confirmation so a re-sent reply is acked idempotently. */
-  private recordSettledConfirmation(confirmId: string, option: string): void {
+  private recordSettledConfirmation(confirmId: string, chatId: string, option: string): void {
     const now = Date.now();
     for (const [id, entry] of this.settledConfirmations) {
       if (entry.expiresAt <= now) this.settledConfirmations.delete(id);
@@ -950,17 +959,17 @@ export class WebChannel
       if (oldest === undefined) break;
       this.settledConfirmations.delete(oldest);
     }
-    this.settledConfirmations.set(confirmId, { option, expiresAt: now + WebChannel.CONFIRMATION_TTL_MS });
+    this.settledConfirmations.set(confirmId, { chatId, option, expiresAt: now + WebChannel.CONFIRMATION_TTL_MS });
   }
 
-  private getSettledConfirmation(confirmId: string): string | undefined {
+  private getSettledConfirmation(confirmId: string): SettledConfirmation | undefined {
     const entry = this.settledConfirmations.get(confirmId);
     if (!entry) return undefined;
     if (entry.expiresAt <= Date.now()) {
       this.settledConfirmations.delete(confirmId);
       return undefined;
     }
-    return entry.option;
+    return entry;
   }
 
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
@@ -1503,8 +1512,12 @@ export class WebChannel
         const pending = this.pendingConfirmations.get(confirmId);
         if (!pending) {
           // Already answered (the client lost our ack and re-sent the reply):
-          // ack it again, idempotently. Codex wave 0-A review 2026-09-17 #6.
-          if (this.getSettledConfirmation(confirmId) !== undefined) {
+          // ack it again, idempotently — but only the identical reply from the
+          // chat that settled it. A different option, or another chat, did not
+          // reach the orchestrator and must not be told it did (Codex wave 0-A
+          // review 2026-09-17 #6; Codex 2026-09-17 round 3 #5).
+          const settled = this.getSettledConfirmation(confirmId);
+          if (settled !== undefined && settled.chatId === chatId && settled.option === option) {
             this.sendToClient(chatId, { type: "confirmation_ack", confirmId, status: "accepted" });
             break;
           }
@@ -1524,7 +1537,7 @@ export class WebChannel
         }
         clearTimeout(pending.timer);
         this.pendingConfirmations.delete(confirmId);
-        this.recordSettledConfirmation(confirmId, option);
+        this.recordSettledConfirmation(confirmId, chatId, option);
         pending.resolve(option);
         // The awaiting orchestrator has the answer: only now may the client
         // drop its dialog.

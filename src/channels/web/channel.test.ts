@@ -1125,6 +1125,65 @@ describe("WebChannel confirmation re-send and expiry acks (Codex wave 0-A 2026-0
     expect(acksFor(c.socket, "never-issued")).toEqual(["unknown"]);
     await channel.disconnect();
   });
+
+  // Codex 2026-09-17 round 3 #5: the settled record carries ownership and the
+  // answer. Only the identical reply from the owning chat is a lost-ack
+  // duplicate; a different option or another chat never reached the
+  // orchestrator and is acked "unknown", not "accepted".
+  it("acks the owner re-sending the same option as accepted, with one settlement (round 3 #5)", async () => {
+    const channel = new WebChannel();
+    const c = connect(channel);
+    const answer = channel.requestConfirmation({ chatId: c.chatId, question: "Deploy?", options: ["yes", "no"] });
+    await Promise.resolve();
+    const confirmId = String(c.socket.getSentMessages().find((m) => m.type === "confirmation")!.confirmId);
+
+    send(c.socket, { type: "confirmation_response", confirmId, option: "no" });
+    await expect(answer).resolves.toBe("no");
+    send(c.socket, { type: "confirmation_response", confirmId, option: "no" });
+
+    expect(acksFor(c.socket, confirmId)).toEqual(["accepted", "accepted"]);
+    const settled = (channel as unknown as { settledConfirmations: Map<string, { chatId: string; option: string }> }).settledConfirmations;
+    expect(settled.size).toBe(1);
+    expect(settled.get(confirmId)).toMatchObject({ chatId: c.chatId, option: "no" });
+    await channel.disconnect();
+  });
+
+  it("acks the owner re-sending a different option as unknown and keeps the settlement (round 3 #5)", async () => {
+    const channel = new WebChannel();
+    const c = connect(channel);
+    const answer = channel.requestConfirmation({ chatId: c.chatId, question: "Deploy?", options: ["yes", "no"] });
+    await Promise.resolve();
+    const confirmId = String(c.socket.getSentMessages().find((m) => m.type === "confirmation")!.confirmId);
+
+    send(c.socket, { type: "confirmation_response", confirmId, option: "no" });
+    await expect(answer).resolves.toBe("no");
+    send(c.socket, { type: "confirmation_response", confirmId, option: "yes" });
+
+    expect(acksFor(c.socket, confirmId)).toEqual(["accepted", "unknown"]);
+    const settled = (channel as unknown as { settledConfirmations: Map<string, { chatId: string; option: string }> }).settledConfirmations;
+    expect(settled.get(confirmId)).toMatchObject({ chatId: c.chatId, option: "no" });
+    await channel.disconnect();
+  });
+
+  it("acks another chat replying to a settled id as unknown (round 3 #5)", async () => {
+    const channel = new WebChannel();
+    const a = connect(channel);
+    const b = connect(channel);
+    const answer = channel.requestConfirmation({ chatId: a.chatId, question: "Deploy?", options: ["yes", "no"] });
+    await Promise.resolve();
+    const confirmId = String(a.socket.getSentMessages().find((m) => m.type === "confirmation")!.confirmId);
+
+    send(a.socket, { type: "confirmation_response", confirmId, option: "no" });
+    await expect(answer).resolves.toBe("no");
+    send(b.socket, { type: "confirmation_response", confirmId, option: "no" });
+    send(b.socket, { type: "confirmation_response", confirmId, option: "yes" });
+
+    expect(acksFor(a.socket, confirmId)).toEqual(["accepted"]);
+    expect(acksFor(b.socket, confirmId)).toEqual(["unknown", "unknown"]);
+    const settled = (channel as unknown as { settledConfirmations: Map<string, { chatId: string; option: string }> }).settledConfirmations;
+    expect(settled.get(confirmId)).toMatchObject({ chatId: a.chatId, option: "no" });
+    await channel.disconnect();
+  });
 });
 
 describe("queued is not delivered (Codex 2026-09-13 AG#13)", () => {
