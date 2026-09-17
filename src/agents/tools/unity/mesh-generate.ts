@@ -628,13 +628,20 @@ export class MeshGenerateTool implements ITool {
    */
   private async executeLocal(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const { installedModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
+    const runner: import("./sprite-generate.js").LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     // Explicit ids go through the DEVICE-GATED list: getModelSpec would hand
     // back a model this machine cannot run.
     const gatedSpec = (id: string, kind: "text-to-image" | "image-to-3d") =>
-      supportedModels().find((m) => m.id === id && m.kind === kind);
+      supportedModels(this.opts.device).find((m) => m.id === id && m.kind === kind);
+    // No id: the model that is INSTALLED, not the smallest the device could
+    // run (audit A2 / D54: only sdxl installed read as "no 2D model").
+    const installedSpec = (kind: "text-to-image" | "image-to-3d") =>
+      this.opts.specFor
+        ? this.opts.specFor(kind)
+        : installedModelFor(kind, (id) => runner.isModelInstalled(id), this.opts.device);
 
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
@@ -645,7 +652,7 @@ export class MeshGenerateTool implements ITool {
       return { content: "Error: path must be under Assets/", isError: true };
     }
 
-    const model3d = input["model"] !== undefined ? gatedSpec(String(input["model"]), "image-to-3d") : defaultModelFor("image-to-3d");
+    const model3d = input["model"] !== undefined ? gatedSpec(String(input["model"]), "image-to-3d") : installedSpec("image-to-3d");
     if (!model3d) {
       return {
         content:
@@ -654,7 +661,6 @@ export class MeshGenerateTool implements ITool {
         isError: true,
       };
     }
-    const runner: import("./sprite-generate.js").LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(model3d.id)) {
       return {
         content: `Error: ${model3d.label} is not installed. Run \`strada assets-local-setup --model ${model3d.id}\` first.`,
@@ -675,7 +681,7 @@ export class MeshGenerateTool implements ITool {
       if (!imgCheck.valid) return { content: `Error: ${imgCheck.error ?? "image path invalid"}`, isError: true };
       imageAbs = imgCheck.fullPath;
     } else {
-      const model2d = input["model2d"] !== undefined ? gatedSpec(String(input["model2d"]), "text-to-image") : defaultModelFor("text-to-image");
+      const model2d = input["model2d"] !== undefined ? gatedSpec(String(input["model2d"]), "text-to-image") : installedSpec("text-to-image");
       if (!model2d || !runner.isModelInstalled(model2d.id)) {
         return {
           content:

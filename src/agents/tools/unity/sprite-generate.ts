@@ -26,7 +26,7 @@ import { dirname, join, relative } from "node:path";
 import { reuseOrMintGuid } from "./meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { validatePath } from "../../../security/path-guard.js";
-import { defaultModelFor } from "../../../assets-local/model-catalog.js";
+import { installedModelFor, type DeviceCapability } from "../../../assets-local/model-catalog.js";
 import { LocalModelRunner } from "../../../assets-local/local-model-runner.js";
 import { isPlaceholderGradePng } from "../../autonomy/built-as-specified.js";
 import { PreviousAsset, outsideAssetsError, unusableSpriteReason } from "./generated-asset-guard.js";
@@ -464,7 +464,7 @@ TextureImporter:
 /** Which local model kinds exist on this machine; a seam so tests never touch ~/.strada. */
 export type LocalAvailability = (kind: "text-to-image" | "image-to-3d") => boolean;
 
-export function realLocalAvailability(): LocalAvailability {
+export function realLocalAvailability(device?: DeviceCapability): LocalAvailability {
   return (kind) => {
     try {
       // The probe and the venv check run here, at call time — the imports are
@@ -473,8 +473,11 @@ export function realLocalAvailability(): LocalAvailability {
       // ReferenceError into the catch and answered false. The installed model
       // was never "available" to a single sprint: every AUTO sprite went
       // procedural, and the "local by default" fix of 2026-09-06 never ran.
-      const spec = defaultModelFor(kind);
-      return spec !== undefined && new LocalModelRunner().isModelInstalled(spec.id);
+      // ANY installed supported model counts, not only the smallest one
+      // (audit A2 / D54: only sdxl installed read as "nothing installed").
+      const runner = new LocalModelRunner();
+      const spec = installedModelFor(kind, (id) => runner.isModelInstalled(id), device);
+      return spec !== undefined && runner.isModelInstalled(spec.id);
     } catch {
       return false;
     }
@@ -517,6 +520,8 @@ export interface GeneratorOptions {
    * (measured 2026-09-07: the batch test passed here and failed on CI).
    */
   specFor?: (kind: "text-to-image" | "image-to-3d", modelId?: string) => import("../../../assets-local/model-catalog.js").LocalModelSpec | undefined;
+  /** The device the catalog is gated by; tests inject one so the selection runs the same on any CI box. */
+  device?: DeviceCapability;
 }
 
 /**
@@ -774,16 +779,19 @@ export class SpriteGenerateTool implements ITool {
     dirRel: string,
   ): Promise<ToolExecutionResult> {
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const { installedModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
 
+    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
     // Explicit ids go through the DEVICE-GATED list too: getModelSpec would
     // hand back a 24GB-bar model on an 8GB machine and swap-thrash the run.
+    // With no id, the model that is INSTALLED is used, not the smallest one
+    // the device could run (audit A2 / D54).
     const spec = this.opts.specFor
       ? this.opts.specFor("text-to-image", modelId)
       : modelId
-        ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
-        : defaultModelFor("text-to-image");
+        ? supportedModels(this.opts.device).find((m) => m.id === modelId && m.kind === "text-to-image")
+        : installedModelFor("text-to-image", (id) => runner.isModelInstalled(id), this.opts.device);
     if (!spec) {
       return {
         content:
@@ -793,7 +801,6 @@ export class SpriteGenerateTool implements ITool {
       };
     }
 
-    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(spec.id)) {
       return {
         content:
@@ -1020,15 +1027,15 @@ export class SpriteGenerateTool implements ITool {
     }
 
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const { defaultModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const { installedModelFor, supportedModels } = await import("../../../assets-local/model-catalog.js");
+    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     const modelId = input["model"] !== undefined ? String(input["model"]) : undefined;
     const spec = this.opts.specFor
       ? this.opts.specFor("text-to-image", modelId)
       : modelId
-        ? supportedModels().find((m) => m.id === modelId && m.kind === "text-to-image")
-        : defaultModelFor("text-to-image");
+        ? supportedModels(this.opts.device).find((m) => m.id === modelId && m.kind === "text-to-image")
+        : installedModelFor("text-to-image", (id) => runner.isModelInstalled(id), this.opts.device);
     if (!spec) return { content: "Error: no local text-to-image model available for this device.", isError: true };
-    const runner: LocalRunnerLike = this.opts.runner ?? new LocalModelRunner();
     if (!runner.isModelInstalled(spec.id)) {
       return { content: `Error: ${spec.label} is not installed. Run \`strada assets-local-setup --model ${spec.id}\` first.`, isError: true };
     }

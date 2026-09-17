@@ -232,11 +232,15 @@ describe("realLocalAvailability is a measurement, not a require() that cannot ru
   // and "false" for a model that was installed — every sprint's sprites went
   // procedural and nothing said why.
   it("agrees with the catalog and the runner asked directly, in this ESM module", async () => {
+    // Inverted 2026-09-17 (audit A2 / D54): the expectation used to be
+    // computed through defaultModelFor — the smallest model — which is the
+    // defect itself. The measurement is "any supported model is installed".
     const { realLocalAvailability } = await import("./sprite-generate.js");
-    const { defaultModelFor } = await import("../../../assets-local/model-catalog.js");
+    const { installedModelFor } = await import("../../../assets-local/model-catalog.js");
     const { LocalModelRunner } = await import("../../../assets-local/local-model-runner.js");
-    const spec = defaultModelFor("text-to-image");
-    const direct = spec !== undefined && new LocalModelRunner().isModelInstalled(spec.id);
+    const runner = new LocalModelRunner();
+    const spec = installedModelFor("text-to-image", (id) => runner.isModelInstalled(id));
+    const direct = spec !== undefined && runner.isModelInstalled(spec.id);
     expect(realLocalAvailability()("text-to-image")).toBe(direct);
   });
 
@@ -505,5 +509,129 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
     expect(outs[0]!.endsWith("/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png")).toBe(true);
     expect(outs[1]!.endsWith("/Assets/Art/Generated/Brand.png")).toBe(true);
     expect(existsSync(join(root, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+  });
+});
+
+/**
+ * Audit A2 / D54 (Codex #13): AUTO asked "is the SMALLEST supported model
+ * installed?" — a machine with only sdxl (9 GB of weights) read as "nothing
+ * installed", and even when availability was patched, every default spec
+ * still resolved to sd15 and the runner refused it as not installed.
+ */
+describe("AUTO runs the model that is installed, not the smallest the device could run (audit A2 / D54)", () => {
+  const bigMac = { totalRamGb: 64, appleSilicon: true };
+  const onlySdxl = (id: string): boolean => id === "sdxl";
+  const onlySd15 = (id: string): boolean => id === "sd15";
+  /** A runner that records which model each inference was asked for. */
+  function recorder(installed: (id: string) => boolean): LocalRunnerLike & { drawn: string[]; batched: string[]; lifted: string[] } {
+    const drawn: string[] = [];
+    const batched: string[] = [];
+    const lifted: string[] = [];
+    return {
+      drawn,
+      batched,
+      lifted,
+      isModelInstalled: installed,
+      textToImage: async (spec: { id: string }, _p: string, out: string) => {
+        drawn.push(spec.id);
+        mkdirSync(dirname(out), { recursive: true });
+        writeFileSync(out, pngFixture("noise"));
+        return { ok: true, detail: out };
+      },
+      textToImageBatch: async (spec: { id: string }, jobs: Array<{ out: string }>) => {
+        batched.push(spec.id);
+        for (const j of jobs) { mkdirSync(dirname(j.out), { recursive: true }); writeFileSync(j.out, pngFixture("noise")); }
+        return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
+      },
+      imageToMesh: async (spec: { id: string }, _img: string, out: string) => {
+        lifted.push(spec.id);
+        writeFileSync(out, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        return { ok: true, detail: out };
+      },
+    } as never;
+  }
+
+  it("realLocalAvailability: only sdxl installed is 'available' (root isolated from ~/.strada)", async () => {
+    const { realLocalAvailability } = await import("./sprite-generate.js");
+    const root = mkdtempSync(join(tmpdir(), "auto-avail-"));
+    dirs.push(root);
+    const prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = root;
+    try {
+      mkdirSync(join(root, "venv", "bin"), { recursive: true });
+      writeFileSync(join(root, "venv", "bin", "python3"), "");
+      expect(realLocalAvailability(bigMac)("text-to-image")).toBe(false);
+      writeFileSync(join(root, ".installed-sdxl"), "now\n");
+      expect(realLocalAvailability(bigMac)("text-to-image")).toBe(true);
+      // The 3D kind is judged on its own installs, not the 2D marker.
+      expect(realLocalAvailability(bigMac)("image-to-3d")).toBe(false);
+    } finally {
+      if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+      else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    }
+  });
+
+  it("single sprite: the spec handed to the runner is sdxl when only sdxl is installed", async () => {
+    const { root, ctx } = project();
+    const runner = recorder(onlySdxl);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Hero" }, ctx);
+    expect(String(r.content)).toContain("Sprite written by local diffusion");
+    expect(String(r.content)).not.toContain("PLACEHOLDER");
+    expect(runner.drawn).toEqual(["sdxl"]);
+    expect(existsSync(join(root, "Assets", "Art", "Generated", "Hero.png"))).toBe(true);
+  });
+
+  it("batch: every batch call to the runner asks for sdxl", async () => {
+    const { ctx } = project();
+    const runner = recorder(onlySdxl);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ batch: [{ name: "A" }, { name: "B" }] }, ctx);
+    expect(r.isError).toBeFalsy();
+    // The batch may retry blank draws with another seed; every call is sdxl.
+    expect(runner.batched.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(runner.batched)).toEqual(new Set(["sdxl"]));
+    expect(runner.drawn).toEqual([]);
+  });
+
+  it("mesh concept stage: the 2D model drawn with is sdxl, the lift uses the installed 3D model", async () => {
+    const { ctx } = project();
+    const runner = recorder((id) => id === "sdxl" || id === "triposr");
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Crate" }, ctx);
+    expect(String(r.content)).toContain("Mesh written by local image-to-3D");
+    expect(runner.drawn).toEqual(["sdxl"]);
+    expect(runner.lifted).toEqual(["triposr"]);
+  });
+
+  // GUARDS: the smallest installed model still wins, an explicit id is still
+  // honoured, and with nothing installed the message names the smallest.
+  it("guard: with sd15 AND sdxl installed the smallest installed (sd15) is used", async () => {
+    const { ctx } = project();
+    const runner = recorder((id) => id === "sd15" || id === "sdxl");
+    await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Hero" }, ctx);
+    expect(runner.drawn).toEqual(["sd15"]);
+  });
+
+  it("guard: only sd15 installed keeps drawing with sd15", async () => {
+    const { ctx } = project();
+    const runner = recorder(onlySd15);
+    await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Hero" }, ctx);
+    expect(runner.drawn).toEqual(["sd15"]);
+  });
+
+  it("guard: an explicit model id is not swapped for the installed one", async () => {
+    const { ctx } = project();
+    const runner = recorder(onlySdxl);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Hero", provider: "local", model: "sd15" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(String(r.content)).toContain("is not installed");
+    expect(String(r.content)).toContain("--model sd15");
+    expect(runner.drawn).toEqual([]);
+  });
+
+  it("guard: nothing installed names the smallest supported model in the setup hint", async () => {
+    const { ctx } = project();
+    const runner = recorder(() => false);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Hero", provider: "local" }, ctx);
+    expect(r.isError).toBe(true);
+    expect(String(r.content)).toContain("--model sd15");
   });
 });

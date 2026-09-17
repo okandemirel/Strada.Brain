@@ -185,3 +185,23 @@ export function catalogForDevice(device: DeviceCapability = probeDevice()): Arra
 export function defaultModelFor(kind: LocalModelKind, device: DeviceCapability = probeDevice()): LocalModelSpec | undefined {
   return supportedModels(device).find((m) => m.kind === kind);
 }
+
+/**
+ * The model a generation tool actually runs for a kind: the first supported
+ * model of that kind (smallest first) that `isInstalled` reports installed.
+ * Only when NONE is installed does this fall back to the smallest supported
+ * one, so the "not installed" message still names a model the device can run.
+ *
+ * Audit A2 / D54 (Codex #13): AUTO selection asked `defaultModelFor` and then
+ * checked whether THAT one was installed — a machine with only sdxl installed
+ * answered "no local model" and every AUTO sprite went procedural, while
+ * 9 GB of installed weights sat idle.
+ */
+export function installedModelFor(
+  kind: LocalModelKind,
+  isInstalled: (modelId: string) => boolean,
+  device: DeviceCapability = probeDevice(),
+): LocalModelSpec | undefined {
+  const candidates = supportedModels(device).filter((m) => m.kind === kind);
+  return candidates.find((m) => isInstalled(m.id)) ?? candidates[0];
+}
