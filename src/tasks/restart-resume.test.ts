@@ -646,6 +646,7 @@ describe("a mission stopped by the BUDGET comes back when the window drains", ()
       isLineageCancelled: () => boolean;
       lineageTipOf: () => unknown;
       _unifiedBudgetManager: unknown;
+      runReservations: Map<string, string>;
       scheduleKeepAliveRearm: () => void;
     };
     internals.missionRetries = new Map();
@@ -654,6 +655,9 @@ describe("a mission stopped by the BUDGET comes back when the window drains", ()
     internals.isLineageCancelled = () => false;
     internals.lineageTipOf = () => null;
     internals._unifiedBudgetManager = { isGlobalExceeded: () => budgetExceeded };
+    // The park path asks the budget to ignore THIS run's own reservation
+    // (D20), so the map has to exist on a hand-built executor.
+    internals.runReservations = new Map();
     const blocks: string[] = [];
     const notices: string[] = [];
     internals.taskManager = {
