@@ -81,6 +81,20 @@ export function shellVerification(command: string): "ran" | "maybe" | "no" {
   return best;
 }
 
+/**
+ * Does this tool call's isError report a VERDICT rather than a broken tool?
+ * The dedicated verifiers (unity_verify_change, dotnet_test, …) by name, and
+ * a shell that ran one (`npm test`, `dotnet build`) by its command: three
+ * failing `npm test` runs through shell_exec took the tool away for sixty
+ * seconds while dotnet_test stayed exempt (Codex 2026-09-17 on 43c43f1e).
+ */
+export function toolReportsVerdict(toolName: string, input: Record<string, unknown> | undefined): boolean {
+  if (isVerificationToolName(toolName)) return true;
+  if (toolName !== "shell_exec") return false;
+  const command = input?.["command"];
+  return typeof command === "string" && shellVerification(command) !== "no";
+}
+
 function shellCommandVerifies(command: string): boolean {
   return shellVerification(command) !== "no";
 }

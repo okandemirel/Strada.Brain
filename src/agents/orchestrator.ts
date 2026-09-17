@@ -114,6 +114,7 @@ import {
   userExplicitlyAskedForPlan,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, looksLikeWriteTool, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
+import { toolReportsVerdict } from "./autonomy/self-verification.js";
 import { DMPolicy, isDestructiveOperation, destructiveShellFlag, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
@@ -5102,7 +5103,7 @@ export class Orchestrator {
     const breakerScope = this.toolBreakerScope(chatId);
     const breakerTarget = failureTarget(activeToolCall.input);
     const tripped = this.toolIsCircuitBroken(breakerScope.key, activeToolCall.name, breakerTarget);
-    if (tripped !== null && !isVerificationToolName(activeToolCall.name)) {
+    if (tripped !== null && !toolReportsVerdict(activeToolCall.name, activeToolCall.input as Record<string, unknown>)) {
       // audited 2026-09-02: name what was measured — the count, whether it was
       // one target or many, the scope, and when a retry is admitted. The old
       // text claimed "temporarily" while the code implemented "forever".
@@ -5407,7 +5408,15 @@ export class Orchestrator {
       }
       emitSubstep(result.isError ? "skipped" : "done");
 
-      this.trackToolError(breakerScope.key, activeToolCall.name, !!result.isError, breakerTarget);
+      // A verdict is not a tool failure: a shell that RAN the tests and
+      // reported them red must not count toward the breaker any more than
+      // dotnet_test does (Codex 2026-09-17).
+      this.trackToolError(
+        breakerScope.key,
+        activeToolCall.name,
+        !!result.isError && !toolReportsVerdict(activeToolCall.name, activeToolCall.input as Record<string, unknown>),
+        breakerTarget,
+      );
 
       // audited 2026-09-02: a warn-tier instinct match is shown to the model here,
       // on the result it reads, instead of dying in a debug log.

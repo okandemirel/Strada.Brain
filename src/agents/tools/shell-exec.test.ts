@@ -48,6 +48,31 @@ describe("ShellExecTool", () => {
     expect(ok.metadata?.["exitCode"]).toBe(0);
   });
 
+  it("a predicate's 'no' is not a failure: grep with no match, git diff --exit-code on a dirty tree (Codex 2026-09-17)", async () => {
+    const noMatch = await tool.execute({ command: "grep -q __absent_sentinel__ /dev/null" }, ctx);
+    expect(noMatch.metadata?.["exitCode"]).toBe(1);
+    expect(noMatch.isError).toBeFalsy();
+    // …but grep's real error (exit 2: no such file) still is one.
+    const missing = await tool.execute({ command: "grep -q x /nonexistent/file/for/test" }, ctx);
+    expect(missing.metadata?.["exitCode"]).toBe(2);
+    expect(missing.isError).toBe(true);
+    // A chain decides by its LAST segment.
+    const chained = await tool.execute({ command: "echo hi && grep -q nope /dev/null" }, ctx);
+    expect(chained.isError).toBeFalsy();
+    const wrapped = await tool.execute({ command: "grep -q nope /dev/null; exit 3" }, ctx);
+    expect(wrapped.isError).toBe(true);
+  });
+
+  it("the caller can name the exit codes that mean success", async () => {
+    const accepted = await tool.execute({ command: "exit 3", ok_exit_codes: [0, 3] }, ctx);
+    expect(accepted.isError).toBeFalsy();
+    const refused = await tool.execute({ command: "exit 4", ok_exit_codes: [0, 3] }, ctx);
+    expect(refused.isError).toBe(true);
+    const malformed = await tool.execute({ command: "exit 0", ok_exit_codes: ["zero"] }, ctx);
+    expect(malformed.isError).toBe(true);
+    expect(malformed.content).toContain("ok_exit_codes");
+  });
+
   it("a timed-out command is an error even when its exit code is not the caller's", async () => {
     const result = await tool.execute({ command: "sleep 5", timeout_ms: 200 } as never, ctx);
     expect(result.metadata?.["timedOut"]).toBe(true);

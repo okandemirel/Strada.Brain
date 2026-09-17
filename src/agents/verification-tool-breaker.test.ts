@@ -59,7 +59,45 @@ const callFourTimes = async (orch: Orchestrator, name: string): Promise<string[]
   return out;
 };
 
+const callFourTimesWith = async (orch: Orchestrator, name: string, input: Record<string, unknown>): Promise<string[]> => {
+  const out: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const [r] = await (
+      orch as unknown as {
+        executeToolCalls: (c: string, t: unknown[], o: unknown) => Promise<Array<{ content: string }>>;
+      }
+    ).executeToolCalls("chat1", [{ id: `s${i}`, name, input }], { mode: "background" });
+    out.push(r?.content ?? "");
+  }
+  return out;
+};
+
 describe("the consecutive-failure breaker", () => {
+  it("keeps shell_exec available when the shell RAN the tests and they were red (Codex 2026-09-17)", async () => {
+    // Since shell_exec reports a non-zero exit as isError, three failing
+    // `npm test` runs took the shell away for sixty seconds while dotnet_test
+    // stayed exempt. The verdict is the tests', not the tool's.
+    const { orch, tools } = orchestratorWith("shell_exec");
+    tools[0]!.metadata = { readOnly: false } as never;
+    tools[0]!.execute = vi.fn().mockResolvedValue({ content: "Tests: 3 failed, 40 passed\nExit code: 1", isError: true });
+
+    const results = await callFourTimesWith(orch, "shell_exec", { command: "npm test" });
+
+    expect(tools[0]!.execute).toHaveBeenCalledTimes(4);
+    expect(results.every((r) => !r.includes("temporarily disabled"))).toBe(true);
+  });
+
+  it("…but a shell command that is not a verifier still trips it", async () => {
+    const { orch, tools } = orchestratorWith("shell_exec");
+    tools[0]!.metadata = { readOnly: false } as never;
+    tools[0]!.execute = vi.fn().mockResolvedValue({ content: "ls: cannot access 'nope': No such file\nExit code: 2", isError: true });
+
+    const results = await callFourTimesWith(orch, "shell_exec", { command: "ls nope" });
+
+    expect(tools[0]!.execute).toHaveBeenCalledTimes(3);
+    expect(results[3]).toContain("temporarily disabled");
+  });
+
   it("keeps a verification tool available however often it reports failure", async () => {
     const { orch, tools } = orchestratorWith("unity_verify_change");
 

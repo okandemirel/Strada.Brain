@@ -113,6 +113,14 @@ export class ShellExecTool implements ITool {
         description:
           "Timeout in milliseconds (default: 30000, max: 300000). Use higher values for builds.",
       },
+      ok_exit_codes: {
+        type: "array",
+        items: { type: "integer" },
+        description:
+          "Exit codes that mean the command did its job (default: [0]). Use it for predicates whose " +
+          "non-zero exit is an answer, not a failure — e.g. [0, 1] for 'grep' or 'git diff --exit-code'. " +
+          "Common predicates (grep/rg/test/git diff --exit-code) already accept exit 1.",
+      },
     },
     required: ["command"],
   };
@@ -170,6 +178,15 @@ export class ShellExecTool implements ITool {
 
     // Explicit timeout validation — surface out-of-range errors instead of
     // silently clamping, so callers can correct their input.
+    const rawOk = input["ok_exit_codes"];
+    const okExitCodes = new Set<number>([0]);
+    if (rawOk !== undefined) {
+      if (!Array.isArray(rawOk) || rawOk.some((c) => typeof c !== "number" || !Number.isInteger(c) || c < 0 || c > 255)) {
+        return { content: "Error: 'ok_exit_codes' must be an array of integers between 0 and 255", isError: true };
+      }
+      for (const c of rawOk) okExitCodes.add(c as number);
+    }
+    for (const c of predicateExitCodes(command)) okExitCodes.add(c);
     const rawTimeout = input["timeout_ms"];
     let timeoutMs = DEFAULT_TIMEOUT_MS;
     if (rawTimeout !== undefined && rawTimeout !== null) {
@@ -257,7 +274,13 @@ export class ShellExecTool implements ITool {
         // tool metrics, the per-tool circuit breaker and the failure archive —
         // counted the failure as a success (audit 04.1, 2026-09-13).
         // dotnet-tools.ts sets the same flag from its exit code.
-        isError: result.exitCode !== 0 || result.timedOut,
+        // …UNLESS THE EXIT IS THE ANSWER: `grep -q` with no match and
+        // `git diff --exit-code` on a dirty tree exit 1 having done exactly
+        // their job, and reading those as failures archived false failures
+        // and tripped the breaker after three (Codex 2026-09-17 on 43c43f1e).
+        // The caller can name its own accepted codes; the common predicates
+        // are known.
+        isError: result.timedOut || !okExitCodes.has(result.exitCode),
         metadata: {
           exitCode: result.exitCode,
           timedOut: result.timedOut,
@@ -289,6 +312,23 @@ export class ShellExecTool implements ITool {
       };
     }
   }
+}
+
+/**
+ * Exit codes that are an ANSWER for the command's last segment, not a
+ * failure: grep/rg/egrep/fgrep and `test`/`[` exit 1 for "no" (2 is a real
+ * error), and `git diff --exit-code|--quiet` (and diff-index/diff-files)
+ * exit 1 for "there are differences". Only the last segment decides, because
+ * that is the status the shell returns.
+ */
+export function predicateExitCodes(command: string): ReadonlySet<number> {
+  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
+  const last = segments[segments.length - 1] ?? "";
+  const head = last.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "");
+  if (/^(?:\S*\/)?(?:e|f)?grep\b|^(?:\S*\/)?rg\b|^test\b|^\[\s/u.test(head)) return new Set([1]);
+  if (/^(?:\S*\/)?git\s+diff(?:-index|-files)?\b[^|;&]*--(?:exit-code|quiet)\b/u.test(head)) return new Set([1]);
+  if (/^(?:\S*\/)?diff\b|^(?:\S*\/)?cmp\b/u.test(head)) return new Set([1]);
+  return new Set();
 }
 
 function formatResult(command: string, result: { stdout: string; stderr: string; exitCode: number; timedOut: boolean; durationMs: number }): string {
