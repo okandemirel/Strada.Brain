@@ -40,6 +40,7 @@ import type { TriggerRegistry } from "../daemon/trigger-registry.js";
 import type { ApprovalQueue } from "../daemon/security/approval-queue.js";
 import type { WebhookTrigger } from "../daemon/triggers/webhook-trigger.js";
 import { WebhookRateLimiter } from "../daemon/triggers/webhook-trigger.js";
+import type { RateLimiter } from "../security/rate-limiter.js";
 import type { IdentityStateManager, IdentityState } from "../identity/identity-state.js";
 import type { DaemonStorage } from "../daemon/daemon-storage.js";
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
@@ -439,6 +440,13 @@ export interface RouteContext {
   identityManager?: IdentityStateManager;
   capabilityManifest?: string;
   daemonStorage?: DaemonStorage;
+  /**
+   * The RUNNING message/token limiter, so POST /api/settings/rate-limits can
+   * change what is enforced instead of only writing a settings row that
+   * nothing read (item 2.7). Absent in tests and in runtimes that disabled
+   * rate limiting.
+   */
+  rateLimiter?: Pick<RateLimiter, "updateConfig" | "getConfig">;
   historyDepth: number;
   triggerFireRetentionDays: number;
   startupNotices: string[];

@@ -22,6 +22,7 @@ import {
 } from "../daemon/triggers/webhook-trigger.js";
 import type { IdentityStateManager } from "../identity/identity-state.js";
 import type { DaemonStorage } from "../daemon/daemon-storage.js";
+import type { RateLimiter } from "../security/rate-limiter.js";
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import type { BootReport } from "../common/capability-contract.js";
@@ -145,6 +146,8 @@ export class DashboardServer {
   private identityManager?: IdentityStateManager;
   private capabilityManifest?: string;
   private daemonStorage?: DaemonStorage;
+  /** The RUNNING rate limiter POST /api/settings/rate-limits drives (item 2.7). */
+  private rateLimiter?: Pick<RateLimiter, "updateConfig" | "getConfig">;
   private historyDepth: number = 10;
   private triggerFireRetentionDays: number = 30;
 
@@ -398,6 +401,16 @@ export class DashboardServer {
   }
 
   /**
+   * Register the running rate limiter so the settings POST can change what is
+   * enforced without a restart (item 2.7). Call once the limiter exists;
+   * runtimes with rate limiting disabled never call it and the route then
+   * persists the setting for the next boot only.
+   */
+  setRateLimiter(limiter: Pick<RateLimiter, "updateConfig" | "getConfig">): void {
+    this.rateLimiter = limiter;
+  }
+
+  /**
    * Register workspace bus for monitor endpoints (Phase 3).
    * Subscribes to agent_activity events to populate the activity log.
    */
@@ -530,6 +543,7 @@ export class DashboardServer {
       identityManager: this.identityManager,
       capabilityManifest: this.capabilityManifest,
       daemonStorage: this.daemonStorage,
+      rateLimiter: this.rateLimiter,
       historyDepth: this.historyDepth,
       triggerFireRetentionDays: this.triggerFireRetentionDays,
       startupNotices: this.startupNotices,

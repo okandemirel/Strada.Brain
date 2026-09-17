@@ -55,6 +55,98 @@ interface UserBucket {
 
 // ---------- Implementation ----------
 
+/**
+ * The rate-limit fields a dashboard POST may change, with the `settings`
+ * override key each one is stored under and the ceiling above which a value
+ * is not a policy but a typo. ONE table drives validation, the live update
+ * and the startup restore, so the API, the store and the limiter cannot
+ * disagree about what a legal limit is (item 2.7: the POST handler
+ * stringified whatever arrived — "abc", -5 and 1e15 were all persisted as the
+ * enforced limit, and the running limiter was never told).
+ *
+ * 0 means UNLIMITED everywhere in this file — it is how the dashboard says
+ * "no limit", so it must stay legal.
+ */
+export const RATE_LIMIT_SETTINGS = [
+  { field: "messagesPerMinute", storageKey: "rate_limit_messages_per_minute", max: 100_000 },
+  { field: "messagesPerHour", storageKey: "rate_limit_messages_per_hour", max: 1_000_000 },
+  { field: "tokensPerDay", storageKey: "rate_limit_tokens_per_day", max: 10_000_000_000 },
+] as const satisfies ReadonlyArray<{ field: keyof RateLimitConfig; storageKey: string; max: number }>;
+
+export type RateLimitSettingField = (typeof RATE_LIMIT_SETTINGS)[number]["field"];
+
+/**
+ * The number this value means, or the reason it is not a limit. Accepts a
+ * number or a numeric string (API clients send strings); rejects NaN,
+ * Infinity, booleans, fractions, negatives and absurd magnitudes.
+ */
+export function parseRateLimitValue(
+  field: RateLimitSettingField,
+  raw: unknown,
+): { ok: true; value: number } | { ok: false; error: string } {
+  const max = RATE_LIMIT_SETTINGS.find((s) => s.field === field)!.max;
+  const refuse = (why: string): { ok: false; error: string } => ({ ok: false, error: `${field}: ${why}` });
+  let n: number;
+  if (typeof raw === "number") {
+    n = raw;
+  } else if (typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))) {
+    n = Number(raw);
+  } else {
+    return refuse(`expected a number, got ${typeof raw === "string" ? JSON.stringify(raw) : typeof raw}`);
+  }
+  if (!Number.isFinite(n)) return refuse("must be a finite number");
+  if (!Number.isInteger(n)) return refuse("must be a whole number");
+  if (n < 0) return refuse("must not be negative (0 means unlimited)");
+  if (n > max) return refuse(`must not exceed ${max.toLocaleString("en-US")}`);
+  return { ok: true, value: n };
+}
+
+/** What the limiter is told to enforce. Every value has passed the table above. */
+export type RateLimitPatch = Partial<Record<RateLimitSettingField, number>>;
+
+/** The least a stored-override source has to offer (DaemonStorage satisfies it). */
+export interface RateLimitOverrideSource {
+  getSettingsOverride(key: string, scope?: string): string | undefined;
+}
+
+/**
+ * Put the dashboard's stored rate-limit overrides in force on a limiter that
+ * was just constructed from config. Without this a restart silently reverted
+ * to the config numbers: the dashboard wrote the override, the GET read it
+ * back, and nothing ever enforced it (item 2.7).
+ *
+ * A corrupt or out-of-range stored value is IGNORED and logged, never
+ * enforced — a bad row in settings must not unlimit (or freeze) the daemon.
+ * Returns the overrides that were applied.
+ */
+export function applyStoredRateLimitOverrides(
+  limiter: RateLimiter,
+  storage: RateLimitOverrideSource,
+  logger?: { info: (msg: string, meta?: unknown) => void; warn: (msg: string, meta?: unknown) => void },
+): RateLimitPatch {
+  const patch: RateLimitPatch = {};
+  for (const { field, storageKey } of RATE_LIMIT_SETTINGS) {
+    let raw: string | undefined;
+    try {
+      raw = storage.getSettingsOverride(storageKey);
+    } catch {
+      continue; // an unreadable store is not a limit change
+    }
+    if (raw === undefined) continue;
+    const parsed = parseRateLimitValue(field, raw);
+    if (!parsed.ok) {
+      logger?.warn("Stored rate-limit override ignored", { key: storageKey, value: raw, reason: parsed.error });
+      continue;
+    }
+    patch[field] = parsed.value;
+  }
+  if (Object.keys(patch).length > 0) {
+    limiter.updateConfig(patch);
+    logger?.info("Stored rate-limit overrides applied", patch);
+  }
+  return patch;
+}
+
 export class RateLimiter {
   private readonly config: RateLimitConfig;
   private readonly userBuckets = new Map<string, UserBucket>();
@@ -84,6 +176,38 @@ export class RateLimiter {
     const now = new Date();
     this.dayStart = startOfDayUTC(now);
     this.monthStart = startOfMonthUTC(now);
+  }
+
+  /** What this limiter is enforcing right now (a copy — callers cannot poke it). */
+  getConfig(): RateLimitConfig {
+    return { ...this.config };
+  }
+
+  /**
+   * Change what the RUNNING limiter enforces. The dashboard's POST
+   * /api/settings/rate-limits used to write a settings row and stop there, so
+   * the new limit took effect only at the next restart — and nothing applied
+   * it then either (item 2.7).
+   *
+   * Every value is re-validated here, not only at the HTTP edge: this is the
+   * last gate before a number becomes policy, and a caller that skipped the
+   * route (a script, a future endpoint) must not be able to install `-1` or
+   * `NaN` as a limit. In-flight per-user counters are deliberately kept: a
+   * tightened limit applies to the traffic already seen this minute.
+   */
+  updateConfig(patch: RateLimitPatch): void {
+    const validated: RateLimitPatch = {};
+    for (const [field, raw] of Object.entries(patch) as Array<[RateLimitSettingField, unknown]>) {
+      if (raw === undefined) continue;
+      const parsed = parseRateLimitValue(field, raw);
+      if (!parsed.ok) throw new RangeError(`Invalid rate limit — ${parsed.error}`);
+      validated[field] = parsed.value;
+    }
+    // Assigned only after EVERY field validated, so a bad field cannot leave
+    // the limiter half-updated.
+    for (const [field, value] of Object.entries(validated) as Array<[RateLimitSettingField, number]>) {
+      this.config[field] = value;
+    }
   }
 
   /**

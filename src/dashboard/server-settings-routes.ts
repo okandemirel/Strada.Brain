@@ -12,6 +12,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import { RATE_LIMIT_SETTINGS, parseRateLimitValue, type RateLimitPatch } from "../security/rate-limiter.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import type { RouteContext } from "./server-types.js";
 
@@ -89,10 +90,16 @@ export function handleSettingsRoutes(
       sendJsonError(res, 503, "Storage not available");
       return true;
     }
-    const mpm = ctx.daemonStorage?.getSettingsOverride("rate_limit_messages_per_minute") ?? "0";
-    const mph = ctx.daemonStorage?.getSettingsOverride("rate_limit_messages_per_hour") ?? "0";
-    const tpd = ctx.daemonStorage?.getSettingsOverride("rate_limit_tokens_per_day") ?? "0";
-    sendJson(res, { messagesPerMinute: Number(mpm), messagesPerHour: Number(mph), tokensPerDay: Number(tpd) });
+    const storage = ctx.daemonStorage;
+    // One table for GET, POST and the startup restore (RATE_LIMIT_SETTINGS) so
+    // the three cannot drift — the tokensPerDay field once round-tripped
+    // through a key nothing read.
+    sendJson(
+      res,
+      Object.fromEntries(
+        RATE_LIMIT_SETTINGS.map(({ field, storageKey }) => [field, Number(storage.getSettingsOverride(storageKey) ?? "0")]),
+      ),
+    );
     return true;
   }
 
@@ -106,18 +113,34 @@ export function handleSettingsRoutes(
       if (!parsed) return;
       try {
         const storage = ctx.daemonStorage!;
-        if (parsed.messagesPerMinute !== undefined) {
-          storage.setSettingsOverride("rate_limit_messages_per_minute", String(parsed.messagesPerMinute));
+        // VALIDATE THE WHOLE BODY FIRST. Until item 2.7 the handler wrote
+        // `String(parsed.x)` for whatever arrived, so "abc", -5 and 1e15 all
+        // became the stored (and later enforced) limit. A bad field must leave
+        // the store and the live limiter exactly as they were, so nothing is
+        // written until every submitted field has passed.
+        const patch: RateLimitPatch = {};
+        for (const { field } of RATE_LIMIT_SETTINGS) {
+          const raw = parsed[field];
+          if (raw === undefined) continue;
+          const value = parseRateLimitValue(field, raw);
+          if (!value.ok) {
+            sendJsonError(res, 400, `Invalid rate limit — ${value.error}`);
+            return;
+          }
+          patch[field] = value.value;
         }
-        if (parsed.messagesPerHour !== undefined) {
-          storage.setSettingsOverride("rate_limit_messages_per_hour", String(parsed.messagesPerHour));
-        }
-        if (parsed.tokensPerDay !== undefined) {
+
+        // The LIVE limiter first: if it refuses the numbers (its own last-gate
+        // validation), nothing is persisted either, so a restart cannot bring
+        // back a limit the running daemon rejected.
+        ctx.rateLimiter?.updateConfig(patch);
+        for (const { field, storageKey } of RATE_LIMIT_SETTINGS) {
+          const value = patch[field];
           // Write the SAME key the GET handler reads (rate_limit_tokens_per_day)
           // and the frontend sends (tokensPerDay). The previous key
           // (rate_limit_messages_per_day) was never read and the daily field
           // never round-tripped, so it always reloaded as 0.
-          storage.setSettingsOverride("rate_limit_tokens_per_day", String(parsed.tokensPerDay));
+          if (value !== undefined) storage.setSettingsOverride(storageKey, String(value));
         }
         sendJson(res, { success: true });
       } catch (err) {

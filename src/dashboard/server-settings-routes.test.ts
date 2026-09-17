@@ -13,6 +13,7 @@ import {
 } from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { RateLimiter } from "../security/rate-limiter.js";
 
 // =============================================================================
 // MOCK STORAGE — in-memory settings overrides keyed by `${key}::${scope}`
@@ -97,6 +98,15 @@ function readJsonBody<T>(req: IncomingMessage, res: ServerResponse, maxBytes = 4
 function makeCtx(storage?: DaemonStorage): RouteContext {
   return {
     daemonStorage: storage,
+    readJsonBody,
+  } as unknown as RouteContext;
+}
+
+/** makeCtx plus the running limiter a POST is supposed to drive (item 2.7). */
+function makeCtxWithLimiter(storage: DaemonStorage, rateLimiter: RateLimiter): RouteContext {
+  return {
+    daemonStorage: storage,
+    rateLimiter,
     readJsonBody,
   } as unknown as RouteContext;
 }
@@ -705,5 +715,131 @@ describe("handleSettingsRoutes", () => {
         storage.initialize();
       }
     });
+  });
+});
+
+// =============================================================================
+// ITEM 2.7 — the rate-limit POST must VALIDATE and must reach the LIVE limiter
+//
+// Before this suite the handler stringified whatever arrived
+// (`String(parsed.messagesPerMinute)`), so "abc", -5 and 1e15 were all stored
+// as the enforced limit, and nothing told the running RateLimiter that its
+// numbers had changed — the new value only took effect on the next restart,
+// and even then nothing read it back.
+// =============================================================================
+
+describe("rate-limit settings are validated and drive the live limiter (item 2.7)", () => {
+  let storage: DaemonStorage;
+  let tmpDir: string;
+  let res: MockRes & ServerResponse;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "rate-limit-live-"));
+    storage = new DaemonStorage(join(tmpDir, "daemon.db"));
+    storage.initialize();
+    res = createMockRes();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const post = async (body: unknown, ctx: RouteContext): Promise<void> => {
+    handleSettingsRoutes("/api/settings/rate-limits", "POST", createMockReq(JSON.stringify(body)), res, ctx);
+    await vi.waitFor(() => {
+      expect(res.end).toHaveBeenCalled();
+    });
+  };
+
+  for (const [label, body, field] of [
+    ["a negative limit", { messagesPerMinute: -5 }, "messagesPerMinute"],
+    ["a non-numeric limit", { tokensPerDay: "abc" }, "tokensPerDay"],
+    ["an absurd limit", { messagesPerHour: 1e15 }, "messagesPerHour"],
+    ["a fractional limit", { messagesPerMinute: 2.5 }, "messagesPerMinute"],
+    ["a boolean limit", { messagesPerMinute: true }, "messagesPerMinute"],
+    ["NaN", { tokensPerDay: "NaN" }, "tokensPerDay"],
+  ] as Array<[string, Record<string, unknown>, string]>) {
+    it(`refuses ${label} with a 400 that names the field and changes nothing`, async () => {
+      const limiter = new RateLimiter({ messagesPerMinute: 4, messagesPerHour: 40, tokensPerDay: 400 });
+      const before = limiter.getConfig();
+      await post(body, makeCtxWithLimiter(storage, limiter));
+
+      expect(res.statusCode).toBe(400);
+      expect(String((responseJson(res) as { error?: string }).error)).toContain(field);
+      // Nothing was stored…
+      expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBeUndefined();
+      expect(storage.getSettingsOverride("rate_limit_messages_per_hour")).toBeUndefined();
+      expect(storage.getSettingsOverride("rate_limit_tokens_per_day")).toBeUndefined();
+      // …and the running limiter still enforces what it did before.
+      expect(limiter.getConfig()).toEqual(before);
+    });
+  }
+
+  it("refuses a bad value with NO limiter wired — the route validates, not only the limiter", async () => {
+    // The dashboard can be up before (or without) a rate limiter. With the
+    // route trusting the limiter to object, this body was persisted verbatim
+    // and became the enforced limit at the next boot.
+    await post({ messagesPerMinute: -5, tokensPerDay: "abc" }, makeCtx(storage));
+    expect(res.statusCode).toBe(400);
+    expect(String((responseJson(res) as { error?: string }).error)).toContain("messagesPerMinute");
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBeUndefined();
+    expect(storage.getSettingsOverride("rate_limit_tokens_per_day")).toBeUndefined();
+  });
+
+  it("refuses the WHOLE body when one field of several is bad (no partial write)", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4 });
+    await post({ messagesPerMinute: 9, tokensPerDay: -1 }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(400);
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBeUndefined();
+    expect(limiter.getConfig().messagesPerMinute).toBe(4);
+  });
+
+  it("a good POST changes what the limiter actually enforces", async () => {
+    // Unlimited to begin with: without the fix the third message is allowed.
+    const limiter = new RateLimiter({ messagesPerMinute: 0 });
+    await post({ messagesPerMinute: 2 }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(200);
+    expect(responseJson(res)).toMatchObject({ success: true });
+
+    expect(limiter.checkMessageRate("u1").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u1").allowed).toBe(true);
+    const third = limiter.checkMessageRate("u1");
+    expect(third.allowed).toBe(false);
+    expect(third.reason).toContain("2 messages/minute");
+  });
+
+  it("a good POST also relaxes a limit on the live limiter", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 1 });
+    expect(limiter.checkMessageRate("u2").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u2").allowed).toBe(false);
+    await post({ messagesPerMinute: 5 }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(200);
+    expect(limiter.checkMessageRate("u2").allowed).toBe(true);
+  });
+
+  it("GUARD: a valid POST still persists every field and still works with no limiter wired", async () => {
+    await post({ messagesPerMinute: 30, messagesPerHour: 500, tokensPerDay: 100000 }, makeCtx(storage));
+    expect(res.statusCode).toBe(200);
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("30");
+    expect(storage.getSettingsOverride("rate_limit_messages_per_hour")).toBe("500");
+    expect(storage.getSettingsOverride("rate_limit_tokens_per_day")).toBe("100000");
+  });
+
+  it("GUARD: zero stays legal — it is how the UI says 'unlimited'", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 3 });
+    await post({ messagesPerMinute: 0, messagesPerHour: 0, tokensPerDay: 0 }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(200);
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("0");
+    expect(limiter.getConfig().messagesPerMinute).toBe(0);
+    for (let i = 0; i < 10; i++) expect(limiter.checkMessageRate("u3").allowed).toBe(true);
+  });
+
+  it("GUARD: a numeric string from an API client is accepted as the number it is", async () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 0 });
+    await post({ messagesPerMinute: "7" }, makeCtxWithLimiter(storage, limiter));
+    expect(res.statusCode).toBe(200);
+    expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("7");
+    expect(limiter.getConfig().messagesPerMinute).toBe(7);
   });
 });

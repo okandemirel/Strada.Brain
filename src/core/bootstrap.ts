@@ -1732,6 +1732,17 @@ async function bootstrapImpl(
     dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   }
 
+  // Rate limits the dashboard saved are policy, not a stored note: apply them
+  // to the limiter this boot constructed from config, and hand the dashboard
+  // the live limiter so a later POST changes what is enforced immediately
+  // (item 2.7 — the stored override was written, read back by the GET, and
+  // never enforced by anything).
+  if (rateLimiter) {
+    const { applyStoredRateLimitOverrides } = await import("../security/rate-limiter.js");
+    applyStoredRateLimitOverrides(rateLimiter, sharedDaemonStorage, logger);
+    dashboard?.setRateLimiter(rateLimiter);
+  }
+
   // Initialize daemon heartbeat loop (if daemon mode enabled)
   if (options.daemonMode) {
     const daemonConfig = config.daemon;

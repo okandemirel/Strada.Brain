@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { RateLimiter, estimateCost } from "./rate-limiter.js";
+import { RateLimiter, estimateCost, applyStoredRateLimitOverrides } from "./rate-limiter.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -257,5 +257,79 @@ describe("free-tier model pricing (audited 2026-09-02)", () => {
     const limiter = new RateLimiter();
     limiter.recordTokenUsage(1_000_000, 0, "claude");
     expect(limiter.getSnapshot().costToday).toBeCloseTo(3.0, 5);
+  });
+});
+
+// =============================================================================
+// ITEM 2.7 — the limiter must be tellable, and a stored override must be in
+// force from construction (a restart used to forget what the dashboard saved).
+// =============================================================================
+
+describe("updateConfig + stored overrides (item 2.7)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date("2026-03-01T12:00:00Z") });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("updateConfig changes what checkMessageRate enforces, right away", () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 0 });
+    limiter.updateConfig({ messagesPerMinute: 2 });
+    expect(limiter.checkMessageRate("u").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u").allowed).toBe(false);
+  });
+
+  it("updateConfig touches only the fields it is given", () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4, messagesPerHour: 40, tokensPerDay: 400, dailyBudgetUsd: 5 });
+    limiter.updateConfig({ messagesPerHour: 7 });
+    expect(limiter.getConfig()).toEqual({
+      messagesPerMinute: 4,
+      messagesPerHour: 7,
+      tokensPerDay: 400,
+      dailyBudgetUsd: 5,
+      monthlyBudgetUsd: 0,
+    });
+  });
+
+  it("updateConfig refuses an invalid number and keeps the running config", () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 4 });
+    expect(() => limiter.updateConfig({ messagesPerMinute: -1 })).toThrow(/messagesPerMinute/);
+    expect(() => limiter.updateConfig({ tokensPerDay: Number.NaN })).toThrow(/tokensPerDay/);
+    expect(limiter.getConfig().messagesPerMinute).toBe(4);
+  });
+
+  it("a stored override is in force on a freshly constructed limiter", () => {
+    // The daemon restarts: config says 60/minute, the dashboard stored 2.
+    const stored = new Map<string, string>([["rate_limit_messages_per_minute::global", "2"]]);
+    const limiter = new RateLimiter({ messagesPerMinute: 60 });
+    const applied = applyStoredRateLimitOverrides(limiter, {
+      getSettingsOverride: (key, scope = "global") => stored.get(`${key}::${scope}`),
+    });
+    expect(applied).toEqual({ messagesPerMinute: 2 });
+    expect(limiter.checkMessageRate("u").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u").allowed).toBe(true);
+    expect(limiter.checkMessageRate("u").allowed).toBe(false);
+  });
+
+  it("GUARD: no stored override leaves the configured limits exactly as they are", () => {
+    const limiter = new RateLimiter({ messagesPerMinute: 3, tokensPerDay: 99 });
+    const applied = applyStoredRateLimitOverrides(limiter, { getSettingsOverride: () => undefined });
+    expect(applied).toEqual({});
+    expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 3, tokensPerDay: 99 });
+  });
+
+  it("GUARD: a corrupt stored value is ignored, not enforced", () => {
+    const stored = new Map<string, string>([
+      ["rate_limit_messages_per_minute::global", "not-a-number"],
+      ["rate_limit_tokens_per_day::global", "500"],
+    ]);
+    const limiter = new RateLimiter({ messagesPerMinute: 3, tokensPerDay: 99 });
+    const applied = applyStoredRateLimitOverrides(limiter, {
+      getSettingsOverride: (key, scope = "global") => stored.get(`${key}::${scope}`),
+    });
+    expect(applied).toEqual({ tokensPerDay: 500 });
+    expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 3, tokensPerDay: 500 });
   });
 });
