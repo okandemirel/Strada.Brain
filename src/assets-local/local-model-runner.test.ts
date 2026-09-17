@@ -660,10 +660,55 @@ describe("isModelInstalled measures the weights, not just the marker (item 2.15)
     expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
   });
 
-  it("an interrupted download (.incomplete) is NOT an installation", () => {
+  it("an interrupted download of a file the driver loads is NOT an installation; an unrelated one is not its business (round 9 #25)", () => {
     fullyInstall("sdxl");
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    // An abandoned download somewhere else in the cache says nothing about
+    // this revision, and used to make a usable model read as missing.
     weightFile("sdxl", join("blobs", "abc123.incomplete"), "half a tensor");
-    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sdxl")).toBe(false);
+    expect(runner.isModelInstalled("sdxl")).toBe(true);
+    // The file the driver actually loads, still downloading, is not there yet.
+    weightFile("sdxl", join("snapshots", "rev1", "unet", "diffusion_pytorch_model.safetensors.incomplete"), "half a tensor");
+    expect(runner.isModelInstalled("sdxl")).toBe(false);
+  });
+
+  it("a metadata-only cache is not an installation (round 9 #25)", () => {
+    venv();
+    marker("sd15");
+    // model_index.json, refs/main and nothing to run: this read as installed.
+    weightFile("sd15", join("snapshots", "rev1", "model_index.json"), '{"_class_name":"StableDiffusionPipeline"}');
+    weightFile("sd15", join("refs", "main"), "rev1");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+    // One real weight file in that revision and it is.
+    weightFile("sd15", join("snapshots", "rev1", "unet", "diffusion_pytorch_model.safetensors"), "weight-bytes");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(true);
+  });
+
+  it("verifies the revision refs/main names, not files collected from several (round 9 #25)", () => {
+    venv();
+    marker("triposr");
+    mkdirSync(join(dir, "src", "triposr", "tsr"), { recursive: true });
+    writeFileSync(join(dir, "src", "triposr", "tsr", "system.py"), "# TSR\n");
+    // Each named file present, but in a DIFFERENT revision: no single
+    // revision the driver could load is complete.
+    weightFile("triposr", join("snapshots", "revA", "config.yaml"), "cfg");
+    weightFile("triposr", join("snapshots", "revB", "model.ckpt"), "ckpt");
+    weightFile("triposr", join("refs", "main"), "revA");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("triposr")).toBe(false);
+    // Complete the revision main names and it is installed, whatever else the
+    // cache still holds (guard).
+    weightFile("triposr", join("snapshots", "revA", "model.ckpt"), "ckpt");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("triposr")).toBe(true);
+  });
+
+  it("will not guess between revisions when nothing names one (guard)", () => {
+    venv();
+    marker("sd15");
+    weightFile("sd15", join("snapshots", "revA", "unet", "diffusion_pytorch_model.safetensors"), "weight-bytes");
+    weightFile("sd15", join("snapshots", "revB", "unet", "diffusion_pytorch_model.safetensors"), "weight-bytes");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+    weightFile("sd15", join("refs", "main"), "revB");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(true);
   });
 
   it("deleting the weights after install turns installed back to false", () => {

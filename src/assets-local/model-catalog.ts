@@ -64,6 +64,12 @@ export interface LocalModelSpec {
    * ships as a diffusers pipeline folder and the whole folder is fetched.
    */
   readonly weightFiles?: readonly string[];
+  /**
+   * The cache ref whose snapshot the driver loads ("main" when absent). The
+   * readiness check reads refs/<this> to learn which revision to verify
+   * (Codex round 9 #25).
+   */
+  readonly weightsRevision?: string;
 }
 
 export interface DeviceCapability {

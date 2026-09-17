@@ -17,7 +17,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync, type Dirent } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, rmSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -251,17 +251,89 @@ function filesUnder(dir: string, depth = 8): Array<{ rel: string; size: number }
  *     and non-empty; without named files, at least one non-empty file must be
  *     cached (a pipeline folder of zero-byte placeholders is not weights).
  */
+/**
+ * The snapshot directory of the revision the driver will actually load, or
+ * null when the cache names none.
+ *
+ * The Hugging Face cache keeps one directory per revision under
+ * `snapshots/<sha>`, whose files are symlinks into `blobs/`, and `refs/main`
+ * holds the sha that "main" currently means. Checking the whole cache instead
+ * accepted a metadata-only leftover and let required files be collected from
+ * DIFFERENT revisions (Codex 2026-09-17 round 9 #25).
+ */
+function hfSnapshotDir(spec: LocalModelSpec): string | null {
+  const root = hfWeightsDir(spec.weightsRef);
+  const snapshots = join(root, "snapshots");
+  if (!existsSync(snapshots)) {
+    // A cache laid down by something other than huggingface_hub (or a test
+    // fixture): the root itself is the revision.
+    return existsSync(root) ? root : null;
+  }
+  const ref = spec.weightsRevision ?? "main";
+  try {
+    const sha = readFileSync(join(root, "refs", ref), "utf-8").trim();
+    if (sha && existsSync(join(snapshots, sha))) return join(snapshots, sha);
+  } catch {
+    // no ref file: fall through to the newest snapshot below
+  }
+  try {
+    const dirs = readdirSync(snapshots, { withFileTypes: true })
+      .filter((e) => e.isDirectory() || e.isSymbolicLink())
+      .map((e) => join(snapshots, e.name));
+    if (dirs.length === 1) return dirs[0]!;
+    // Several revisions and no usable ref: nothing names which one the driver
+    // would load, so do not claim an installation.
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** A file in a snapshot whose blob is still downloading is not there yet. */
+function blobIsComplete(file: string): boolean {
+  try {
+    const target = realpathSync(file);
+    if (existsSync(`${target}.incomplete`)) return false;
+    return statSync(target).size > 0;
+  } catch {
+    // Not a link, or the target is gone: judge the path itself.
+    try {
+      return statSync(file).size > 0 && !existsSync(`${file}.incomplete`);
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Files that describe a model without being one. */
+const WEIGHT_METADATA_RE = /\.(?:json|txt|md|ya?ml|py)$/iu;
+
+/**
+ * Whether the weights the driver loads are on disk, COMPLETE, and all from one
+ * revision.
+ *
+ * Two ways this used to lie (round 9 #25): a cache holding only
+ * `model_index.json` or `refs/main` read as installed, and a perfectly usable
+ * revision read as NOT installed because some abandoned download had left an
+ * unrelated `.incomplete` blob elsewhere in the cache.
+ */
 export function modelWeightsPresent(spec: LocalModelSpec): boolean {
-  const dir = hfWeightsDir(spec.weightsRef);
-  if (!existsSync(dir)) return false;
-  const files = filesUnder(dir);
-  if (files.some((f) => f.rel.endsWith(".incomplete"))) return false;
+  const snapshot = hfSnapshotDir(spec);
+  if (snapshot === null) return false;
+  const files = filesUnder(snapshot);
   const named = spec.weightFiles ?? [];
   if (named.length > 0) {
-    return named.every((name) => files.some((f) => (f.rel === name || f.rel.endsWith(`/${name}`)) && f.size > 0));
+    // Every named file, in THIS revision, with its blob finished.
+    return named.every((name) => {
+      const match = files.find((f) => f.rel === name || f.rel.endsWith(`/${name}`));
+      return match !== undefined && blobIsComplete(join(snapshot, match.rel));
+    });
   }
-  return files.some((f) => f.size > 0);
+  // Nothing named: at least one file that is a MODEL rather than a description
+  // of one, with its blob finished.
+  return files.some((f) => !f.rel.endsWith(".incomplete") && !WEIGHT_METADATA_RE.test(f.rel) && blobIsComplete(join(snapshot, f.rel)));
 }
+
 
 /**
  * The local artifacts an install left behind, beyond the weights: a
