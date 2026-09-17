@@ -401,6 +401,24 @@ async function drive<T>(clock: FakeClock, runPromise: Promise<T>): Promise<T> {
 
 // ── TESTS ─────────────────────────────────────────────────────────────────────
 
+describe("V2AgentRunner — a superseded attempt's tokens are charged (audit 03.4 / D22)", () => {
+  it("auxiliaryUsage on the served response is debited and reported with the run's usage", async () => {
+    const handles = mkPlane();
+    // Step 1 (PLANNING) answers cleanly; step 2's response carries the chain's
+    // superseded attempt.
+    const gateway = new ModelGateway(scriptedStream([
+      mkResponse({ text: "plan", stopReason: "end_turn" }),
+      mkResponse({ text: "all done", stopReason: "end_turn", auxiliaryUsage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } }),
+    ]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+    expect(result.status).toBe("completed");
+    // 10 + 10 from the responses the model used, 5000 from the empty attempt the chain retried.
+    expect(result.usage?.inputTokens).toBe(5020);
+  });
+});
+
 describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", () => {
   it("end_turn terminal → completed, deliverFinal called, run.ended emitted, persistTerminal joined", async () => {
     const handles = mkPlane();

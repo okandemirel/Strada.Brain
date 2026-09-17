@@ -1,4 +1,5 @@
 import type { ConsensusManager } from "../agent-core/routing/consensus-manager.js";
+import type { TaskUsageEvent } from "../tasks/types.js";
 import type {
   TaskClassification,
   OriginalOutput,
@@ -23,6 +24,8 @@ export interface ConsensusVerificationParams {
   identityKey: string;
   /** Label for the warn log on disagreement (e.g. "background", "text-only, critical"). */
   logLabel?: string;
+  /** Where the reviewer's spend is booked; the reviewer's own calls were never accounted (audit 03.3 / D22). */
+  onUsage?: (usage: TaskUsageEvent) => void;
   recordExecutionTrace: (params: {
     chatId?: string;
     identityKey: string;
@@ -75,6 +78,7 @@ export async function runConsensusVerification(
     chatId,
     identityKey,
     logLabel,
+    onUsage,
     recordExecutionTrace,
     recordPhaseOutcome,
   } = params;
@@ -101,6 +105,17 @@ export async function runConsensusVerification(
     reviewProvider: reviewAssignment.provider,
     prompt,
   });
+
+  if (consensusResult.usage && onUsage) {
+    onUsage({
+      provider: reviewAssignment.providerName,
+      ...(reviewAssignment.modelId === undefined ? {} : { model: reviewAssignment.modelId }),
+      inputTokens: consensusResult.usage.inputTokens,
+      outputTokens: consensusResult.usage.outputTokens,
+      ...(consensusResult.usage.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: consensusResult.usage.cacheCreationInputTokens }),
+      ...(consensusResult.usage.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: consensusResult.usage.cacheReadInputTokens }),
+    });
+  }
 
   recordExecutionTrace({
     chatId,

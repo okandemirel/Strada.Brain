@@ -547,6 +547,13 @@ export class V2AgentRunner implements AgentRunner {
             budget.debit(toBudgetUsage(outcome.response.usage, served.provider, served.model));
             usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.usage);
             port.recordProviderUsage(served.provider, outcome.response.usage, served.model);
+            // …and the attempt the chain superseded on the way (an empty answer
+            // retried): its tokens were consumed and never charged (audit 03.4).
+            if (outcome.response.auxiliaryUsage) {
+              budget.debit(toBudgetUsage(outcome.response.auxiliaryUsage, served.provider, served.model));
+              usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.auxiliaryUsage);
+              port.recordProviderUsage(served.provider, outcome.response.auxiliaryUsage, served.model);
+            }
             // The provider's own count of what it received — the compaction
             // trigger trusts this over the chars/4 estimate (2026-09-09).
             if (typeof outcome.response.usage?.inputTokens === "number" && outcome.response.usage.inputTokens > 0) {

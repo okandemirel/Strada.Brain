@@ -115,6 +115,22 @@ function extractJsonVerdict(
   return { verdict, sawObject };
 }
 
+type UsageLike = { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number };
+/** The reviewer's calls, summed — absent only when neither carried usage. */
+function sumUsage(a: UsageLike | undefined, b: UsageLike | undefined): UsageLike | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const add = (x?: number, y?: number): number | undefined => (x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0));
+  const cw = add(a.cacheCreationInputTokens, b.cacheCreationInputTokens);
+  const cr = add(a.cacheReadInputTokens, b.cacheReadInputTokens);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    ...(cw === undefined ? {} : { cacheCreationInputTokens: cw }),
+    ...(cr === undefined ? {} : { cacheReadInputTokens: cr }),
+  };
+}
+
 export class ConsensusManager {
   private readonly config: ConsensusConfig;
   private readonly logger = getLogger();
@@ -272,6 +288,7 @@ export class ConsensusManager {
       originalProvider: params.originalProvider,
       reviewProvider: params.reviewProvider.name ?? "unknown",
       reasoning: response.text?.slice(0, 500),
+      ...(response.usage ? { usage: response.usage } : {}),
     };
   }
 
@@ -303,6 +320,7 @@ export class ConsensusManager {
         originalProvider: params.originalProvider,
         reviewProvider: params.reviewProvider.name ?? "unknown",
         reasoning: "Providers disagree on approach (tools vs text)",
+        ...(response.usage ? { usage: response.usage } : {}),
       };
     }
 
@@ -320,6 +338,7 @@ export class ConsensusManager {
         originalProvider: params.originalProvider,
         reviewProvider: params.reviewProvider.name ?? "unknown",
         reasoning: `Tool agreement: ${Math.round(toolAgreement * 100)}% (${overlap}/${total} tools overlap)`,
+        ...(response.usage ? { usage: response.usage } : {}),
       };
     }
 
@@ -343,12 +362,15 @@ export class ConsensusManager {
     );
 
     const agreed = this.parseApproval(comparison.text);
+    // Both reviewer calls are spend (audit 03.3 / D22).
+    const usage = sumUsage(response.usage, comparison.usage);
     return {
       agreed,
       strategy: "re-execute",
       originalProvider: params.originalProvider,
       reviewProvider: params.reviewProvider.name ?? "unknown",
       reasoning: comparison.text?.slice(0, 500) ?? "Comparison complete",
+      ...(usage ? { usage } : {}),
     };
   }
 

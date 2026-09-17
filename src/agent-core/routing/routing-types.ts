@@ -181,4 +181,10 @@ export interface ConsensusResult {
   readonly originalProvider: string;
   readonly reviewProvider?: string;
   readonly reasoning?: string;
+  /**
+   * What the reviewer's own calls consumed, summed. The consensus path
+   * returned only a verdict, so every reviewer turn was model spend nobody
+   * accounted for (audit 03.3 / D22, 2026-09-13).
+   */
+  readonly usage?: { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number };
 }

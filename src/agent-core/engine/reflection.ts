@@ -259,6 +259,7 @@ export function buildInteractiveEndTurnContext(
         chatId: core.chatId,
         identityKey,
         logLabel: "text-only, critical",
+        onUsage: runCtx.onUsage,
         recordExecutionTrace: (rp) => recordExecutionTrace(deps, rp as Parameters<typeof recordExecutionTrace>[1]),
         recordPhaseOutcome: (rp) => recordPhaseOutcome(deps, rp as Parameters<typeof recordPhaseOutcome>[1]),
       });

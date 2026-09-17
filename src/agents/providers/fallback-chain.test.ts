@@ -176,6 +176,20 @@ describe("FallbackChainProvider", () => {
 
   // Audit #1/#2: a resolved-but-empty response must NOT short-circuit the chain as
   // a success — a silently-empty provider should fail over to the next healthy one.
+  it("an empty first answer from the ONLY provider is retried, and its tokens travel as auxiliaryUsage (audit 03.4 / D22)", async () => {
+    const p1 = { ...createMockProvider(), name: "only-provider" };
+    (p1.chat as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } })
+      .mockResolvedValueOnce({ text: "real-answer", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5100, outputTokens: 20, totalTokens: 5120 } });
+    const chain = new FallbackChainProvider([p1]);
+    const result = await chain.chat("sys", [], []);
+    expect(result.text).toBe("real-answer");
+    expect(p1.chat).toHaveBeenCalledTimes(2);
+    // The discarded attempt's tokens were consumed and used to vanish.
+    expect(result.auxiliaryUsage).toEqual(expect.objectContaining({ inputTokens: 5000, outputTokens: 0 }));
+    expect(result.usage.inputTokens).toBe(5100);
+  });
+
   it("falls over to the next provider when a provider returns an empty response", async () => {
     const p1 = { ...createMockProvider(), name: "empty-provider" };
     (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({

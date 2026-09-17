@@ -145,6 +145,13 @@ export interface ProviderResponse {
    * fingerprint (audit #18).
    */
   readonly meta?: { readonly empty?: boolean; readonly reason?: string };
+  /**
+   * Usage of attempts this response SUPERSEDED inside the chain — an empty
+   * first answer that was retried — so the caller can bill them: only the
+   * final response reached accounting and the discarded attempt's tokens
+   * were never charged (audit 03.4 / D22, 2026-09-13).
+   */
+  readonly auxiliaryUsage?: TokenUsage;
 }
 
 // =============================================================================

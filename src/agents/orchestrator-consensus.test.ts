@@ -27,6 +27,28 @@ function baseParams(overrides: Record<string, unknown> = {}) {
 }
 
 describe("runConsensusVerification", () => {
+  it("books the reviewer's own spend through onUsage, attributed to the review provider (audit 03.3 / D22)", async () => {
+    // The reviewer's calls returned only a verdict; every reviewer turn was
+    // model spend nobody accounted for.
+    const onUsage = vi.fn();
+    const params = baseParams({
+      consensusManager: {
+        shouldConsult: vi.fn().mockReturnValue(true),
+        verify: vi.fn().mockResolvedValue({ agreed: true, strategy: "review", reasoning: "fine", usage: { inputTokens: 120, outputTokens: 30 } }),
+      },
+      reviewAssignment: { provider: { name: "opencode" }, providerName: "opencode", modelId: "deepseek-flash", reason: "diversity" },
+      onUsage,
+    });
+    await runConsensusVerification(params);
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ provider: "opencode", model: "deepseek-flash", inputTokens: 120, outputTokens: 30 }));
+  });
+
+  it("…and a verdict without usage books nothing (guard)", async () => {
+    const onUsage = vi.fn();
+    await runConsensusVerification(baseParams({ onUsage }));
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
   it("returns the disagreement so the caller can act on it (not advisory-only)", async () => {
     // Audited 2026-08-30: the second opinion was recorded and then changed
     // nothing. The verdict must reach the caller, which injects the objection

@@ -268,6 +268,7 @@ export async function portExecuteToolTurn(
         identityKey: runCtx.identityKey,
         chatId,
         logLabel: "agent-core",
+        onUsage: runCtx.onUsage,
         resolveConsensusReviewAssignment: (r, c, k) => resolveConsensusReviewAssignmentHelper(deps.getSupervisorRoutingContext(), r, c, k),
         recordExecutionTrace: (p) => recordExecutionTrace(deps, p),
         recordPhaseOutcome: (p) => recordPhaseOutcome(deps, p),

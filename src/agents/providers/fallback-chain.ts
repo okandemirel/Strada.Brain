@@ -8,7 +8,7 @@ import type {
   IStreamingProvider,
   ProviderCallOptions,
 } from "./provider.interface.js";
-import type { MessageContent } from "./provider-core.interface.js";
+import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
@@ -223,6 +223,21 @@ interface AttemptControl {
  * immediately without trying subsequent providers.
  * Logs each attempt and failure for observability.
  */
+/** Sum two usages (the superseded attempt onto whatever is already carried). */
+function mergeTokenUsage(a: TokenUsage | undefined, b: TokenUsage): TokenUsage {
+  if (!a) return b;
+  const add = (x?: number, y?: number): number | undefined => (x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0));
+  const cw = add(a.cacheCreationInputTokens, b.cacheCreationInputTokens);
+  const cr = add(a.cacheReadInputTokens, b.cacheReadInputTokens);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    ...(cw === undefined ? {} : { cacheCreationInputTokens: cw }),
+    ...(cr === undefined ? {} : { cacheReadInputTokens: cr }),
+  };
+}
+
 export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
@@ -831,11 +846,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             provider: provider.name,
           });
           await sleep(EMPTY_RESPONSE_RETRY_DELAY_MS, externalSignal);
+          // The empty attempt's tokens are still spend (audit 03.4 / D22).
+          const discarded = response.usage;
           response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
           if (isEmptyProviderResponse(response)) {
             // Twice running is not a blip; a provider with nothing to say twice
             // really has nothing to say.
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+          }
+          if (discarded && (discarded.inputTokens > 0 || discarded.outputTokens > 0)) {
+            response = { ...response, auxiliaryUsage: mergeTokenUsage(response.auxiliaryUsage, discarded) };
           }
         }
         health.recordSuccess(provider.name);

@@ -209,6 +209,8 @@ export interface ConsensusContext {
   identityKey: string;
   chatId: string;
   logLabel?: string;
+  /** Where the reviewer's spend is booked (audit 03.3 / D22). */
+  onUsage?: ConsensusVerificationParams["onUsage"];
   resolveConsensusReviewAssignment: (
     reviewer: SupervisorAssignment,
     current: SupervisorAssignment,
@@ -265,6 +267,7 @@ export async function runConsensusIfAvailable(
         ctx.identityKey,
       ),
       chatId: ctx.chatId,
+      onUsage: ctx.onUsage,
       identityKey: ctx.identityKey,
       logLabel: ctx.logLabel,
       recordExecutionTrace: ctx.recordExecutionTrace,

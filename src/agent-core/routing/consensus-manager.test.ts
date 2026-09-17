@@ -611,3 +611,33 @@ describe("ConsensusManager", () => {
     expect(result.agreed).toBe(false);
   });
 });
+
+
+describe("ConsensusManager carries the reviewer's usage (audit 03.3 / D22)", () => {
+  const usage = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens, totalTokens: inputTokens + outputTokens });
+  const reviewer = (answers: Array<{ text: string; inputTokens: number; outputTokens: number }>) => {
+    const chat = vi.fn();
+    for (const a of answers) chat.mockResolvedValueOnce({ text: a.text, toolCalls: [], stopReason: "end_turn", usage: usage(a.inputTokens, a.outputTokens) });
+    return { name: "reviewer", chat } as never;
+  };
+  const task = { type: "code_generation", complexity: "moderate", criticality: "high" } as never;
+
+  it("the review strategy returns the reviewer call's usage", async () => {
+    const cm = new ConsensusManager(new ConfidenceEstimator());
+    const result = await (cm as unknown as { reviewStrategy(p: unknown): Promise<{ agreed: boolean; usage?: { inputTokens: number; outputTokens: number } }> }).reviewStrategy({
+      originalOutput: { text: "done" }, originalProvider: "claude", reviewProvider: reviewer([{ text: '{"approved": true, "reasoning": "ok"}', inputTokens: 120, outputTokens: 30 }]), prompt: "p", task,
+    });
+    expect(result.agreed).toBe(true);
+    expect(result.usage).toEqual(expect.objectContaining({ inputTokens: 120, outputTokens: 30 }));
+  });
+
+  it("the re-execute strategy sums BOTH reviewer calls", async () => {
+    const cm = new ConsensusManager(new ConfidenceEstimator());
+    const result = await (cm as unknown as { reExecuteStrategy(p: unknown): Promise<{ usage?: { inputTokens: number; outputTokens: number } }> }).reExecuteStrategy({
+      originalOutput: { text: "answer A" }, originalProvider: "claude",
+      reviewProvider: reviewer([{ text: "answer B", inputTokens: 100, outputTokens: 40 }, { text: '{"agreed": true, "reasoning": "same"}', inputTokens: 200, outputTokens: 10 }]),
+      prompt: "p", task,
+    });
+    expect(result.usage).toEqual(expect.objectContaining({ inputTokens: 300, outputTokens: 50 }));
+  });
+});
