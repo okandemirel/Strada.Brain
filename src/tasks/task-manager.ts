@@ -320,6 +320,9 @@ export class TaskManager extends EventEmitter {
       conversationId: task.conversationId,
       userId: task.userId,
       agentId: task.agentId,
+      // …and the same campaign's: a retry that loses this charges the wallet
+      // with nothing naming the campaign (plan 6.1, Codex round 11 #4).
+      campaignId: task.campaignId,
       orchestrator: this.replayOrchestrator(task),
       workspacePolicy: task.workspacePolicy,
       supervisorMode: task.supervisorMode,

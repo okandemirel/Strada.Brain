@@ -78,6 +78,19 @@ describe("TaskStorage", () => {
     expect(storage.load(leased.id)?.supervisorMode).toBeUndefined();
   });
 
+  it("persists the campaign a task serves, so a reload still attributes its spend (round 11 #4)", () => {
+    // Without this a reloaded or retried task charged the wallet with nothing
+    // naming the campaign, and the campaign reported a partial total with a
+    // positive entry count — worse than reporting nothing.
+    const task = makeTask(TaskStatus.executing, { campaignId: "camp_42" });
+    storage.save(task);
+    expect(storage.load(task.id)?.campaignId).toBe("camp_42");
+    // A task that serves no campaign stays that way.
+    const solo = makeTask(TaskStatus.executing);
+    storage.save(solo);
+    expect(storage.load(solo.id)?.campaignId).toBeUndefined();
+  });
+
   it("markCancelled persists the reason its descendants read; a plain cancel leaves none", () => {
     const superseded = makeTask(TaskStatus.executing);
     const plain = makeTask(TaskStatus.executing);

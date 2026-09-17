@@ -199,6 +199,28 @@ describe("TaskManager", () => {
     );
   });
 
+  it("a retry keeps serving the same campaign, so its spend is still attributed (round 11 #4)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-manager-campaign-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    const executor = { enqueue: vi.fn(), resumeConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+    try {
+      const task = manager.submit("chat-1", "cli", "a campaign milestone", { campaignId: "camp_7" });
+      expect(storage.load(task.id)?.campaignId).toBe("camp_7");
+      manager.block(task.id, "Transient failure — provider blink.");
+      const retry = manager.retryTask(task.id);
+      expect(retry).not.toBeNull();
+      // The continuation charges the same campaign; losing this reported a
+      // partial total as if it were the whole.
+      expect(retry!.campaignId).toBe("camp_7");
+      expect(storage.load(retry!.id)?.campaignId).toBe("camp_7");
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates a new retry attempt for a failed standalone task", () => {
     const failedTask = buildTask({
       id: "task_failed123" as Task["id"],

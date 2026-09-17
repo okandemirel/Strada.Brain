@@ -78,6 +78,7 @@ interface TaskRow {
   origin: string | null;
   trigger_name: string | null;
   agent_id: string | null;
+  campaign_id: string | null;
   force_shared_planning: number | null;
   user_content_json: string | null;
   attachments_json: string | null;
@@ -167,6 +168,11 @@ export class TaskStorage {
       task.cancelReason ?? null,
       task.supervisorMode ?? null,
       task.agentId ?? null,
+      // A cost is attributed to the campaign this task serves (plan 6.1), so
+      // the id has to survive a reload: without it a reloaded or retried task
+      // charged the wallet with nothing naming the campaign, and the campaign
+      // reported a partial total as if it were the whole (Codex round 11 #4).
+      task.campaignId ?? null,
     );
   }
 
@@ -363,6 +369,7 @@ export class TaskStorage {
       origin: this.parseTaskOrigin(row.origin),
       triggerName: row.trigger_name ?? undefined,
       agentId: row.agent_id ?? undefined,
+      campaignId: row.campaign_id ?? undefined,
       forceSharedPlanning: row.force_shared_planning === 1,
       userContent: this.parseUserContent(row.user_content_json),
       attachments: this.parseAttachments(row.attachments_json),
@@ -393,6 +400,7 @@ export class TaskStorage {
       ["cancel_reason", "TEXT"],
       ["supervisor_mode", "TEXT"],
       ["agent_id", "TEXT"],
+      ["campaign_id", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
@@ -491,9 +499,10 @@ export class TaskStorage {
           id, chat_id, channel_type, conversation_id, user_id, goal_root_id,
           title, status, prompt, result, error, origin, trigger_name,
           force_shared_planning, user_content_json, attachments_json,
-          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason, supervisor_mode, agent_id
+          created_at, updated_at, completed_at, parent_id, workspace_policy, cancel_reason, supervisor_mode, agent_id,
+          campaign_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
