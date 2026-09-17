@@ -21,6 +21,7 @@ import {
   assessWorkspaceSkillTrust,
   hashSkillContent,
   revokeWorkspaceSkill,
+  takeOverStaleLock,
   scanSkillContent,
   trustedSkillsLockPath,
   trustedSkillsPath,
@@ -330,6 +331,39 @@ describe("trust record locking (round 6 #8)", () => {
     // No temp file or lock left behind.
     const leftovers = (await readdir(join(fakeHome, ".strada"))).filter((f) => f !== "trusted-skills.json");
     expect(leftovers).toEqual([]);
+  });
+
+  it("never displaces a lock it did not judge — a delayed second taker keeps its hands off a fresh one (round 8 #16)", async () => {
+    await mkdir(join(fakeHome, ".strada"), { recursive: true });
+    const lock = trustedSkillsLockPath();
+    const abandoned = lockLine(deadPid());
+    await writeFile(lock, abandoned, "utf-8");
+
+    // Two takers read the SAME dead owner. The first removes it and creates
+    // its own lock…
+    expect(await takeOverStaleLock(lock, abandoned)).toBe(true);
+    await expect(access(lock)).rejects.toThrow();
+    await writeFile(lock, lockLine(process.pid, "first-taker-token"), "utf-8");
+
+    // …and the second, delayed between its read and its rename, must leave
+    // that fresh lock alone. It used to rename it into its own grave and
+    // acquire the file too, so both believed they held it.
+    expect(await takeOverStaleLock(lock, abandoned)).toBe(false);
+    expect(await readFile(lock, "utf-8")).toContain("first-taker-token");
+    // Nothing left behind: no grave beside the record.
+    expect((await readdir(join(fakeHome, ".strada"))).sort()).toEqual(["trusted-skills.json.lock"]);
+  });
+
+  it("removes exactly the abandoned lock it judged, and reports it (guard)", async () => {
+    await mkdir(join(fakeHome, ".strada"), { recursive: true });
+    const lock = trustedSkillsLockPath();
+    const abandoned = lockLine(deadPid());
+    await writeFile(lock, abandoned, "utf-8");
+    // A crashed owner must not block the record forever.
+    expect(await takeOverStaleLock(lock, abandoned)).toBe(true);
+    await expect(access(lock)).rejects.toThrow();
+    // An absent lock is nobody's to take.
+    expect(await takeOverStaleLock(lock, abandoned)).toBe(false);
   });
 
   it("waits for a lock held by a live process and takes over one whose owner is dead", async () => {

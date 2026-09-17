@@ -43,7 +43,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -205,17 +205,17 @@ function formatLockOwner(owner: LockOwner): string {
  * read (gone) — the caller distinguishes that from an unparseable file by
  * `readable`.
  */
-async function readLockOwner(lockPath: string): Promise<{ readable: boolean; owner: LockOwner | null }> {
+async function readLockOwner(lockPath: string): Promise<{ readable: boolean; owner: LockOwner | null; raw: string }> {
   let raw: string;
   try {
     raw = await readFile(lockPath, "utf-8");
   } catch {
-    return { readable: false, owner: null };
+    return { readable: false, owner: null, raw: "" };
   }
   const [pidText, token] = raw.trim().split(/\s+/);
   const pid = Number(pidText);
-  if (!Number.isInteger(pid) || pid <= 0 || !token) return { readable: true, owner: null };
-  return { readable: true, owner: { pid, token } };
+  if (!Number.isInteger(pid) || pid <= 0 || !token) return { readable: true, owner: null, raw };
+  return { readable: true, owner: { pid, token }, raw };
 }
 
 /** Whether a process with this pid exists (EPERM means it does, just not ours). */
@@ -229,19 +229,44 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Remove a lock we judged abandoned. The file is first renamed to a unique
- * name (atomic), so two takers cannot both "remove" it and one of them end
- * up unlinking the other's freshly created lock; the loser's rename fails
- * with ENOENT and it simply retries.
+ * Remove the lock we judged abandoned — THAT lock, not whatever happens to sit
+ * at the path now.
+ *
+ * Renaming first is atomic, but rename alone still stole a live lock (Codex
+ * 2026-09-17 round 8 #16): two takers read the same dead owner, the first
+ * renamed it away and created its own fresh lock, and the second — delayed
+ * between its read and its rename — renamed THE FIRST TAKER'S lock into its
+ * grave and acquired the file too. Both then believed they held it.
+ *
+ * So the bytes are verified after the rename: they must be the bytes we
+ * judged. Anything else belongs to a live owner and is LINKED BACK
+ * immediately; `link` fails when a third lock already exists, which is the
+ * fail-closed answer — we never hold a lock we did not create. The return
+ * value says whether the abandoned lock was actually removed.
  */
-async function takeOverStaleLock(lockPath: string): Promise<void> {
+export async function takeOverStaleLock(lockPath: string, expected: string): Promise<boolean> {
   const grave = `${lockPath}.stale.${process.pid}.${randomBytes(4).toString("hex")}`;
   try {
     await rename(lockPath, grave);
   } catch {
-    return;
+    return false;
+  }
+  let graveRaw: string | null = null;
+  try {
+    graveRaw = await readFile(grave, "utf-8");
+  } catch {
+    graveRaw = null;
+  }
+  if (graveRaw !== expected) {
+    // Someone else's lock: put it back where its owner expects it. A newer
+    // lock at the path makes `link` fail with EEXIST; that owner holds it and
+    // we simply do not steal.
+    await link(grave, lockPath).catch(() => undefined);
+    await rm(grave, { force: true }).catch(() => undefined);
+    return false;
   }
   await rm(grave, { force: true }).catch(() => undefined);
+  return true;
 }
 
 /**
@@ -262,6 +287,9 @@ async function acquireTrustFileLock(): Promise<{ release: () => Promise<void>; i
   const startedAt = performance.now();
   const remaining = (): number => LOCK_TIMEOUT_MS - (performance.now() - startedAt);
   let backoff = LOCK_BACKOFF_MIN_MS;
+  // A crashed owner is taken over at most ONCE per acquisition; afterwards
+  // this acquisition waits for the holder instead of stealing again.
+  let triedTakeover = false;
 
   const isHeld = async (): Promise<boolean> => (await readLockOwner(lockPath)).owner?.token === mine.token;
 
@@ -287,22 +315,27 @@ async function acquireTrustFileLock(): Promise<{ release: () => Promise<void>; i
     }
 
     // Held by someone. Abandoned?
-    const { readable, owner } = await readLockOwner(lockPath);
+    const { readable, owner, raw } = await readLockOwner(lockPath);
     if (!readable) {
       // Released between our open() and read(); retry immediately.
       continue;
     }
     if (owner) {
-      if (!pidAlive(owner.pid)) {
-        await takeOverStaleLock(lockPath);
+      if (!pidAlive(owner.pid) && !triedTakeover) {
+        // ONE takeover attempt per acquisition, and only of the bytes we
+        // judged: a second steal is refused and we wait for the holder
+        // instead (round 8 #16 — fail closed rather than steal).
+        triedTakeover = true;
+        await takeOverStaleLock(lockPath, raw);
         continue;
       }
     } else {
       // No owner recorded (foreign or truncated file): mtime is the last resort.
       try {
         const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await takeOverStaleLock(lockPath);
+        if (Date.now() - info.mtimeMs > LOCK_STALE_MS && !triedTakeover) {
+          triedTakeover = true;
+          await takeOverStaleLock(lockPath, raw);
           continue;
         }
       } catch {
