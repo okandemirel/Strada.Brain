@@ -121,11 +121,16 @@ export function toolReportsVerdict(
  * 2026-09-17 on 7cb9d8a3 #1). No code at all is not a zero: a result that
  * cannot say how it ended has not passed.
  */
-function shellExitedNonZero(output: string | undefined, result: { content?: unknown; metadata?: Record<string, unknown> }): boolean {
+function shellExitedNonZero(output: string | undefined, result: { content?: unknown; metadata?: Record<string, unknown> }, command?: string): boolean {
   const meta = result.metadata?.["exitCode"];
   if (typeof meta === "number") return meta !== 0;
   if (typeof meta === "string" && /^\d+$/u.test(meta.trim())) return Number(meta.trim()) !== 0;
-  const body = output !== undefined && output !== "" ? output : typeof result.content === "string" ? result.content : "";
+  let body = output !== undefined && output !== "" ? output : typeof result.content === "string" ? result.content : "";
+  // THE ECHO IS NOT THE FOOTER. The formatter prints `$ <command>` first, so
+  // a command carrying a forged footer AND a forged stdout marker on lines
+  // of its own put both ahead of the real footer (Codex 2026-09-17 round 4
+  // #3). The exact echo of the command is removed before anything is read.
+  if (command !== undefined && body.startsWith(`$ ${command}\n`)) body = body.slice(command.length + 3);
   // THE LAST FOOTER BEFORE STDOUT. The formatter echoes the command first,
   // so a command carrying "Exit code: 0 | Duration: 1ms" on a line of its
   // own put a forged zero ahead of the real footer (Codex 2026-09-17 round
@@ -338,7 +343,10 @@ export class SelfVerification {
           // with isError: false; the editor that exited 1 or was killed at its
           // allowance after writing the file counted as green (Codex
           // 2026-09-17 on 7cb9d8a3 #2, reproduced against the vendored tool).
-          || /\bunityExit=(-?\d+)\b/.test(bodyText) && /\bunityExit=(-?\d+)\b/.exec(bodyText)![1] !== "0";
+          // …and only from a Unity tool's own summary: fixture text saying
+          // "unityExit=1" in a passing dotnet or npm run is not a Unity exit
+          // (Codex 2026-09-17 round 4 #11).
+          || (executedTool.toolName.startsWith("unity_") && /\bunityExit=(-?\d+)\b/.test(bodyText) && /\bunityExit=(-?\d+)\b/.exec(bodyText)![1] !== "0");
         // AN INSPECTION IS NOT A VERIFICATION. A symbol search that returned
         // "No matches" and a console read cleared the compile debt of every
         // edited file, because "did not fail" was read as "compiled" (Codex
@@ -366,7 +374,9 @@ export class SelfVerification {
         // …and STRUCTURED exit metadata fails any verifier, dedicated ones
         // included; only the "no footer is not a zero" rule is the shell's.
         const metaExit = result.metadata?.["exitCode"];
-        const exitedNonZero = typeof metaExit === "number" ? metaExit !== 0 : shell && shellExitedNonZero(executedTool.output, result);
+        const exitedNonZero = typeof metaExit === "number"
+          ? metaExit !== 0
+          : shell && shellExitedNonZero(executedTool.output, result, typeof executedTool.input["command"] === "string" ? executedTool.input["command"] : undefined);
         const ok = !executedTool.isError && !bodyReportsFailure && !exitedNonZero;
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
