@@ -112,7 +112,11 @@ export function handleSkillsRoutes(
     return true;
   }
 
-  // POST /api/skills/:name/enable
+  // POST /api/skills/:name/enable and /disable only rewrite the skills
+  // config; the running SkillManager keeps its entries, so GET /api/skills
+  // still reports the live state until a restart. Say so in the reply
+  // (appliesOnRestart) instead of letting the UI flip back to the old badge
+  // as though nothing happened (R3 / D36).
   const enableMatch = url.match(/^\/api\/skills\/([^/]+)\/enable$/);
   if (enableMatch && method === "POST") {
     const name = decodeURIComponent(enableMatch[1] ?? "");
@@ -121,7 +125,7 @@ export function handleSkillsRoutes(
       return true;
     }
     void setSkillEnabled(name, true).then(() => {
-      sendJson(res, { success: true });
+      sendJson(res, { success: true, appliesOnRestart: true, message: `Skill "${name}" will be enabled on the next restart.` });
     }).catch((err) => {
       sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
     });
@@ -137,7 +141,7 @@ export function handleSkillsRoutes(
       return true;
     }
     void setSkillEnabled(name, false).then(() => {
-      sendJson(res, { success: true });
+      sendJson(res, { success: true, appliesOnRestart: true, message: `Skill "${name}" will be disabled on the next restart.` });
     }).catch((err) => {
       sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
     });

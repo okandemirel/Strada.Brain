@@ -152,6 +152,37 @@ describe('SkillsPage', () => {
     expect(enableBtn.textContent).toBe('Enable')
   })
 
+  it('shows a pending-restart note after a disable the server applies on restart (R3 / D36)', async () => {
+    const user = userEvent.setup()
+    mockUseSkills.mockReturnValue({ data: { skills: SAMPLE_SKILLS }, error: null, isLoading: false })
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true, appliesOnRestart: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      renderPage()
+      await user.click(screen.getByRole('button', { name: 'unity-build' }))
+      expect(await screen.findByText('Disabled on next restart')).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledWith('/api/skills/unity-build/disable', { method: 'POST' })
+      // The live badge still says active — the note is what tells the truth.
+      expect(screen.getAllByText('active').length).toBeGreaterThanOrEqual(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows no pending-restart note when the server applied the change live (guard)', async () => {
+    const user = userEvent.setup()
+    mockUseSkills.mockReturnValue({ data: { skills: SAMPLE_SKILLS }, error: null, isLoading: false })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })))
+    try {
+      renderPage()
+      await user.click(screen.getByRole('button', { name: 'web-search' }))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'web-search' })).not.toBeDisabled())
+      expect(screen.queryByTestId('pending-restart')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('gated and error skills have disabled action buttons', () => {
     mockUseSkills.mockReturnValue({
       data: { skills: SAMPLE_SKILLS },

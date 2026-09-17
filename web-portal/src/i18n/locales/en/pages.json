@@ -13,7 +13,6 @@
   "channels.statusDegraded": "Degraded",
   "channels.clientsConnected": "{{count}} client connected",
   "channels.clientsConnectedPlural": "{{count}} clients connected",
-
   "config.title": "Configuration",
   "config.errorTitle": "Failed to Load Configuration",
   "config.filterPlaceholder": "Filter settings...",
@@ -25,7 +24,6 @@
   "config.tierLabel": "Tier: {{tier}}",
   "config.fallbackCategory": "System",
   "config.fallbackDescription": "General runtime configuration.",
-
   "identity.title": "Identity",
   "identity.errorTitle": "Failed to Load Identity",
   "identity.agentIdentity": "Agent Identity",
@@ -50,7 +48,6 @@
   "identity.triggersColumnState": "State",
   "identity.triggersColumnCircuit": "Circuit",
   "identity.circuitNA": "N/A",
-
   "logs.title": "Logs",
   "logs.searchPlaceholder": "Search logs...",
   "logs.autoScroll": "Auto-scroll",
@@ -59,7 +56,6 @@
   "logs.unavailableDescription": "The log endpoint is not available. Logs may not be exposed via the API yet.",
   "logs.noMatchingTitle": "No Matching Logs",
   "logs.noMatchingDescription": "No log entries match the current filters.",
-
   "memory.title": "Memory",
   "memory.errorTitle": "Failed to Load Memory",
   "memory.overview": "Overview",
@@ -93,7 +89,6 @@
   "memory.lastPrunedEntries": "{{count}} entries",
   "memory.noDataTitle": "No Memory Data",
   "memory.noDataDescription": "Memory statistics are not available. The memory system may not be initialized.",
-
   "personality.title": "Personality",
   "personality.dismiss": "Dismiss",
   "personality.unavailableTitle": "Personality Unavailable",
@@ -128,7 +123,6 @@
   "personality.validationContentTooLarge": "Content exceeds 10KB limit",
   "personality.noDataTitle": "No Personality Data",
   "personality.noDataDescription": "The personality API returned no data. SOUL.md may not be configured, or the API endpoint does not exist yet.",
-
   "sessions.title": "Sessions",
   "sessions.errorTitle": "Failed to Load Sessions",
   "sessions.overview": "Overview",
@@ -140,7 +134,6 @@
   "sessions.noActiveNoServer": "Cannot reach the server. Make sure it is running.",
   "sessions.agentLabel": "Agent: {{id}}",
   "sessions.messageCount": "{{count}} msgs",
-
   "skills.title": "Skills",
   "skills.description": "Manage installed skills and discover new ones from the community registry.",
   "skills.tabInstalled": "Installed",
@@ -155,6 +148,8 @@
   "skills.installed.columnActions": "Actions",
   "skills.installed.enable": "Enable",
   "skills.installed.disable": "Disable",
+  "skills.installed.pendingEnable": "Enabled on next restart",
+  "skills.installed.pendingDisable": "Disabled on next restart",
   "skills.installed.failedTitle": "Failed to Load Skills",
   "skills.installed.noSkillsTitle": "No Skills Loaded",
   "skills.installed.noSkillsDescription": "No skills are currently registered. Check the Marketplace tab to discover and install skills.",
@@ -168,7 +163,6 @@
   "skills.marketplace.installed": "Installed",
   "skills.marketplace.install": "Install",
   "skills.marketplace.installing": "Installing...",
-
   "tools.title": "Tools",
   "tools.titleWithCount": "Tools ({{count}})",
   "tools.errorTitle": "Failed to Load Tools",

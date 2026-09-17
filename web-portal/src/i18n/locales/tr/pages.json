@@ -13,7 +13,6 @@
   "channels.statusDegraded": "Bozulmuş",
   "channels.clientsConnected": "{{count}} istemci bağlı",
   "channels.clientsConnectedPlural": "{{count}} istemci bağlı",
-
   "config.title": "Yapılandırma",
   "config.errorTitle": "Yapılandırma Yüklenemedi",
   "config.filterPlaceholder": "Ayarları filtrele...",
@@ -25,7 +24,6 @@
   "config.tierLabel": "Seviye: {{tier}}",
   "config.fallbackCategory": "Sistem",
   "config.fallbackDescription": "Genel çalışma zamanı yapılandırması.",
-
   "identity.title": "Kimlik",
   "identity.errorTitle": "Kimlik Yüklenemedi",
   "identity.agentIdentity": "Ajan Kimliği",
@@ -50,7 +48,6 @@
   "identity.triggersColumnState": "Durum",
   "identity.triggersColumnCircuit": "Devre",
   "identity.circuitNA": "Yok",
-
   "logs.title": "Günlükler",
   "logs.searchPlaceholder": "Günlüklerde ara...",
   "logs.autoScroll": "Otomatik kaydırma",
@@ -59,7 +56,6 @@
   "logs.unavailableDescription": "Günlük uç noktası kullanılamıyor. Günlükler henüz API üzerinden sunulmuyor olabilir.",
   "logs.noMatchingTitle": "Eşleşen Günlük Yok",
   "logs.noMatchingDescription": "Mevcut filtrelerle eşleşen günlük kaydı yok.",
-
   "memory.title": "Bellek",
   "memory.errorTitle": "Bellek Yüklenemedi",
   "memory.overview": "Genel Bakış",
@@ -93,7 +89,6 @@
   "memory.lastPrunedEntries": "{{count}} kayıt",
   "memory.noDataTitle": "Bellek Verisi Yok",
   "memory.noDataDescription": "Bellek istatistikleri mevcut değil. Bellek sistemi başlatılmamış olabilir.",
-
   "personality.title": "Kişilik",
   "personality.dismiss": "Kapat",
   "personality.unavailableTitle": "Kişilik Kullanılamıyor",
@@ -128,7 +123,6 @@
   "personality.validationContentTooLarge": "İçerik 10KB limitini aşıyor",
   "personality.noDataTitle": "Kişilik Verisi Yok",
   "personality.noDataDescription": "Kişilik API'si veri döndürmedi. SOUL.md yapılandırılmamış olabilir veya API uç noktası henüz mevcut değil.",
-
   "sessions.title": "Oturumlar",
   "sessions.errorTitle": "Oturumlar Yüklenemedi",
   "sessions.overview": "Genel Bakış",
@@ -140,7 +134,6 @@
   "sessions.noActiveNoServer": "Sunucuya ulaşılamıyor. Çalıştığından emin olun.",
   "sessions.agentLabel": "Ajan: {{id}}",
   "sessions.messageCount": "{{count}} mesaj",
-
   "skills.title": "Yetenekler",
   "skills.description": "Yüklü yetenekleri yönetin ve topluluk kayıt defterinden yenilerini keşfedin.",
   "skills.tabInstalled": "Yüklü",
@@ -155,6 +148,8 @@
   "skills.installed.columnActions": "İşlemler",
   "skills.installed.enable": "Etkinleştir",
   "skills.installed.disable": "Devre Dışı Bırak",
+  "skills.installed.pendingEnable": "Bir sonraki yeniden başlatmada etkinleşir",
+  "skills.installed.pendingDisable": "Bir sonraki yeniden başlatmada devre dışı kalır",
   "skills.installed.failedTitle": "Yetenekler Yüklenemedi",
   "skills.installed.noSkillsTitle": "Yüklü Yetenek Yok",
   "skills.installed.noSkillsDescription": "Şu anda kayıtlı yetenek yok. Yetenekleri keşfetmek ve yüklemek için Mağaza sekmesine bakın.",
@@ -168,7 +163,6 @@
   "skills.marketplace.installed": "Yüklü",
   "skills.marketplace.install": "Yükle",
   "skills.marketplace.installing": "Yükleniyor...",
-
   "tools.title": "Araçlar",
   "tools.titleWithCount": "Araçlar ({{count}})",
   "tools.errorTitle": "Araçlar Yüklenemedi",

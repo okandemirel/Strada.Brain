@@ -105,6 +105,10 @@ function InstalledTab() {
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  // Enable/disable only rewrite the config; the live list keeps reporting
+  // the old status until a restart (R3 / D36). Remember what was requested
+  // so the row can say "…on next restart" instead of flipping back silently.
+  const [pendingRestart, setPendingRestart] = useState<Record<string, 'enable' | 'disable'>>({})
 
   const { data, error, isLoading } = skillsQuery
 
@@ -150,9 +154,12 @@ function InstalledTab() {
   const handleToggle = async (name: string, enable: boolean) => {
     const endpoint = `/api/skills/${encodeURIComponent(name)}/${enable ? 'enable' : 'disable'}`
     const res = await fetch(endpoint, { method: 'POST' })
+    const body = await res.json().catch(() => ({})) as { error?: string; appliesOnRestart?: boolean }
     if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as { error?: string }
       throw new Error(body.error ?? `Request failed: ${res.status}`)
+    }
+    if (body.appliesOnRestart) {
+      setPendingRestart((prev) => ({ ...prev, [name]: enable ? 'enable' : 'disable' }))
     }
     await queryClient.invalidateQueries({ queryKey: ['skills'] })
   }
@@ -221,6 +228,13 @@ function InstalledTab() {
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   <StatusBadge status={skill.status} />
+                  {pendingRestart[skill.manifest.name] && (
+                    <span className="block text-[10px] text-warning mt-1" data-testid="pending-restart">
+                      {pendingRestart[skill.manifest.name] === 'enable'
+                        ? t('skills.installed.pendingEnable')
+                        : t('skills.installed.pendingDisable')}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   <ToggleButton skill={skill} onToggle={handleToggle} />
