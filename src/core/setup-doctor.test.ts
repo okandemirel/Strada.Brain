@@ -505,4 +505,34 @@ describe("setup doctor", () => {
     const [, , , baseUrls] = preflightResponseProvidersMock.mock.calls[0]!;
     expect(baseUrls).toBeUndefined();
   });
+
+  /**
+   * Plan 6.8's first-run rehearsal found this by running the CLI in a throwaway
+   * home: with a `.env` present but INVALID, the doctor died with
+   * `TypeError: Cannot read properties of undefined (reading 'language')` — it
+   * crashed exactly when a new developer needed it to say what was wrong.
+   *
+   * The cause was a spelling: `loadConfigSafe` fails with `kind: "err"`, this file
+   * declared `"error"` and cast, so the failure matched neither branch and fell
+   * through to the success path.
+   */
+  describe("the doctor on a configuration it cannot load (plan 6.8)", () => {
+    it("reports the validation failure instead of crashing, whichever spelling the failure carries", async () => {
+      const installRoot = makeBuiltInstallRoot();
+      for (const kind of ["err", "error"] as const) {
+        const report = await collectDoctorReport({
+          installRoot,
+          configRoot: installRoot,
+          configResult: { kind, error: "Invalid configuration:\n  - anthropicApiKey: At least one AI provider API key is required (or use Ollama)" } as never,
+        });
+        const config = report.checks.find((check) => check.id === "config");
+        expect(config?.status, kind).toBe("fail");
+        expect(config?.detail, kind).toContain("At least one AI provider API key");
+        expect(config?.fix, kind).toMatch(/setup/);
+        // And the report is still a report: the crash took the whole thing down.
+        expect(report.checks.length, kind).toBeGreaterThan(1);
+        expect(report.status, kind).toBe("fail");
+      }
+    });
+  });
 });

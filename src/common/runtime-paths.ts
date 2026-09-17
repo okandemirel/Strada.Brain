@@ -59,6 +59,16 @@ export function resolveStradaHome(
   return path.join(homeDir, ".strada");
 }
 
+/** What STRADA_SOURCE_CHECKOUT says, or undefined when it says nothing. */
+function explicitSourceCheckout(env: NodeJS.ProcessEnv): boolean | undefined {
+  const raw = env["STRADA_SOURCE_CHECKOUT"]?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return undefined;
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+  // A value nobody can read is not an instruction: probe, as before.
+  return undefined;
+}
+
 export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePaths {
   const env = options.env ?? process.env;
   const installRoot = options.installRoot
@@ -67,10 +77,12 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
   const homeDir = options.homeDir ?? os.homedir();
   const platform = options.platform ?? process.platform;
   const cwd = options.cwd ?? resolveLaunchCwd(env, homeDir);
-  const sourceCheckout = options.sourceCheckout
-    ?? (env["STRADA_SOURCE_CHECKOUT"] === "true"
-      ? true
-      : existsSync(path.join(installRoot, ".git")));
+  // STRADA_SOURCE_CHECKOUT IS THREE-STATE. It used to mean "true forces on,
+  // anything else probes for .git" — so `false` silently did nothing and a
+  // process running inside this repository ALWAYS took the repository as its
+  // config root. A test or a first-run rehearsal could therefore redirect HOME
+  // and still read — and write — the developer's own `.env`.
+  const sourceCheckout = options.sourceCheckout ?? explicitSourceCheckout(env) ?? existsSync(path.join(installRoot, ".git"));
   const configRoot = sourceCheckout ? installRoot : resolveStradaHome(env, homeDir, cwd, platform);
 
   return {

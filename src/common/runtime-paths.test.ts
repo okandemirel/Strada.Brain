@@ -146,3 +146,42 @@ describe("runtime paths", () => {
     }
   });
 });
+
+/**
+ * Plan 6.8 (the first-15-minutes rehearsal). Found by running `strada doctor`
+ * with HOME redirected to a throwaway directory: it still reported "Loaded .env
+ * successfully" from the developer's own checkout, because a process inside this
+ * repository ALWAYS took the repository as its config root — `.git` is there, and
+ * STRADA_SOURCE_CHECKOUT could only ever force the answer to `true`.
+ *
+ * The dangerous direction is not the rehearsal: it is that a test with a fake
+ * HOME could still read and WRITE the developer's real `.env`.
+ */
+describe("STRADA_SOURCE_CHECKOUT is three-state (plan 6.8)", () => {
+  const inRepo = { installRoot: process.cwd(), cwd: "/Users/tester/.strada", homeDir: "/Users/tester" };
+
+  it("false moves the config root into the app home, even inside a checkout", () => {
+    const paths = resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "false" } });
+    expect(paths.sourceCheckout).toBe(false);
+    expect(paths.configRoot).toBe(path.join("/Users/tester", ".strada"));
+    expect(resolveDotenvPath({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "false" } }))
+      .toBe(path.join("/Users/tester", ".strada", ".env"));
+  });
+
+  it("true still forces a source checkout, and 0/1/yes/no are read too", () => {
+    expect(resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "true" } }).sourceCheckout).toBe(true);
+    expect(resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "1" } }).sourceCheckout).toBe(true);
+    expect(resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "YES" } }).sourceCheckout).toBe(true);
+    expect(resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "0" } }).sourceCheckout).toBe(false);
+    expect(resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: " No " } }).sourceCheckout).toBe(false);
+  });
+
+  it("says nothing when it says nothing: unset, empty or unreadable still probes for .git", () => {
+    // This repository has a .git, so the probe answers true — the behaviour
+    // every existing caller relies on.
+    for (const value of [undefined, "", "   ", "maybe"]) {
+      const env = value === undefined ? {} : { STRADA_SOURCE_CHECKOUT: value };
+      expect(resolveRuntimePaths({ ...inRepo, env }).sourceCheckout, String(value)).toBe(true);
+    }
+  });
+});

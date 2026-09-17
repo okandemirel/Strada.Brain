@@ -54,7 +54,17 @@ interface ConfigResultOk {
 }
 
 interface ConfigResultErr {
-  kind: "error";
+  /**
+   * BOTH SPELLINGS, because production only ever produces one of them.
+   * `loadConfigSafe` returns `Result<Config, string>`, whose failure is
+   * `kind: "err"` — this file declared `"error"` and cast, so an INVALID
+   * configuration matched neither branch, fell through to the success path
+   * and read `.value.language` off an object with no value. The doctor then
+   * crashed with `Cannot read properties of undefined` exactly when a new
+   * developer needed it to say what was wrong (found by the plan-6.8
+   * first-run rehearsal).
+   */
+  kind: "err" | "error";
   error: string;
 }
 
@@ -232,7 +242,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       detail: `No .env file was found in ${configRoot}.`,
       fix: `Run \`${getSourceSetupCommand(platform, "web")}\`, \`${getSourceSetupCommand(platform, "terminal")}\`, or \`npm run setup:web\`.`,
     });
-  } else if (configResult.kind === "error") {
+  } else if (configResult.kind !== "ok") {
     checks.push({
       id: "config",
       label: "Configuration",
