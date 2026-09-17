@@ -9,11 +9,14 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import {
+  assertPublicTarget,
   validateUrlWithConfig,
   BrowserRateLimiter,
   BrowserSessionManager,
   DEFAULT_SECURITY_CONFIG,
+  ForbiddenTargetError,
   type BrowserSecurityConfig,
+  type TargetResolver,
 } from "../../security/browser-security.js";
 import { getLogger } from "../../utils/logger.js";
 import { createWriteStream } from "node:fs";
@@ -80,6 +83,90 @@ function looksLikeExpression(script: string): boolean {
     !/[;{}]/.test(trimmed) &&
     !/\b(return|const|let|var|if|for|while|switch|try|throw|function|class)\b/.test(trimmed)
   );
+}
+
+// ─── Network policy (plan 4.6 / audit 13F2 / D64) ────────────────────────────
+//
+// Validating the first URL is not enough: a page can redirect, embed
+// sub-resources, open frames or navigate itself to an internal address after
+// the initial check. The SAME resolved-target policy (`assertPublicTarget`,
+// src/security/browser-security.ts) is applied to every request the context
+// makes (forbidden ones are aborted) and re-checked on every frame navigation
+// (a forbidden destination closes the session).
+
+/** Structural subset of Playwright's Route used by the policy (fake-able in tests). */
+export interface PolicyRoute {
+  request(): { url(): string };
+  continue(): Promise<void>;
+  abort(errorCode?: string): Promise<void>;
+}
+
+/** Structural subset of Playwright's BrowserContext. */
+export interface PolicyContext {
+  route(url: string, handler: (route: PolicyRoute) => Promise<void> | void): Promise<unknown>;
+}
+
+/** Structural subset of Playwright's Page. */
+export interface PolicyPage {
+  on(event: "framenavigated", listener: (frame: { url(): string }) => void): unknown;
+}
+
+export interface NetworkPolicyOptions {
+  /** Injectable resolver (tests); defaults to dns.lookup. */
+  resolver?: TargetResolver;
+  /** Called when a frame has navigated to a forbidden destination. Should tear the session down. */
+  onForbiddenNavigation: (url: string, reason: string) => Promise<void> | void;
+  /** Called for every aborted request (logging). */
+  onBlockedRequest?: (url: string, reason: string) => void;
+}
+
+/** Schemes that never touch the network from the browser; nothing to resolve. */
+const NON_NETWORK_SCHEMES = new Set(["about:", "blob:", "data:"]);
+
+function schemeOf(url: string): string {
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(url);
+  return match ? match[1]!.toLowerCase() : "";
+}
+
+/**
+ * Install the resolved-target policy on a browser context: every request goes
+ * through `assertPublicTarget` (abort on refusal) and every frame navigation
+ * is re-checked (close on refusal).
+ */
+export async function installNetworkPolicy(
+  context: PolicyContext,
+  page: PolicyPage,
+  options: NetworkPolicyOptions,
+): Promise<void> {
+  const policyOptions = options.resolver ? { resolver: options.resolver } : {};
+
+  await context.route("**/*", async (route) => {
+    const url = route.request().url();
+    const scheme = schemeOf(url);
+    if (NON_NETWORK_SCHEMES.has(scheme)) {
+      await route.continue();
+      return;
+    }
+    try {
+      await assertPublicTarget(url, policyOptions);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      options.onBlockedRequest?.(url, reason);
+      await route.abort("blockedbyclient").catch(() => undefined);
+      return;
+    }
+    await route.continue();
+  });
+
+  page.on("framenavigated", (frame) => {
+    const url = frame.url();
+    const scheme = schemeOf(url);
+    if (NON_NETWORK_SCHEMES.has(scheme) || url === "") return;
+    void assertPublicTarget(url, policyOptions).catch(async (error: unknown) => {
+      const reason = error instanceof ForbiddenTargetError ? error.message : String(error);
+      await options.onForbiddenNavigation(url, reason);
+    });
+  });
 }
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -235,6 +322,9 @@ export class BrowserAutomationTool implements ITool {
     const validation = validateUrlWithConfig(input.url, this.config);
     if (!validation.valid)
       return { content: `URL validation failed: ${validation.reason}`, isError: true };
+
+    const targetCheck = await this.checkResolvedTarget(input.url);
+    if (targetCheck) return targetCheck;
 
     if (!this.sessionManager.acquireSession(sessionId)) {
       return {
@@ -514,6 +604,9 @@ export class BrowserAutomationTool implements ITool {
     if (!validation.valid)
       return { content: `URL validation failed: ${validation.reason}`, isError: true };
 
+    const targetCheck = await this.checkResolvedTarget(input.url);
+    if (targetCheck) return targetCheck;
+
     const session = this.requireSession(sessionId);
     const candidate = resolve(join(context.workingDirectory, input.downloadPath));
     const safeRoot = resolve(context.workingDirectory);
@@ -588,6 +681,8 @@ export class BrowserAutomationTool implements ITool {
         if (!hopValidation.valid) {
           return { content: `Download blocked (URL validation failed): ${hopValidation.reason}`, isError: true };
         }
+        const hopTarget = await this.checkResolvedTarget(currentUrl);
+        if (hopTarget) return { content: `Download blocked: ${hopTarget.content}`, isError: true };
         response = await fetch(currentUrl, {
           method: "GET",
           headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
@@ -664,6 +759,21 @@ export class BrowserAutomationTool implements ITool {
 
       const page = await context.newPage();
 
+      if (this.config.blockLocalhost) {
+        await installNetworkPolicy(context, page, {
+          onBlockedRequest: (url, reason) =>
+            this.logger.warn("Browser request blocked by network policy", { sessionId, url, reason }),
+          onForbiddenNavigation: async (url, reason) => {
+            this.logger.warn("Browser navigated to a forbidden destination; closing session", {
+              sessionId,
+              url,
+              reason,
+            });
+            await this.closeSession(sessionId);
+          },
+        });
+      }
+
       session = { browser, context, page, createdAt: Date.now(), lastUsed: Date.now() };
       this.sessions.set(sessionId, session);
       this.logger.info("Created new browser session", { sessionId });
@@ -673,6 +783,22 @@ export class BrowserAutomationTool implements ITool {
       if (context) await context.close().catch(() => {});
       if (browser) await browser.close().catch(() => {});
       throw error;
+    }
+  }
+
+  /**
+   * Resolved-target policy for tool-supplied URLs (navigate / download / every
+   * download redirect hop). Returns an error result when the URL's hostname
+   * resolves to a forbidden address, null when it is public.
+   */
+  private async checkResolvedTarget(url: string): Promise<ToolExecutionResult | null> {
+    if (!this.config.blockLocalhost) return null;
+    try {
+      await assertPublicTarget(url);
+      return null;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { content: `URL validation failed: ${reason}`, isError: true };
     }
   }
 

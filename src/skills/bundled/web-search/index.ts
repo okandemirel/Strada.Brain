@@ -2,7 +2,15 @@
 // Web Search bundled skill — fetch URL content and search the web via DuckDuckGo.
 // ---------------------------------------------------------------------------
 
+import type { LookupFunction } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { ITool, ToolContext, ToolExecutionResult } from "../../../agents/tools/tool.interface.js";
+import {
+  assertPublicTarget,
+  ForbiddenTargetError,
+  isRedirectStatus,
+  type ResolvedTarget,
+} from "../../../security/browser-security.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -17,16 +25,19 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** Maximum number of search results to return. */
 const MAX_SEARCH_RESULTS = 5;
 
+/** Redirect hops web_fetch_url will follow (each hop re-checked by the SSRF policy). */
+const MAX_REDIRECTS = 5;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Hosts that must never be fetched (SSRF prevention). */
-const BLOCKED_HOSTS = /^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|\[::1\]|::1)$/i;
-
 /**
- * Validate that a URL starts with http:// or https://.
- * Rejects file://, data://, javascript:, and other schemes.
+ * Cheap synchronous shape check: non-empty string starting with http:// or
+ * https://. The SSRF decision is NOT made here — `assertPublicTarget`
+ * (src/security/browser-security.ts) classifies the resolved addresses of the
+ * initial URL and of every redirect hop right before each request
+ * (plan 0-B.6 / audit 13F1 / D63 + Codex #12).
  */
 function validateUrl(url: string): { ok: true; url: string } | { ok: false; error: string } {
   if (typeof url !== "string" || url.trim() === "") {
@@ -37,15 +48,100 @@ function validateUrl(url: string): { ok: true; url: string } | { ok: false; erro
     return { ok: false, error: "Only http:// and https:// URLs are allowed." };
   }
   try {
-    const parsed = new URL(trimmed);
-    const hostname = parsed.hostname;
-    if (BLOCKED_HOSTS.test(hostname)) {
-      return { ok: false, error: "Access to internal/private network addresses is blocked." };
-    }
+    new URL(trimmed);
   } catch {
     return { ok: false, error: "Invalid URL format." };
   }
   return { ok: true, url: trimmed };
+}
+
+/**
+ * An undici Agent whose socket connect uses ONLY the addresses the policy just
+ * vetted, instead of resolving the hostname a second time. This closes the
+ * check-then-connect (DNS rebinding) window: the address we classified is the
+ * address the TCP connection goes to. TLS still verifies against the hostname
+ * (servername is derived from the URL, not from the pinned address).
+ *
+ * Node's global fetch cannot pin: its RequestInit has no lookup hook and mixing
+ * an npm undici Agent into the bundled fetch is version-fragile, so the request
+ * goes through the npm `undici` fetch with this dispatcher.
+ */
+function pinnedDispatcher(target: ResolvedTarget): Agent {
+  const pinned = target.addresses.map((a) => ({ address: a.address, family: a.family }));
+  const lookup: LookupFunction = (hostname, options, callback) => {
+    if (hostname.toLowerCase() !== target.hostname) {
+      const err: NodeJS.ErrnoException = new Error(`Refusing to connect to unvetted host "${hostname}"`);
+      err.code = "ENOTFOUND";
+      callback(err, options.all ? [] : "");
+      return;
+    }
+    const family =
+      options.family === 4 || options.family === "IPv4" ? 4
+      : options.family === 6 || options.family === "IPv6" ? 6
+      : undefined;
+    const candidates = family ? pinned.filter((a) => a.family === family) : pinned;
+    if (candidates.length === 0) {
+      const err: NodeJS.ErrnoException = new Error(`No vetted address of family ${family ?? "any"} for "${hostname}"`);
+      err.code = "ENOTFOUND";
+      callback(err, options.all ? [] : "");
+      return;
+    }
+    if (options.all) {
+      callback(null, candidates);
+    } else {
+      callback(null, candidates[0]!.address, candidates[0]!.family);
+    }
+  };
+  return new Agent({ connect: { lookup } });
+}
+
+/**
+ * GET `initialUrl`, following redirects by hand: every hop (the initial URL
+ * and each Location) is passed through `assertPublicTarget` immediately
+ * before its request and the connection is pinned to the vetted addresses.
+ * A hop that lands on a forbidden address throws ForbiddenTargetError.
+ */
+async function fetchWithPolicy(
+  initialUrl: string,
+  signal: AbortSignal,
+): Promise<{ response: Response; dispose: () => Promise<void> }> {
+  const agents: Agent[] = [];
+  const dispose = async (): Promise<void> => {
+    await Promise.all(agents.splice(0).map((a) => a.close().catch(() => undefined)));
+  };
+
+  let currentUrl = initialUrl;
+  try {
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      // Re-resolve right before the request: a rebinding host that was public a
+      // moment ago is re-checked, and the agent below connects only to what
+      // this call vetted.
+      const target = await assertPublicTarget(currentUrl);
+      const agent = pinnedDispatcher(target);
+      agents.push(agent);
+
+      const response = (await undiciFetch(currentUrl, {
+        signal,
+        headers: { "User-Agent": "StradaBrain/1.0" },
+        redirect: "manual",
+        dispatcher: agent,
+      })) as unknown as Response;
+
+      if (!isRedirectStatus(response.status)) {
+        return { response, dispose };
+      }
+      const location = response.headers.get("location");
+      if (!location) {
+        return { response, dispose };
+      }
+      await response.body?.cancel().catch(() => undefined);
+      currentUrl = new URL(location, currentUrl).toString();
+    }
+    throw new Error(`Too many redirects (more than ${MAX_REDIRECTS}).`);
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }
 
 /**
@@ -111,18 +207,13 @@ const webFetchUrl: ITool = {
       return { content: `Error: ${validation.error}` };
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let dispose: (() => Promise<void>) | undefined;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-      const response = await fetch(validation.url, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "StradaBrain/1.0",
-        },
-      });
-
-      clearTimeout(timeoutId);
+      const fetched = await fetchWithPolicy(validation.url, controller.signal);
+      dispose = fetched.dispose;
+      const response = fetched.response;
 
       if (!response.ok) {
         return { content: `Error: HTTP ${response.status} ${response.statusText}` };
@@ -135,11 +226,17 @@ const webFetchUrl: ITool = {
 
       return { content: truncated };
     } catch (error) {
+      if (error instanceof ForbiddenTargetError) {
+        return { content: `Error: Access to internal/private network addresses is blocked. ${error.message}` };
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("abort")) {
         return { content: "Error: Request timed out after 10 seconds." };
       }
       return { content: `Error: ${message}` };
+    } finally {
+      clearTimeout(timeoutId);
+      if (dispose) await dispose();
     }
   },
 };

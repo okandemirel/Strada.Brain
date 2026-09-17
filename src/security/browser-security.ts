@@ -4,10 +4,14 @@
  * Provides:
  * - URL validation with configurable allow/block lists
  * - Domain blocking (localhost, private IPs, file://)
+ * - Resolved-target SSRF policy (`assertPublicTarget`, `isForbiddenAddress`):
+ *   classifies the addresses a hostname actually resolves to, not the
+ *   hostname string (plan 0-B.6 / audit 13F1 / D63, 4.6 / 13F2 / D64)
  * - Rate limiting for browser operations
  * - Security configuration management
  */
 
+import { lookup as dnsLookup } from "node:dns/promises";
 import { getLogger } from "../utils/logger.js";
 
 // ---------- Types ----------
@@ -182,53 +186,349 @@ export function validateUrlWithConfig(
 }
 
 /**
- * Check if an IP address is in a private range.
- * Also detects IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1).
+ * Check if a hostname is an IP literal that lands in a forbidden range.
+ * Plain hostnames (not literals) return false here — they are handled by the
+ * resolved-target policy (`assertPublicTarget`), which classifies what the
+ * name actually resolves to.
  */
-function isPrivateIp(ip: string): boolean {
-  let ipToCheck = ip;
+function isPrivateIp(host: string): boolean {
+  const literal = normalizeIpLiteral(host);
+  return literal !== null && isForbiddenAddress(literal);
+}
 
-  // Handle IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
-  const v4MappedMatch = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
-  if (v4MappedMatch) {
-    ipToCheck = v4MappedMatch[1]!;
+// ---------- Resolved-target policy (plan 0-B.6 / 13F1 / D63, 4.6 / 13F2 / D64) ----------
+//
+// The hostname string is not the connection target. A public-looking name can
+// resolve to 127.0.0.1 / 10.0.0.1 / 169.254.169.254 / fd00::1, a rebinding host
+// can answer differently on the second lookup, a redirect can point inside, and
+// IPv4 has decimal / hex / octal / short spellings. The ONE policy below parses
+// the URL, normalises every literal spelling, resolves the name, and refuses if
+// ANY resolved address is in a forbidden class. Callers apply it to the initial
+// URL, to every redirect hop, and (browser) to every request and navigation.
+
+export interface ResolvedAddress {
+  address: string;
+  family: 4 | 6;
+}
+
+/** Injectable resolver (tests); defaults to `dns.lookup({ all: true })`. */
+export type TargetResolver = (hostname: string) => Promise<ResolvedAddress[]>;
+
+export interface PublicTargetOptions {
+  resolver?: TargetResolver;
+}
+
+export interface ResolvedTarget {
+  /** Parsed URL (WHATWG-normalised). */
+  url: URL;
+  /** Lowercased hostname without IPv6 brackets. */
+  hostname: string;
+  /** Every address the hostname resolved to (or the literal itself). All are public. */
+  addresses: ResolvedAddress[];
+}
+
+export class ForbiddenTargetError extends Error {
+  readonly code = "FORBIDDEN_TARGET";
+  readonly url: string;
+  readonly address: string | undefined;
+
+  constructor(message: string, url: string, address?: string) {
+    super(message);
+    this.name = "ForbiddenTargetError";
+    this.url = url;
+    this.address = address;
+  }
+}
+
+export const defaultTargetResolver: TargetResolver = async (hostname) => {
+  const results = await dnsLookup(hostname, { all: true });
+  return results.map((r) => ({ address: r.address, family: r.family === 6 ? 6 : 4 }));
+};
+
+/**
+ * Parse one IPv4 "part" the way the WHATWG URL parser does: `0x..` hex,
+ * leading-zero octal, otherwise decimal. Returns null on garbage.
+ */
+function parseIpv4Part(part: string): number | null {
+  if (part === "") return null;
+  let radix = 10;
+  let digits = part;
+  if (/^0[xX]/.test(part)) {
+    radix = 16;
+    digits = part.slice(2);
+    if (digits === "") return null;
+    if (!/^[0-9a-fA-F]+$/.test(digits)) return null;
+  } else if (part.length > 1 && part.startsWith("0")) {
+    radix = 8;
+    digits = part.slice(1);
+    if (!/^[0-7]+$/.test(digits)) return null;
+  } else if (!/^[0-9]+$/.test(part)) {
+    return null;
+  }
+  const value = parseInt(digits, radix);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Normalise every IPv4 spelling (dotted decimal, hex `0x7f000001`, octal
+ * `0177.0.0.1`, decimal `2130706433`, short `127.1` / `127.0.1`) to a
+ * canonical dotted quad. Returns null if the input is not an IPv4 literal.
+ */
+export function parseIpv4Literal(host: string): string | null {
+  const parts = host.split(".");
+  if (parts.length < 1 || parts.length > 4) return null;
+  const values: number[] = [];
+  for (const part of parts) {
+    const v = parseIpv4Part(part);
+    if (v === null) return null;
+    values.push(v);
+  }
+  // All but the last part must fit in one octet; the last fills the rest.
+  for (let i = 0; i < values.length - 1; i++) {
+    if (values[i]! > 255) return null;
+  }
+  const last = values[values.length - 1]!;
+  const remaining = 4 - (values.length - 1);
+  if (last >= 256 ** remaining) return null;
+  let n = 0;
+  for (let i = 0; i < values.length - 1; i++) {
+    n = n * 256 + values[i]!;
+  }
+  n = n * 256 ** remaining + last;
+  return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+}
+
+/** Parse an IPv6 literal into 8 hextets. Handles `::` compression, embedded IPv4 tails and zone ids. */
+function parseIpv6(host: string): number[] | null {
+  let text = host;
+  const zone = text.indexOf("%");
+  if (zone !== -1) text = text.slice(0, zone);
+  if (!/^[0-9a-fA-F:.]+$/.test(text) || !text.includes(":")) return null;
+
+  const doubleColon = text.indexOf("::");
+  if (doubleColon !== -1 && text.indexOf("::", doubleColon + 1) !== -1) return null;
+
+  const toGroups = (segment: string): number[] | null => {
+    if (segment === "") return [];
+    const raw = segment.split(":");
+    const groups: number[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const g = raw[i]!;
+      if (g.includes(".")) {
+        // Embedded IPv4 must be the final group.
+        if (i !== raw.length - 1) return null;
+        const v4 = parseIpv4Literal(g);
+        if (v4 === null || g.split(".").length !== 4) return null;
+        const [a, b, c, d] = v4.split(".").map(Number) as [number, number, number, number];
+        groups.push((a << 8) | b, (c << 8) | d);
+        continue;
+      }
+      if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+      groups.push(parseInt(g, 16));
+    }
+    return groups;
+  };
+
+  if (doubleColon === -1) {
+    const groups = toGroups(text);
+    return groups && groups.length === 8 ? groups : null;
+  }
+  const head = toGroups(text.slice(0, doubleColon));
+  const tail = toGroups(text.slice(doubleColon + 2));
+  if (!head || !tail || head.length + tail.length > 7) return null;
+  return [...head, ...new Array<number>(8 - head.length - tail.length).fill(0), ...tail];
+}
+
+function formatIpv6(groups: number[]): string {
+  return groups.map((g) => g.toString(16)).join(":");
+}
+
+/**
+ * Normalise an IP literal (any IPv4 spelling, IPv6 with or without brackets /
+ * zone id) to a canonical string. Returns null for non-literal hostnames.
+ */
+export function normalizeIpLiteral(host: string): string | null {
+  const trimmed = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (trimmed === "") return null;
+  if (trimmed.includes(":")) {
+    const groups = parseIpv6(trimmed);
+    return groups ? formatIpv6(groups) : null;
+  }
+  return parseIpv4Literal(trimmed);
+}
+
+function ipv4ToNumber(quad: string): number {
+  const [a, b, c, d] = quad.split(".").map(Number) as [number, number, number, number];
+  return ((a << 24) >>> 0) + (b << 16) + (c << 8) + d;
+}
+
+function inCidr4(n: number, base: string, bits: number): boolean {
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return ((n & mask) >>> 0) === ((ipv4ToNumber(base) & mask) >>> 0);
+}
+
+/** Reason an IPv4 address (canonical dotted quad) is forbidden, or null if public. */
+function classifyIpv4(quad: string): string | null {
+  const n = ipv4ToNumber(quad);
+  if (inCidr4(n, "0.0.0.0", 8)) return "unspecified (0.0.0.0/8)";
+  if (inCidr4(n, "10.0.0.0", 8)) return "private (10.0.0.0/8)";
+  if (inCidr4(n, "100.64.0.0", 10)) return "carrier-grade NAT (100.64.0.0/10)";
+  if (inCidr4(n, "127.0.0.0", 8)) return "loopback (127.0.0.0/8)";
+  if (inCidr4(n, "169.254.0.0", 16)) return "link-local (169.254.0.0/16)";
+  if (inCidr4(n, "172.16.0.0", 12)) return "private (172.16.0.0/12)";
+  if (inCidr4(n, "192.0.0.0", 24)) return "reserved (192.0.0.0/24)";
+  if (inCidr4(n, "192.0.2.0", 24)) return "documentation (192.0.2.0/24)";
+  if (inCidr4(n, "192.168.0.0", 16)) return "private (192.168.0.0/16)";
+  if (inCidr4(n, "198.18.0.0", 15)) return "benchmark (198.18.0.0/15)";
+  if (inCidr4(n, "198.51.100.0", 24)) return "documentation (198.51.100.0/24)";
+  if (inCidr4(n, "203.0.113.0", 24)) return "documentation (203.0.113.0/24)";
+  if (inCidr4(n, "224.0.0.0", 4)) return "multicast (224.0.0.0/4)";
+  if (inCidr4(n, "240.0.0.0", 4)) return "reserved / broadcast (240.0.0.0/4)";
+  return null;
+}
+
+/** Reason an IPv6 address (8 hextets) is forbidden, or null if public. */
+function classifyIpv6(g: number[]): string | null {
+  const embeddedV4 = (hi: number, lo: number): string =>
+    [hi >>> 8, hi & 255, lo >>> 8, lo & 255].join(".");
+  const allZeroUpTo = (count: number): boolean => g.slice(0, count).every((x) => x === 0);
+
+  if (allZeroUpTo(8)) return "unspecified (::)";
+  if (allZeroUpTo(7) && g[7] === 1) return "loopback (::1)";
+  // IPv4-mapped ::ffff:a.b.c.d — classify the embedded IPv4.
+  if (allZeroUpTo(5) && g[5] === 0xffff) {
+    const v4 = embeddedV4(g[6]!, g[7]!);
+    const reason = classifyIpv4(v4);
+    return reason ? `IPv4-mapped ${v4}: ${reason}` : null;
+  }
+  // IPv4-compatible ::a.b.c.d (deprecated) — classify the embedded IPv4.
+  if (allZeroUpTo(6)) {
+    const v4 = embeddedV4(g[6]!, g[7]!);
+    const reason = classifyIpv4(v4);
+    return reason ? `IPv4-compatible ${v4}: ${reason}` : null;
+  }
+  // NAT64 64:ff9b::/96 — classify the embedded IPv4.
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) {
+    const v4 = embeddedV4(g[6]!, g[7]!);
+    const reason = classifyIpv4(v4);
+    return reason ? `NAT64 ${v4}: ${reason}` : null;
+  }
+  // 6to4 2002:a.b.c.d::/48 — classify the embedded IPv4.
+  if (g[0] === 0x2002) {
+    const v4 = embeddedV4(g[1]!, g[2]!);
+    const reason = classifyIpv4(v4);
+    return reason ? `6to4 ${v4}: ${reason}` : null;
+  }
+  if ((g[0]! & 0xffc0) === 0xfe80) return "link-local (fe80::/10)";
+  if ((g[0]! & 0xffc0) === 0xfec0) return "site-local (fec0::/10)";
+  if ((g[0]! & 0xfe00) === 0xfc00) return "unique-local (fc00::/7)";
+  if ((g[0]! & 0xff00) === 0xff00) return "multicast (ff00::/8)";
+  if (g[0] === 0x2001 && g[1] === 0x0db8) return "documentation (2001:db8::/32)";
+  return null;
+}
+
+/**
+ * Why `ip` must not be connected to, or null if it is a public unicast address.
+ * Pure: no DNS. Accepts any IPv4 spelling and IPv6 with/without brackets.
+ * Non-literals (hostnames) and unparsable strings are refused ("not an IP literal").
+ */
+export function classifyForbiddenAddress(ip: string): string | null {
+  const literal = normalizeIpLiteral(ip);
+  if (literal === null) return "not an IP literal";
+  if (literal.includes(":")) {
+    const groups = parseIpv6(literal);
+    return groups ? classifyIpv6(groups) : "unparsable IPv6";
+  }
+  return classifyIpv4(literal);
+}
+
+/**
+ * True if `ip` is loopback, link-local, private (RFC 1918), CGNAT, multicast,
+ * unspecified, reserved, unique-local / link-local / site-local IPv6, or an
+ * IPv4-mapped / -compatible / NAT64 / 6to4 form of any of those. Strings that
+ * are not IP literals are also forbidden (they must go through resolution).
+ */
+export function isForbiddenAddress(ip: string): boolean {
+  return classifyForbiddenAddress(ip) !== null;
+}
+
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+
+/** True for HTTP statuses whose Location header a client would follow. */
+export function isRedirectStatus(status: number): boolean {
+  return REDIRECT_STATUS.has(status);
+}
+
+/**
+ * The resolved-target policy. Parses `url`, rejects non-http(s) schemes,
+ * normalises literal spellings, resolves the hostname (every address) and
+ * throws `ForbiddenTargetError` if ANY address is in a forbidden class or the
+ * name cannot be resolved. Returns the parsed URL and the vetted address list
+ * so the caller can pin its connection to exactly those addresses.
+ *
+ * Call it immediately before every request and again for every redirect hop —
+ * a rebinding host that answered public once is re-resolved, not trusted.
+ */
+export async function assertPublicTarget(
+  url: string | URL,
+  options: PublicTargetOptions = {},
+): Promise<ResolvedTarget> {
+  const raw = typeof url === "string" ? url : url.toString();
+  let parsed: URL;
+  try {
+    parsed = typeof url === "string" ? new URL(url) : url;
+  } catch (error) {
+    throw new ForbiddenTargetError(
+      `Invalid URL: ${error instanceof Error ? error.message : String(error)}`,
+      raw,
+    );
   }
 
-  // IPv4 private ranges
-  const privateRanges = [
-    /^10\./, // 10.0.0.0/8
-    /^172\.(1[6-9]|2[0-9]|3[01])\./, // 172.16.0.0/12
-    /^192\.168\./, // 192.168.0.0/16
-    /^169\.254\./, // Link-local
-    /^127\./, // Loopback
-    /^0\./, // 0.0.0.0/8
-  ];
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ForbiddenTargetError(`Protocol "${parsed.protocol}" is not allowed (http/https only)`, raw);
+  }
 
-  for (const range of privateRanges) {
-    if (range.test(ipToCheck)) {
-      return true;
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname === "") {
+    throw new ForbiddenTargetError("URL has no hostname", raw);
+  }
+  // RFC 6761: "localhost" and every name under it resolve to loopback by definition.
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new ForbiddenTargetError(`Host "${hostname}" is loopback (localhost)`, raw, hostname);
+  }
+
+  let addresses: ResolvedAddress[];
+  const literal = normalizeIpLiteral(hostname);
+  if (literal !== null) {
+    addresses = [{ address: literal, family: literal.includes(":") ? 6 : 4 }];
+  } else {
+    const resolver = options.resolver ?? defaultTargetResolver;
+    try {
+      addresses = await resolver(hostname);
+    } catch (error) {
+      throw new ForbiddenTargetError(
+        `Host "${hostname}" could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+        raw,
+        hostname,
+      );
+    }
+    if (addresses.length === 0) {
+      throw new ForbiddenTargetError(`Host "${hostname}" resolved to no addresses`, raw, hostname);
     }
   }
 
-  // IPv6 loopback, unique-local, link-local, and IPv4-mapped. Only apply the
-  // fc/fd prefix checks to actual IPv6 literals (which always contain ':'), so
-  // legitimate hostnames like "fcbarcelona.com"/"fdomain.com" are not over-blocked.
-  if (ip === "::1" || ip === "::") {
-    return true;
-  }
-  if (ip.includes(":")) {
-    const lower = ip.toLowerCase();
-    if (
-      lower.startsWith("fc") || // fc00::/8 (unique local)
-      lower.startsWith("fd") || // fd00::/8 (unique local)
-      lower.startsWith("fe80:") || // link-local
-      lower.startsWith("::ffff:") // IPv4-mapped
-    ) {
-      return true;
+  for (const entry of addresses) {
+    const reason = classifyForbiddenAddress(entry.address);
+    if (reason !== null) {
+      throw new ForbiddenTargetError(
+        `Host "${hostname}" resolves to ${entry.address} — ${reason}; access to internal/private network addresses is blocked`,
+        raw,
+        entry.address,
+      );
     }
   }
 
-  return false;
+  return { url: parsed, hostname, addresses };
 }
 
 // ---------- Rate Limiter ----------

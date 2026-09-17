@@ -1,10 +1,18 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   validateUrlWithConfig,
+  assertPublicTarget,
+  classifyForbiddenAddress,
+  isForbiddenAddress,
+  isRedirectStatus,
+  normalizeIpLiteral,
+  parseIpv4Literal,
   BrowserRateLimiter,
   BrowserSessionManager,
   DEFAULT_SECURITY_CONFIG,
+  ForbiddenTargetError,
   type BrowserSecurityConfig,
+  type ResolvedAddress,
 } from "./browser-security.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -12,6 +20,280 @@ import { createLogger } from "../utils/logger.js";
 createLogger("error", "/tmp/strada-test.log");
 
 describe("BrowserSecurity", () => {
+  // ── Plan 0-B.6 (audit 13F1 / D63 + Codex #12) — resolved-target SSRF policy ──
+  // The guard used to classify the hostname STRING. These tests pin the address
+  // classifier (pure, no DNS) and the resolver policy (injected resolver).
+
+  describe("isForbiddenAddress (plan 0-B.6 / 13F1 / D63)", () => {
+    const forbidden: Array<[string, string]> = [
+      // loopback, every IPv4 spelling
+      ["127.0.0.1", "loopback"],
+      ["127.255.255.254", "loopback"],
+      ["2130706433", "loopback"], // decimal
+      ["0x7f000001", "loopback"], // hex
+      ["0177.0.0.1", "loopback"], // octal
+      ["127.1", "loopback"], // short
+      ["127.0.1", "loopback"], // short (3 parts)
+      ["0x7f.1", "loopback"], // mixed hex + short
+      ["0177.1", "loopback"], // mixed octal + short
+      // unspecified
+      ["0.0.0.0", "unspecified"],
+      ["0", "unspecified"],
+      ["0.1.2.3", "unspecified"],
+      // RFC 1918
+      ["10.0.0.1", "private"],
+      ["10.255.255.255", "private"],
+      ["0xa000001", "private"], // 10.0.0.1 hex
+      ["167772161", "private"], // 10.0.0.1 decimal
+      ["172.16.0.1", "private"],
+      ["172.31.255.255", "private"],
+      ["192.168.1.1", "private"],
+      ["0xc0a80101", "private"], // 192.168.1.1 hex
+      // link-local (cloud metadata)
+      ["169.254.169.254", "link-local"],
+      ["0xa9fea9fe", "link-local"],
+      ["2852039166", "link-local"],
+      // CGNAT
+      ["100.64.0.1", "carrier-grade NAT"],
+      ["100.127.255.255", "carrier-grade NAT"],
+      // multicast / reserved / broadcast
+      ["224.0.0.1", "multicast"],
+      ["239.255.255.255", "multicast"],
+      ["240.0.0.1", "reserved"],
+      ["255.255.255.255", "reserved"],
+      ["192.0.0.1", "reserved"],
+      ["198.18.0.1", "benchmark"],
+      // IPv6
+      ["::1", "loopback"],
+      ["[::1]", "loopback"],
+      ["0:0:0:0:0:0:0:1", "loopback"],
+      ["::", "unspecified"],
+      ["fe80::1", "link-local"],
+      ["fe80::1%en0", "link-local"],
+      ["febf::1", "link-local"],
+      ["fec0::1", "site-local"],
+      ["fc00::1", "unique-local"],
+      ["fd00::1", "unique-local"],
+      ["fdff:ffff::1", "unique-local"],
+      ["ff02::1", "multicast"],
+      // IPv4-mapped / compatible / NAT64 / 6to4 forms of forbidden IPv4
+      ["::ffff:127.0.0.1", "loopback"],
+      ["[::ffff:127.0.0.1]", "loopback"],
+      ["::ffff:7f00:1", "loopback"],
+      ["::ffff:10.0.0.1", "private"],
+      ["::ffff:a00:1", "private"],
+      ["::ffff:169.254.169.254", "link-local"],
+      ["::ffff:192.168.0.1", "private"],
+      ["::ffff:0.0.0.0", "unspecified"],
+      ["::127.0.0.1", "loopback"],
+      ["64:ff9b::7f00:1", "loopback"],
+      ["64:ff9b::10.0.0.1", "private"],
+      ["2002:7f00:1::", "loopback"],
+      ["2002:a9fe:a9fe::1", "link-local"],
+    ];
+
+    it.each(forbidden)("refuses %s (%s)", (ip, reasonFragment) => {
+      expect(isForbiddenAddress(ip)).toBe(true);
+      expect(classifyForbiddenAddress(ip)).toContain(reasonFragment);
+    });
+
+    const allowed = [
+      "8.8.8.8",
+      "1.1.1.1",
+      "93.184.216.34",
+      "172.32.0.1", // just outside 172.16/12
+      "172.15.255.255",
+      "100.63.255.255", // just outside 100.64/10
+      "100.128.0.0",
+      "192.169.0.1",
+      "11.0.0.1",
+      "126.255.255.255",
+      "128.0.0.1",
+      "223.255.255.255",
+      "0x08080808", // 8.8.8.8 hex
+      "134744072", // 8.8.8.8 decimal
+      "2606:4700::1111",
+      "2001:4860:4860::8888",
+      "[2606:4700::1111]",
+      "::ffff:8.8.8.8", // IPv4-mapped public stays public
+      "::ffff:808:808",
+      "64:ff9b::808:808",
+      "2002:808:808::1",
+    ];
+
+    it.each(allowed)("allows public %s", (ip) => {
+      expect(isForbiddenAddress(ip)).toBe(false);
+      expect(classifyForbiddenAddress(ip)).toBeNull();
+    });
+
+    it("refuses strings that are not IP literals (they must go through resolution)", () => {
+      for (const s of ["example.com", "localhost", "", "256.1.1.1", "4294967296", "1.2.3.4.5", "0x", "::g", "1:2:3:4:5:6:7:8:9", "fcbarcelona.com"]) {
+        expect(isForbiddenAddress(s)).toBe(true);
+      }
+    });
+
+    it("normalises every IPv4 spelling to a dotted quad", () => {
+      expect(parseIpv4Literal("2130706433")).toBe("127.0.0.1");
+      expect(parseIpv4Literal("0x7f000001")).toBe("127.0.0.1");
+      expect(parseIpv4Literal("0177.0.0.1")).toBe("127.0.0.1");
+      expect(parseIpv4Literal("127.1")).toBe("127.0.0.1");
+      expect(parseIpv4Literal("127.0.1")).toBe("127.0.0.1");
+      expect(parseIpv4Literal("0xA9.0xFE.0xA9.0xFE")).toBe("169.254.169.254");
+      expect(parseIpv4Literal("256")).toBe("0.0.1.0");
+      expect(parseIpv4Literal("1.256")).toBe("1.0.1.0"); // WHATWG: last part fills the rest
+      expect(parseIpv4Literal("1.2.256.1")).toBeNull(); // non-last part over 255
+      expect(parseIpv4Literal("1.2.3.256")).toBeNull();
+      expect(parseIpv4Literal("08.1.1.1")).toBeNull(); // bad octal
+      expect(parseIpv4Literal("a.b.c.d")).toBeNull();
+      expect(normalizeIpLiteral("[::FFFF:127.0.0.1]")).toBe("0:0:0:0:0:ffff:7f00:1");
+      expect(normalizeIpLiteral("fe80::1%eth0")).toBe("fe80:0:0:0:0:0:0:1");
+      expect(normalizeIpLiteral("example.com")).toBeNull();
+    });
+
+    it("knows which statuses are redirects", () => {
+      for (const s of [301, 302, 303, 307, 308]) expect(isRedirectStatus(s)).toBe(true);
+      for (const s of [200, 204, 304, 400, 404, 500]) expect(isRedirectStatus(s)).toBe(false);
+    });
+  });
+
+  describe("assertPublicTarget (plan 0-B.6 / 13F1 / D63)", () => {
+    const table = new Map<string, ResolvedAddress[]>();
+    const calls: string[] = [];
+    const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+      calls.push(hostname);
+      const hit = table.get(hostname);
+      if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+      return hit;
+    });
+
+    beforeEach(() => {
+      table.clear();
+      calls.length = 0;
+      resolver.mockClear();
+    });
+
+    it("public hostname -> public address passes and returns the vetted addresses", async () => {
+      table.set("example.com", [{ address: "93.184.216.34", family: 4 }, { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }]);
+      const target = await assertPublicTarget("https://example.com/path?q=1", { resolver });
+      expect(target.hostname).toBe("example.com");
+      expect(target.url.href).toBe("https://example.com/path?q=1");
+      expect(target.addresses.map((a) => a.address)).toEqual(["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]);
+      expect(resolver).toHaveBeenCalledWith("example.com");
+    });
+
+    it("public-looking hostname that resolves to a private address is refused", async () => {
+      table.set("public.example", [{ address: "10.0.0.1", family: 4 }]);
+      await expect(assertPublicTarget("http://public.example/", { resolver })).rejects.toThrow(ForbiddenTargetError);
+      await expect(assertPublicTarget("http://public.example/", { resolver })).rejects.toThrow(/10\.0\.0\.1.*private/);
+    });
+
+    it.each([
+      ["127.0.0.1", "loopback"],
+      ["169.254.169.254", "link-local"],
+      ["fd00::1", "unique-local"],
+      ["::1", "loopback"],
+      ["100.64.1.1", "carrier-grade NAT"],
+      ["::ffff:10.1.1.1", "private"],
+    ])("hostname resolving to %s (%s) is refused", async (address, reason) => {
+      table.set("evil.example", [{ address, family: address.includes(":") ? 6 : 4 }]);
+      await expect(assertPublicTarget("https://evil.example/", { resolver })).rejects.toThrow(reason);
+    });
+
+    it("refuses when ANY of several resolved addresses is forbidden", async () => {
+      table.set("mixed.example", [
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ]);
+      await expect(assertPublicTarget("https://mixed.example/", { resolver })).rejects.toThrow(ForbiddenTargetError);
+    });
+
+    it("DNS rebinding: first lookup public passes, second lookup private is refused on the re-check", async () => {
+      resolver.mockImplementationOnce(async () => [{ address: "93.184.216.34", family: 4 }]);
+      resolver.mockImplementationOnce(async () => [{ address: "127.0.0.1", family: 4 }]);
+      await expect(assertPublicTarget("https://rebind.example/", { resolver })).resolves.toBeDefined();
+      await expect(assertPublicTarget("https://rebind.example/", { resolver })).rejects.toThrow(/127\.0\.0\.1/);
+      expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses when the hostname cannot be resolved (fail closed)", async () => {
+      await expect(assertPublicTarget("https://nxdomain.example/", { resolver })).rejects.toThrow(/could not be resolved/);
+    });
+
+    it("refuses when the resolver returns no addresses", async () => {
+      table.set("empty.example", []);
+      await expect(assertPublicTarget("https://empty.example/", { resolver })).rejects.toThrow(/no addresses/);
+    });
+
+    it.each([
+      "http://127.0.0.1/",
+      "http://2130706433/",
+      "http://0x7f000001/",
+      "http://0177.0.0.1/",
+      "http://127.1/",
+      "http://0x7f.1/",
+      "http://[::1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://[::ffff:7f00:1]/",
+      "http://[fd00::1]/",
+      "http://[fe80::1]/",
+      "http://10.0.0.1/",
+      "http://0xa000001/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://0/",
+      "http://0.0.0.0/",
+      "http://100.64.0.1/",
+      "http://224.0.0.1/",
+    ])("IP literal %s is refused without consulting DNS", async (url) => {
+      await expect(assertPublicTarget(url, { resolver })).rejects.toThrow(ForbiddenTargetError);
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it("public IP literals pass without consulting DNS", async () => {
+      const target = await assertPublicTarget("http://8.8.8.8/", { resolver });
+      expect(target.addresses).toEqual([{ address: "8.8.8.8", family: 4 }]);
+      const v6 = await assertPublicTarget("http://[2606:4700::1111]/", { resolver });
+      expect(v6.addresses[0]?.family).toBe(6);
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it("refuses localhost and *.localhost without consulting DNS", async () => {
+      await expect(assertPublicTarget("http://localhost:8080/", { resolver })).rejects.toThrow(/localhost/);
+      await expect(assertPublicTarget("http://app.localhost/", { resolver })).rejects.toThrow(/localhost/);
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it("rejects non-http(s) schemes and malformed URLs", async () => {
+      for (const url of ["ftp://example.com/", "file:///etc/passwd", "javascript:alert(1)", "data:text/plain,hi", "gopher://x/"]) {
+        await expect(assertPublicTarget(url, { resolver })).rejects.toThrow(ForbiddenTargetError);
+      }
+      await expect(assertPublicTarget("not a url", { resolver })).rejects.toThrow(/Invalid URL/);
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it("accepts a URL object and carries url/address on the error", async () => {
+      table.set("public.example", [{ address: "192.168.0.7", family: 4 }]);
+      const err = await assertPublicTarget(new URL("http://public.example/x"), { resolver }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ForbiddenTargetError);
+      expect((err as ForbiddenTargetError).code).toBe("FORBIDDEN_TARGET");
+      expect((err as ForbiddenTargetError).url).toBe("http://public.example/x");
+      expect((err as ForbiddenTargetError).address).toBe("192.168.0.7");
+    });
+  });
+
+  describe("validateUrlWithConfig uses the shared literal classifier", () => {
+    it.each(["http://2130706433/", "http://0x7f000001/", "http://0177.0.0.1/", "http://127.1/", "http://100.64.0.1/", "http://224.0.0.1/", "http://[::ffff:10.0.0.1]/"])(
+      "blocks %s",
+      (url) => {
+        const result = validateUrlWithConfig(url);
+        expect(result.valid).toBe(false);
+      },
+    );
+
+    it("does not block an IPv4-mapped public address literal", () => {
+      expect(validateUrlWithConfig("http://[::ffff:8.8.8.8]/").valid).toBe(true);
+    });
+  });
+
   describe("DEFAULT_SECURITY_CONFIG", () => {
     it("should have reasonable defaults", () => {
       expect(DEFAULT_SECURITY_CONFIG.blockLocalhost).toBe(true);
