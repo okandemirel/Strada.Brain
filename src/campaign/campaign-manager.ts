@@ -4879,6 +4879,7 @@ export class CampaignManager {
     const artifacts: Array<{ target?: string; artifactPath: string }> = [];
     for (const target of wanted) {
       let built: PlayerBuildEvidence;
+      let buildDecision: EvidenceDecision | undefined;
       try {
         // UNDER A TICKET: what was asked for is on disk before the builder
         // runs, and what came back is judged after (Codex 2026-09-12 AC).
@@ -4890,6 +4891,10 @@ export class CampaignManager {
             const value = await this.buildPlayer!(this.projectRoot, target, runId);
             return { value, ...(value.receipt === undefined ? {} : { receipt: value.receipt }) };
           },
+          // …and the decision reaches the slot it was made for: the build
+          // never asked, so a refused build receipt still shipped its
+          // artifact (plan 1.2).
+          (decision) => { buildDecision = decision; },
         );
       } catch (err) {
         built = {
@@ -4897,6 +4902,8 @@ export class CampaignManager {
           detail: `the player build could not run (${err instanceof Error ? err.message : String(err)})`,
         };
       }
+      const refusedBuild = this.refusedProof(buildDecision, "player-build");
+      if (refusedBuild !== undefined) built = { ran: false, detail: refusedBuild };
       // A build that succeeded but named a DIFFERENT platform has not built
       // this one: a valid StandaloneOSX artifact used to satisfy "Release on
       // Windows" and the campaign reached `done` (Codex 2026-09-11 L#12).
@@ -5130,6 +5137,26 @@ export class CampaignManager {
   }
 
   /**
+   * The reason a producer's receipt was REFUSED, when one came back and was
+   * refused — or nothing.
+   *
+   * ADMISSION IS A PRECONDITION. `underTicket` returned the producer's value
+   * whatever the receiver decided, so a play-through whose receipt said
+   * `execution.completed: false`, or named the wrong session, or a tree
+   * this campaign never built, still had its green verdict read from disk
+   * and credited (audit 09.2 / D11 / AK#11, Codex plan review #19; the
+   * 0-A.6 residue). A producer that sent NO receipt is a producer this
+   * deployment has not upgraded: that case is read as before, by name, and
+   * the ledger records it as EVIDENCE_MISSING — everything else that was
+   * refused is a missing proof for the slot it was asked for.
+   */
+  private refusedProof(decision: EvidenceDecision | undefined, what: string): string | undefined {
+    if (decision === undefined || decision.admitted) return undefined;
+    if (decision.refusal === "EVIDENCE_MISSING") return undefined;
+    return `the ${what} receipt was refused (${decision.refusal}): ${decision.detail}`;
+  }
+
+  /**
    * Do the bytes of the verdict this run wrote still match the receipt the
    * receiver admitted? Nothing when there was no admitted receipt to check
    * against. An ADMITTED receipt that states no verdict digest binds nothing:
@@ -5256,6 +5283,12 @@ export class CampaignManager {
       failure = err instanceof Error ? err.message : String(err);
       getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
     }
+    // A REFUSED RECEIPT IS A MISSING PROOF, before the file is even read: the
+    // run came back, its receipt was judged, and the receiver said no.
+    const refusedPrimary = failure === undefined ? this.refusedProof(primaryDecision, "play-through") : undefined;
+    if (refusedPrimary !== undefined) {
+      return { found: false, missingRunner: refusedPrimary };
+    }
     const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, primaryRunId ?? attemptRunId(milestone));
     // THE FILE THE RECEIPT IS ABOUT. The delivery is judged from this
     // verdict — its frame rate, its frames, its errors — and an admitted
@@ -5330,6 +5363,11 @@ export class CampaignManager {
         );
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
+      }
+      const theirRefused = why === undefined ? this.refusedProof(theirDecision, "play-through") : undefined;
+      if (theirRefused !== undefined) {
+        perTarget.push({ target: other.target, ok: false, detail: `not measured: ${theirRefused}` });
+        continue;
       }
       const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, theirRunId ?? attemptRunId(milestone));
       // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
@@ -6153,7 +6191,8 @@ export class CampaignManager {
       // may answer it — the live editor or a headless compiler — and neither
       // is chosen here, so the ticket accepts both and demands no exit code
       // of a live editor that never exits.
-      return await this.underTicket(
+      let compileDecision: EvidenceDecision | undefined;
+      const verdict = await this.underTicket(
         campaign,
         milestone,
         // …and WHICH of those owns a process: a headless compiler always
@@ -6164,7 +6203,11 @@ export class CampaignManager {
           const verdict = await this.verifyCompile!(this.projectRoot, runId);
           return { value: verdict, ...(verdict.receipt === undefined ? {} : { receipt: verdict.receipt }) };
         },
+        (decision) => { compileDecision = decision; },
       );
+      // A refused compile receipt is a compile nobody measured (plan 1.2).
+      const refused = this.refusedProof(compileDecision, "compile");
+      return refused === undefined ? verdict : { ok: false, ran: false, detail: refused };
     } catch (err) {
       return {
         ok: false,
@@ -6943,8 +6986,12 @@ export class CampaignManager {
      */
     onDecision?: (decision: EvidenceDecision) => void,
   ): Promise<T> {
-    const ledger = campaign === undefined ? null : this.ledger();
-    if (ledger === null || campaign === undefined) return (await run(issueRunId())).value;
+    if (campaign === undefined) return (await run(issueRunId())).value;
+    // THE LEDGER IS THE EVIDENCE. A ledger that could not be opened or could
+    // not record the ticket used to let the producer run unticketed and its
+    // answer count; a proof nobody could record is not a proof (plan 1.2).
+    const ledger = this.ledger();
+    if (ledger === null) throw new Error("the evidence ledger could not be opened, so this producer's answer cannot be admitted");
     // A PROJECT WITH NO REPOSITORY HAS NO DIRT. `git status` fails outside a
     // repository, and the failure was read as "dirty", so a correct project
     // outside git refused every receipt as SOURCE_DIRTY (Codex 2026-09-13
@@ -6975,8 +7022,7 @@ export class CampaignManager {
     try {
       ledger.issue(ticket);
     } catch (err) {
-      getLoggerSafe().warn("A producer ticket could not be recorded", { error: err instanceof Error ? err.message : String(err) });
-      return (await run(ticket.binding.runId)).value;
+      throw new Error(`the evidence ledger could not record the ticket (${err instanceof Error ? err.message : String(err)}), so this producer's answer cannot be admitted`);
     }
     let outcome: { value: T; receipt?: string } | undefined;
     // THE RECEIPT A FAILURE CARRIED. A producer that was killed at its
@@ -7023,6 +7069,11 @@ export class CampaignManager {
         ledger.settle(ticket.binding.runId, outcome?.receipt ?? failedReceipt, decision);
       } catch (err) {
         getLoggerSafe().warn("A producer receipt could not be recorded", { error: err instanceof Error ? err.message : String(err) });
+        // …and a run whose evidence could not be written has no admitted
+        // evidence; a run that already failed keeps its own cause.
+        if (outcome !== undefined) {
+          throw new Error(`the evidence ledger could not record the receipt (${err instanceof Error ? err.message : String(err)}), so this producer's answer cannot be admitted`);
+        }
       }
     }
   }

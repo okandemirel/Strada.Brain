@@ -3687,7 +3687,7 @@ describe("CampaignManager", () => {
    * digest bound nothing, and the verdict's run id was compared with the
    * milestone attempt id while the producer had been handed a ticket id.
    */
-  describe("admission is binding (plan 1.3)", () => {
+  describe("admission is binding (plan 1.2, 1.3)", () => {
     const bindingFixture = (
       produce: (root: string, dispatch: { runId?: string; target?: string }, artifactPlayed: string, revision: string) => { receipt?: string },
     ): { measure: (id: string) => Promise<{ found: boolean; missingRunner?: string }> } => {
@@ -3741,6 +3741,88 @@ describe("CampaignManager", () => {
       const unbound = await measure("m_unbound");
       expect(unbound.found).toBe(false);
       expect(unbound.missingRunner).toContain("names no verdict digest");
+    });
+
+    it("a REFUSED receipt beside a green verdict is a missing proof, and a valid retry then delivers (plan 1.2)", async () => {
+      // The 0-A.6 residue: a receipt saying execution.completed: false was
+      // refused by the receiver — and the green file was read anyway.
+      let completed = false;
+      const { measure } = bindingFixture((root, dispatch, artifactPlayed, revision) => {
+        writePlayerVerdict(true, { runId: dispatch.runId }, root);
+        const bytes = readFileSync(join(root, verdictRel), "utf8");
+        const receipt = JSON.parse(receiptFor(dispatch, artifactPlayed, revision, { verdictPath: verdictRel, verdictSha256: createHash("sha256").update(bytes).digest("hex") })) as Record<string, unknown>;
+        receipt["execution"] = { completed, exitCode: completed ? 0 : null, timedOut: false };
+        return { receipt: JSON.stringify(receipt) };
+      });
+      const refused = await measure("m_refused");
+      expect(refused.found).toBe(false);
+      expect(refused.missingRunner).toContain("refused (PROCESS_INCOMPLETE)");
+      // Guard: the refused row in the ledger does not block the retry that is admitted.
+      completed = true;
+      const retried = await measure("m_refused");
+      expect(retried.found).toBe(true);
+    });
+
+    it("a refused BUILD receipt ships no artifact, and a refused COMPILE receipt measured nothing (plan 1.2)", async () => {
+      const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+      const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+      mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+      writeFileSync(artifact, "the bytes that were built");
+      git("init", "-q");
+      git("config", "user.email", "t@t");
+      git("config", "user.name", "t");
+      git("add", "-A");
+      git("commit", "-qm", "baseline");
+      const revision = git("rev-parse", "HEAD").trim();
+      let buildKind = "compile"; // a receipt for the wrong kind of work: KIND_MISMATCH
+      let compileKind = "player-build";
+      const campaign = {
+        id: "c_slots", chatId: "chat", channelType: "cli", userId: "u", projectRoot, gddText: "# GDD",
+        state: "executing", draftAttempts: 0, milestones: [{ id: "m1", title: "t", prompt: "p", status: "running", attempts: 1 }], currentMilestone: 0,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const gated = new CampaignManager({
+        storage,
+        buildPlayer: async (_root, target, runId) => ({
+          ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1,
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId, kind: buildKind, medium: "builder", revision, ...(target === undefined ? {} : { target }),
+            artifactSha256: artifactDigest(artifact), execution: { completed: true, exitCode: 0, timedOut: false },
+          }),
+        }),
+        verifyCompile: async (_root, runId) => ({
+          ok: true, ran: true,
+          receipt: JSON.stringify({ schemaVersion: 1, runId, kind: compileKind, medium: "compiler", revision, execution: { completed: true, exitCode: 0, timedOut: false } }),
+        }),
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const internals = gated as unknown as {
+        measureBuild(c: unknown): Promise<{ ran: boolean; ok?: boolean; detail?: string }>;
+        measureCompile(c: unknown, m: unknown): Promise<{ ran: boolean; ok: boolean; detail?: string }>;
+      };
+      const refusedBuild = await internals.measureBuild(campaign);
+      expect(refusedBuild.ran).toBe(false);
+      expect(refusedBuild.detail).toContain("refused (KIND_MISMATCH)");
+      const refusedCompile = await internals.measureCompile(campaign, campaign.milestones[0]);
+      expect(refusedCompile.ran).toBe(false);
+      expect(refusedCompile.detail).toContain("refused (KIND_MISMATCH)");
+      // Guards: the same producers, answering for the work they were asked for, are admitted.
+      buildKind = "player-build";
+      compileKind = "compile";
+      expect((await internals.measureBuild(campaign)).ok).toBe(true);
+      expect((await internals.measureCompile(campaign, campaign.milestones[0])).ok).toBe(true);
+      // …and a ledger that cannot record the ticket is an explicit failure, not an unticketed pass.
+      const issue = vi.spyOn(EvidenceLedger.prototype, "issue").mockImplementationOnce(() => { throw new Error("disk full"); });
+      try {
+        const unrecorded = await internals.measureCompile(campaign, campaign.milestones[0]);
+        expect(unrecorded.ran).toBe(false);
+        expect(unrecorded.detail).toContain("could not record the ticket");
+      } finally {
+        issue.mockRestore();
+      }
     });
 
     it("the run id the producer stamps is the id it was GIVEN — the ticket's, one namespace", async () => {
@@ -5924,7 +6006,7 @@ describe("CampaignManager", () => {
       projectRoot,
     });
     const threw = await (throwing as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ran: boolean }> })
-      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+      .measureBuild({ id: "c_platforms", gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
     expect(threw.ran).toBe(false);
     expect((threw as { requestedTarget?: string }).requestedTarget).toBe("windows");
     expect(threw.unbuiltTargets).toEqual(["windows", "ios"]);
@@ -5938,7 +6020,7 @@ describe("CampaignManager", () => {
       projectRoot,
     });
     const measured = await (noBuilder as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; requestedTarget?: string }> })
-      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+      .measureBuild({ id: "c_platforms", gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
     expect(measured.requestedTarget).toBe("windows");
     expect(measured.unbuiltTargets).toEqual(["ios"]);
 
@@ -5964,13 +6046,13 @@ describe("CampaignManager", () => {
       projectRoot,
     });
     const both = await (honest as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[]; ok?: boolean }> })
-      .measureBuild({ gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
+      .measureBuild({ id: "c_platforms", gddText: "Ships on Steam for Windows and later on iOS.", milestones: [], currentMilestone: 0 });
     expect(asked).toEqual(["windows", "ios"]);
     // THREE platforms are three builds: a cap of any size would quietly leave
     // the last one unbuilt (Codex 2026-09-11 review O, mutation table).
     asked.length = 0;
     const three = await (honest as unknown as { measureBuild(c: unknown): Promise<{ unbuiltTargets?: string[] }> })
-      .measureBuild({ gddText: "Ships on Windows, on Android, and on iOS.", milestones: [], currentMilestone: 0 });
+      .measureBuild({ id: "c_platforms", gddText: "Ships on Windows, on Android, and on iOS.", milestones: [], currentMilestone: 0 });
     expect(asked).toEqual(["windows", "android", "ios"]);
     expect(three.unbuiltTargets).toBeUndefined();
     expect(both.unbuiltTargets).toBeUndefined();
