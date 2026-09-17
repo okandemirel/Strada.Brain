@@ -45,6 +45,8 @@ interface WalletReservation {
   readonly estimateUsd: number;
   /** Real cost already recorded against this reservation (shrinks it). */
   chargedUsd: number;
+  /** When it last booked a cost: the stale ceiling measures idleness, not age (round 8 #3). */
+  lastActivityAt?: number;
   readonly createdAt: number;
 }
 
@@ -126,7 +128,12 @@ export class UnifiedBudgetManager {
   chargeReservation(reservationId: string, costUsd: number): void {
     if (!(costUsd > 0)) return;
     const reservation = this.reservations.get(reservationId);
-    if (reservation) reservation.chargedUsd += costUsd;
+    if (!reservation) return;
+    reservation.chargedUsd += costUsd;
+    // A CHARGE IS PROGRESS: the ceiling exists to drop leases nobody is
+    // using, and a seven-hour run that keeps booking cost lost its
+    // reservation at hour six while still spending (Codex round 8 #3).
+    reservation.lastActivityAt = Date.now();
   }
 
   /** Drop a reservation without charging anything. Idempotent. */
@@ -145,7 +152,7 @@ export class UnifiedBudgetManager {
     let leaked = 0;
     let outstanding = 0;
     for (const [id, reservation] of this.reservations) {
-      if (now - reservation.createdAt > RESERVATION_MAX_AGE_MS) {
+      if (now - (reservation.lastActivityAt ?? reservation.createdAt) > RESERVATION_MAX_AGE_MS) {
         this.reservations.delete(id);
         leaked++;
         continue;
@@ -162,6 +169,18 @@ export class UnifiedBudgetManager {
       });
     }
     return outstanding;
+  }
+
+  /**
+   * CHECK AND RESERVE IN ONE STEP, or refuse. Reserving without asking let two
+   * runs start on the same remaining dollar: nothing in production called
+   * canSpend, so the reservations recorded the overcommitment instead of
+   * preventing it (Codex round 8 #1). Returns the reservation id, or undefined
+   * when the wallet cannot carry the estimate — the caller must not run.
+   */
+  reserveIfAffordable(estimateUsd: number, source: BudgetSource, sourceId?: string): string | undefined {
+    if (!this.canSpend(estimateUsd, source, sourceId)) return undefined;
+    return this.reserve(estimateUsd, source, sourceId);
   }
 
   /** Number of reservations currently held (diagnostics / tests). */
@@ -196,20 +215,27 @@ export class UnifiedBudgetManager {
 
   recordCost(amount: number, source: BudgetSource, metadata: CostMetadata): void {
     if (amount <= 0) return;
-    // Booked spend stops being reserved headroom (plan 2.12 / D20).
-    if (metadata.reservationId) this.chargeReservation(metadata.reservationId, amount);
+    // BOOKED spend stops being reserved headroom (plan 2.12 / D20) — booked,
+    // not attempted: charging before the insert let a failed write shrink the
+    // reservation while recorded spend stayed at zero, so the headroom was
+    // released to nobody (Codex round 8 #4).
+    const chargeAfterInsert = (): void => {
+      if (metadata.reservationId) this.chargeReservation(metadata.reservationId, amount);
+    };
     if (source === "agent" && metadata.agentId && this.storage.insertBudgetEntryWithSource) {
       this.storage.insertBudgetEntryWithSource({
         costUsd: amount, model: metadata.model, tokensIn: metadata.tokensIn,
         tokensOut: metadata.tokensOut, triggerName: metadata.triggerName,
         timestamp: Date.now(), source, agentId: metadata.agentId,
       });
+      chargeAfterInsert();
     } else if (this.storage.insertBudgetEntryWithSource) {
       this.storage.insertBudgetEntryWithSource({
         costUsd: amount, model: metadata.model, tokensIn: metadata.tokensIn,
         tokensOut: metadata.tokensOut, triggerName: metadata.triggerName,
         timestamp: Date.now(), source,
       });
+      chargeAfterInsert();
     } else {
       // Fallback to legacy insert
       this.storage.insertBudgetEntry({
@@ -217,6 +243,7 @@ export class UnifiedBudgetManager {
         tokensOut: metadata.tokensOut, triggerName: metadata.triggerName,
         timestamp: Date.now(), source,
       });
+      chargeAfterInsert();
     }
   }
 

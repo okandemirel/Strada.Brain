@@ -1629,7 +1629,18 @@ export class BackgroundExecutor {
     // Hold headroom for this run before any cost is booked, so a run that
     // starts alongside it sees the wallet already committed (D20). Released
     // immediately on cancel and unconditionally in the finally below.
-    const budgetReservationId = this.reserveRunBudget(task);
+    const reserved = this.reserveRunBudget(task);
+    if (reserved === "refused") {
+      // The wallet cannot carry this run beside what is already in flight: a
+      // budget WAIT, not a verdict about the work. The keep-alive re-arms it
+      // when the window drains, exactly as for a run the wallet stopped
+      // mid-flight (Codex round 8 #1).
+      const waiting = `Task not started: the wallet cannot carry this run beside the work already in flight. ${BUDGET_WAIT_MARKER}`;
+      getLoggerSafe().warn("A task run was refused for want of budget headroom", { taskId: task.id });
+      if (!this.scheduleMissionKeepAlive(task, waiting)) this.taskManager.block(task.id, waiting);
+      return;
+    }
+    const budgetReservationId = reserved;
     const releaseOnCancel = () => this.releaseRunBudget(task);
     if (budgetReservationId) signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
@@ -2195,7 +2206,7 @@ export class BackgroundExecutor {
    * manager to reserve against. Never throws: a wallet that cannot be reserved
    * must not stop the run — the recorded-spend gates still apply.
    */
-  private reserveRunBudget(task: Task): string | undefined {
+  private reserveRunBudget(task: Task): string | "refused" | undefined {
     const manager = this._unifiedBudgetManager;
     if (!manager || typeof manager.reserve !== "function") return undefined;
     try {
@@ -2203,7 +2214,14 @@ export class BackgroundExecutor {
       const estimate = typeof own === "number" && Number.isFinite(own) && own > 0
         ? own
         : manager.getTaskReservationUsd();
-      const id = manager.reserve(estimate, this.budgetSourceOf(task), task.agentId);
+      // CHECK AND RESERVE TOGETHER (Codex round 8 #1): a run that the wallet
+      // cannot carry does not start. `undefined` from the manager means
+      // refused, which the caller turns into the same budget wait a drained
+      // window produces.
+      const id = typeof manager.reserveIfAffordable === "function"
+        ? manager.reserveIfAffordable(estimate, this.budgetSourceOf(task), task.agentId)
+        : manager.reserve(estimate, this.budgetSourceOf(task), task.agentId);
+      if (id === undefined) return "refused";
       this.runReservations.set(String(task.id), id);
       return id;
     } catch (err) {

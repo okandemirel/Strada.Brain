@@ -74,6 +74,14 @@ export class BudgetConfigStore {
       }
       this.storage.setBudgetConfig("interactiveTokenBudget", String(partial.interactiveTokenBudget));
     }
+    if (partial.taskReservationUsd !== undefined) {
+      // Plan 2.12's reservation size was documented and never resolved, so the
+      // configured value was ignored and every run reserved 0.25 (round 8 #5).
+      if (typeof partial.taskReservationUsd !== "number" || !Number.isFinite(partial.taskReservationUsd) || partial.taskReservationUsd < 0) {
+        throw new Error("taskReservationUsd must be a finite number >= 0");
+      }
+      this.storage.setBudgetConfig("taskReservationUsd", String(partial.taskReservationUsd));
+    }
     this.cached = null; // Invalidate cache
   }
 
@@ -100,6 +108,11 @@ export class BudgetConfigStore {
       ...(interactiveOverride !== undefined && interactiveOverride >= -1
         ? { interactiveTokenBudget: interactiveOverride }
         : {}),
+      taskReservationUsd: val(
+        "taskReservationUsd",
+        "STRADA_BUDGET_TASK_RESERVATION_USD",
+        DEFAULT_BUDGET_CONFIG.taskReservationUsd ?? 0,
+      ),
     };
   }
 }

@@ -21,13 +21,20 @@ interface StoredEntry {
 
 function makeStorage(config: Record<string, string>) {
   const entries: StoredEntry[] = [];
+  const state = { failInserts: false };
+  const push = (e: StoredEntry): void => {
+    if (state.failInserts) throw new Error("budget entry could not be written");
+    entries.push({ ...e });
+  };
   const since = (from: number, pred: (e: StoredEntry) => boolean = () => true) =>
     entries.filter((e) => e.timestamp >= from && pred(e)).reduce((s, e) => s + e.costUsd, 0);
   return {
     entries,
-    insertBudgetEntry: (e: StoredEntry) => { entries.push({ ...e }); },
-    insertBudgetEntryWithAgent: (e: StoredEntry) => { entries.push({ ...e }); },
-    insertBudgetEntryWithSource: (e: StoredEntry) => { entries.push({ ...e }); },
+    insertBudgetEntry: push,
+    insertBudgetEntryWithAgent: push,
+    insertBudgetEntryWithSource: push,
+    set failInserts(value: boolean) { state.failInserts = value; },
+    get failInserts() { return state.failInserts; },
     sumBudgetSince: (from: number) => since(from),
     sumBudgetBySource: (from: number) => {
       const out: Record<string, number> = {};
@@ -159,8 +166,71 @@ describe("UnifiedBudgetManager reservations (plan 2.12 / audit 03.1 / D20)", () 
     const env = { STRADA_BUDGET_TASK_RESERVATION_USD: "0.5" };
     const viaEnv = new UnifiedBudgetManager(makeStorage({}), { emit: vi.fn() }, env);
     expect(viaEnv.getTaskReservationUsd()).toBe(0.5);
+    // …and the CONFIGURED value is what a run reserves: the store resolves the
+    // key now, so 0 disables task reservations as documented (round 8 #5).
     const { manager } = makeManager({ taskReservationUsd: "0" });
-    // The config store does not surface this key today; the default still stands.
-    expect(manager.getTaskReservationUsd()).toBe(0.25);
+    expect(manager.getTaskReservationUsd()).toBe(0);
+  });
+});
+
+/**
+ * Codex round 8 #1, #3, #4, #5 on 6cf75454: reserving recorded an
+ * overcommitment instead of preventing it; a charge did not refresh the lease,
+ * so a long run lost its headroom at the ceiling; a failed insert shrank the
+ * reservation anyway; and the configured reservation size was never resolved.
+ */
+describe("reservations gate admission and survive a working run (round 8)", () => {
+  const managerWith = (overrides: Record<string, string> = {}) => makeManager({ ...overrides });
+
+  it("reserveIfAffordable refuses the second run on the same dollar", () => {
+    const { manager } = managerWith({ dailyLimitUsd: "1" });
+    const first = manager.reserveIfAffordable(0.6, "daemon");
+    expect(first).toBeDefined();
+    expect(manager.reserveIfAffordable(0.6, "daemon")).toBeUndefined();
+    manager.release(first!);
+    expect(manager.reserveIfAffordable(0.6, "daemon")).toBeDefined();
+  });
+
+  it("a charge refreshes the lease, so a long working run keeps its headroom", () => {
+    vi.useFakeTimers();
+    try {
+      const t0 = new Date("2026-09-01T00:00:00Z").getTime();
+      vi.setSystemTime(t0);
+      const { manager } = managerWith({ dailyLimitUsd: "10" });
+      const id = manager.reserve(1, "daemon");
+      // Five hours in, it books cost — that is progress, not a leak.
+      vi.setSystemTime(t0 + 5 * 60 * 60 * 1000);
+      manager.recordCost(0.1, "daemon", { reservationId: id });
+      // Two hours later the ORIGINAL age is past the six-hour ceiling…
+      vi.setSystemTime(t0 + 7 * 60 * 60 * 1000);
+      expect(manager.outstandingUsd()).toBeCloseTo(0.9, 5);
+      expect(manager.reservationCount()).toBe(1);
+      // …and an idle lease is still dropped.
+      vi.setSystemTime(t0 + 14 * 60 * 60 * 1000);
+      expect(manager.outstandingUsd()).toBe(0);
+      expect(manager.reservationCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a cost that could not be written does not shrink the reservation", () => {
+    const { manager, storage } = managerWith({ dailyLimitUsd: "10" });
+    const id = manager.reserve(1, "daemon");
+    storage.failInserts = true;
+    expect(() => manager.recordCost(0.4, "daemon", { reservationId: id })).toThrow();
+    expect(manager.outstandingUsd()).toBeCloseTo(1, 5);
+    storage.failInserts = false;
+    manager.recordCost(0.4, "daemon", { reservationId: id });
+    expect(manager.outstandingUsd()).toBeCloseTo(0.6, 5);
+  });
+
+  it("the configured reservation size is what a run reserves", () => {
+    const { manager } = managerWith({ taskReservationUsd: "0.9" });
+    expect(manager.getTaskReservationUsd()).toBe(0.9);
+    manager.updateConfig({ taskReservationUsd: 0 });
+    expect(manager.getTaskReservationUsd()).toBe(0);
+    expect(manager.getConfig().taskReservationUsd).toBe(0);
+    expect(() => manager.updateConfig({ taskReservationUsd: -1 })).toThrow(/>= 0/);
   });
 });
