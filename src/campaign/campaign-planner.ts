@@ -724,6 +724,19 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       // An id nobody asked about is simply never consulted below.
       verdictsById.set(v.id, [...(verdictsById.get(v.id) ?? []), { delivered: v.delivered, evidence: v.evidence }]);
     }
+    // …AND ABOUT THIS REQUIREMENT. A verbatim quote of a measured line is
+    // necessary, not sufficient: "179/179 tests passed (unfiltered)" is a
+    // measured line and closed "Save progress across restarts", and a commit
+    // note naming a hero sprite closed the shop (audit 06.5 / D10 / AK#14,
+    // Codex plan review #7; plan 0-B.3). A blacklist of line kinds cannot
+    // fix that — every kind has an unrelated positive instance — so the
+    // quote is held to a TYPED, requirement-specific predicate: a suite
+    // total closes only a requirement about the suite; a landed / shipped
+    // tree / document-numbers line must name something the requirement
+    // names. The quoted FACT (the whole measured line the quote came from)
+    // is what is judged, so a note that lists several files closes each
+    // requirement it names.
+    const facts = milestones.flatMap((m) => quotableFacts(m)).map(flat);
     const closedIds = new Set<number>();
     for (const [id, list] of verdictsById) {
       if (list.length !== 1) continue;
@@ -731,6 +744,10 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       if (only.delivered !== true) continue;
       const quote = flat(only.evidence ?? "");
       if (quote.length < 12 || !record.includes(quote)) continue;
+      const requirement = asked[id - 1];
+      if (requirement === undefined) continue;
+      const fact = facts.find((f) => f.includes(quote));
+      if (fact === undefined || !quoteIsAbout(requirement, fact)) continue;
       closedIds.add(id);
     }
     const closed: string[] = [];
@@ -744,6 +761,45 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     return { closed, open, unasked: requirements.slice(asked.length) };
   }
 
+}
+
+/** Words that say nothing about WHICH requirement a line is about. */
+const REQUIREMENT_STOPWORDS = new Set([
+  "that", "this", "with", "from", "into", "when", "then", "than", "were", "been", "have", "will", "must", "should",
+  "after", "before", "their", "there", "which", "while", "about", "every", "each", "also", "only", "more", "some",
+  "such", "them", "they", "what", "where", "your", "game", "player", "players", "absent", "missing", "implemented",
+  "delivered", "required", "requirement", "milestone", "sprint", "shipped", "landed", "does", "make", "makes",
+  "using", "used", "through", "without", "within", "between", "still", "never", "always", "system", "feature",
+]);
+
+/**
+ * The words a requirement is ABOUT: its distinctive tokens (four letters or
+ * more, not a stopword), stemmed to their first five letters so "restarts"
+ * meets "restart" and "saving" meets "save".
+ */
+export function requirementTokens(requirement: string): string[] {
+  const words = requirement
+    .replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, "")
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !REQUIREMENT_STOPWORDS.has(w));
+  return [...new Set(words.map((w) => w.slice(0, 5)))];
+}
+
+/**
+ * Is this measured line evidence ABOUT this requirement — not merely a
+ * measured line (plan 0-B.3)? A suite line closes only a requirement about
+ * the suite; every other kind must name something the requirement names.
+ */
+export function quoteIsAbout(requirement: string, fact: string): boolean {
+  const line = fact.trim();
+  if (line.startsWith("suite:")) {
+    return /\b(?:test|tests|suite|suites|spec|specs|playmode|editmode|unit|coverage)\b/i.test(requirement);
+  }
+  const hay = line.toLowerCase().replace(/([a-z])([A-Z])/g, "$1 $2");
+  const tokens = requirementTokens(requirement);
+  return tokens.length > 0 && tokens.some((t) => hay.includes(t));
 }
 
 /**

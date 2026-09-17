@@ -138,6 +138,33 @@ describe("re-judging the requirements no sprint closed", () => {
     expect(sent).toContain("landed: 3 commit(s)");
   });
 
+  it("a measured line closes only a requirement it is ABOUT: a suite total is not a save system (plan 0-B.3, AK#14)", async () => {
+    // "179/179 tests passed (unfiltered)" is a measured, quotable line — and
+    // it closed "Save progress across restarts". A blacklist cannot fix that:
+    // the quote is held to a typed, requirement-specific predicate.
+    const withSuite = [
+      ...ladder,
+      { title: "Sprint B — Tests", status: "green", testVerdict: "179/179 tests passed", testVerdictUnfiltered: true, commitNote: "1 commit(s): Assets/Art/Hero.png" },
+    ];
+    const { planner } = plannerWith([
+      '{"verdicts": [' +
+        '{"id": 1, "delivered": true, "evidence": "suite: 179/179 tests passed (unfiltered)"},' +
+        '{"id": 2, "delivered": true, "evidence": "suite: 179/179 tests passed (unfiltered)"},' +
+        '{"id": 3, "delivered": true, "evidence": "landed: 1 commit(s): Assets/Art/Hero.png"},' +
+        '{"id": 4, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}' +
+      ']}',
+    ]);
+    const judged = await planner.resolveCoverageGaps(
+      "# GDD",
+      ["Save progress across restarts: absent", "The full test suite runs green: absent", "Shop: absent", "Dragon boss: no milestone implemented it"],
+      withSuite,
+    );
+    // The suite total closes the requirement about the suite, and nothing else;
+    // a hero sprite is not a shop; the dragon commit closes the dragon.
+    expect(judged.open).toEqual(["Save progress across restarts: absent", "Shop: absent"]);
+    expect(judged.closed).toEqual(["The full test suite runs green: absent", "Dragon boss: no milestone implemented it"]);
+  });
+
   it("a 'delivered' with nothing to point at, or no verdict at all, stays OPEN", async () => {
     // The default is the conservative one: this audit exists to stop prose
     // from closing a requirement, so a bare claim closes nothing.
@@ -206,15 +233,17 @@ describe("re-judging the requirements no sprint closed", () => {
       ]),
     ).resolves.toEqual({ closed: [], open: ["Save: absent"], unasked: [] });
 
-    // …and an UNFILTERED suite still counts as a measurement.
+    // …and an UNFILTERED suite still counts as a measurement — of the SUITE:
+    // it closes the requirement about the suite, and not the save system it
+    // says nothing about (plan 0-B.3).
     const unfiltered = plannerWith([
-      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "suite: 179 of 179 tests passed (unfiltered)"}]}',
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "suite: 179 of 179 tests passed (unfiltered)"}, {"id": 2, "delivered": true, "evidence": "suite: 179 of 179 tests passed (unfiltered)"}]}',
     ]);
     await expect(
-      unfiltered.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [
+      unfiltered.planner.resolveCoverageGaps("# GDD", ["Save: absent", "The full test suite runs green: absent"], [
         { title: "Sprint A", status: "green", testVerdict: "179 of 179 tests passed", testVerdictUnfiltered: true },
       ]),
-    ).resolves.toEqual({ closed: ["Save: absent"], open: [], unasked: [] });
+    ).resolves.toEqual({ closed: ["The full test suite runs green: absent"], open: ["Save: absent"], unasked: [] });
   });
 
   it("a title or the worker's own prose is not evidence (Codex 2026-09-12 W#3)", async () => {

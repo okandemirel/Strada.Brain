@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { windowGdd, GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
+import { windowGdd, GDD_AUDIT_FULL_CHARS, quoteIsAbout, requirementTokens } from "./campaign-planner.js";
 
 const HEAD = 50_000;
 const TAIL = 30_000;
@@ -58,5 +58,25 @@ describe("windowGdd", () => {
     const doc = bigGdd("- Bomb: 3x3 blast, spawns from 4-match"); // 120k of schedule lines > outline budget
     const windowed = windowGdd(doc);
     expect(windowed).toMatch(/outline truncated to \d+ of \d+ chars/);
+  });
+});
+
+/** Plan 0-B.3: a measured line is evidence only for a requirement it is about. */
+describe("quoteIsAbout", () => {
+  it("stems the requirement's distinctive words and drops its verdict suffix", () => {
+    expect(requirementTokens("Save progress across restarts: absent")).toEqual(["save", "progr", "acros", "resta"]);
+    expect(requirementTokens("Shop: absent")).toEqual(["shop"]);
+  });
+
+  it("holds each kind of line to the requirement", () => {
+    expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Scripts/SaveSystem.cs")).toBe(true);
+    expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Art/Hero.png")).toBe(false);
+    expect(quoteIsAbout("Save progress across restarts: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("The full test suite runs green: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Dragon boss: absent", "shipped tree: Assets/Prefabs/DragonBoss.prefab present")).toBe(true);
+    expect(quoteIsAbout("Level count: 13 levels", "document numbers: 13 levels claimed; 13 played to an outcome")).toBe(true);
+    expect(quoteIsAbout("Level count: 13 levels", "document numbers: boots in 2.1 s (claimed under 3 s)")).toBe(false);
+    // A requirement made only of stopwords cannot be closed by relevance.
+    expect(quoteIsAbout("The game: absent", "landed: Added Assets/Game.cs")).toBe(false);
   });
 });
