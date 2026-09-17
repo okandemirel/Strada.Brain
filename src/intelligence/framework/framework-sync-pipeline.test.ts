@@ -399,6 +399,78 @@ describe("FrameworkSyncPipeline keeps an edit that lands mid-flush (audited 2026
     ]);
   });
 
+  /**
+   * Audit U3 / 0-A.23: the watcher subscribed to `change` only. A file added
+   * to Runtime/ (a new base class) or removed from it never marked the
+   * package pending, so the snapshot went stale until an unrelated edit.
+   */
+  it("subscribes the same handler to change, add and unlink (audit U3)", async () => {
+    const pipeline = new FrameworkSyncPipeline(store, makeConfig({ watchEnabled: true }), makeDeps(corePath));
+    await pipeline.startWatcher();
+    try {
+      const handlers = fakeWatches[0]!.handlers;
+      for (const event of ["change", "add", "unlink"]) {
+        expect(handlers.get(event), event).toHaveLength(1);
+      }
+    } finally {
+      await pipeline.stop();
+    }
+  });
+
+  it("an added Runtime file, and an unlinked one, each schedule a sync of the package (audit U3)", async () => {
+    const pipeline = new FrameworkSyncPipeline(
+      store,
+      makeConfig({ watchEnabled: true, watchDebounceMs: 50 }),
+      makeDeps(corePath),
+    );
+    const synced: string[] = [];
+    vi.spyOn(pipeline, "syncPackage").mockImplementation(async (pkg) => {
+      synced.push(pkg);
+      return null;
+    });
+    await pipeline.startWatcher();
+    vi.useFakeTimers();
+    try {
+      const added = join(corePath, "Runtime", "NewBase.cs");
+      writeFileSync(added, CORE_ONE_BASE);
+      fakeWatches[0]!.emit("add", added);
+      await vi.advanceTimersByTimeAsync(60);
+      expect(synced).toEqual(["core"]);
+
+      rmSync(added);
+      fakeWatches[0]!.emit("unlink", added);
+      await vi.advanceTimersByTimeAsync(60);
+      expect(synced).toEqual(["core", "core"]);
+      await pipeline.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guard: an add or unlink outside every package schedules nothing (audit U3)", async () => {
+    const pipeline = new FrameworkSyncPipeline(
+      store,
+      makeConfig({ watchEnabled: true, watchDebounceMs: 50 }),
+      makeDeps(corePath),
+    );
+    const synced: string[] = [];
+    vi.spyOn(pipeline, "syncPackage").mockImplementation(async (pkg) => {
+      synced.push(pkg);
+      return null;
+    });
+    await pipeline.startWatcher();
+    vi.useFakeTimers();
+    try {
+      fakeWatches[0]!.emit("add", join(tmp, "Elsewhere", "Other.cs"));
+      fakeWatches[0]!.emit("unlink", join(tmp, "Elsewhere", "Gone.cs"));
+      await vi.advanceTimersByTimeAsync(200);
+      await pipeline.stop();
+      expect(synced).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not re-sync a package no event touched", async () => {
     const pipeline = new FrameworkSyncPipeline(
       store,

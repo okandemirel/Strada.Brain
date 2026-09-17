@@ -197,9 +197,16 @@ export class FrameworkSyncPipeline {
       ignoreInitial: true,
     });
 
-    this.watcher.on("change", (filePath: string) => {
+    // change AND add AND unlink: a new Runtime .cs or a deleted one changes
+    // the framework API exactly as an edit does. Until 2026-09-17 only
+    // `change` was subscribed, so an added base class never reached the
+    // snapshot until some other file was edited (audit U3 / 0-A.23).
+    const onEvent = (filePath: string): void => {
       this.handleWatchEvent(filePath);
-    });
+    };
+    for (const event of ["change", "add", "unlink"] as const) {
+      this.watcher.on(event, onEvent);
+    }
 
     logger.debug(
       `Framework watcher started for ${watchPaths.length} path(s)`,
