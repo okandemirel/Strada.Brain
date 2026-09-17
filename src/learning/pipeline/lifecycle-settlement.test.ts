@@ -62,13 +62,17 @@ function toolEvent(over: { taskRunId?: string; ids?: string[] }): ToolResultEven
   } as ToolResultEvent;
 }
 
-/** The production wiring (bootstrap.ts): observations droppable, settlement not. */
+/**
+ * The production wiring (bootstrap.ts): observations droppable, settlement not,
+ * and — round 12 #7/#8 — the queue's answer returned and the pipeline's
+ * label/fallback forwarded, so work the queue cannot carry is not swallowed.
+ */
 function wire(pipeline: LearningPipeline, queue: LearningQueue): void {
-  pipeline.setSettlementBarrier((task) => {
+  pipeline.setSettlementBarrier((task, options) =>
     queue.enqueue(async () => {
       await task();
-    }, { durable: true });
-  });
+    }, { durable: true, ...options }),
+  );
 }
 
 describe("LearningQueue: lifecycle work is non-droppable (r11 #7)", () => {
@@ -140,13 +144,19 @@ describe("LearningQueue: lifecycle work is non-droppable (r11 #7)", () => {
     expect(order).toEqual(["blocker", "observation-3", "observation-4"]);
   });
 
-  it("the production wiring marks terminal settlement durable", () => {
+  it("the production wiring marks terminal settlement durable, and forwards the queue's answer", () => {
     // The guarantee above is worth nothing if the one line in bootstrap.ts that
     // requests it goes away. There is no seam to drive that file through, so the
     // line itself is pinned: it is the whole of the fix at the call site.
     const bootstrap = readFileSync(new URL("../../core/bootstrap.ts", import.meta.url), "utf8");
     const barrier = bootstrap.slice(bootstrap.indexOf("pipeline.setSettlementBarrier("));
-    expect(barrier.slice(0, 400)).toContain("{ durable: true }");
+    const wiring = barrier.slice(0, 400);
+    expect(wiring).toContain("durable: true");
+    // Round 12 #7/#8: the barrier RETURNS what the queue answered and forwards
+    // the pipeline's label/fallback. Without both, a refused or abandoned
+    // settlement is swallowed exactly as it was before.
+    expect(wiring).toContain("...options");
+    expect(wiring.replace(/\s+/g, " ")).toMatch(/=>\s*learningQueue\.enqueue\(/);
   });
 
   it("GUARD: shutdown still discards trailing observations once nothing durable is left", async () => {
@@ -236,6 +246,109 @@ describe("every run settles exactly once, under pressure and at shutdown (r11 #7
     expect(rows[0]!.success).toBe(true);
     expect(storage.getInstinct(i.id)!.stats.timesApplied).toBe(1);
   });
+
+  it("r12 #7: a settlement the queue REFUSES at its durable bound is still recorded, exactly once", async () => {
+    const first = seedShaped("instinct_bound_first");
+    const refused = seedShaped("instinct_bound_refused");
+    storage.createInstinct(first);
+    storage.createInstinct(refused);
+
+    // One durable slot, and a blocked processor so it cannot free up.
+    const queue = new LearningQueue({ maxQueueSize: 4, maxDurableQueueSize: 1 });
+    wire(pipeline, queue);
+    queue.enqueue(async () => { await new Promise((r) => setTimeout(r, 60)); });
+
+    await pipeline.handleToolResult(toolEvent({ taskRunId: "run-bound-1", ids: [String(first.id)] }));
+    await pipeline.handleToolResult(toolEvent({ taskRunId: "run-bound-2", ids: [String(refused.id)] }));
+
+    // run-bound-1 takes the only durable slot; run-bound-2's settlement is
+    // refused — and must not be swallowed by the refusal.
+    pipeline.clearRunInstinctCredits(CHAT, { success: true }, "run-bound-1");
+    pipeline.clearRunInstinctCredits(CHAT, { success: false }, "run-bound-2");
+
+    // TEETH: the refused run has ALREADY settled, here, before the queue drains.
+    const early = storage.getInstinctCredits({ instinctId: String(refused.id) });
+    expect(early, "the refused settlement was dropped: no terminal credit").toHaveLength(1);
+    expect(early[0]!.taskRunId).toBe("run-bound-2");
+    expect(early[0]!.success).toBe(false);
+    expect(storage.getInstinctCredits({ instinctId: String(first.id) }), "the queued settlement ran early").toHaveLength(0);
+
+    await new Promise((r) => setTimeout(r, 120));
+    await queue.shutdown();
+
+    // And the queued one still settles normally — no double credit either way.
+    expect(storage.getInstinctCredits({ instinctId: String(first.id) })).toHaveLength(1);
+    expect(storage.getInstinctCredits({ instinctId: String(refused.id) })).toHaveLength(1);
+    expect(storage.getInstinct(refused.id)!.stats.timesFailed).toBe(1);
+    expect(storage.getInstinct(first.id)!.stats.timesApplied).toBe(1);
+  });
+
+  it("r12 #7: a barrier that refuses and runs no fallback still does not cost the run its settlement", async () => {
+    const i = seedShaped("instinct_refusing_barrier");
+    storage.createInstinct(i);
+
+    // Not the learning queue: any barrier may answer "I did not take this".
+    // The pipeline's contract is that the run settles regardless — the queue's
+    // own fallback is a belt, this is the braces.
+    let refusals = 0;
+    pipeline.setSettlementBarrier(() => {
+      refusals++;
+      return false;
+    });
+
+    await pipeline.handleToolResult(toolEvent({ taskRunId: "run-refuse", ids: [String(i.id)] }));
+    pipeline.clearRunInstinctCredits(CHAT, { success: true }, "run-refuse");
+
+    expect(refusals).toBe(1);
+    const rows = storage.getInstinctCredits({ instinctId: String(i.id) });
+    expect(rows, "a refused settlement was swallowed by the barrier").toHaveLength(1);
+    expect(rows[0]!.taskRunId).toBe("run-refuse");
+    expect(rows[0]!.source).toBe("terminal");
+  });
+
+  it("GUARD: a barrier that takes the work (returning nothing) settles once, not twice", async () => {
+    const i = seedShaped("instinct_legacy_barrier");
+    storage.createInstinct(i);
+
+    // The pre-round-12 barrier shape: a block body, no return value. It must
+    // keep meaning "taken", or every settlement would run twice.
+    const taken: Array<() => Promise<void> | void> = [];
+    pipeline.setSettlementBarrier((task) => {
+      taken.push(task);
+    });
+
+    await pipeline.handleToolResult(toolEvent({ taskRunId: "run-legacy", ids: [String(i.id)] }));
+    pipeline.clearRunInstinctCredits(CHAT, { success: true }, "run-legacy");
+
+    expect(storage.getInstinctCredits({ instinctId: String(i.id) }), "the barrier was bypassed").toHaveLength(0);
+    await taken[0]!();
+    expect(storage.getInstinctCredits({ instinctId: String(i.id) })).toHaveLength(1);
+  });
+
+  it("r12 #8: a settlement the shutdown drain cannot reach is settled by its fallback, not lost", async () => {
+    const i = seedShaped("instinct_drain_budget");
+    storage.createInstinct(i);
+
+    const queue = new LearningQueue();
+    wire(pipeline, queue);
+
+    // An item that never finishes: the drain cannot get past it, and the daemon
+    // used to force-exit with the settlement behind it still in memory.
+    queue.enqueue(async () => new Promise<void>(() => { /* never resolves */ }));
+    await pipeline.handleToolResult(toolEvent({ taskRunId: "run-drain", ids: [String(i.id)] }));
+    pipeline.clearRunInstinctCredits(CHAT, { success: true }, "run-drain");
+
+    await new Promise((r) => setTimeout(r, 5));
+    const report = await queue.shutdown({ deadlineMs: 120 });
+
+    expect(report.durableAbandoned).toBe(1);
+    expect(report.abandoned[0]).toContain("run-drain");
+    expect(report.abandonedWithoutFallback).toBe(0);
+    const rows = storage.getInstinctCredits({ instinctId: String(i.id) });
+    expect(rows, "the shutdown lost the pending settlement").toHaveLength(1);
+    expect(rows[0]!.taskRunId).toBe("run-drain");
+    expect(rows[0]!.success).toBe(true);
+  }, 5000);
 
   it("a late event after a pressured settlement is judged by that run's retained verdict", async () => {
     const early = seedShaped("instinct_early");

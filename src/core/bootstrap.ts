@@ -774,7 +774,17 @@ async function bootstrapImpl(
     },
   );
   disposables.push("learningEventBus", () => learningResult.eventBus?.shutdown());
-  disposables.push("learningQueue", () => learningResult.learningQueue?.shutdown());
+  // Round 12 #8: the drain now REPORTS what it could not carry. A disposable
+  // returns void, so the report is logged here rather than discarded silently.
+  disposables.push("learningQueue", async () => {
+    const report = await learningResult.learningQueue?.shutdown();
+    if (report && report.durableAbandoned > 0) {
+      logger.warn("Learning queue shutdown left non-droppable work undone", {
+        abandoned: report.abandoned,
+        abandonedWithoutFallback: report.abandonedWithoutFallback,
+      });
+    }
+  });
   disposables.push("learningPipeline", () => learningResult.pipeline?.stop());
   disposables.push("learningStorage", () => learningResult.storage?.close());
 
@@ -2664,11 +2674,15 @@ async function initializeLearning(
     // Round 11 #7: `durable` — that queue drops its oldest item on overflow and
     // discards its backlog at shutdown, so the ordering fix was handing the one
     // event that must never be lost to the one place designed to lose it.
-    pipeline.setSettlementBarrier((task) => {
+    // Round 12 #7/#8: the durable backlog is bounded and the shutdown drain has a
+    // deadline, so the queue's ANSWER is load-bearing — it is returned, and the
+    // pipeline's label/fallback are forwarded, so a settlement the queue cannot
+    // carry is settled by the pipeline instead of vanishing.
+    pipeline.setSettlementBarrier((task, options) =>
       learningQueue.enqueue(async () => {
         await task();
-      }, { durable: true });
-    });
+      }, { durable: true, ...options }),
+    );
 
     logger.info("Learning pipeline initialized", {
       dbPath: learningDbPath,

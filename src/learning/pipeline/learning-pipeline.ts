@@ -253,10 +253,23 @@ export class LearningPipeline {
    * already queued for the run. Unset (tests, standalone use) ⇒ settlement is
    * immediate, exactly as before.
    */
-  private settlementBarrier?: (task: () => Promise<void> | void) => void;
+  private settlementBarrier?: (
+    task: () => Promise<void> | void,
+    /**
+     * Round 12 #7/#8: what the work IS (for the queue's overflow warning and
+     * shutdown report) and what to do if the queue cannot carry it. A barrier
+     * that ignores this second argument keeps the previous behaviour exactly.
+     */
+    options?: { label?: string; onAbandoned?: () => void },
+  ) => boolean | void;
 
   /** See {@link settlementBarrier}. */
-  setSettlementBarrier(barrier: (task: () => Promise<void> | void) => void): void {
+  setSettlementBarrier(
+    barrier: (
+      task: () => Promise<void> | void,
+      options?: { label?: string; onAbandoned?: () => void },
+    ) => boolean | void,
+  ): void {
     this.settlementBarrier = barrier;
   }
 
@@ -284,8 +297,23 @@ export class LearningPipeline {
     // #14: behind this run's own queued events when a barrier is wired.
     const barrier = this.settlementBarrier;
     if (barrier) {
-      barrier(() => this.settleAndForgetRun(sessionId, terminal, runId));
-      return;
+      // ROUND 12 #7/#8 — A QUEUE THAT CANNOT TAKE THE SETTLEMENT MUST NOT SWALLOW
+      // IT. The learning queue's durable backlog is bounded now, and its shutdown
+      // drain runs under a deadline, so the barrier can refuse or abandon the
+      // work. Either way this run settles: `onAbandoned` does it at the moment of
+      // refusal (or when the drain gives up), and an explicit `false` from a
+      // barrier that has no fallback wiring settles it here. Out of order and
+      // said so — a settlement delayed is not lost, a settlement dropped is.
+      let settledHere = false;
+      const settleNow = (): void => {
+        settledHere = true;
+        this.settleAndForgetRun(sessionId, terminal, runId);
+      };
+      const accepted = barrier(() => this.settleAndForgetRun(sessionId, terminal, runId), {
+        label: `terminal settlement for run ${runId?.trim() || sessionId}`,
+        onAbandoned: settleNow,
+      });
+      if (accepted !== false || settledHere) return;
     }
     this.settleAndForgetRun(sessionId, terminal, runId);
   }
