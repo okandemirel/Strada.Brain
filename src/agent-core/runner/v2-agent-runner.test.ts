@@ -628,6 +628,55 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
     );
   });
 
+  /**
+   * Audit 01.1 (2026-09-13), plan 0-A.1: the reflection dispatch's blocked
+   * branch reports reason "blocked" (NOT DELIVERED / loop-detected stop) but
+   * the spine mapped only "failed" — a background run that had just said it
+   * could not deliver settled its task as completed.
+   */
+  function blockedReflectionRunner(mode: "background" | "interactive") {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }] }),
+        mkResponse({ text: "DONE", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(mkProvider(), {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
+      reflectionDecision: { decision: "DONE", wasOverride: false },
+      reflection: { agentState: createInitialState(), terminal: true, reason: "blocked" },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    return drive(handles.clock, runner.run(mkRequest(), mkIO(mode)));
+  }
+
+  it("a reflection settled as blocked ends a background run blocked, not completed (audit 01.1)", async () => {
+    const result = await blockedReflectionRunner("background");
+    expect(result.status).toBe("blocked");
+  });
+
+  it("…while an interactive run keeps completed (the person read the notice)", async () => {
+    const result = await blockedReflectionRunner("interactive");
+    expect(result.status).toBe("completed");
+  });
+
+  it("an end-turn dispatch that carries terminalStatus blocked ends the run blocked", async () => {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "NOT DELIVERED", stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    port.spies.dispatchEndTurn.mockImplementationOnce(async (p: { agentState: AgentState }) => ({
+      agentState: { ...p.agentState, phase: AgentPhase.COMPLETE },
+      finalText: "NOT DELIVERED",
+      terminalStatus: "blocked" as const,
+    }));
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+    expect(result.status).toBe("blocked");
+  });
+
   it("D1: a parsed CONTINUE reflection continues the loop instead of force-terminating", async () => {
     const handles = mkPlane();
     const provider = mkProvider();

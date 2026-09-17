@@ -388,6 +388,16 @@ export async function portDispatchReflection(
   }
 }
 
+/**
+ * "blocked" as a terminal status — background runs only. An interactive
+ * turn that stopped on a block was READ by the person at the keyboard; the
+ * spine keeps "completed" there, exactly as it does for a task-inactivity
+ * stop (v2-agent-runner: "the person read the notice").
+ */
+function blockedTerminal(mode: DispatchEndTurnParams["mode"]): { terminalStatus?: "blocked" } {
+  return mode === "interactive" ? {} : { terminalStatus: "blocked" as const };
+}
+
 export async function portDispatchEndTurn(
   deps: ReflectionDeps,
   params: DispatchEndTurnParams,
@@ -405,7 +415,15 @@ export async function portDispatchEndTurn(
   );
   if (writeRejectionText) {
     const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, writeRejectionText);
-    return { agentState: params.agentState, finalText: safe.text };
+    // A rejected write that the model then acknowledged with an empty "done"
+    // is NOT a delivery. This return carried no status, so the runner's
+    // default "completed" settled the task as done (Codex 2026-09-16 plan
+    // review #1 — the sibling of 01.1 that sits before both branches below).
+    return {
+      agentState: params.agentState,
+      finalText: safe.text,
+      ...blockedTerminal(params.mode),
+    };
   }
   const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0);
   const action: EndTurnLoopAction =
@@ -428,7 +446,16 @@ export async function portDispatchEndTurn(
         // Thread an explicit failed settlement (terminal_failure boundary)
         // through to the spine — otherwise the run defaults to "completed"
         // and an honest failure report reads as success downstream.
-        ...(action.status === "failed" ? { terminalStatus: "failed" as const } : {}),
+        // …AND A BLOCKED ONE. The background handler settles NOT DELIVERED
+        // as `status: "blocked"`; only "failed" was carried, so a run that
+        // had just reported it could not deliver was recorded `completed`,
+        // the task row closed and the dev-knowledge hook was told
+        // success:true (audit 01.1, 2026-09-13).
+        ...(action.status === "failed"
+          ? { terminalStatus: "failed" as const }
+          : action.status === "blocked"
+            ? blockedTerminal(params.mode)
+            : {}),
       };
     }
     case "blocked": {
@@ -438,6 +465,8 @@ export async function portDispatchEndTurn(
           ? { ...params.agentState, loopDetectionBlocked: true }
           : params.agentState,
         finalText: safe.text,
+        // A loop-detected stop is not a completion either (01.1's sibling).
+        ...blockedTerminal(params.mode),
       };
     }
     case "continue":

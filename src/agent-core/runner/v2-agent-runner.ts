@@ -790,6 +790,12 @@ export class V2AgentRunner implements AgentRunner {
               // honest failure report indistinguishable from success.
               if (refl.reason === "failed") {
                 terminalStatus = "failed";
+              } else if (refl.reason === "blocked" && !isInteractive(mode)) {
+                // The reflection dispatch's blocked branch reports reason
+                // "blocked"; only "failed" was mapped, so a background run
+                // that settled NOT DELIVERED through the reflection path
+                // closed its task as completed (audit 01.1).
+                terminalStatus = "blocked";
               }
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
