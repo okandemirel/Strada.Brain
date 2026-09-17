@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { getLoggerSafe } from "../utils/logger.js";
 import { BudgetConfigStore } from "./budget-config-store.js";
 import type {
@@ -106,26 +107,34 @@ interface BudgetStorageAdapter {
   setBudgetConfig(key: string, value: string): void;
   getAllBudgetConfig(): Record<string, string>;
   // Read-only legacy adapters remain supported; durable admission requires all wallet operations.
-  upsertBudgetReservation?(row: { id: string; source: string; sourceId?: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; createdAt: number; lastActivityAt?: number | null }): void;
+  upsertBudgetReservation?(row: { id: string; source: string; sourceId?: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt: number; lastActivityAt?: number | null }): void;
   chargeBudgetReservation?(id: string, chargedUsd: number, lastActivityAt: number): void;
   deleteBudgetReservation?(id: string): void;
   reconcileBudgetReservation?(id: string, now: number): boolean;
-  listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; createdAt: number; lastActivityAt: number | null; reconciledAt?: number | null }>;
+  listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt: number; lastActivityAt: number | null; reconciledAt?: number | null }>;
   // Owner liveness registry (round 10 #7). Absent on legacy adapters: without
   // it no foreign owner can be proved ALIVE, and none can be proved dead
   // either unless its PID is gone — uncertainty keeps its headroom.
-  touchBudgetOwner?(ownerPid: number, ownerGeneration: string, now: number): void;
-  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number }>;
+  touchBudgetOwner?(ownerPid: number, ownerGeneration: string, now: number, ownerHost?: string): void;
+  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; ownerHost?: string }>;
   pruneBudgetOwners?(heartbeatBefore: number): void;
 }
 
 export interface BudgetProcessIdentity {
   readonly pid: number;
   readonly generation: string;
+  /**
+   * WHOSE PID THIS IS (Codex round 12 #2). Two machines can share one wallet,
+   * and pid 123 on another host is a different process — its registry row
+   * says nothing about ours, and `process.kill(123, 0)` here answers about
+   * OUR pid 123. Absent means "this host", which is exactly how every
+   * single-machine install behaved before the column existed.
+   */
+  readonly host?: string;
 }
 
 // One unpredictable generation per Node process, shared by all its managers.
-const PROCESS_IDENTITY: BudgetProcessIdentity = { pid: process.pid, generation: randomUUID() };
+const PROCESS_IDENTITY: BudgetProcessIdentity = { pid: process.pid, generation: randomUUID(), host: hostname() };
 
 interface BudgetProcessOptions {
   readonly identity?: BudgetProcessIdentity;
@@ -182,7 +191,12 @@ export class UnifiedBudgetManager {
    */
   heartbeat(): void {
     if (!this.storage.touchBudgetOwner) return;
-    this.persist(() => this.storage.touchBudgetOwner?.(this.identity.pid, this.identity.generation, Date.now()), "heartbeat");
+    this.persist(() => this.storage.touchBudgetOwner?.(this.identity.pid, this.identity.generation, Date.now(), this.thisHost()), "heartbeat");
+  }
+
+  /** This process's host, which is what an absent owner host means. */
+  private thisHost(): string {
+    return this.identity.host ?? hostname();
   }
 
   /**
@@ -200,11 +214,18 @@ export class UnifiedBudgetManager {
    */
   private ownerVerdict(
     owner: BudgetProcessIdentity,
-    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }>,
+    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }>,
     claimedAt?: number,
   ): OwnerVerdict {
     if (owner.pid === this.identity.pid && owner.generation === this.identity.generation) return "alive";
-    const known = (registry ?? this.ownerRegistry()).get(owner.pid);
+    // WHOSE PID IS THIS? (Codex round 12 #2.) A registry row from another
+    // machine says nothing about this owner, and our own pid table cannot be
+    // asked about a foreign pid at all: answering from it would call a live
+    // remote owner dead and hand its headroom away.
+    const here = this.thisHost();
+    const ownerHost = owner.host ?? here;
+    const candidate = (registry ?? this.ownerRegistry()).get(owner.pid);
+    const known = candidate && (candidate.host ?? here) === ownerHost ? candidate : undefined;
     if (known && known.generation !== owner.generation) {
       // SUPERSESSION DOES NOT EXPIRE (Codex round 11 #5). A pid hosts one
       // process at a time, so a DIFFERENT incarnation registering on it after
@@ -217,36 +238,52 @@ export class UnifiedBudgetManager {
       const arrived = known.registeredAt;
       if (arrived !== undefined && (claimedAt === undefined || arrived >= claimedAt)) return "dead";
     }
-    if (known && Date.now() - known.heartbeatAt <= OWNER_HEARTBEAT_TTL_MS) {
-      return known.generation === owner.generation ? "alive" : "dead";
+    if (known && known.generation === owner.generation && Date.now() - known.heartbeatAt <= OWNER_HEARTBEAT_TTL_MS) {
+      return "alive";
     }
+    // A DIFFERENT generation heartbeating right now is NOT proof on its own
+    // (Codex round 12 #1): the row may be this owner's PREDECESSOR on the pid,
+    // still inside the TTL, while the owner's own registration merely failed —
+    // heartbeats are best effort. Only arrival order proves supersession, and
+    // that is the check above. Unproven means UNKNOWN, which keeps the headroom.
+    if (ownerHost !== here) return "unknown";
     return pidIsRunning(owner.pid) ? "unknown" : "dead";
   }
 
-  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }> {
+  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }> {
     const rows = this.storage.listBudgetOwners?.() ?? [];
     return new Map(
       rows.map((row) => [
         row.ownerPid,
-        { generation: row.ownerGeneration, heartbeatAt: row.heartbeatAt, ...(row.registeredAt === undefined ? {} : { registeredAt: row.registeredAt }) },
+        {
+          generation: row.ownerGeneration,
+          heartbeatAt: row.heartbeatAt,
+          ...(row.registeredAt === undefined ? {} : { registeredAt: row.registeredAt }),
+          ...(row.ownerHost === undefined || row.ownerHost === null ? {} : { host: row.ownerHost }),
+        },
       ]),
     );
   }
 
   /** May this process resolve someone else's liability as uncertain estimate? */
   private isReclaimable(
-    row: { ownerPid: number; ownerGeneration?: string | null; createdAt?: number; lastActivityAt?: number | null },
-    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }>,
+    row: { ownerPid: number; ownerGeneration?: string | null; ownerHost?: string | null; createdAt?: number; lastActivityAt?: number | null },
+    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number; host?: string }>,
   ): boolean {
     // Written before owner generations existed: it names no incarnation that
     // could still be running, so nothing can keep it in flight.
     if (!row.ownerGeneration) return true;
-    const owner = { pid: row.ownerPid, generation: row.ownerGeneration };
+    const owner = { pid: row.ownerPid, generation: row.ownerGeneration, ...(row.ownerHost ? { host: row.ownerHost } : {}) };
     if (this.injectedIsOwnerAlive) return !this.injectedIsOwnerAlive(owner);
-    // The LATEST moment this owner is known to have been running: a registry
-    // row older than that names a PREDECESSOR on the pid, not a replacement,
-    // so it proves nothing (the ABA direction of round 11 #5).
-    const claimedAt = Math.max(row.createdAt ?? 0, row.lastActivityAt ?? 0) || undefined;
+    // WHEN THIS OWNER CLAIMED: a registry row older than the claim names a
+    // PREDECESSOR on the pid, not a replacement, so it proves nothing (the ABA
+    // direction of round 11 #5).
+    //
+    // Deliberately NOT lastActivityAt (Codex round 12 #3): a charge can be
+    // recorded against this reservation by whichever process is doing the
+    // accounting, so activity does not authenticate the OWNER as alive — and
+    // letting it move the claim time forward erased a replacement's proof.
+    const claimedAt = row.createdAt === undefined || row.createdAt <= 0 ? undefined : row.createdAt;
     return this.ownerVerdict(owner, registry, claimedAt) === "dead";
   }
 
@@ -280,7 +317,7 @@ export class UnifiedBudgetManager {
     this.heartbeat();
     this.storage.upsertBudgetReservation({
       id, source, sourceId: sourceId ?? null, estimateUsd: amount, chargedUsd: 0,
-      ownerPid: this.identity.pid, ownerGeneration: this.identity.generation, createdAt, lastActivityAt: null,
+      ownerPid: this.identity.pid, ownerGeneration: this.identity.generation, ownerHost: this.thisHost(), createdAt, lastActivityAt: null,
     });
     this.reservations.set(id, reservation);
     return id;

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -155,7 +156,11 @@ it("#3 two managers sharing SQLite cannot reserve more than the wallet", () => {
 it("#3 a reused pid with a different generation is recovered after boot", () => {
   orphan();
   vi.restoreAllMocks();
-  storage.getDatabase().prepare("UPDATE budget_reservations SET owner_pid = ?, owner_generation = 'previous-incarnation' WHERE id = 'orphan'").run(process.pid);
+  // The previous incarnation held this pid BEFORE we did: its claim is older
+  // than our own registration, which is what proves the pid changed hands.
+  storage.getDatabase()
+    .prepare("UPDATE budget_reservations SET owner_pid = ?, owner_generation = 'previous-incarnation', created_at = ? WHERE id = 'orphan'")
+    .run(process.pid, Date.now() - 60_000);
   // A reused PID does not identify the previous process incarnation.
   expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
 });
@@ -217,7 +222,10 @@ it("#1 partial and over-estimate charges stay evidenced while old uncertainty pr
   vi.useFakeTimers();
   const id = manager.reserve(0.75, "agent", "alice");
   manager.recordCost(0.2, "agent", { agentId: "alice", reservationId: id });
-  storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'dead' WHERE id = ?").run(id);
+  // The owner CRASHED: a pid that is not running, naming an incarnation that
+  // is gone. Faking it on THIS pid instead would only be a generation mismatch,
+  // which since Codex round 12 #1 is no proof of death at all.
+  storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'dead', owner_pid = 99999999 WHERE id = ?").run(id);
   manager.reconcileOrphanedReservations();
   expect(manager.getSnapshot().global.daily.usedUsd).toBe(0.2);
   expect(manager.getSnapshot().estimates?.reconciledUsd).toBeCloseTo(0.55);
@@ -240,7 +248,10 @@ it("#1 a live owner's liability never ages out, and reconciled crashes do not ac
   // Three runs die on three different days, each holding $0.30 of the $1 wallet.
   for (let day = 0; day < 3; day++) {
     const id = manager.reserve(0.3, "chat");
-    storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'dead' WHERE id = ?").run(id);
+    // The owner CRASHED: a pid that is not running, naming an incarnation that
+  // is gone. Faking it on THIS pid instead would only be a generation mismatch,
+  // which since Codex round 12 #1 is no proof of death at all.
+  storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'dead', owner_pid = 99999999 WHERE id = ?").run(id);
     manager.reconcileOrphanedReservations();
     vi.advanceTimersByTime(25 * 60 * 60 * 1000);
   }
@@ -337,7 +348,12 @@ describe("round 10: window consistency and foreign owner liveness", () => {
   /** A reconciled liability of `usd`, owned by a generation that is provably gone. */
   function deadLiability(usd: number, source = "agent", sourceId: string | undefined = "alice") {
     const id = manager.reserve(usd, source as never, sourceId);
-    storage.getDatabase().prepare("UPDATE budget_reservations SET owner_generation = 'previous-incarnation' WHERE id = ?").run(id);
+    // A PREVIOUS BOOT: the claim predates this incarnation's registration on
+    // the pid, which is what makes our own registration proof that the
+    // claimant exited (Codex round 12 #1 — a mere generation mismatch is not).
+    storage.getDatabase()
+      .prepare("UPDATE budget_reservations SET owner_generation = 'previous-incarnation', created_at = ? WHERE id = ?")
+      .run(Date.now() - 60_000, id);
     expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
     return id;
   }
@@ -577,4 +593,91 @@ describe("round 11 #5: owner-replacement evidence does not expire", () => {
     expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
     expect(manager.canSpend(0.5, "chat")).toBe(false);
   });
+});
+
+/**
+ * Codex round 12 #1 and #3. Both are the same error in two places: reading
+ * something OTHER than arrival order as proof that a reservation's owner exited.
+ */
+describe("round 12: only arrival order proves a pid changed hands", () => {
+  const pid = process.ppid; // really running, so the PID probe proves nothing
+
+  it("#1 a freshly heartbeating PREDECESSOR does not condemn the live owner", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    // The predecessor registered and heartbeat a second ago — inside the TTL.
+    storage.touchBudgetOwner(pid, "gen-old", t0 - 1000);
+    // The live owner claimed AFTER it; its own registration never landed
+    // (heartbeats are best effort, and the write can simply fail).
+    storage.upsertBudgetReservation({ id: "live", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-live", createdAt: t0 });
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("#3 late accounting against a dead owner's reservation does not erase the replacement's proof", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    storage.upsertBudgetReservation({ id: "dead", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-dead", createdAt: t0 });
+    // The replacement takes the pid a second later: the claimant is gone.
+    storage.touchBudgetOwner(pid, "gen-new", t0 + 1000);
+    // Whoever is doing the accounting records a late cost against that
+    // reservation, moving its activity past the replacement's registration.
+    storage.chargeBudgetReservation("dead", 0.1, t0 + 60_000);
+    vi.setSystemTime(t0 + 45 * 24 * 60 * 60 * 1000);
+    // Activity is not the owner's heartbeat, so it cannot outrank the proof.
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+});
+
+/**
+ * Codex round 12 #2. Two machines can share one wallet. A pid is only
+ * meaningful together with the host it belongs to: our own pid table cannot be
+ * asked about a foreign pid, and a foreign machine's registration says nothing
+ * about ours.
+ */
+describe("round 12 #2: a pid means nothing without its host", () => {
+  it("a reservation from ANOTHER host is never reclaimed from a local PID probe", () => {
+    // pid 99999999 does not exist HERE, which used to read as proof of death.
+    storage.upsertBudgetReservation({ id: "remote", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: 99999999, ownerGeneration: "remote-gen", ownerHost: "build-box-2", createdAt: Date.now() });
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("another host's registration on the same pid number proves nothing about ours", () => {
+    const t0 = Date.now();
+    storage.upsertBudgetReservation({ id: "local", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: process.ppid, ownerGeneration: "our-gen", ownerHost: os.hostname(), createdAt: t0 });
+    // The other machine happens to run its daemon on the same pid NUMBER.
+    storage.touchBudgetOwner(process.ppid, "their-gen", t0 + 1000, "build-box-2");
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+    // Our OWN host taking that pid is still proof, so nothing is lost.
+    storage.touchBudgetOwner(process.ppid, "successor-gen", t0 + 2000, os.hostname());
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+
+  it("a row with no host recorded still behaves exactly as it did before the column", () => {
+    const t0 = Date.now();
+    storage.upsertBudgetReservation({ id: "legacy", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: 99999999, ownerGeneration: "legacy-gen", createdAt: t0 });
+    // No host on either side: this host, and the pid is gone.
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+  });
+});
+
+it("round 12 #2 a reservation records the host that made it, so another machine reads it as foreign", () => {
+  const id = manager.reserve(0.75, "chat");
+  const row = storage.listBudgetReservations().find((r) => r.id === id)!;
+  expect(row.ownerHost).toBe(os.hostname());
+  // A manager on a DIFFERENT machine sharing this wallet can neither probe that
+  // pid nor prove anything about it: the liability stands.
+  const elsewhere = new UnifiedBudgetManager(connect(), { emit: vi.fn() }, {}, {
+    identity: { pid: process.pid, generation: "their-gen", host: "build-box-2" },
+  });
+  elsewhere.updateConfig({ dailyLimitUsd: 1 });
+  expect(elsewhere.reconcileOrphanedReservations().orphans).toBe(0);
+  expect(elsewhere.canSpend(0.5, "chat")).toBe(false);
 });

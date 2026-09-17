@@ -703,6 +703,8 @@ describe("DaemonStorage", () => {
           expect(second.listBudgetReservations()).toEqual([{
             id: "res-1", source: "daemon", sourceId: "task-7", estimateUsd: 0.6,
             chargedUsd: 0.25, ownerPid: 4242, ownerGeneration: null, reconciledAt: null, createdAt: 1_000, lastActivityAt: 2_000,
+            // Round 12 #2: no host recorded on this row, which reads as "this host".
+            ownerHost: null,
           }]);
           second.deleteBudgetReservation("res-1");
           expect(second.listBudgetReservations()).toEqual([]);
@@ -771,5 +773,37 @@ describe("DaemonStorage", () => {
         rmSync(restartDir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("the budget owner registry records arrival, and never invents it (round 12 #2)", () => {
+  it("keeps an unknown arrival unknown for the same incarnation, and stamps a new one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-arrival-"));
+    try {
+      const storage = new DaemonStorage(join(dir, "daemon.db"));
+      storage.initialize();
+      try {
+        // A row from before registered_at existed: its arrival time is unknown.
+        storage.getDatabase()
+          .prepare("INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at) VALUES (7777, 'gen-a', ?, NULL)")
+          .run(Date.now() - 60_000);
+        // The SAME incarnation heartbeats again: still unknown. Filling it in
+        // with now() claimed an arrival that never happened, and a claim older
+        // than that invented moment then read as superseded.
+        storage.touchBudgetOwner(7777, "gen-a", Date.now(), "some-host");
+        const sameGen = storage.listBudgetOwners().find((r) => r.ownerPid === 7777)!;
+        expect(sameGen.registeredAt).toBeUndefined();
+        expect(sameGen.ownerHost).toBe("some-host");
+        // A DIFFERENT incarnation taking the pid stamps its own arrival.
+        const now = Date.now();
+        storage.touchBudgetOwner(7777, "gen-b", now, "some-host");
+        const newGen = storage.listBudgetOwners().find((r) => r.ownerPid === 7777)!;
+        expect(newGen.registeredAt).toBe(now);
+      } finally {
+        storage.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

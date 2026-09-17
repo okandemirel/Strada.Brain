@@ -156,6 +156,10 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
   estimate_usd REAL NOT NULL,
   charged_usd REAL NOT NULL DEFAULT 0,
   owner_pid INTEGER NOT NULL,
+  -- WHOSE PID (Codex round 12 #2): two machines can share one wallet, and pid
+  -- 123 elsewhere is a different process. NULL means this host, which is how
+  -- every single-machine install behaved before the column existed.
+  owner_host TEXT,
   created_at INTEGER NOT NULL,
   last_activity_at INTEGER
 );
@@ -173,6 +177,8 @@ CREATE TABLE IF NOT EXISTS budget_owners (
   owner_pid INTEGER PRIMARY KEY,
   owner_generation TEXT NOT NULL,
   heartbeat_at INTEGER NOT NULL,
+  -- The machine this pid belongs to (round 12 #2). NULL means this host.
+  owner_host TEXT,
   -- WHEN THIS INCARNATION TOOK THE PID. A later generation on a pid PROVES the
   -- earlier one exited, and that proof must not expire with a heartbeat
   -- (Codex round 11 #5): an idle replacement used to turn definite
@@ -476,6 +482,13 @@ export class DaemonStorage {
     if (!ownerColumns.some((column) => column.name === "registered_at")) {
       this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_at INTEGER DEFAULT NULL");
     }
+    // Round 12 #2: whose pid each row is about. NULL = this host.
+    if (!ownerColumns.some((column) => column.name === "owner_host")) {
+      this.db.exec("ALTER TABLE budget_owners ADD COLUMN owner_host TEXT DEFAULT NULL");
+    }
+    if (!reservationColumns.some((column) => column.name === "owner_host")) {
+      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN owner_host TEXT DEFAULT NULL");
+    }
     // PROJECT HISTORY (plan 6.6). A daemon.db from before this table gets it
     // from the schema constant above; one written by an EARLIER shape of it
     // gains the missing columns here. This must run before prepareStatements(),
@@ -757,6 +770,7 @@ export class DaemonStorage {
     chargedUsd: number;
     ownerPid: number;
     ownerGeneration?: string | null;
+    ownerHost?: string | null;
     createdAt: number;
     lastActivityAt?: number | null;
   }): void {
@@ -764,6 +778,7 @@ export class DaemonStorage {
     this.stmts.upsertReservation!.run(
       row.id, row.source, row.sourceId ?? null, row.estimateUsd, row.chargedUsd,
       row.ownerPid, row.createdAt, row.lastActivityAt ?? null, row.ownerGeneration ?? null,
+      row.ownerHost ?? null,
     );
   }
 
@@ -784,20 +799,21 @@ export class DaemonStorage {
    * Keyed by PID: a PID hosts one process at a time, so an upsert by a newer
    * incarnation is what proves the previous one on that PID is gone.
    */
-  touchBudgetOwner(ownerPid: number, ownerGeneration: string, now: number): void {
+  touchBudgetOwner(ownerPid: number, ownerGeneration: string, now: number, ownerHost?: string): void {
     this.assertOpen();
-    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now, now);
+    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now, now, ownerHost ?? null);
   }
 
   /** Registered wallet owners with their last heartbeat. */
-  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number }> {
+  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number; ownerHost?: string }> {
     this.assertOpen();
-    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number; registered_at: number | null }>;
+    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number; registered_at: number | null; owner_host: string | null }>;
     return rows.map((r) => ({
       ownerPid: r.owner_pid,
       ownerGeneration: r.owner_generation,
       heartbeatAt: r.heartbeat_at,
       ...(r.registered_at === null ? {} : { registeredAt: r.registered_at }),
+      ...(r.owner_host === null ? {} : { ownerHost: r.owner_host }),
     }));
   }
 
@@ -825,6 +841,7 @@ export class DaemonStorage {
     chargedUsd: number;
     ownerPid: number;
     ownerGeneration?: string | null;
+    ownerHost?: string | null;
     createdAt: number;
     lastActivityAt: number | null;
     reconciledAt: number | null;
@@ -832,7 +849,7 @@ export class DaemonStorage {
     this.assertOpen();
     const rows = this.stmts.allReservations!.all() as Array<{
       id: string; source: string; source_id: string | null; estimate_usd: number;
-      charged_usd: number; owner_pid: number; owner_generation: string | null; created_at: number; last_activity_at: number | null; reconciled_at: number | null;
+      charged_usd: number; owner_pid: number; owner_generation: string | null; owner_host: string | null; created_at: number; last_activity_at: number | null; reconciled_at: number | null;
     }>;
     return rows.map((r) => ({
       id: r.id,
@@ -840,6 +857,7 @@ export class DaemonStorage {
       sourceId: r.source_id,
       estimateUsd: r.estimate_usd,
       chargedUsd: r.charged_usd,
+      ownerHost: r.owner_host,
       ownerPid: r.owner_pid,
       ownerGeneration: r.owner_generation,
       createdAt: r.created_at,
@@ -1398,8 +1416,8 @@ export class DaemonStorage {
 
     // Pending liability (round 8 #2)
     this.stmts.upsertReservation = db.prepare(
-      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at, owner_generation)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at, owner_generation, owner_host)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET estimate_usd = excluded.estimate_usd, charged_usd = excluded.charged_usd, last_activity_at = excluded.last_activity_at`,
     );
     this.stmts.chargeReservation = db.prepare(
@@ -1410,17 +1428,20 @@ export class DaemonStorage {
 
     // Owner liveness registry (round 10 #7)
     this.stmts.touchOwner = db.prepare(
-      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at) VALUES (?, ?, ?, ?)
+      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at, owner_host) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(owner_pid) DO UPDATE SET
          owner_generation = excluded.owner_generation,
          heartbeat_at = excluded.heartbeat_at,
-         -- A NEW incarnation stamps its own arrival; the same one keeps the
-         -- moment it first registered.
+         owner_host = excluded.owner_host,
+         -- A NEW incarnation stamps its own arrival; the same one KEEPS what
+         -- it had, including not knowing (round 12 #2): COALESCE here gave a
+         -- pre-migration row an arrival time it never had, which then read as
+         -- a replacement of claims that were actually older than it.
          registered_at = CASE WHEN budget_owners.owner_generation = excluded.owner_generation
-           THEN COALESCE(budget_owners.registered_at, excluded.registered_at)
+           THEN budget_owners.registered_at
            ELSE excluded.registered_at END`,
     );
-    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at, registered_at FROM budget_owners`);
+    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at, registered_at, owner_host FROM budget_owners`);
     this.stmts.pruneOwners = db.prepare(
       `DELETE FROM budget_owners WHERE heartbeat_at < ?
          AND owner_pid NOT IN (SELECT owner_pid FROM budget_reservations WHERE reconciled_at IS NULL)`,
