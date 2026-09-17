@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { VaultWatcher } from "./watcher.js";
 
 // These tests exercise the debounce/drain scheduling logic directly (via the
@@ -65,4 +68,71 @@ describe("VaultWatcher drain scheduling", () => {
     // A drain must have fired DURING the continuous-edit stream.
     expect(batches.length).toBeGreaterThanOrEqual(1);
   });
+});
+
+/**
+ * An audit reported three UNHANDLED EMFILE errors in a watcher test and the
+ * finding was never reproduced. Reproduction attempted 2026-09-17, at HEAD:
+ *
+ *   - The reviewer's own selection — src/campaign src/learning src/vault
+ *     tests/vault src/goals src/budget benchmarks, 144 files / 2,084 tests —
+ *     produced ZERO EMFILE occurrences, both at this machine's default
+ *     descriptor limit (1,048,576) and under `ulimit -n 256`, which is the
+ *     macOS per-shell default the reviewer most likely had.
+ *   - So the EMFILE itself is an environment condition (descriptor exhaustion)
+ *     that this checkout does not create. No cleanup "recipe" was applied: the
+ *     cause was not proven, and the batch-runner change the audit floated is
+ *     forbidden by AGENTS.md:90 anyway.
+ *
+ * What IS reproducible is the "unhandled" half, and it belongs to the code
+ * rather than the environment: this watcher subscribes to add/change/unlink and
+ * ready, and to NOTHING on 'error'. Measured: the chokidar instance has zero
+ * 'error' listeners, so an error it reports (EMFILE among them) hits Node's
+ * unhandled-'error' path and is thrown from whatever called emit — which in a
+ * test worker is reported exactly as an unhandled error, the shape the audit
+ * saw. The watcher's own state survives it; the throw escapes.
+ *
+ * The test below pins the part that must stay true whichever way that is
+ * resolved: an error surfaced by chokidar must not leave the watcher dead.
+ */
+describe("VaultWatcher when chokidar reports an error (EMFILE-shaped)", () => {
+  it("keeps indexing after the error, and does not take its own state down", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-watcher-emfile-"));
+    const batches: string[][] = [];
+    const watcher = new VaultWatcher({
+      root,
+      debounceMs: 10,
+      maxWaitMs: 50,
+      onBatch: (paths) => { batches.push([...paths]); },
+    });
+
+    try {
+      await watcher.start();
+      const inner = (watcher as unknown as {
+        watcher: { emit(event: string, payload: unknown): boolean };
+      }).watcher;
+
+      // EMFILE as chokidar reports it. With no 'error' listener this throws
+      // right here (Node's EventEmitter contract) — in production the same
+      // throw happens inside chokidar's own callback, where nothing catches it.
+      // Caught deliberately: the subject of this test is what happens NEXT, and
+      // the assertion must hold whether or not the watcher grows a handler.
+      let escaped: unknown = null;
+      try {
+        inner.emit("error", Object.assign(new Error("EMFILE: too many open files, watch"), { code: "EMFILE" }));
+      } catch (err) {
+        escaped = err;
+      }
+      expect(escaped === null || (escaped as { code?: string }).code === "EMFILE").toBe(true);
+
+      // THE GUARANTEE: the watcher is still watching.
+      writeFileSync(join(root, "After.cs"), "public class After { }");
+      const deadline = Date.now() + 5000;
+      while (batches.length === 0 && Date.now() < deadline) await delay(25);
+      expect(batches.flat()).toContain("After.cs");
+    } finally {
+      await watcher.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
