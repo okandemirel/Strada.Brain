@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
 import { OWNER_HEARTBEAT_TTL_MS, UnifiedBudgetManager } from "./unified-budget-manager.js";
 
@@ -496,4 +497,84 @@ it("plan 6.1 a recorded cost carries the task and campaign that spent it", () =>
   manager.recordCost(0.2, "chat", {});
   expect(storage.sumBudgetForTask("task_9").totalUsd).toBeCloseTo(0.3, 6);
   expect(storage.sumBudgetSince(0)).toBeCloseTo(0.5, 6);
+});
+
+/**
+ * Round 11 #5. Owner replacement is PERMANENT evidence: a pid hosts one
+ * process at a time, so a different incarnation registering on it after a
+ * liability was claimed proves the claimant exited — no matter how long the
+ * replacement has since been idle. Reading it through the heartbeat TTL made
+ * that proof expire, and a dead owner's reservation then held headroom for ever.
+ */
+describe("round 11 #5: owner-replacement evidence does not expire", () => {
+  const pid = process.ppid; // really running, so the PID probe proves nothing
+  const FORTY_FIVE_DAYS = 45 * 24 * 60 * 60 * 1000; // past heartbeat TTL and the 30-day retention
+  const owners = () => storage.listBudgetOwners();
+  function claimed(generation: string, at: number, usd = 0.75) {
+    storage.upsertBudgetReservation({ id: "claim", source: "chat", sourceId: null, estimateUsd: usd,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: generation, createdAt: at });
+  }
+
+  it("an idle replacement still proves the previous incarnation exited, a month later", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    claimed("gen-a", t0);
+    storage.touchBudgetOwner(pid, "gen-a", t0);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    // A different incarnation takes the pid a second later, then goes idle.
+    storage.touchBudgetOwner(pid, "gen-b", t0 + 1000);
+    vi.setSystemTime(t0 + FORTY_FIVE_DAYS);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(1);
+    // The evidence survived the retention prune precisely because the claim it
+    // answers is still unreconciled at the moment pruning runs.
+    expect(owners().filter((row) => row.ownerPid === pid)).toMatchObject([{ ownerGeneration: "gen-b" }]);
+  });
+
+  it("a stale MATCHING incarnation is unknown, not dead: its headroom stays", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    claimed("gen-a", t0);
+    storage.touchBudgetOwner(pid, "gen-a", t0);
+    vi.setSystemTime(t0 + FORTY_FIVE_DAYS);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("a registry row from before this column exists migrates, and still keeps its owner's headroom", () => {
+    // The live daemon.db has budget_owners without registered_at: every owner
+    // statement names that column, so a missing migration would break the
+    // wallet outright. A NULL arrival time orders nothing, so the mismatch
+    // alone must not condemn an owner whose PID is still running.
+    const legacyPath = join(dir, "legacy.db");
+    const raw = new Database(legacyPath);
+    raw.exec("CREATE TABLE budget_owners (owner_pid INTEGER PRIMARY KEY, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL)");
+    raw.prepare("INSERT INTO budget_owners VALUES (?, ?, ?)").run(pid, "gen-legacy", Date.now() - 2 * OWNER_HEARTBEAT_TTL_MS);
+    raw.close();
+    const legacy = new DaemonStorage(legacyPath);
+    legacy.initialize();
+    legacy.migrateAgentBudget();
+    legacy.migrateBudgetSource();
+    connections.push(legacy);
+    expect(legacy.listBudgetOwners()).toMatchObject([{ ownerPid: pid, ownerGeneration: "gen-legacy" }]);
+    expect(legacy.listBudgetOwners()[0]!.registeredAt).toBeUndefined();
+    const onLegacy = new UnifiedBudgetManager(legacy, { emit: vi.fn() }, {});
+    onLegacy.updateConfig({ dailyLimitUsd: 1 });
+    legacy.upsertBudgetReservation({ id: "claim", source: "chat", sourceId: null, estimateUsd: 0.75,
+      chargedUsd: 0, ownerPid: pid, ownerGeneration: "gen-a", createdAt: Date.now() });
+    expect(onLegacy.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(onLegacy.canSpend(0.5, "chat")).toBe(false);
+  });
+
+  it("a registration OLDER than the claim names a predecessor, and proves nothing", () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    // The pid's registry row was left by an earlier incarnation and the current
+    // owner's own heartbeat (best effort) never landed. Reading the mismatch as
+    // death would release a live owner's headroom.
+    storage.touchBudgetOwner(pid, "gen-old", t0);
+    claimed("gen-a", t0 + 10 * 60 * 1000);
+    vi.setSystemTime(t0 + FORTY_FIVE_DAYS);
+    expect(manager.reconcileOrphanedReservations().orphans).toBe(0);
+    expect(manager.canSpend(0.5, "chat")).toBe(false);
+  });
 });

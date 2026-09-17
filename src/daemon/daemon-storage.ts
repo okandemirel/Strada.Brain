@@ -172,7 +172,13 @@ CREATE INDEX IF NOT EXISTS idx_budget_reservations_owner ON budget_reservations(
 CREATE TABLE IF NOT EXISTS budget_owners (
   owner_pid INTEGER PRIMARY KEY,
   owner_generation TEXT NOT NULL,
-  heartbeat_at INTEGER NOT NULL
+  heartbeat_at INTEGER NOT NULL,
+  -- WHEN THIS INCARNATION TOOK THE PID. A later generation on a pid PROVES the
+  -- earlier one exited, and that proof must not expire with a heartbeat
+  -- (Codex round 11 #5): an idle replacement used to turn definite
+  -- supersession back into "unknown", and the superseded owner's liability
+  -- then held headroom for ever.
+  registered_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS settings_overrides (
@@ -377,6 +383,14 @@ export class DaemonStorage {
     }
     if (!reservationColumns.some((column) => column.name === "reconciled_at")) {
       this.db.exec("ALTER TABLE budget_reservations ADD COLUMN reconciled_at INTEGER DEFAULT NULL");
+    }
+    // A registry written before round 11 #5 has no registration time. Every
+    // owner statement names the column, so this must run before they are
+    // prepared; rows already there stay NULL, which reads as "no proof of when
+    // this incarnation arrived" and therefore keeps the owner's headroom.
+    const ownerColumns = this.db.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string }>;
+    if (!ownerColumns.some((column) => column.name === "registered_at")) {
+      this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_at INTEGER DEFAULT NULL");
     }
     this.prepareStatements();
   }
@@ -669,19 +683,27 @@ export class DaemonStorage {
    */
   touchBudgetOwner(ownerPid: number, ownerGeneration: string, now: number): void {
     this.assertOpen();
-    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now);
+    this.stmts.touchOwner!.run(ownerPid, ownerGeneration, now, now);
   }
 
   /** Registered wallet owners with their last heartbeat. */
-  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number }> {
+  listBudgetOwners(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number }> {
     this.assertOpen();
-    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number }>;
-    return rows.map((r) => ({ ownerPid: r.owner_pid, ownerGeneration: r.owner_generation, heartbeatAt: r.heartbeat_at }));
+    const rows = this.stmts.allOwners!.all() as Array<{ owner_pid: number; owner_generation: string; heartbeat_at: number; registered_at: number | null }>;
+    return rows.map((r) => ({
+      ownerPid: r.owner_pid,
+      ownerGeneration: r.owner_generation,
+      heartbeatAt: r.heartbeat_at,
+      ...(r.registered_at === null ? {} : { registeredAt: r.registered_at }),
+    }));
   }
 
   /** Forget owners that stopped heartbeating long ago, so the registry stays bounded. */
   pruneBudgetOwners(heartbeatBefore: number): void {
     this.assertOpen();
+    // NEVER PRUNE EVIDENCE SOMETHING STILL DEPENDS ON (round 11 #5): a row is
+    // what proves an older incarnation of that pid exited, and an unreconciled
+    // reservation of that pid is exactly the claim it answers.
     this.stmts.pruneOwners!.run(heartbeatBefore);
   }
 
@@ -1185,11 +1207,21 @@ export class DaemonStorage {
 
     // Owner liveness registry (round 10 #7)
     this.stmts.touchOwner = db.prepare(
-      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at) VALUES (?, ?, ?)
-       ON CONFLICT(owner_pid) DO UPDATE SET owner_generation = excluded.owner_generation, heartbeat_at = excluded.heartbeat_at`,
+      `INSERT INTO budget_owners (owner_pid, owner_generation, heartbeat_at, registered_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(owner_pid) DO UPDATE SET
+         owner_generation = excluded.owner_generation,
+         heartbeat_at = excluded.heartbeat_at,
+         -- A NEW incarnation stamps its own arrival; the same one keeps the
+         -- moment it first registered.
+         registered_at = CASE WHEN budget_owners.owner_generation = excluded.owner_generation
+           THEN COALESCE(budget_owners.registered_at, excluded.registered_at)
+           ELSE excluded.registered_at END`,
     );
-    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at FROM budget_owners`);
-    this.stmts.pruneOwners = db.prepare(`DELETE FROM budget_owners WHERE heartbeat_at < ?`);
+    this.stmts.allOwners = db.prepare(`SELECT owner_pid, owner_generation, heartbeat_at, registered_at FROM budget_owners`);
+    this.stmts.pruneOwners = db.prepare(
+      `DELETE FROM budget_owners WHERE heartbeat_at < ?
+         AND owner_pid NOT IN (SELECT owner_pid FROM budget_reservations WHERE reconciled_at IS NULL)`,
+    );
     this.stmts.recentBudget = db.prepare(
       `SELECT * FROM budget_entries ORDER BY timestamp DESC LIMIT ?`,
     );

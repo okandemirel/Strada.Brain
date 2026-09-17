@@ -115,7 +115,7 @@ interface BudgetStorageAdapter {
   // it no foreign owner can be proved ALIVE, and none can be proved dead
   // either unless its PID is gone — uncertainty keeps its headroom.
   touchBudgetOwner?(ownerPid: number, ownerGeneration: string, now: number): void;
-  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number }>;
+  listBudgetOwners?(): Array<{ ownerPid: number; ownerGeneration: string; heartbeatAt: number; registeredAt?: number }>;
   pruneBudgetOwners?(heartbeatBefore: number): void;
 }
 
@@ -198,28 +198,56 @@ export class UnifiedBudgetManager {
    *   manager reconcile a live owner's reservation and then hand out the
    *   headroom that owner was still spending (round 10 #7).
    */
-  private ownerVerdict(owner: BudgetProcessIdentity, registry?: Map<number, { generation: string; heartbeatAt: number }>): OwnerVerdict {
+  private ownerVerdict(
+    owner: BudgetProcessIdentity,
+    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }>,
+    claimedAt?: number,
+  ): OwnerVerdict {
     if (owner.pid === this.identity.pid && owner.generation === this.identity.generation) return "alive";
     const known = (registry ?? this.ownerRegistry()).get(owner.pid);
+    if (known && known.generation !== owner.generation) {
+      // SUPERSESSION DOES NOT EXPIRE (Codex round 11 #5). A pid hosts one
+      // process at a time, so a DIFFERENT incarnation registering on it after
+      // this liability was claimed proves the claimant exited — whether or not
+      // the replacement is still heartbeating. Treating a stale replacement as
+      // "unknown" let a dead owner's liability hold headroom for ever.
+      // An UNKNOWN arrival time (a registry row written before this column
+      // existed) proves nothing about order, so it falls through to the
+      // heartbeat and PID evidence below rather than condemning the owner.
+      const arrived = known.registeredAt;
+      if (arrived !== undefined && (claimedAt === undefined || arrived >= claimedAt)) return "dead";
+    }
     if (known && Date.now() - known.heartbeatAt <= OWNER_HEARTBEAT_TTL_MS) {
       return known.generation === owner.generation ? "alive" : "dead";
     }
     return pidIsRunning(owner.pid) ? "unknown" : "dead";
   }
 
-  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number }> {
+  private ownerRegistry(): Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }> {
     const rows = this.storage.listBudgetOwners?.() ?? [];
-    return new Map(rows.map((row) => [row.ownerPid, { generation: row.ownerGeneration, heartbeatAt: row.heartbeatAt }]));
+    return new Map(
+      rows.map((row) => [
+        row.ownerPid,
+        { generation: row.ownerGeneration, heartbeatAt: row.heartbeatAt, ...(row.registeredAt === undefined ? {} : { registeredAt: row.registeredAt }) },
+      ]),
+    );
   }
 
   /** May this process resolve someone else's liability as uncertain estimate? */
-  private isReclaimable(row: { ownerPid: number; ownerGeneration?: string | null }, registry?: Map<number, { generation: string; heartbeatAt: number }>): boolean {
+  private isReclaimable(
+    row: { ownerPid: number; ownerGeneration?: string | null; createdAt?: number; lastActivityAt?: number | null },
+    registry?: Map<number, { generation: string; heartbeatAt: number; registeredAt?: number }>,
+  ): boolean {
     // Written before owner generations existed: it names no incarnation that
     // could still be running, so nothing can keep it in flight.
     if (!row.ownerGeneration) return true;
     const owner = { pid: row.ownerPid, generation: row.ownerGeneration };
     if (this.injectedIsOwnerAlive) return !this.injectedIsOwnerAlive(owner);
-    return this.ownerVerdict(owner, registry) === "dead";
+    // The LATEST moment this owner is known to have been running: a registry
+    // row older than that names a PREDECESSOR on the pid, not a replacement,
+    // so it proves nothing (the ABA direction of round 11 #5).
+    const claimedAt = Math.max(row.createdAt ?? 0, row.lastActivityAt ?? 0) || undefined;
+    return this.ownerVerdict(owner, registry, claimedAt) === "dead";
   }
 
   // ===========================================================================
