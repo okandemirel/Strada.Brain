@@ -23,6 +23,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
 import { describePlaythroughScenarios, parsePlaythroughScenarios, type ScenarioPlaythroughEvidence } from "./playthrough-scenarios.js";
+import { readdirSync } from "node:fs";
+import { dirname } from "node:path";
 export { parsePlaythroughScenarios, scenariosForRequirement, isRequirementShownByPlaythrough, describePlaythroughScenarios } from "./playthrough-scenarios.js";
 
 export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playthrough-verdict.json");
@@ -165,7 +167,10 @@ export function readPlaythroughVerdict(
     bytesSha256,
     ok: parsed.ok === true && evidenced,
     reasons,
-    scenarios: parsePlaythroughScenarios(record?.scenarios, frames?.count),
+    scenarios: parsePlaythroughScenarios(record?.scenarios, frames?.count, {
+      framesOnDisk: countCapturedFrames(dirname(path)),
+      artifactExists: (relative) => artifactIsPresent(projectRoot, relative),
+    }),
     ...(record
       ? {
           outcome: str(record.outcome),
@@ -267,6 +272,32 @@ function parseRuntime(r: Record<string, unknown>): RuntimeSceneDump {
     meshes: names(r.meshes),
     primitiveMeshes: n(r.primitiveMeshes),
   };
+}
+
+/**
+ * Frames actually captured beside a verdict (round 13 #32).
+ *
+ * The producer writes `frames.count` itself, so a verdict can claim captures
+ * that were never taken. The files are in the verdict's own directory; an
+ * unreadable directory returns undefined, which reads as "not inspected" and
+ * never as proof.
+ */
+function countCapturedFrames(dir: string): number | undefined {
+  try {
+    return readdirSync(dir).filter((name) => /^frame_.*\.(png|jpg|jpeg)$/i.test(name)).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Does the save artifact a scenario names exist inside the project? */
+function artifactIsPresent(projectRoot: string, relative: string): boolean {
+  if (relative.includes("..") || relative.startsWith("/")) return false;
+  try {
+    return existsSync(join(projectRoot, relative));
+  } catch {
+    return false;
+  }
 }
 
 /** Existing play result, followed by the named scenario measurements. */

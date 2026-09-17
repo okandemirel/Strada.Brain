@@ -3,16 +3,23 @@ import * as contract from "./playthrough-verdict.js";
 
 // Exercise the verdict module's public contract. Missing exports are assertion
 // failures on the old reader, not a missing-module / zero-test load failure.
-function parse(rows: unknown, count: unknown = 4) {
+/**
+ * Round 13 #32: the numbers in a verdict are the producer's claim; the frames
+ * and the save artifact are the evidence. The default here is a run that DID
+ * leave both, so these cases still test what they were written to test.
+ */
+const ONDISK = { framesOnDisk: 4, artifactExists: () => true };
+
+function parse(rows: unknown, count: unknown = 4, disk = ONDISK) {
   expect(contract).toHaveProperty("parsePlaythroughScenarios");
-  return contract.parsePlaythroughScenarios(rows, count);
+  return contract.parsePlaythroughScenarios(rows, count, disk);
 }
 
 const reached = [
   { id: "menu-to-game", fromState: "Menu", toState: "Playing" },
   { id: "win", outcome: "Won", reachedOutcome: true },
   { id: "lose", outcome: "Lost", reachedOutcome: true },
-  { id: "save-load", saveCompleted: true, loadCompleted: true, saveId: "slot-1", loadedSaveId: "slot-1", savedStateHash: "state-a", loadedStateHash: "state-a" },
+  { id: "save-load", saveCompleted: true, loadCompleted: true, artifact: "Recordings/playthrough/save-slot-1.json", saveId: "slot-1", loadedSaveId: "slot-1", savedStateHash: "state-a", loadedStateHash: "state-a" },
   { id: "scene-transition", transitionCompleted: true, fromScene: "Home", toScene: "Level" },
 ].map((row) => ({ ...row, startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 } }));
 
@@ -31,7 +38,7 @@ describe("scenario evidence contract", () => {
     ];
     expect(parse(contradictions).every((row) => row.status === "not-reached")).toBe(true);
     for (const count of [undefined, 0, 1]) {
-      expect(contract.parsePlaythroughScenarios(reached, count).every((row) => row.status === "not-reached")).toBe(true);
+      expect(contract.parsePlaythroughScenarios(reached, count, ONDISK).every((row) => row.status === "not-reached")).toBe(true);
     }
     for (const patch of [
       { reached: false }, { startAccepted: undefined }, { actions: 0 },

@@ -39,10 +39,33 @@ export interface PlaythroughScenarioEvidence {
   /** save-load: completed save, then load of that save with matching state. */
   saveCompleted?: boolean;
   loadCompleted?: boolean;
+  /**
+   * Project-relative path of the save the run wrote and read back. Round 13
+   * #32: a save id and a state hash are the producer's own words about game
+   * state; the artifact is the only part of save/load this reader can check.
+   * Absent means save/load is NOT MEASURED, never reached.
+   */
+  artifact?: string;
   saveId?: string;
   loadedSaveId?: string;
   savedStateHash?: string;
   loadedStateHash?: string;
+}
+
+/**
+ * WHAT THE RUN LEFT ON DISK, as opposed to what the file says about itself.
+ *
+ * Codex round 13 #32: every field above is written by the producer, so a
+ * verdict claiming `frames.count: 2`, indices 0 -> 1 and matching save ids of
+ * `"x"` made save/load READ AS REACHED with no captures and no save artifact
+ * anywhere. The numbers are a claim; the files are the evidence, and the
+ * reader knows where they are (the verdict's own directory).
+ */
+export interface ScenarioEvidenceOnDisk {
+  /** Frames actually captured beside this verdict, counted from the files. */
+  readonly framesOnDisk?: number;
+  /** Does this project-relative artifact exist? Absent = nothing can be checked. */
+  readonly artifactExists?: (relativePath: string) => boolean;
 }
 
 /** Wire row: record.scenarios is an array of these, parsed from unknown. */
@@ -77,7 +100,7 @@ function str(value: unknown): string | undefined {
 
 function parseEvidence(row: Record<string, unknown>): PlaythroughScenarioEvidence {
   const evidence: PlaythroughScenarioEvidence = {};
-  for (const key of ["reason", "missing", "outcome", "fromState", "toState", "fromScene", "toScene", "saveId", "loadedSaveId", "savedStateHash", "loadedStateHash"] as const) {
+  for (const key of ["reason", "missing", "outcome", "fromState", "toState", "fromScene", "toScene", "artifact", "saveId", "loadedSaveId", "savedStateHash", "loadedStateHash"] as const) {
     const value = str(row[key]);
     if (value !== undefined) evidence[key] = value;
   }
@@ -98,9 +121,23 @@ function parseEvidence(row: Record<string, unknown>): PlaythroughScenarioEvidenc
   return evidence;
 }
 
-/** REACHED always needs explicit acceptance, observed reach, action and frames. */
-function reached(id: PlaythroughScenarioId, e: PlaythroughScenarioEvidence, count: unknown): boolean {
-  const total = whole(count);
+/**
+ * REACHED always needs explicit acceptance, observed reach, action and frames —
+ * and the frames it names must EXIST. A claimed count beyond the files on disk
+ * is not evidence of anything (round 13 #32).
+ */
+function reached(
+  id: PlaythroughScenarioId,
+  e: PlaythroughScenarioEvidence,
+  count: unknown,
+  disk: ScenarioEvidenceOnDisk,
+): boolean {
+  const claimed = whole(count);
+  // The smaller of what the file claims and what the directory holds; when the
+  // caller could not look, the claim alone proves nothing.
+  const total = disk.framesOnDisk === undefined
+    ? undefined
+    : Math.min(claimed ?? 0, disk.framesOnDisk);
   const before = e.frames?.before;
   const after = e.frames?.after;
   if (e.startAccepted !== true || e.reached !== true || e.actions === undefined || e.actions <= 0) return false;
@@ -111,7 +148,10 @@ function reached(id: PlaythroughScenarioId, e: PlaythroughScenarioEvidence, coun
     case "lose": return e.outcome === "Lost" && e.reachedOutcome === true;
     case "save-load": return e.saveCompleted === true && e.loadCompleted === true
       && e.saveId !== undefined && e.saveId === e.loadedSaveId
-      && e.savedStateHash !== undefined && e.savedStateHash === e.loadedStateHash;
+      && e.savedStateHash !== undefined && e.savedStateHash === e.loadedStateHash
+      // The one part of save/load that is not the producer's own word.
+      && e.artifact !== undefined && disk.artifactExists !== undefined
+      && disk.artifactExists(e.artifact);
     case "scene-transition": return e.transitionCompleted === true
       && e.fromScene !== undefined && e.toScene !== undefined && e.fromScene !== e.toScene;
   }
@@ -126,7 +166,11 @@ function refused(e: PlaythroughScenarioEvidence): boolean {
  * Duplicates cannot cherry-pick success: any refusal wins, otherwise ambiguous
  * duplicates are not-reached. A known but incomplete row is also not-reached.
  */
-export function parsePlaythroughScenarios(raw: unknown, frameCount: unknown): PlaythroughScenarioResult[] {
+export function parsePlaythroughScenarios(
+  raw: unknown,
+  frameCount: unknown,
+  disk: ScenarioEvidenceOnDisk = {},
+): PlaythroughScenarioResult[] {
   const rows = Array.isArray(raw) ? raw.map(object).filter((row) => row !== undefined) : [];
   return PLAYTHROUGH_SCENARIOS.map(({ id }): PlaythroughScenarioResult => {
     const matches = rows.filter((row) => row.id === id).map(parseEvidence);
@@ -135,8 +179,21 @@ export function parsePlaythroughScenarios(raw: unknown, frameCount: unknown): Pl
     if (denied) return { id, status: "refused", evidence: denied, reason: denied.reason ?? denied.missing ?? "runner refused the scenario" };
     if (matches.length !== 1) return { id, status: "not-reached", reason: "duplicate scenario reports" };
     const evidence = matches[0]!;
-    if (reached(id, evidence, frameCount)) return { id, status: "reached", evidence };
-    return { id, status: "not-reached", evidence, reason: evidence.reason ?? "required observations or captured frames are missing or contradictory" };
+    if (reached(id, evidence, frameCount, disk)) return { id, status: "reached", evidence };
+    return {
+      id,
+      status: "not-reached",
+      evidence,
+      reason:
+        evidence.reason
+        ?? (disk.framesOnDisk === undefined
+          ? "the captured frames beside the verdict were not inspected, so the frame claim proves nothing"
+          : disk.framesOnDisk === 0
+            ? "the verdict claims captured frames but none are on disk beside it"
+            : id === "save-load" && evidence.artifact === undefined
+              ? "no save artifact was named, so only the producer's own word says the state came back"
+              : "required observations or captured frames are missing or contradictory"),
+    };
   });
 }
 

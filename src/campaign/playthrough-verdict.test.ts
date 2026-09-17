@@ -24,12 +24,32 @@ function write(content: unknown, ageMs = 0): string {
   return path;
 }
 
+/**
+ * The captures a real run leaves beside its verdict. Round 13 #32: without
+ * them the verdict's frame count is only a claim, so a fixture that omits them
+ * is a fixture of a producer that captured nothing.
+ */
+function writeFrames(count: number): void {
+  mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
+  for (let i = 0; i < count; i++) {
+    writeFileSync(join(root, "Recordings", "playthrough", `frame_${String(i).padStart(5, "0")}.png`), "png");
+  }
+}
+
+/** The save the run wrote and read back, named by the scenario row. */
+const SAVE_ARTIFACT = join("Recordings", "playthrough", "save-slot-1.json");
+function writeSaveArtifact(): void {
+  mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
+  writeFileSync(join(root, SAVE_ARTIFACT), "{}");
+}
+
 describe("scenario verdict integration", () => {
   it("carries defensively parsed record.scenarios through the verdict reader", () => {
     write({ ...ok, record: { ...ok.record, scenarios: [null, { id: { toString: null } },
       { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
       { id: "save-load", actions: 0.5, frames: { after: "1" }, reason: { toString: null } },
     ] } });
+    writeFrames(5);
     const read = readPlaythroughVerdict(root, 0);
     expect(read.scenarios?.find((row) => row.id === "win")).toMatchObject({ status: "reached", evidence: { actions: 2, frames: { before: 0, after: 1 } } });
     const save = read.scenarios?.find((row) => row.id === "save-load");
@@ -57,6 +77,7 @@ describe("scenario verdict integration", () => {
       { id: "save-load", startAccepted: false, reason: "no save driver" },
       { id: "lose", startAccepted: true, reached: false },
     ] } });
+    writeFrames(5);
     const read = readPlaythroughVerdict(root, 0);
     for (const output of [describePlaythrough(read), playthroughDirective(read)]) {
       expect(output.split("\n").filter((line) => line.startsWith("scenario "))).toHaveLength(5);
@@ -401,5 +422,64 @@ describe("the reader keeps absence absent", () => {
     // game said no session was running (Codex 2026-09-12 AA#3).
     write({ ...ok, record: { ...ok.record, sessionCount: 1, sessions: [session(0)] } });
     expect(readPlaythroughVerdict(root, 0).sessions?.[0]).toMatchObject({ observedIndex: 0 });
+  });
+
+  /**
+   * Codex round 13 #32. Every scenario field is written by the producer, so a
+   * verdict claiming two frames, indices 0 -> 1, and save ids that match could
+   * make save/load READ AS REACHED with no captures and no save on disk at all.
+   * The numbers are a claim; the files are the evidence, and this reader knows
+   * where to look.
+   */
+  it("refuses a scenario whose captures and save artifact do not exist", () => {
+    const selfAsserted = [
+      { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
+      { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
+        saveCompleted: true, loadCompleted: true, artifact: SAVE_ARTIFACT,
+        saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+    ];
+    // Nothing but the verdict file: no frames, no save.
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: selfAsserted } });
+    const claimed = readPlaythroughVerdict(root, 0);
+    expect(claimed.scenarios?.find((row) => row.id === "win")).toMatchObject({ status: "not-reached" });
+    expect(claimed.scenarios?.find((row) => row.id === "win")?.reason).toContain("none are on disk");
+    expect(claimed.scenarios?.find((row) => row.id === "save-load")).toMatchObject({ status: "not-reached" });
+
+    // The frames exist but the save does not: the visual scenario is shown, the
+    // one that turns on restored STATE is not.
+    writeFrames(2);
+    const framesOnly = readPlaythroughVerdict(root, 0);
+    expect(framesOnly.scenarios?.find((row) => row.id === "win")).toMatchObject({ status: "reached" });
+    expect(framesOnly.scenarios?.find((row) => row.id === "save-load")).toMatchObject({ status: "not-reached" });
+
+    // With the save on disk too, save/load is genuinely shown.
+    writeSaveArtifact();
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((row) => row.id === "save-load")).toMatchObject({ status: "reached" });
+  });
+
+  it("a save/load that names no artifact is not measured on the producer's word alone", () => {
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
+      { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
+        saveCompleted: true, loadCompleted: true, saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+    ] } });
+    writeFrames(2);
+    const row = readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load");
+    expect(row).toMatchObject({ status: "not-reached" });
+    expect(row?.reason).toContain("no save artifact was named");
+  });
+
+  it("an artifact path that climbs out of the project is refused, even when that file EXISTS (guard)", () => {
+    // The file is real — just not inside the project. A producer naming it is
+    // pointing at evidence nobody can attribute to this run.
+    const outside = join(root, "..", `outside-${Date.now()}`);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "save.json"), "{}");
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
+      { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
+        saveCompleted: true, loadCompleted: true, artifact: `../${outside.split("/").pop()}/save.json`,
+        saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+    ] } });
+    writeFrames(2);
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load")).toMatchObject({ status: "not-reached" });
   });
 });
