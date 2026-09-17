@@ -273,6 +273,40 @@ describe("artifactDigest over a build manifest", () => {
     expect(artifactManifest(exe)?.files).toEqual(whole);
   });
 
+  it("native plugins beside a player are runtime too, and a data folder in any case is the data folder (Codex on 04dd905d #8, #9)", () => {
+    const exe = layout();
+    mkdirSync(join(dir, "linux", "Plugins"), { recursive: true });
+    writeFileSync(join(dir, "linux", "Plugins", "native.so"), "native code");
+    manifest(["Game.x86_64", "Game_Data/level0"]);
+    expect(artifactManifest(exe)).toBeUndefined();
+    manifest(["Game.x86_64", "Game_Data/level0", "Plugins/native.so"]);
+    const adopted = artifactDigest(exe);
+    expect(adopted).toMatch(HEX);
+    writeFileSync(join(dir, "linux", "Plugins", "native.so"), "NATIVE CODE");
+    expect(artifactDigest(exe)).not.toBe(adopted);
+    // A data folder the filesystem spells differently is still the data folder.
+    const odd = join(dir, "odd");
+    mkdirSync(join(odd, "Game_data"), { recursive: true });
+    writeFileSync(join(odd, "Game.x86_64"), "the executable");
+    writeFileSync(join(odd, "Game_data", "level0"), "level one");
+    writeFileSync(join(odd, "Game.x86_64.strada-artifact.json"), JSON.stringify({ version: "strada-manifest-v1", files: ["Game.x86_64"] }));
+    expect(artifactManifest(join(odd, "Game.x86_64"))).toBeUndefined();
+    const walked = artifactDigest(join(odd, "Game.x86_64"));
+    writeFileSync(join(odd, "Game_data", "level0"), "LEVEL ONE");
+    expect(artifactDigest(join(odd, "Game.x86_64"))).not.toBe(walked); // the walk saw Game_data as the layout
+  });
+
+  it("a declared file that is missing means no digest whatever its position in the list (Codex on 04dd905d #10)", () => {
+    const exe = layout();
+    mkdirSync(join(dir, "elsewhere"), { recursive: true });
+    writeFileSync(join(dir, "elsewhere", "other.bin"), "other build");
+    symlinkSync(join(dir, "elsewhere", "other.bin"), join(dir, "linux", "escape.bin"));
+    manifest(["escape.bin", "missing.bin"]);
+    expect(artifactDigest(exe)).toBeUndefined();
+    manifest(["missing.bin", "escape.bin"]);
+    expect(artifactDigest(exe)).toBeUndefined();
+  });
+
   it("nothing outside the layout: a symlink to another build refuses the manifest", () => {
     const exe = layout();
     mkdirSync(join(dir, "elsewhere"), { recursive: true });

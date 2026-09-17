@@ -344,19 +344,28 @@ function manifestCoversTheGame(path: string, files: readonly string[]): boolean 
   // manifest as it stands: the digest fails on it, and "no digest" is the
   // answer for a build that says it shipped a file the tree does not have
   // (review #5) — never a walk that hashes what is left.
+  // …judged for EVERY entry before containment is: with a symlink out listed
+  // before a missing file the manifest was refused and walked, with the
+  // order reversed it was adopted and yielded no digest (Codex 2026-09-17 on
+  // 04dd905d #10). Missing first, whatever the order.
   const layoutRoot = realpathSync(base);
+  const resolved: string[] = [];
   for (const rel of files) {
-    let real: string;
     try {
-      real = realpathSync(join(base, rel));
+      resolved.push(realpathSync(join(base, rel)));
     } catch {
       return true;
     }
+  }
+  for (const real of resolved) {
     const inside = relative(layoutRoot, real);
     if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return false;
   }
-  const listed = new Set(files);
-  return requiredRuntimeFiles(path, base, name, isDirectory).every((required) => listed.has(required));
+  // Membership is case-blind: on a case-insensitive filesystem the layout is
+  // the same layout under any spelling, and a wrong-case entry on a
+  // case-sensitive one fails the digest's own read (fails closed).
+  const listed = new Set(files.map((f) => f.toLowerCase()));
+  return requiredRuntimeFiles(path, base, name, isDirectory).every((required) => listed.has(required.toLowerCase()));
 }
 
 /**
@@ -387,7 +396,7 @@ function requiredRuntimeFiles(path: string, base: string, name: string, isDirect
       continue;
     }
     if (directory) {
-      if (entry.endsWith("_Data") || RUNTIME_DIRS.has(entry)) walk(join(base, entry), entry);
+      if (isDataDir(entry) || RUNTIME_DIRS.has(entry.toLowerCase())) walk(join(base, entry), entry);
     } else if (RUNTIME_FILE_RE.test(entry)) {
       required.push(entry);
     }
@@ -395,8 +404,16 @@ function requiredRuntimeFiles(path: string, base: string, name: string, isDirect
   return required;
 }
 
-const RUNTIME_DIRS = new Set(["MonoBleedingEdge", "Build", "TemplateData"]);
+// Lower-cased: a case-insensitive filesystem serves `Game_data` and
+// `plugins` as the same folders (Codex 2026-09-17 on 04dd905d #9), and the
+// native plugins beside a Windows player and a WebGL page's StreamingAssets
+// are runtime too (#8).
+const RUNTIME_DIRS = new Set(["monobleedingedge", "build", "templatedata", "plugins", "streamingassets"]);
 const RUNTIME_FILE_RE = /\.(?:dll|so|dylib)$|^GameAssembly\./i;
+/** Unity writes `<Name>_Data` beside a player; the filesystem may serve it in any case. */
+function isDataDir(entry: string): boolean {
+  return /_data$/i.test(entry);
+}
 
 /**
  * The directory a Unity player's parts live in, or the path itself.
@@ -411,9 +428,10 @@ export function playerLayoutRoot(path: string): string {
     if (statSync(path).isDirectory()) return path;
     const dir = dirname(path);
     const entries = readdirSync(dir);
-    const hasData = entries.some((entry) => entry.endsWith("_Data") && statSync(join(dir, entry)).isDirectory());
+    const hasData = entries.some((entry) => isDataDir(entry) && statSync(join(dir, entry)).isDirectory());
     // A WebGL player is index.html beside its Build folder (Codex 2026-09-17 D78 review #3).
-    const webgl = basename(path).toLowerCase() === "index.html" && entries.includes("Build") && statSync(join(dir, "Build")).isDirectory();
+    const buildDir = entries.find((entry) => entry.toLowerCase() === "build");
+    const webgl = basename(path).toLowerCase() === "index.html" && buildDir !== undefined && statSync(join(dir, buildDir)).isDirectory();
     return hasData || webgl ? dir : path;
   } catch {
     return path;
