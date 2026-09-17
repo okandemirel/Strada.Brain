@@ -51,6 +51,19 @@ export interface ConfirmationMessage {
   details?: string
 }
 
+/**
+ * The terminal verdict on a confirmation answer the client is holding.
+ * "accepted" means the orchestrator got it; "unknown" means the confirmation
+ * had expired server-side and the answer did NOT apply (Codex review of
+ * 0-A.26). The frame was handled in useWebSocket but missing from this union,
+ * so `tsc -b` — the portal build — was red.
+ */
+export interface ConfirmationAckMessage {
+  type: 'confirmation_ack'
+  confirmId: string
+  status: 'accepted' | 'unknown'
+}
+
 export interface TypingMessage {
   type: 'typing'
   active: boolean
@@ -75,6 +88,7 @@ export type IncomingMessage =
   | StreamUpdateMessage
   | StreamEndMessage
   | ConfirmationMessage
+  | ConfirmationAckMessage
   | MessageReceivedMessage
   | TypingMessage
   | SystemMessage
