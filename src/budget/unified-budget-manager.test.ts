@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { UnifiedBudgetManager } from "./unified-budget-manager.js";
 
 // ---------------------------------------------------------------------------
@@ -16,12 +17,44 @@ interface StoredEntry {
   agentId?: string | null;
 }
 
-function makeMockStorage(configOverrides: Record<string, string> = {}) {
+interface StoredReservation {
+  id: string;
+  source: string;
+  sourceId: string | null;
+  estimateUsd: number;
+  chargedUsd: number;
+  ownerPid: number;
+  createdAt: number;
+  lastActivityAt: number | null;
+}
+
+function makeMockStorage(configOverrides: Record<string, string> = {}, sharedReservations?: Map<string, StoredReservation>) {
   const entries: StoredEntry[] = [];
   const config: Record<string, string> = { ...configOverrides };
+  // Survives a "reboot": a second manager over the same map is a new process
+  // reading the reservations the previous one left behind (round 8 #2).
+  const reservations = sharedReservations ?? new Map<string, StoredReservation>();
 
   return {
     entries,
+    reservations,
+    upsertBudgetReservation(row: { id: string; source: string; sourceId?: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; createdAt: number; lastActivityAt?: number | null }) {
+      reservations.set(row.id, {
+        id: row.id, source: row.source, sourceId: row.sourceId ?? null,
+        estimateUsd: row.estimateUsd, chargedUsd: row.chargedUsd, ownerPid: row.ownerPid,
+        createdAt: row.createdAt, lastActivityAt: row.lastActivityAt ?? null,
+      });
+    },
+    chargeBudgetReservation(id: string, chargedUsd: number, lastActivityAt: number) {
+      const row = reservations.get(id);
+      if (row) reservations.set(id, { ...row, chargedUsd, lastActivityAt });
+    },
+    deleteBudgetReservation(id: string) {
+      reservations.delete(id);
+    },
+    listBudgetReservations(): StoredReservation[] {
+      return [...reservations.values()].sort((a, b) => a.createdAt - b.createdAt);
+    },
     insertBudgetEntry(entry: StoredEntry) {
       entries.push({ ...entry });
     },
@@ -582,5 +615,103 @@ describe("UnifiedBudgetManager", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex 2026-09-17 round 8 #2: a crash must not lose unbooked liability.
+// ---------------------------------------------------------------------------
+describe("persisted reservations and orphan reconciliation (round 8 #2)", () => {
+  /** A pid that no longer exists: a child that has already exited. */
+  function deadPid(): number {
+    const child = spawnSync(process.execPath, ["-e", ""]);
+    if (child.error || child.pid === undefined) throw child.error ?? new Error("no pid");
+    return child.pid;
+  }
+
+  it("writes the liability before the work runs, and a later boot books what the dead run never recorded", () => {
+    const shared = new Map<string, StoredReservation>();
+    const first = makeMockStorage({}, shared);
+    const crashed = new UnifiedBudgetManager(first, makeMockEventBus());
+
+    const id = crashed.reserve(0.6, "daemon", "task-1");
+    // The row exists the moment the estimate is reserved — before any provider
+    // is called, which is the only window a crash can be caught in.
+    expect(shared.get(id)).toMatchObject({ estimateUsd: 0.6, chargedUsd: 0, source: "daemon", sourceId: "task-1" });
+
+    // It got $0.20 booked, then the process died: no release, no further costs.
+    crashed.recordCost(0.2, "daemon", { reservationId: id });
+    expect(shared.get(id)!.chargedUsd).toBeCloseTo(0.2, 6);
+    shared.set(id, { ...shared.get(id)!, ownerPid: deadPid() });
+
+    // Next boot: neither the reservation nor the missing spend used to exist.
+    const rebooted = makeMockStorage({}, shared);
+    const fresh = new UnifiedBudgetManager(rebooted, makeMockEventBus());
+    const result = fresh.reconcileOrphanedReservations();
+    expect(result.orphans).toBe(1);
+    expect(result.bookedUsd).toBeCloseTo(0.4, 6);
+    expect(rebooted.entries).toHaveLength(1);
+    expect(rebooted.entries[0]!.costUsd).toBeCloseTo(0.4, 6);
+    expect(rebooted.entries[0]).toMatchObject({ source: "daemon", triggerName: "orphaned-reservation" });
+    // Forgotten, so a second boot cannot book it again.
+    expect(shared.size).toBe(0);
+    expect(fresh.reconcileOrphanedReservations()).toEqual({ orphans: 0, bookedUsd: 0 });
+  });
+
+  it("stamps the booked remainder with the reservation's own last activity, not today", () => {
+    const shared = new Map<string, StoredReservation>();
+    const storage = makeMockStorage({}, shared);
+    const mgr = new UnifiedBudgetManager(storage, makeMockEventBus());
+    const id = mgr.reserve(1, "agent");
+    const longAgo = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    shared.set(id, { ...shared.get(id)!, ownerPid: deadPid(), createdAt: longAgo, lastActivityAt: null });
+
+    expect(mgr.reconcileOrphanedReservations()).toEqual({ orphans: 1, bookedUsd: 1 });
+    expect(storage.entries[0]!.timestamp).toBe(longAgo);
+    // …so a crash from last month does not eat today's budget.
+    expect(mgr.getSnapshot().global.daily.usedUsd).toBe(0);
+  });
+
+  it("leaves a live owner's reservation alone and forgets a released one (guard)", () => {
+    const shared = new Map<string, StoredReservation>();
+    const storage = makeMockStorage({}, shared);
+    const mgr = new UnifiedBudgetManager(storage, makeMockEventBus());
+
+    // Ours: in flight in THIS process, nothing to reconcile.
+    const mine = mgr.reserve(0.5, "daemon");
+    expect(mgr.reconcileOrphanedReservations()).toEqual({ orphans: 0, bookedUsd: 0 });
+    expect(shared.has(mine)).toBe(true);
+    expect(storage.entries).toHaveLength(0);
+
+    // Another LIVE process holds this one — its run is still going, so its
+    // liability is not ours to book.
+    const theirs = mgr.reserve(0.7, "agent");
+    shared.set(theirs, { ...shared.get(theirs)!, ownerPid: process.ppid });
+    expect(mgr.reconcileOrphanedReservations()).toEqual({ orphans: 0, bookedUsd: 0 });
+    expect(shared.has(theirs)).toBe(true);
+    expect(storage.entries).toHaveLength(0);
+    mgr.release(theirs);
+
+    // Released: the liability is gone, so a later boot books nothing.
+    mgr.release(mine);
+    expect(shared.size).toBe(0);
+    expect(mgr.reconcileOrphanedReservations()).toEqual({ orphans: 0, bookedUsd: 0 });
+    expect(storage.entries).toHaveLength(0);
+
+    // A reservation of zero holds nothing and is not persisted.
+    mgr.reserve(0, "daemon");
+    expect(shared.size).toBe(0);
+  });
+
+  it("works with a storage that cannot persist reservations at all (guard)", () => {
+    const legacy = makeMockStorage();
+    delete (legacy as unknown as Record<string, unknown>)["upsertBudgetReservation"];
+    delete (legacy as unknown as Record<string, unknown>)["listBudgetReservations"];
+    delete (legacy as unknown as Record<string, unknown>)["deleteBudgetReservation"];
+    const mgr = new UnifiedBudgetManager(legacy, makeMockEventBus());
+    const id = mgr.reserve(0.3, "daemon");
+    expect(mgr.outstandingUsd()).toBeCloseTo(0.3, 6);
+    mgr.release(id);
+    expect(mgr.reconcileOrphanedReservations()).toEqual({ orphans: 0, bookedUsd: 0 });
   });
 });

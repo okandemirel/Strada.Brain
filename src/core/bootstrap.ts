@@ -1700,6 +1700,9 @@ async function bootstrapImpl(
     process.env,
   );
   sharedDaemonStorage.migrateBudgetSource();
+  // Reservations of runs that did not survive: their unbilled remainder is
+  // booked as spend before anything new reserves (Codex round 8 #2).
+  sharedUnifiedBudgetManager.reconcileOrphanedReservations();
   // Wire immediately — orchestrator loop re-reads every iteration, and
   // commandHandler.handleToken needs a live manager to update.
   orchestrator.setUnifiedBudgetManager(sharedUnifiedBudgetManager);

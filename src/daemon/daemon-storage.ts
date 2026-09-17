@@ -2,8 +2,8 @@
  * Daemon Storage
  *
  * SQLite-based persistence for the daemon subsystem. Manages a single daemon.db
- * file with 5 tables: budget_entries, approval_queue, audit_log,
- * circuit_breaker_state, and daemon_state.
+ * file with tables for budget_entries, budget_reservations, approval_queue,
+ * audit_log, circuit_breaker_state, and daemon_state.
  *
  * Uses better-sqlite3 with configureSqlitePragmas (WAL mode, daemon profile).
  * All queries use prepared statements for performance.
@@ -144,6 +144,23 @@ CREATE TABLE IF NOT EXISTS budget_config (
   updated_at INTEGER NOT NULL
 );
 
+-- PENDING LIABILITY (Codex 2026-09-17 round 8 #2). A reservation lived only
+-- in the reserving process, so a crash between "provider charged us" and "the
+-- usage callback recorded it" left the wallet believing neither the
+-- reservation nor the spend had happened. The row is written BEFORE the work
+-- is dispatched; the next boot reconciles rows whose owner is gone.
+CREATE TABLE IF NOT EXISTS budget_reservations (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  source_id TEXT,
+  estimate_usd REAL NOT NULL,
+  charged_usd REAL NOT NULL DEFAULT 0,
+  owner_pid INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_activity_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_budget_reservations_owner ON budget_reservations(owner_pid);
+
 CREATE TABLE IF NOT EXISTS settings_overrides (
   key TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT 'global',
@@ -249,6 +266,10 @@ export class DaemonStorage {
   // Prepared statement cache
   private stmts: {
     insertBudget?: Database.Statement;
+    upsertReservation?: Database.Statement;
+    chargeReservation?: Database.Statement;
+    deleteReservation?: Database.Statement;
+    allReservations?: Database.Statement;
     insertBudgetWithAgent?: Database.Statement;
     sumBudget?: Database.Statement;
     sumBudgetForAgent?: Database.Statement;
@@ -527,6 +548,68 @@ export class DaemonStorage {
   }
 
   /** Insert a budget cost entry with a source field */
+  // ---------------------------------------------------------------------------
+  // PENDING LIABILITY (round 8 #2)
+  // ---------------------------------------------------------------------------
+
+  /** Record (or update) an in-flight reservation, owned by this process. */
+  upsertBudgetReservation(row: {
+    id: string;
+    source: string;
+    sourceId?: string | null;
+    estimateUsd: number;
+    chargedUsd: number;
+    ownerPid: number;
+    createdAt: number;
+    lastActivityAt?: number | null;
+  }): void {
+    this.assertOpen();
+    this.stmts.upsertReservation!.run(
+      row.id, row.source, row.sourceId ?? null, row.estimateUsd, row.chargedUsd,
+      row.ownerPid, row.createdAt, row.lastActivityAt ?? null,
+    );
+  }
+
+  /** Book progress against a persisted reservation. */
+  chargeBudgetReservation(id: string, chargedUsd: number, lastActivityAt: number): void {
+    this.assertOpen();
+    this.stmts.chargeReservation!.run(chargedUsd, lastActivityAt, id);
+  }
+
+  /** Forget a reservation: released, or reconciled. */
+  deleteBudgetReservation(id: string): void {
+    this.assertOpen();
+    this.stmts.deleteReservation!.run(id);
+  }
+
+  /** Every persisted reservation, oldest first (boot reconciliation). */
+  listBudgetReservations(): Array<{
+    id: string;
+    source: string;
+    sourceId: string | null;
+    estimateUsd: number;
+    chargedUsd: number;
+    ownerPid: number;
+    createdAt: number;
+    lastActivityAt: number | null;
+  }> {
+    this.assertOpen();
+    const rows = this.stmts.allReservations!.all() as Array<{
+      id: string; source: string; source_id: string | null; estimate_usd: number;
+      charged_usd: number; owner_pid: number; created_at: number; last_activity_at: number | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      source: r.source,
+      sourceId: r.source_id,
+      estimateUsd: r.estimate_usd,
+      chargedUsd: r.charged_usd,
+      ownerPid: r.owner_pid,
+      createdAt: r.created_at,
+      lastActivityAt: r.last_activity_at,
+    }));
+  }
+
   insertBudgetEntryWithSource(entry: {
     costUsd: number;
     model?: string | null;
@@ -968,6 +1051,18 @@ export class DaemonStorage {
       `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE timestamp >= ?`,
     );
     this.stmts.clearBudget = db.prepare(`DELETE FROM budget_entries`);
+
+    // Pending liability (round 8 #2)
+    this.stmts.upsertReservation = db.prepare(
+      `INSERT INTO budget_reservations (id, source, source_id, estimate_usd, charged_usd, owner_pid, created_at, last_activity_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET estimate_usd = excluded.estimate_usd, charged_usd = excluded.charged_usd, last_activity_at = excluded.last_activity_at`,
+    );
+    this.stmts.chargeReservation = db.prepare(
+      `UPDATE budget_reservations SET charged_usd = ?, last_activity_at = ? WHERE id = ?`,
+    );
+    this.stmts.deleteReservation = db.prepare(`DELETE FROM budget_reservations WHERE id = ?`);
+    this.stmts.allReservations = db.prepare(`SELECT * FROM budget_reservations ORDER BY created_at ASC`);
     this.stmts.recentBudget = db.prepare(
       `SELECT * FROM budget_entries ORDER BY timestamp DESC LIMIT ?`,
     );

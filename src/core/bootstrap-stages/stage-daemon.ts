@@ -165,6 +165,9 @@ export function initializeDaemonHeartbeatStage(
   if (!params.unifiedBudgetManager) {
     daemonStorage.migrateBudgetSource();
   }
+  // A previous run that died holding a reservation spent money the ledger
+  // never saw; book its unbilled remainder now (Codex round 8 #2).
+  unifiedBudgetManager.reconcileOrphanedReservations();
   params.backgroundExecutor.setUnifiedBudgetManager(unifiedBudgetManager);
 
   const approvalQueue = deps.createApprovalQueue?.(

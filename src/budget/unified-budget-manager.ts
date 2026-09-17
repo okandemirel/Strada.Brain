@@ -73,6 +73,29 @@ interface BudgetStorageAdapter {
   getBudgetConfig(key: string): string | undefined;
   setBudgetConfig(key: string, value: string): void;
   getAllBudgetConfig(): Record<string, string>;
+  // PENDING LIABILITY (round 8 #2) — optional so older adapters keep working.
+  upsertBudgetReservation?(row: { id: string; source: string; sourceId?: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; createdAt: number; lastActivityAt?: number | null }): void;
+  chargeBudgetReservation?(id: string, chargedUsd: number, lastActivityAt: number): void;
+  deleteBudgetReservation?(id: string): void;
+  listBudgetReservations?(): Array<{ id: string; source: string; sourceId: string | null; estimateUsd: number; chargedUsd: number; ownerPid: number; createdAt: number; lastActivityAt: number | null }>;
+}
+
+/** Whether a process with this pid exists (EPERM means it does, just not ours). */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/** What a boot found and booked for runs that died holding a reservation. */
+export interface ReservationReconciliation {
+  /** Orphaned reservations found (owner process gone). */
+  readonly orphans: number;
+  /** Dollars booked as spend for their unbilled remainder. */
+  readonly bookedUsd: number;
 }
 
 export class UnifiedBudgetManager {
@@ -109,14 +132,37 @@ export class UnifiedBudgetManager {
    */
   reserve(estimateUsd: number, source: BudgetSource, sourceId?: string): string {
     const id = randomUUID();
+    const createdAt = Date.now();
+    const amount = Number.isFinite(estimateUsd) && estimateUsd > 0 ? estimateUsd : 0;
     this.reservations.set(id, {
       source,
       ...(sourceId ? { sourceId } : {}),
-      estimateUsd: Number.isFinite(estimateUsd) && estimateUsd > 0 ? estimateUsd : 0,
+      estimateUsd: amount,
       chargedUsd: 0,
-      createdAt: Date.now(),
+      createdAt,
     });
+    // THE LIABILITY IS WRITTEN BEFORE THE WORK IS DISPATCHED (round 8 #2):
+    // a crash between the provider's charge and the usage callback used to
+    // leave the wallet with neither the reservation nor the spend.
+    if (amount > 0) {
+      this.persist(() => this.storage.upsertBudgetReservation?.({
+        id, source, sourceId: sourceId ?? null, estimateUsd: amount, chargedUsd: 0,
+        ownerPid: process.pid, createdAt, lastActivityAt: null,
+      }), "record");
+    }
     return id;
+  }
+
+  /** Reservation bookkeeping must never break the work it protects. */
+  private persist(write: () => void, what: string): void {
+    try {
+      write();
+    } catch (error) {
+      getLoggerSafe().warn("Could not persist a budget reservation; a crash would undercount this run", {
+        action: what,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -134,11 +180,17 @@ export class UnifiedBudgetManager {
     // using, and a seven-hour run that keeps booking cost lost its
     // reservation at hour six while still spending (Codex round 8 #3).
     reservation.lastActivityAt = Date.now();
+    this.persist(
+      () => this.storage.chargeBudgetReservation?.(reservationId, reservation.chargedUsd, reservation.lastActivityAt!),
+      "charge",
+    );
   }
 
   /** Drop a reservation without charging anything. Idempotent. */
   release(reservationId: string): void {
     this.reservations.delete(reservationId);
+    // Released in this process: there is no liability left to reconcile.
+    this.persist(() => this.storage.deleteBudgetReservation?.(reservationId), "release");
   }
 
   /**
@@ -154,6 +206,7 @@ export class UnifiedBudgetManager {
     for (const [id, reservation] of this.reservations) {
       if (now - (reservation.lastActivityAt ?? reservation.createdAt) > RESERVATION_MAX_AGE_MS) {
         this.reservations.delete(id);
+        this.persist(() => this.storage.deleteBudgetReservation?.(id), "drop-leaked");
         leaked++;
         continue;
       }
@@ -186,6 +239,52 @@ export class UnifiedBudgetManager {
   /** Number of reservations currently held (diagnostics / tests). */
   reservationCount(): number {
     return this.reservations.size;
+  }
+
+  /**
+   * RECONCILE RUNS THAT DIED HOLDING A RESERVATION (round 8 #2).
+   *
+   * A row whose owning process no longer exists describes work that was in
+   * flight when that process disappeared: whatever it spent after its last
+   * booked cost never reached the ledger. The unbilled remainder is booked as
+   * spend — pessimistically, exactly as the reservation described it — and
+   * stamped with the reservation's own last activity, so an old crash lands in
+   * the window it belongs to instead of today's. The row is then forgotten, so
+   * a second boot cannot book it twice.
+   *
+   * Rows owned by THIS process or by another live process are left alone.
+   */
+  reconcileOrphanedReservations(): ReservationReconciliation {
+    const rows = this.storage.listBudgetReservations?.();
+    if (!rows || rows.length === 0) return { orphans: 0, bookedUsd: 0 };
+    let orphans = 0;
+    let bookedUsd = 0;
+    for (const row of rows) {
+      if (row.ownerPid === process.pid || pidAlive(row.ownerPid)) continue;
+      orphans++;
+      const unbilled = Math.max(0, row.estimateUsd - row.chargedUsd);
+      if (unbilled > 0) {
+        const timestamp = row.lastActivityAt ?? row.createdAt;
+        const entry = {
+          costUsd: unbilled, model: null, tokensIn: null, tokensOut: null,
+          triggerName: "orphaned-reservation", timestamp,
+        };
+        if (this.storage.insertBudgetEntryWithSource) {
+          this.storage.insertBudgetEntryWithSource({ ...entry, source: row.source });
+        } else {
+          this.storage.insertBudgetEntry({ ...entry, source: row.source });
+        }
+        bookedUsd += unbilled;
+      }
+      this.persist(() => this.storage.deleteBudgetReservation?.(row.id), "reconcile");
+    }
+    if (orphans > 0) {
+      getLoggerSafe().warn("Booked the unbilled remainder of reservations whose run did not survive", {
+        orphans,
+        bookedUsd: Number(bookedUsd.toFixed(4)),
+      });
+    }
+    return { orphans, bookedUsd };
   }
 
   /**

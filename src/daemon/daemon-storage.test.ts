@@ -677,4 +677,50 @@ describe("DaemonStorage", () => {
       }
     });
   });
+
+  // =========================================================================
+  // Pending liability (Codex 2026-09-17 round 8 #2)
+  // =========================================================================
+
+  describe("budget reservations", () => {
+    it("round-trips a reservation, updates its charge, and survives a restart of the process", () => {
+      const restartDir = mkdtempSync(join(tmpdir(), "daemon-storage-reservations-"));
+      const dbPath = join(restartDir, "daemon.db");
+      try {
+        const first = new DaemonStorage(dbPath);
+        first.initialize();
+        first.upsertBudgetReservation({
+          id: "res-1", source: "daemon", sourceId: "task-7", estimateUsd: 0.6,
+          chargedUsd: 0, ownerPid: 4242, createdAt: 1_000, lastActivityAt: null,
+        });
+        first.chargeBudgetReservation("res-1", 0.25, 2_000);
+        first.close();
+
+        // A new process on the same file sees the liability the dead one left.
+        const second = new DaemonStorage(dbPath);
+        second.initialize();
+        try {
+          expect(second.listBudgetReservations()).toEqual([{
+            id: "res-1", source: "daemon", sourceId: "task-7", estimateUsd: 0.6,
+            chargedUsd: 0.25, ownerPid: 4242, createdAt: 1_000, lastActivityAt: 2_000,
+          }]);
+          second.deleteBudgetReservation("res-1");
+          expect(second.listBudgetReservations()).toEqual([]);
+        } finally {
+          second.close();
+        }
+      } finally {
+        rmSync(restartDir, { recursive: true, force: true });
+      }
+    });
+
+    it("upserting the same id updates it instead of failing, and orders rows oldest first", () => {
+      storage.upsertBudgetReservation({ id: "b", source: "agent", estimateUsd: 1, chargedUsd: 0, ownerPid: 1, createdAt: 200 });
+      storage.upsertBudgetReservation({ id: "a", source: "daemon", estimateUsd: 2, chargedUsd: 0, ownerPid: 1, createdAt: 100 });
+      storage.upsertBudgetReservation({ id: "b", source: "agent", estimateUsd: 1, chargedUsd: 0.5, ownerPid: 1, createdAt: 200, lastActivityAt: 300 });
+      const rows = storage.listBudgetReservations();
+      expect(rows.map((r) => r.id)).toEqual(["a", "b"]);
+      expect(rows[1]).toMatchObject({ chargedUsd: 0.5, lastActivityAt: 300, sourceId: null });
+    });
+  });
 });
