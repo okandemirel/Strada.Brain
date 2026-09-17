@@ -113,15 +113,21 @@ export function toolReportsVerdict(
  * repeated red runs could then disable the shell (Codex 2026-09-17 #3).
  */
 /**
- * Did a shell verifier exit non-zero? The tool's metadata carries the raw
- * code for a direct call; a batch child keeps only its "Exit code: N" line.
+ * Did a shell verifier exit non-zero — or fail to say? The tool's metadata
+ * carries the raw code for a direct call; a batch child keeps only the
+ * tool's own footer, `Exit code: N | Duration: Nms`, which the formatter
+ * writes BEFORE stdout — so the first such line is the tool's, and a
+ * program that prints "Exit code: 1" of its own comes after it (Codex
+ * 2026-09-17 on 7cb9d8a3 #1). No code at all is not a zero: a result that
+ * cannot say how it ended has not passed.
  */
 function shellExitedNonZero(output: string | undefined, result: { content?: unknown; metadata?: Record<string, unknown> }): boolean {
   const meta = result.metadata?.["exitCode"];
   if (typeof meta === "number") return meta !== 0;
+  if (typeof meta === "string" && /^\d+$/u.test(meta.trim())) return Number(meta.trim()) !== 0;
   const body = output !== undefined && output !== "" ? output : typeof result.content === "string" ? result.content : "";
-  const line = /^Exit code: (\d+)\s*$/mu.exec(body);
-  return line !== null && Number(line[1]) !== 0;
+  const line = /(?:^|\n)Exit code: (\d+)(?: \| Duration: \d+ms)?[ \t]*(?:\n|$)/u.exec(body);
+  return line === null || Number(line[1]) !== 0;
 }
 
 function infrastructureFailure(result: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }): boolean {

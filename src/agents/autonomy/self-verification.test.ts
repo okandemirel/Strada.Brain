@@ -331,14 +331,31 @@ describe("SelfVerification", () => {
       expect(verifier.needsVerification()).toBe(true);
     });
 
-    it("a batch child without metadata is judged by its own Exit code line", () => {
+    it("a batch child without metadata is judged by the tool's own footer line (Codex on 7cb9d8a3 #1)", () => {
+      // The footer the formatter writes: `Exit code: N | Duration: Nms`,
+      // before stdout. A bare "Exit code: 2" line matched; the real one did not.
       const verifier = wroteCs();
       verifier.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, {
         toolCallId: "v",
-        content: "$ npx tsc --noEmit\nerror TS2322: nope\nExit code: 2",
+        content: "$ npx tsc --noEmit\nExit code: 2 | Duration: 17ms\n\n--- stdout ---\nerror TS2322: nope",
         isError: false,
       });
       expect(verifier.getState().lastBuildOk).toBe(false);
+      // …and a program that PRINTS "Exit code: 1" under a real exit 0 has passed.
+      const echoed = wroteCs();
+      echoed.track("shell_exec", { command: "npx tsc --noEmit" }, {
+        toolCallId: "v2",
+        content: "$ npx tsc --noEmit\nExit code: 0 | Duration: 17ms\n\n--- stdout ---\nnote: a previous run said Exit code: 1",
+        isError: false,
+      });
+      expect(echoed.getState().lastBuildOk).toBe(true);
+      // A string code in the metadata is still a code; no code at all is not a zero.
+      const stringCode = wroteCs();
+      stringCode.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, { toolCallId: "v3", content: "$ npx tsc --noEmit\nsome output", isError: false, metadata: { exitCode: "2" } });
+      expect(stringCode.getState().lastBuildOk).toBe(false);
+      const silent = wroteCs();
+      silent.track("shell_exec", { command: "npx tsc --noEmit" }, { toolCallId: "v4", content: "$ npx tsc --noEmit\nsome output, no footer", isError: false });
+      expect(silent.getState().lastBuildOk).not.toBe(true);
     });
 
     it("a test run that exited 1 under ok_exit_codes [0,1] leaves the test gate open", () => {
