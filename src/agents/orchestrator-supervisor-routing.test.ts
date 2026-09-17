@@ -135,6 +135,21 @@ describe("resolveSupervisorAssignment hard-pin fallback", () => {
 });
 
 describe("recordProviderUsage (audited 2026-09-02)", () => {
+  it("hands the cached share of the prompt to the rate limiter, priced like the ledger (audit 03.2 / D21)", () => {
+    const plain = new RateLimiter();
+    recordProviderUsage({ rateLimiter: plain } as any, "claude", { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 }, undefined, "claude-sonnet-5");
+    const cached = new RateLimiter();
+    recordProviderUsage(
+      { rateLimiter: cached } as any,
+      "claude",
+      { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000, cacheReadInputTokens: 1_000_000 },
+      undefined,
+      "claude-sonnet-5",
+    );
+    expect(plain.getSnapshot().costToday).toBeGreaterThan(0);
+    expect(cached.getSnapshot().costToday).toBeCloseTo(plain.getSnapshot().costToday * 0.1, 6);
+  });
+
   it("hands the routed model id to the rate limiter, so a free model costs $0", () => {
     // recordProviderUsage already knew modelId (it echoes it on the usage
     // event); the rate limiter's budget wall was the one consumer that never

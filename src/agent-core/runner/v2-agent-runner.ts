@@ -59,7 +59,7 @@ import type { AgentRunEventBus } from "../events/event-bus.js";
 import { guardedSleep } from "../events/heartbeat-guard.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
-import { estimateCost } from "../../budget/cost-model.js";
+import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
@@ -165,17 +165,30 @@ function trimMode(mode: RunnerMode): "interactive" | "background" {
  * "-free"/":free" → $0 rule and a free-tier model (opencode Zen, OpenRouter :free) was charged
  * its provider's paid table rate against the run's cost cap — money nobody was billed, spent out
  * of a live run's headroom. The model the turn was SERVED by is the one that priced it. */
-function toBudgetUsage(
+export function toBudgetUsage(
   usage: TokenUsage | undefined,
   providerName: string,
   modelId: string | undefined,
 ): BudgetTokenUsage {
   const inputTokens = usage?.inputTokens ?? 0;
   const outputTokens = usage?.outputTokens ?? 0;
+  // CACHE-AWARE, like the ledger. The gate priced every input token at the
+  // full rate while the ledger billed cache reads at a tenth: one million
+  // cache-read tokens debited $3.00 from the run's headroom against $0.30
+  // recorded — a run stopped on phantom cost (audit 03.2 / D21, 2026-09-13).
   return {
     inputTokens,
     outputTokens,
-    costUsd: estimateCost(inputTokens, outputTokens, providerName, modelId),
+    costUsd: estimateCostWithCache(
+      {
+        inputTokens,
+        outputTokens,
+        ...(usage?.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
+        ...(usage?.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+        ...(modelId === undefined ? {} : { model: modelId }),
+      },
+      providerName,
+    ),
   };
 }
 

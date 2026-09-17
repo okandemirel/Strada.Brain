@@ -88,6 +88,15 @@ describe("RateLimiter", () => {
       expect(result.reason).toContain("Daily token quota exceeded");
     });
 
+    it("prices the cached share of the prompt like the ledger (audit 03.2 / D21)", () => {
+      const plain = new RateLimiter({ tokensPerDay: 10_000_000 });
+      plain.recordTokenUsage(1_000_000, 0, "claude", "claude-sonnet-5");
+      const cached = new RateLimiter({ tokensPerDay: 10_000_000 });
+      cached.recordTokenUsage(1_000_000, 0, "claude", "claude-sonnet-5", { cacheReadInputTokens: 1_000_000 });
+      expect(plain.getSnapshot().costToday).toBeGreaterThan(0);
+      expect(cached.getSnapshot().costToday).toBeCloseTo(plain.getSnapshot().costToday * 0.1, 6);
+    });
+
     it("allows when under daily token quota", () => {
       const limiter = new RateLimiter({ tokensPerDay: 10000 });
       limiter.recordTokenUsage(100, 200, "claude");

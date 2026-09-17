@@ -656,7 +656,10 @@ export function recordProviderUsage(
   // audited 2026-09-02: modelId was echoed on the usage event but withheld from
   // the rate limiter, which is what prices the run. A "-free" model was billed
   // at the provider's table rate and the budget wall measured money nobody paid.
-  ctx.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName, modelId);
+  ctx.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName, modelId, {
+    ...(usage?.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
+    ...(usage?.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+  });
   onUsage?.({
     provider: providerName,
     model: modelId,

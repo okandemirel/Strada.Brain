@@ -8,7 +8,7 @@
  */
 
 import { getLogger } from "../utils/logger.js";
-import { estimateCost } from "../budget/cost-model.js";
+import { estimateCostWithCache } from "../budget/cost-model.js";
 
 export { estimateCost } from "../budget/cost-model.js";
 
@@ -191,12 +191,23 @@ export class RateLimiter {
     inputTokens: number,
     outputTokens: number,
     provider: string,
-    model?: string
+    model?: string,
+    /** The cached share of the prompt, priced like the ledger prices it (audit 03.2 / D21). */
+    cache?: { cacheCreationInputTokens?: number; cacheReadInputTokens?: number },
   ): void {
     const now = Date.now();
     this.rotatePeriods(now);
 
-    const cost = estimateCost(inputTokens, outputTokens, provider, model);
+    const cost = estimateCostWithCache(
+      {
+        inputTokens,
+        outputTokens,
+        ...(cache?.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: cache.cacheCreationInputTokens }),
+        ...(cache?.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: cache.cacheReadInputTokens }),
+        ...(model === undefined ? {} : { model }),
+      },
+      provider,
+    );
 
     // Maintain running aggregates instead of unbounded per-call record arrays.
     this.dailyTokens += inputTokens + outputTokens;
