@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
+  <strong>Unity 6 / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
+  <em>Yalnizca Unity 6 (&ge; 6000.0.0f1) projeleri &mdash; canli Unity yuzeyi (konsol okumalari, Unity derlemeleri, playthrough kararlari) Strada.MCP ve calistiran makinede bir Unity editoru gerektirir. <a href="README.md#supported-project-matrix">Supported project matrix</a> bolumune bakin; <code>strada doctor</code> her satiri kontrol eder ve eksik olani adiyla soyler.</em><br/>
   Web paneline, Telegram, Discord, Slack veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, control-plane clarification review, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
 </p>
 

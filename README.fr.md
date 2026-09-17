@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
+  <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity 6 / Strada.Core</strong><br/>
+  <em>Projets Unity 6 uniquement (&ge; 6000.0.0f1) &mdash; la surface Unity en direct (lectures de console, builds Unity, verdicts de playthrough) exige Strada.MCP et un editeur Unity sur la machine qui l'execute. Voir <a href="README.md#supported-project-matrix">Supported project matrix</a> ; <code>strada doctor</code> verifie chaque ligne et nomme ce qui manque.</em><br/>
   Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, control-plane clarification review, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
 </p>
 

@@ -113,4 +113,39 @@ describe("README.md matches the supported project matrix", () => {
     expect(readmeFlat).toContain("another machine satisfies this matrix");
     expect(readmeFlat).toContain("run `strada doctor` on that machine");
   });
+
+  /**
+   * A TRANSLATION IS READ INSTEAD OF THE ORIGINAL. Plan 6.10 scoped the English
+   * tagline to Unity 6 and named what the live Unity surface needs; the seven
+   * translations still promised "Unity" in general with no caveat, so the
+   * unbounded claim simply moved to whoever does not read English.
+   */
+  describe("every translated README carries the same bounded scope", () => {
+    const TRANSLATIONS = ["de", "es", "fr", "ja", "ko", "tr", "zh"];
+
+    it("names Unity 6 and the floor the code declares, and points at the matrix", () => {
+      for (const lang of TRANSLATIONS) {
+        const text = readFileSync(join(import.meta.dirname, "..", "..", `README.${lang}.md`), "utf8");
+        // The SECOND centred block is the tagline; the first holds the logo.
+        const header = text.split('<p align="center">')[2] ?? "";
+        // The TAGLINE itself, not just the caveat under it: the bold line is
+        // what a reader takes away, and it is the line plan 6.10 bounded.
+        const tagline = header.split("\n").find((line) => line.includes("<strong>")) ?? "";
+        expect(tagline, lang).toContain("Unity 6");
+        expect(header, lang).toContain(SUPPORTED_UNITY_VERSIONS.minInclusive);
+        // The live-surface claim must not read as unconditional anywhere.
+        expect(header, lang).toContain("Strada.MCP");
+        expect(header, lang).toContain("#supported-project-matrix");
+      }
+    });
+
+    it("claims no Unity version below the supported floor (guard)", () => {
+      for (const lang of TRANSLATIONS) {
+        const text = readFileSync(join(import.meta.dirname, "..", "..", `README.${lang}.md`), "utf8");
+        for (const claim of ["Unity 2021", "Unity 2022", "Unity 2023", "Unity 5"]) {
+          expect(text, `${lang} must not claim ${claim}`).not.toContain(claim);
+        }
+      }
+    });
+  });
 });

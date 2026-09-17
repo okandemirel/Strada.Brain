@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
+  <strong>Agente de Desarrollo con IA para Proyectos Unity 6 / Strada.Core</strong><br/>
+  <em>Solo proyectos Unity 6 (&ge; 6000.0.0f1) &mdash; la superficie Unity en vivo (lecturas de consola, builds de Unity, veredictos de playthrough) necesita Strada.MCP y un editor de Unity en la maquina que lo ejecuta. Consulta <a href="README.md#supported-project-matrix">Supported project matrix</a>; <code>strada doctor</code> comprueba cada fila y nombra lo que falta.</em><br/>
   Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion, comparticion de medios con soporte de vision LLM, un sistema de personalidad configurable via SOUL.md, control-plane clarification review, enrutamiento inteligente multi-proveedor con conmutacion dinamica segun tarea, verificacion de consenso basada en confianza, un Agent Core autonomo con bucle de razonamiento OODA e integracion con Strada.MCP.
 </p>
 

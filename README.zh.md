@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>面向 Unity / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
+  <strong>面向 Unity 6 / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
+  <em>仅支持 Unity 6 (&ge; 6000.0.0f1) 项目 &mdash; 实时 Unity 能力（读取控制台、Unity 构建、通关判定）需要 Strada.MCP 以及运行机器上的 Unity 编辑器。请参阅 <a href="README.md#supported-project-matrix">Supported project matrix</a>；<code>strada doctor</code> 会检查每一行并指出缺少什么。</em><br/>
   一个连接到 Web 仪表板、Telegram、Discord、Slack 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合、带审批门控的部署子系统、支持 LLM 视觉识别的媒体共享、通过 SOUL.md 实现的可配置个性系统、control-plane clarification review、支持任务感知动态切换的智能多提供商路由、基于置信度的共识验证、带 OODA 推理循环的自主 Agent Core，以及 Strada.MCP 集成。
 </p>
 

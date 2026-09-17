@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
+  <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity 6 / Strada.Core-Projekte</strong><br/>
+  <em>Nur Unity-6-Projekte (&ge; 6000.0.0f1) &mdash; die aktive Unity-Oberflaeche (Console-Reads, Unity-Builds, Playthrough-Verdicts) braucht Strada.MCP und einen Unity-Editor auf der ausfuehrenden Maschine. Siehe <a href="README.md#supported-project-matrix">Supported project matrix</a>; <code>strada doctor</code> prueft jede Zeile und benennt, was fehlt.</em><br/>
   Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet. Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates, Medienfreigabe mit LLM-Vision-Unterstuetzung, einem konfigurierbaren Persoenlichkeitssystem ueber SOUL.md, control-plane clarification review, intelligentem Multi-Provider-Routing mit aufgabenbewusstem dynamischem Wechsel, konfidenzbasierter Konsensverifizierung, einem autonomen Agent Core mit OODA-Reasoning-Loop und Strada.MCP-Integration.
 </p>
 

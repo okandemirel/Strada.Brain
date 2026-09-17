@@ -5,7 +5,8 @@
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Unity / Strada.Core 프로젝트를 위한 AI 기반 개발 에이전트</strong><br/>
+  <strong>Unity 6 / Strada.Core 프로젝트를 위한 AI 기반 개발 에이전트</strong><br/>
+  <em>Unity 6 (&ge; 6000.0.0f1) 프로젝트 전용 &mdash; 라이브 Unity 기능(콘솔 읽기, Unity 빌드, 플레이스루 판정)에는 Strada.MCP와 실행 머신의 Unity 에디터가 필요합니다. <a href="README.md#supported-project-matrix">Supported project matrix</a>를 참고하세요. <code>strada doctor</code>가 각 행을 확인하고 빠진 것을 이름으로 알려줍니다.</em><br/>
   웹 대시보드, Telegram, Discord, Slack 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습하며, 24/7 데몬 루프로 자율 운영됩니다. 멀티 에이전트 오케스트레이션, 작업 위임, 메모리 통합, 승인 게이트가 포함된 배포 하위 시스템, LLM 비전 지원을 포함한 미디어 공유, SOUL.md를 통한 구성 가능한 성격 시스템, control-plane clarification review, 작업 인식 동적 전환이 포함된 지능형 멀티 공급자 라우팅, 신뢰도 기반 합의 검증, OODA 추론 루프를 갖춘 자율 Agent Core, 그리고 Strada.MCP 통합을 탑재했습니다.
 </p>
 
