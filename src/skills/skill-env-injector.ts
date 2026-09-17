@@ -1,57 +1,95 @@
 // ---------------------------------------------------------------------------
-// Per-skill environment variable injection with snapshot/restore.
+// Per-skill environment variable injection with owner-aware rollback.
+//
+// Codex round 6 #9 (2026-09-17): the previous snapshot/restore stored, per
+// skill, "the value before I wrote". With skill A injecting X=a and skill B
+// then injecting X=b, restoring A out of order put X back to the pre-A value
+// and clobbered B; disposing B afterwards "restored" X to "a". The variable
+// is now an overlay stack: every owner records what it set, and removing an
+// owner recomputes the variable from the overlays that remain (the original
+// value when none does), whatever the removal order.
 // ---------------------------------------------------------------------------
+
+interface Overlay {
+  readonly owner: string;
+  readonly value: string;
+}
+
+interface VariableState {
+  /** The value before the first owner touched it (`undefined` = not set). */
+  readonly original: string | undefined;
+  /** Owners in injection order; the last one is what `process.env` shows. */
+  overlays: Overlay[];
+}
 
 /**
  * Manages per-skill environment variable injection.
  *
- * Before overwriting `process.env` keys, it snapshots their current values
- * so they can be restored when the skill is unloaded.
+ * Each owner (skill) contributes an overlay per variable it sets. The
+ * effective value is the most recently injected overlay still present; when
+ * the last overlay of a variable is removed, the original value is restored
+ * (deleted when it was not set before).
  */
 export class SkillEnvInjector {
-  /** Map<skillName, Map<envKey, previousValue | undefined>> */
-  private snapshots = new Map<string, Map<string, string | undefined>>();
+  /** envKey → its original value + overlay stack */
+  private readonly variables = new Map<string, VariableState>();
+  /** owner → the keys it currently overlays */
+  private readonly owners = new Map<string, Set<string>>();
 
   /**
-   * Inject environment variables for a skill.
-   * Existing values are snapshotted before being overwritten.
-   * Calling inject() again for the same skill replaces the previous snapshot.
+   * Inject environment variables for a skill. Calling inject() again for the
+   * same owner replaces its previous overlays (they are removed first).
    */
-  inject(skillName: string, env: Record<string, string>): void {
-    const snapshot = new Map<string, string | undefined>();
+  inject(owner: string, env: Record<string, string>): void {
+    if (this.owners.has(owner)) this.restore(owner);
 
+    const keys = new Set<string>();
     for (const [key, value] of Object.entries(env)) {
-      // Snapshot current value (may be undefined if not previously set)
-      snapshot.set(key, process.env[key]);
+      let state = this.variables.get(key);
+      if (!state) {
+        state = { original: process.env[key], overlays: [] };
+        this.variables.set(key, state);
+      }
+      state.overlays.push({ owner, value });
       process.env[key] = value;
+      keys.add(key);
     }
-
-    this.snapshots.set(skillName, snapshot);
+    this.owners.set(owner, keys);
   }
 
   /**
-   * Restore environment variables that were overwritten by `inject()`.
-   * Keys that were previously undefined are deleted from `process.env`.
+   * Remove an owner's overlays. Every variable it touched is recomputed from
+   * the remaining overlays; a variable with none left returns to its original
+   * value (deleted when it was previously undefined).
    */
-  restore(skillName: string): void {
-    const snapshot = this.snapshots.get(skillName);
-    if (!snapshot) return;
+  restore(owner: string): void {
+    const keys = this.owners.get(owner);
+    if (!keys) return;
 
-    for (const [key, previousValue] of snapshot) {
-      if (previousValue === undefined) {
+    for (const key of keys) {
+      const state = this.variables.get(key);
+      if (!state) continue;
+      state.overlays = state.overlays.filter((overlay) => overlay.owner !== owner);
+      const top = state.overlays[state.overlays.length - 1];
+      if (top) {
+        process.env[key] = top.value;
+        continue;
+      }
+      if (state.original === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = previousValue;
+        process.env[key] = state.original;
       }
+      this.variables.delete(key);
     }
 
-    this.snapshots.delete(skillName);
+    this.owners.delete(owner);
   }
 
   /**
    * Check if a skill currently has injected environment variables.
    */
-  hasSnapshot(skillName: string): boolean {
-    return this.snapshots.has(skillName);
+  hasSnapshot(owner: string): boolean {
+    return this.owners.has(owner);
   }
 }

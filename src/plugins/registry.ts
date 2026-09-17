@@ -388,8 +388,26 @@ export class PluginRegistry {
  * itself unresolvable (transitive).
  */
 export function partitionDependencyGraph(
-  graph: ReadonlyMap<string, readonly string[]>,
+  input: ReadonlyMap<string, unknown>,
 ): { order: string[]; unresolvable: Map<string, string> } {
+  // Codex round 6 #10: a node whose dependency list is not an array of names
+  // (a manifest with `requires.skills: missing` parses to a scalar) used to
+  // make `deps.every` throw and abort the whole preflight. It is validated
+  // per node here: that node alone is unresolvable with the reason, and the
+  // graph the rest is judged on carries an empty list for it.
+  const unresolvable = new Map<string, string>();
+  const graph = new Map<string, readonly string[]>();
+  for (const [name, raw] of input) {
+    const problem = dependencyListProblem(raw);
+    if (problem) {
+      unresolvable.set(name, problem);
+      graph.set(name, []);
+    } else {
+      graph.set(name, (raw ?? []) as readonly string[]);
+    }
+  }
+  const malformed = new Set(unresolvable.keys());
+
   // Fixpoint: a node is resolvable once every dependency is resolvable. Nodes
   // with a missing dependency, nodes in a cycle, and everything depending on
   // them never enter the set.
@@ -398,7 +416,7 @@ export function partitionDependencyGraph(
   while (grew) {
     grew = false;
     for (const [name, deps] of graph) {
-      if (resolvable.has(name)) continue;
+      if (resolvable.has(name) || malformed.has(name)) continue;
       if (deps.every((dep) => resolvable.has(dep))) {
         resolvable.add(name);
         grew = true;
@@ -419,9 +437,8 @@ export function partitionDependencyGraph(
     return false;
   };
 
-  const unresolvable = new Map<string, string>();
   for (const [name, deps] of graph) {
-    if (resolvable.has(name)) continue;
+    if (resolvable.has(name) || malformed.has(name)) continue;
     const missing = deps.find((dep) => !graph.has(dep));
     if (missing !== undefined) {
       unresolvable.set(name, `depends on '${missing}' which is not registered`);
@@ -433,7 +450,9 @@ export function partitionDependencyGraph(
       continue;
     }
     const blocked = deps.find((dep) => !resolvable.has(dep))!;
-    unresolvable.set(name, `depends on '${blocked}' which cannot be initialized`);
+    unresolvable.set(name, malformed.has(blocked)
+      ? `depends on '${blocked}' whose dependency list is malformed`
+      : `depends on '${blocked}' which cannot be initialized`);
   }
 
   // Dependencies-first order over the resolvable subgraph (acyclic by construction).
@@ -449,4 +468,27 @@ export function partitionDependencyGraph(
     if (resolvable.has(name)) visit(name);
   }
   return { order, unresolvable };
+}
+
+/**
+ * Why a declared dependency list cannot be used, or `null` when it is a
+ * proper array of names. `undefined` (nothing declared) is fine.
+ */
+export function dependencyListProblem(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    return `dependency list must be an array of skill names, got ${describeScalar(raw)}`;
+  }
+  const bad = raw.findIndex((dep) => typeof dep !== "string" || dep.length === 0);
+  if (bad >= 0) {
+    return `dependency list must contain only skill names, entry #${bad} is ${describeScalar(raw[bad])}`;
+  }
+  return null;
+}
+
+function describeScalar(value: unknown): string {
+  if (typeof value === "string") return `the string "${value}"`;
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `${typeof value} ${JSON.stringify(value) ?? String(value)}`;
 }

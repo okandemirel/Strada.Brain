@@ -450,6 +450,73 @@ describe("SkillManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Codex round 6 #9 (2026-09-17): env rollback is owner-aware. Skill A and
+  // skill B both configure X; A is parked by the preflight after B injected.
+  // -------------------------------------------------------------------------
+  describe("env rollback across skills (round 6 #9)", () => {
+    const KEY = "SKILL_MGR_TEST_SHARED_VAR";
+    const saved = process.env[KEY];
+    afterEach(() => { if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved; });
+
+    it("parking A (injected before B) leaves X at B's value; dispose restores the original", async () => {
+      process.env[KEY] = "original";
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("A", { manifest: { name: "A", version: "1.0.0", description: "A", requires: { skills: ["Missing"] } } }),
+        makeSkill("B"),
+      ]);
+      mockReadSkillConfig.mockResolvedValue({
+        entries: {
+          A: { enabled: true, env: { [KEY]: "a" } },
+          B: { enabled: true, env: { [KEY]: "b" } },
+        },
+      });
+      const mgr = new SkillManager();
+      const entries = await mgr.loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e.status]));
+      expect(byName).toEqual({ A: "gated", B: "active" });
+      expect(process.env[KEY]).toBe("b");
+      await mgr.dispose();
+      expect(process.env[KEY]).toBe("original");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Codex round 6 #10 (2026-09-17): a scalar requires.skills parks only that
+  // skill; it used to make the whole preflight throw.
+  // -------------------------------------------------------------------------
+  describe("malformed requires.skills (round 6 #10)", () => {
+    it("a manifest whose requires.skills is a scalar is gated alone with the reason; the others load", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("scalar", { manifest: { name: "scalar", version: "1.0.0", description: "s", requires: { skills: "missing" as unknown as string[] } } }),
+        makeSkill("ok-dep"),
+        makeSkill("ok", { manifest: { name: "ok", version: "1.0.0", description: "o", requires: { skills: ["ok-dep"] } } }),
+        makeSkill("needs-scalar", { manifest: { name: "needs-scalar", version: "1.0.0", description: "n", requires: { skills: ["scalar"] } } }),
+      ]);
+      const entries = await new SkillManager().loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["scalar"]!.status).toBe("gated");
+      expect(byName["scalar"]!.gateReason).toContain("requires.skills must be an array");
+      expect(byName["ok-dep"]!.status).toBe("active");
+      expect(byName["ok"]!.status).toBe("active");
+      expect(byName["needs-scalar"]!.status).toBe("gated");
+      expect(byName["needs-scalar"]!.gateReason).toContain('"scalar" is gated');
+      expect(mockCheckGates).not.toHaveBeenCalledWith({ skills: "missing" }, undefined);
+    });
+
+    it("an array holding a non-string entry is malformed too", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("mixed", { manifest: { name: "mixed", version: "1.0.0", description: "m", requires: { skills: ["ok", 42] as unknown as string[] } } }),
+        makeSkill("ok"),
+      ]);
+      const entries = await new SkillManager().loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["mixed"]!.status).toBe("gated");
+      expect(byName["mixed"]!.gateReason).toContain("requires.skills must be an array");
+      expect(byName["ok"]!.status).toBe("active");
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // plan 1.15 (audit 13F3/D65 + Codex #23): workspace skills need an approval
   // record OUTSIDE the project before their entry point is imported.
   // -------------------------------------------------------------------------

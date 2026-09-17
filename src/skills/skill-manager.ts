@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   PluginRegistry,
+  dependencyListProblem,
   partitionDependencyGraph,
   type Plugin,
   type PluginMetadata,
@@ -107,6 +108,17 @@ export class SkillManager {
         if (config.entries[name]?.enabled === false) {
           park(skill, "disabled");
           logger.debug(`Skill "${name}" is disabled by user config`);
+          continue;
+        }
+
+        // Codex round 6 #10: a manifest whose `requires.skills` is not an
+        // array (YAML `skills: missing` is a scalar) is parked on its own with
+        // the reason; it used to make the graph preflight throw for everyone.
+        const skillsProblem = dependencyListProblem(skill.manifest.requires?.skills);
+        if (skillsProblem) {
+          const reason = `requires.skills must be an array of skill names (${skillsProblem})`;
+          park(skill, "gated", reason);
+          logger.warn(`Skill "${name}" gated: ${reason}`);
           continue;
         }
 
@@ -408,7 +420,7 @@ export class SkillManager {
 
 /** `requires` minus the `skills` gate, which loadAll measures itself. Same object when there is nothing to strip. */
 function withoutSkillsGate(requires: SkillRequirements | undefined): SkillRequirements | undefined {
-  if (!requires?.skills?.length) return requires;
+  if (!requires || requires.skills === undefined) return requires;
   const { skills: _skills, ...rest } = requires;
   return rest;
 }

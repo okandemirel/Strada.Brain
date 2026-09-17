@@ -159,6 +159,31 @@ describe("initializeAll resilience (plan 0-B.2)", () => {
 });
 
 describe("partitionDependencyGraph", () => {
+  // Codex round 6 #10 (2026-09-17): a scalar dependency list is validated
+  // per node instead of throwing for the whole graph.
+  it("a node whose dependency list is not an array is unresolvable alone, with the reason; the rest is judged normally", () => {
+    const graph = new Map<string, unknown>([["A", ["B"]], ["B", []], ["S", "missing"], ["T", ["S"]], ["N", [1]]]);
+    const { order, unresolvable } = partitionDependencyGraph(graph);
+    expect([...order].sort()).toEqual(["A", "B"]);
+    expect(unresolvable.get("S")).toContain("must be an array");
+    expect(unresolvable.get("S")).toContain('"missing"');
+    expect(unresolvable.get("T")).toContain("'S'");
+    expect(unresolvable.get("N")).toContain("skill names");
+  });
+
+  it("initializeAll: a plugin with a scalar dependency list is recorded as failed, the others initialise", async () => {
+    const registry = new PluginRegistry();
+    const seen: string[] = [];
+    const scalar = makePlugin("S", () => seen.push("S"));
+    (scalar.metadata as { dependencies?: unknown }).dependencies = "missing";
+    registry.register(scalar);
+    registry.register(makePlugin("A", () => seen.push("A")));
+    await registry.initializeAll();
+    expect(seen).toEqual(["A"]);
+    expect(registry.isInitialized("S")).toBe(false);
+    expect(registry.getInitializationError("S")).toContain("must be an array");
+  });
+
   it("is order-independent: the same verdicts whichever way the nodes are listed", () => {
     const forward = new Map<string, string[]>([["A", ["B"]], ["B", []], ["X", ["Nope"]], ["Y", ["X"]]]);
     const backward = new Map<string, string[]>([...forward.entries()].reverse());

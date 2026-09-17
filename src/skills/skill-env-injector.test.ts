@@ -110,4 +110,60 @@ describe("SkillEnvInjector", () => {
     injector.restore("skill-b");
     expect(process.env["SKILL_INJ_Y"]).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // Codex round 6 #9 (2026-09-17): overlay stack per variable, owner-aware.
+  // Out-of-order removal must not clobber another owner's value nor
+  // resurrect a removed owner's value later.
+  // -------------------------------------------------------------------------
+
+  describe("owner-aware overlays (round 6 #9)", () => {
+    it("A then B on the same key, remove A → X stays B's; remove B → X returns to the original", () => {
+      process.env["SKILL_INJ_X"] = "original";
+      injector.inject("skill-a", { SKILL_INJ_X: "a" });
+      injector.inject("skill-b", { SKILL_INJ_X: "b" });
+      expect(process.env["SKILL_INJ_X"]).toBe("b");
+
+      injector.restore("skill-a");
+      expect(process.env["SKILL_INJ_X"]).toBe("b");
+      expect(injector.hasSnapshot("skill-a")).toBe(false);
+      expect(injector.hasSnapshot("skill-b")).toBe(true);
+
+      injector.restore("skill-b");
+      expect(process.env["SKILL_INJ_X"]).toBe("original");
+    });
+
+    it("A then B, remove A → B's value; the original was unset → removing B deletes the key", () => {
+      delete process.env["SKILL_INJ_X"];
+      injector.inject("skill-a", { SKILL_INJ_X: "a" });
+      injector.inject("skill-b", { SKILL_INJ_X: "b" });
+      injector.restore("skill-a");
+      expect(process.env["SKILL_INJ_X"]).toBe("b");
+      injector.restore("skill-b");
+      expect(process.env["SKILL_INJ_X"]).toBeUndefined();
+    });
+
+    it("removing the top owner exposes the next overlay, not the original", () => {
+      process.env["SKILL_INJ_X"] = "original";
+      injector.inject("skill-a", { SKILL_INJ_X: "a" });
+      injector.inject("skill-b", { SKILL_INJ_X: "b" });
+      injector.inject("skill-c", { SKILL_INJ_X: "c" });
+      injector.restore("skill-c");
+      expect(process.env["SKILL_INJ_X"]).toBe("b");
+      injector.restore("skill-b");
+      expect(process.env["SKILL_INJ_X"]).toBe("a");
+      injector.restore("skill-a");
+      expect(process.env["SKILL_INJ_X"]).toBe("original");
+    });
+
+    it("re-injecting the same owner replaces its overlay instead of stacking on itself", () => {
+      delete process.env["SKILL_INJ_X"];
+      injector.inject("skill-a", { SKILL_INJ_X: "a1" });
+      injector.inject("skill-a", { SKILL_INJ_X: "a2", SKILL_INJ_Y: "y" });
+      expect(process.env["SKILL_INJ_X"]).toBe("a2");
+      injector.restore("skill-a");
+      expect(process.env["SKILL_INJ_X"]).toBeUndefined();
+      expect(process.env["SKILL_INJ_Y"]).toBeUndefined();
+    });
+  });
 });
