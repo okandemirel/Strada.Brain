@@ -519,6 +519,56 @@ describe("SetupWizard path validation", () => {
     expect(envContent).toContain("TASK_DELEGATION_ENABLED=true");
   });
 
+  it("preflights OpenCode with the saved OPENCODE_DEFAULT_MODEL and OPENCODE_BASE_URL (audit 10.4 / D28)", async () => {
+    // OpenCode is absent from KNOWN_PROVIDER_MODEL_ORDER, so until now the
+    // preflight probed the provider's built-in default model on the default
+    // endpoint — not what the user just configured.
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["opencode"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "opencode",
+      OPENCODE_API_KEY: "sk-opencode",
+      OPENCODE_DEFAULT_MODEL: "vendor/chosen-model",
+      OPENCODE_BASE_URL: "https://opencode.example.test/v1",
+      RAG_ENABLED: "false",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+
+    expect(preflightResponseProvidersMock).toHaveBeenCalledTimes(1);
+    const [names, , models, baseUrls] = preflightResponseProvidersMock.mock.calls[0]!;
+    expect(names).toEqual(["opencode"]);
+    expect(models).toEqual(expect.objectContaining({ opencode: "vendor/chosen-model" }));
+    expect(baseUrls).toEqual({ opencode: "https://opencode.example.test/v1" });
+  });
+
+  it("passes no OpenCode endpoint to preflight when OpenCode is not configured (guard)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["kimi"], failures: [] });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+    expect(saveResponse.read().statusCode).toBe(200);
+    const [, , models, baseUrls] = preflightResponseProvidersMock.mock.calls[0]!;
+    expect(models).not.toHaveProperty("opencode");
+    expect(baseUrls ?? {}).toEqual({});
+  });
+
   it("blocks saving when the only response provider fails preflight (no false success)", async () => {
     preflightResponseProvidersMock.mockResolvedValue({
       passedProviderIds: [],

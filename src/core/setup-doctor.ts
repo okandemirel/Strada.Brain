@@ -198,10 +198,15 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
     const requestedResponseProviders = configuredProviders.length > 0
       ? configuredProviders
       : detectConfiguredResponseProviders(configResult.value);
+    // providerModels already carries opencode (config.ts maps
+    // OPENCODE_DEFAULT_MODEL into it); the saved OPENCODE_BASE_URL was not
+    // passed, so the doctor probed the default endpoint instead of the one
+    // the user configured (audit 10.4 / D28).
     const preflightResult = await preflightResponseProviders(
       requestedResponseProviders,
       collectProviderCredentials(configResult.value),
       configResult.value.providerModels,
+      configResult.value.providerBaseUrls,
     );
     if (preflightResult.failures.length > 0) {
       providerCheck.status = "fail";

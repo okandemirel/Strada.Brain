@@ -344,4 +344,43 @@ describe("setup doctor", () => {
     expect(report.status).toBe("fail");
     expect(report.checks.find((check) => check.id === "openai-subscription")?.status).toBe("fail");
   });
+
+  it("preflights response workers with the configured OpenCode model and base URL (audit 10.4 / D28)", async () => {
+    // The doctor passed providerModels (which config.ts already fills for
+    // opencode) but never providerBaseUrls, so a user's OPENCODE_BASE_URL was
+    // ignored and the probe hit the default endpoint.
+    const installRoot = makeBuiltInstallRoot();
+    preflightResponseProvidersMock.mockResolvedValue({ passedProviderIds: ["opencode"], failures: [] });
+
+    await collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: {
+        kind: "ok",
+        value: makeConfig({
+          providerChain: "opencode",
+          opencodeApiKey: "sk-opencode",
+          providerModels: { opencode: "vendor/chosen-model" },
+          providerBaseUrls: { opencode: "https://opencode.example.test/v1" },
+        }),
+      },
+    });
+
+    expect(preflightResponseProvidersMock).toHaveBeenCalledTimes(1);
+    const [names, , models, baseUrls] = preflightResponseProvidersMock.mock.calls[0]!;
+    expect(names).toEqual(["opencode"]);
+    expect(models).toEqual({ opencode: "vendor/chosen-model" });
+    expect(baseUrls).toEqual({ opencode: "https://opencode.example.test/v1" });
+  });
+
+  it("passes no base URLs to preflight when the config declares none (guard)", async () => {
+    const installRoot = makeBuiltInstallRoot();
+    await collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: { kind: "ok", value: makeConfig({ providerChain: "gemini,kimi" }) },
+    });
+    const [, , , baseUrls] = preflightResponseProvidersMock.mock.calls[0]!;
+    expect(baseUrls).toBeUndefined();
+  });
 });

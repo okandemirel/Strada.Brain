@@ -1403,11 +1403,23 @@ export class SetupWizard {
           providerModels[provider] = model.trim();
         }
       }
+      // OpenCode is not in KNOWN_PROVIDER_MODEL_ORDER: its model lives in
+      // OPENCODE_DEFAULT_MODEL and its endpoint in OPENCODE_BASE_URL. Until now
+      // neither reached the preflight, so the probe ran against the provider's
+      // built-in default model on the default endpoint and could pass (or
+      // fail) for a configuration the user never chose (audit 10.4 / D28).
+      const opencodeModel = config.OPENCODE_DEFAULT_MODEL?.trim();
+      if (opencodeModel) {
+        providerModels["opencode"] = opencodeModel;
+      }
+      const opencodeBaseUrl = config.OPENCODE_BASE_URL?.trim();
+      const providerBaseUrls: Record<string, string> = opencodeBaseUrl ? { opencode: opencodeBaseUrl } : {};
 
       const preflight = await preflightResponseProviders(
         names,
         this.collectProviderCredentials(config),
         providerModels,
+        providerBaseUrls,
       );
 
       if (preflight.failures.length > 0) {
