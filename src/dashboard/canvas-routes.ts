@@ -12,6 +12,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { CANVAS_VERSION_ABSENT } from "./canvas-storage.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -76,6 +77,17 @@ function validConnections(raw: unknown, sessionId: string): Array<Record<string,
     }
     return true;
   }) as Array<Record<string, unknown>>;
+}
+
+/**
+ * The precondition a save may carry: `undefined` (no precondition at all),
+ * CANVAS_VERSION_ABSENT (0 — "there is no canvas yet, create it") or the
+ * positive version this write replaces. Anything else is a malformed request:
+ * coercing it would turn a client bug into an unconditional overwrite.
+ */
+function isValidSaveVersion(value: unknown): value is number | undefined {
+  if (value === undefined) return true;
+  return typeof value === "number" && Number.isInteger(value) && value >= CANVAS_VERSION_ABSENT;
 }
 
 /** Validate sessionId from URL: non-empty, max 128 chars, no path traversal, no null bytes or backslashes. */
@@ -195,6 +207,11 @@ export function handleCanvasRoute(
     void readJsonBody<Partial<CanvasState>>(req, res).then((parsed) => {
       if (!parsed) return;
 
+      if (!isValidSaveVersion(parsed.version)) {
+        jsonResponse(res, 400, { error: "Invalid version", sessionId });
+        return;
+      }
+
       const now = Date.now();
 
       // Validate shapes: each must have at minimum id (string) and type (string)
@@ -227,16 +244,22 @@ export function handleCanvasRoute(
       };
 
       try {
-        const saved = canvasStorage.save(state);
-        if (!saved) {
-          jsonResponse(res, 409, { error: "Version conflict", sessionId });
+        const outcome = canvasStorage.save(state);
+        if (!outcome.ok) {
+          // Either another writer moved the version on, or this client believed
+          // the canvas did not exist yet and it does (r9 #17). Both leave the
+          // client's work unsaved and dirty rather than overwriting.
+          jsonResponse(res, 409, {
+            error: outcome.reason === "already_exists" ? "Canvas already exists" : "Version conflict",
+            sessionId,
+          });
           return;
         }
-        // The saved version goes back with the ack: the client stores it and
-        // sends it on the next save, so a concurrent write is refused with 409
-        // instead of silently overwriting (plan 2.6 / Codex #25).
-        const stored = canvasStorage.getBySession(sessionId);
-        jsonResponse(res, 200, { status: "saved", sessionId, version: stored?.version ?? 1 });
+        // The ack carries the version OF THIS WRITE — read back inside the
+        // write's own transaction. A separate getBySession() could have
+        // reported a concurrent writer's version, which the client would then
+        // have used to overwrite content it never saw (r9 #21).
+        jsonResponse(res, 200, { status: "saved", sessionId, version: outcome.version });
       } catch {
         jsonResponse(res, 500, { error: "Failed to save canvas" });
       }

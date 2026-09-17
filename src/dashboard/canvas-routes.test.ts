@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import Database from "better-sqlite3";
 import { handleCanvasRoute } from "./canvas-routes.js";
 import {
   createMockReq,
   createMockRes,
   responseJson,
+  waitForResponse,
   type MockRes,
 } from "./test-support/mock-http.js";
-import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
+import { CanvasStorage } from "./canvas-storage.js";
+import type { CanvasState } from "./canvas-storage.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -27,7 +30,7 @@ vi.mock("../utils/logger.js", () => ({
 function createMockStorage(): CanvasStorage {
   return {
     getBySession: vi.fn(),
-    save: vi.fn().mockReturnValue(true),
+    save: vi.fn().mockReturnValue({ ok: true, version: 1 }),
     delete: vi.fn(),
     listByProject: vi.fn(),
   } as unknown as CanvasStorage;
@@ -749,4 +752,106 @@ describe("handleCanvasRoute", () => {
       expect(res.headers["Content-Type"]).toBe("application/json");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // PUT PRECONDITIONS AND ACKS (r9 #17 / #21)
+  // ---------------------------------------------------------------------------
+
+  describe("PUT preconditions and acks", () => {
+    /** PUT a body and wait for the response. */
+    async function put(body: unknown, store: CanvasStorage, target = res): Promise<void> {
+      const req = createMockReq(JSON.stringify(body));
+      expect(handleCanvasRoute("/api/canvas/session-abc", "PUT", req, target, store)).toBe(true);
+      await waitForResponse(target);
+    }
+
+    it("acks the version of its own write, never a concurrent writer's row", async () => {
+      // The ack used to be built from a separate getBySession(): a writer that
+      // saved 2 -> 3 was told 4 because another process had written in between,
+      // and could then overwrite content it had never seen (r9 #21).
+      (storage.save as ReturnType<typeof vi.fn>).mockReturnValue({ ok: true, version: 3 });
+      (storage.getBySession as ReturnType<typeof vi.fn>).mockReturnValue({ ...sampleCanvas, version: 4 });
+
+      await put({ shapes: [], version: 2 }, storage);
+
+      expect(res.statusCode).toBe(200);
+      expect(responseJson(res)).toEqual({ status: "saved", sessionId: "session-abc", version: 3 });
+    });
+
+    it("answers 409 when the store refuses the write", async () => {
+      (storage.save as ReturnType<typeof vi.fn>).mockReturnValue({ ok: false, reason: "version_conflict" });
+      await put({ shapes: [], version: 2 }, storage);
+      expect(res.statusCode).toBe(409);
+      expect(responseJson(res)).toEqual({ error: "Version conflict", sessionId: "session-abc" });
+    });
+
+    it("answers 409 when a canvas the client thought absent already exists", async () => {
+      (storage.save as ReturnType<typeof vi.fn>).mockReturnValue({ ok: false, reason: "already_exists" });
+      await put({ shapes: [], version: 0 }, storage);
+      expect(res.statusCode).toBe(409);
+      expect(responseJson(res)).toEqual({ error: "Canvas already exists", sessionId: "session-abc" });
+    });
+
+    it("turns two first saves after two null reads into one success and one conflict", async () => {
+      // Two windows both GET `canvas: null`, so both send the create-if-absent
+      // precondition (version 0). One wins; the loser is told, and the winner's
+      // work is still there (r9 #17).
+      const real = new CanvasStorage(new Database(":memory:"));
+      try {
+        const first = createMockRes();
+        await put({ shapes: [{ id: "w1", type: "note-block" }], version: 0 }, real, first);
+        expect(first.statusCode).toBe(200);
+        expect(responseJson(first)).toEqual({ status: "saved", sessionId: "session-abc", version: 1 });
+
+        const second = createMockRes();
+        await put({ shapes: [{ id: "w2", type: "note-block" }], version: 0 }, real, second);
+        expect(second.statusCode).toBe(409);
+
+        expect(JSON.parse(real.getBySession("session-abc")!.shapes)).toEqual([
+          { id: "w1", type: "note-block" },
+        ]);
+      } finally {
+        real.close();
+      }
+    });
+
+    it("rejects a version that is not a whole count", async () => {
+      for (const version of ["2", -1, 1.5, Number.NaN, null]) {
+        const target = createMockRes();
+        await put({ shapes: [], version }, storage, target);
+        expect(target.statusCode, `version ${String(version)}`).toBe(400);
+        expect(responseJson(target)).toEqual({ error: "Invalid version", sessionId: "session-abc" });
+      }
+      expect(storage.save).not.toHaveBeenCalled();
+    });
+
+    it("saves an ordinary versioned revision and acks the new version (guard)", async () => {
+      const real = new CanvasStorage(new Database(":memory:"));
+      try {
+        const first = createMockRes();
+        await put({ shapes: [{ id: "s1", type: "note-block" }], version: 0 }, real, first);
+        const second = createMockRes();
+        await put({
+          shapes: [{ id: "s1", type: "note-block" }, { id: "s2", type: "note-block" }],
+          connections: [{ id: "c1", from: "s1", to: "s2" }],
+          version: 1,
+        }, real, second);
+        expect(second.statusCode).toBe(200);
+        expect(responseJson(second)).toEqual({ status: "saved", sessionId: "session-abc", version: 2 });
+        const stored = real.getBySession("session-abc")!;
+        expect(JSON.parse(stored.connections!)).toEqual([{ id: "c1", from: "s1", to: "s2" }]);
+        expect(stored.version).toBe(2);
+      } finally {
+        real.close();
+      }
+    });
+
+    it("still upserts a body with no version at all (guard)", async () => {
+      await put({ shapes: [{ id: "s1", type: "note-block" }] }, storage);
+      expect(res.statusCode).toBe(200);
+      const passed = (storage.save as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CanvasState;
+      expect(passed.version).toBeUndefined();
+    });
+  });
+
 });

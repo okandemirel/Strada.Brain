@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { CanvasStorage } from "./canvas-storage.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CANVAS_VERSION_ABSENT, CanvasStorage } from "./canvas-storage.js";
 import type { CanvasState } from "./canvas-storage.js";
 
 describe("CanvasStorage", () => {
@@ -18,6 +21,7 @@ describe("CanvasStorage", () => {
       shapes: overrides.shapes ?? "[]",
       connections: overrides.connections,
       viewport: overrides.viewport,
+      version: overrides.version,
       createdAt: overrides.createdAt ?? now,
       updatedAt: overrides.updatedAt ?? now,
     };
@@ -556,4 +560,93 @@ describe("CanvasStorage", () => {
       legacy.close();
     });
   });
+
+  // =========================================================================
+  // save() outcome: the version of the write itself, and create-if-absent
+  // (r9 #17 / #21)
+  // =========================================================================
+
+  describe("save() outcome", () => {
+    it("reports the version of the write itself", () => {
+      const state = makeState({ id: "s-own", sessionId: "s-own" });
+      expect(storage.save(state)).toEqual({ ok: true, version: 1 });
+      expect(storage.save({ ...state, version: 1 })).toEqual({ ok: true, version: 2 });
+      expect(storage.save({ ...state, version: 2 })).toEqual({ ok: true, version: 3 });
+    });
+
+    it("gives each of two connections the version of its own write", () => {
+      // The route used to build the ack from a separate getBySession(), so a
+      // writer could be told a version it had never written (r9 #21): here B
+      // pushes the row to 3 right after A's write, and A must still hear 2.
+      const dir = mkdtempSync(join(tmpdir(), "canvas-version-"));
+      const file = join(dir, "canvas.db");
+      const a = new CanvasStorage(new Database(file));
+      const b = new CanvasStorage(new Database(file));
+      try {
+        const state = makeState({ id: "s-race", sessionId: "s-race" });
+        expect(a.save({ ...state, version: CANVAS_VERSION_ABSENT })).toEqual({ ok: true, version: 1 });
+        const outcomeA = a.save({ ...state, version: 1, shapes: '[{"id":"a","type":"note-block"}]' });
+        const outcomeB = b.save({ ...state, version: 2, shapes: '[{"id":"b","type":"note-block"}]' });
+        expect(outcomeA).toEqual({ ok: true, version: 2 });
+        expect(outcomeB).toEqual({ ok: true, version: 3 });
+        // The create-if-absent precondition holds across connections too.
+        expect(b.save({ ...state, version: CANVAS_VERSION_ABSENT })).toEqual({ ok: false, reason: "already_exists" });
+      } finally {
+        a.close();
+        b.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses a stale version instead of overwriting", () => {
+      const state = makeState({ id: "s-stale", sessionId: "s-stale", shapes: '[{"id":"kept","type":"note-block"}]' });
+      storage.save(state);
+      expect(storage.save({ ...state, version: 1 })).toEqual({ ok: true, version: 2 });
+      expect(
+        storage.save({ ...state, version: 1, shapes: '[{"id":"clobber","type":"note-block"}]' }),
+      ).toEqual({ ok: false, reason: "version_conflict" });
+      expect(storage.getBySession("s-stale")!.shapes).toBe('[{"id":"kept","type":"note-block"}]');
+    });
+
+    it("creates a canvas the client read as absent, and refuses the second creator", () => {
+      // Two windows both GET `canvas: null` and both save. An unconditional
+      // upsert let the second destroy the first window's work (r9 #17).
+      const first = storage.save(makeState({
+        id: "s-two", sessionId: "s-two",
+        version: CANVAS_VERSION_ABSENT,
+        shapes: '[{"id":"first","type":"note-block"}]',
+      }));
+      expect(first).toEqual({ ok: true, version: 1 });
+
+      const second = storage.save(makeState({
+        id: "s-two", sessionId: "s-two",
+        version: CANVAS_VERSION_ABSENT,
+        shapes: '[{"id":"second","type":"note-block"}]',
+      }));
+      expect(second).toEqual({ ok: false, reason: "already_exists" });
+      expect(storage.getBySession("s-two")!.shapes).toBe('[{"id":"first","type":"note-block"}]');
+    });
+
+    it("refuses a create-if-absent even when the existing row has another id", () => {
+      storage.save(makeState({ id: "row-a", sessionId: "s-dup", shapes: '[{"id":"kept","type":"note-block"}]' }));
+      expect(storage.save(makeState({ id: "row-b", sessionId: "s-dup", version: CANVAS_VERSION_ABSENT })))
+        .toEqual({ ok: false, reason: "already_exists" });
+      expect(storage.getBySession("s-dup")!.shapes).toBe('[{"id":"kept","type":"note-block"}]');
+    });
+
+    it("inserts for a client holding a version of a row that is gone (guard)", () => {
+      const state = makeState({ id: "s-gone", sessionId: "s-gone" });
+      storage.save(state);
+      storage.delete("s-gone");
+      expect(storage.save({ ...state, version: 4 })).toEqual({ ok: true, version: 1 });
+    });
+
+    it("upserts unconditionally when no version is given (guard)", () => {
+      const state = makeState({ id: "s-uncond", sessionId: "s-uncond" });
+      expect(storage.save(state)).toEqual({ ok: true, version: 1 });
+      expect(storage.save({ ...state, shapes: '[{"id":"x","type":"note-block"}]' })).toEqual({ ok: true, version: 2 });
+      expect(storage.getBySession("s-uncond")!.shapes).toBe('[{"id":"x","type":"note-block"}]');
+    });
+  });
+
 });
