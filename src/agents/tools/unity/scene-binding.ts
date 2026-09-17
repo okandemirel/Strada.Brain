@@ -117,7 +117,13 @@ function writeAtomic(path: string, text: string): void {
 // ─── SpriteRenderer ───────────────────────────────────────────────────────
 
 /** Unity 6000.3 SpriteRenderer, as the Editor serializes it (copied from a project file, 2026-09-07). */
-export function spriteRendererDoc(fileId: string, gameObjectId: string, spriteGuid: string, sortingOrder = 0): string {
+export function spriteRendererDoc(
+  fileId: string,
+  gameObjectId: string,
+  spriteGuid: string,
+  sortingOrder = 0,
+  spriteFileId: string = SINGLE_SPRITE_FILE_ID,
+): string {
   return `--- !u!212 &${fileId}
 SpriteRenderer:
   serializedVersion: 2
@@ -167,7 +173,7 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: ${sortingOrder}
   m_MaskInteraction: 0
-  m_Sprite: {fileID: 21300000, guid: ${spriteGuid}, type: 3}
+  m_Sprite: {fileID: ${spriteFileId}, guid: ${spriteGuid}, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -180,9 +186,93 @@ SpriteRenderer:
 `;
 }
 
-/** The sprite reference a SpriteRenderer holds for a single-sprite texture. */
-export function spriteRef(guid: string): string {
-  return `{fileID: 21300000, guid: ${guid}, type: 3}`;
+/** The fileID Unity gives the single Sprite of a Single-mode texture. */
+export const SINGLE_SPRITE_FILE_ID = "21300000";
+
+/** The sprite reference a SpriteRenderer holds. `fileId` defaults to the single-sprite one. */
+export function spriteRef(guid: string, fileId: string = SINGLE_SPRITE_FILE_ID): string {
+  return `{fileID: ${fileId}, guid: ${guid}, type: 3}`;
+}
+
+export interface SpriteTableEntry {
+  /** The Sprite sub-asset's local fileID — what m_Sprite must carry. */
+  readonly fileId: string;
+  readonly name: string;
+}
+
+/**
+ * The texture's named sprites, from the .meta's `internalIDToNameTable`:
+ *
+ *   internalIDToNameTable:
+ *   - first:
+ *       213: 21300002       # 213 = Sprite; the value is the sub-asset's fileID
+ *     second: pig_idle
+ *
+ * A Single-mode texture records one entry (fileID 21300000) or, in older
+ * importer versions, none at all; a SHEET records one per slice, each with its
+ * own fileID — which is why the 21300000 literal binds the wrong sprite (D53).
+ * `internalIDToNameTable: []` and a missing key both read as "no named sprites".
+ * Entries for other class ids (e.g. 114) are ignored; `first: {213: n}` written
+ * inline is read too.
+ */
+export function spriteNameTable(metaText: string): SpriteTableEntry[] {
+  const lines = metaText.split("\n");
+  const start = lines.findIndex((l) => /^\s*internalIDToNameTable:/.test(l));
+  if (start < 0) return [];
+  const keyLine = lines[start]!;
+  if (/internalIDToNameTable:\s*\[\s*\]\s*\r?$/.test(keyLine)) return [];
+  const keyIndent = /^(\s*)/.exec(keyLine)![1]!.length;
+  const out: SpriteTableEntry[] = [];
+  let pending: string | undefined;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!.replace(/\r$/, "");
+    if (line.trim() === "") continue;
+    const indent = /^(\s*)/.exec(line)![1]!.length;
+    const isItem = /^\s*-\s/.test(line) || /^\s*-$/.test(line);
+    // A sibling key at the table's own indent (or shallower) ends the table;
+    // Unity writes the list items at that same indent, hence the `-` check.
+    if (!isItem && indent <= keyIndent) break;
+    if (isItem) pending = undefined;
+    const idMatch = /(?:^|\{|\s)213:\s*(-?\d+)/.exec(line);
+    if (idMatch) pending = idMatch[1]!;
+    const nameMatch = /^\s*second:\s*(.*)$/.exec(line);
+    if (nameMatch && pending !== undefined) {
+      out.push({ fileId: pending, name: yamlScalar(nameMatch[1]!.trim()) });
+      pending = undefined;
+    }
+  }
+  return out;
+}
+
+/**
+ * The fileID m_Sprite must carry for `spriteName` in this texture — read from
+ * the .meta on every call (never cached: a re-slice rewrites the ids).
+ *
+ * No name asked for: a texture with 0 or 1 named sprites resolves to what its
+ * meta says (a single sprite's own id, else 21300000); a SHEET refuses, because
+ * picking a slice for the caller is the defect this resolves.
+ */
+export function resolveSpriteFileId(metaPath: string, spriteName?: string): string {
+  const table = spriteNameTable(readFileSync(metaPath, "utf8"));
+  const names = table.map((e) => e.name);
+  if (spriteName === undefined) {
+    if (table.length > 1) {
+      throw new Error(
+        `${metaPath} is a sprite SHEET with ${table.length} sprites — name one with spriteName (have: ${names.join(", ")}); ` +
+          "binding without a name would point at the wrong sprite",
+      );
+    }
+    return table[0]?.fileId ?? SINGLE_SPRITE_FILE_ID;
+  }
+  const hit = table.find((e) => e.name === spriteName);
+  if (hit) return hit.fileId;
+  if (table.length === 0) {
+    throw new Error(
+      `no sprite named "${spriteName}": ${metaPath} records no named sprites (its internalIDToNameTable is empty — ` +
+        "the texture is imported as a single sprite, so omit spriteName, or re-slice it as a sheet)",
+    );
+  }
+  throw new Error(`no sprite named "${spriteName}" in ${metaPath} (have: ${names.join(", ")})`);
 }
 
 /**
@@ -206,17 +296,23 @@ export interface BindSpriteResult {
   readonly rendererFileId: string;
   readonly added: boolean;
   readonly importerFixed: boolean;
+  /** The Sprite sub-asset fileID written into m_Sprite. */
+  readonly spriteFileId: string;
 }
 
 /**
  * Point the named GameObject's SpriteRenderer at the sprite; add a renderer
  * when it has none. Verified by re-reading the file.
+ *
+ * `spriteFileId` is the Sprite sub-asset's id from the texture's .meta
+ * (resolveSpriteFileId) — 21300000 only for a single-sprite texture.
  */
 export function bindSprite(
   targetPath: string,
   spriteGuid: string,
-  opts: { objectName?: string; addRenderer?: boolean } = {},
+  opts: { objectName?: string; addRenderer?: boolean; spriteFileId?: string } = {},
 ): BindSpriteResult {
+  const spriteFileId = opts.spriteFileId ?? SINGLE_SPRITE_FILE_ID;
   const original = readFileSync(targetPath, "utf8");
   const { preamble, docs } = splitUnityDocs(original);
   const gameObjects = docs.filter((d) => d.classId === 1 && !d.stripped);
@@ -239,7 +335,7 @@ export function bindSprite(
     rendererFileId = renderer.fileId;
     if (!/^  m_Sprite: .*$/m.test(renderer.text)) throw new Error(`SpriteRenderer &${renderer.fileId} has no m_Sprite line`);
     // A reference the Editor wrapped onto continuation lines is replaced whole.
-    renderer.text = renderer.text.replace(/^  m_Sprite: .*(?:\r?\n {4}[^\r\n]*)*$/m, `  m_Sprite: ${spriteRef(spriteGuid)}`);
+    renderer.text = renderer.text.replace(/^  m_Sprite: .*(?:\r?\n {4}[^\r\n]*)*$/m, `  m_Sprite: ${spriteRef(spriteGuid, spriteFileId)}`);
     renderer.text = renderer.text.replace(/^  m_WasSpriteAssigned: \d$/m, "  m_WasSpriteAssigned: 1");
   } else {
     if (opts.addRenderer === false) throw new Error(`GameObject "${goName}" has no SpriteRenderer and addRenderer is false`);
@@ -249,18 +345,20 @@ export function bindSprite(
     // Register the component on the GameObject, after its existing components.
     const eol = go.text.includes("\r\n") ? "\r\n" : "\n";
     go.text = go.text.replace(/^(  m_Component:\r?\n(?:  - component: \{fileID: -?\d+\}\r?\n)*)/m, `$1  - component: {fileID: ${rendererFileId}}${eol}`);
-    docs.push({ classId: 212, fileId: rendererFileId, stripped: false, text: spriteRendererDoc(rendererFileId, go.fileId, spriteGuid) });
+    docs.push({ classId: 212, fileId: rendererFileId, stripped: false, text: spriteRendererDoc(rendererFileId, go.fileId, spriteGuid, 0, spriteFileId) });
     added = true;
   }
   writeAtomic(targetPath, joinUnityDocs(preamble, docs));
   // Verify by re-reading — the delivery measurement reads the same bytes.
   const check = splitUnityDocs(readFileSync(targetPath, "utf8"));
   const bound = check.docs.find((d) => d.classId === 212 && d.fileId === rendererFileId);
-  if (!bound || !bound.text.includes(`guid: ${spriteGuid}`)) {
+  // The fileID is part of what is verified: a right guid with the wrong
+  // sub-asset id reads as bound and draws nothing (D53).
+  if (!bound || !bound.text.includes(`m_Sprite: ${spriteRef(spriteGuid, spriteFileId)}`)) {
     writeAtomic(targetPath, original);
     throw new Error("verification failed after write — the file was restored");
   }
-  return { gameObject: goName, rendererFileId, added, importerFixed: false };
+  return { gameObject: goName, rendererFileId, added, importerFixed: false, spriteFileId };
 }
 
 // ─── PrefabInstance ───────────────────────────────────────────────────────
@@ -357,14 +455,21 @@ export class BindSpriteTool implements ITool {
     "Point a GameObject's SpriteRenderer at a sprite texture — in a .prefab or a .unity scene — editing the " +
     "serialized file directly (no Editor, no bridge) in Unity's own shape, adding a SpriteRenderer when the " +
     "object has none, fixing the texture's importer to Sprite when needed, and verifying by re-reading what it " +
-    "wrote. Use this to bind generated or imported art to the prefab/object the GDD element uses; then " +
-    "unity_place_prefab (or a scene that already holds the object) makes it render.";
+    "wrote. For a sliced sheet name the slice with spriteName — its fileID is read from the texture's .meta " +
+    "(internalIDToNameTable), because the single-sprite 21300000 would bind the wrong sprite. Use this to bind " +
+    "generated or imported art to the prefab/object the GDD element uses; then unity_place_prefab (or a scene " +
+    "that already holds the object) makes it render.";
   readonly inputSchema = {
     type: "object",
     properties: {
       target: { type: "string", description: "Project-relative .prefab or .unity path holding the GameObject." },
       sprite: { type: "string", description: "Project-relative texture path (PNG/JPG) that has a .meta." },
       objectName: { type: "string", description: "m_Name of the GameObject to bind. Default: the object that already has a SpriteRenderer, else the first GameObject." },
+      spriteName: {
+        type: "string",
+        description:
+          "Name of the sprite inside the texture, as the .meta's internalIDToNameTable records it. Required for a sliced sheet (each slice has its own fileID); omit for a single-sprite texture.",
+      },
       addRenderer: { type: "boolean", description: "Add a SpriteRenderer when the object has none (default true)." },
     },
     required: ["target", "sprite"],
@@ -389,13 +494,18 @@ export class BindSpriteTool implements ITool {
     }
     try {
       const importerFixed = ensureSpriteImporter(metaPath);
+      const spriteName = typeof input["spriteName"] === "string" && input["spriteName"] !== "" ? input["spriteName"] : undefined;
+      // Re-read the meta every call: a re-slice renumbers the sub-asset ids.
+      const spriteFileId = resolveSpriteFileId(metaPath, spriteName);
       const r = bindSprite(target.full, guid, {
         objectName: typeof input["objectName"] === "string" ? input["objectName"] : undefined,
         addRenderer: input["addRenderer"] !== false,
+        spriteFileId,
       });
       return {
         content:
-          `Bound ${spriteRel} (guid ${guid.slice(0, 8)}…) to "${r.gameObject}" in ${targetRel}: SpriteRenderer &${r.rendererFileId}` +
+          `Bound ${spriteRel}${spriteName ? ` sprite "${spriteName}"` : ""} (guid ${guid.slice(0, 8)}…, fileID ${r.spriteFileId}) ` +
+          `to "${r.gameObject}" in ${targetRel}: SpriteRenderer &${r.rendererFileId}` +
           `${r.added ? " ADDED and registered on the GameObject" : " m_Sprite replaced"}${importerFixed ? "; the texture's importer was switched to Sprite" : ""}. ` +
           "Verified by re-reading the file. " +
           (/\.prefab$/i.test(targetRel)
