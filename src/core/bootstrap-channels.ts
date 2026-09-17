@@ -66,6 +66,8 @@ export async function initializeChannel(
       return new WebChannel(config.web.port, config.dashboard.port, {
         dashboardAuthToken: config.websocketDashboard.authToken,
         identityDbPath: join(config.memory.dbPath, "web-identities.db"),
+        // Attachment links must still resolve after a restart (plan 2.8).
+        attachmentDbPath: join(config.memory.dbPath, "web-attachments.db"),
       });
 
     case "slack": {

@@ -1750,10 +1750,17 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(text)![1]!;
     expect(text).toContain(`![frame_00012.png](/attachments/${token})`);
     expect(text).not.toContain("[Attachment:");
-    // Audit 11.1 / D31: the portal renders a "text" frame as a plain span, so
-    // the image syntax above reached the user as literal "![frame…](…)". The
-    // frame must be "markdown" — the only type the client hands to its renderer.
-    expect(sent[0]!.type).toBe("markdown");
+    // A STRUCTURED FRAME (plan 2.8): the fields say what arrived, and `text`
+    // is the fallback rendering — audit 11.1 / D31 was the markdown form of
+    // the same problem, a "text" frame reaching the user as literal markup.
+    expect(sent[0]).toMatchObject({
+      type: "attachment",
+      name: "frame_00012.png",
+      kind: "image",
+      mimeType: "image/png",
+      sizeBytes: png.length,
+      href: `/attachments/${token}`,
+    });
     const out = await handle(channel, `/attachments/${token}`);
     expect(out.status).toBe(200);
     expect(out.headers!["Content-Type"]).toBe("image/png");
@@ -1776,7 +1783,7 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     await channel.sendAttachment("chat-1", { type: "document", name: "HOW_TO_RUN.md", url: file });
     const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
     expect(String(sent[0]!.text)).toContain("📎 [HOW_TO_RUN.md]");
-    expect(sent[0]!.type).toBe("markdown");
+    expect(sent[0]).toMatchObject({ type: "attachment", kind: "file", name: "HOW_TO_RUN.md" });
     const out = await handle(channel, `/attachments/${token}`);
     expect(out.status).toBe(200);
     expect(out.headers!["Content-Disposition"]).toContain('attachment; filename="HOW_TO_RUN.md"');

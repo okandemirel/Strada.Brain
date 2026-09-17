@@ -167,6 +167,26 @@ describe('buildModelSwitchCommand', () => {
     expect(useSessionStore.getState().messages.at(-1)?.deliveryState).toBeUndefined()
   })
 
+  it('renders a structured attachment frame, and falls back to its own fields (plan 2.8)', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    act(() => {
+      socket!.emit('open')
+      socket!.emit('message', { type: 'connected', chatId: 'chat-at', reconnectToken: 'r', profileId: 'p' })
+      socket!.emit('message', {
+        type: 'attachment', messageId: 'm-at', name: 'frame.png', href: '/attachments/tok',
+        kind: 'image', mimeType: 'image/png', sizeBytes: 8, text: '![frame.png](/attachments/tok)',
+      })
+      // No markdown supplied: the fields alone still produce a working link.
+      socket!.emit('message', { type: 'attachment', messageId: 'm-at2', name: 'HOW_TO_RUN.md', href: '/attachments/tok2', kind: 'file', text: '' })
+    })
+    const messages = useSessionStore.getState().messages
+    const image = messages.find((m) => m.id === 'm-at')
+    expect(image?.text).toBe('![frame.png](/attachments/tok)')
+    expect(image?.isMarkdown).toBe(true)
+    expect(messages.find((m) => m.id === 'm-at2')?.text).toBe('[HOW_TO_RUN.md](/attachments/tok2)')
+  })
+
   it('flags a markdown frame for the renderer and leaves a text frame plain (audit 11.1 / D31)', () => {
     renderHook(() => useWebSocket())
     const socket = MockWebSocket.instances[0]

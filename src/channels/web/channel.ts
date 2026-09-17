@@ -24,6 +24,7 @@ import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { LRUCache } from "../../common/lru-cache.js";
+import { WebAttachmentStore } from "./web-attachment-store.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type {
@@ -101,6 +102,12 @@ interface SettledConfirmation {
 interface WebChannelOptions {
   dashboardAuthToken?: string;
   identityDbPath?: string;
+  /**
+   * Where attachment records live. In memory by default (tests, ephemeral
+   * runs); a real path keeps every attachment link working across a restart
+   * (plan 2.8).
+   */
+  attachmentDbPath?: string;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -232,6 +239,8 @@ export class WebChannel
   private readonly streamChatIds = new Map<string, string>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
+  /** Attachment records, by token: rows, so a restart does not break the links. */
+  private readonly attachmentStore: WebAttachmentStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
   /**
    * Emits a frontend command onto the workspace bus. Returns true only when at
@@ -282,7 +291,7 @@ export class WebChannel
    * confirmation_ack: the terminal verdict on an answer the client is holding
    * a dialog open for — Codex wave 0-A review 2026-09-17 #6).
    */
-  private static readonly REPLAYABLE_FRAME_TYPES = new Set(["markdown", "text", "system", "confirmation_ack"]);
+  private static readonly REPLAYABLE_FRAME_TYPES = new Set(["markdown", "text", "system", "confirmation_ack", "attachment"]);
   private static readonly CACHEABLE_MONITOR_TYPES = new Set([
     "monitor:task_update",
     "monitor:substep",
@@ -316,6 +325,11 @@ export class WebChannel
     private readonly options: WebChannelOptions = {},
   ) {
     this.identityStore = new WebIdentityStore(options.identityDbPath ?? ":memory:");
+    this.attachmentStore = new WebAttachmentStore(
+      options.attachmentDbPath ?? ":memory:",
+      WebChannel.ATTACHMENT_TTL_MS,
+      WebChannel.MAX_SERVED_ATTACHMENTS,
+    );
     this.lastMonitorSnapshotByRoot = new LRUCache(WebChannel.MAX_MONITOR_ROOTS);
   }
 
@@ -833,7 +847,7 @@ export class WebChannel
    * from a URL on anyone's say-so.
    */
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
-    const token = this.registerAttachment(attachment);
+    const token = this.registerAttachment(attachment, chatId);
     if (token === null) {
       this.sendToClient(chatId, {
         type: "text",
@@ -844,50 +858,48 @@ export class WebChannel
     }
     const href = `/attachments/${token}`;
     const size = typeof attachment.size === "number" ? ` (${(attachment.size / 1024).toFixed(0)} KB)` : "";
-    const text = attachment.type === "image"
+    const kind = attachment.type === "image" ? "image" : "file";
+    // The markdown text every existing renderer already handles stays as the
+    // fallback (audit 11.1 / D31: a "text" frame arrived as literal markup).
+    const text = kind === "image"
       ? `![${attachment.name}](${href})\n[${attachment.name}](${href})${size}`
       : `📎 [${attachment.name}](${href})${size}`;
-    // "markdown", not "text": the portal renders a "text" frame as a plain
-    // span, so the image/link syntax above arrived as literal `![name](...)`
-    // (audit 11.1 / D31). The markdown frame type is the one the client
-    // hands to its renderer.
-    this.sendToClient(chatId, { type: "markdown", text, messageId: randomUUID() });
+    // A STRUCTURED FRAME (plan 2.8): the client no longer parses a markdown
+    // link to learn what arrived — name, href, kind, mime type and size are
+    // fields, and text is the fallback rendering.
+    this.sendToClient(chatId, {
+      type: "attachment",
+      messageId: randomUUID(),
+      name: attachment.name,
+      href,
+      kind,
+      ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+      ...(typeof attachment.size === "number" ? { sizeBytes: attachment.size } : {}),
+      text,
+    });
   }
 
-  /** Files handed to the portal, by token; bounded and time-limited. */
-  private readonly servedAttachments = new Map<
-    string,
-    { name: string; mimeType?: string; path?: string; data?: Buffer; expiresAt: number }
-  >();
+
   private static readonly ATTACHMENT_TTL_MS = 24 * 60 * 60_000;
   private static readonly MAX_SERVED_ATTACHMENTS = 200;
 
   /** Register a local file or bytes; null when the attachment names neither. */
-  private registerAttachment(attachment: Attachment): string | null {
+  private registerAttachment(attachment: Attachment, chatId?: string): string | null {
     const localPath = attachment.url && /^(?:\/|[A-Za-z]:[\\/])/.test(attachment.url) ? attachment.url : undefined;
     if (!localPath && !attachment.data) return null;
-    const now = Date.now();
-    for (const [key, entry] of this.servedAttachments) if (entry.expiresAt <= now) this.servedAttachments.delete(key);
-    while (this.servedAttachments.size >= WebChannel.MAX_SERVED_ATTACHMENTS) {
-      const oldest = this.servedAttachments.keys().next().value;
-      if (oldest === undefined) break;
-      this.servedAttachments.delete(oldest);
-    }
-    const token = randomBytes(18).toString("base64url");
-    this.servedAttachments.set(token, {
+    return this.attachmentStore.register({
       name: attachment.name,
-      mimeType: attachment.mimeType,
+      ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
       ...(localPath ? { path: localPath } : {}),
       ...(attachment.data ? { data: attachment.data } : {}),
-      expiresAt: now + WebChannel.ATTACHMENT_TTL_MS,
+      ...(chatId ? { chatId } : {}),
     });
-    return token;
   }
 
   /** GET /attachments/<token> — the registered file, or 404. */
   private async serveAttachment(res: ServerResponse, token: string): Promise<void> {
-    const entry = this.servedAttachments.get(token);
-    if (!entry || entry.expiresAt <= Date.now()) {
+    const entry = this.attachmentStore.get(token);
+    if (!entry) {
       res.writeHead(404, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/plain" });
       res.end("Not Found");
       return;

@@ -465,6 +465,27 @@ export function useWebSocket(): UseWebSocketReturn {
           break
         }
 
+        // An attachment frame carries its own fields; the markdown text it
+        // brings is what the existing renderer shows (plan 2.8).
+        case 'attachment': {
+          const store = useSessionStore.getState()
+          store.setTyping(false)
+          const attachText = typeof data.text === 'string' && data.text.length > 0
+            ? data.text
+            : typeof data.href === 'string' && typeof data.name === 'string'
+              ? `[${data.name}](${data.href})`
+              : ''
+          if (!attachText) break
+          store.addMessage({
+            id: typeof data.messageId === 'string' ? data.messageId : generateId(),
+            sender: 'assistant',
+            text: attachText,
+            isMarkdown: true,
+            timestamp: Date.now(),
+          })
+          break
+        }
+
         case 'text':
         case 'markdown': {
           const store = useSessionStore.getState()

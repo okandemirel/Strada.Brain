@@ -64,6 +64,22 @@ export interface ConfirmationAckMessage {
   status: 'accepted' | 'unknown'
 }
 
+/**
+ * A file the daemon is handing to this chat (plan 2.8). The fields say what
+ * arrived; `text` is the markdown fallback the renderer already understands,
+ * so a client that does nothing special still shows the link.
+ */
+export interface AttachmentMessage {
+  type: 'attachment'
+  name: string
+  href: string
+  kind: 'image' | 'file'
+  text: string
+  messageId?: string
+  mimeType?: string
+  sizeBytes?: number
+}
+
 export interface TypingMessage {
   type: 'typing'
   active: boolean
@@ -89,6 +105,7 @@ export type IncomingMessage =
   | StreamEndMessage
   | ConfirmationMessage
   | ConfirmationAckMessage
+  | AttachmentMessage
   | MessageReceivedMessage
   | TypingMessage
   | SystemMessage
