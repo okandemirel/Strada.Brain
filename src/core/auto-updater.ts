@@ -9,6 +9,12 @@ import { recordUpdateEvent } from "./update-history.js";
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
 const STALE_LOCK_MAX_AGE = 30 * 60 * 1000;
+/**
+ * Boot smoke budget. The script itself gives the daemon BOOT_SMOKE_TIMEOUT_S
+ * (120s default) to answer /health, plus shutdown; 5 minutes covers a slow
+ * runner without letting a wedged boot hold the updater open forever.
+ */
+const BOOT_SMOKE_TIMEOUT = 5 * 60 * 1000;
 
 export type InstallMethod = "npm-global" | "npm-local" | "git";
 
@@ -418,6 +424,17 @@ export class AutoUpdater {
     return this.spawnWithTimeout(cmd, args, timeoutMs, cwd);
   }
 
+  /**
+   * Prove the thing that was just installed actually runs (14F6 / D75).
+   *
+   * This used to be `node dist/index.js --version`, which proves the entrypoint
+   * parses and nothing else: no channel started, no port bound, no database
+   * opened, no bootstrap stage run — precisely the failures an update
+   * introduces. `scripts/ci/boot-smoke.mjs` boots `dist/index.js start --channel
+   * web` in a throwaway home, waits for /health to answer ok, SIGTERMs it and
+   * requires a clean exit, so that is what runs when it is present. `--version`
+   * survives only as the fallback for an install that does not carry it.
+   */
   private async runPostUpdateHealthCheck(): Promise<void> {
     if (this.healthChecker) {
       await this.healthChecker();
@@ -425,6 +442,11 @@ export class AutoUpdater {
     }
     const distIndex = path.join(this.installRoot, "dist", "index.js");
     if (!fs.existsSync(distIndex)) {
+      return;
+    }
+    const bootSmoke = path.join(this.installRoot, "scripts", "ci", "boot-smoke.mjs");
+    if (fs.existsSync(bootSmoke)) {
+      await this.runCommand(process.execPath, [bootSmoke], BOOT_SMOKE_TIMEOUT, this.installRoot);
       return;
     }
     await this.runCommand(

@@ -7,6 +7,7 @@
   "files": [
     "dist",
     "scripts/source-launcher.mjs",
+    "scripts/ci/boot-smoke.mjs",
     "README.md",
     "README.tr.md",
     "README.de.md",
