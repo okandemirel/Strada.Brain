@@ -66,6 +66,21 @@ export interface CapabilitySnapshotOptions {
    *   unreported boot is not the same as a caller that never boots.
    */
   supervisorWired?: boolean | "not-measured";
+  /**
+   * What the Codebase Memory Vault actually retrieves with (plan 3.10 /
+   * audit 05.cap / D44).
+   *
+   * A normal boot wires an in-memory placeholder vector store whose
+   * `semantic` flag is FALSE: the vault skips the vector round-trip entirely
+   * and answers from FTS/BM25, wikilinks and the symbol graph. That is a
+   * real, working retrieval mode — but nothing said so, and a reader who saw
+   * a vault plus a configured embedding provider had every reason to believe
+   * vectors were in play. The report names the mode instead.
+   *
+   * `undefined` — the caller did not measure it (the doctor reads static
+   * config and does not boot).
+   */
+  vaultRetrieval?: { registered: number; semantic: boolean };
 }
 
 export interface CapabilityHealthSummary {
@@ -323,6 +338,26 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       false,
     ),
     createCapability(
+      "codebase-vault",
+      "Codebase Vault Retrieval",
+      "Knowledge",
+      "beta",
+      // A lexical vault is ACTIVE, not degraded: it answers every query the
+      // graph can answer. Only an unmeasured or empty one is not.
+      options.vaultRetrieval === undefined || options.vaultRetrieval.registered === 0
+        ? "inactive"
+        : "active",
+      options.vaultRetrieval === undefined ? "declared-only" : "health-checked",
+      options.vaultRetrieval === undefined
+        ? "Vault retrieval mode was not measured on this path."
+        : options.vaultRetrieval.registered === 0
+          ? "No vault is registered, so nothing is retrieved from one."
+          : options.vaultRetrieval.semantic
+            ? `Semantic: ${options.vaultRetrieval.registered} vault(s) answer from vectors fused with FTS/BM25, wikilinks and the symbol graph.`
+            : `Lexical only: ${options.vaultRetrieval.registered} vault(s) answer from FTS/BM25, wikilinks and the symbol graph — no vectors are queried, whatever embedding provider is configured.`,
+      false,
+    ),
+    createCapability(
       "daemon-automation",
       "Daemon Automation",
       "Operations",
@@ -554,6 +589,14 @@ export function collectConfigWarnings(
     ].filter(Boolean).join(" + ");
     warnings.push(
       `${dependents} enabled but no embedding provider available — using hash fallback embeddings (retrieval is non-semantic)`,
+    );
+  }
+
+  // The vault answers lexically while an embedding provider is configured:
+  // true, useful, and previously unsaid (plan 3.10 / D44).
+  if (options.vaultRetrieval && options.vaultRetrieval.registered > 0 && !options.vaultRetrieval.semantic) {
+    warnings.push(
+      "Vault retrieval is LEXICAL ONLY (FTS/BM25 + wikilinks + symbol graph) — the vector store wired at boot is a non-semantic placeholder, so no embeddings are queried",
     );
   }
 

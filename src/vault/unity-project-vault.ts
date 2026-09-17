@@ -146,6 +146,11 @@ export class UnityProjectVault implements IVault {
     await this.init();
   }
 
+  /** Whether this vault queries vectors at all (plan 3.10). */
+  retrievalIsSemantic(): boolean {
+    return this.adapter.isSemantic();
+  }
+
   async query(q: VaultQuery): Promise<VaultQueryResult> {
     const topK = q.topK ?? 20;
     // langFilter / pathGlob are CANDIDATE constraints, not a post-trim. They

@@ -110,6 +110,15 @@ export interface IVault {
   readFile(path: string): Promise<string>;
   writeFile?(path: string, content: string): Promise<void>;
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void;
+  /**
+   * Whether THIS vault answers with vectors as well as its lexical index.
+   *
+   * A normal boot wires a non-semantic placeholder store, so the vault
+   * answers from FTS/BM25, wikilinks and the symbol graph and never embeds
+   * a query. Nothing reported that, and a configured embedding provider made
+   * it look otherwise (plan 3.10 / audit 05.cap / D44).
+   */
+  retrievalIsSemantic?(): boolean;
   findCallers?(symbolId: string): Promise<VaultEdge[]>;
   findSymbolsByName?(name: string, limit?: number): Promise<VaultSymbol[]>;
   /** Return bidirectional links: wikilinks pointing to path + code callers of its symbols. */

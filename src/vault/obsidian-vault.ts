@@ -197,6 +197,11 @@ export class ObsidianVault implements IVault {
     await this.init();
   }
 
+  /** Whether this vault queries vectors at all (plan 3.10). */
+  retrievalIsSemantic(): boolean {
+    return this.adapter.isSemantic();
+  }
+
   async query(q: VaultQuery): Promise<VaultQueryResult> {
     const topK = q.topK ?? 20;
     // Fix P2: escapeFtsQuery throws VaultQueryError on whitespace-only input;

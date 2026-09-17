@@ -281,6 +281,8 @@ export async function finalizeChannelStartupStage(params: {
   primaryProviderSupportsStreaming?: boolean;
   /** Whether a SupervisorBrain was actually constructed this boot. */
   supervisorWired?: boolean;
+  /** What the vaults registered this boot actually retrieve with (plan 3.10). */
+  vaultRetrieval?: { registered: number; semantic: boolean };
   startupNotices: string[];
   moduleUrl: string;
 }): Promise<BootReport> {
@@ -321,6 +323,7 @@ export async function finalizeChannelStartupStage(params: {
     stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
     primaryProviderSupportsStreaming: params.primaryProviderSupportsStreaming,
     supervisorWired: params.supervisorWired,
+    ...(params.vaultRetrieval ? { vaultRetrieval: params.vaultRetrieval } : {}),
     startupNotices: params.startupNotices,
   });
 

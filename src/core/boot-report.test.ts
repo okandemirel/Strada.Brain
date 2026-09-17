@@ -452,3 +452,59 @@ describe("runtime surface of a channel hub (2026-09-09)", () => {
     expect(surfaceOf("telegram")).toContain("extended");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Plan 3.10 (audit 05.cap / D44): the report names the vault's retrieval mode.
+// ---------------------------------------------------------------------------
+describe("vault retrieval is named, not implied", () => {
+  const vaultCapability = (vaultRetrieval?: { registered: number; semantic: boolean }) =>
+    buildCapabilitySnapshot({
+      config: makeConfig(),
+      installRoot: process.cwd(),
+      channelType: "web",
+      ...(vaultRetrieval ? { vaultRetrieval } : {}),
+    }).find((c) => c.id === "codebase-vault");
+
+  it("says LEXICAL ONLY when the boot wired a non-semantic store", () => {
+    // The placeholder store makes the vault answer from FTS/BM25, wikilinks
+    // and the symbol graph. Nothing said so, and a configured embedding
+    // provider made it look like semantic search.
+    const capability = vaultCapability({ registered: 2, semantic: false });
+    expect(capability).toBeDefined();
+    expect(capability!.status).toBe("active");
+    expect(capability!.truth).toBe("health-checked");
+    expect(capability!.detail).toContain("Lexical only");
+    expect(capability!.detail).toContain("no vectors are queried");
+    expect(capability!.detail).toContain("2 vault(s)");
+
+    const warnings = collectConfigWarnings({
+      config: makeConfig(),
+      channelType: "web",
+      vaultRetrieval: { registered: 2, semantic: false },
+    });
+    expect(warnings.some((w) => w.includes("LEXICAL ONLY"))).toBe(true);
+  });
+
+  it("says semantic once vectors really are queried, and warns about nothing (guard)", () => {
+    const capability = vaultCapability({ registered: 1, semantic: true });
+    expect(capability!.status).toBe("active");
+    expect(capability!.detail).toContain("Semantic:");
+    expect(capability!.detail).not.toContain("Lexical only");
+
+    const warnings = collectConfigWarnings({
+      config: makeConfig(),
+      channelType: "web",
+      vaultRetrieval: { registered: 1, semantic: true },
+    });
+    expect(warnings.some((w) => w.includes("LEXICAL ONLY"))).toBe(false);
+  });
+
+  it("does not claim a mode nobody measured, and reports an empty registry as inactive", () => {
+    expect(vaultCapability()!.truth).toBe("declared-only");
+    expect(vaultCapability()!.detail).toContain("not measured");
+    expect(vaultCapability({ registered: 0, semantic: false })!.status).toBe("inactive");
+    // …and an unmeasured path warns about nothing.
+    expect(collectConfigWarnings({ config: makeConfig(), channelType: "web" })
+      .some((w) => w.includes("LEXICAL ONLY"))).toBe(false);
+  });
+});
