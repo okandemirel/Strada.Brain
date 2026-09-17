@@ -483,21 +483,94 @@ export function cookiePathMatches(requestPath: string, cookiePath: string): bool
 }
 
 /**
- * Same-site in the SameSite sense. There is no public-suffix list here, so two
- * hosts count as same-site only when they are equal or one is a subdomain of
- * the other. That is NARROWER than the registrable-domain rule (siblings like
- * a.example.com / b.example.com are treated as cross-site) and never wider,
- * which is the safe direction for a credential decision.
+ * Second-level labels that form a public suffix under a country-code TLD:
+ * co.uk, com.au, ac.uk, co.jp, ne.jp, gov.uk, com.br, co.in ... (round 9 #12).
+ * RFC 6265bis answers this from the public-suffix list; there is none offline
+ * here, so this pattern stands in for the overwhelming majority of them.
+ */
+const PUBLIC_SECOND_LEVEL_LABELS: ReadonlySet<string> = new Set([
+  "ac", "co", "com", "edu", "gen", "go", "gob", "gouv", "gov", "gv", "id", "in",
+  "info", "int", "k12", "lg", "mil", "ne", "net", "nom", "or", "org", "priv", "sch", "web",
+]);
+
+/**
+ * Multi-label public suffixes that host mutually untrusting content one label
+ * down (round 9 #12). These are the ones where treating the suffix itself as a
+ * site would put a cookie of `a.github.io` on `b.github.io`'s requests.
+ */
+const KNOWN_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
+  "appspot.com", "azurewebsites.net", "blob.core.windows.net", "blogspot.com",
+  "cloudfront.net", "firebaseapp.com", "fly.dev", "github.io", "gitlab.io",
+  "glitch.me", "herokuapp.com", "netlify.app", "ngrok-free.app", "ngrok.io",
+  "onrender.com", "pages.dev", "r2.dev", "s3.amazonaws.com", "sourceforge.io",
+  "storage.googleapis.com", "surge.sh", "trycloudflare.com", "vercel.app",
+  "web.app", "workers.dev",
+]);
+
+/**
+ * Is `host` a public suffix rather than a registrable domain? A public suffix is
+ * never a "site": `foo.github.io` and `github.io` are cross-site, and so are
+ * `example.co.uk` and `co.uk`.
+ *
+ * Without the public-suffix list this can only be approximated. It is
+ * approximated in the direction that WITHHOLDS cookies: a host wrongly called a
+ * public suffix makes a comparison cross-site, which is the safe answer.
+ */
+export function isLikelyPublicSuffix(host: string): boolean {
+  const labels = host.split(".").filter(Boolean);
+  // A bare TLD ("com", "uk") is a public suffix, never a site.
+  if (labels.length <= 1) return true;
+  if (KNOWN_PUBLIC_SUFFIXES.has(host)) return true;
+  if (labels.length === 2) {
+    const second = labels[0]!;
+    const tld = labels[1]!;
+    // "co.uk", "com.au", "ac.uk": a generic label under a short (ccTLD) suffix.
+    if (PUBLIC_SECOND_LEVEL_LABELS.has(second) && tld.length <= 3) return true;
+  }
+  return false;
+}
+
+/**
+ * Same-site in the SameSite sense (RFC 6265bis §5.2), SCHEMEFUL: two URLs are
+ * same-site when their schemes are equal AND their hosts belong to one
+ * registrable domain. Round 9 #12 — comparing hostnames alone was wrong in both
+ * directions:
+ *
+ *  - http and https on one host looked same-site, so a non-Secure Strict cookie
+ *    survived an https -> http redirect. Schemes are now compared.
+ *  - a public suffix looked like a site, so a `github.io` cookie was same-site
+ *    with `foo.github.io` (a browser says cross-site). An ancestor host must now
+ *    be a registrable domain (`isLikelyPublicSuffix`) for the subdomain
+ *    relationship to make the two one site.
+ *
+ * There is no public-suffix list available offline, so the registrable-domain
+ * half is deliberately NARROWER than a browser's rather than approximated
+ * wider: sibling subdomains (`a.example.com` / `b.example.com`) are treated as
+ * cross-site even though a browser calls them same-site. The cost is a cookie
+ * withheld; the alternative direction would send one the browser would not.
  */
 export function isSameSiteUrl(hopUrl: string, contextUrl: string): boolean {
+  let hop: URL;
+  let site: URL;
   try {
-    const hop = new URL(hopUrl).hostname.toLowerCase();
-    const site = new URL(contextUrl).hostname.toLowerCase();
-    if (!hop || !site) return false;
-    return hop === site || hop.endsWith(`.${site}`) || site.endsWith(`.${hop}`);
+    hop = new URL(hopUrl);
+    site = new URL(contextUrl);
   } catch {
     return false;
   }
+  // Schemeful: "http:" and "https:" are different sites. (The port is not part
+  // of a site, so it is deliberately not compared.)
+  if (hop.protocol !== site.protocol) return false;
+  const h = hop.hostname.toLowerCase().replace(/\.$/, "");
+  const s = site.hostname.toLowerCase().replace(/\.$/, "");
+  if (!h || !s) return false;
+  if (h === s) return true;
+  // One host under the other: one site only while the ancestor is a registrable
+  // domain. Anything else (siblings, unrelated hosts) is cross-site.
+  const ancestor = h.length < s.length ? h : s;
+  const descendant = ancestor === h ? s : h;
+  if (!descendant.endsWith(`.${ancestor}`)) return false;
+  return !isLikelyPublicSuffix(ancestor);
 }
 
 /** A name or value that cannot be put in a header without changing its meaning. */
@@ -745,7 +818,11 @@ async function fulfillDocumentUnderPolicy(
       method: request.method(),
       headers,
       body: request.postDataBuffer(),
-      hopHeaders: (hopUrl) => cookieHeaderFor(context, hopUrl, cookieContext),
+      // Round 9 #13: the Lax rule uses the CURRENT hop's method. A 303 (and a
+      // 301/302 on a POST) rewrites the method to GET, so the landing request
+      // of a cross-site POST is a safe top-level navigation and its Lax cookies
+      // are eligible — the requested method would have withheld them.
+      hopHeaders: (hopUrl, hop) => cookieHeaderFor(context, hopUrl, { ...cookieContext, method: hop.method }),
       onSetCookie: async (hopUrl, setCookies) => {
         const parsed = setCookies.map((h) => parseSetCookie(h, hopUrl)).filter((c): c is PolicyCookie => c !== null);
         if (parsed.length > 0) await context.addCookies(parsed);

@@ -37,6 +37,8 @@ import {
   CrossOriginRedirectError,
   credentialHeadersForRequest,
   installNetworkPolicy,
+  isLikelyPublicSuffix,
+  isSameSiteUrl,
   parseSetCookie,
   type OriginCredentials,
   type PolicyContext,
@@ -1433,5 +1435,155 @@ describe("installNetworkPolicy — Codex round 9 #11 (per-request credentials)",
     await ctx.routeHandler!(route);
     expect(route.continue).toHaveBeenCalledTimes(1);
     expect(route.continue.mock.calls[0]?.[0]).toBeUndefined();
+  });
+});
+
+// ── Codex round 9 #12: the SameSite "site" is schemeful and stops at the
+// registrable domain. Comparing hostnames alone let a non-Secure Strict cookie
+// follow an https -> http redirect on the same host, and treated a public
+// suffix (github.io, co.uk) as if it were a site of its own. ──
+
+describe("isSameSiteUrl — Codex round 9 #12", () => {
+  // Schemeful same-site: http and https are DIFFERENT sites, so a non-Secure
+  // Strict cookie must not survive a downgrade to http on the same host.
+  it("#12 a scheme change is a site change", () => {
+    expect(isSameSiteUrl("http://trusted.example/next", "https://trusted.example/start")).toBe(false);
+    expect(isSameSiteUrl("https://trusted.example/next", "http://trusted.example/start")).toBe(false);
+    expect(isSameSiteUrl("http://trusted.example/next", "http://trusted.example/start")).toBe(true);
+  });
+
+  // Public-suffix boundary: github.io is not a site, so foo.github.io and
+  // github.io (or bar.github.io) are cross-site — a browser says the same.
+  it("#12 a public suffix is not a site of its own", () => {
+    expect(isSameSiteUrl("https://foo.github.io/a", "https://github.io/b")).toBe(false);
+    expect(isSameSiteUrl("https://github.io/b", "https://foo.github.io/a")).toBe(false);
+    expect(isSameSiteUrl("https://shop.example.co.uk/a", "https://example.co.uk/b")).toBe(true);
+    expect(isSameSiteUrl("https://example.co.uk/a", "https://co.uk/b")).toBe(false);
+    expect(isSameSiteUrl("https://example.com/a", "https://com/b")).toBe(false);
+    expect(isSameSiteUrl("https://bucket.s3.amazonaws.com/a", "https://s3.amazonaws.com/b")).toBe(false);
+  });
+
+  it("#12 isLikelyPublicSuffix classifies the ancestors the rule depends on", () => {
+    for (const host of ["com", "uk", "co.uk", "com.au", "ac.uk", "github.io", "vercel.app", "s3.amazonaws.com"]) {
+      expect(isLikelyPublicSuffix(host), host).toBe(true);
+    }
+    for (const host of ["example.com", "example.co.uk", "foo.github.io", "trusted.example", "a.b.example.com"]) {
+      expect(isLikelyPublicSuffix(host), host).toBe(false);
+    }
+  });
+
+  // The guard: correct traffic still counts as same-site.
+  it("#12 a registrable domain and its subdomains are one site", () => {
+    expect(isSameSiteUrl("https://www.example.com/a", "https://example.com/b")).toBe(true);
+    expect(isSameSiteUrl("https://example.com/a", "https://deep.www.example.com/b")).toBe(true);
+    expect(isSameSiteUrl("https://trusted.example/a", "https://trusted.example/b")).toBe(true);
+    expect(isSameSiteUrl("https://a.example.com:8443/a", "https://example.com/b")).toBe(true);
+  });
+
+  // Documented narrowing: no public-suffix list is available offline, so
+  // siblings under one registrable domain are treated as cross-site. A browser
+  // calls them same-site; withholding a cookie is the safe direction.
+  it("#12 sibling subdomains stay cross-site (narrower than a browser, by choice)", () => {
+    expect(isSameSiteUrl("https://a.example.com/x", "https://b.example.com/y")).toBe(false);
+  });
+
+  it("#12 a garbage URL is never same-site", () => {
+    expect(isSameSiteUrl("not a url", "https://trusted.example/")).toBe(false);
+    expect(isSameSiteUrl("https://trusted.example/", "not a url")).toBe(false);
+  });
+});
+
+describe("installNetworkPolicy — Codex round 9 #12/#13 at the hop", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+  });
+
+  async function install() {
+    const ctx = fakeContext();
+    const page = fakePage();
+    await installNetworkPolicy(ctx, page, { resolver, onForbiddenNavigation: vi.fn(), onBlockedRequest: vi.fn() });
+    return { ctx };
+  }
+
+  function jar(ctx: FakeContext, cookies: Array<Record<string, unknown>>): void {
+    (ctx.cookies as ReturnType<typeof vi.fn>).mockImplementation(async () => cookies);
+  }
+
+  function sentHeaders(call: number): Record<string, string> {
+    return (mockFetch.mock.calls[call]?.[1] as { headers: Record<string, string> }).headers;
+  }
+
+  // #12: an https document redirected to http on the SAME host is a site
+  // change, so a non-Secure Strict cookie must not travel on the second hop.
+  it("#12 a Strict cookie does not follow an https -> http redirect on the same host", async () => {
+    const { ctx } = await install();
+    jar(ctx, [
+      { name: "strict", value: "1", domain: "trusted.example", path: "/", sameSite: "Strict" },
+      { name: "lax", value: "2", domain: "trusted.example", path: "/", sameSite: "Lax" },
+    ]);
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "http://trusted.example/next"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>next</html>"));
+
+    await ctx.routeHandler!(
+      documentRoute("https://trusted.example/start", {
+        allHeaders: async () => ({ "sec-fetch-site": "none", "sec-fetch-dest": "document" }),
+      }),
+    );
+
+    expect(sentHeaders(0)["cookie"]).toBe("strict=1; lax=2");
+    // Second hop: another site, and a safe top-level navigation -> Lax only.
+    expect(sentHeaders(1)["cookie"]).toBe("lax=2");
+  });
+
+  // #13: fetchWithPolicy turns the POST into a GET at a 303, so the landing
+  // request is a safe top-level navigation and its Lax cookie is eligible. The
+  // cookie context used to keep the ORIGINAL method and withheld it.
+  it("#13 a cross-site POST -> 303 -> GET landing receives the Lax cookie", async () => {
+    const { ctx } = await install();
+    jar(ctx, [{ name: "lax", value: "2", domain: "trusted.example", path: "/", sameSite: "Lax" }]);
+    mockFetch.mockResolvedValueOnce(redirectResponse(303, "/landing"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>landing</html>"));
+
+    await ctx.routeHandler!(
+      documentRoute("https://trusted.example/submit", {
+        method: () => "POST",
+        postDataBuffer: () => Buffer.from("x=1"),
+        allHeaders: async () => ({ "sec-fetch-site": "cross-site", "sec-fetch-dest": "document" }),
+      }),
+    );
+
+    expect(sentHeaders(0)["cookie"]).toBeUndefined(); // the POST itself: unsafe method
+    expect(sentHeaders(1)["cookie"]).toBe("lax=2"); // the GET the 303 produced
+    expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "GET" }));
+  });
+
+  // The opposite direction: a 307 preserves the method, so the second hop is
+  // still an unsafe cross-site POST and the Lax cookie stays home.
+  it("#13 a cross-site POST -> 307 -> POST receives no Lax cookie", async () => {
+    const { ctx } = await install();
+    jar(ctx, [{ name: "lax", value: "2", domain: "trusted.example", path: "/", sameSite: "Lax" }]);
+    mockFetch.mockResolvedValueOnce(redirectResponse(307, "/landing"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>landing</html>"));
+
+    await ctx.routeHandler!(
+      documentRoute("https://trusted.example/submit", {
+        method: () => "POST",
+        postDataBuffer: () => Buffer.from("x=1"),
+        allHeaders: async () => ({ "sec-fetch-site": "cross-site", "sec-fetch-dest": "document" }),
+      }),
+    );
+
+    expect(sentHeaders(0)["cookie"]).toBeUndefined();
+    expect(sentHeaders(1)["cookie"]).toBeUndefined();
+    expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
   });
 });

@@ -574,8 +574,16 @@ export interface FetchWithPolicyOptions {
    * Headers for ONE hop, merged over `headers` after the cross-origin strip
    * (Codex round 7 #14: the browser supplies the cookies its jar holds for
    * exactly this hop's URL). Never carried to the next hop.
+   *
+   * `hop` describes the request as it will actually be sent (round 9 #13): a
+   * 303 — and a 301/302 on a POST — rewrites the method to GET, and the
+   * SameSite=Lax rule is about the CURRENT hop's method, not the one the
+   * navigation started with (RFC 6265bis §5.6.7.1).
    */
-  hopHeaders?: (url: string) => Promise<Record<string, string> | undefined> | Record<string, string> | undefined;
+  hopHeaders?: (
+    url: string,
+    hop: { method: string; redirectCount: number },
+  ) => Promise<Record<string, string> | undefined> | Record<string, string> | undefined;
   /**
    * Called with every hop's Set-Cookie headers (each one separately, undici's
    * `getSetCookie`) and the URL that set them, redirect hops included, before
@@ -739,7 +747,7 @@ export async function fetchWithPolicy(
         carriedHeaders = stripCredentialHeaders(carriedHeaders);
       }
       previousOrigin = origin;
-      const perHop = await options.hopHeaders?.(currentUrl);
+      const perHop = await options.hopHeaders?.(currentUrl, { method, redirectCount: hop });
       const headers = perHop ? { ...carriedHeaders, ...perHop } : carriedHeaders;
 
       const response = (await undiciFetch(currentUrl, {
