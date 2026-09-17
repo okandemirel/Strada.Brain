@@ -8,6 +8,7 @@ import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
 import { appendLeaseLedger, systemOwnedDeletionReason } from "./system-owned-path.js";
+import { isDerivedBuildOutput } from "./derived-build-output.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -311,56 +312,12 @@ const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".vite",
 ]);
 /**
- * Compiler output, at ANY depth.
- *
- * The excludes above only ever looked at a path's FIRST segment, so
- * `Tools/PixelFlowCoreBuild/obj/Debug/…` and its `bin/Debug/…` twin travelled
- * with every lease — and since the project builds them too, all thirteen came
- * back as CONFLICTS and the whole commit published nothing (measured live
- * 2026-09-12 11:26 and 11:51). These are derived from the sources beside them;
- * nothing is lost by leaving them where they were built.
- *
- * `obj/` is .NET's own name for its intermediate directory; `bin/` is only
- * derived when it holds a build configuration, so a repository's own `bin/`
- * of scripts is untouched.
+ * The derived-output contract now lives in one place: it also decides how
+ * serious a publication CONFLICT is (src/tasks/publication.ts), and a rule with
+ * two callers and two failure modes belongs in its own tested module.
+ * Re-exported here because callers and tests import it from the manager.
  */
-export function isDerivedBuildOutput(rel: string): boolean {
-  const parts = rel.split(/[/\\]/);
-  const config = /^(?:Debug|Release)$/i;
-  // A target-framework folder: obj/net8.0/…, obj/netstandard2.1/…
-  const framework = /^net(?:standard|coreapp)?[0-9][0-9.]*(?:-[a-z0-9.]+)?$/i;
-  // The files .NET writes directly into obj/.
-  // NAMES .NET WRITES, not any file that ends in .cache: `Assets/obj/terrain.cache`
-  // is a game's own baked data and was classified as compiler output (Codex
-  // 2026-09-12 T#10).
-  const intermediate = new RegExp(
-    "^(?:" +
-      "project\\.(?:assets\\.json|nuget\\.cache|packagespec\\.json)" +
-      // NuGet's restore graph, written into obj/ beside the rest: it was not
-      // in this list, so it travelled with every lease, the project restored
-      // its own copy, and the two CONFLICTED — which failed the goal that had
-      // done the work (measured live 2026-09-16 19:03).
-      "|.+\\.(?:csproj|vbproj|fsproj)\\.nuget\\.dgspec\\.json" +
-      "|.+\\.(?:csproj|vbproj|fsproj)\\.(?:nuget\\.g\\.(?:props|targets)|CopyComplete|FileListAbsolute\\.txt)" +
-      "|.+\\.(?:assets|AssemblyInfoInputs|CoreCompileInputs|GeneratedMSBuildEditorConfig)\\.(?:cache|editorconfig)" +
-      "|.+\\.AssemblyInfo\\.cs" +
-      "|.+\\.sourcelink\\.json" +
-    ")$",
-    "i",
-  );
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const next = parts[i + 1] ?? "";
-    // `bin` and `obj` are only derived when they hold what a compiler puts
-    // there. The bare directory NAME is not enough: a game's own
-    // `Assets/Models/obj/Hero.obj` was classified derived and dropped from
-    // publication, which loses authored work (Codex 2026-09-12 S#8).
-    if (part !== "bin" && part !== "obj") continue;
-    if (config.test(next) || framework.test(next)) return true;
-    if (part === "obj" && i + 2 === parts.length && intermediate.test(next)) return true;
-  }
-  return false;
-}
+export { isDerivedBuildOutput };
 
 
 const DERIVED_COPY_EXCLUDES = new Set([

@@ -16,7 +16,7 @@ import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { runProcess } from "../../utils/process-runner.js";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed, isDerivedBuildOutput } from "./workspace-lease-manager.js";
+import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
 
 let source: string;
@@ -1521,35 +1521,10 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(readFileSync(join(source, "bin", "tools.sh"), "utf8")).toBe("#!/bin/sh\necho edited\n");
   });
 
-  it("knows what a build directory looks like, and what merely shares its name", () => {
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Debug", "a.dll"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "net8.0", "a.dll"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "netstandard2.1", "Core.AssemblyInfo.cs"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "project.assets.json"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.csproj.nuget.g.props"))).toBe(true);
-    // NuGet's restore graph: it was NOT in this list, so it travelled with
-    // every lease, the project restored its own copy, and the conflict failed
-    // the goal that had done the work (measured live 2026-09-16 19:03).
-    expect(isDerivedBuildOutput(join("Tools", "PixelFlowCoreBuild", "obj", "PixelFlow.Core.csproj.nuget.dgspec.json"))).toBe(true);
-    // …and a game's own file that merely ends in dgspec.json is not it.
-    expect(isDerivedBuildOutput(join("Assets", "Data", "obj", "levels.dgspec.json"))).toBe(false);
-    expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
-    expect(isDerivedBuildOutput(join("bin", "tools.sh"))).toBe(false);
-    expect(isDerivedBuildOutput(join("Assets", "Scripts", "Object.cs"))).toBe(false);
-    // A GAME'S OWN ASSETS in a folder called obj: a Wavefront model under
-    // Assets/Models/obj was classified derived and dropped from publication,
-    // which loses authored work (Codex 2026-09-12 S#8).
-    expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.obj"))).toBe(false);
-    // A GAME'S OWN baked data in a folder called obj is not compiler output
-    // either, whatever its extension (Codex 2026-09-12 T#10).
-    expect(isDerivedBuildOutput(join("Assets", "obj", "terrain.cache"))).toBe(false);
-    expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.cache"))).toBe(false);
-    // …while the names .NET actually writes there still count.
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.assets.cache"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.csproj.FileListAbsolute.txt"))).toBe(true);
-    expect(isDerivedBuildOutput(join("Assets", "obj", "Pig", "body.fbx"))).toBe(false);
-    expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Custom", "a.dll"))).toBe(false);
-  });
+  // The path-classification cases moved to derived-build-output.test.ts: the
+  // same predicate also decides conflict severity in src/tasks/publication.ts,
+  // so its contract is tested once, beside itself, not inside an fs-heavy lease
+  // suite. What stays here is the LEASE behaviour that depends on it (above).
 });
 
 describe("publication never runs unlocked (Codex 2026-09-12 R#14)", () => {

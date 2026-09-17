@@ -66,6 +66,31 @@ describe("a conflict on generated output", () => {
     expect(mixed.loss).not.toContain("dgspec");
   });
 
+  // A-missed#4 (2026-09-17): the severity of a conflict is decided by
+  // isDerivedBuildOutput, so an authored file the rule misreads as generated is
+  // reported as "nothing the run authored was lost" — and stays in quarantine.
+  // MSBuild writes <Assembly>.AssemblyInfo.cs under obj/<Config>/<Tfm>/, so the
+  // name in a game's OWN obj/ folder does not make the file generated.
+  it("an authored AssemblyInfo.cs in the game's own obj/ folder is a LOSS, not a note", () => {
+    const verdict = judgePublication({
+      written: ["Assets/Scripts/Other.cs"],
+      conflicts: ["Assets/obj/PixelFlow.Runtime.AssemblyInfo.cs"],
+      quarantined: 1,
+    });
+    expect(verdict.note).toBeUndefined();
+    expect(verdict.loss).toContain("Assets/obj/PixelFlow.Runtime.AssemblyInfo.cs");
+    expect(verdict.loss).toContain("did not reach the project");
+  });
+
+  it("…and the same file where the compiler really writes it is disclosed, not lost", () => {
+    const verdict = judgePublication({
+      conflicts: ["Tools/X/obj/Debug/net8.0/PixelFlow.Runtime.AssemblyInfo.cs"],
+      quarantined: 1,
+    });
+    expect(verdict.loss).toBeUndefined();
+    expect(verdict.note).toContain("the project builds these for itself");
+  });
+
   it("and a generated file that could not even be preserved is still a loss", () => {
     const gone = judgePublication({
       conflicts: ["Tools/X/obj/Core.csproj.nuget.dgspec.json"],

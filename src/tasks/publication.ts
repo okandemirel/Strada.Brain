@@ -10,7 +10,9 @@
  * 2026-09-12 AE#4). One adjudicator now answers for both.
  */
 
-import { isDerivedBuildOutput } from "../agents/multi/workspace-lease-manager.js";
+// The conflict-severity rule and the lease's copy rule are the SAME contract,
+// imported from its own module rather than from either caller.
+import { isDerivedBuildOutput } from "../agents/multi/derived-build-output.js";
 
 export interface LeaseCommitResult {
   readonly written?: readonly string[];
