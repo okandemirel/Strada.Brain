@@ -160,10 +160,16 @@ export function entryOwnership(row: OwnedRow): SummaryOwnership {
  */
 export function ownershipKey(row: OwnedRow): string {
   const o = entryOwnership(row);
+  const shared = o.shared === true;
+  // SHARING IS ITS OWN FIELD, never a chat-id string (Codex round 9 #9): the
+  // "*shared*" sentinel collided with a private row whose chatId is literally
+  // "*shared*", so the two landed in one partition and the summary of that
+  // private row could be written shared — visible from any chat.
   return JSON.stringify([
     o.userId ?? "",
     o.projectId ?? "",
-    o.shared === true ? "*shared*" : o.chatId,
+    shared,
+    shared ? "" : o.chatId,
   ]);
 }
 

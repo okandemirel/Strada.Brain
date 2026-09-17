@@ -1046,6 +1046,20 @@ describe("migration merge uses rank fusion, not raw scores (finding 18)", () => 
     expect([...scores].sort((a, b) => b - a)).toEqual(scores);
   });
 
+  it("a text-only result keeps the index's own scores and order (round 9 #10)", async () => {
+    // With the vector list empty there is nothing to reconcile, and fusing the
+    // single list with an empty one replaced its comparable scores with rank
+    // weights — changing which rows MMR then kept.
+    const { ctx } = build([0.99, 0.98, 0.97]);
+    const search = vi.fn(async () => []);
+    (ctx as any).hnswStore = { search, count: () => 0 };
+    const textOnly = retrieveTFIDF(ctx, query, { mode: "text", query, limit: 5 },
+      (e) => e.embeddingProvenance === "other-model:4d");
+    const hits = await retrieveSemantic(ctx, query, { limit: 5 });
+    expect(hits.map((h) => h.entry.id as string)).toEqual(textOnly.map((h) => h.entry.id as string));
+    expect(hits.map((h) => h.score as number)).toEqual(textOnly.map((h) => h.score as number));
+  });
+
   it("with no row awaiting migration the raw provider scores are kept untouched (guard)", async () => {
     const { ctx, entries } = build([0.9, 0.8, 0.7]);
     entries.delete("t1");

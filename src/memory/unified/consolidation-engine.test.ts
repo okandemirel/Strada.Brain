@@ -1472,6 +1472,29 @@ describe("consolidation ownership (finding 17)", () => {
     );
   });
 
+  it("a private chat named like the shared sentinel is not the shared partition (round 9 #9)", () => {
+    // The key encoded sharing as the chat-id string "*shared*", so a private
+    // row whose chatId is literally "*shared*" shared a partition with truly
+    // shared rows — and the summary of that private row could be written
+    // shared, which matches every scope.
+    const sentinelChat = { chatId: "*shared*", userId: "alice", projectId: "proj-A" };
+    const trulyShared = { chatId: "chat-A", userId: "alice", projectId: "proj-A", shared: true };
+    expect(ownershipKey(sentinelChat)).not.toBe(ownershipKey(trulyShared));
+
+    // …in either member order, the summary of the two stays private.
+    for (const members of [[trulyShared, sentinelChat], [sentinelChat, trulyShared]]) {
+      const owner = summaryOwnership(members);
+      expect(owner.shared).toBeUndefined();
+      expect(owner.userId).toBe("alice");
+      expect(owner.projectId).toBe("proj-A");
+    }
+    // Guard: two genuinely shared rows of one user/project are still one
+    // partition, and their summary may stay shared.
+    const sharedB = { chatId: "chat-B", userId: "alice", projectId: "proj-A", shared: true };
+    expect(ownershipKey(trulyShared)).toBe(ownershipKey(sharedB));
+    expect(summaryOwnership([trulyShared, sharedB]).shared).toBe(true);
+  });
+
   it("findClusters never puts two owners in one cluster", async () => {
     const entries = new Map<string, unknown>();
     entries.set("o1", makeMemEntry("o1", "alpha beta gamma", { chatId: "chat-A", userId: "alice", projectId: "proj-A" }));

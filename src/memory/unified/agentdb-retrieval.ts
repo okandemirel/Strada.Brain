@@ -305,7 +305,12 @@ export async function retrieveSemantic(
   // calibration), so the survivors depended on the scorers' unrelated scales.
   // Rank fusion when both scorers contributed; with only the index list the
   // scores are already comparable and are passed through exactly as reported.
-  const results = textHits.length > 0 ? fuseRankedLists([vectorHits, textHits]) : vectorHits;
+  // …and with only ONE non-empty list there is nothing to reconcile: fusing it
+  // with an empty one replaced comparable scores with rank weights and changed
+  // the order MMR then selected from (Codex round 9 #10).
+  const results = vectorHits.length > 0 && textHits.length > 0
+    ? fuseRankedLists([vectorHits, textHits])
+    : textHits.length > 0 ? textHits : vectorHits;
 
   // Record search time for all paths
   const searchTime = performance.now() - startTime;
