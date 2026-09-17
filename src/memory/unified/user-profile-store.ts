@@ -416,8 +416,12 @@ export class UserProfileStore {
    * Returns null if no link exists for the given channel+user pair.
    */
   resolveLinkedIdentity(channelType: string, channelUserId: string): string | null {
+    // CONFIRMED links only. linkIdentity inserts confirmed = 0 and the
+    // resolver never checked it, so any caller that minted a pending link
+    // merged memory across channels before anyone confirmed it (audit 12-cap,
+    // 2026-09-13).
     const row = this.db.prepare(
-      "SELECT unified_user_id FROM identity_links WHERE channel_type = ? AND channel_user_id = ?",
+      "SELECT unified_user_id FROM identity_links WHERE channel_type = ? AND channel_user_id = ? AND confirmed = 1",
     ).get(channelType, channelUserId) as { unified_user_id: string } | undefined;
     return row?.unified_user_id ?? null;
   }

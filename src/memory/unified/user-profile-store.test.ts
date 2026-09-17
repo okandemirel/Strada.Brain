@@ -246,6 +246,10 @@ describe("UserProfileStore", () => {
   describe("identity links", () => {
     it("should link and resolve identity across channels", () => {
       store.linkIdentity("unified-user-1", "telegram", "tg_123", "Alice");
+      // A PENDING link resolves nothing: merging memory across channels
+      // before anyone confirmed the link was the defect (audit 12-cap).
+      expect(store.resolveLinkedIdentity("telegram", "tg_123")).toBeNull();
+      store.confirmIdentityLink(store.getLinkedIdentities("unified-user-1")[0]!.id);
       const resolved = store.resolveLinkedIdentity("telegram", "tg_123");
       expect(resolved).toBe("unified-user-1");
     });
