@@ -2661,10 +2661,13 @@ async function initializeLearning(
     // Round 10 #14: terminal settlement goes on the SAME serial queue, so it runs
     // behind the tool events of the run it is judging. Called directly (as the
     // engine teardown did), it could settle before its own evidence arrived.
+    // Round 11 #7: `durable` — that queue drops its oldest item on overflow and
+    // discards its backlog at shutdown, so the ordering fix was handing the one
+    // event that must never be lost to the one place designed to lose it.
     pipeline.setSettlementBarrier((task) => {
       learningQueue.enqueue(async () => {
         await task();
-      });
+      }, { durable: true });
     });
 
     logger.info("Learning pipeline initialized", {
