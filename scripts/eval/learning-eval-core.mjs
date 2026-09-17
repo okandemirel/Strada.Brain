@@ -556,7 +556,12 @@ export function scoreDeterministicRubric(answer, rubric) {
  * quality arm's contribution to measures 2 and 3.
  */
 export function summariseQuality(cases, thresholds) {
-  const compared = cases.filter((c) => c.baseScore !== null && c.guidedScore !== null);
+  const scorable = cases.filter((c) => c.baseScore !== null && c.guidedScore !== null);
+  // A case nothing was retrieved for is NOT one of the compared: see
+  // {@link vacuousQualityCase}. Excluded from the denominator as well as from
+  // the verdict, because a pair that differs only by sampling would otherwise
+  // halve the harm rate of the cases guidance really was injected into.
+  const compared = scorable.filter((c) => vacuousQualityCase(c) === undefined);
   if (compared.length === 0) {
     // An unmeasured arm has to say WHY in terms a reader can act on: the
     // provider's own error, not "nothing was scorable".
@@ -564,17 +569,27 @@ export function summariseQuality(cases, thresholds) {
     if (cases.length === 0) {
       return unmeasured("answer-quality", "the dataset has no quality cases (nothing was asked of a provider)");
     }
-    return unmeasured(
-      "answer-quality",
-      errors.length > 0
-        ? `every prompt failed at the provider: ${errors.join("; ")}`
-        : "no case produced two scorable answers",
-      { cases },
-    );
+    if (errors.length > 0) {
+      return unmeasured("answer-quality", `every prompt failed at the provider: ${errors.join("; ")}`, { cases });
+    }
+    const vacuous = scorable.filter((c) => vacuousQualityCase(c) !== undefined);
+    if (vacuous.length > 0) {
+      return unmeasured(
+        "answer-quality",
+        `no case had any guidance to compare: ${vacuous
+          .map((c) => `${c.id}: ${vacuousQualityCase(c)}`)
+          .join("; ")}`,
+        { cases },
+      );
+    }
+    return unmeasured("answer-quality", "no case produced two scorable answers", { cases });
   }
   const worse = compared.filter((c) => c.guidedScore < c.baseScore);
   const accepted = compared.filter((c) => c.guidedScore >= thresholds.minQualityAccept).length;
-  const tokens = cases.reduce((sum, c) => sum + (c.tokens ?? 0), 0);
+  // Over the COMPARED cases, for the same reason the harm rate is: tokens spent
+  // on a case whose guided prompt was the base prompt buy no measurement of what
+  // guidance costs, and counting them would let a vacuous case regress measure 3.
+  const tokens = compared.reduce((sum, c) => sum + (c.tokens ?? 0), 0);
   const measured = {
     name: "answer-quality",
     compared: compared.length,
@@ -615,6 +630,26 @@ export function summariseQuality(cases, thresholds) {
 }
 
 /**
+ * Is this case a comparison of nothing with nothing?
+ *
+ * When proactive retrieval returns ZERO insights, `runQualityArm` sends the same
+ * system prompt twice: the "guided" answer is the base answer with a different
+ * sampling seed. Scoring that pair measures the provider's variance, not the
+ * effect of learned guidance — and reporting it as measured-and-fine is worse
+ * than reporting a gap, because it reads as evidence that guidance did no harm
+ * when no guidance existed. So it is NOT MEASURED, per case, by name.
+ *
+ * Only a REPORTED zero counts. `injectedGuidance` absent means the caller did
+ * not say how many insights it injected (a hand-built case in a test, a result
+ * from before the field existed), and inventing "none" for it would turn silence
+ * into a finding. `runQualityArm` — the only producer — always reports it.
+ */
+export function vacuousQualityCase(c) {
+  if (c.injectedGuidance !== 0) return undefined;
+  return "no guidance was retrieved, so the guided prompt was identical to the base prompt — nothing was compared";
+}
+
+/**
  * Why a requested quality case cannot be counted as measured. Each entry names
  * the case and what stopped it, so the verdict's reason is actionable.
  */
@@ -623,6 +658,11 @@ export function incompleteQualityCases(cases) {
   for (const c of cases ?? []) {
     if (c.baseScore === null || c.baseScore === undefined || c.guidedScore === null || c.guidedScore === undefined) {
       incomplete.push(`${c.id}: no scorable answer pair${c.error ? ` (${c.error})` : ""}`);
+      continue;
+    }
+    const vacuous = vacuousQualityCase(c);
+    if (vacuous !== undefined) {
+      incomplete.push(`${c.id}: ${vacuous}`);
       continue;
     }
     if (c.error) incomplete.push(`${c.id}: ${c.error}`);

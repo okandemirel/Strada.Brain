@@ -524,10 +524,118 @@ describe("learning-eval answer-quality arm", () => {
       if (call > 2) throw new Error("API error 429: rate limited");
       return { text: "fix it", tokens: 5 };
     };
-    const q = await runQualityArm({ dataset: twoCases, generate, retriever: null, thresholds: DEFAULT_THRESHOLDS });
+    // A retriever that returns something, so the case that DID answer is a real
+    // comparison: with no retriever at all every case is vacuous (round 12 #25,
+    // second pass), which is true but is not the gap this case is about.
+    const retriever = { getInsightsForTask: async () => ({ insights: ["[learned] build it first"] }) };
+    const q = await runQualityArm({ dataset: twoCases, generate, retriever, thresholds: DEFAULT_THRESHOLDS });
     expect(q.state, "one answered prompt and one rate-limited prompt reported as measured-good").toBe(STATE.UNMEASURED);
     expect(q.reason).toContain("429");
     expect(q.compared).toBe(1);
+  });
+
+  /**
+   * A COMPARISON OF NOTHING WITH NOTHING IS NOT A MEASUREMENT (Codex round 12
+   * #25, second pass).
+   *
+   * When retrieval returns zero insights the guided prompt IS the base prompt:
+   * the same system text, the same question, two answers that differ only by
+   * sampling. Scoring them and reporting "measured, no harm" is worse than a
+   * gap, because it looks like evidence that guidance did no damage — when no
+   * guidance was ever injected. Such a case is NOT MEASURED, it says so per
+   * case, and it is out of the harm denominator so it cannot dilute the rate of
+   * the cases that really were compared.
+   */
+  it("a case whose retrieval returned nothing is NOT MEASURED, and the prompts prove it", async () => {
+    const seen: string[] = [];
+    const generate = async (system: string) => {
+      seen.push(system);
+      return { text: "build the dependency first", tokens: 10 };
+    };
+    const retriever = { getInsightsForTask: async () => ({ insights: [] }) };
+
+    const q = await runQualityArm({ dataset, generate, retriever, thresholds: DEFAULT_THRESHOLDS });
+
+    // The vacuity itself: the guided prompt was the base prompt, verbatim.
+    expect(seen).toHaveLength(2);
+    expect(seen[1], "the guided prompt differed, so this case was not vacuous").toEqual(seen[0]);
+    expect(q.state, "a comparison of the base prompt with itself was reported as measured").toBe(
+      STATE.UNMEASURED,
+    );
+    expect(q.reason).toContain("q1");
+    expect(q.reason).toMatch(/no guidance was retrieved/u);
+    // Nothing was compared, so no harm rate is reported — and none is invented
+    // out of a 0/0.
+    expect(q.harm).toBeUndefined();
+  });
+
+  it("a vacuous case is out of the harm denominator, so it cannot dilute a real regression", () => {
+    const q = summariseQuality(
+      [
+        // Guidance was injected and it made the answer worse: the real finding.
+        { id: "real", injectedGuidance: 2, baseScore: 1, guidedScore: 0.4, tokens: 20 },
+        // Nothing was retrieved: the two answers differ only by sampling.
+        { id: "vacuous", injectedGuidance: 0, baseScore: 1, guidedScore: 1, tokens: 20 },
+      ],
+      DEFAULT_THRESHOLDS,
+    );
+
+    expect(q.state).toBe(STATE.UNMEASURED);
+    expect(q.reason).toContain("vacuous");
+    // 1 of 1 really compared, not 1 of 2: a case nothing was injected into must
+    // not halve the harm rate of the one that was.
+    expect(q.harm.compared).toBe(1);
+    expect(q.harm.rate).toBe(1);
+    expect(q.harm.cases.map((c: { id: string }) => c.id)).toEqual(["real"]);
+
+    // PRECEDENCE, unchanged: the regression the measured case found still wins.
+    const probe = {
+      id: "p", decision: DECISION.CORRECT, repeatable: true, repeatedError: false,
+      accepted: true, cost: 1, recalled: [{ instinctId: "i", family: "f" }],
+    };
+    const arms = [
+      summariseArm({ name: "warm-learning-off", trained: true, learningEnabled: false, probes: [probe] }),
+      summariseArm({ name: "warm-learning-on", trained: true, learningEnabled: true, probes: [probe] }),
+    ];
+    const m = measureHarmfulRecall(arms, DEFAULT_THRESHOLDS, q);
+    expect(m.state, "harm found beside a vacuous case was dropped").toBe(STATE.REGRESSED);
+    const v = decideVerdict({
+      measures: [m],
+      arms: [],
+      requested: [{ name: "answer-quality", state: q.state, reason: q.reason }],
+    });
+    expect(v.exitCode, "NOT MEASURED outranked a real regression").toBe(EXIT.MEASURED_REGRESSED);
+  });
+
+  it("THE OPPOSITE DIRECTION: cases that did retrieve guidance still measure normally", () => {
+    const q = summariseQuality(
+      [
+        { id: "a", injectedGuidance: 3, baseScore: 1, guidedScore: 1, tokens: 20 },
+        { id: "b", injectedGuidance: 1, baseScore: 0.5, guidedScore: 1, tokens: 20 },
+      ],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state, "a complete run was downgraded by the vacuity rule").toBe(STATE.GOOD);
+    expect(q.harm.compared).toBe(2);
+    expect(q.harm.worse).toBe(0);
+    expect(q.reason).toBeUndefined();
+  });
+
+  it("an arm where NOTHING was retrieved for any case is unmeasured and says which", () => {
+    const q = summariseQuality(
+      [
+        { id: "a", injectedGuidance: 0, baseScore: 1, guidedScore: 1, tokens: 20 },
+        { id: "b", injectedGuidance: 0, baseScore: 1, guidedScore: 0.5, tokens: 20 },
+      ],
+      DEFAULT_THRESHOLDS,
+    );
+    expect(q.state).toBe(STATE.UNMEASURED);
+    expect(q.reason).toMatch(/no guidance was retrieved/u);
+    expect(q.reason).toContain("a");
+    expect(q.reason).toContain("b");
+    // Nothing was compared, so there is no harm rate to report — and no
+    // invented one either.
+    expect(q.harm).toBeUndefined();
   });
 
   it("a dataset with no quality cases is unmeasured, not a pass", async () => {
