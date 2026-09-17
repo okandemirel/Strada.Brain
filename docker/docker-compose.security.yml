@@ -44,6 +44,9 @@ services:
       - READ_ONLY_MODE=true
       - SHELL_ENABLED=false
       - RATE_LIMIT_ENABLED=true
+      # 127.0.0.1 is the container's own loopback; the published port below
+      # reaches nothing unless the listeners bind all interfaces (14F2/D71).
+      - BIND_HOST=${BIND_HOST:-0.0.0.0}
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     

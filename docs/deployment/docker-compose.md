@@ -75,6 +75,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `BIND_HOST` | `0.0.0.0` (in compose; `127.0.0.1` otherwise) | Address the listeners bind to. A container must bind all interfaces or a published port reaches nothing |
 | `DASHBOARD_PORT` | `3100` | Dashboard port |
 | `METRICS_PORT` | `9090` | Prometheus metrics port |
 | `MEMORY_ENABLED` | `true` | Enable persistent memory |

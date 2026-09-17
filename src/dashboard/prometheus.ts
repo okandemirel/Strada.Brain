@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from "prom-client";
 import { getLogger } from "../utils/logger.js";
+import { resolveBindHost } from "../core/bind-host.js";
 import type { MetricsCollector } from "./metrics.js";
 
 /**
@@ -15,6 +16,8 @@ import type { MetricsCollector } from "./metrics.js";
  */
 export class PrometheusMetrics {
   private readonly port: number;
+  /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
+  private readonly bindHost: string;
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: () => { loaded: number; directories: string[] } | undefined;
@@ -44,9 +47,11 @@ export class PrometheusMetrics {
     port: number,
     metrics: MetricsCollector,
     getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
-    getPluginsStats?: () => { loaded: number; directories: string[] } | undefined
+    getPluginsStats?: () => { loaded: number; directories: string[] } | undefined,
+    bindHost: string = resolveBindHost(),
   ) {
     this.port = port;
+    this.bindHost = bindHost;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
     this.getPluginsStats = getPluginsStats as () => { loaded: number; directories: string[] } | undefined;
@@ -202,14 +207,14 @@ export class PrometheusMetrics {
 
       const onListening = (): void => {
         server.off("error", onError);
-        this.logger.info(`Prometheus metrics server running at http://localhost:${this.port}/metrics`);
+        this.logger.info(`Prometheus metrics server running at http://${this.bindHost}:${this.port}/metrics`);
         resolve();
       };
 
       server.once("error", onError);
       server.once("listening", onListening);
       try {
-        server.listen(this.port, "127.0.0.1");
+        server.listen(this.port, this.bindHost);
       } catch (error) {
         onError(error as NodeJS.ErrnoException);
       }

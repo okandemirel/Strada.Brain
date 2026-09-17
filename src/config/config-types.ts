@@ -133,6 +133,7 @@ export type EnvVarName =
   | "LOG_LEVEL"
   | "LOG_FILE"
   | "WEB_CHANNEL_PORT"
+  | "BIND_HOST"
   | "PLUGIN_DIRS"
   | "OPENAI_MODEL"
   | "DEEPSEEK_MODEL"
@@ -816,6 +817,8 @@ export interface Config {
 
   // Web Channel
   readonly web: { readonly port: number };
+  /** Address every HTTP listener binds to; loopback unless BIND_HOST says otherwise (14F2/D71). */
+  readonly bindHost: string;
 
   // Logging
   readonly logLevel: LogLevel;

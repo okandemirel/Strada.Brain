@@ -59,6 +59,11 @@ services:
       # Project Paths
       - UNITY_PROJECT_PATH=/app/project
       
+      # Listeners. 127.0.0.1 is the CONTAINER's loopback, so a published port
+      # would reach nothing; the container binds all interfaces and the port
+      # mapping below is what limits exposure (14F2/D71).
+      - BIND_HOST=${BIND_HOST:-0.0.0.0}
+
       # Dashboard & Monitoring
       - DASHBOARD_ENABLED=${DASHBOARD_ENABLED:-true}
       - DASHBOARD_PORT=3100

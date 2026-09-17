@@ -308,6 +308,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       port: rawConfig.webChannelPort,
     },
 
+    // The address every HTTP listener binds to (14F2/D71). Loopback by
+    // default; a container sets BIND_HOST=0.0.0.0 so a published port works.
+    bindHost: rawConfig.bindHost,
+
     logLevel: rawConfig.logLevel,
     logFile: rawConfig.logFile,
     pluginDirs: rawConfig.pluginDirs,
@@ -893,6 +897,7 @@ interface EnvVars {
   logLevel: string | undefined;
   logFile: string | undefined;
   webChannelPort: string | undefined;
+  bindHost: string | undefined;
   pluginDirs: string | undefined;
   bayesianEnabled: string | undefined;
   bayesianDeprecatedThreshold: string | undefined;
@@ -1302,6 +1307,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     logLevel: env["LOG_LEVEL"],
     logFile: env["LOG_FILE"],
     webChannelPort: env["WEB_CHANNEL_PORT"],
+    bindHost: env["BIND_HOST"],
     pluginDirs: env["PLUGIN_DIRS"],
     bayesianEnabled: env["BAYESIAN_ENABLED"],
     bayesianDeprecatedThreshold: env["BAYESIAN_DEPRECATED_THRESHOLD"],

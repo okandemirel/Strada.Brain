@@ -67,6 +67,7 @@ export async function initializeOpsMonitoringStage(
     const { WebSocketDashboardServer } = await import("../../dashboard/websocket-server.js");
     const wsDashboard = new WebSocketDashboardServer({
       port: params.config.websocketDashboard.port,
+      bindHost: params.config.bindHost,
       authToken: params.config.websocketDashboard.authToken,
       allowedOrigins: params.config.websocketDashboard.allowedOrigins,
       metrics: params.metrics,
@@ -86,6 +87,8 @@ export async function initializeOpsMonitoringStage(
       params.config.prometheus.port,
       params.metrics,
       () => params.memoryManager?.getStats(),
+      undefined,
+      params.config.bindHost,
     );
     await prometheus.start();
     stoppableServers.push(prometheus);
