@@ -2360,4 +2360,90 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     expect(Buffer.concat(out.body).toString()).not.toContain("PRIVATE-KEY-MATERIAL");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  // ---------------------------------------------------------------------------
+  // ROUND 10 #2 — above the 8 MiB inline limit the record kept a mutable PATH
+  //
+  // A 9 MiB recording was registered by reference, so deleting its temp source —
+  // which is what the pipeline that produced it does — 404'd a token that had not
+  // expired, and a file replaced between verification and the stream was served
+  // in place of the promised bytes. The record retains its own immutable copy.
+  // ---------------------------------------------------------------------------
+  it("serves a 9 MiB recording after its temp source is deleted (round 10 #2)", async () => {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const dir = mkdtempSync(join(tmpdir(), "web-attach-large-"));
+    const file = join(dir, "gameplay.mp4");
+    // Above the 8 MiB inline limit: the by-reference branch.
+    const bytes = Buffer.alloc(9 * 1024 * 1024, 0);
+    bytes.write("RECORDING-HEAD", 0);
+    bytes.write("RECORDING-TAIL", bytes.length - 14);
+    writeFileSync(file, bytes);
+
+    await channel.sendAttachment("chat-1", { type: "document", name: "gameplay.mp4", url: file, size: bytes.length });
+    const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
+
+    // The pipeline cleans up its temp file the moment the message is out.
+    rmSync(file);
+    const out = await handle(channel, `/attachments/${token}`);
+    expect(out.status).toBe(200);
+    expect(out.headers!["Content-Length"]).toBe(String(bytes.length));
+    const served = Buffer.concat(out.body);
+    expect(served.length).toBe(bytes.length);
+    expect(served.subarray(0, 14).toString()).toBe("RECORDING-HEAD");
+    expect(served.subarray(-14).toString()).toBe("RECORDING-TAIL");
+    // …and the same token serves the same bytes again, for as long as it lives.
+    expect(Buffer.concat((await handle(channel, `/attachments/${token}`)).body).length).toBe(bytes.length);
+
+    rmSync(dir, { recursive: true, force: true });
+    await channel.disconnect();
+  });
+
+  it("serves the verified bytes when the file is replaced between verification and the stream (round 10 #2)", async () => {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const dir = mkdtempSync(join(tmpdir(), "web-attach-race-"));
+    const file = join(dir, "recording.mp4");
+    const bytes = Buffer.alloc(9 * 1024 * 1024, 0x41); // "A"
+    writeFileSync(file, bytes);
+    await channel.sendAttachment("chat-1", { type: "document", name: "recording.mp4", url: file, size: bytes.length });
+    const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
+
+    // Open the window deterministically: the instant the store says the file is
+    // the registered one, something replaces it at that path. Both the check and
+    // the open are patched, so the test does not care WHICH of them the serve
+    // path uses — it only insists that the bytes leaving the server are the ones
+    // that were verified.
+    const store = (channel as unknown as {
+      attachmentStore: {
+        openStoredFile: (e: { path?: string }) => unknown;
+        verifyStoredFile: (e: { path?: string }) => boolean;
+      };
+    }).attachmentStore;
+    // A replacement is a NEW file at that path — rm + create, or a symlink swap:
+    // what a process that owns the directory entry can do. (Rewriting the store's
+    // own copy IN PLACE is not this: that needs write access to the 0700 spool,
+    // i.e. the daemon itself.)
+    const replace = (entry: { path?: string }) => {
+      if (!entry.path) return;
+      rmSync(entry.path);
+      writeFileSync(entry.path, Buffer.alloc(bytes.length, 0x5a)); // "Z"
+    };
+    const realOpen = store.openStoredFile.bind(store);
+    const realVerify = store.verifyStoredFile.bind(store);
+    store.openStoredFile = (entry) => { const open = realOpen(entry); replace(entry); return open; };
+    store.verifyStoredFile = (entry) => { const ok = realVerify(entry); replace(entry); return ok; };
+
+    const out = await handle(channel, `/attachments/${token}`);
+    expect(out.status).toBe(200);
+    const served = Buffer.concat(out.body);
+    expect(served.length).toBe(bytes.length);
+    expect(served.includes(Buffer.from("Z".repeat(64)))).toBe(false);
+    expect(served.subarray(0, 64).toString()).toBe("A".repeat(64));
+
+    rmSync(dir, { recursive: true, force: true });
+    await channel.disconnect();
+  });
 });

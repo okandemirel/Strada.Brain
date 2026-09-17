@@ -992,20 +992,25 @@ export class WebChannel
       res.end(entry.data);
       return;
     }
-    // A by-reference record (a file too large to snapshot) is served only while
-    // the bytes on disk are still the ones the token was issued for: same real
-    // path, same size, same SHA-256 (round 9 #24). `isServableFile` used to
-    // accept whatever was at the path — a replacement, or a symlink to
-    // something private, which the read stream then followed.
-    if (entry.path && this.attachmentStore.verifyStoredFile(entry)) {
+    // A by-reference record (a file too large to snapshot — since round 10 #2 the
+    // store's own immutable copy of it) is served from ONE verified file
+    // descriptor: same size, same SHA-256, no symlink, and the bytes streamed
+    // out of the very fd those checks were made on. Checking a path and then
+    // opening it again was a race — a file replaced in between was streamed
+    // under the verified length — and before round 9 #24 the path was not
+    // checked at all.
+    const open = this.attachmentStore.openStoredFile(entry);
+    if (open) {
       res.writeHead(200, {
         ...WebChannel.SECURITY_HEADERS,
         "Content-Type": contentType,
-        ...(entry.sizeBytes === undefined ? {} : { "Content-Length": String(entry.sizeBytes) }),
+        "Content-Length": String(open.sizeBytes),
         "Content-Disposition": disposition,
         ...WebChannel.NO_CACHE_HEADERS,
       });
-      await pipeline(createReadStream(entry.path), res);
+      // The stream owns the fd from here (autoClose), including on a client
+      // that hangs up mid-download.
+      await pipeline(createReadStream("", { fd: open.fd, start: 0, autoClose: true }), res);
       return;
     }
     res.writeHead(404, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/plain" });
