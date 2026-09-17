@@ -60,14 +60,14 @@ describe("reporting a refused write", () => {
   });
 
   /** A rejection followed by later tool activity; names resolve via the assistant's tool_use ids. */
-  function sessionAfterRejection(later: Array<{ name: string; content: string; is_error?: boolean }>) {
+  function sessionAfterRejection(later: Array<{ name: string; content: string; is_error?: boolean; input?: Record<string, unknown> }>) {
     return {
       messages: [
         { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "shell_exec", input: {} }] },
         { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: REJECTION }] },
         {
           role: "assistant",
-          content: later.map((l, i) => ({ type: "tool_use", id: `t${i + 2}`, name: l.name, input: {} })),
+          content: later.map((l, i) => ({ type: "tool_use", id: `t${i + 2}`, name: l.name, input: l.input ?? {} })),
         },
         {
           role: "user",
@@ -103,6 +103,31 @@ describe("reporting a refused write", () => {
     expect(byName).toContain("Execution stopped"); // the heuristic reads "get" as read-only
     const byMeta = manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.", () => true);
     expect(byMeta).toBeNull();
+  });
+
+  it("an INSPECTION through a write-capable tool is not the replacement (Codex 2026-09-17 #3)", () => {
+    // shell_exec can write, but `git status` did not; neither did a stash
+    // listing. Both cleared the rejection.
+    const gitStatus = sessionAfterRejection([{ name: "shell_exec", content: "On branch main", input: { command: "git status" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(gitStatus, "Done.", () => true)).toContain("Execution stopped");
+    const stashList = sessionAfterRejection([{ name: "git_stash", content: "stash@{0}: WIP", input: { action: "list" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(stashList, "Done.", () => true)).toContain("Execution stopped");
+    const lsChain = sessionAfterRejection([{ name: "shell_exec", content: "…", input: { command: "cd Assets && ls -la | head" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(lsChain, "Done.", () => true)).toContain("Execution stopped");
+    // …while a narrower shell WRITE is exactly the replacement the review asked for.
+    const sedWrite = sessionAfterRejection([{ name: "shell_exec", content: "", input: { command: "sed -i '' 's/a/b/' Assets/Scripts/Hud.cs" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(sedWrite, "Done.", () => true)).toBeNull();
+    const redirect = sessionAfterRejection([{ name: "shell_exec", content: "", input: { command: "echo x > notes.txt" } }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(redirect, "Done.", () => true)).toBeNull();
+  });
+
+  it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {
+    for (const name of ["learning_stats", "code_quality", "show_plan", "ask_user", "unity_delivery_measure", "speech_to_text"]) {
+      const session = sessionAfterRejection([{ name, content: "ok" }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done."), name).toContain("Execution stopped");
+    }
+    const writer = sessionAfterRejection([{ name: "file_write", content: "Wrote a.cs" }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(writer, "Done.")).toBeNull();
   });
 
   it("says nothing for an empty draft, which is a boundary and not an acknowledgement", () => {

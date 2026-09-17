@@ -31,10 +31,11 @@ import { createInitialState } from "../../agents/agent-state.js";
 const bgEndTurn = vi.mocked(handleBgEndTurn);
 const interactiveEndTurn = vi.mocked(handleInteractiveEndTurn);
 
-function deps(rejectionText: string | null = null): ReflectionDeps {
+function deps(rejectionText: string | null = null, toolMetadataByName: Map<string, { readOnly?: boolean }> = new Map()): ReflectionDeps {
   return {
     sessionManager: {
-      getPendingSelfManagedWriteRejectionVisibleText: () => rejectionText,
+      getPendingSelfManagedWriteRejectionVisibleText: (_s: unknown, _d: unknown, isWriteCapable?: (n: string) => boolean) =>
+        typeof rejectionText === "function" ? (rejectionText as (p: (n: string) => boolean) => string | null)(isWriteCapable!) : rejectionText,
       extractLastUserMessage: () => "build the game",
       formatBoundaryVisibleText: (b: { visibleText: string }) => b.visibleText,
       appendVisibleAssistantMessage: () => {},
@@ -45,7 +46,7 @@ function deps(rejectionText: string | null = null): ReflectionDeps {
     taskClassifier: { classify: () => ({ type: "code_generation", criticality: "normal" }) },
     progressAssessmentEnabled: false,
     buildStructuredProgressSignal: (_p: unknown, _t: unknown, s: unknown) => s,
-    getClarificationContext: () => ({ interactionConfig: {}, toolMetadataByName: {} }),
+    getClarificationContext: () => ({ interactionConfig: {}, toolMetadataByName }),
     synthesizeUserFacingResponse: async () => "",
   } as unknown as ReflectionDeps;
 }
@@ -92,6 +93,18 @@ describe("portDispatchEndTurn carries a blocked settlement (audit 01.1)", () => 
     expect(bgEndTurn).not.toHaveBeenCalled();
     expect(out.finalText).toContain("blocked by safety review");
     expect(out.terminalStatus).toBe("blocked");
+  });
+
+  it("only an EXPLICIT readOnly:false makes a tool a writer for the rejection check (Codex 2026-09-17 #5)", async () => {
+    const seen: Record<string, boolean> = {};
+    const probe = ((isWriteCapable: (n: string) => boolean) => {
+      for (const n of ["file_write", "file_read", "unknown_tool"]) seen[n] = isWriteCapable(n);
+      return null;
+    }) as unknown as string;
+    const meta = new Map<string, { readOnly?: boolean }>([["file_write", { readOnly: false }], ["file_read", {}]]);
+    bgEndTurn.mockResolvedValue({ flow: "done", visibleText: "ok", newState: state(), status: "completed" });
+    await portDispatchEndTurn(deps(probe, meta), params("background"), runCtx());
+    expect(seen).toEqual({ file_write: true, file_read: false, unknown_tool: false });
   });
 
   it("a failed settlement is still failed", async () => {

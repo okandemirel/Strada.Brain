@@ -401,8 +401,10 @@ function blockedTerminal(mode: DispatchEndTurnParams["mode"]): { terminalStatus?
 
 /**
  * Which tools can write, from the orchestrator's tool metadata (a Map or a
- * record); unknown tools count as write-capable so a real replacement is
- * never mistaken for a read.
+ * record). Only an EXPLICIT `readOnly: false` counts: the clarification
+ * layer reads an undefined flag as readable (orchestrator-clarification.ts
+ * `!== false`), and reading the same undefined as writable here let a
+ * metadata-less read resolve a rejection (Codex 2026-09-17 #5).
  */
 function writeCapableFrom(deps: ReflectionDeps): (toolName: string) => boolean {
   const ctx = deps.getClarificationContext() as { toolMetadataByName?: unknown };
@@ -414,7 +416,7 @@ function writeCapableFrom(deps: ReflectionDeps): (toolName: string) => boolean {
         : meta && typeof meta === "object"
           ? (meta as Record<string, { readOnly?: boolean } | undefined>)[name]
           : undefined;
-    return entry?.readOnly !== true;
+    return entry?.readOnly === false;
   };
 }
 

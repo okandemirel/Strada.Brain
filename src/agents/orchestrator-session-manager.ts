@@ -114,10 +114,49 @@ export interface SessionManagerDeps {
 
 // ─── SessionManager ──────────────────────────────────────────────────────────
 
-/** Names that read but never write; used only when the caller has no tool metadata. */
-const READ_ONLY_TOOL_NAME_RE = /(^|_)(read|search|list|glob|grep|status|analyze|analyse|inspect|get|find|lookup|query|verify|diff|log)(_|$)/iu;
+/**
+ * Names that mean a tool changes things; used only when the caller has no
+ * tool metadata. An UNKNOWN name is not a writer: the default used to treat
+ * every name that did not look like a read as a write, and ten registered
+ * read-only tools (learning_stats, code_quality, show_plan, …) cleared a
+ * rejection on success (Codex 2026-09-17 #4). Both production boundaries pass
+ * real metadata; this is the fallback's conservative side.
+ */
+const WRITE_TOOL_NAME_RE = /(^|_)(write|edit|create|delete|remove|move|rename|generate|bind|manage|apply|install|exec|run|build|commit|save|set|update|patch|stash|import|link|regenerate|prerender)(_|$)/iu;
+const READ_ONLY_TOOL_NAME_RE = /(^|_)(read|search|list|glob|grep|status|analyze|analyse|inspect|get|find|lookup|query|verify|diff|log|stats|quality|measure|show|plan|ask|speech)(_|$)/iu;
 function defaultIsWriteCapable(toolName: string): boolean {
-  return !READ_ONLY_TOOL_NAME_RE.test(toolName);
+  return WRITE_TOOL_NAME_RE.test(toolName) && !READ_ONLY_TOOL_NAME_RE.test(toolName);
+}
+
+/**
+ * A write-capable tool used to INSPECT: a shell running `git status`, a
+ * stash tool listing, a manage tool reading. Such a call writes nothing and
+ * is not the replacement the review asked for (Codex 2026-09-17 #3). The
+ * first program of each segment of a shell chain is what counts.
+ */
+const READ_ONLY_SHELL_PROGRAM_RE =
+  /^(?:\S*\/)?(?:cd|pushd|popd|export|unset|alias|source|ls|cat|head|tail|less|more|wc|grep|egrep|fgrep|rg|find|pwd|which|type|file|stat|du|df|env|printenv|tree|diff|cmp|echo|printf|true|false|test|\[|date|whoami|uname|sleep)$/iu;
+const READ_ONLY_GIT_SUBCOMMAND_RE = /^(?:status|log|diff|show|branch|remote|rev-parse|ls-files|ls-tree|blame|describe|tag|config\s+--get|stash\s+(?:list|show))\b/iu;
+const READ_ONLY_ACTION_RE = /^(?:list|show|get|status|info|read|inspect|describe|check)$/iu;
+function inspectionOnly(input: Record<string, unknown> | undefined): boolean {
+  if (input === undefined) return false;
+  const action = input["action"];
+  if (typeof action === "string" && READ_ONLY_ACTION_RE.test(action)) return true;
+  const command = input["command"];
+  if (typeof command !== "string") return false;
+  // Any redirection or pipe into a writer makes it a write.
+  if (/[>]|\btee\b|\bxargs\b/u.test(command)) return false;
+  const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
+  if (segments.length === 0) return false;
+  return segments.every((seg) => {
+    const words = seg.split(/\s+/u);
+    const program = words[0] ?? "";
+    if (/^(?:\S*\/)?git$/iu.test(program)) return READ_ONLY_GIT_SUBCOMMAND_RE.test(words.slice(1).join(" "));
+    if (/^(?:\S*\/)?(?:dotnet|npm|npx|node|python3?)$/iu.test(program)) {
+      return /^(?:--version|-v|--help|list|ls|--list-sdks|--list-runtimes|-e\s+["']console)/iu.test(words.slice(1).join(" "));
+    }
+    return READ_ONLY_SHELL_PROGRAM_RE.test(program);
+  });
 }
 
 /**
@@ -131,12 +170,13 @@ function writeSucceededAfter(
   blockIndex: number,
   isWriteCapable: (toolName: string) => boolean,
 ): boolean {
-  const nameById = new Map<string, string>();
+  const useById = new Map<string, { name: string; input: Record<string, unknown> | undefined }>();
   for (const message of session.messages) {
     if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const block of message.content) {
       if (block && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
-        nameById.set(block.id, block.name);
+        const input = block.input && typeof block.input === "object" ? (block.input as Record<string, unknown>) : undefined;
+        useById.set(block.id, { name: block.name, input });
       }
     }
   }
@@ -150,8 +190,10 @@ function writeSucceededAfter(
       if (block.is_error === true) continue;
       if (block.content.startsWith("Self-managed write review rejected")) continue;
       if (/^Error\b/u.test(block.content)) continue;
-      const name = nameById.get(block.tool_use_id);
-      if (name !== undefined && isWriteCapable(name)) return true;
+      const use = useById.get(block.tool_use_id);
+      if (use === undefined || !isWriteCapable(use.name)) continue;
+      if (inspectionOnly(use.input)) continue;
+      return true;
     }
   }
   return false;
