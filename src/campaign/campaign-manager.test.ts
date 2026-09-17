@@ -4176,6 +4176,100 @@ describe("CampaignManager", () => {
     expect(fingerprint()).toBe(looped);
   });
 
+  describe("the catalogue is covered in one gate, per artifact (plan 1.10)", () => {
+    const range = (sessions: string | undefined, catalogue: number): number[] => {
+      if (sessions === undefined || sessions === "all") return Array.from({ length: Math.min(12, catalogue) }, (_u, i) => i + 1);
+      const out: number[] = [];
+      for (const part of sessions.split(",")) {
+        const m = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
+        if (!m) continue;
+        const a = Number(m[1]);
+        const b = m[2] === undefined ? a : Number(m[2]);
+        for (let i = a; i <= b; i++) out.push(i);
+      }
+      return out;
+    };
+    const record = (indices: number[], catalogue: number): Record<string, unknown> => ({
+      record: {
+        medium: "player", scene: "Entry", session: indices[0] ?? 1, autoStarted: false, actions: 12, outcome: "Won", reachedOutcome: true,
+        sessionCount: catalogue,
+        sessions: indices.map((index) => ({ index, requestedIndex: index, identityVerified: true, identitySource: "start-acceptance", outcome: "Won", reachedOutcome: true, actions: 12, seconds: 9 })),
+      },
+    });
+    const gdd = "# GDD\n\nThe game ships 13 levels. You win a level by clearing it.";
+
+    it("a 13-level game: the gate asks for session 13 itself, and the whole catalogue is covered", async () => {
+      const artifact = join(projectRoot, "Builds", "gate", "Game.app");
+      mkdirSync(join(projectRoot, "Builds", "gate"), { recursive: true });
+      writeFileSync(artifact, "the bytes that were built");
+      const asked: Array<string | undefined> = [];
+      const campaign = {
+        id: "c_gate13", chatId: "chat", channelType: "cli", userId: "u", projectRoot, gddText: gdd,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const player = new CampaignManager({
+        storage,
+        runPlayer: async (root, _artifact, spec) => {
+          asked.push(spec?.sessions);
+          writePlayerVerdict(true, record(range(spec?.sessions, 13), 13), root);
+          return {};
+        },
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+      const measured = await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; ok?: boolean }> })
+        .measurePlayerRun({ id: "m_gate", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+      expect(measured.found).toBe(true);
+      expect(asked).toEqual(["all", "13"]);
+      const covered = (player as unknown as { verifiedSessionsFor(c: unknown, a: string): readonly number[] }).verifiedSessionsFor(campaign, artifact);
+      expect(covered).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
+      // …and a second measurement re-measures rather than looping: the game is covered
+      // (the catalogue is known from the milestone the caller stored the verdict on).
+      campaign.milestones = [{ id: "m_gate", title: "Delivery", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount: 13 } }] as never;
+      asked.length = 0;
+      await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> })
+        .measurePlayerRun({ id: "m_gate2", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+      expect(asked).toEqual(["1-12"]);
+    });
+
+    it("guard: two targets keep their own coverage — the sessions one played are not the other's", async () => {
+      const a = join(projectRoot, "Builds", "two", "GameA.app");
+      const b = join(projectRoot, "Builds", "two", "GameB.app");
+      mkdirSync(join(projectRoot, "Builds", "two"), { recursive: true });
+      writeFileSync(a, "artifact A");
+      writeFileSync(b, "artifact B");
+      const campaign = {
+        id: "c_two_targets", chatId: "chat", channelType: "cli", userId: "u", projectRoot, gddText: gdd,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const player = new CampaignManager({
+        storage,
+        runPlayer: async (root, played, spec) => {
+          // B only ever manages three levels; A plays whatever it is asked.
+          writePlayerVerdict(true, record(played === b ? [1, 2, 3] : range(spec?.sessions, 13), 13), root);
+          return {};
+        },
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const build = {
+        ran: true, ok: true, target: "StandaloneOSX", artifactPath: a, sizeBytes: 25, durationMs: 1, scenes: 1,
+        artifacts: [{ target: "StandaloneOSX", artifactPath: a }, { target: "StandaloneLinux64", artifactPath: b }],
+      };
+      await (player as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<unknown> })
+        .measurePlayerRun({ id: "m_two", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+      const covered = (player as unknown as { verifiedSessionsFor(c: unknown, a: string): readonly number[] });
+      expect(covered.verifiedSessionsFor(campaign, a)).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
+      expect(covered.verifiedSessionsFor(campaign, b)).toEqual([1, 2, 3]);
+      expect(Object.keys(campaign.verifiedSessions?.byArtifact ?? {})).toHaveLength(2);
+    });
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got

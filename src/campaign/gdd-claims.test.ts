@@ -232,7 +232,10 @@ describe("assessNumericClaims", () => {
       sessionCount: 13,
       sessions: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, outcome: "Won", actions: 5, seconds: 3 })),
     }));
-    expect(twelvePlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ blocking: false });
+    // …and twelve of thirteen is STILL a missing proof: the gate walks the
+    // catalogue itself, so what one run could not reach no longer waives the
+    // claim (plan 1.10).
+    expect(twelvePlayed.find((x) => x.claim.kind === "level_count")).toMatchObject({ status: "not_met", blocking: true });
 
     // "each with 12 levels" is distributive however it is phrased (D#22).
     expect(extractNumericClaims("The game ships 2 worlds, each with 12 levels.").claims.map((c) => c.value)).toEqual([24]);
@@ -326,9 +329,9 @@ describe("a shortfall is not a pass, and an outcome must be stated (Codex 2026-0
     // The status used to read "met" with twelve levels never played.
     expect(level.status).toBe("not_met");
     expect(level.note).toContain("12 of 24 levels are NOT yet played");
-    // …and it is still not held against the delivery, since no single run can
-    // answer it (C#21 stands).
-    expect(level.blocking).toBe(false);
+    // …and it IS held against the delivery: the gate asks for the next
+    // batches itself, so twelve unplayed levels are a missing proof (plan 1.10).
+    expect(level.blocking).toBe(true);
   });
 
   it("every level played to an outcome IS met", () => {
@@ -1211,9 +1214,9 @@ describe("the level-count waiver follows the batch the run could play", () => {
       ...(sessionsPerRun === undefined ? {} : { sessionsPerRun }),
     }).find((a) => a.claim.kind === "level_count")!;
 
-  it("waives the shortfall for a run that finished the batch it could play", () => {
+  it("names the shortfall of a run that finished the batch it could play — and still blocks on it (plan 1.10)", () => {
     const five = judge(5, 5, 5);
-    expect(five).toMatchObject({ status: "not_met", blocking: false });
+    expect(five).toMatchObject({ status: "not_met", blocking: true });
     expect(five.note).toContain("one run plays at most 5");
     // …and a run that did NOT finish its own batch is still blocking.
     expect(judge(5, 4, 5)).toMatchObject({ status: "not_met", blocking: true });
@@ -1222,11 +1225,13 @@ describe("the level-count waiver follows the batch the run could play", () => {
   it("keeps the producer's cap for a caller that says nothing", () => {
     // Twelve is what every caller had before; a run of one session is not a
     // run that played its share (Codex 2026-09-11 C#21).
-    expect(judge(12, 12)).toMatchObject({ status: "not_met", blocking: false });
+    expect(judge(12, 12)).toMatchObject({ status: "not_met", blocking: true });
+    expect(judge(12, 12).note).toContain("one run plays at most 12");
     expect(judge(1, 1)).toMatchObject({ status: "not_met", blocking: true });
+    expect(judge(1, 1).note).not.toContain("one run plays at most");
     // …and a caller cannot claim a batch LARGER than the producer's cap.
-    expect(judge(12, 12, 50)).toMatchObject({ blocking: false });
-    expect(judge(13, 13, 50)).toMatchObject({ blocking: false });
+    expect(judge(12, 12, 50).note).toContain("one run plays at most 12");
+    expect(judge(13, 13, 50).note).toContain("one run plays at most 12");
   });
 });
 
@@ -1273,7 +1278,7 @@ describe("the level count accumulates across runs", () => {
 
   it("completes the catalogue when the last batch lands", () => {
     const first = judge([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], []);
-    expect(first).toMatchObject({ status: "not_met", blocking: false });
+    expect(first).toMatchObject({ status: "not_met", blocking: true });
     expect(first.note).toContain("12 of 12 played session(s) reached an outcome");
 
     // The second run plays session 13; together they are the whole game.

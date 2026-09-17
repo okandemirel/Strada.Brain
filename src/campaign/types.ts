@@ -437,7 +437,13 @@ export interface Campaign {
    * of one build says nothing about the next, which is why the artifact it
    * was measured on is part of it.
    */
-  verifiedSessions?: { artifact: string; indices: number[] };
+  /**
+   * Session coverage accumulated across runs. `artifact`/`indices` are the
+   * last artifact remembered (the shape older rows carry); `byArtifact` keys
+   * every artifact's coverage by its digest, so two targets never share one
+   * count (plan 1.10).
+   */
+  verifiedSessions?: { artifact: string; indices: number[]; byArtifact?: Record<string, number[]> };
 }
 
 // =============================================================================

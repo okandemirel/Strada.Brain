@@ -642,6 +642,14 @@ export function unscheduledGaps(
  * looking (Codex 2026-09-12 V#4). An UNKNOWN revision binds nothing, so a
  * closure recorded without one is re-judged every round.
  */
+/**
+ * How many player runs one delivery gate may dispatch for one artifact while
+ * walking its catalogue (plan 1.10): bounded so a document claiming thousands
+ * of levels cannot spend the whole budget in one gate; what is left continues
+ * on the next attempt from the accumulator.
+ */
+const MAX_PLAYER_ROUNDS_PER_GATE = 8;
+
 /** Folders a build, a run or this system writes at the project ROOT: not the project's content. */
 const FINGERPRINT_SKIP_AT_ROOT = new Set(["Library", "Temp", "Logs", "obj", "Builds", "Recordings", ".strada", "UserSettings", ".vs", ".idea"]);
 /** …and the two that are never content wherever they sit. */
@@ -4998,7 +5006,7 @@ export class CampaignManager {
    * is faster than a person's, but never faster than the game allows, so the
    * document's ceiling plus headroom is the deadline.
    */
-  private playerRunSpec(campaign?: Campaign): PlayerRunSpec {
+  private playerRunSpec(campaign?: Campaign, artifactPath?: string): PlayerRunSpec {
     const spec: {
       sessions?: string;
       deadlineSeconds?: number;
@@ -5078,7 +5086,7 @@ export class CampaignManager {
       // often the delivery ran (Codex 2026-09-13 AJ#11). Coverage already
       // measured ON THIS ARTIFACT is skipped, so successive runs walk the
       // catalogue instead of replaying its first batch.
-      const done = this.verifiedSessionsFor(campaign);
+      const done = this.verifiedSessionsFor(campaign, artifactPath);
       // A CURSOR ONLY WHERE THERE IS COVERAGE TO SKIP. With nothing played
       // yet, "all" is the better request: the PRODUCER resolves it against
       // the catalogue it reads now, so a game that grew since the last run is
@@ -5127,8 +5135,12 @@ export class CampaignManager {
     const stored = campaign?.verifiedSessions;
     if (stored === undefined) return [];
     const digest = artifactDigest(artifactPath) ?? this.lastArtifactDigest(campaign);
-    if (digest === undefined || digest !== stored.artifact) return [];
-    return stored.indices;
+    if (digest === undefined) return [];
+    // PER ARTIFACT: two targets' coverage was one accumulator, so the sessions
+    // Windows had played were credited to Linux (plan 1.10).
+    const own = stored.byArtifact?.[digest];
+    if (own !== undefined) return own;
+    return digest === stored.artifact ? stored.indices : [];
   }
 
   /** The digest of the artifact the last build produced, when it named one. */
@@ -5156,9 +5168,13 @@ export class CampaignManager {
       outcomeRequired: documentRequiresAnOutcome(this.gddTextOf(campaign)),
     });
     if (finished.length === 0) return;
-    const previous = campaign.verifiedSessions?.artifact === digest ? campaign.verifiedSessions.indices : [];
+    const previous = this.verifiedSessionsFor(campaign, artifactPath);
     const merged = [...new Set([...previous, ...finished])].sort((a, b) => a - b);
-    campaign.verifiedSessions = { artifact: digest, indices: merged };
+    campaign.verifiedSessions = {
+      artifact: digest,
+      indices: merged,
+      byArtifact: { ...(campaign.verifiedSessions?.byArtifact ?? {}), [digest]: merged },
+    };
   }
 
   /**
@@ -5247,7 +5263,7 @@ export class CampaignManager {
     // green (Codex 2026-09-12 W#11). The first is the one whose verdict the
     // gate reads for timing; the others are recorded per target beside it,
     // and one that cannot be played here says so.
-    const spec = this.playerRunSpec(campaign);
+    let spec = this.playerRunSpec(campaign, build.artifactPath);
     // THE FILE IS ONE FILE. Every player run writes the same verdict path, so
     // a second target's read found the FIRST target's verdict still sitting
     // there and reported a crashed player as a clean play-through (measured
@@ -5279,92 +5295,112 @@ export class CampaignManager {
     // round that had none (Y#5).
     milestone.playerRunsByTarget = undefined;
     const perTarget: Array<{ target?: string; ok: boolean; detail: string }> = [];
-    const since = Date.now();
     let failure: string | undefined;
-    const stale = clearVerdict();
-    if (stale !== undefined) {
-      return { found: false, missingRunner: `the player was not run: ${stale}` };
-    }
-    let primaryDecision: EvidenceDecision | undefined;
-    // THE ID THE PRODUCER WAS GIVEN. The verdict's run id was compared with
-    // the milestone attempt id while the ticket handed the producer a run id
-    // of its own, so a producer that stamped the id it was given could never
-    // match (plan 1.3: one namespace).
-    let primaryRunId: string | undefined;
-    try {
-      // UNDER A TICKET, bound to the artifact this run is about (AC Job 2).
-      await this.underTicket(
-        campaign,
-        milestone,
-        {
-          kind: "playthrough",
-          medium: "player",
-          ...(build.target === undefined ? {} : { target: build.target }),
-          ...(build.artifactPath === undefined ? {} : { artifactPath: build.artifactPath }),
-          requestedSessions: sessionsRequested(spec.sessions),
-        },
-        async (runId) => {
-          primaryRunId = runId;
-          const played = await this.runPlayer!(this.projectRoot, build.artifactPath!, spec, {
-            runId,
+    let verdict: PlaythroughEvidence = { found: false };
+    // THE WHOLE CATALOGUE, IN ONE GATE. One run plays a batch, and the
+    // shortfall beyond it was waived as "what one run cannot reach": a
+    // 13-level game with twelve levels played delivered, session 13 never
+    // played (audit 09.3 / D14, Codex plan review #20). Coverage beyond one
+    // run is a missing proof — so the gate itself asks for the next batch,
+    // against the coverage THIS artifact has accumulated, until the catalogue
+    // is covered, a run fails, or the round budget is spent; what is still
+    // missing then blocks, and the next attempt continues from the
+    // accumulator.
+    for (let round = 1; ; round += 1) {
+      const since = Date.now();
+      failure = undefined;
+      const stale = clearVerdict();
+      if (stale !== undefined) {
+        return { found: false, missingRunner: `the player was not run: ${stale}` };
+      }
+      let primaryDecision: EvidenceDecision | undefined;
+      // THE ID THE PRODUCER WAS GIVEN. The verdict's run id was compared with
+      // the milestone attempt id while the ticket handed the producer a run id
+      // of its own, so a producer that stamped the id it was given could never
+      // match (plan 1.3: one namespace).
+      let primaryRunId: string | undefined;
+      try {
+        // UNDER A TICKET, bound to the artifact this run is about (AC Job 2).
+        await this.underTicket(
+          campaign,
+          milestone,
+          {
+            kind: "playthrough",
+            medium: "player",
             ...(build.target === undefined ? {} : { target: build.target }),
-          });
-          return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
-        },
-        (decision) => { primaryDecision = decision; },
-      );
-    } catch (err) {
-      failure = err instanceof Error ? err.message : String(err);
-      getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
+            ...(build.artifactPath === undefined ? {} : { artifactPath: build.artifactPath }),
+            requestedSessions: sessionsRequested(spec.sessions),
+          },
+          async (runId) => {
+            primaryRunId = runId;
+            const played = await this.runPlayer!(this.projectRoot, build.artifactPath!, spec, {
+              runId,
+              ...(build.target === undefined ? {} : { target: build.target }),
+            });
+            return { value: undefined, ...(played?.receipt === undefined ? {} : { receipt: played.receipt }) };
+          },
+          (decision) => { primaryDecision = decision; },
+        );
+      } catch (err) {
+        failure = err instanceof Error ? err.message : String(err);
+        getLoggerSafe().warn("The built player could not be played", { milestone: milestone.id, error: failure });
+      }
+      // A REFUSED RECEIPT IS A MISSING PROOF, before the file is even read: the
+      // run came back, its receipt was judged, and the receiver said no.
+      const refusedPrimary = failure === undefined ? this.refusedProof(primaryDecision, "play-through") : undefined;
+      if (refusedPrimary !== undefined) {
+        return { found: false, missingRunner: refusedPrimary };
+      }
+      verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, primaryRunId ?? attemptRunId(milestone));
+      // THE FILE THE RECEIPT IS ABOUT. The delivery is judged from this
+      // verdict — its frame rate, its frames, its errors — and an admitted
+      // receipt said nothing about those bytes, so nothing connected the
+      // evidence to the measurement being consumed (Codex 2026-09-13 AJ#12).
+      // A producer whose receipt was admitted is held to the digest it states,
+      // and an admitted receipt that states none is a missing proof (plan 1.3).
+      const substituted = this.verdictDisagreesWithReceipt(primaryDecision, verdict);
+      if (substituted !== undefined) {
+        return { found: false, missingRunner: substituted };
+      }
+      // THE RUN THAT WROTE A GREEN FILE AND THEN FAILED IS NOT A GREEN RUN. The
+      // wrapper threw (adapter timeout, transport error, the producer's own
+      // failure after writing) and the fresh verdict was read anyway, credited
+      // to the coverage and returned as proof (audit 09.1, 2026-09-13). A red
+      // file stays red on its own; a green one after a reported failure is a
+      // missing proof that names the failure — BEFORE anything is remembered.
+      // A FAILURE THAT IS THIS MACHINE'S LIMIT keeps its classification even
+      // when the producer left a green file behind: read as ordinary missing
+      // work it lost the host-limit escalation and was retried as if the game
+      // were broken (Codex 2026-09-17 on ab10dee3 #3).
+      if (
+        failure !== undefined
+        && (UNRUNNABLE_HERE_RE.test(failure) || NOT_A_PLAYER_HERE_RE.test(failure))
+        && artifactIsForeign(build.artifactPath, hostTarget())
+      ) {
+        return { found: false, unrunnableHere: failure.slice(0, 200) };
+      }
+      const greenAfterFailure = this.greenVerdictAfterFailure(verdict, failure);
+      if (greenAfterFailure !== undefined) {
+        return { found: false, missingRunner: greenAfterFailure };
+      }
+      // WHAT THIS RUN ADDED TO THE COVERAGE, against the artifact it played: the
+      // next run then asks for the sessions nobody has played yet (AJ#11).
+      // …from a run that FINISHED. A red verdict with a completed session in it
+      // after a reported failure still fed the coverage (Codex 2026-09-17 #2).
+      if (verdict.found && failure === undefined) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
+      const next = verdict.found && verdict.ok === true && failure === undefined && round < MAX_PLAYER_ROUNDS_PER_GATE
+        ? this.nextPrimaryBatch(campaign, build.artifactPath, verdict, spec)
+        : undefined;
+      if (next === undefined) break;
+      spec = { ...spec, sessions: next };
     }
-    // A REFUSED RECEIPT IS A MISSING PROOF, before the file is even read: the
-    // run came back, its receipt was judged, and the receiver said no.
-    const refusedPrimary = failure === undefined ? this.refusedProof(primaryDecision, "play-through") : undefined;
-    if (refusedPrimary !== undefined) {
-      return { found: false, missingRunner: refusedPrimary };
-    }
-    const verdict = readPlaythroughVerdict(this.projectRoot, since - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, primaryRunId ?? attemptRunId(milestone));
-    // THE FILE THE RECEIPT IS ABOUT. The delivery is judged from this
-    // verdict — its frame rate, its frames, its errors — and an admitted
-    // receipt said nothing about those bytes, so nothing connected the
-    // evidence to the measurement being consumed (Codex 2026-09-13 AJ#12).
-    // A producer whose receipt was admitted is held to the digest it states,
-    // and an admitted receipt that states none is a missing proof (plan 1.3).
-    const substituted = this.verdictDisagreesWithReceipt(primaryDecision, verdict);
-    if (substituted !== undefined) {
-      return { found: false, missingRunner: substituted };
-    }
-    // THE RUN THAT WROTE A GREEN FILE AND THEN FAILED IS NOT A GREEN RUN. The
-    // wrapper threw (adapter timeout, transport error, the producer's own
-    // failure after writing) and the fresh verdict was read anyway, credited
-    // to the coverage and returned as proof (audit 09.1, 2026-09-13). A red
-    // file stays red on its own; a green one after a reported failure is a
-    // missing proof that names the failure — BEFORE anything is remembered.
-    // A FAILURE THAT IS THIS MACHINE'S LIMIT keeps its classification even
-    // when the producer left a green file behind: read as ordinary missing
-    // work it lost the host-limit escalation and was retried as if the game
-    // were broken (Codex 2026-09-17 on ab10dee3 #3).
-    if (
-      failure !== undefined
-      && (UNRUNNABLE_HERE_RE.test(failure) || NOT_A_PLAYER_HERE_RE.test(failure))
-      && artifactIsForeign(build.artifactPath, hostTarget())
-    ) {
-      return { found: false, unrunnableHere: failure.slice(0, 200) };
-    }
-    const greenAfterFailure = this.greenVerdictAfterFailure(verdict, failure);
-    if (greenAfterFailure !== undefined) {
-      return { found: false, missingRunner: greenAfterFailure };
-    }
-    // WHAT THIS RUN ADDED TO THE COVERAGE, against the artifact it played: the
-    // next run then asks for the sessions nobody has played yet (AJ#11).
-    // …from a run that FINISHED. A red verdict with a completed session in it
-    // after a reported failure still fed the coverage (Codex 2026-09-17 #2).
-    if (verdict.found && failure === undefined) this.rememberVerifiedSessions(campaign, build.artifactPath, verdict);
     for (const other of others) {
       const at = Date.now();
       let why: string | undefined;
       let theirDecision: EvidenceDecision | undefined;
       let theirRunId: string | undefined;
+      // Its own cursor: the coverage THIS artifact has, not the primary's.
+      const theirSpec = this.playerRunSpec(campaign, other.artifactPath);
       const staleHere = clearVerdict();
       if (staleHere !== undefined) {
         perTarget.push({ target: other.target, ok: false, detail: `not run: ${staleHere}` });
@@ -5379,11 +5415,11 @@ export class CampaignManager {
             medium: "player",
             ...(other.target === undefined ? {} : { target: other.target }),
             artifactPath: other.artifactPath,
-            requestedSessions: sessionsRequested(spec.sessions),
+            requestedSessions: sessionsRequested(theirSpec.sessions),
           },
           async (runId) => {
             theirRunId = runId;
-            const played = await this.runPlayer!(this.projectRoot, other.artifactPath, spec, {
+            const played = await this.runPlayer!(this.projectRoot, other.artifactPath, theirSpec, {
               runId,
               ...(other.target === undefined ? {} : { target: other.target }),
             });
@@ -5404,6 +5440,9 @@ export class CampaignManager {
         continue;
       }
       const theirs = readPlaythroughVerdict(this.projectRoot, at - 1000, PLAYER_PLAYTHROUGH_VERDICT_REL, theirRunId ?? attemptRunId(milestone));
+      // …and what it played is remembered against IT (plan 1.10): only the
+      // primary run fed the accumulator before.
+      if (theirs.found && why === undefined) this.rememberVerifiedSessions(campaign, other.artifactPath, theirs);
       // THIS TARGET'S RECEIPT AGAINST THIS TARGET'S VERDICT (AK#13).
       const theirSubstitution = this.verdictDisagreesWithReceipt(theirDecision, theirs);
       if (theirSubstitution !== undefined) {
@@ -5478,6 +5517,29 @@ export class CampaignManager {
       return { ...verdict, unrunnableHere: failure.slice(0, 200) };
     }
     return verdict;
+  }
+
+  /**
+   * The next sessions nobody has played ON THIS ARTIFACT, when the document
+   * claims a level count and the catalogue this run reported is bigger than
+   * what has been played — or nothing, when the game is covered, the run
+   * covered nothing to continue from, or the document makes no such claim.
+   */
+  private nextPrimaryBatch(
+    campaign: Campaign | undefined,
+    artifactPath: string | undefined,
+    verdict: PlaythroughEvidence,
+    spec: PlayerRunSpec,
+  ): string | undefined {
+    const text = this.gddTextOf(campaign);
+    if (text === undefined) return undefined;
+    if (!extractNumericClaims(text).claims.some((c) => c.kind === "level_count")) return undefined;
+    const catalogue = verdict.sessionCount;
+    if (typeof catalogue !== "number" || !Number.isInteger(catalogue) || catalogue < 1) return undefined;
+    const done = this.verifiedSessionsFor(campaign, artifactPath);
+    if (done.length === 0) return undefined;
+    const fits = sessionsThatFitOneRun(spec.deadlineSeconds ?? DEFAULT_SESSION_DEADLINE_SECONDS, spec.bootDeadlineSeconds ?? DEFAULT_BOOT_DEADLINE_SECONDS);
+    return nextSessionBatch(catalogue, done, Math.min(MAX_SESSIONS_PER_RUN, fits, catalogue));
   }
 
   /**

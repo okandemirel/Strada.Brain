@@ -82,20 +82,33 @@ interface CampaignRow {
  * coverage at all — the next run then asks for the first batch again, which
  * measures more rather than less.
  */
-function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[] } | undefined {
+function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[]; byArtifact?: Record<string, number[]> } | undefined {
   if (raw === null || raw === undefined || raw.trim() === "") return undefined;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== "object") return undefined;
-    const doc = parsed as { artifact?: unknown; indices?: unknown };
+    const doc = parsed as { artifact?: unknown; indices?: unknown; byArtifact?: unknown };
     if (typeof doc.artifact !== "string" || doc.artifact === "") return undefined;
-    if (!Array.isArray(doc.indices)) return undefined;
-    const indices: number[] = [];
-    for (const entry of doc.indices) {
-      if (typeof entry !== "number" || !Number.isInteger(entry) || entry < 1) return undefined;
-      if (!indices.includes(entry)) indices.push(entry);
+    const readIndices = (raw: unknown): number[] | undefined => {
+      if (!Array.isArray(raw)) return undefined;
+      const indices: number[] = [];
+      for (const entry of raw) {
+        if (typeof entry !== "number" || !Number.isInteger(entry) || entry < 1) return undefined;
+        if (!indices.includes(entry)) indices.push(entry);
+      }
+      return indices.sort((a, b) => a - b);
+    };
+    const indices = readIndices(doc.indices);
+    if (indices === undefined || indices.length === 0) return undefined;
+    // Per-artifact coverage (plan 1.10): a malformed entry drops that entry, never the row.
+    const byArtifact: Record<string, number[]> = {};
+    if (doc.byArtifact !== null && typeof doc.byArtifact === "object" && !Array.isArray(doc.byArtifact)) {
+      for (const [digest, list] of Object.entries(doc.byArtifact as Record<string, unknown>)) {
+        const read = readIndices(list);
+        if (/^[0-9a-f]{64}$/.test(digest) && read !== undefined && read.length > 0) byArtifact[digest] = read;
+      }
     }
-    return indices.length === 0 ? undefined : { artifact: doc.artifact, indices: indices.sort((a, b) => a - b) };
+    return { artifact: doc.artifact, indices, ...(Object.keys(byArtifact).length > 0 ? { byArtifact } : {}) };
   } catch {
     return undefined;
   }

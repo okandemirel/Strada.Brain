@@ -1025,7 +1025,11 @@ export function assessNumericClaims(
             (beyondOneRun
               ? ` (one run plays at most ${sessionsPerRun}; ${claim.value - Math.min(finished, claim.value)} of ${claim.value} levels are NOT yet played to an outcome)`
               : ""),
-          blocking: !catalogMatches || !beyondOneRun,
+          // COVERAGE BEYOND ONE RUN IS A MISSING PROOF (plan 1.10). The
+          // shortfall one run could not reach was waived here, and a
+          // 13-level game with twelve levels played delivered; the gate now
+          // walks the catalogue itself, so what is still unplayed blocks.
+          blocking: true,
         };
       }
     }
