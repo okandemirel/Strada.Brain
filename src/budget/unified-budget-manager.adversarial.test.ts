@@ -484,3 +484,16 @@ describe("round 10: what the owner registry can and cannot prove", () => {
     expect(registry().some((row) => row.ownerPid === process.pid)).toBe(true);
   });
 });
+
+it("plan 6.1 a recorded cost carries the task and campaign that spent it", () => {
+  // Without this the executor named the work and the ledger forgot it: the
+  // delivery package could only report a window total nobody can attribute.
+  const id = manager.reserve(0.5, "daemon", "task-cost");
+  manager.recordCost(0.3, "daemon", { reservationId: id, taskId: "task_9", campaignId: "camp_9" });
+  expect(storage.sumBudgetForTask("task_9")).toEqual({ totalUsd: 0.3, entries: 1 });
+  expect(storage.sumBudgetForCampaign("camp_9")).toEqual({ totalUsd: 0.3, entries: 1 });
+  // Guard: a cost that names no work still records, and belongs to nobody.
+  manager.recordCost(0.2, "chat", {});
+  expect(storage.sumBudgetForTask("task_9").totalUsd).toBeCloseTo(0.3, 6);
+  expect(storage.sumBudgetSince(0)).toBeCloseTo(0.5, 6);
+});

@@ -96,7 +96,7 @@ interface BudgetStorageAdapter {
   budgetTransaction?<T>(work: () => T): T;
   insertBudgetEntry(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; source?: string }): void;
   insertBudgetEntryWithAgent(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; agentId: string }): void;
-  insertBudgetEntryWithSource?(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; source: string; agentId?: string | null }): void;
+  insertBudgetEntryWithSource?(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; source: string; agentId?: string | null; taskId?: string | null; campaignId?: string | null }): void;
   sumBudgetSince(windowStart: number): number;
   sumBudgetBySource(windowStart: number): Record<string, number>;
   sumBudgetForSource(source: string, windowStart: number): number;
@@ -434,6 +434,10 @@ export class UnifiedBudgetManager {
         costUsd: amount, model: metadata.model, tokensIn: metadata.tokensIn,
         tokensOut: metadata.tokensOut, triggerName: metadata.triggerName,
         timestamp: now, source, agentId: source === "agent" ? metadata.agentId : undefined,
+        // WHAT THIS PIECE OF WORK COST (plan 6.1): the task and campaign the
+        // caller named travel with the row, so a task's own spend is a query
+        // instead of a window total nobody can attribute.
+        taskId: metadata.taskId, campaignId: metadata.campaignId,
       };
       if (this.storage.insertBudgetEntryWithSource) this.storage.insertBudgetEntryWithSource(entry);
       else this.storage.insertBudgetEntry(entry);
