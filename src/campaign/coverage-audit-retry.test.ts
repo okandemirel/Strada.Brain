@@ -161,7 +161,7 @@ describe("re-judging the requirements no sprint closed", () => {
     ]);
     await expect(
       invented.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [{ title: "Sprint A" }]),
-    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"], unasked: [] });
 
     for (const reply of [
       '{"verdicts": [{"id": 1, "delivered": false}, {"id": 1, "delivered": true, "evidence": "landed: 3 commit(s): Assets/Scripts/Dragon.cs"}]}',
@@ -171,7 +171,7 @@ describe("re-judging the requirements no sprint closed", () => {
       const conflicting = plannerWith([reply]);
       await expect(
         conflicting.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
-      ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+      ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"], unasked: [] });
     }
 
     // An id nobody asked about closes nothing either.
@@ -180,7 +180,7 @@ describe("re-judging the requirements no sprint closed", () => {
     ]);
     await expect(
       strayId.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
-    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"], unasked: [] });
   });
 
   it("a sprint's STATUS closes nothing, nor does a suite of unknown scope (Codex 2026-09-12 AD#1)", async () => {
@@ -194,7 +194,7 @@ describe("re-judging the requirements no sprint closed", () => {
       const quoted = plannerWith([`{"verdicts": [{"id": 1, "delivered": true, "evidence": "${evidence}"}]}`]);
       await expect(
         quoted.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [{ ...failedLadder[0]!, status: evidence.slice(8) }]),
-      ).resolves.toEqual({ closed: [], open: ["Save: absent"] });
+      ).resolves.toEqual({ closed: [], open: ["Save: absent"], unasked: [] });
     }
 
     const filtered = plannerWith([
@@ -204,7 +204,7 @@ describe("re-judging the requirements no sprint closed", () => {
       filtered.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [
         { title: "Sprint A", status: "green", testVerdict: "12 of 12 tests passed", testVerdictUnfiltered: false },
       ]),
-    ).resolves.toEqual({ closed: [], open: ["Save: absent"] });
+    ).resolves.toEqual({ closed: [], open: ["Save: absent"], unasked: [] });
 
     // …and an UNFILTERED suite still counts as a measurement.
     const unfiltered = plannerWith([
@@ -214,7 +214,7 @@ describe("re-judging the requirements no sprint closed", () => {
       unfiltered.planner.resolveCoverageGaps("# GDD", ["Save: absent"], [
         { title: "Sprint A", status: "green", testVerdict: "179 of 179 tests passed", testVerdictUnfiltered: true },
       ]),
-    ).resolves.toEqual({ closed: ["Save: absent"], open: [] });
+    ).resolves.toEqual({ closed: ["Save: absent"], open: [], unasked: [] });
   });
 
   it("a title or the worker's own prose is not evidence (Codex 2026-09-12 W#3)", async () => {
@@ -227,7 +227,7 @@ describe("re-judging the requirements no sprint closed", () => {
     ]);
     await expect(
       titleQuoted.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [{ title: "Dragon boss: absent" }]),
-    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"], unasked: [] });
 
     const proseQuoted = plannerWith([
       '{"verdicts": [{"id": 1, "delivered": true, "evidence": "The dragon boss is NOT delivered."}]}',
@@ -236,7 +236,7 @@ describe("re-judging the requirements no sprint closed", () => {
       proseQuoted.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], [
         { title: "Sprint A", status: "failed", resultExcerpt: "The dragon boss is NOT delivered." },
       ]),
-    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"] });
+    ).resolves.toEqual({ closed: [], open: ["Dragon boss: absent"], unasked: [] });
 
     // …and a measured line still closes it.
     const measured = plannerWith([
@@ -244,7 +244,7 @@ describe("re-judging the requirements no sprint closed", () => {
     ]);
     await expect(
       measured.planner.resolveCoverageGaps("# GDD", ["Dragon boss: absent"], ladder),
-    ).resolves.toEqual({ closed: ["Dragon boss: absent"], open: [] });
+    ).resolves.toEqual({ closed: ["Dragon boss: absent"], open: [], unasked: [] });
 
     // The prompt still SHOWS the worker's report as context.
     const sent = JSON.stringify(proseQuoted.chat.mock.calls[0]);
@@ -258,7 +258,7 @@ describe("re-judging the requirements no sprint closed", () => {
 
   it("asks nothing when there is nothing to re-judge", async () => {
     const { planner, chat } = plannerWith([]);
-    await expect(planner.resolveCoverageGaps("# GDD", [], ladder)).resolves.toEqual({ closed: [], open: [] });
+    await expect(planner.resolveCoverageGaps("# GDD", [], ladder)).resolves.toEqual({ closed: [], open: [], unasked: [] });
     expect(chat).not.toHaveBeenCalled();
   });
 });

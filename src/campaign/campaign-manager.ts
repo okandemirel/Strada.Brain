@@ -36,6 +36,7 @@ import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
+import { COVERAGE_ASK_WINDOW } from "./campaign-planner.js";
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
@@ -5480,6 +5481,8 @@ export class CampaignManager {
    */
   /** Gaps per remediation round; more than this is a planning failure, not a sprint list. */
   private static readonly MAX_GAP_SPRINTS_PER_ROUND = 4;
+  /** Resolver windows one closure pass may ask back to back (150 requirements at 30 each). */
+  private static readonly MAX_COVERAGE_WINDOWS_PER_PASS = 5;
 
   /** One gap, one sprint — the audit's list is a ladder, not a prompt. */
   private gapSprint(campaign: Campaign, round: number, index: number, item: string): CampaignMilestone {
@@ -5657,14 +5660,37 @@ export class CampaignManager {
       const candidates = [...byRequirement.entries()]
         .filter(([key]) => needsJudging.has(key))
         .sort((a, b) => askedAt(a[1]) - askedAt(b[1]));
-      const asked = candidates.map(([, ms]) => coverageGapOf(ms[0]!));
-      const judged = await this.planner.resolveCoverageGaps(gddForGaps, asked, campaign.milestones);
+      // EVERY WINDOW IN ONE PASS, against one tree. The resolver judges at
+      // most a window per call; asking once and stamping everything it
+      // returned — the unasked remainder came back as "open" — meant a
+      // project without git (nothing to cache a closure against) closed
+      // the same thirty on every pass and left the thirty-first open until
+      // the delivery budget stopped a finished game (Codex 2026-09-17 on
+      // d49c420e; AD#16 rotated fairly and still never finished). The
+      // windows are asked back to back under the same before/after tree
+      // guard, only the requirements actually submitted are stamped, and a
+      // pass is bounded so a runaway list cannot spend the whole budget.
+      const window = COVERAGE_ASK_WINDOW;
+      const asked: string[] = [];
+      const judged = { closed: [] as string[], open: [] as string[] };
+      const askedKeys = new Set<string>();
+      for (let start = 0; start < candidates.length && start < window * CampaignManager.MAX_COVERAGE_WINDOWS_PER_PASS; start += window) {
+        const slice = candidates.slice(start, start + window);
+        const names = slice.map(([, ms]) => coverageGapOf(ms[0]!));
+        const answer = await this.planner.resolveCoverageGaps(gddForGaps, names, campaign.milestones);
+        asked.push(...names);
+        judged.closed.push(...answer.closed);
+        judged.open.push(...answer.open);
+        // Only what THIS window submitted, less whatever the resolver itself
+        // declined to ask.
+        const unasked = new Set((answer.unasked ?? []).map(requirementKey));
+        for (const [key] of slice) if (!unasked.has(key)) askedKeys.add(key);
+      }
       // Stamped whether or not the answer closed them: what matters is that
       // this pass ASKED, so the next one can ask the others.
-      const answered = new Set([...judged.closed, ...judged.open].map(requirementKey));
       const askedNow = Date.now();
       for (const [key, ms] of candidates) {
-        if (!answered.has(key)) continue;
+        if (!askedKeys.has(key)) continue;
         for (const m of ms) m.coverageJudgedAtMs = askedNow;
       }
       const closed = new Set(judged.closed.map(requirementKey));

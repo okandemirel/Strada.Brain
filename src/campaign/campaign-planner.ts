@@ -232,6 +232,9 @@ export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHAR
  */
 export const GDD_AUDIT_FULL_CHARS = 400_000;
 
+/** How many requirements one resolver call judges. */
+export const COVERAGE_ASK_WINDOW = 30;
+
 export class CampaignPlanner {
   constructor(private readonly provider: IAIProvider | undefined) {}
 
@@ -655,12 +658,12 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       gddClaims?: readonly string[];
       coverageGap?: string;
     }>,
-  ): Promise<{ closed: string[]; open: string[] }> {
-    if (requirements.length === 0) return { closed: [], open: [] };
+  ): Promise<{ closed: string[]; open: string[]; unasked: string[] }> {
+    if (requirements.length === 0) return { closed: [], open: [], unasked: [] };
     if (!this.provider) {
       throw new Error("coverage resolution requires an LLM provider");
     }
-    const asked = requirements.slice(0, 30);
+    const asked = requirements.slice(0, COVERAGE_ASK_WINDOW);
     const ladderSummary = milestones
       .map((m, i) => `${i + 1}. ${m.title}${milestoneEvidence(m)}`)
       .join("\n");
@@ -733,10 +736,14 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     const closed: string[] = [];
     const open: string[] = [];
     asked.forEach((req, i) => (closedIds.has(i + 1) ? closed : open).push(req));
-    // Anything past the ask is unjudged, so it is open.
-    open.push(...requirements.slice(asked.length));
-    return { closed, open };
+    // ANYTHING PAST THE ASK IS UNASKED — not "open". Returned as open, the
+    // caller stamped it as judged, so with 31 requirements and no revision to
+    // cache closures against the thirty-first was never asked: every pass
+    // judged the same thirty (Codex 2026-09-12 AD#16, 2026-09-17 on
+    // d49c420e). The caller asks the rest in further windows.
+    return { closed, open, unasked: requirements.slice(asked.length) };
   }
+
 }
 
 /**

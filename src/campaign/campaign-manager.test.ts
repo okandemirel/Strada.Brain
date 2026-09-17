@@ -3834,6 +3834,92 @@ describe("CampaignManager", () => {
     expect(result.open).toContain("Save progress across restarts: no milestone implemented it");
   });
 
+  it("31 correct requirements without git are all judged in ONE pass, and a finished game delivers (plan 0-B.12)", async () => {
+    // The resolver judges thirty per call and the manager asked once,
+    // stamping everything it returned — the unasked remainder came back as
+    // "open" — so a project without git (nothing to cache a closure against)
+    // closed the same thirty every pass and left the thirty-first open until
+    // the delivery budget stopped a finished game (Codex 2026-09-17).
+    const seen: string[][] = [];
+    // A project WITHOUT git: nothing to cache a closure against.
+    const noGit = mkdtempSync(join(tmpdir(), "no-git-"));
+    const gitless = new CampaignManager({
+      storage,
+      // The PRODUCTION shape: at most thirty judged, the rest returned unasked.
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]),
+        resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+          const asked = reqs.slice(0, 30);
+          seen.push([...asked]);
+          return { closed: [...asked], open: [], unasked: reqs.slice(30) };
+        }),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot: noGit,
+    });
+    const openRequirements = (gitless as unknown as {
+      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+    }).openRequirements.bind(gitless);
+    const campaign = {
+      id: "c_all_windows", chatId: "chat1", channelType: "cli", userId: "u", projectRoot: noGit, draftAttempts: 0,
+      gddText: "# GDD", gddPath: "docs/Game_GDD.md", state: "executing", currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+      milestones: Array.from({ length: 31 }, (_unused, i) => ({
+        id: `mcov1-${i}`, title: `Req${i + 1}`, prompt: "p", status: "green",
+        attempts: 1, coverageGap: `Req${i + 1}: absent`,
+      })),
+    } as unknown as Campaign;
+
+    const result = await openRequirements(campaign);
+    // Two windows in one pass: thirty, then the thirty-first.
+    expect(seen.map((w) => w.length)).toEqual([30, 1]);
+    expect(new Set(seen.flat()).size).toBe(31);
+    expect(result.open).toEqual([]);
+    // Every requirement carries this pass's stamp.
+    expect(campaign.milestones.every((m) => typeof m.coverageJudgedAtMs === "number")).toBe(true);
+  });
+
+  it("a pass is bounded, and only what was actually asked is stamped (plan 0-B.12 guard)", async () => {
+    const seen: string[][] = [];
+    const noGit = mkdtempSync(join(tmpdir(), "no-git-"));
+    const gitless = new CampaignManager({
+      storage,
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]),
+        resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+          const asked = reqs.slice(0, 30);
+          seen.push([...asked]);
+          return { closed: [], open: [...asked], unasked: reqs.slice(30) };
+        }),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot: noGit,
+    });
+    const openRequirements = (gitless as unknown as {
+      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+    }).openRequirements.bind(gitless);
+    const campaign = {
+      id: "c_bounded", chatId: "chat1", channelType: "cli", userId: "u", projectRoot: noGit, draftAttempts: 0,
+      gddText: "# GDD", gddPath: "docs/Game_GDD.md", state: "executing", currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+      milestones: Array.from({ length: 160 }, (_unused, i) => ({
+        id: `mcov1-${i}`, title: `Req${i + 1}`, prompt: "p", status: "failed",
+        attempts: 1, coverageGap: `Req${i + 1}: absent`,
+      })),
+    } as unknown as Campaign;
+
+    await openRequirements(campaign);
+    expect(seen).toHaveLength(5);
+    const stamped = campaign.milestones.filter((m) => typeof m.coverageJudgedAtMs === "number");
+    expect(stamped).toHaveLength(150);
+    // The next pass asks the ten nobody asked yet, first.
+    seen.length = 0;
+    await openRequirements(campaign);
+    expect(seen[0]!.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_u, i) => `Req${151 + i}: absent`));
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got
