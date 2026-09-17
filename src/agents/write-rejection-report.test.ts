@@ -121,13 +121,47 @@ describe("reporting a refused write", () => {
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(redirect, "Done.", () => true)).toBeNull();
   });
 
+  it("only POSITIVE mutation evidence resolves it; unknown and inspecting commands do not (Codex 2026-09-17 #4/#5)", () => {
+    const stopped = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
+    };
+    const resolved = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
+    };
+    // Inspections and unknowns: not a replacement.
+    stopped("git -C . status");
+    stopped("git status > /dev/null");
+    stopped("sed -n 1,20p package.json");
+    stopped('python -c "print(1)"');
+    stopped("git branch -a");
+    stopped("git tag -l");
+    stopped("git remote -v");
+    stopped("dotnet --list-sdks");
+    stopped("npm ls");
+    // Real writes: a replacement.
+    resolved("git branch fix/hud");
+    resolved("git tag v1.0");
+    resolved("git remote add origin https://x/y.git");
+    resolved("env sed -i s/a/b/ X.cs");
+    resolved('find Assets -name "*.tmp" -delete');
+    resolved("git add -A && git commit -m x");
+    resolved("git -C . apply fix.patch");
+    resolved("dotnet build");
+    resolved("npm run build");
+    resolved("cat a | xargs rm");
+  });
+
   it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {
-    for (const name of ["learning_stats", "code_quality", "show_plan", "ask_user", "unity_delivery_measure", "speech_to_text"]) {
+    for (const name of ["learning_stats", "code_quality", "show_plan", "ask_user", "unity_delivery_measure", "speech_to_text", "dotnet_build", "dotnet_test"]) {
       const session = sessionAfterRejection([{ name, content: "ok" }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done."), name).toContain("Execution stopped");
     }
-    const writer = sessionAfterRejection([{ name: "file_write", content: "Wrote a.cs" }]);
-    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(writer, "Done.")).toBeNull();
+    for (const name of ["file_write", "git_branch", "git_push", "obsidian_append", "vault_init", "vault_sync", "rag_index", "switch_personality", "browser_automation", "unity_place_prefab"]) {
+      const writer = sessionAfterRejection([{ name, content: "ok" }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(writer, "Done."), name).toBeNull();
+    }
   });
 
   it("says nothing for an empty draft, which is a boundary and not an acknowledgement", () => {

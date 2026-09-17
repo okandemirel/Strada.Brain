@@ -122,8 +122,9 @@ export interface SessionManagerDeps {
  * rejection on success (Codex 2026-09-17 #4). Both production boundaries pass
  * real metadata; this is the fallback's conservative side.
  */
-const WRITE_TOOL_NAME_RE = /(^|_)(write|edit|create|delete|remove|move|rename|generate|bind|manage|apply|install|exec|run|build|commit|save|set|update|patch|stash|import|link|regenerate|prerender)(_|$)/iu;
-const READ_ONLY_TOOL_NAME_RE = /(^|_)(read|search|list|glob|grep|status|analyze|analyse|inspect|get|find|lookup|query|verify|diff|log|stats|quality|measure|show|plan|ask|speech)(_|$)/iu;
+const WRITE_TOOL_NAME_RE =
+  /(^|_)(write|edit|create|delete|remove|move|rename|generate|bind|manage|apply|install|exec|run|commit|save|set|update|patch|stash|import|link|regenerate|prerender|push|pull|append|init|sync|index|switch|automation|place|checkout|merge|rebase|reset|tag|branch|clone|fetch|upload|record|capture|bake|convert|add)(_|$)/iu;
+const READ_ONLY_TOOL_NAME_RE = /(^|_)(read|search|list|glob|grep|status|analyze|analyse|inspect|get|find|lookup|query|verify|diff|log|stats|quality|measure|show|plan|ask|speech|build|test)(_|$)/iu;
 function defaultIsWriteCapable(toolName: string): boolean {
   return WRITE_TOOL_NAME_RE.test(toolName) && !READ_ONLY_TOOL_NAME_RE.test(toolName);
 }
@@ -134,28 +135,47 @@ function defaultIsWriteCapable(toolName: string): boolean {
  * is not the replacement the review asked for (Codex 2026-09-17 #3). The
  * first program of each segment of a shell chain is what counts.
  */
-const READ_ONLY_SHELL_PROGRAM_RE =
-  /^(?:\S*\/)?(?:cd|pushd|popd|export|unset|alias|source|ls|cat|head|tail|less|more|wc|grep|egrep|fgrep|rg|find|pwd|which|type|file|stat|du|df|env|printenv|tree|diff|cmp|echo|printf|true|false|test|\[|date|whoami|uname|sleep)$/iu;
-const READ_ONLY_GIT_SUBCOMMAND_RE = /^(?:status|log|diff|show|branch|remote|rev-parse|ls-files|ls-tree|blame|describe|tag|config\s+--get|stash\s+(?:list|show))\b/iu;
+/**
+ * POSITIVE evidence of a mutation, or nothing. The first version listed
+ * read-only programs and called everything else a write, so `python -c
+ * "print(1)"` and `sed -n 1,20p` resolved a rejection while `git branch
+ * fix/hud` and `find -delete` did not (Codex 2026-09-17 #4/#5). A shell
+ * command is a replacement write only when some segment provably mutates.
+ */
+const MUTATING_PROGRAM_RE =
+  /^(?:\S*\/)?(?:tee|mv|cp|rm|rmdir|mkdir|touch|chmod|chown|ln|install|truncate|dd|patch|rsync|unzip|tar|curl|wget|npm|pnpm|yarn|npx|bunx|dotnet|make|cargo|go|gradle|\.\/gradlew|mvn|msbuild|xcodebuild|unity|Unity)$/iu;
+const GIT_MUTATING_RE =
+  /^(?:add|apply|am|checkout|switch|restore|commit|merge|rebase|reset|revert|cherry-pick|clean|mv|rm|stash(?!\s+(?:list|show))|tag\s+(?!-l\b|--list\b|-n\d*\b)\S+|branch\s+(?!-[alrv]|--list|--all|--remotes|--show-current|$)\S+|remote\s+(?:add|remove|rm|rename|set-url)|push|pull|fetch|clone|init|submodule\s+(?:add|update|init)|worktree\s+(?:add|remove|prune)|config(?!\s+--get|\s+--list|\s+-l\b)\s+\S+|notes|filter-branch|gc|prune)\b/iu;
 const READ_ONLY_ACTION_RE = /^(?:list|show|get|status|info|read|inspect|describe|check)$/iu;
-function inspectionOnly(input: Record<string, unknown> | undefined): boolean {
-  if (input === undefined) return false;
+function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
+  if (input === undefined) return true;
   const action = input["action"];
-  if (typeof action === "string" && READ_ONLY_ACTION_RE.test(action)) return true;
+  if (typeof action === "string") return !READ_ONLY_ACTION_RE.test(action);
   const command = input["command"];
-  if (typeof command !== "string") return false;
-  // Any redirection or pipe into a writer makes it a write.
-  if (/[>]|\btee\b|\bxargs\b/u.test(command)) return false;
+  if (typeof command !== "string") return true;
   const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
-  if (segments.length === 0) return false;
-  return segments.every((seg) => {
-    const words = seg.split(/\s+/u);
+  return segments.some((seg) => {
+    // A redirection writes — unless it is to /dev/null.
+    if (/(?:^|[^<])>+\s*(?!\/dev\/null\b)\S/u.test(seg)) return true;
+    // Unwrap `env VAR=x`, plain assignments and sudo/time/nice.
+    const stripped = seg
+      .replace(/^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
+      .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
+    const words = stripped.split(/\s+/u);
     const program = words[0] ?? "";
-    if (/^(?:\S*\/)?git$/iu.test(program)) return READ_ONLY_GIT_SUBCOMMAND_RE.test(words.slice(1).join(" "));
-    if (/^(?:\S*\/)?(?:dotnet|npm|npx|node|python3?)$/iu.test(program)) {
-      return /^(?:--version|-v|--help|list|ls|--list-sdks|--list-runtimes|-e\s+["']console)/iu.test(words.slice(1).join(" "));
+    const rest = words.slice(1).join(" ");
+    if (/^(?:\S*\/)?git$/iu.test(program)) {
+      // Leading options: -C dir, -c k=v, --no-pager, --git-dir=…
+      const sub = rest.replace(/^(?:(?:-C\s+\S+|-c\s+\S+|--no-pager|--git-dir=\S+|--work-tree=\S+)\s+)*/u, "");
+      return GIT_MUTATING_RE.test(sub);
     }
-    return READ_ONLY_SHELL_PROGRAM_RE.test(program);
+    if (/^(?:\S*\/)?sed$/iu.test(program)) return /(?:^|\s)-i\b|(?:^|\s)--in-place\b/u.test(rest);
+    if (/^(?:\S*\/)?find$/iu.test(program)) return /\s-(?:delete|exec|execdir|ok)\b/u.test(rest);
+    if (/^(?:\S*\/)?(?:dotnet|npm|pnpm|yarn|npx|bunx)$/iu.test(program)) {
+      return !/^(?:--version|-v|--help|list|ls|--list-sdks|--list-runtimes|view|info|outdated|audit(?!\s+fix)|why|ping)\b/iu.test(rest);
+    }
+    if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest });
+    return MUTATING_PROGRAM_RE.test(program);
   });
 }
 
@@ -192,7 +212,7 @@ function writeSucceededAfter(
       if (/^Error\b/u.test(block.content)) continue;
       const use = useById.get(block.tool_use_id);
       if (use === undefined || !isWriteCapable(use.name)) continue;
-      if (inspectionOnly(use.input)) continue;
+      if (!mutatesSomething(use.input)) continue;
       return true;
     }
   }
