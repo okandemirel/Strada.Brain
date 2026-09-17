@@ -38,6 +38,7 @@ import {
   credentialHeadersForRequest,
   installNetworkPolicy,
   isLikelyPublicSuffix,
+  POLICY_CONTEXT_OPTIONS,
   isSameSiteUrl,
   parseSetCookie,
   takeVettedDocument,
@@ -107,6 +108,8 @@ interface FakeContext extends PolicyContext {
   wsPattern?: string;
   wsHandler?: (ws: PolicyWebSocketRoute) => Promise<void> | void;
   responseListeners: Array<(response: PolicyResponse) => void>;
+  /** Pages the context opens after install (popups) — plan 4.6 bypass (b). */
+  pageListeners: Array<(page: PolicyPage) => void>;
 }
 
 interface FakePage extends PolicyPage {
@@ -117,6 +120,7 @@ function fakeContext(): FakeContext {
   const ctx: FakeContext = {
     jar: [],
     responseListeners: [],
+    pageListeners: [],
     cookies: vi.fn(async (_url: string) => ctx.jar),
     addCookies: vi.fn(async (cookies) => {
       ctx.jar.push(...cookies);
@@ -129,10 +133,14 @@ function fakeContext(): FakeContext {
       ctx.wsPattern = pattern;
       ctx.wsHandler = handler;
     }),
-    on: vi.fn((_event: "response", listener: (response: PolicyResponse) => void) => {
-      ctx.responseListeners.push(listener);
+    on: vi.fn(((event: string, listener: unknown) => {
+      if (event === "page") {
+        ctx.pageListeners.push(listener as (page: PolicyPage) => void);
+      } else {
+        ctx.responseListeners.push(listener as (response: PolicyResponse) => void);
+      }
       return ctx;
-    }),
+    }) as unknown as PolicyContext["on"]),
   };
   return ctx;
 }
@@ -267,6 +275,99 @@ describe("installNetworkPolicy (plan 4.6 / 13F2 / D64)", () => {
     table.set("public.example", [{ address: "127.0.0.1", family: 4 }]);
     listener!({ url: () => "https://public.example/page2" });
     await vi.waitFor(() => expect(onForbiddenNavigation).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ── Plan 4.6 / audit 13F2: the two places the route API was BYPASSED ──
+//
+// (a) Service-worker requests never reach context.route (Playwright's own note on
+//     page.route/browserContext.route, microsoft/playwright#1090) — so a page
+//     that registered a worker had an unpoliced network path out. The context
+//     must therefore be created with serviceWorkers: "block".
+// (b) context.route covers every page in the context, but the framenavigated
+//     recheck was bound to the first page only, so a popup's navigations were
+//     never re-resolved.
+
+describe("installNetworkPolicy — plan 4.6: the route API's own bypasses", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("public.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("internal.corp", [{ address: "10.0.0.5", family: 4 }]);
+  });
+
+  it("(a) requires serviceWorkers: block, because a worker's requests never reach the route", () => {
+    expect(POLICY_CONTEXT_OPTIONS.serviceWorkers).toBe("block");
+  });
+
+  it("(b) subscribes to every page the context opens", async () => {
+    const ctx = fakeContext();
+    await installNetworkPolicy(ctx, fakePage(), { resolver, onForbiddenNavigation: vi.fn() });
+    expect(ctx.on).toHaveBeenCalledWith("page", expect.any(Function));
+    expect(ctx.pageListeners).toHaveLength(1);
+  });
+
+  it("(b) re-checks a POPUP's frame navigation and tears the session down", async () => {
+    const ctx = fakeContext();
+    const onForbiddenNavigation = vi.fn(async () => undefined);
+    await installNetworkPolicy(ctx, fakePage(), { resolver, onForbiddenNavigation });
+
+    // window.open / target=_blank: a page the context opens AFTER install.
+    const popup = fakePage();
+    for (const open of ctx.pageListeners) open(popup);
+    expect(popup.on).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+
+    const [listener] = popup.listeners["framenavigated"]!;
+    listener!({ url: () => "http://internal.corp/dashboard" });
+
+    await vi.waitFor(() => expect(onForbiddenNavigation).toHaveBeenCalledTimes(1));
+    expect(onForbiddenNavigation.mock.calls[0]?.[0]).toBe("http://internal.corp/dashboard");
+  });
+
+  it("(b) a popup's rebound host is caught after the bytes were vetted", async () => {
+    const ctx = fakeContext();
+    const onForbiddenNavigation = vi.fn(async () => undefined);
+    await installNetworkPolicy(ctx, fakePage(), { resolver, onForbiddenNavigation });
+    const popup = fakePage();
+    for (const open of ctx.pageListeners) open(popup);
+    const [listener] = popup.listeners["framenavigated"]!;
+
+    listener!({ url: () => "https://public.example/p" });
+    await vi.waitFor(() => expect(resolver).toHaveBeenCalledWith("public.example"));
+    expect(onForbiddenNavigation).not.toHaveBeenCalled();
+
+    table.set("public.example", [{ address: "127.0.0.1", family: 4 }]);
+    listener!({ url: () => "https://public.example/p2" });
+    await vi.waitFor(() => expect(onForbiddenNavigation).toHaveBeenCalledTimes(1));
+  });
+
+  // Guard: the recheck must not refuse a popup that goes somewhere public, and
+  // the first page's own recheck must still be installed.
+  it("(b) leaves a public popup navigation alone, and still rechecks the first page", async () => {
+    const ctx = fakeContext();
+    const page = fakePage();
+    const onForbiddenNavigation = vi.fn(async () => undefined);
+    await installNetworkPolicy(ctx, page, { resolver, onForbiddenNavigation });
+
+    expect(page.listeners["framenavigated"]).toHaveLength(1);
+
+    const popup = fakePage();
+    for (const open of ctx.pageListeners) open(popup);
+    for (const url of ["https://public.example/ok", "about:blank", ""]) {
+      popup.listeners["framenavigated"]![0]!({ url: () => url });
+    }
+    await vi.waitFor(() => expect(resolver).toHaveBeenCalledWith("public.example"));
+    expect(onForbiddenNavigation).not.toHaveBeenCalled();
+
+    page.listeners["framenavigated"]![0]!({ url: () => "http://internal.corp/x" });
+    await vi.waitFor(() => expect(onForbiddenNavigation).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -203,6 +203,29 @@ function looksLikeExpression(script: string): boolean {
 //       outright (`routeWebSocket`) until an address-pinned implementation
 //       exists.
 //
+// Two places where the route API was BYPASSED altogether, closed here (13F2 / 4.6):
+//
+//  (a) Service Workers. Playwright's own docs say it plainly for both
+//      `page.route` and `browserContext.route`: "will not intercept requests
+//      intercepted by Service Worker … We recommend disabling Service Workers
+//      when using request interception by setting serviceWorkers to 'block'"
+//      (playwright-core types.d.ts, microsoft/playwright#1090). The context was
+//      created with the default `'allow'`, so a page that registered a worker
+//      could fetch ANY address from inside it: no `assertPublicTarget`, no
+//      pinned transport, no abort, not even the post-hoc response check. The
+//      policy is only as wide as the route it installs, so the one class of
+//      request that escapes the route is now disabled outright
+//      (`POLICY_CONTEXT_OPTIONS`). No site the tool drives needs a worker: a
+//      fresh context has no cache to warm and every navigation is ours.
+//
+//  (b) Pages other than the first. `context.route` and `routeWebSocket` cover
+//      every page in the context, but the `framenavigated` recheck was bound to
+//      the ONE page the session opened. A `window.open` / `target=_blank`
+//      popup therefore did its navigating unrechecked — the recheck is what
+//      re-resolves the destination AFTER the bytes were vetted, which is the
+//      only thing that catches a DNS answer that changed in between. The
+//      recheck is now attached to every page the context produces.
+//
 // The complete fix for the sub-resource residuals is a controlled proxy that
 // owns every connection the browser makes (plan 4.6b). Until it exists,
 // sub-resource SSRF remains (Codex round 7 #17): an image, script, frame or
@@ -272,6 +295,16 @@ export interface PolicyJarCookie {
   sameSite?: "Strict" | "Lax" | "None";
 }
 
+/**
+ * The context options the network policy REQUIRES (13F2 / 4.6, bypass (a)).
+ * Service-worker requests do not reach `context.route`, so a context that
+ * allows workers has an unpoliced network path; blocking them keeps every
+ * request the browser makes inside the route handler.
+ */
+export const POLICY_CONTEXT_OPTIONS = {
+  serviceWorkers: "block",
+} as const satisfies { serviceWorkers: "allow" | "block" };
+
 /** Structural subset of Playwright's BrowserContext. */
 export interface PolicyContext {
   route(url: string, handler: (route: PolicyRoute) => Promise<void> | void): Promise<unknown>;
@@ -285,6 +318,8 @@ export interface PolicyContext {
   addCookies(cookies: ReadonlyArray<PolicyCookie>): Promise<void>;
   routeWebSocket(url: string, handler: (ws: PolicyWebSocketRoute) => Promise<void> | void): Promise<unknown>;
   on(event: "response", listener: (response: PolicyResponse) => void): unknown;
+  /** Every page the context opens, popups included (13F2 / 4.6, bypass (b)). */
+  on(event: "page", listener: (page: PolicyPage) => void): unknown;
 }
 
 /** Structural subset of Playwright's Page. */
@@ -1052,15 +1087,21 @@ export async function installNetworkPolicy(
     })();
   });
 
-  page.on("framenavigated", (frame) => {
-    const url = frame.url();
-    const scheme = schemeOf(url);
-    if (NON_NETWORK_SCHEMES.has(scheme) || url === "") return;
-    void assertPublicTarget(url, policyOptions).catch(async (error: unknown) => {
-      const reason = error instanceof ForbiddenTargetError ? error.message : String(error);
-      await options.onForbiddenNavigation(url, reason);
+  // (b) The recheck belongs to every page in the context, not only the first.
+  // A popup's own navigations were never re-resolved before.
+  const attachFrameRecheck = (target: PolicyPage): void => {
+    target.on("framenavigated", (frame) => {
+      const url = frame.url();
+      const scheme = schemeOf(url);
+      if (NON_NETWORK_SCHEMES.has(scheme) || url === "") return;
+      void assertPublicTarget(url, policyOptions).catch(async (error: unknown) => {
+        const reason = error instanceof ForbiddenTargetError ? error.message : String(error);
+        await options.onForbiddenNavigation(url, reason);
+      });
     });
-  });
+  };
+  attachFrameRecheck(page);
+  context.on("page", (opened) => attachFrameRecheck(opened));
 }
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -1828,6 +1869,9 @@ export class BrowserAutomationTool implements ITool {
         viewport: viewport ?? { width: 1280, height: 720 },
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        // 13F2 / 4.6: service-worker requests bypass context.route entirely, so
+        // a worker would be an unpoliced network path out of the page.
+        ...POLICY_CONTEXT_OPTIONS,
       });
 
       const page = await context.newPage();
