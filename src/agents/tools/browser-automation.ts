@@ -91,6 +91,14 @@ interface SessionState {
    */
   credentials: { current?: OriginCredentials };
   /**
+   * Round 9 #14: the response a refused same-origin redirect already fetched,
+   * kept for ONE delivery at the URL it came from. Without it the restart (or
+   * the click recovery) requested the destination a second time, which loses a
+   * single-use URL: the policy fetch consumed the receipt and `goto` then got
+   * 410. One slot, so a 32 MB document cannot accumulate.
+   */
+  vettedDocument: { current?: { url: string; document: VettedDocument; storedAt: number } };
+  /**
    * Whether installNetworkPolicy is active for this session (it is installed
    * only when `blockLocalhost` is on). Without it there is no route handler to
    * inject credentials through, so handleNavigate falls back to the round 8 #21
@@ -115,6 +123,21 @@ const SCRIPT_EVAL_TIMEOUT_MS = 5000;
  * covers each individual load.
  */
 const MAX_SAME_ORIGIN_RESTARTS = 3;
+
+/**
+ * How long a response kept for a same-origin restart (round 9 #14) may be
+ * delivered. The restart follows immediately, so this only stops a stale body
+ * from being served to an unrelated navigation much later.
+ */
+export const VETTED_DOCUMENT_TTL_MS = 60_000;
+
+/**
+ * How long a click-initiated navigation is given to be refused by the policy
+ * before the click is reported as an ordinary one (round 9 #14). The route
+ * handler performs the document fetch itself, so the refusal lands after
+ * `page.click()` has already resolved.
+ */
+const REDIRECT_SETTLE_TIMEOUT_MS = 5000;
 
 function looksLikeExpression(script: string): boolean {
   const trimmed = script.trim();
@@ -340,9 +363,18 @@ export interface NetworkPolicyOptions {
   /**
    * Called when a document request was aborted because its redirect chain
    * ended on a different URL of the SAME origin (round 8 #22), with the vetted
-   * final URL the navigation must be restarted at.
+   * final URL the navigation must be restarted at and the response that URL
+   * already produced (round 9 #14) — keep it and hand it back through
+   * `takeVettedDocument` so the restart is not a second request.
    */
-  onSameOriginRedirect?: (url: string, finalUrl: string) => void;
+  onSameOriginRedirect?: (url: string, finalUrl: string, document?: VettedDocument) => void;
+  /**
+   * A response kept by a previous `onSameOriginRedirect` for exactly this URL
+   * (round 9 #14). Returning it fulfils the document without touching the
+   * network; returning undefined fetches as usual. The implementation is
+   * expected to hand each kept response out at most once.
+   */
+  takeVettedDocument?: (url: string) => VettedDocument | undefined;
   /** Called for every refused WebSocket (logging). */
   onBlockedWebSocket?: (url: string) => void;
   /** Bound on one document fetch (all hops); defaults to DOCUMENT_FETCH_TIMEOUT_MS. */
@@ -405,6 +437,13 @@ export class CrossOriginRedirectError extends Error {
   }
 }
 
+/** A response the policy vetted, in the form `route.fulfill` takes. */
+export interface VettedDocument {
+  status: number;
+  headers: Record<string, string>;
+  body: Buffer;
+}
+
 /**
  * A document request whose redirect chain stayed on the origin but ended on
  * another URL (round 8 #22). `fulfill` cannot change the page's URL, so
@@ -412,17 +451,48 @@ export class CrossOriginRedirectError extends Error {
  * behind: `/start` redirected to `/app/index.html` would run with a base of
  * `/start`, and `src="main.js"` would resolve to `/main.js`. The route is
  * aborted and the navigation is restarted at the final URL instead.
+ *
+ * `document` is that final response (round 9 #14): the chain already SPENT the
+ * destination, so a single-use URL is gone by the time the restart runs. The
+ * restart delivers this response instead of requesting the URL a second time.
+ * It is absent only when the body could not be buffered (too large), in which
+ * case the restart does fetch again, as before.
  */
 export class SameOriginRedirectError extends Error {
   constructor(
     readonly requestedUrl: string,
     readonly finalUrl: string,
+    readonly document?: VettedDocument,
   ) {
     super(
       `Navigation to ${requestedUrl} was redirected to ${finalUrl}; the body was not delivered under the old URL. Navigate to ${finalUrl} to continue.`,
     );
     this.name = "SameOriginRedirectError";
   }
+}
+
+/**
+ * Take the response kept for `url`, if it is the one held and still fresh
+ * (round 9 #14). The slot is emptied either way: a kept response is delivered
+ * at most once, so a single-use destination cannot be replayed.
+ */
+export function takeVettedDocument(
+  slot: { current?: { url: string; document: VettedDocument; storedAt: number } },
+  url: string,
+  now: number = Date.now(),
+): VettedDocument | undefined {
+  const held = slot.current;
+  if (!held) return undefined;
+  if (held.url !== normalizeUrl(url)) return undefined;
+  slot.current = undefined;
+  if (now - held.storedAt > VETTED_DOCUMENT_TTL_MS) return undefined;
+  return held.document;
+}
+
+/** The map's first entry in insertion order, or undefined when it is empty. */
+function firstEntry<K, V>(map: Map<K, V>): [K, V] | undefined {
+  for (const entry of map) return entry;
+  return undefined;
 }
 
 function originOf(url: string): string {
@@ -831,24 +901,42 @@ async function fulfillDocumentUnderPolicy(
     });
     dispose = fetched.dispose;
     const response = fetched.response;
+    const buildDocument = async (): Promise<VettedDocument> => {
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, name) => {
+        if (!DOCUMENT_RESPONSE_HEADERS_DROPPED.has(name.toLowerCase())) responseHeaders[name] = value;
+      });
+      return {
+        status: response.status,
+        headers: responseHeaders,
+        body: await readBounded(response, DOCUMENT_MAX_BYTES),
+      };
+    };
     // #13 / #22: fulfil only what belongs to the requested URL. `fulfill`
     // cannot change the page's URL, so a body from anywhere else would run
     // under the wrong document URL: foreign HTML as the requested origin (#13),
     // or the right origin's HTML with the wrong base path (#22). Either way the
     // route is aborted and the final URL is reported, to be navigated to.
     if (normalizeUrl(fetched.finalUrl) !== normalizeUrl(requestedUrl)) {
-      await discardBody(response);
       if (originOf(fetched.finalUrl) !== originOf(requestedUrl)) {
+        // Another origin: the agent must navigate there itself, under that
+        // origin's own request context, so nothing is kept.
+        await discardBody(response);
         throw new CrossOriginRedirectError(requestedUrl, fetched.finalUrl);
       }
-      throw new SameOriginRedirectError(requestedUrl, fetched.finalUrl);
+      // #14: this chain already SPENT the destination — a single-use URL is
+      // gone now. Keep the vetted response so the restart delivers it instead
+      // of asking for it again (and getting 410).
+      let document: VettedDocument | undefined;
+      try {
+        document = await buildDocument();
+      } catch {
+        // Too large to buffer: report the redirect anyway; the restart refetches.
+        await discardBody(response);
+      }
+      throw new SameOriginRedirectError(requestedUrl, fetched.finalUrl, document);
     }
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, name) => {
-      if (!DOCUMENT_RESPONSE_HEADERS_DROPPED.has(name.toLowerCase())) responseHeaders[name] = value;
-    });
-    const body = await readBounded(response, DOCUMENT_MAX_BYTES);
-    await route.fulfill({ status: response.status, headers: responseHeaders, body });
+    await route.fulfill(await buildDocument());
   } finally {
     clearTimeout(timer);
     if (dispose) await dispose();
@@ -903,6 +991,14 @@ export async function installNetworkPolicy(
     }
     // #11: documents are fetched hop by hop under the policy and fulfilled.
     try {
+      // #14: a refused same-origin redirect already fetched THIS URL under the
+      // policy and kept the response. Deliver it rather than spend the URL a
+      // second time (a single-use destination would answer 410).
+      const kept = options.takeVettedDocument?.(url);
+      if (kept) {
+        await route.fulfill(kept);
+        return;
+      }
       await fulfillDocumentUnderPolicy(context, route, options);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -915,7 +1011,7 @@ export async function installNetworkPolicy(
         await route.abort("blockedbyclient").catch(() => undefined);
       } else if (error instanceof SameOriginRedirectError) {
         options.onBlockedRequest?.(url, reason);
-        options.onSameOriginRedirect?.(url, error.finalUrl);
+        options.onSameOriginRedirect?.(url, error.finalUrl, error.document);
         await route.abort("blockedbyclient").catch(() => undefined);
       } else {
         await route.abort("failed").catch(() => undefined);
@@ -1133,6 +1229,8 @@ export class BrowserAutomationTool implements ITool {
     const timeout = input.timeout ?? this.config.maxNavigationTimeMs;
     session.crossOriginRedirects.clear();
     session.sameOriginRedirects.clear();
+    // #14: a response kept for an earlier navigation is not an answer to this one.
+    session.vettedDocument.current = undefined;
 
     // Round 8 #21: the headers the agent supplies are credentials for THIS
     // target's origin. They are remembered with that origin; round 9 #11: the
@@ -1141,14 +1239,37 @@ export class BrowserAutomationTool implements ITool {
       session.credentials.current = { origin: originOf(input.url), headers: { ...input.headers } };
     }
 
-    let target = input.url;
+    return this.gotoUnderPolicy(session, sessionId, input.url, timeout, {
+      validateFirst: false,
+      releaseOnFailure: true,
+    });
+  }
+
+  /**
+   * `goto` under the network policy, restarting at the vetted final URL when the
+   * policy refused a same-origin redirect (round 8 #22) and delivering the
+   * response that redirect already fetched (round 9 #14). Shared by the
+   * `navigate` action and by the recovery of a page-initiated navigation, so
+   * both commit the same document by the same rules.
+   */
+  private async gotoUnderPolicy(
+    session: SessionState,
+    sessionId: string,
+    initial: string,
+    timeout: number,
+    options: { validateFirst: boolean; releaseOnFailure: boolean },
+  ): Promise<ToolExecutionResult> {
+    const release = (): void => {
+      if (options.releaseOnFailure) this.sessionManager.releaseSession(sessionId);
+    };
+    let target = initial;
     for (let restart = 0; restart <= MAX_SAME_ORIGIN_RESTARTS; restart++) {
       // A restart target is a URL of its own: it goes through the same
       // validation and resolved-target policy as the one the agent asked for.
-      if (restart > 0) {
+      if (restart > 0 || options.validateFirst) {
         const check = await this.checkNavigationTarget(target);
         if (check) {
-          this.sessionManager.releaseSession(sessionId);
+          release();
           return check;
         }
       }
@@ -1185,7 +1306,7 @@ export class BrowserAutomationTool implements ITool {
         // there explicitly (it is a new origin, so its own headers are needed).
         const crossOrigin = session.crossOriginRedirects.get(key);
         if (crossOrigin) {
-          this.sessionManager.releaseSession(sessionId);
+          release();
           session.crossOriginRedirects.clear();
           return {
             content: new CrossOriginRedirectError(target, crossOrigin).message,
@@ -1208,7 +1329,7 @@ export class BrowserAutomationTool implements ITool {
           target = sameOrigin;
           continue;
         }
-        this.sessionManager.releaseSession(sessionId);
+        release();
         if (sameOrigin) {
           session.sameOriginRedirects.clear();
           return {
@@ -1221,8 +1342,52 @@ export class BrowserAutomationTool implements ITool {
       }
     }
     // Unreachable: the loop's last iteration either returns or throws.
-    this.sessionManager.releaseSession(sessionId);
-    return { content: `Navigation to ${input.url} did not settle on a final URL.`, isError: true };
+    release();
+    return { content: `Navigation to ${initial} did not settle on a final URL.`, isError: true };
+  }
+
+  /**
+   * Round 9 #14: recover a navigation the PAGE started (a clicked link, a
+   * submitted form, a scripted `location` assignment) and the policy refused.
+   * `navigate` restarts itself at the vetted final URL (round 8 #22); a click
+   * never consulted the redirect maps, so the page was left on an aborted
+   * navigation with nothing for the agent to act on.
+   *
+   * The refusal lands AFTER `page.click()` resolves — the route handler fetches
+   * the document itself — so the page is first given until it is idle to settle.
+   * Returns null when no refused navigation was recorded (an ordinary click).
+   */
+  private async recoverRefusedNavigation(
+    session: SessionState,
+    sessionId: string,
+    timeout: number,
+  ): Promise<ToolExecutionResult | null> {
+    await session.page.waitForLoadState("networkidle", { timeout }).catch(() => undefined);
+
+    const crossOrigin = firstEntry(session.crossOriginRedirects);
+    if (crossOrigin) {
+      session.crossOriginRedirects.clear();
+      return {
+        content: new CrossOriginRedirectError(crossOrigin[0], crossOrigin[1]).message,
+        isError: true,
+        metadata: { url: crossOrigin[0], redirectedTo: crossOrigin[1] },
+      };
+    }
+    const sameOrigin = firstEntry(session.sameOriginRedirects);
+    if (!sameOrigin) return null;
+    session.sameOriginRedirects.delete(sameOrigin[0]);
+    this.logger.info("Committing a page-initiated navigation at the final URL of a same-origin redirect", {
+      sessionId,
+      from: sameOrigin[0],
+      to: sameOrigin[1],
+    });
+    // The final URL is validated like any other target, and the load delivers
+    // the response the refused chain already fetched (#14) rather than a second
+    // request for a URL that may have been single-use.
+    return this.gotoUnderPolicy(session, sessionId, sameOrigin[1], timeout, {
+      validateFirst: true,
+      releaseOnFailure: false,
+    });
   }
 
   /** validateUrlWithConfig + the resolved-target policy for one navigation target. */
@@ -1238,7 +1403,27 @@ export class BrowserAutomationTool implements ITool {
     if (!input.selector) return { content: "Selector is required for click action", isError: true };
     const session = this.requireSession(sessionId);
 
+    // #14: whatever navigation the click starts goes through the same policy as
+    // a `navigate` action, and may be refused the same way. Start from a clean
+    // slate so what is recorded afterwards belongs to THIS click.
+    session.crossOriginRedirects.clear();
+    session.sameOriginRedirects.clear();
+    session.vettedDocument.current = undefined;
+
     await session.page.click(input.selector);
+
+    const recovery = await this.recoverRefusedNavigation(
+      session,
+      sessionId,
+      input.timeout ?? REDIRECT_SETTLE_TIMEOUT_MS,
+    );
+    if (recovery?.isError) return recovery;
+    if (recovery) {
+      return {
+        content: `Clicked element: ${input.selector}\n${recovery.content}`,
+        ...(recovery.metadata ? { metadata: recovery.metadata } : {}),
+      };
+    }
     return { content: `Clicked element: ${input.selector}` };
   }
 
@@ -1651,6 +1836,9 @@ export class BrowserAutomationTool implements ITool {
       // #11: the box the policy reads the agent's credentials out of on every
       // request. handleNavigate fills it; nothing is installed on the page.
       const credentials: { current?: OriginCredentials } = {};
+      // #14: the one slot a refused same-origin redirect keeps its vetted
+      // response in, so the restart delivers it instead of asking again.
+      const vettedDocument: SessionState["vettedDocument"] = {};
 
       const policyInstalled = this.config.blockLocalhost;
       if (policyInstalled) {
@@ -1660,7 +1848,15 @@ export class BrowserAutomationTool implements ITool {
           onBlockedRequest: (url, reason) =>
             this.logger.warn("Browser request blocked by network policy", { sessionId, url, reason }),
           onCrossOriginRedirect: (url, finalUrl) => crossOriginRedirects.set(normalizeUrl(url), finalUrl),
-          onSameOriginRedirect: (url, finalUrl) => sameOriginRedirects.set(normalizeUrl(url), finalUrl),
+          onSameOriginRedirect: (url, finalUrl, document) => {
+            sameOriginRedirects.set(normalizeUrl(url), finalUrl);
+            // #14: keep the response the chain already produced, for ONE
+            // delivery at the URL it came from.
+            vettedDocument.current = document
+              ? { url: normalizeUrl(finalUrl), document, storedAt: Date.now() }
+              : undefined;
+          },
+          takeVettedDocument: (url) => takeVettedDocument(vettedDocument, url),
           onBlockedWebSocket: (url) =>
             this.logger.warn("Browser WebSocket refused by network policy", { sessionId, url }),
           onForbiddenRedirect: async (url, reason) => {
@@ -1691,6 +1887,7 @@ export class BrowserAutomationTool implements ITool {
         crossOriginRedirects,
         sameOriginRedirects,
         credentials,
+        vettedDocument,
         policyInstalled,
       };
       this.sessions.set(sessionId, session);

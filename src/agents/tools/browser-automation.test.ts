@@ -40,6 +40,8 @@ import {
   isLikelyPublicSuffix,
   isSameSiteUrl,
   parseSetCookie,
+  takeVettedDocument,
+  type VettedDocument,
   type OriginCredentials,
   type PolicyContext,
   type PolicyJarCookie,
@@ -493,9 +495,12 @@ describe("installNetworkPolicy — Codex round 7 #13–#15", () => {
     expect(mockFetch.mock.calls[1]?.[0]).toBe("https://trusted.example/login?next=%2Fstart");
     expect(route.fulfill).not.toHaveBeenCalled();
     expect(onCrossOriginRedirect).not.toHaveBeenCalled();
+    // Round 9 #14: the vetted response of the final hop rides along, so the
+    // restart delivers it instead of requesting the URL a second time.
     expect(onSameOriginRedirect).toHaveBeenCalledWith(
       "https://trusted.example/start",
       "https://trusted.example/login?next=%2Fstart",
+      expect.objectContaining({ status: 200 }),
     );
   });
 
@@ -1142,6 +1147,7 @@ interface FakeNavSession {
   sameOriginRedirects: Map<string, string>;
   credentials: { current?: OriginCredentials };
   policyInstalled: boolean;
+  vettedDocument: { current?: unknown };
 }
 
 describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
@@ -1177,6 +1183,7 @@ describe("BrowserAutomationTool.navigate — Codex round 8 #21/#22", () => {
       sameOriginRedirects: new Map(),
       credentials: {},
       policyInstalled: true,
+      vettedDocument: {},
     };
     (tool as unknown as { sessions: Map<string, unknown> }).sessions.set(context.workingDirectory, session);
     return session;
@@ -1585,5 +1592,220 @@ describe("installNetworkPolicy — Codex round 9 #12/#13 at the hop", () => {
     expect(sentHeaders(0)["cookie"]).toBeUndefined();
     expect(sentHeaders(1)["cookie"]).toBeUndefined();
     expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+  });
+});
+
+// ── Codex round 9 #14: the vetted response of a refused same-origin redirect is
+// kept and delivered at the restart, and a click- or form-initiated navigation
+// gets the same recovery a `navigate` action does. ──
+
+describe("installNetworkPolicy — Codex round 9 #14 (the vetted response is reused)", () => {
+  const table = new Map<string, ResolvedAddress[]>();
+  const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+    const hit = table.get(hostname);
+    if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+    return hit;
+  });
+
+  beforeEach(() => {
+    table.clear();
+    resolver.mockClear();
+    table.set("trusted.example", [{ address: PUBLIC_V4, family: 4 }]);
+    table.set("other.example", [{ address: "151.101.1.2", family: 4 }]);
+  });
+
+  /** The session's single-slot stash, wired exactly as the tool wires it. */
+  async function install() {
+    const ctx = fakeContext();
+    const page = fakePage();
+    const slot: { current?: { url: string; document: VettedDocument; storedAt: number } } = {};
+    const reported: Array<{ url: string; finalUrl: string; hasDocument: boolean }> = [];
+    await installNetworkPolicy(ctx, page, {
+      resolver,
+      onForbiddenNavigation: vi.fn(),
+      onBlockedRequest: vi.fn(),
+      onSameOriginRedirect: (url, finalUrl, document) => {
+        reported.push({ url, finalUrl, hasDocument: document !== undefined });
+        slot.current = document ? { url: finalUrl, document, storedAt: Date.now() } : undefined;
+      },
+      takeVettedDocument: (url) => takeVettedDocument(slot, url),
+    });
+    return { ctx, slot, reported };
+  }
+
+  // The receipt is single-use: the policy fetch spent it, so asking again gets
+  // 410. The kept response must be what the restart delivers.
+  it("#14 a single-use destination is requested once and its vetted body is delivered at the restart", async () => {
+    const { ctx, reported } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "/receipt/once"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>receipt</html>", { "x-served-by": "app" }));
+
+    const start = documentRoute("https://trusted.example/start");
+    await ctx.routeHandler!(start);
+    expect(start.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(reported).toEqual([
+      { url: "https://trusted.example/start", finalUrl: "https://trusted.example/receipt/once", hasDocument: true },
+    ]);
+
+    // What the restart would get if it asked again: gone.
+    mockFetch.mockResolvedValueOnce({ ...okResponse("GONE — MUST NOT BE FETCHED"), ok: false, status: 410 });
+    const restart = documentRoute("https://trusted.example/receipt/once");
+    await ctx.routeHandler!(restart);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2); // no second request for the receipt
+    expect(restart.abort).not.toHaveBeenCalled();
+    expect(restart.fulfill).toHaveBeenCalledTimes(1);
+    const fulfilled = restart.fulfill.mock.calls[0]![0];
+    expect(fulfilled.status).toBe(200);
+    expect(fulfilled.body.toString("utf8")).toBe("<html>receipt</html>");
+    expect(fulfilled.headers).toEqual({ "content-type": "text/html", "x-served-by": "app" });
+  });
+
+  it("#14 the kept response is delivered once; a later request for the same URL is fetched", async () => {
+    const { ctx } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "/receipt/once"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>receipt</html>"));
+    await ctx.routeHandler!(documentRoute("https://trusted.example/start"));
+
+    await ctx.routeHandler!(documentRoute("https://trusted.example/receipt/once"));
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    mockFetch.mockResolvedValueOnce(okResponse("<html>fresh</html>"));
+    const again = documentRoute("https://trusted.example/receipt/once");
+    await ctx.routeHandler!(again);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(again.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>fresh</html>");
+  });
+
+  it("#14 the kept response is only delivered at its own URL", async () => {
+    const { ctx, slot } = await install();
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "/receipt/once"));
+    mockFetch.mockResolvedValueOnce(okResponse("<html>receipt</html>"));
+    await ctx.routeHandler!(documentRoute("https://trusted.example/start"));
+    expect(slot.current?.url).toBe("https://trusted.example/receipt/once");
+
+    mockFetch.mockResolvedValueOnce(okResponse("<html>elsewhere</html>"));
+    const other = documentRoute("https://trusted.example/elsewhere");
+    await ctx.routeHandler!(other);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(other.fulfill.mock.calls[0]![0].body.toString("utf8")).toBe("<html>elsewhere</html>");
+  });
+
+  // A cross-origin chain keeps the round 7 #13 behaviour: nothing is kept, the
+  // agent must navigate to the other origin itself under its own context.
+  it("#14 a cross-origin redirect keeps nothing", async () => {
+    const { ctx, slot, reported } = await install();
+    const cancel = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValueOnce(redirectResponse(302, "https://other.example/landing"));
+    mockFetch.mockResolvedValueOnce({ ...okResponse("<html>landing</html>"), body: { cancel } });
+
+    await ctx.routeHandler!(documentRoute("https://trusted.example/start"));
+    expect(reported).toEqual([]);
+    expect(slot.current).toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BrowserAutomationTool.click — Codex round 9 #14", () => {
+  let tool: BrowserAutomationTool;
+  const context: ToolContext = { projectPath: "/tmp/test", workingDirectory: "/tmp/test-click", readOnly: false };
+
+  beforeEach(() => {
+    tool = new BrowserAutomationTool();
+  });
+
+  afterAll(async () => {
+    await tool?.dispose();
+  });
+
+  /** A session whose click can trigger a policy-refused document redirect. */
+  function fakeSession(onClick: (session: FakeClickSession) => void | Promise<void>) {
+    let current = "https://trusted.example/start";
+    const session = {
+      browser: { close: async () => undefined },
+      context: { close: async () => undefined },
+      page: {
+        click: vi.fn(async (_selector: string) => {
+          await onClick(session);
+        }),
+        goto: vi.fn(async (url: string) => {
+          current = url;
+        }),
+        waitForLoadState: vi.fn(async () => undefined),
+        url: () => current,
+        title: async () => "T",
+        setExtraHTTPHeaders: vi.fn(async () => undefined),
+      },
+      createdAt: Date.now(),
+      lastUsed: Date.now(),
+      crossOriginRedirects: new Map<string, string>(),
+      sameOriginRedirects: new Map<string, string>(),
+      credentials: {},
+      policyInstalled: true,
+      vettedDocument: {} as { current?: unknown },
+    };
+    (tool as unknown as { sessions: Map<string, unknown> }).sessions.set(context.workingDirectory, session);
+    return session;
+  }
+  type FakeClickSession = ReturnType<typeof fakeSession>;
+
+  // The clicked link's document was aborted by the policy and handleClick never
+  // looked at the redirect map, so the page stayed on an error with no recovery.
+  it("#14 a clicked link whose same-origin redirect was refused commits the final document", async () => {
+    const session = fakeSession((s) => {
+      s.sameOriginRedirects.set("https://trusted.example/start", "https://trusted.example/app/index.html");
+    });
+
+    const result = await tool.execute({ action: "click", selector: "a#go" }, context);
+
+    expect(result.isError).toBeFalsy();
+    expect(session.page.goto.mock.calls.map((c) => c[0])).toEqual(["https://trusted.example/app/index.html"]);
+    expect(result.content).toContain("https://trusted.example/app/index.html");
+    expect(result.metadata).toEqual(expect.objectContaining({ url: "https://trusted.example/app/index.html" }));
+  });
+
+  it("#14 a submitted form's same-origin redirect is recovered the same way", async () => {
+    const session = fakeSession((s) => {
+      s.sameOriginRedirects.set("https://trusted.example/submit", "https://trusted.example/receipt/once");
+    });
+
+    const result = await tool.execute({ action: "click", selector: "button[type=submit]" }, context);
+
+    expect(result.isError).toBeFalsy();
+    expect(session.page.goto).toHaveBeenCalledWith("https://trusted.example/receipt/once", expect.anything());
+  });
+
+  it("#14 a clicked link that left the origin is reported, not followed", async () => {
+    const session = fakeSession((s) => {
+      s.crossOriginRedirects.set("https://trusted.example/start", "https://other.example/landing");
+    });
+
+    const result = await tool.execute({ action: "click", selector: "a#go" }, context);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Navigate to https://other.example/landing explicitly");
+    expect(session.page.goto).not.toHaveBeenCalled();
+  });
+
+  it("#14 the recovery target still runs the URL policy", async () => {
+    const session = fakeSession((s) => {
+      s.sameOriginRedirects.set("https://trusted.example/start", "https://trusted.example/admin/dump");
+    });
+
+    const result = await tool.execute({ action: "click", selector: "a#go" }, context);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("blocked pattern");
+    expect(session.page.goto).not.toHaveBeenCalled();
+  });
+
+  // The guard: an ordinary click is unchanged — no navigation of our own.
+  it("#14 a click with no refused redirect behaves as before", async () => {
+    const session = fakeSession(() => undefined);
+    const result = await tool.execute({ action: "click", selector: "a#go" }, context);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe("Clicked element: a#go");
+    expect(session.page.goto).not.toHaveBeenCalled();
   });
 });
