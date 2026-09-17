@@ -244,6 +244,13 @@ export interface WorkspaceEventMap {
   // === Progress narrative events ===
   'progress:narrative': {
     nodeId?: string
+    /**
+     * Conversation/chat scope this narrative belongs to (round 10 #4). The text
+     * is the request, reworded, so the frame carries its owner instead of
+     * relying on the monitor bridge still remembering which board the node is
+     * on.
+     */
+    conversationId?: string
     narrative: string
     lang: string
     milestone?: {

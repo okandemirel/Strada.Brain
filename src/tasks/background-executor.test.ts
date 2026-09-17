@@ -4038,3 +4038,48 @@ describe("BackgroundExecutor - run budget reservations (plan 2.12 / audit 03.1 /
     expect(unified.release).not.toHaveBeenCalled();
   });
 });
+
+// ── Round 10 #4: a narrative carries the conversation it belongs to ──
+//
+// progress:narrative names only a nodeId, and its text is the request reworded
+// (buildGoalNarrativeFeedback(tree, task.prompt)). The monitor bridge could
+// therefore deliver it to the right portal profile only while it still
+// remembered which board that node was on — and a large DAG made it forget, at
+// which point the frame went to EVERY profile. The scope travels with the frame.
+describe("BackgroundExecutor goal narrative attribution (round 10 #4)", () => {
+  /** emitGoalNarrative on a bare instance: the method under test needs only the bus. */
+  function emit(task: Task, tree: GoalTree) {
+    const bus = { emit: vi.fn() };
+    const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
+    (executor as unknown as { workspaceBus: unknown }).workspaceBus = bus;
+    (executor as unknown as { emitGoalNarrative: (t: Task, g: GoalTree, n?: string) => void }).emitGoalNarrative(
+      task,
+      tree,
+      "node-7",
+    );
+    expect(bus.emit).toHaveBeenCalledTimes(1);
+    expect(bus.emit.mock.calls[0]?.[0]).toBe("progress:narrative");
+    return bus.emit.mock.calls[0]?.[1] as Record<string, unknown>;
+  }
+
+  it("stamps the conversation scope the board was emitted under", () => {
+    const tree = buildTestGoalTree();
+    const payload = emit(
+      createTestTask(tree, { chatId: "chat-1", conversationId: "profile-A" }),
+      tree,
+    );
+    expect(payload["conversationId"]).toBe("profile-A");
+    expect(payload["nodeId"]).toBe("node-7");
+    expect(typeof payload["narrative"]).toBe("string");
+  });
+
+  it("uses the chatId when the task names no conversation, and the monitorScope when it joins a parent episode", () => {
+    const tree = buildTestGoalTree();
+    expect(emit(createTestTask(tree, { chatId: "chat-1" }), tree)["conversationId"]).toBe("chat-1");
+    expect(
+      emit(createTestTask(tree, { chatId: "chat-1", conversationId: "profile-A", monitorScope: "parent-scope" }), tree)[
+        "conversationId"
+      ],
+    ).toBe("parent-scope");
+  });
+});

@@ -624,8 +624,18 @@ export class BackgroundExecutor {
       return;
     }
     const feedback = buildGoalNarrativeFeedback(tree, task.prompt);
+    // Round 10 #4: the narrative IS the request, reworded. It used to name only
+    // a nodeId, so the monitor bridge could deliver it to the right portal
+    // profile only while it still remembered that node — and a large DAG or a
+    // busy process made it forget. The scope the board was emitted under travels
+    // with every narrative instead, which is the same scope beginGoalExecution
+    // gives monitor:dag_init (monitorScope for a sub-goal joining a parent
+    // episode, else the conversation scope).
+    const scope = task.monitorScope?.trim() || this.getConversationScope(task);
     this.workspaceBus.emit("progress:narrative", {
       ...(nodeId ? { nodeId } : {}),
+      ...(scope ? { conversationId: scope } : {}),
+
       narrative: feedback.narrative,
       lang: feedback.language,
       milestone: feedback.milestone,

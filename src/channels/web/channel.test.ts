@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
+import { TypedEventBus } from "../../core/event-bus.js";
+import { createMonitorBridge } from "../../dashboard/monitor-bridge.js";
+import type { WorkspaceEventMap } from "../../dashboard/workspace-events.js";
 
 type WsHandler = (payload?: Buffer) => void;
 
@@ -392,6 +395,47 @@ describe("WebChannel monitor profile boundary (13F5 / 4.7)", () => {
       expect(typesOf(c.socket, "budget:warning"), name).toHaveLength(1);
     }
 
+    await channel.disconnect();
+  });
+
+  // ── Round 10 #4, end to end: the bridge and the transport together ──
+  //
+  // Node ownership was a flat 200-entry LRU, so Alice's 201-node DAG evicted the
+  // attribution of its OWN first nodes; their later progress:narrative — the
+  // milestone wording derived from Alice's request — carried no origin and the
+  // transport therefore fanned it out to Bob. This drives the real bridge into
+  // the real channel, live delivery and reconnect replay.
+  it("leaks nothing of a 201-node DAG to another profile, live or on replay", async () => {
+    const channel = new WebChannel();
+    const bus = new TypedEventBus<WorkspaceEventMap>();
+    const bridge = createMonitorBridge(bus, (message) => channel.broadcastRaw(message));
+    bridge.start();
+
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    bus.emit("monitor:dag_init", {
+      rootId: "ep-A",
+      nodes: Array.from({ length: 201 }, (_, i) => ({ id: `n${i}` })),
+      edges: [],
+      conversationId: A,
+    });
+    // The FIRST node of the board — the entry the old bound dropped.
+    bus.emit("progress:narrative", { nodeId: "n0", narrative: "Alice: the secret request", lang: "en" });
+    bus.emit("monitor:substep", { rootId: "ep-A", nodeId: "n0", substep: "writing the secret" });
+
+    expect(typesOf(alice.socket, "progress:narrative")).toHaveLength(1);
+    expect(typesOf(alice.socket, "monitor:substep")).toHaveLength(1);
+    expect(typesOf(bob.socket, "progress:narrative")).toHaveLength(0);
+    expect(typesOf(bob.socket, "monitor:substep")).toHaveLength(0);
+    expect(JSON.stringify(bob.socket.getSentMessages())).not.toContain("secret");
+
+    // …and the replay a reconnecting Bob gets holds none of it either.
+    bob.socket.close();
+    const bobAgain = connectProfile(channel, B);
+    expect(JSON.stringify(bobAgain.socket.getSentMessages())).not.toContain("secret");
+
+    bridge.stop();
     await channel.disconnect();
   });
 
