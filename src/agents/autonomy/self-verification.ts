@@ -126,8 +126,14 @@ function shellExitedNonZero(output: string | undefined, result: { content?: unkn
   if (typeof meta === "number") return meta !== 0;
   if (typeof meta === "string" && /^\d+$/u.test(meta.trim())) return Number(meta.trim()) !== 0;
   const body = output !== undefined && output !== "" ? output : typeof result.content === "string" ? result.content : "";
-  const line = /(?:^|\n)Exit code: (\d+)(?: \| Duration: \d+ms)?[ \t]*(?:\n|$)/u.exec(body);
-  return line === null || Number(line[1]) !== 0;
+  // THE LAST FOOTER BEFORE STDOUT. The formatter echoes the command first,
+  // so a command carrying "Exit code: 0 | Duration: 1ms" on a line of its
+  // own put a forged zero ahead of the real footer (Codex 2026-09-17 round
+  // 3 #1); what the program printed only comes after the stdout marker.
+  const head = body.split(/\n--- (?:stdout|stderr) ---/u)[0] ?? "";
+  const footers = [...head.matchAll(/(?:^|\n)Exit code: (\d+)(?: \| Duration: \d+ms)?[ \t]*(?=\n|$)/gu)];
+  const last = footers[footers.length - 1];
+  return last === undefined || Number(last[1]) !== 0;
 }
 
 function infrastructureFailure(result: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }): boolean {
