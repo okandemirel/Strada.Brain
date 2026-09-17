@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { summarizeToolArgs } from "../agents/orchestrator-tool-execution.js";
+import { MAX_SESSIONS_PER_RUN } from "../campaign/producer-evidence.js";
 import { describeEvidenceShortfall, missingRequiredEvidence, requiredToolsInPrompt, requiredToolArguments, sessionsSatisfy, thresholdLoopTools, REQUIRED_EVIDENCE_PREFIX } from "./required-evidence.js";
 
 describe("required evidence named by the task", () => {
@@ -43,8 +44,9 @@ describe("required evidence named by the task", () => {
     const prompt = 'Prove the levels: run unity_playthrough with sessions "all" and report the catalog.';
     expect(requiredToolArguments(prompt)).toEqual([{ tool: "unity_playthrough", key: "sessions", value: "all" }]);
     // Ran, but with one session that skips the first: the task asked for all
-    // of them. (Not "1": a leading batch `1-N` is how the coordinator spells
-    // "everything that fits", and it counts as coverage of "all" — plan 1.6.)
+    // of them. (A leading batch `1-N` with N at the producer's cap is how the
+    // coordinator spells "everything that fits", and it counts as coverage of
+    // "all" — plan 1.6, round 5 #7.)
     const narrow = missingRequiredEvidence(prompt, [
       { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "2" }) },
     ]);
@@ -433,29 +435,46 @@ describe("the arguments the producer ran with decide the scope (Codex 2026-09-12
  * plan existed (declared "all") must still be satisfiable by the call the
  * coordinator now asks for. Literal comparison failed every such run.
  */
-describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3)", () => {
-  it("declared \"all\" is covered by \"all\" or a leading contiguous batch", () => {
-    expect(sessionsSatisfy("all", "1-3")).toBe(true);
+describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3; Codex 2026-09-17 round 5 #6, #7)", () => {
+  // The producer plays "all" as sessions 1..min(catalogue, cap): coverage
+  // of "all" is what the producer would have played, never less.
+  it("declared \"all\" is covered by \"all\" or a leading contiguous batch at least the producer's cap long", () => {
+    expect(MAX_SESSIONS_PER_RUN).toBe(12);
     expect(sessionsSatisfy("all", "all")).toBe(true);
-    expect(sessionsSatisfy("all", "1,2,3")).toBe(true);
     expect(sessionsSatisfy("ALL", " All ")).toBe(true);
+    expect(sessionsSatisfy("all", "1-12")).toBe(true);
+    expect(sessionsSatisfy("all", "1-13")).toBe(true);
+    expect(sessionsSatisfy("all", "1,2,3,4,5,6,7,8,9,10,11,12")).toBe(true);
+    // Round 5 #7: a shorter batch or a single-session call is missing work.
+    expect(sessionsSatisfy("all", "1")).toBe(false);
+    expect(sessionsSatisfy("all", "1-3")).toBe(false);
+    expect(sessionsSatisfy("all", "1,2,3")).toBe(false);
+    expect(sessionsSatisfy("all", "1-11")).toBe(false);
     // A batch that skips sessions is not everything.
     expect(sessionsSatisfy("all", "2,4")).toBe(false);
     expect(sessionsSatisfy("all", "2-5")).toBe(false);
+    expect(sessionsSatisfy("all", "2-13")).toBe(false);
   });
 
-  it("a declared explicit set is covered by \"all\" or a superset", () => {
+  it("a declared explicit set is covered by \"all\" only within the cap, or by a superset", () => {
     expect(sessionsSatisfy("1-3", "all")).toBe(true);
+    expect(sessionsSatisfy("1", "all")).toBe(true);
+    expect(sessionsSatisfy("2,4,5", "all")).toBe(true);
+    expect(sessionsSatisfy("1-12", "all")).toBe(true);
+    // Round 5 #7: "all" plays at most the cap; session 13 was never played.
+    expect(sessionsSatisfy("13", "all")).toBe(false);
+    expect(sessionsSatisfy("1-13", "all")).toBe(false);
+    expect(sessionsSatisfy("13", "13")).toBe(true);
+    expect(sessionsSatisfy("13", "1-13")).toBe(true);
+    expect(sessionsSatisfy("13", "1-12")).toBe(false);
     expect(sessionsSatisfy("1-3", "1-12")).toBe(true);
     expect(sessionsSatisfy("1-3", "1-2")).toBe(false);
-    expect(sessionsSatisfy("13", "13")).toBe(true);
-    expect(sessionsSatisfy("13", "1-12")).toBe(false);
     expect(sessionsSatisfy("2,4,5", "1-5")).toBe(true);
     expect(sessionsSatisfy("2,4,5", "5, 4, 2")).toBe(true);
   });
 
   it("anything unparsable matches nothing", () => {
-    for (const garbage of ["smoke", "", "1-", "3-1", "1,,2", "a-b", "0"]) {
+    for (const garbage of ["smoke", "", "1-", "3-1", "1,,2", "a-b", "0", "0-3"]) {
       expect(sessionsSatisfy(garbage, "all")).toBe(false);
       expect(sessionsSatisfy(garbage, "1-3")).toBe(false);
       expect(sessionsSatisfy("all", garbage)).toBe(false);
@@ -463,11 +482,30 @@ describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3)", () 
     }
   });
 
+  // Round 5 #6: 2^53-2^53 passed the span check while i++ never advanced at
+  // 2^53 — an infinite loop. Every endpoint must be a safe integer.
+  it("an endpoint past the safe-integer range is unparsable, not an infinite loop", () => {
+    const unsafe = "9007199254740992-9007199254740992";
+    expect(sessionsSatisfy(unsafe, "all")).toBe(false);
+    expect(sessionsSatisfy("all", unsafe)).toBe(false);
+    expect(sessionsSatisfy("1-3", unsafe)).toBe(false);
+    expect(sessionsSatisfy(unsafe, unsafe)).toBe(false);
+    expect(sessionsSatisfy("9007199254740992", "all")).toBe(false);
+    expect(sessionsSatisfy("all", "1-9007199254740993")).toBe(false);
+    // The last safe index still parses and terminates.
+    expect(sessionsSatisfy("9007199254740991", "9007199254740991")).toBe(true);
+  }, 2_000);
+
   it("an old prompt declaring \"all\" accepts the leading batch the coordinator now asks for", () => {
     const old = `Prove the levels.\n\n${REQUIRED_EVIDENCE_PREFIX} unity_playthrough sessions="all"`;
     expect(missingRequiredEvidence(old, [
-      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1-3" }) },
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1-12" }) },
     ])).toEqual([]);
+    // Round 5 #7: a batch shorter than what the producer plays for "all" is
+    // missing work, not coverage.
+    expect(missingRequiredEvidence(old, [
+      { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "1-3" }) },
+    ])).toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
     // …and still refuses a batch that skipped sessions.
     expect(missingRequiredEvidence(old, [
       { toolName: "unity_playthrough", success: true, args: JSON.stringify({ sessions: "2,4" }) },

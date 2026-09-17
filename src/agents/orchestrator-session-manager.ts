@@ -605,16 +605,23 @@ function stageMutates(seg: string): boolean {
  * `$ <command>\n`, so when the content starts with it the footer is the
  * first line of what remains — an echoed command carrying its own
  * "Exit code: 0" line AND a "--- stdout ---" line would otherwise forge
- * the boundary (Codex 2026-09-17 round 4 #3). Without the echo prefix
- * (the tool may echo a rewritten command), the footer is the LAST such
- * line before the first output marker. No footer proves nothing.
+ * the boundary (Codex 2026-09-17 round 4 #3). The tool echoes the command
+ * TRIMMED, so the prefix is built from the trimmed command — a trailing
+ * newline on the forged command otherwise missed the echo and fell back
+ * to the footer inside the echoed text (Codex 2026-09-17 round 5 #5). A
+ * result that starts with `$ ` whose echo does not match the command (a
+ * rewritten path, a truncated echo) is UNPROVEN: the footer cannot be
+ * told from the echoed text, so it is not exit 0. Only a result carrying
+ * no echo at all (a batch child) reads the LAST footer before the first
+ * output marker. No footer proves nothing.
  */
 function shellResultExitedZero(content: string, command: string | undefined): boolean {
-  const echo = command === undefined ? undefined : `$ ${command}\n`;
+  const echo = command === undefined ? undefined : `$ ${command.trim()}\n`;
   if (echo !== undefined && content.startsWith(echo)) {
     const footer = /^Exit code: (\d+) \| Duration: \d+ms[ \t]*(?=\n|$)/u.exec(content.slice(echo.length));
     return footer !== null && Number(footer[1]) === 0;
   }
+  if (content.startsWith("$ ")) return false;
   const marker = content.search(/(?:^|\n)--- (?:stdout|stderr) ---(?:\n|$)/u);
   const head = marker === -1 ? content : content.slice(0, marker);
   let exit: number | undefined;

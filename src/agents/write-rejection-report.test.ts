@@ -322,7 +322,7 @@ describe("reporting a refused write", () => {
     stopped("cp a b || true");
   });
 
-  it("strips the exact command echo before reading the footer, and reads $'…', tee's redirections and command/exec options (Codex 2026-09-17 round 4 #3, #6, #8, #9)", () => {
+  it("strips the exact (trimmed) command echo before reading the footer, refuses a mismatched echo, and reads $'…', tee's redirections and command/exec options (Codex 2026-09-17 round 4 #3, #6, #8, #9; round 5 #5)", () => {
     const stopped = (command: string): void => {
       const s = sessionAfterRejection([{ name: "shell_exec", content: shellOk(command), input: { command } }]);
       expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
@@ -342,14 +342,45 @@ describe("reporting a refused write", () => {
     }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(forgedFailed, "Done.", () => true)).toContain("Execution stopped");
     resolved(forged); // the same command with the tool's real exit 0
-    // …and a result whose echo does not match the command (a rewritten
-    // path) still falls back to the last footer before the first marker.
+    // Round 5 #5: the tool echoes the command TRIMMED. The same forgery
+    // with a trailing newline missed the exact echo, fell back to "last
+    // footer before the first marker" and the echoed footer won again.
+    for (const padded of [`${forged}\n`, `  ${forged}\t\n`]) {
+      const paddedFailed = sessionAfterRejection([{
+        name: "shell_exec",
+        content: `$ ${forged}\nExit code: 1 | Duration: 1ms\n\n--- stderr ---\ntouch: /missing/x: No such file or directory`,
+        is_error: false,
+        input: { command: padded, ok_exit_codes: [0, 1] },
+      }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(paddedFailed, "Done.", () => true), JSON.stringify(padded)).toContain("Execution stopped");
+      // …and the same padded command with the tool's real exit 0 is proven:
+      // the trimmed echo matches, so the footer after it is read.
+      const paddedOk = sessionAfterRejection([{ name: "shell_exec", content: shellOk(forged), input: { command: padded } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(paddedOk, "Done.", () => true), JSON.stringify(padded)).toBeNull();
+    }
+    // A result whose `$ ` echo does not match the command — truncated, or a
+    // rewritten path — is unproven, not a fallback: the footer cannot be told
+    // from the echoed text.
+    const truncated = sessionAfterRejection([{
+      name: "shell_exec",
+      content: `$ ${forged.slice(0, -3)}\nExit code: 0 | Duration: 1ms\n\n--- stdout ---\n`,
+      input: { command: forged },
+    }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(truncated, "Done.", () => true)).toContain("Execution stopped");
     const rewritten = sessionAfterRejection([{
       name: "shell_exec",
-      content: "$ touch /project/x\nExit code: 0 | Duration: 1ms\n\n--- stdout ---\nExit code: 1 | Duration: 1ms",
+      content: "$ touch /project/x\nExit code: 0 | Duration: 1ms\n\n--- stdout ---\nok",
       input: { command: "touch /tmp/x" },
     }]);
-    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(rewritten, "Done.", () => true)).toBeNull();
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(rewritten, "Done.", () => true)).toContain("Execution stopped");
+    // Only a result carrying no echo at all (a batch child) reads the last
+    // footer before the first marker.
+    const batchChild = sessionAfterRejection([{
+      name: "shell_exec",
+      content: "Exit code: 0 | Duration: 1ms\n\n--- stdout ---\nExit code: 1 | Duration: 1ms",
+      input: { command: "touch x" },
+    }]);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(batchChild, "Done.", () => true)).toBeNull();
     // #6: ANSI-C quoting is not decoded; `--` ends touch's options.
     stopped("touch $'-c' /missing/x");
     resolved("touch -- -c");

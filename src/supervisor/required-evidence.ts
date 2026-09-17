@@ -11,6 +11,10 @@
  * names — it reads the task's own sentence.
  */
 
+// The producer's per-run cap: "all" resolves to sessions 1..min(catalogue,
+// cap), so coverage of "all" is judged against it (round 5 #7).
+import { MAX_SESSIONS_PER_RUN } from "../campaign/producer-evidence.js";
+
 /** Tools the task's text tells the worker to run: "run unity_playthrough", "Run the unity_build_player". */
 /**
  * Words that make an instruction CONDITIONAL: the tool runs only in a case
@@ -446,9 +450,17 @@ export function carriesTestFilter(parsed: Record<string, unknown>): boolean {
  */
 const MAX_SESSION_SPAN = 10_000;
 
+/** A positive session index the loop below can actually step past. */
+function isSessionIndex(n: number): boolean {
+  return Number.isSafeInteger(n) && n > 0;
+}
+
 /**
  * A session spec — "1-3", "13", "2,4,5" — as the set of indices it names.
- * Undefined when any token is not a positive integer or an ascending range.
+ * Undefined when any token is not a positive SAFE integer or an ascending
+ * range of them: "9007199254740992-9007199254740992" passed the span check
+ * while `i++` never advanced at 2^53 — an infinite loop (Codex 2026-09-17
+ * round 5 #6).
  */
 function parseSessionSet(spec: string): Set<number> | undefined {
   const out = new Set<number>();
@@ -458,13 +470,13 @@ function parseSessionSet(spec: string): Set<number> | undefined {
     if (range) {
       const a = Number(range[1]);
       const b = Number(range[2]);
-      if (a < 1 || b < a || b - a > MAX_SESSION_SPAN) return undefined;
+      if (!isSessionIndex(a) || !isSessionIndex(b) || b < a || b - a > MAX_SESSION_SPAN) return undefined;
       for (let i = a; i <= b; i++) out.add(i);
       continue;
     }
     if (!/^\d+$/.test(token)) return undefined;
     const n = Number(token);
-    if (n < 1) return undefined;
+    if (!isSessionIndex(n)) return undefined;
     out.add(n);
   }
   return out.size > 0 ? out : undefined;
@@ -485,12 +497,16 @@ function parseSessionSet(spec: string): Set<number> | undefined {
  * - Both sides are trimmed and lower-cased; "all" stays "all"; anything else
  *   is parsed as ranges (`a-b`), comma lists and single numbers. Unparsable
  *   on either side is no match.
- * - Declared "all" is satisfied by "all", or by an explicit spec that starts
- *   at 1 and is contiguous (`1-N`, or a list equal to 1..N): the coordinator
- *   only ever asks for a leading contiguous batch when it asks for everything
- *   that fits. A spec that skips sessions ("2,4") is not "all".
- * - A declared explicit set S is satisfied by "all" (the whole catalogue
- *   contains S) or by an explicit superset of S.
+ * - "all" is what the PRODUCER plays for "all": sessions 1..min(catalogue,
+ *   MAX_SESSIONS_PER_RUN), never more than the cap. So declared "all" is
+ *   satisfied by "all", or by an explicit leading contiguous batch 1..N with
+ *   N ≥ the cap — the same thing the producer would have played. A shorter
+ *   batch ("1-3") or a single "1" is missing work, and a spec that skips
+ *   sessions ("2,4") is not "all" (Codex 2026-09-17 round 5 #7: "all" was
+ *   satisfied by "1").
+ * - A declared explicit set S is satisfied by "all" only when every index in
+ *   S is ≤ the cap ("13" was satisfied by "all", which plays at most 12), or
+ *   by an explicit superset of S.
  */
 export function sessionsSatisfy(declared: string, actual: string): boolean {
   const want = declared.trim().toLowerCase();
@@ -498,14 +514,17 @@ export function sessionsSatisfy(declared: string, actual: string): boolean {
   if (want === "all") {
     if (got === "all") return true;
     const set = parseSessionSet(got);
-    if (set === undefined) return false;
-    // Leading and contiguous: exactly the indices 1..N.
+    if (set === undefined || set.size < MAX_SESSIONS_PER_RUN) return false;
+    // Leading and contiguous: exactly the indices 1..N, N ≥ cap.
     for (let i = 1; i <= set.size; i++) if (!set.has(i)) return false;
     return true;
   }
   const wanted = parseSessionSet(want);
   if (wanted === undefined) return false;
-  if (got === "all") return true;
+  if (got === "all") {
+    for (const i of wanted) if (i > MAX_SESSIONS_PER_RUN) return false;
+    return true;
+  }
   const ran = parseSessionSet(got);
   if (ran === undefined) return false;
   for (const i of wanted) if (!ran.has(i)) return false;
