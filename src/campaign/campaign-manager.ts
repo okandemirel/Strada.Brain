@@ -8,7 +8,7 @@
  * transition, so a crash mid-sprint resumes instead of restarting the game.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
@@ -89,6 +89,13 @@ export interface CompileVerdict {
   readonly errors?: number;
   /** The verifier's own sentence, for the report. */
   readonly detail?: string;
+  /**
+   * The verifier answered and its proof was REFUSED, or could not be
+   * recorded: not a pass and not "not run" either — a refused compile used
+   * to read as unmeasured and a non-final sprint advanced on it (Codex
+   * 2026-09-17 round 4 #2).
+   */
+  readonly refused?: string;
 }
 
 export interface CampaignManagerOptions {
@@ -123,6 +130,14 @@ export interface CampaignManagerOptions {
    * treated as a pass.
    */
   verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
+  /**
+   * Do this deployment's producers emit receipts? When they do, a producer
+   * that returned NONE is refused like any other refusal: "no receipt" was a
+   * legacy allowance, and omitting the receipt bypassed admission entirely
+   * (Codex 2026-09-17 round 4 #1). The bootstrap sets it for the vendored
+   * Strada.MCP, which stamps every ticketed run.
+   */
+  receiptsExpected?: boolean;
   /**
    * Build the player from the project root and measure the artifact. The
    * delivery gate runs it ONCE per final-sprint evaluation, only after the
@@ -800,6 +815,7 @@ export class CampaignManager {
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
   private readonly verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
+  private readonly receiptsExpected: boolean;
   private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
@@ -828,6 +844,7 @@ export class CampaignManager {
     this.messenger = options.messenger;
     this.projectRoot = options.projectRoot;
     this.verifyCompile = options.verifyCompile;
+    this.receiptsExpected = options.receiptsExpected === true;
     this.buildPlayer = options.buildPlayer;
     this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
     this.implementationReviveDelayMs = options.implementationReviveDelayMs ?? IMPLEMENTATION_REVIVE_DELAY_MS;
@@ -3291,7 +3308,7 @@ export class CampaignManager {
       const revisionBefore = this.projectRevision();
       const compile = await this.measureCompile(campaign, milestone);
       milestone.compileVerdict = compile;
-      const compileBroken = compile.ran && !compile.ok;
+      const compileBroken = (compile.ran && !compile.ok) || compile.refused !== undefined;
       // A verifier that could not run proves nothing: at the final sprint that
       // is a missing proof, not a pass (Codex 2026-09-11 B#2).
       const compileNotRun = isLast && !compile.ran;
@@ -4666,6 +4683,16 @@ export class CampaignManager {
         if (FINGERPRINT_SKIP_ANYWHERE.has(entry)) continue;
         if (rel === "" && FINGERPRINT_SKIP_AT_ROOT.has(entry)) continue;
         const child = join(at, entry);
+        // A LINK IS CONTENT TOO: retargeting Assets/zLink from A to B left
+        // the fingerprint unchanged, both destinations having been walked
+        // already (round 4 #4). Its path and target enter the hash before
+        // the directory it points at is deduplicated.
+        try {
+          if (lstatSync(child).isSymbolicLink()) hash.update(`${rel}/${entry}:link:${readlinkSync(child)}\n`);
+        } catch {
+          incomplete = true;
+          return;
+        }
         let st: BigIntStats;
         try {
           st = statSync(child, { bigint: true });
@@ -5191,7 +5218,13 @@ export class CampaignManager {
    */
   private refusedProof(decision: EvidenceDecision | undefined, what: string): string | undefined {
     if (decision === undefined || decision.admitted) return undefined;
-    if (decision.refusal === "EVIDENCE_MISSING") return undefined;
+    if (decision.refusal === "EVIDENCE_MISSING") {
+      // A producer this deployment knows to stamp receipts sent none:
+      // nothing binds its answer to the run (round 4 #1).
+      return this.receiptsExpected
+        ? `the ${what} producer returned no receipt, and this deployment's producers emit one — nothing binds its answer to the run`
+        : undefined;
+    }
     return `the ${what} receipt was refused (${decision.refusal}): ${decision.detail}`;
   }
 
@@ -6302,14 +6335,23 @@ export class CampaignManager {
         },
         (decision) => { compileDecision = decision; },
       );
-      // A refused compile receipt is a compile nobody measured (plan 1.2).
+      // A REFUSED COMPILE PROOF IS NOT "NOT RUN". Reading it as unmeasured
+      // let a non-final sprint advance on a red tree whose receipt was
+      // refused (round 4 #2): the verdict keeps what the verifier reported
+      // and carries the refusal, and every gate holds `refused` as broken.
       const refused = this.refusedProof(compileDecision, "compile");
-      return refused === undefined ? verdict : { ok: false, ran: false, detail: refused };
+      return refused === undefined
+        ? verdict
+        : { ...verdict, ok: false, refused, detail: `${refused}${verdict.detail !== undefined ? ` — the verifier reported: ${verdict.detail}` : ""}` };
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      // …and a proof that could not be recorded is refused the same way.
+      const unrecorded = /evidence ledger/u.test(reason);
       return {
         ok: false,
         ran: false,
-        detail: `the compile check could not run (${err instanceof Error ? err.message : String(err)})`,
+        ...(unrecorded ? { refused: reason } : {}),
+        detail: `the compile check could not run (${reason})`,
       };
     }
   }
@@ -7163,7 +7205,10 @@ export class CampaignManager {
       );
       onDecision?.(decision);
       try {
-        ledger.settle(ticket.binding.runId, outcome?.receipt ?? failedReceipt, decision);
+        // A SETTLEMENT THAT DID NOT SETTLE. "conflict" and "unknown-run" come
+        // back as values, not exceptions, and were ignored (round 4 #5).
+        const settled = ledger.settle(ticket.binding.runId, outcome?.receipt ?? failedReceipt, decision);
+        if (settled !== "recorded" && settled !== "unchanged") throw new Error(settled);
       } catch (err) {
         getLoggerSafe().warn("A producer receipt could not be recorded", { error: err instanceof Error ? err.message : String(err) });
         // …and a run whose evidence could not be written has no admitted

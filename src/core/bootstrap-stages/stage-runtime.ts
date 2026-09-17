@@ -435,6 +435,9 @@ export async function initializeTaskRuntimeStage(
       // MEASURED and never treats as a pass (audited 2026-09-04: a campaign
       // delivered on a tree carrying 37 compile errors).
       verifyCompile: params.toolRegistry ? makeVerifyCompile(params.toolRegistry) : undefined,
+      // The vendored Strada.MCP stamps a receipt on every ticketed run: a
+      // producer that returns none is refused, not read as legacy (round 4 #1).
+      receiptsExpected: params.toolRegistry !== undefined,
       // The delivery artifact: the campaign builds the player itself from the
       // project root through the same tool a sprint uses, and reads the
       // tool's own JSON verdict (path, size, duration) — never the worker's

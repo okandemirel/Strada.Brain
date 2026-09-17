@@ -3763,6 +3763,30 @@ describe("CampaignManager", () => {
       expect(retried.found).toBe(true);
     });
 
+    it("when this deployment's producers emit receipts, a producer that returns NONE is refused (Codex round 4 #1)", async () => {
+      const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
+      mkdirSync(join(projectRoot, "Builds", "StandaloneOSX"), { recursive: true });
+      writeFileSync(artifact, "the bytes that were built");
+      const campaign = {
+        id: "c_no_receipt", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const strict = new CampaignManager({
+        storage,
+        receiptsExpected: true,
+        runPlayer: async (root) => { writePlayerVerdict(true, {}, root); return {}; },
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const build = { ran: true, ok: true, target: "StandaloneOSX", artifactPath: artifact, sizeBytes: 25, durationMs: 1, scenes: 1 };
+      const measured = await (strict as unknown as { measurePlayerRun(m: unknown, b: unknown, c: unknown): Promise<{ found: boolean; missingRunner?: string }> })
+        .measurePlayerRun({ id: "m_none", title: "Delivery", prompt: "p", status: "running", attempts: 1 }, build, campaign);
+      expect(measured.found).toBe(false);
+      expect(measured.missingRunner).toContain("returned no receipt");
+    });
+
     it("a refused BUILD receipt ships no artifact, and a refused COMPILE receipt measured nothing (plan 1.2)", async () => {
       const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
       const artifact = join(projectRoot, "Builds", "StandaloneOSX", "Game.app");
@@ -3807,7 +3831,10 @@ describe("CampaignManager", () => {
       expect(refusedBuild.ran).toBe(false);
       expect(refusedBuild.detail).toContain("refused (KIND_MISMATCH)");
       const refusedCompile = await internals.measureCompile(campaign, campaign.milestones[0]);
-      expect(refusedCompile.ran).toBe(false);
+      // Refused is neither a pass nor "not run": the verifier's answer stays, the refusal rides with it (round 4 #2).
+      expect(refusedCompile.ran).toBe(true);
+      expect(refusedCompile.ok).toBe(false);
+      expect(refusedCompile.refused).toContain("refused (KIND_MISMATCH)");
       expect(refusedCompile.detail).toContain("refused (KIND_MISMATCH)");
       // Guards: the same producers, answering for the work they were asked for, are admitted.
       buildKind = "player-build";
@@ -3819,9 +3846,17 @@ describe("CampaignManager", () => {
       try {
         const unrecorded = await internals.measureCompile(campaign, campaign.milestones[0]);
         expect(unrecorded.ran).toBe(false);
-        expect(unrecorded.detail).toContain("could not record the ticket");
+        expect(unrecorded.refused).toContain("could not record the ticket");
       } finally {
         issue.mockRestore();
+      }
+      // …and a settlement that did not settle ("conflict", "unknown-run") is a refusal too (round 4 #5).
+      const settle = vi.spyOn(EvidenceLedger.prototype, "settle").mockImplementationOnce(() => "conflict");
+      try {
+        const conflicted = await internals.measureCompile(campaign, campaign.milestones[0]);
+        expect(conflicted.refused).toContain("could not record the receipt (conflict)");
+      } finally {
+        settle.mockRestore();
       }
     });
 
@@ -4176,6 +4211,16 @@ describe("CampaignManager", () => {
     const looped = fingerprint();
     expect(looped).toMatch(/^fp:/);
     expect(fingerprint()).toBe(looped);
+    // Retargeting a directory link is a change, even when both targets were walked already (round 4 #4).
+    mkdirSync(join(noGit, "Assets", "A"), { recursive: true });
+    mkdirSync(join(noGit, "Assets", "B"), { recursive: true });
+    writeFileSync(join(noGit, "Assets", "A", "a.cs"), "class A {}");
+    writeFileSync(join(noGit, "Assets", "B", "b.cs"), "class B {}");
+    symlinkSync(join(noGit, "Assets", "A"), join(noGit, "Assets", "zLink"));
+    const towardsA = fingerprint();
+    rmSync(join(noGit, "Assets", "zLink"));
+    symlinkSync(join(noGit, "Assets", "B"), join(noGit, "Assets", "zLink"));
+    expect(fingerprint()).not.toBe(towardsA);
   });
 
   describe("the catalogue is covered in one gate, per artifact (plan 1.10)", () => {
