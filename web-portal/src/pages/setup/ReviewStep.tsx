@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { PRESETS, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 import type { SaveStatus } from '../../types/setup'
 import { buildSetupRetryHref } from '../../../../src/common/setup-state.ts'
@@ -62,6 +63,10 @@ export default function ReviewStep({
   onBack,
   onSave,
 }: ReviewStepProps) {
+  // D38 (plan 0-A.32): every label, value and readiness/error line here was
+  // hardcoded English although setup.json already carried review.* in all
+  // locales; the step ignored the language the user had just picked.
+  const { t } = useTranslation('setup')
   const preset = PRESETS.find((p) => p.id === selectedPreset)
   const providerChain = Array.from(checkedProviders)
     .map((id) => {
@@ -93,9 +98,9 @@ export default function ReviewStep({
 
   return (
     <div className="step">
-      <h2>Review &amp; Save</h2>
+      <h2>{t('review.title')}</h2>
       <p className="step-subtitle">
-        Verify your configuration before saving.
+        {t('review.subtitle')}
       </p>
 
       <div className="review-list">
@@ -117,7 +122,7 @@ export default function ReviewStep({
               <div key={id} className="review-item">
                 <span className="review-label">
                   {id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription'
-                    ? 'OpenAI Embedding Key'
+                    ? t('review.labels.openaiEmbeddingKey')
                     : authModeDef?.secretLabel ?? `${provider.name} Key`}
                 </span>
                 <span className="review-value mono">
@@ -133,7 +138,7 @@ export default function ReviewStep({
           explicitEmbeddingProviderKey.trim().length > 0 &&
           PROVIDER_MAP[effectiveEmbeddingProviderId]?.name && (
             <div className="review-item">
-              <span className="review-label">{PROVIDER_MAP[effectiveEmbeddingProviderId]!.name} Embedding Key</span>
+              <span className="review-label">{t('review.labels.embeddingKey', { provider: PROVIDER_MAP[effectiveEmbeddingProviderId]!.name })}</span>
               <span className="review-value mono">
                 {maskKey(explicitEmbeddingProviderKey)}
               </span>
@@ -141,15 +146,15 @@ export default function ReviewStep({
           )}
 
         <div className="review-item">
-          <span className="review-label">Preset</span>
+          <span className="review-label">{t('review.labels.preset')}</span>
           <span className="review-value">
-            {preset ? `${preset.name} (${preset.cost})` : 'Custom'}
+            {preset ? `${preset.name} (${preset.cost})` : t('review.values.custom')}
           </span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">Provider Chain</span>
-          <span className="review-value">{providerChain || 'None selected'}</span>
+          <span className="review-label">{t('review.labels.providerChain')}</span>
+          <span className="review-value">{providerChain || t('review.values.noneSelected')}</span>
         </div>
 
         {Array.from(checkedProviders).map((id) => {
@@ -158,83 +163,83 @@ export default function ReviewStep({
           const model = providerModels[id]?.trim()
           return (
             <div key={`${id}-model`} className="review-item">
-              <span className="review-label">{provider.name} Model</span>
-              <span className="review-value mono">{model || 'Default'}</span>
+              <span className="review-label">{t('review.labels.providerModel', { provider: provider.name })}</span>
+              <span className="review-value mono">{model || t('review.values.default')}</span>
             </div>
           )
         })}
 
         {checkedProviders.has('openai') && (
           <div className="review-item">
-            <span className="review-label">OpenAI Auth</span>
+            <span className="review-label">{t('review.labels.openaiAuth')}</span>
             <span className="review-value">
               {providerAuthModes.openai === 'chatgpt-subscription'
-                ? 'ChatGPT/Codex subscription'
-                : 'API key'}
+                ? t('review.values.openaiChatgptSubscription')
+                : t('review.values.openaiApiKey')}
             </span>
           </div>
         )}
 
         {checkedProviders.has('openai') && providerAuthModes.openai === 'chatgpt-subscription' && (
           <div className="review-item">
-            <span className="review-label">OpenAI Subscription Scope</span>
+            <span className="review-label">{t('review.labels.openaiSubscriptionScope')}</span>
             <span className="review-value">
-              Conversation only. OpenAI embeddings still require an API key.
+              {t('review.values.openaiSubscriptionScopeInfo')}
             </span>
           </div>
         )}
 
         {checkedProviders.has('claude') && (
           <div className="review-item">
-            <span className="review-label">Claude Auth</span>
+            <span className="review-label">{t('review.labels.claudeAuth')}</span>
             <span className="review-value">
               {providerAuthModes.claude === 'claude-subscription'
-                ? 'Claude subscription token'
-                : 'API key'}
+                ? t('review.values.claudeSubscriptionToken')
+                : t('review.values.claudeApiKey')}
             </span>
           </div>
         )}
 
         {checkedProviders.has('claude') && providerAuthModes.claude === 'claude-subscription' && (
           <div className="review-item">
-            <span className="review-label">Claude Subscription Warning</span>
+            <span className="review-label">{t('review.labels.claudeSubscriptionWarning')}</span>
             <span className="review-value">
-              Anthropic documents claude.ai subscription auth as restricted outside Claude Code and Claude.ai. Use this mode at your own risk.
+              {t('review.values.claudeSubscriptionWarningInfo')}
             </span>
           </div>
         )}
 
         <div className="review-item">
-          <span className="review-label">Project Path</span>
-          <span className="review-value mono">{projectPath || 'Not set'}</span>
+          <span className="review-label">{t('review.labels.projectPath')}</span>
+          <span className="review-value mono">{projectPath || t('review.values.notSet')}</span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">Channel</span>
+          <span className="review-label">{t('review.labels.channel')}</span>
           <span className="review-value">{channel}</span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">RAG</span>
+          <span className="review-label">{t('review.labels.rag')}</span>
           <span className="review-value">
-            {!ragEnabled && 'Disabled'}
-            {ragEnabled && hasEmbeddingProvider && 'Enabled'}
-            {ragEnabled && !hasEmbeddingProvider && 'Blocked (no embedding provider)'}
+            {!ragEnabled && t('review.values.disabled')}
+            {ragEnabled && hasEmbeddingProvider && t('review.values.enabled')}
+            {ragEnabled && !hasEmbeddingProvider && t('review.values.ragBlocked')}
           </span>
         </div>
 
         {ragEnabled && (
           <div className="review-item">
-            <span className="review-label">Embedding Provider</span>
+            <span className="review-label">{t('review.labels.embeddingProvider')}</span>
             <span className="review-value">
-              {effectiveEmbeddingProviderName ?? 'None selected'}
+              {effectiveEmbeddingProviderName ?? t('review.values.noneSelected')}
             </span>
           </div>
         )}
 
         {ragEnabled && !hasEmbeddingProvider && (
           <div className="save-message error" style={{ marginTop: 0 }}>
-            RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
+            {t('review.ragBlockedError')}
           </div>
         )}
 
@@ -245,29 +250,35 @@ export default function ReviewStep({
         )}
 
         <div className="review-item">
-          <span className="review-label">Language</span>
+          <span className="review-label">{t('review.labels.language')}</span>
           <span className="review-value">{language}</span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">Daily Budget</span>
-          <span className="review-value">{globalDailyBudget > 0 ? `$${globalDailyBudget.toFixed(0)}/day` : 'Unlimited'}</span>
+          <span className="review-label">{t('review.labels.dailyBudget')}</span>
+          <span className="review-value">{globalDailyBudget > 0 ? t('review.values.budgetPerDay', { amount: `$${globalDailyBudget.toFixed(0)}` }) : t('review.values.budgetUnlimited')}</span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">Daemon Mode</span>
-          <span className="review-value">{daemonEnabled ? `Enabled${daemonBudget > 0 ? ` (sub-limit: $${daemonBudget.toFixed(2)}/day)` : ''}` : 'Disabled'}</span>
+          <span className="review-label">{t('review.labels.daemonMode')}</span>
+          <span className="review-value">
+            {daemonEnabled
+              ? (daemonBudget > 0
+                ? t('review.values.daemonEnabledWithBudget', { amount: `$${daemonBudget.toFixed(2)}` })
+                : t('review.values.enabled'))
+              : t('review.values.disabled')}
+          </span>
         </div>
 
         <div className="review-item">
-          <span className="review-label">Autonomy</span>
-          <span className="review-value">{autonomyEnabled ? `Enabled (${autonomyHours}h)` : 'Disabled'}</span>
+          <span className="review-label">{t('review.labels.autonomy')}</span>
+          <span className="review-value">{autonomyEnabled ? t('review.values.autonomyEnabledWithHours', { hours: autonomyHours }) : t('review.values.disabled')}</span>
         </div>
       </div>
 
       {saveStatus === 'saved' && (
         <div className="save-message polling">
-          {bootstrapDetail ?? 'Configuration accepted. Starting Strada on this same URL.'}
+          {bootstrapDetail ?? t('review.save.configAccepted')}
         </div>
       )}
 
@@ -279,11 +290,11 @@ export default function ReviewStep({
 
       {saveStatus === 'booting' && (
         <div className="save-message polling">
-          {bootstrapDetail ?? 'Strada is still starting the main web app.'}
+          {bootstrapDetail ?? t('review.save.booting')}
           {readyUrl && (
             <>
               {' '}
-              If this page does not advance, open <a href={readyUrl}>{readyUrl}</a>.
+              {t('review.save.bootingOpenLink')} <a href={readyUrl}>{readyUrl}</a>.
             </>
           )}
         </div>
@@ -291,8 +302,7 @@ export default function ReviewStep({
 
       {saveStatus === 'success' && (
         <div className="save-message success">
-          {bootstrapDetail ?? 'Configuration saved. Redirecting...'} If this is a source checkout,
-          run `./strada install-command` once before expecting the bare `strada` command to exist globally.
+          {bootstrapDetail ?? t('review.save.success')} {t('review.save.sourceCheckoutHint')}
         </div>
       )}
 
@@ -302,13 +312,13 @@ export default function ReviewStep({
           {readyUrl && (
             <>
               {' '}
-              <a href={readyUrl}>Open main app</a>
+              <a href={readyUrl}>{t('review.save.openMainApp')}</a>
             </>
           )}
           {saveCommitted && (
             <>
               {' '}
-              <a href={buildSetupRetryHref()}>Re-open setup</a>
+              <a href={buildSetupRetryHref()}>{t('review.save.reopenSetup')}</a>
             </>
           )}
         </div>
@@ -316,10 +326,10 @@ export default function ReviewStep({
 
       <div className="step-actions">
         <button className="btn btn-secondary" onClick={onBack} disabled={isSaving}>
-          Back
+          {t('wizard.nav.back')}
         </button>
         <button className="btn btn-primary" onClick={onSave} disabled={isSaveDisabled}>
-          {isSaving ? 'Saving...' : 'Save Configuration'}
+          {isSaving ? t('review.save.saving') : t('review.save.button')}
         </button>
       </div>
     </div>
