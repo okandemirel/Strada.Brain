@@ -641,6 +641,10 @@ export function unscheduledGaps(
  * looking (Codex 2026-09-12 V#4). An UNKNOWN revision binds nothing, so a
  * closure recorded without one is re-judged every round.
  */
+/** Folders a build, a run or this system writes: not the project's content. */
+const FINGERPRINT_SKIP = new Set([".git", "node_modules", "Library", "Temp", "Logs", "obj", "Builds", "Recordings", ".strada", "UserSettings", ".vs", ".idea"]);
+const FINGERPRINT_MAX_FILES = 200_000;
+
 export function closureHolds(
   milestone: { coverageClosed?: boolean; coverageClosedRevision?: string },
   revision: string,
@@ -4607,6 +4611,45 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * What the tree IS, for a project that has no repository to say so: every
+   * file's path, size and mtime under the project, less what a build or a
+   * run writes (Library, Temp, Logs, Builds, Recordings, .strada). Not a
+   * git revision, and never mistaken for one: the "fp:" prefix keeps the two
+   * namespaces apart.
+   */
+  private projectFingerprint(): string {
+    const hash = createHash("sha256");
+    let seen = 0;
+    const walk = (at: string, rel: string): void => {
+      let entries: string[];
+      try {
+        entries = readdirSync(at).sort();
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (FINGERPRINT_SKIP.has(entry)) continue;
+        if (seen > FINGERPRINT_MAX_FILES) return;
+        const child = join(at, entry);
+        let st: ReturnType<typeof statSync>;
+        try {
+          st = statSync(child);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) {
+          walk(child, `${rel}/${entry}`);
+        } else {
+          seen += 1;
+          hash.update(`${rel}/${entry}:${st.size}:${Math.floor(st.mtimeMs)}\n`);
+        }
+      }
+    };
+    walk(this.projectRoot, "");
+    return `fp:${hash.digest("hex")}`;
+  }
+
   private projectRevision(): string {
     try {
       return execFileSync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], {
@@ -5621,7 +5664,18 @@ export class CampaignManager {
       // of git takes the uncached exception (Codex 2026-09-12 AA#1).
       unknown: repoState === "unknown",
     };
-    const revisionForClosure = treeBefore.dirty ? "" : treeBefore.revision;
+    // A PROJECT WITHOUT GIT STILL HAS A TREE. Closures were bound to the git
+    // revision or to nothing, so without a repository every closure was
+    // re-judged on every pass: 150 requirements closed, the 151st asked on
+    // the next pass — which re-asked the 150 first and left one open again,
+    // until the delivery budget stopped a finished game (Codex wave 0-A
+    // review 2026-09-17 #2, reproduced). The tree's content fingerprint is
+    // the revision such a project can bind a closure to.
+    const revisionForClosure = treeBefore.dirty || treeBefore.unknown
+      ? ""
+      : treeBefore.tracked
+      ? treeBefore.revision
+      : this.projectFingerprint();
     // EVERY REPAIR'S REQUIREMENT, not only the ones whose sprint failed. A
     // repair that went GREEN without implementing the requirement removed it
     // from this question entirely: audit one found "Save progress across
@@ -5733,7 +5787,7 @@ export class CampaignManager {
         ? false
         : treeBefore.tracked
         ? revisionForClosure !== "" && this.projectRevision() === revisionForClosure && !this.projectIsDirty()
-        : this.projectRevision() === "" && this.projectRepoState() === "none";
+        : this.projectRepoState() === "none" && this.projectFingerprint() === revisionForClosure;
       for (const [key, ms] of byRequirement) {
         if (!needsJudging.has(key)) continue;
         // Never a key the answer names on both sides.

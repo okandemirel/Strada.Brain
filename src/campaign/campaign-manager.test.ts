@@ -4006,6 +4006,57 @@ describe("CampaignManager", () => {
     expect(seen[0]!.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_u, i) => `Req${151 + i}: absent`));
   });
 
+  it("151 correct requirements without git close across passes: the tree's fingerprint binds the closures (Codex wave 0-A review 2026-09-17 #2)", async () => {
+    // Reproduced: each pass closed 150, left one open, and the next pass
+    // re-asked the 150 (an empty revision held no closure) and left one open
+    // again, until the delivery budget stopped a finished game.
+    const seen: string[][] = [];
+    const noGit = mkdtempSync(join(tmpdir(), "no-git-fp-"));
+    writeFileSync(join(noGit, "Game.cs"), "class Game {}");
+    const gitless = new CampaignManager({
+      storage,
+      planner: {
+        planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]),
+        resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+          const asked = reqs.slice(0, 30);
+          seen.push([...asked]);
+          return { closed: [...asked], open: [], unasked: reqs.slice(30) };
+        }),
+      } as unknown as CampaignPlanner,
+      taskManager: tasks as unknown as TaskManager,
+      messenger: async () => {},
+      projectRoot: noGit,
+    });
+    const openRequirements = (gitless as unknown as {
+      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+    }).openRequirements.bind(gitless);
+    const campaign = {
+      id: "c_fp", chatId: "chat1", channelType: "cli", userId: "u", projectRoot: noGit, draftAttempts: 0,
+      gddText: "# GDD", gddPath: "docs/Game_GDD.md", state: "executing", currentMilestone: 0,
+      createdAt: Date.now(), updatedAt: Date.now(),
+      milestones: Array.from({ length: 151 }, (_unused, i) => ({
+        id: `mcov1-${i}`, title: `Req${i + 1}`, prompt: "p", status: "failed",
+        attempts: 1, coverageGap: `Req${i + 1}: absent`,
+      })),
+    } as unknown as Campaign;
+
+    const first = await openRequirements(campaign);
+    expect(seen).toHaveLength(5);
+    expect(first.open).toEqual(["Req151: absent"]);
+    // The 150 closures are bound to the tree, not to nothing.
+    expect(campaign.milestones.filter((m) => m.coverageClosed === true && (m.coverageClosedRevision ?? "").startsWith("fp:"))).toHaveLength(150);
+    // The next pass asks ONLY the one nobody asked, and the game is closed.
+    seen.length = 0;
+    const second = await openRequirements(campaign);
+    expect(seen).toEqual([["Req151: absent"]]);
+    expect(second.open).toEqual([]);
+    // Guard: a tree that changed under the closures is re-judged.
+    writeFileSync(join(noGit, "Game.cs"), "class Game { /* edited */ }");
+    seen.length = 0;
+    await openRequirements(campaign);
+    expect(seen.flat().length).toBeGreaterThan(1);
+  });
+
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
     // Reproduced by Codex: the same missing capability reported as "…,
     // attempt 1" and "…, attempt 2" were two requirements. Each rewording got
