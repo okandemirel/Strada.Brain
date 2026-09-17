@@ -170,6 +170,45 @@ describe("reporting a refused write", () => {
     resolved("cat list | xargs -0 rm");
   });
 
+  it("counts only the shell segments that PROVABLY ran, and reads inline interpreter bodies (Codex wave 0-A review 2026-09-17 finding #5)", () => {
+    // The detector split on `&&`, `||`, `;` and `|` alike and accepted any
+    // mutating segment, so `true || touch x` (exit 0, nothing written)
+    // cleared a rejection. And `python3 -c "…write_text(…)"` — a bounded
+    // replacement that DID write — was not recognised, so "Done." stayed
+    // blocked and the run entered keep-alive.
+    const stopped = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toContain("Execution stopped");
+    };
+    const resolved = (command: string): void => {
+      const s = sessionAfterRejection([{ name: "shell_exec", content: "ok", input: { command } }]);
+      expect(manager().getPendingSelfManagedWriteRejectionVisibleText(s, "Done.", () => true), command).toBeNull();
+    };
+    // Skipped branches: exit 0 does not say the write ran.
+    stopped("true || touch Assets/level3.json");
+    stopped("false && touch Assets/level3.json");
+    stopped("test -f a && touch x || echo fallback");
+    stopped("echo touch x");
+    // Provably ran: exit 0 forces every `&&` segment; `false ||` forces its alternative.
+    resolved("mkdir -p d && touch d/x");
+    resolved("false || touch x");
+    // The first segment always ran; exit 0 cannot say whether it SUCCEEDED
+    // behind `|| true`, and the detector does not pretend to know.
+    resolved("cp a b || true");
+    resolved("git status || true && touch x");
+    resolved("cat in | tee out");
+    resolved("ls; touch x");
+    resolved("ls\ntouch x");
+    // Inline interpreter bodies: the body decides, not the interpreter.
+    resolved(`python3 -c "from pathlib import Path; Path('Assets/level3.json').write_text('{}')"`);
+    resolved(`python3 -c "with open('Assets/level3.json', 'w') as f: f.write('{}')"`);
+    resolved(`node -e "require('fs').writeFileSync('Assets/level3.json','{}')"`);
+    resolved(`/usr/bin/python3.12 -c "import os; os.remove('Assets/level3.json')"`);
+    stopped(`python3 -c "import json; print(json.load(open('Assets/level3.json')))"`);
+    stopped(`node -e "console.log(require('fs').readFileSync('Assets/level3.json','utf8'))"`);
+    stopped("python3 script.py");
+  });
+
   it("the metadata-less default treats an unknown name as NOT a writer (Codex 2026-09-17 #4)", () => {
     for (const name of ["learning_stats", "code_quality", "show_plan", "ask_user", "unity_delivery_measure", "speech_to_text", "dotnet_build", "dotnet_test"]) {
       const session = sessionAfterRejection([{ name, content: "ok" }]);

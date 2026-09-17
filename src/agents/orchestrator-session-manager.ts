@@ -147,6 +147,60 @@ const MUTATING_PROGRAM_RE =
 const GIT_MUTATING_RE =
   /^(?:add|apply|am|checkout|switch|restore|commit|merge|rebase|reset|revert|cherry-pick|clean|mv|rm|stash(?!\s+(?:list|show))|tag\s+(?!-l\b|--list\b|-n\d*\b)\S+|branch\s+(?!-[alrv]|--list|--all|--remotes|--show-current|$)\S+|remote\s+(?:add|remove|rm|rename|set-url)|push|pull|fetch|clone|init|submodule\s+(?:add|update|init)|worktree\s+(?:add|remove|prune)|config(?!\s+--get|\s+--list|\s+-l\b)\s+\S+|notes|filter-branch|gc|prune)\b/iu;
 const READ_ONLY_ACTION_RE = /^(?:list|show|get|status|info|read|inspect|describe|check)$/iu;
+/**
+ * A write-shaped call inside an inline interpreter body (`python3 -c`,
+ * `node -e`, …). The interpreter itself is neither a reader nor a writer;
+ * its body is. `print(1)` and `json.load(open('x'))` are not writes;
+ * `Path('x').write_text(…)` and `fs.writeFileSync(…)` are (Codex wave 0-A
+ * review 2026-09-17 #5).
+ */
+const INTERPRETER_WRITE_RE =
+  /\b(?:write_text|write_bytes|writeFileSync|writeFile|appendFileSync|appendFile|copyFileSync|copyFile|unlinkSync|unlink|renameSync|rename|rmSync|rmdirSync|rmdir|mkdirSync|mkdir|makedirs|touch)\s*\(|\bshutil\.\w+\s*\(|\bos\.(?:remove|replace)\s*\(|\bopen\s*\([^)]*(?:,|mode\s*=)\s*['"][wax][bt+]*['"]|\.open\s*\(\s*['"][wax][bt+]*['"]/u;
+const INTERPRETER_PROGRAM_RE = /^(?:\S*\/)?(?:python(?:\d+(?:\.\d+)?)?|node|perl|ruby)$/iu;
+
+/**
+ * Which `&&`/`||`-joined segments of one shell statement PROVABLY ran, given
+ * the statement exited 0 (the caller only asks about non-error results).
+ *
+ * The first version counted every segment, so `true || touch x` — exit 0,
+ * nothing written — cleared a rejection (Codex wave 0-A review 2026-09-17 #5).
+ * Rules: the first segment always ran; with no `||` present every `&&`
+ * segment ran (exit 0 needs each to succeed); with a `||` present, only the
+ * trailing `&&` chain after the last `||` is forced by exit 0 — the segment
+ * right after that `||` is the alternative and may have been skipped. A
+ * literal `true`/`false` decides its own successor either way.
+ */
+function provablyRunSegments(statement: string): string[] {
+  const parts = statement.split(/\s*(&&|\|\|)\s*/u);
+  const segments: string[] = [];
+  const ops: string[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    if (i % 2 === 0) segments.push((parts[i] ?? "").trim());
+    else ops.push(parts[i] ?? "");
+  }
+  type Ran = "yes" | "no" | "maybe";
+  const ran: Ran[] = [];
+  // Exit status of the prefix so far, when a literal makes it known.
+  let prefix: 0 | 1 | undefined;
+  for (let i = 0; i < segments.length; i += 1) {
+    let r: Ran;
+    if (i === 0) r = "yes";
+    else if (prefix === undefined) r = "maybe";
+    else r = (ops[i - 1] === "&&") === (prefix === 0) ? "yes" : "no";
+    ran.push(r);
+    if (r === "no") continue; // a skipped segment leaves the status alone
+    const seg = segments[i] ?? "";
+    prefix = r === "yes" && /^(?:true|:)$/u.test(seg) ? 0 : r === "yes" && seg === "false" ? 1 : undefined;
+  }
+  // Exit 0 forces the trailing `&&` chain: each of its segments ran and
+  // succeeded. It says nothing about what sits before the last `||`.
+  for (let i = segments.length - 1; i >= 1; i -= 1) {
+    if (ops[i - 1] !== "&&") break;
+    if (ran[i] === "maybe") ran[i] = "yes";
+  }
+  return segments.filter((seg, i) => ran[i] === "yes" && seg.length > 0);
+}
+
 function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   if (input === undefined) return true;
   const action = input["action"];
@@ -158,54 +212,69 @@ function mutatesSomething(input: Record<string, unknown> | undefined): boolean {
   // …so quoted text keeps its words (a quoted program path is still the
   // program) and loses its shell characters.
   const unquoted = command
-    .replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (_m, d: string | undefined, q: string | undefined) => (d ?? q ?? "").replace(/[<>|;&]/gu, "_"))
+    .replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/gu, (_m, d: string | undefined, q: string | undefined) => (d ?? q ?? "").replace(/[<>|;&\n]/gu, "_"))
     .replace(/\d*>&\d+/gu, " ");
-  const segments = unquoted.split(/\s*(?:&&|\|\||;|\|)\s*/u).map((seg) => seg.trim()).filter((seg) => seg.length > 0);
-  return segments.some((seg) => {
-    // A redirection writes — unless it is to /dev/null.
-    if (/(?:^|[^<>])>\s*(?!\/dev\/null\b)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
-    // Unwrap `env VAR=x`, plain assignments and sudo/time/nice.
-    const stripped = seg
-      .replace(/^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
-      .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
-    const words = stripped.split(/\s+/u);
-    // "/Applications/Unity/Unity.exe" is the same program as unity; quotes
-    // were blanked above.
-    const program = (words[0] ?? "").replace(/\.exe$/iu, "");
-    const rest = words.slice(1).join(" ");
-    if (/^(?:\S*\/)?git$/iu.test(program)) {
-      // Leading options: -C dir, -c k=v, --no-pager, --git-dir=…
-      const sub = rest.replace(/^(?:(?:-C\s+\S+|-c\s+\S+|--no-pager|--git-dir=\S+|--work-tree=\S+)\s+)*/u, "");
-      return GIT_MUTATING_RE.test(sub);
-    }
-    if (/^(?:\S*\/)?sed$/iu.test(program)) return /(?:^|\s)-i\b|(?:^|\s)--in-place\b/u.test(rest);
-    if (/^(?:\S*\/)?find$/iu.test(program)) {
-      if (/\s-delete\b/u.test(rest)) return true;
-      // -exec runs a program: it writes only if THAT program does.
-      const exec = /\s-(?:exec|execdir|ok)\s+(.+?)(?:\s*[;+]|$)/u.exec(rest);
-      return exec !== null && mutatesSomething({ command: exec[1] ?? "" });
-    }
-    if (/^(?:\S*\/)?dotnet$/iu.test(program)) {
-      return /^(?:build|run|new|add|remove|restore|publish|pack|clean|format|tool|workload|nuget\s+(?:add|push|delete)|sln|ef)\b/iu.test(rest);
-    }
-    if (/^(?:\S*\/)?(?:npm|pnpm|yarn|bun)$/iu.test(program)) {
-      if (/^(?:install|i|ci|add|remove|uninstall|update|up|link|unlink|publish|version|init|create|dedupe|prune|rebuild|exec|dlx|x)\b/iu.test(rest)) return true;
-      // "npm run lint" inspects; "npm run build" writes. Decide by the script name.
-      const run = /^run(?:-script)?\s+(\S+)/iu.exec(rest);
-      return run !== null && /build|gen|generate|create|write|migrate|setup|install|prepare|format|fix|bump|release|compile|bundle|pack/iu.test(run[1] ?? "");
-    }
-    if (/^(?:\S*\/)?(?:npx|bunx)$/iu.test(program)) return true;
-    if (/^(?:\S*\/)?curl$/iu.test(program)) {
-      return /(?:^|\s)(?:-o|-O|--output|--remote-name|-X\s*(?:POST|PUT|DELETE|PATCH)|-d|--data\S*|-F|--form|-T|--upload-file)\b/u.test(rest);
-    }
-    if (/^(?:\S*\/)?wget$/iu.test(program)) return !/(?:^|\s)--spider\b/u.test(rest);
-    if (/^(?:\S*\/)?tar$/iu.test(program)) {
-      const flags = rest.split(/\s+/u)[0] ?? "";
-      return /^--(?:extract|create)$/u.test(flags) || (/^-?[a-zA-Z]+$/u.test(flags) && /[xc]/u.test(flags) && !/t/u.test(flags));
-    }
-    if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:-\S+\s+)*/u, "") });
-    return MUTATING_PROGRAM_RE.test(program);
-  });
+  // Statements always run in sequence; within one, only the provably-run
+  // `&&`/`||` segments count, and every stage of a pipeline runs.
+  const statements = unquoted.split(/\s*(?:;|\n)+\s*/u).map((s) => s.trim()).filter((s) => s.length > 0);
+  return statements.some((statement) =>
+    provablyRunSegments(statement).some((segment) =>
+      segment.split(/\s*\|\s*/u).map((stage) => stage.trim()).filter((stage) => stage.length > 0).some(stageMutates),
+    ),
+  );
+}
+
+/** Does one pipeline stage (a single program invocation) positively mutate something? */
+function stageMutates(seg: string): boolean {
+  // A redirection writes — unless it is to /dev/null.
+  if (/(?:^|[^<>])>\s*(?!\/dev\/null\b)\S/u.test(seg.replace(/>>/gu, ">"))) return true;
+  // Unwrap `env VAR=x`, plain assignments and sudo/time/nice.
+  const stripped = seg
+    .replace(/^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u, "")
+    .replace(/^(?:sudo|time|nice|nohup)\s+/u, "");
+  const words = stripped.split(/\s+/u);
+  // "/Applications/Unity/Unity.exe" is the same program as unity; quotes
+  // were blanked above.
+  const program = (words[0] ?? "").replace(/\.exe$/iu, "");
+  const rest = words.slice(1).join(" ");
+  if (/^(?:\S*\/)?git$/iu.test(program)) {
+    // Leading options: -C dir, -c k=v, --no-pager, --git-dir=…
+    const sub = rest.replace(/^(?:(?:-C\s+\S+|-c\s+\S+|--no-pager|--git-dir=\S+|--work-tree=\S+)\s+)*/u, "");
+    return GIT_MUTATING_RE.test(sub);
+  }
+  if (/^(?:\S*\/)?sed$/iu.test(program)) return /(?:^|\s)-i\b|(?:^|\s)--in-place\b/u.test(rest);
+  if (/^(?:\S*\/)?find$/iu.test(program)) {
+    if (/\s-delete\b/u.test(rest)) return true;
+    // -exec runs a program: it writes only if THAT program does.
+    const exec = /\s-(?:exec|execdir|ok)\s+(.+?)(?:\s*[;+]|$)/u.exec(rest);
+    return exec !== null && mutatesSomething({ command: exec[1] ?? "" });
+  }
+  if (/^(?:\S*\/)?dotnet$/iu.test(program)) {
+    return /^(?:build|run|new|add|remove|restore|publish|pack|clean|format|tool|workload|nuget\s+(?:add|push|delete)|sln|ef)\b/iu.test(rest);
+  }
+  if (/^(?:\S*\/)?(?:npm|pnpm|yarn|bun)$/iu.test(program)) {
+    if (/^(?:install|i|ci|add|remove|uninstall|update|up|link|unlink|publish|version|init|create|dedupe|prune|rebuild|exec|dlx|x)\b/iu.test(rest)) return true;
+    // "npm run lint" inspects; "npm run build" writes. Decide by the script name.
+    const run = /^run(?:-script)?\s+(\S+)/iu.exec(rest);
+    return run !== null && /build|gen|generate|create|write|migrate|setup|install|prepare|format|fix|bump|release|compile|bundle|pack/iu.test(run[1] ?? "");
+  }
+  if (/^(?:\S*\/)?(?:npx|bunx)$/iu.test(program)) return true;
+  if (/^(?:\S*\/)?curl$/iu.test(program)) {
+    return /(?:^|\s)(?:-o|-O|--output|--remote-name|-X\s*(?:POST|PUT|DELETE|PATCH)|-d|--data\S*|-F|--form|-T|--upload-file)\b/u.test(rest);
+  }
+  if (/^(?:\S*\/)?wget$/iu.test(program)) return !/(?:^|\s)--spider\b/u.test(rest);
+  if (/^(?:\S*\/)?tar$/iu.test(program)) {
+    const flags = rest.split(/\s+/u)[0] ?? "";
+    return /^--(?:extract|create)$/u.test(flags) || (/^-?[a-zA-Z]+$/u.test(flags) && /[xc]/u.test(flags) && !/t/u.test(flags));
+  }
+  if (/^(?:\S*\/)?xargs$/iu.test(program)) return mutatesSomething({ command: rest.replace(/^(?:-\S+\s+)*/u, "") });
+  if (INTERPRETER_PROGRAM_RE.test(program)) {
+    // An inline body writes only if IT contains a write-shaped call; a
+    // script file is unknown, not a write.
+    const inline = /(?:^|\s)(?:-c|-e|--eval)\s+([\s\S]+)$/u.exec(rest);
+    return inline !== null && INTERPRETER_WRITE_RE.test(inline[1] ?? "");
+  }
+  return MUTATING_PROGRAM_RE.test(program);
 }
 
 /**
