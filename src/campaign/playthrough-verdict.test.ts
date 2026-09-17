@@ -24,6 +24,52 @@ function write(content: unknown, ageMs = 0): string {
   return path;
 }
 
+describe("scenario verdict integration", () => {
+  it("carries defensively parsed record.scenarios through the verdict reader", () => {
+    write({ ...ok, record: { ...ok.record, scenarios: [null, { id: { toString: null } },
+      { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
+      { id: "save-load", actions: 0.5, frames: { after: "1" }, reason: { toString: null } },
+    ] } });
+    const read = readPlaythroughVerdict(root, 0);
+    expect(read.scenarios?.find((row) => row.id === "win")).toMatchObject({ status: "reached", evidence: { actions: 2, frames: { before: 0, after: 1 } } });
+    const save = read.scenarios?.find((row) => row.id === "save-load");
+    expect(save).toMatchObject({ status: "not-reached", evidence: { frames: {} } });
+    expect(save?.evidence).not.toHaveProperty("actions");
+    expect(save?.evidence).not.toHaveProperty("reason");
+    write({ ...ok, runId: "other", record: { ...ok.record, scenarios: [{ id: "win" }] } });
+    expect(readPlaythroughVerdict(root, 0, undefined, "this-attempt")).toEqual({ found: false, stale: true });
+  });
+
+  it("old files keep their play result while explicitly reporting scenarios not measured", () => {
+    write(ok);
+    const read = readPlaythroughVerdict(root, 0);
+    expect(read).toMatchObject({ found: true, ok: true, actions: 12, outcome: "Won" });
+    expect(read.scenarios?.map((row) => row.status)).toEqual(Array(5).fill("not-measured"));
+    expect(describePlaythrough(read)).toContain("scenarios not measured");
+    expect(playthroughDirective(read)).toContain("scenarios not measured");
+    write({ ...ok, ok: false, reasons: ["flat frames"] });
+    expect(readPlaythroughVerdict(root, 0)).toMatchObject({ ok: false, reasons: ["flat frames"] });
+  });
+
+  it("gate output gives a human-readable line for shown refused and unmeasured scenarios", () => {
+    write({ ...ok, record: { ...ok.record, scenarios: [
+      { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
+      { id: "save-load", startAccepted: false, reason: "no save driver" },
+      { id: "lose", startAccepted: true, reached: false },
+    ] } });
+    const read = readPlaythroughVerdict(root, 0);
+    for (const output of [describePlaythrough(read), playthroughDirective(read)]) {
+      expect(output.split("\n").filter((line) => line.startsWith("scenario "))).toHaveLength(5);
+      expect(output).toContain("scenario win: REACHED — win shown; frames #0 → #1");
+      expect(output).toContain("scenario save-load: REFUSED — save/load; no save driver");
+      expect(output).toContain("scenario menu-to-game: not measured — menu → game");
+      expect(output).toContain("scenario lose: NOT REACHED — lose");
+      expect(output).toContain("scenario scene-transition: not measured — scene transition");
+    }
+    expect(describePlaythrough({ found: false })).toContain("scenario win: not measured");
+  });
+});
+
 describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () => {
   it("reports the sha256 of the very bytes it parsed, so a receipt is held against one read (plan 1.3)", () => {
     mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
@@ -95,7 +141,9 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
     expect(e).toMatchObject({ found: true, ok: true, scene: "Entry", session: 1, outcome: "Won", actions: 12, autoStarted: false });
     expect(e.frames).toEqual({ count: 5, flat: 0, maxMotionShare: 0.31 });
     expect(describePlaythrough(e)).toBe(
-      "play-through OK in Entry: session 1 played to Won in 12 actions; 5 frames, 0 flat, max motion 31.0%; the game does NOT start play by itself after boot (the driver's StartSession was called); no session catalog (level count not measurable)",
+      "play-through OK in Entry: session 1 played to Won in 12 actions; 5 frames, 0 flat, max motion 31.0%; the game does NOT start play by itself after boot (the driver's StartSession was called); no session catalog (level count not measurable)\n" +
+      "scenarios not measured\nscenario menu-to-game: not measured — menu → game\nscenario win: not measured — win\n" +
+      "scenario lose: not measured — lose\nscenario save-load: not measured — save/load\nscenario scene-transition: not measured — scene transition",
     );
     write({ ...ok, record: { ...ok.record, sessionCount: 12, sessions: [
       { index: 1, startAccepted: true, actions: 12, outcome: "Won", reachedOutcome: true, seconds: 8.5, identityVerified: true, requestedIndex: 1, observedIndex: 1 },
@@ -112,7 +160,7 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
       { index: 3, outcome: "Refused", actions: 0, seconds: 0, reachedOutcome: false },
     ]);
     expect(describePlaythrough(many)).toContain("; played 3: #1 Won in 12, #2 None in 60, #3 Refused in 0;");
-    expect(describePlaythrough(many)).toMatch(/; catalog 12 session\(s\)$/);
+    expect(describePlaythrough(many)).toMatch(/; catalog 12 session\(s\)\n/);
   });
 
   it("the built player's verdict is read from its own path and names its medium (2026-09-10)", () => {

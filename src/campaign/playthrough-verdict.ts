@@ -22,6 +22,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
+import { describePlaythroughScenarios, parsePlaythroughScenarios, type ScenarioPlaythroughEvidence } from "./playthrough-scenarios.js";
+export { parsePlaythroughScenarios, scenariosForRequirement, isRequirementShownByPlaythrough, describePlaythroughScenarios } from "./playthrough-scenarios.js";
 
 export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playthrough-verdict.json");
 /** The same verdict shape, written by unity_run_player after playing INSIDE the built player. */
@@ -43,6 +45,7 @@ interface VerdictFile {
     sessionCount?: unknown;
     sessions?: unknown;
     runtime?: unknown;
+    scenarios?: unknown;
   } | null;
   frames?: { count?: unknown; flat?: unknown; maxMotionShare?: unknown } | null;
   perf?: {
@@ -69,7 +72,7 @@ export function readPlaythroughVerdict(
   sinceMs: number,
   rel: string = PLAYTHROUGH_VERDICT_REL,
   expectRunId?: string,
-): PlaythroughEvidence {
+): ScenarioPlaythroughEvidence {
   const path = join(projectRoot, rel);
   if (!existsSync(path)) return { found: false };
   let mtimeMs: number;
@@ -162,6 +165,7 @@ export function readPlaythroughVerdict(
     bytesSha256,
     ok: parsed.ok === true && evidenced,
     reasons,
+    scenarios: parsePlaythroughScenarios(record?.scenarios, frames?.count),
     ...(record
       ? {
           outcome: str(record.outcome),
@@ -265,8 +269,12 @@ function parseRuntime(r: Record<string, unknown>): RuntimeSceneDump {
   };
 }
 
-/** One sentence for the delivery report and the structural findings. */
-export function describePlaythrough(e: PlaythroughEvidence | undefined): string {
+/** Existing play result, followed by the named scenario measurements. */
+export function describePlaythrough(e: ScenarioPlaythroughEvidence | undefined): string {
+  return `${describePlaythroughSession(e)}\n${describePlaythroughScenarios(e)}`;
+}
+
+function describePlaythroughSession(e: PlaythroughEvidence | undefined): string {
   if (!e || !e.found) {
     return e?.stale
       ? "play-through: the only verdict on disk predates this sprint — the game as delivered was never played"
@@ -310,7 +318,7 @@ export function describePerf(p: PlaythroughPerf): string {
 }
 
 /** What the final sprint is told when its play-through proof is missing or failed. */
-export function playthroughDirective(e: PlaythroughEvidence | undefined): string {
+export function playthroughDirective(e: ScenarioPlaythroughEvidence | undefined): string {
   const why = !e || !e.found
     ? e?.stale
       ? "the only play-through verdict on disk is from BEFORE this sprint began"
@@ -322,6 +330,6 @@ export function playthroughDirective(e: PlaythroughEvidence | undefined): string
     "Strada.Core.Play.ISessionCatalog too and pass sessions: \"all\" so every level is played and counted) and fix " +
     "whatever it names until its verdict is ok — no registered driver, a session that never ends, a screen " +
     "that never changes, or a driver that refuses to start is not a delivered game. Its verdict, not your " +
-    "description of the game, is the proof."
+    "description of the game, is the proof.\n" + describePlaythroughScenarios(e)
   );
 }
