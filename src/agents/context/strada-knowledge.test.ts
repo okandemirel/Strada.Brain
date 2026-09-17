@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  renderVaultContext,
+  buildVaultProjectContext,
+  focusFilesFromMessage,
   buildCapabilityManifest,
   buildDepsContext,
   buildIdentitySection,
@@ -266,5 +269,57 @@ describe("buildDepsContext", () => {
 
     expect(result).toContain("strada.mcp: NOT INSTALLED");
     expect(result).not.toContain("first-class part of the Strada toolchain");
+  });
+});
+
+
+describe("renderVaultContext keeps vault + span identity (audit 05.F3 / D47)", () => {
+  it("two chunks of one file and the same path in two vaults are all rendered, each named by its vault", () => {
+    const out = renderVaultContext([
+      { id: "project", hits: [
+        { chunk: { path: "Assets/Scripts/PlayerController.cs", content: "void Jump() {}", startLine: 10, endLine: 20 } },
+        { chunk: { path: "Assets/Scripts/PlayerController.cs", content: "void Dash() {}", startLine: 40, endLine: 55 } },
+      ] },
+      { id: "framework", hits: [
+        { chunk: { path: "README.md", content: "framework readme", startLine: 1, endLine: 5 } },
+      ] },
+      { id: "modules", hits: [
+        { chunk: { path: "README.md", content: "modules readme", startLine: 1, endLine: 5 } },
+      ] },
+    ]);
+    expect(out).toContain("void Jump()");
+    expect(out).toContain("void Dash()");
+    expect(out).toContain("[framework] README.md");
+    expect(out).toContain("[modules] README.md");
+    expect(out).toContain("PlayerController.cs:10-20");
+    // Guard: the SAME chunk of the same vault twice is still one.
+    const once = renderVaultContext([
+      { id: "project", hits: [
+        { chunk: { path: "a.cs", content: "x", startLine: 1, endLine: 2 } },
+        { chunk: { path: "a.cs", content: "x", startLine: 1, endLine: 2 } },
+      ] },
+    ]);
+    expect(once.match(/### /g)).toHaveLength(1);
+  });
+});
+
+describe("buildVaultProjectContext seeds the graph re-rank (audit 05.cap, plan 0-A.22)", () => {
+  it("files the message names reach the vault as focusFiles", async () => {
+    const seen: Array<{ focusFiles?: string[] }> = [];
+    const vault = { id: "project", query: async (q: { focusFiles?: string[] }) => { seen.push(q); return { hits: [] }; } };
+    await buildVaultProjectContext({
+      vaultRegistry: { list: () => [vault] },
+      userMessage: "the double jump in Assets/Scripts/PlayerController.cs ignores Assets/Config/input.json",
+    });
+    expect(seen[0]?.focusFiles).toEqual(["Assets/Scripts/PlayerController.cs", "Assets/Config/input.json"]);
+    // Guard: a message naming nothing sends none.
+    seen.length = 0;
+    await buildVaultProjectContext({ vaultRegistry: { list: () => [vault] }, userMessage: "make the boss harder" });
+    expect(seen[0]?.focusFiles).toBeUndefined();
+  });
+
+  it("focusFilesFromMessage ignores prose and caps the list", () => {
+    expect(focusFilesFromMessage("see docs/GDD.md and ./Assets/A.cs, not example.com")).toEqual(["docs/GDD.md", "Assets/A.cs"]);
+    expect(focusFilesFromMessage(Array.from({ length: 12 }, (_u, i) => `Assets/F${i}.cs`).join(" "))).toHaveLength(8);
   });
 });

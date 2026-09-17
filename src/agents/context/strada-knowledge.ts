@@ -526,7 +526,7 @@ export interface BuildProjectContextInput {
 }
 
 export function renderVaultContext(
-  results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>,
+  results: Array<{ id?: string; hits: Array<{ chunk: { path: string; content: string; startLine?: number; endLine?: number } }> }>,
   maxTotalChars = 48_000,
 ): string {
   // GLOBAL cap, interleaved round-robin: the budget used to be per-vault
@@ -536,20 +536,26 @@ export function renderVaultContext(
   // not whole vaults.
   const lines: string[] = [];
   let total = 0;
-  const seenPaths = new Set<string>();
+  // IDENTITY IS vault + path + span, not the path alone: the second chunk of
+  // the same file (another relevant method) and a second root's README were
+  // silently dropped, and the survivor was rendered without its vault (audit
+  // 05.F3 / D47, 2026-09-13).
+  const seen = new Set<string>();
   const maxHits = Math.max(0, ...results.map((r) => r.hits.length));
   outer: for (let rank = 0; rank < maxHits; rank++) {
     for (const r of results) {
       const h = r.hits[rank];
       if (!h) continue;
-      if (seenPaths.has(h.chunk.path)) continue; // cross-vault duplicate
-      seenPaths.add(h.chunk.path);
+      const span = h.chunk.startLine === undefined ? "" : `:${h.chunk.startLine}${h.chunk.endLine === undefined ? "" : `-${h.chunk.endLine}`}`;
+      const identity = `${r.id ?? ""}\u0000${h.chunk.path}${span}`;
+      if (seen.has(identity)) continue; // the same chunk of the same vault twice
+      seen.add(identity);
       // sec-H1: vault chunks are user-controlled content being injected into
       // the system prompt. Strip prompt-injection carriers (envelopes,
       // "ignore previous", zero-width, base64 smuggles) before the model sees
       // them. Sanitizer is a no-op on short clean strings.
       const safeContent = sanitizeRetrievalContent(h.chunk.content, "strada-knowledge-vault");
-      const block = `\n### ${h.chunk.path}\n\`\`\`\n${safeContent}\n\`\`\``;
+      const block = `\n### ${r.id ? `[${r.id}] ` : ""}${h.chunk.path}${span}\n\`\`\`\n${safeContent}\n\`\`\``;
       if (total + block.length > maxTotalChars) break outer;
       total += block.length;
       lines.push(block);
@@ -565,11 +571,27 @@ export interface VaultProjectContextInput {
   vaultRegistry: {
     list(): Array<{
       id: string;
-      query(q: { text: string; topK?: number; budgetTokens?: number }): Promise<{ hits: Array<{ chunk: { path: string; content: string } }> }>;
+      query(q: { text: string; topK?: number; budgetTokens?: number; focusFiles?: string[] }): Promise<{ hits: Array<{ chunk: { path: string; content: string; startLine?: number; endLine?: number } }> }>;
     }>;
   };
   userMessage: string;
   contextBudget?: number;
+  /** Files the run is working on (touched or named); they seed the vault's graph re-rank. */
+  focusFiles?: readonly string[];
+}
+
+/**
+ * File paths a message names. The vault's Personalized-PageRank re-rank only
+ * ran when a caller passed focusFiles, and the automatic context never did
+ * (audit 05.cap, 2026-09-13) — so the graph was built and never consulted.
+ */
+export function focusFilesFromMessage(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(/(?:^|[\s"'`(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:cs|unity|prefab|asset|asmdef|json|md|shader|hlsl|cginc|uxml|uss))\b/gu)) {
+    const path = m[1]!.replace(/^\.\//u, "");
+    if (path.length > 0) found.add(path);
+  }
+  return [...found].slice(0, 8);
 }
 
 export async function buildVaultProjectContext(input: VaultProjectContextInput): Promise<string> {
@@ -580,10 +602,12 @@ export async function buildVaultProjectContext(input: VaultProjectContextInput):
   // the front of every system prompt).
   const globalBudget = input.contextBudget ?? 4000;
   const perVaultBudget = Math.max(800, Math.ceil(globalBudget / vaults.length));
+  const focusFiles = [...new Set([...(input.focusFiles ?? []), ...focusFilesFromMessage(input.userMessage)])];
   const settled = await Promise.allSettled(vaults.map((v) => v.query({
     text: input.userMessage,
     topK: 8,
     budgetTokens: perVaultBudget,
+    ...(focusFiles.length > 0 ? { focusFiles } : {}),
   })));
   // Visibility (Fix D): a rejected vault query is dropped here so one bad vault
   // never sinks the others. Debug-log each rejection so a future query failure
@@ -599,8 +623,8 @@ export async function buildVaultProjectContext(input: VaultProjectContextInput):
     }
   });
   const results = settled
-    .filter((s): s is PromiseFulfilledResult<{ hits: { chunk: { path: string; content: string } }[] }> => s.status === "fulfilled")
-    .map((s) => s.value);
+    .map((s, i) => (s.status === "fulfilled" ? { id: vaults[i]?.id, hits: s.value.hits } : undefined))
+    .filter((r): r is { id: string | undefined; hits: { chunk: { path: string; content: string; startLine?: number; endLine?: number } }[] } => r !== undefined);
   // ~4 chars/token: the render cap enforces the same global budget in chars.
   return renderVaultContext(results, globalBudget * 4);
 }
