@@ -773,33 +773,53 @@ const REQUIREMENT_STOPWORDS = new Set([
 ]);
 
 /**
- * The words a requirement is ABOUT: its distinctive tokens (four letters or
- * more, not a stopword), stemmed to their first five letters so "restarts"
- * meets "restart" and "saving" meets "save".
+ * A word's stem, lightly: enough that "restarts" meets "restart", "saving"
+ * meets "save" and "levels" meets "level" — compared as WHOLE stems, so
+ * "saver" (ScreenSaver.png) does not meet "save" and "leverage" does not
+ * meet "level" (Codex 2026-09-17 round 6 #1, #2).
+ */
+function stemWord(word: string): string {
+  return word.replace(/ies$/u, "y").replace(/(?:ing|ed|es|s|e)$/u, "");
+}
+
+/** The stems of a text's words: Unicode letters, camelCase split BEFORE case folding, paths and dots as separators. */
+function stemsOf(text: string): string[] {
+  return text
+    .replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length >= 3)
+    .map(stemWord)
+    .filter((w) => w.length >= 3);
+}
+
+/**
+ * The words a requirement is ABOUT: its distinctive stems (three letters or
+ * more after stemming, not a stopword), with its verdict suffix dropped.
  */
 export function requirementTokens(requirement: string): string[] {
-  const words = requirement
-    .replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, "")
-    .toLowerCase()
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 4 && !REQUIREMENT_STOPWORDS.has(w));
-  return [...new Set(words.map((w) => w.slice(0, 5)))];
+  const text = requirement.replace(/:\s*(?:absent|missing|no milestone implemented it).*$/i, "");
+  return [...new Set(stemsOf(text).filter((w) => !REQUIREMENT_STOPWORDS.has(w) && !REQUIREMENT_STOPWORDS.has(w + "e") && !REQUIREMENT_STOPWORDS.has(w + "s")))];
 }
 
 /**
  * Is this measured line evidence ABOUT this requirement — not merely a
  * measured line (plan 0-B.3)? A suite line closes only a requirement about
- * the suite; every other kind must name something the requirement names.
+ * the suite AS A WHOLE ("the full test suite runs green"), never one that
+ * merely mentions a test ("Test saving progress", round 6 #1); every other
+ * kind must share a stem with the requirement, whole stem to whole stem.
  */
 export function quoteIsAbout(requirement: string, fact: string): boolean {
   const line = fact.trim();
   if (line.startsWith("suite:")) {
-    return /\b(?:test|tests|suite|suites|spec|specs|playmode|editmode|unit|coverage)\b/i.test(requirement);
+    const req = requirement.toLowerCase();
+    return /\b(?:full|whole|entire|all|complete)\b[^.]*\b(?:test|tests|suite|suites|playmode|editmode)\b/u.test(req)
+      || /\b(?:test|tests|suite|suites)\b[^.]*\b(?:green|pass|passes|passing|run|runs|unfiltered)\b/u.test(req);
   }
-  const hay = line.toLowerCase().replace(/([a-z])([A-Z])/g, "$1 $2");
   const tokens = requirementTokens(requirement);
-  return tokens.length > 0 && tokens.some((t) => hay.includes(t));
+  if (tokens.length === 0) return false;
+  const factStems = new Set(stemsOf(line));
+  return tokens.some((t) => factStems.has(t));
 }
 
 /**

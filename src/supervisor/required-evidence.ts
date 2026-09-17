@@ -463,7 +463,20 @@ function isSessionIndex(n: number): boolean {
  * round 5 #6).
  */
 function parseSessionSet(spec: string): Set<number> | undefined {
-  const out = new Set<number>();
+  const ordered = parseSessionList(spec);
+  return ordered === undefined ? undefined : new Set(ordered);
+}
+
+/** The sessions a spec names, IN THE ORDER the producer would play them, without repeats. */
+function parseSessionList(spec: string): number[] | undefined {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const push = (n: number): void => {
+    if (!seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  };
   for (const raw of spec.split(",")) {
     const token = raw.trim();
     const range = /^(\d+)\s*-\s*(\d+)$/.exec(token);
@@ -471,15 +484,15 @@ function parseSessionSet(spec: string): Set<number> | undefined {
       const a = Number(range[1]);
       const b = Number(range[2]);
       if (!isSessionIndex(a) || !isSessionIndex(b) || b < a || b - a > MAX_SESSION_SPAN) return undefined;
-      for (let i = a; i <= b; i++) out.add(i);
+      for (let i = a; i <= b; i++) push(i);
       continue;
     }
     if (!/^\d+$/.test(token)) return undefined;
     const n = Number(token);
     if (!isSessionIndex(n)) return undefined;
-    out.add(n);
+    push(n);
   }
-  return out.size > 0 ? out : undefined;
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -525,8 +538,12 @@ export function sessionsSatisfy(declared: string, actual: string): boolean {
     for (const i of wanted) if (i > MAX_SESSIONS_PER_RUN) return false;
     return true;
   }
-  const ran = parseSessionSet(got);
-  if (ran === undefined) return false;
+  // WHAT THE PRODUCER ACTUALLY PLAYS of an explicit spec: the first
+  // MAX_SESSIONS_PER_RUN in the order named — "1-13" runs 1..12, so it does
+  // not cover 13 (Codex 2026-09-17 round 6 #23).
+  const named = parseSessionList(got);
+  if (named === undefined) return false;
+  const ran = new Set(named.slice(0, MAX_SESSIONS_PER_RUN));
   for (const i of wanted) if (!ran.has(i)) return false;
   return true;
 }

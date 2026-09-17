@@ -4297,11 +4297,12 @@ describe("CampaignManager", () => {
         state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
       } as unknown as Campaign;
       let redFirst = true;
+      let slowFirst = true;
       const player = new CampaignManager({
         storage,
         runPlayer: async (root, _artifact, spec) => {
           const indices = range(spec?.sessions, 13);
-          const fps = indices[0] === 1 ? 10 : 60;
+          const fps = slowFirst && indices[0] === 1 ? 10 : 60;
           writePlayerVerdict(!(redFirst && indices[0] === 1), { ...record(indices, 13), perf: { medium: "player", bootSeconds: 1.1, playSeconds: 10, playFrames: 600, avgFps: fps, worstFrameMs: fps === 10 ? 200 : 40 } }, root);
           return {};
         },
@@ -4325,6 +4326,16 @@ describe("CampaignManager", () => {
       expect(covered.verifiedSessionsFor(campaign, artifact)).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
       expect(green.perf?.avgFps).toBe(10);
       expect(green.perf?.worstFrameMs).toBe(200);
+      // #21: every round's sessions survive with their own clocks, and play
+      // time is the longest round's, never a sum.
+      expect(green.sessions?.map((s) => s.index)).toEqual(Array.from({ length: 13 }, (_u, i) => i + 1));
+      expect(green.perf?.playSeconds).toBe(10);
+      // #22: the worst timing is remembered against the artifact across gates —
+      // a later gate whose own rounds all run at 60 still answers for the 10.
+      slowFirst = false;
+      const later = await measure("m_later");
+      expect(later.perf?.avgFps).toBe(10);
+      expect(campaign.verifiedSessions?.perfByArtifact?.[artifactDigest(artifact)!]?.avgFps).toBe(10);
     });
 
     it("a secondary target walks its own catalogue and answers for its own coverage (round 5 #2)", async () => {
@@ -4420,6 +4431,37 @@ describe("CampaignManager", () => {
       const amended = manager.amendGdd(campaign.id);
       expect(amended).toBe(sha(gdd + "\n\n## Multiplayer\n\nFour players online."));
       expect(internals(manager).gddDriftOf(storage.get(campaign.id)!)).toBeUndefined();
+    });
+
+    it("approval freezes the document on disk at that moment; an intake path cannot leave the project; 'amend gdd' re-approves by hash (round 6 #3, #4, #5)", async () => {
+      // #3: an idea-mode campaign awaiting approval — the text on disk when
+      // the person says yes is the approved one, by hash, not whatever the
+      // first delivery gate later finds.
+      mkdirSync(join(projectRoot, "docs"), { recursive: true });
+      const drafted = "# GDD\n\nDrafted: 2 levels.";
+      writeFileSync(join(projectRoot, "docs", "Drafted_GDD.md"), drafted);
+      const awaiting = {
+        id: "c_await", chatId: "chat-approve", channelType: "cli", userId: "u", projectRoot, gddPath: "docs/Drafted_GDD.md",
+        state: "awaiting-approval", draftAttempts: 1, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      storage.save(awaiting);
+      expect(await manager.tryHandleApproval("chat-approve", "yes")).toBe(true);
+      const approved = storage.get("c_await")!;
+      expect(approved.gddSha256).toBe(sha(drafted));
+      writeFileSync(join(projectRoot, "docs", "Drafted_GDD.md"), drafted + "\n\n## Multiplayer");
+      expect(internals(manager).gddDriftOf(storage.get("c_await")!)).toContain("is not the approved document");
+      // The approval's planning pass persists its own copy of the campaign;
+      // the amendment is sent once that has landed.
+      await waitFor(() => expect(storage.get("c_await")!.state).toBe("executing"));
+      // #5: the amendment is a chat command, scoped to the chat's campaign.
+      expect(await manager.tryHandleIncoming({ chatId: "chat-approve", text: "amend gdd" } as never)).toBe(true);
+      expect(internals(manager).gddDriftOf(storage.get("c_await")!)).toBeUndefined();
+      expect(storage.get("c_await")!.gddSha256).toBe(sha(drafted + "\n\n## Multiplayer"));
+      // #4: a path that leaves the project is not written; the text stands alone.
+      const outside = manager.startFromGdd({ ...ctx, chatId: "chat-outside" }, "# GDD\n\nEscape.", "../escaped-gdd.md");
+      expect(existsSync(join(projectRoot, "..", "escaped-gdd.md"))).toBe(false);
+      expect(outside.gddPath).toBeUndefined();
+      expect(outside.gddText).toBe("# GDD\n\nEscape.");
     });
 
     it("a row from before the hash takes the text it holds as approved (migration), and a text-only intake cannot drift", () => {

@@ -83,12 +83,12 @@ interface CampaignRow {
  * coverage at all — the next run then asks for the first batch again, which
  * measures more rather than less.
  */
-function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[]; byArtifact?: Record<string, number[]>; catalogueByArtifact?: Record<string, number> } | undefined {
+function parseVerifiedSessions(raw: string | null | undefined): { artifact: string; indices: number[]; byArtifact?: Record<string, number[]>; catalogueByArtifact?: Record<string, number>; perfByArtifact?: Record<string, { avgFps?: number; worstFrameMs?: number; bootSeconds?: number }> } | undefined {
   if (raw === null || raw === undefined || raw.trim() === "") return undefined;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== "object") return undefined;
-    const doc = parsed as { artifact?: unknown; indices?: unknown; byArtifact?: unknown; catalogueByArtifact?: unknown };
+    const doc = parsed as { artifact?: unknown; indices?: unknown; byArtifact?: unknown; catalogueByArtifact?: unknown; perfByArtifact?: unknown };
     if (typeof doc.artifact !== "string" || doc.artifact === "") return undefined;
     const readIndices = (raw: unknown): number[] | undefined => {
       if (!Array.isArray(raw)) return undefined;
@@ -115,11 +115,26 @@ function parseVerifiedSessions(raw: string | null | undefined): { artifact: stri
         if (/^[0-9a-f]{64}$/.test(digest) && typeof count === "number" && Number.isInteger(count) && count >= 1) catalogueByArtifact[digest] = count;
       }
     }
+    const perfByArtifact: Record<string, { avgFps?: number; worstFrameMs?: number; bootSeconds?: number }> = {};
+    if (doc.perfByArtifact !== null && typeof doc.perfByArtifact === "object" && !Array.isArray(doc.perfByArtifact)) {
+      for (const [digest, perf] of Object.entries(doc.perfByArtifact as Record<string, unknown>)) {
+        if (!/^[0-9a-f]{64}$/.test(digest) || perf === null || typeof perf !== "object") continue;
+        const p = perf as Record<string, unknown>;
+        const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        const entry = {
+          ...(num(p["avgFps"]) === undefined ? {} : { avgFps: num(p["avgFps"])! }),
+          ...(num(p["worstFrameMs"]) === undefined ? {} : { worstFrameMs: num(p["worstFrameMs"])! }),
+          ...(num(p["bootSeconds"]) === undefined ? {} : { bootSeconds: num(p["bootSeconds"])! }),
+        };
+        if (Object.keys(entry).length > 0) perfByArtifact[digest] = entry;
+      }
+    }
     return {
       artifact: doc.artifact,
       indices,
       ...(Object.keys(byArtifact).length > 0 ? { byArtifact } : {}),
       ...(Object.keys(catalogueByArtifact).length > 0 ? { catalogueByArtifact } : {}),
+      ...(Object.keys(perfByArtifact).length > 0 ? { perfByArtifact } : {}),
     };
   } catch {
     return undefined;
@@ -527,6 +542,17 @@ export class CampaignStorage {
    * game is being built, new messages stay ordinary tasks instead of
    * silently forking a second build.
    */
+  /** The non-terminal campaign this chat is running, when there is one — the newest. */
+  findActiveForChat(chatId: string): Campaign | undefined {
+    const placeholders = ACTIVE_CAMPAIGN_STATES.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `SELECT * FROM campaigns WHERE chat_id = ? AND state IN (${placeholders}) ORDER BY updated_at DESC LIMIT 1`,
+      )
+      .get(chatId, ...ACTIVE_CAMPAIGN_STATES) as CampaignRow | undefined;
+    return row === undefined ? undefined : rowToCampaign(row);
+  }
+
   hasActiveForChat(chatId: string): boolean {
     const placeholders = ACTIVE_CAMPAIGN_STATES.map(() => "?").join(", ");
     const row = this.db

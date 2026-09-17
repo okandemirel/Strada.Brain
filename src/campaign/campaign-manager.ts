@@ -8,7 +8,7 @@
  * transition, so a crash mid-sprint resumes instead of restarting the game.
  */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
@@ -197,6 +197,8 @@ export interface CampaignManagerOptions {
 }
 
 const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|ok|okay|approve[ds]?|lgtm|devam|go ahead|go)[.!\s]*$/i;
+/** "amend gdd" / "/campaign amend gdd" / "gdd amendment" / "gdd değişikliğini onayla". */
+const AMEND_GDD_RE = /^\/?(?:campaign\s+)?(?:amend\s+(?:the\s+)?gdd|gdd\s+amend(?:ment)?|accept\s+(?:the\s+)?gdd\s+(?:change|amendment)|gdd\s+değişikliğini\s+onayla)[.!\s]*$/i;
 
 /** "kampanya devam" / "campaign resume" — revive the newest failed/cancelled campaign on this chat. */
 const REVIVE_RE = /^(kampanya(yı)?\s+(devam( et(tir)?)?|sürdür)|campaign\s+(resume|retry|continue)|resume\s+campaign)\b/i;
@@ -896,11 +898,19 @@ export class CampaignManager {
     // document the workers read and the gates judge is the one that was
     // approved; a write that fails leaves a text-only intake, disclosed.
     if (gddPath !== undefined && readGddFile(this.projectRoot, gddPath) !== gddText) {
-      try {
-        mkdirSync(dirname(join(this.projectRoot, gddPath)), { recursive: true });
-        writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
-      } catch (err) {
-        getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
+      // …INSIDE THE PROJECT ONLY: "../victim.md" or a symlinked docs/ would
+      // write outside the root (round 6 #4). The nearest existing ancestor is
+      // resolved and held inside the project's real path.
+      if (!pathIsInsideProject(this.projectRoot, gddPath)) {
+        getLoggerSafe().warn("The GDD path leaves the project; the intake text stands alone", { gddPath });
+        gddPath = undefined;
+      } else {
+        try {
+          mkdirSync(dirname(join(this.projectRoot, gddPath)), { recursive: true });
+          writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
+        } catch (err) {
+          getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
     const campaign = this.newCampaign(ctx, { gddText, gddPath });
@@ -930,6 +940,7 @@ export class CampaignManager {
    */
   async tryHandleIncoming(msg: IncomingMessage): Promise<boolean> {
     if (await this.tryHandleApproval(msg.chatId, msg.text)) return true;
+    if (await this.tryHandleAmendment(msg.chatId, msg.text)) return true;
     if (await this.tryHandleRevive(msg.chatId, msg.text)) return true;
 
     const intent = detectCampaignIntent(msg);
@@ -992,6 +1003,25 @@ export class CampaignManager {
     }
   }
 
+  /**
+   * "amend gdd": the GDD as it is on disk NOW becomes the approved one, by
+   * hash (plan 1.9; round 6 #5). Without this a legitimately edited document
+   * left every delivery refused for drift with no way to say "yes, that one".
+   */
+  async tryHandleAmendment(chatId: string, text: string): Promise<boolean> {
+    if (!AMEND_GDD_RE.test(text.trim())) return false;
+    const campaign = this.storage.findActiveForChat(chatId);
+    if (!campaign) return false;
+    const hash = this.amendGdd(campaign.id);
+    await this.tell(
+      campaign,
+      hash === undefined
+        ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`
+        : `GDD amendment acknowledged: the document on disk (${hash.slice(0, 8)}) is now the approved one; the next delivery is judged against it.`,
+    );
+    return true;
+  }
+
   /** The approval gate. Returns true when the message was consumed by it. */
   async tryHandleApproval(chatId: string, text: string): Promise<boolean> {
     const campaign = this.storage.findAwaitingApproval(chatId);
@@ -1005,6 +1035,15 @@ export class CampaignManager {
       // and planned the ladder twice — two billable passes, a clobbered
       // ladder, two sprint-1 tasks (audited 2026-09-02).
       campaign.state = "planning";
+      // THE APPROVED DOCUMENT IS FROZEN HERE (plan 1.9; round 6 #3): the text
+      // on disk at the moment of approval is the one every gate holds the
+      // game to, by hash — an edit during implementation is drift, not a
+      // silent re-approval at the first delivery gate.
+      const approvedText = (campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined) ?? campaign.gddText;
+      if (approvedText !== undefined) {
+        campaign.gddText = approvedText;
+        campaign.gddSha256 = sha256Of(approvedText);
+      }
       this.persist(campaign);
       await this.tell(
         campaign,
@@ -5216,11 +5255,25 @@ export class CampaignManager {
       ...(campaign.verifiedSessions?.catalogueByArtifact ?? {}),
       ...(typeof count === "number" && Number.isInteger(count) && count >= 1 ? { [digest]: count } : {}),
     };
+    // …AND THE WORST TIMING SEEN ON IT: a 10 fps session in one gate must not
+    // vanish when the next gate plays the rest at 60 (round 6 #22).
+    const seen = campaign.verifiedSessions?.perfByArtifact?.[digest];
+    const perf = evidence.perf;
+    const worst = perf === undefined
+      ? seen
+      : {
+          ...(min2(seen?.avgFps, perf.avgFps) === undefined ? {} : { avgFps: min2(seen?.avgFps, perf.avgFps)! }),
+          ...(max2(seen?.worstFrameMs, perf.worstFrameMs) === undefined ? {} : { worstFrameMs: max2(seen?.worstFrameMs, perf.worstFrameMs)! }),
+          ...(max2(seen?.bootSeconds, perf.bootSeconds) === undefined ? {} : { bootSeconds: max2(seen?.bootSeconds, perf.bootSeconds)! }),
+        };
     campaign.verifiedSessions = {
       artifact: digest,
       indices: merged,
       byArtifact: { ...(campaign.verifiedSessions?.byArtifact ?? {}), [digest]: merged },
       ...(Object.keys(catalogueByArtifact).length > 0 ? { catalogueByArtifact } : {}),
+      ...(worst === undefined || Object.keys(worst).length === 0
+        ? (campaign.verifiedSessions?.perfByArtifact === undefined ? {} : { perfByArtifact: campaign.verifiedSessions.perfByArtifact })
+        : { perfByArtifact: { ...(campaign.verifiedSessions?.perfByArtifact ?? {}), [digest]: worst } }),
     };
   }
 
@@ -5460,6 +5513,8 @@ export class CampaignManager {
     // worst frame rate, the longest boot and the slowest frame across rounds
     // are what the document's numbers are held to.
     if (verdict.found && rounds.length > 1) verdict = withWorstPerf(verdict, rounds);
+    // …and with the worst this ARTIFACT has shown in earlier gates (round 6 #22).
+    if (verdict.found) verdict = this.withRememberedWorstPerf(campaign, build.artifactPath, verdict);
     // …and what the plan changed about the allowance is said with the evidence (round 5 #11).
     if (verdict.found && spec.trimmed !== undefined) verdict = { ...verdict, allowanceNote: spec.trimmed };
     // EVERY OTHER TARGET, the same way: its own cursor, its own rounds, its
@@ -5591,6 +5646,22 @@ export class CampaignManager {
       return { ...verdict, unrunnableHere: failure.slice(0, 200) };
     }
     return verdict;
+  }
+
+  /** The verdict with the worst timing this artifact has shown across gates folded in (round 6 #22). */
+  private withRememberedWorstPerf(campaign: Campaign | undefined, artifactPath: string | undefined, verdict: PlaythroughEvidence): PlaythroughEvidence {
+    const digest = artifactDigest(artifactPath);
+    const seen = digest === undefined ? undefined : campaign?.verifiedSessions?.perfByArtifact?.[digest];
+    if (seen === undefined || verdict.perf === undefined) return verdict;
+    return {
+      ...verdict,
+      perf: {
+        ...verdict.perf,
+        ...(min2(seen.avgFps, verdict.perf.avgFps) === undefined ? {} : { avgFps: min2(seen.avgFps, verdict.perf.avgFps)! }),
+        ...(max2(seen.worstFrameMs, verdict.perf.worstFrameMs) === undefined ? {} : { worstFrameMs: max2(seen.worstFrameMs, verdict.perf.worstFrameMs)! }),
+        ...(max2(seen.bootSeconds, verdict.perf.bootSeconds) === undefined ? {} : { bootSeconds: max2(seen.bootSeconds, verdict.perf.bootSeconds)! }),
+      },
+    };
   }
 
   /**
@@ -7519,17 +7590,51 @@ function withWorstPerf(last: PlaythroughEvidence, rounds: readonly PlaythroughEv
   const avgFps = min(perfs.map((p) => p.avgFps).filter((v): v is number => typeof v === "number"));
   const worstFrameMs = max(perfs.map((p) => p.worstFrameMs).filter((v): v is number => typeof v === "number"));
   const bootSeconds = max(perfs.map((p) => p.bootSeconds).filter((v): v is number => typeof v === "number"));
+  // EVERY ROUND'S SESSIONS, each with its own clock: summing play time made
+  // two 40 s rounds an 80 s session, and only the last round's sessions
+  // reached the duration claims (round 6 #21). Play time is the longest
+  // round's, never a sum.
+  const byIndex = new Map<number, NonNullable<PlaythroughEvidence["sessions"]>[number]>();
+  for (const round of rounds) for (const session of round.sessions ?? []) if (typeof session.index === "number") byIndex.set(session.index, session);
+  const sessions = [...byIndex.values()].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   return {
     ...last,
+    ...(sessions.length > 0 ? { sessions } : {}),
     perf: {
       ...last.perf,
-      playSeconds: perfs.reduce((sum, p) => sum + p.playSeconds, 0),
-      playFrames: perfs.reduce((sum, p) => sum + p.playFrames, 0),
+      playSeconds: Math.max(...perfs.map((p) => p.playSeconds)),
+      playFrames: Math.max(...perfs.map((p) => p.playFrames)),
       ...(avgFps === undefined ? {} : { avgFps }),
       ...(worstFrameMs === undefined ? {} : { worstFrameMs }),
       ...(bootSeconds === undefined ? {} : { bootSeconds }),
     },
   };
+}
+
+/** Is `rel`, resolved against the project, inside the project's real path (through existing ancestors)? */
+function pathIsInsideProject(projectRoot: string, rel: string): boolean {
+  try {
+    const root = realpathSync.native(projectRoot);
+    const target = join(projectRoot, rel);
+    let probe = dirname(target);
+    while (!existsSync(probe)) {
+      const up = dirname(probe);
+      if (up === probe) return false;
+      probe = up;
+    }
+    const real = realpathSync.native(probe);
+    const inside = relative(root, real);
+    return inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep + "..") && !/^[A-Za-z]:/u.test(inside));
+  } catch {
+    return false;
+  }
+}
+
+function min2(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined ? b : b === undefined ? a : Math.min(a, b);
+}
+function max2(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined ? b : b === undefined ? a : Math.max(a, b);
 }
 
 /** The identity of a document: sha256 of its exact bytes. */

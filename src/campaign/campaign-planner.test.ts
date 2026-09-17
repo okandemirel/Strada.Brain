@@ -64,8 +64,10 @@ describe("windowGdd", () => {
 /** Plan 0-B.3: a measured line is evidence only for a requirement it is about. */
 describe("quoteIsAbout", () => {
   it("stems the requirement's distinctive words and drops its verdict suffix", () => {
-    expect(requirementTokens("Save progress across restarts: absent")).toEqual(["save", "progr", "acros", "resta"]);
+    expect(requirementTokens("Save progress across restarts: absent")).toEqual(["sav", "progres", "acros", "restart"]);
     expect(requirementTokens("Shop: absent")).toEqual(["shop"]);
+    // Unicode words are words (round 6 #2).
+    expect(requirementTokens("Çıkış menüsü: absent")).toEqual(["çıkış", "menüsü"]);
   });
 
   it("holds each kind of line to the requirement", () => {
@@ -78,5 +80,13 @@ describe("quoteIsAbout", () => {
     expect(quoteIsAbout("Level count: 13 levels", "document numbers: boots in 2.1 s (claimed under 3 s)")).toBe(false);
     // A requirement made only of stopwords cannot be closed by relevance.
     expect(quoteIsAbout("The game: absent", "landed: Added Assets/Game.cs")).toBe(false);
+    // Whole stems, not substrings: a screensaver is not the save system, and
+    // "saving" is (round 6 #1, #2).
+    expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Art/ScreenSaver.png")).toBe(false);
+    expect(quoteIsAbout("Saving progress: absent", "landed: Added Assets/Scripts/SaveSystem.cs")).toBe(true);
+    expect(quoteIsAbout("Level count: 13 levels", "landed: Added Assets/Scripts/Leverage.cs")).toBe(false);
+    // A suite total closes the suite requirement, not a requirement that merely mentions a test.
+    expect(quoteIsAbout("Test saving progress: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("All tests pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
   });
 });

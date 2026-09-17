@@ -459,6 +459,8 @@ export interface Campaign {
     byArtifact?: Record<string, number[]>;
     /** The catalogue each artifact reported, by digest: a count read on another build is not this build's (plan 0-B.4). */
     catalogueByArtifact?: Record<string, number>;
+    /** The worst timing each artifact has shown across gates: a 10 fps session must not vanish behind a later 60 (round 6 #22). */
+    perfByArtifact?: Record<string, { avgFps?: number; worstFrameMs?: number; bootSeconds?: number }>;
   };
 }
 

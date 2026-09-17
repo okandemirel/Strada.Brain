@@ -465,7 +465,8 @@ describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3; Codex
     expect(sessionsSatisfy("13", "all")).toBe(false);
     expect(sessionsSatisfy("1-13", "all")).toBe(false);
     expect(sessionsSatisfy("13", "13")).toBe(true);
-    expect(sessionsSatisfy("13", "1-13")).toBe(true);
+    // Round 6 #23: an explicit "1-13" runs only its first twelve.
+    expect(sessionsSatisfy("13", "1-13")).toBe(false);
     expect(sessionsSatisfy("13", "1-12")).toBe(false);
     expect(sessionsSatisfy("1-3", "1-12")).toBe(true);
     expect(sessionsSatisfy("1-3", "1-2")).toBe(false);
@@ -518,5 +519,15 @@ describe("sessions are compared as coverage, not spelling (plan 1.6, AK#3; Codex
     expect(missingRequiredEvidence(build, [
       { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "all" }) },
     ])).toHaveLength(1);
+  });
+});
+
+/** Codex 2026-09-17 round 6 #23: an explicit spec runs only its first cap sessions in order. */
+describe("sessionsSatisfy caps explicit specs at what the producer plays", () => {
+  it("'1-13' runs 1..12, so it does not cover 13; a list runs in the order named", () => {
+    expect(sessionsSatisfy("13", "1-13")).toBe(false);
+    expect(sessionsSatisfy("12", "1-13")).toBe(true);
+    expect(sessionsSatisfy("13", "13,1,2,3,4,5,6,7,8,9,10,11,12,14")).toBe(true);
+    expect(sessionsSatisfy("14", "13,1,2,3,4,5,6,7,8,9,10,11,12,14")).toBe(false);
   });
 });
