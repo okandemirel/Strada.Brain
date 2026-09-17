@@ -18,6 +18,29 @@ function readString(payload: unknown, key: string): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+/**
+ * The node ids a DAG payload declares. Accepts `nodes` at the top level (what
+ * monitor-lifecycle and goalTreeToDagPayload emit) and `dag.nodes` (the shape
+ * the portal's message types describe), so neither spelling silently contributes
+ * nothing.
+ */
+function readNodeIds(payload: unknown): string[] {
+  if (typeof payload !== 'object' || payload === null) return []
+  const bag = payload as Record<string, unknown>
+  const lists: unknown[] = [bag['nodes']]
+  const dag = bag['dag']
+  if (typeof dag === 'object' && dag !== null) lists.push((dag as Record<string, unknown>)['nodes'])
+  const ids: string[] = []
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue
+    for (const node of list) {
+      const id = readString(node, 'id')
+      if (id) ids.push(id)
+    }
+  }
+  return ids
+}
+
 export function createMonitorBridge(
   workspaceBus: WorkspaceBus,
   broadcast: (message: string) => void,
@@ -42,35 +65,57 @@ export function createMonitorBridge(
   // canvas/code/budget/supervisor frames that have no scope of their own),
   // because a filter that drops what it cannot attribute would blank the board.
   const rootOrigins = new Map<string, string>()
+  // …and the same for NODE ids, because some frames name neither a conversation
+  // nor a root: `progress:narrative` carries only `nodeId` and its text is the
+  // milestone wording derived from the request, which is exactly what must not
+  // cross profiles. A node belongs to one board, which belongs to one scope, so
+  // the DAG frame that declares the node teaches the pairing.
+  const nodeOrigins = new Map<string, string>()
 
-  function rememberRoot(rootId: string, origin: string): void {
-    // Re-insert so the bounded map's insertion-order eviction drops the
-    // least-recently-touched root, not the busiest one.
-    rootOrigins.delete(rootId)
-    while (rootOrigins.size >= MAX_TRACKED_ROOTS) {
-      const oldest = rootOrigins.keys().next().value
+  /** Insert into a bounded map, dropping the least-recently-touched entry. */
+  function remember(map: Map<string, string>, key: string, origin: string): void {
+    // Re-insert so the insertion-order eviction drops the least-recently-touched
+    // entry, not the busiest one.
+    map.delete(key)
+    while (map.size >= MAX_TRACKED_ROOTS) {
+      const oldest = map.keys().next().value
       if (oldest === undefined) break
-      rootOrigins.delete(oldest)
+      map.delete(oldest)
     }
-    rootOrigins.set(rootId, origin)
+    map.set(key, origin)
+  }
+
+  /** Read a remembered origin, refreshing its recency. */
+  function recall(map: Map<string, string>, key: string): string | undefined {
+    const known = map.get(key)
+    if (known !== undefined) {
+      map.delete(key)
+      map.set(key, known)
+    }
+    return known
   }
 
   /** The origin a frame belongs to, or undefined when it is not attributable. */
   function originOf(payload: unknown): string | undefined {
     const conversationId = readString(payload, 'conversationId')
     const rootId = readString(payload, 'rootId')
+    const nodeId = readString(payload, 'nodeId')
     if (conversationId) {
-      if (rootId) rememberRoot(rootId, conversationId)
+      if (rootId) remember(rootOrigins, rootId, conversationId)
+      if (nodeId) remember(nodeOrigins, nodeId, conversationId)
+      for (const id of readNodeIds(payload)) remember(nodeOrigins, id, conversationId)
       return conversationId
     }
     if (rootId) {
-      const known = rootOrigins.get(rootId)
-      if (known) {
-        rootOrigins.delete(rootId)
-        rootOrigins.set(rootId, known)
+      const known = recall(rootOrigins, rootId)
+      if (known !== undefined) {
+        // A rootId-only frame still teaches us about the nodes it names.
+        if (nodeId) remember(nodeOrigins, nodeId, known)
+        for (const id of readNodeIds(payload)) remember(nodeOrigins, id, known)
+        return known
       }
-      return known
     }
+    if (nodeId) return recall(nodeOrigins, nodeId)
     return undefined
   }
 
@@ -120,8 +165,9 @@ export function createMonitorBridge(
       for (const event of FORWARDED_EVENTS) {
         const handler = (payload: unknown) => {
           if (event === 'monitor:clear') {
-            // The boards are gone; so are the root→origin pairings.
+            // The boards are gone; so are the root/node→origin pairings.
             rootOrigins.clear()
+            nodeOrigins.clear()
           }
           const origin = originOf(payload)
           broadcast(
@@ -143,6 +189,7 @@ export function createMonitorBridge(
       for (const unsub of listeners) unsub()
       listeners.length = 0
       rootOrigins.clear()
+      nodeOrigins.clear()
     },
   }
 }

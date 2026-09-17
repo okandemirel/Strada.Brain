@@ -101,6 +101,65 @@ describe('createMonitorBridge', () => {
     }
   })
 
+  // A frame can name neither a conversation nor a root: progress:narrative carries
+  // only nodeId, and its text is the milestone wording derived from the request.
+  it("attributes a nodeId-only frame to the board that declared the node", () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', {
+      rootId: 'ep-A',
+      nodes: [{ id: 'goal-1' }, { id: 'goal-2' }],
+      edges: [],
+      conversationId: 'profile-A',
+    })
+    workspaceBus.emit('progress:narrative', { nodeId: 'goal-2', narrative: 'Aşama: ship the thing', lang: 'tr' })
+
+    expect(JSON.parse(broadcasts[1]).origin).toBe('profile-A')
+  })
+
+  it('keeps two profiles\' nodeId-only narratives apart', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-A', nodes: [{ id: 'a1' }], edges: [], conversationId: 'profile-A' })
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-B', nodes: [{ id: 'b1' }], edges: [], conversationId: 'profile-B' })
+    workspaceBus.emit('progress:narrative', { nodeId: 'b1', narrative: 'B', lang: 'en' })
+    workspaceBus.emit('progress:narrative', { nodeId: 'a1', narrative: 'A', lang: 'en' })
+
+    expect(broadcasts.slice(2).map((m) => JSON.parse(m).origin)).toEqual(['profile-B', 'profile-A'])
+  })
+
+  it('learns a node from a rootId-only frame whose root is already attributed', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-A', nodes: [], edges: [], conversationId: 'profile-A' })
+    // A worker's card arrives under the known root, naming a node the dag did not list.
+    workspaceBus.emit('monitor:task_update', { rootId: 'ep-A', nodeId: 'late-node', status: 'executing' })
+    workspaceBus.emit('progress:narrative', { nodeId: 'late-node', narrative: 'x', lang: 'en' })
+
+    expect(JSON.parse(broadcasts[2]).origin).toBe('profile-A')
+  })
+
+  // Guard: an unknown node must NOT acquire an origin, or the transport would
+  // withhold a frame that belongs to everyone.
+  it('stamps no origin on a nodeId the bridge has never seen declared', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-A', nodes: [{ id: 'a1' }], edges: [], conversationId: 'profile-A' })
+    workspaceBus.emit('progress:narrative', { nodeId: 'stranger', narrative: 'x', lang: 'en' })
+
+    expect(Object.hasOwn(JSON.parse(broadcasts[1]), 'origin')).toBe(false)
+  })
+
+  it('forgets the node→origin pairings on monitor:clear too', () => {
+    makeBridge().start()
+
+    workspaceBus.emit('monitor:dag_init', { rootId: 'ep-A', nodes: [{ id: 'a1' }], edges: [], conversationId: 'profile-A' })
+    workspaceBus.emit('monitor:clear', {})
+    workspaceBus.emit('progress:narrative', { nodeId: 'a1', narrative: 'x', lang: 'en' })
+
+    expect(Object.hasOwn(JSON.parse(broadcasts[2]), 'origin')).toBe(false)
+  })
+
   it('forgets the root→origin pairings on monitor:clear', () => {
     makeBridge().start()
 
