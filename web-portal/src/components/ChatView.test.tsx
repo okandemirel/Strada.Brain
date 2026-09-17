@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import type { ChatMessage, ConfirmationState, ConnectionStatus } from '../types/messages'
 
 const mockUseWS = vi.fn()
@@ -59,14 +59,35 @@ function createMockWS(overrides: {
   }
 }
 
+// Node >= 22 exposes its own experimental `localStorage` global (no `.length`
+// without --localstorage-file), which shadows jsdom's and crashes
+// SessionPicker's history scan. Give the suite a real Storage-like object.
+function createStorageMock() {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    key: (i: number) => Array.from(values.keys())[i] ?? null,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+    clear: () => { values.clear() },
+  }
+}
+const originalLocalStorage = window.localStorage
+
 describe('ChatView', () => {
   beforeEach(() => {
     // Mock scrollIntoView for jsdom
     Element.prototype.scrollIntoView = vi.fn()
+    const storage = createStorageMock()
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
   })
 
   afterEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(globalThis, 'localStorage', { value: originalLocalStorage, configurable: true })
+    Object.defineProperty(window, 'localStorage', { value: originalLocalStorage, configurable: true })
   })
 
   it('renders empty state when no messages', () => {
@@ -94,6 +115,48 @@ describe('ChatView', () => {
     mockUseWS.mockReturnValue(createMockWS({ messages }))
     render(<ChatView />)
     expect(screen.queryByText(/AI-powered Unity development assistant/)).not.toBeInTheDocument()
+  })
+
+  it('finds a message older than the visible window and widens the window to it (HIST / 0-A.28)', () => {
+    const messages: ChatMessage[] = Array.from({ length: 60 }, (_, i) => ({
+      id: `m-${i + 1}`,
+      sender: i % 2 === 0 ? 'user' : 'assistant',
+      text: `msg-${i + 1}-end`,
+      isMarkdown: false,
+      timestamp: i,
+    }))
+    mockUseWS.mockReturnValue(createMockWS({ messages }))
+    render(<ChatView />)
+    // Only the newest 50 are rendered; message 1 is behind "Load earlier".
+    expect(screen.getByText(/Load 10 earlier/)).toBeInTheDocument()
+    expect(screen.queryByText('msg-1-end')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    fireEvent.change(screen.getByPlaceholderText('Search messages...'), { target: { value: 'msg-1-end' } })
+
+    expect(screen.getByText(/^1 results$/)).toBeInTheDocument()
+    expect(screen.getByText('msg-1-end')).toBeInTheDocument()
+    // The window grew to include the hit, so nothing is hidden any more.
+    expect(screen.queryByText(/earlier messages/)).toBeNull()
+  })
+
+  it('still finds a message inside the visible window and leaves the window alone (guard)', () => {
+    const messages: ChatMessage[] = Array.from({ length: 60 }, (_, i) => ({
+      id: `m-${i + 1}`,
+      sender: 'assistant',
+      text: `msg-${i + 1}-end`,
+      isMarkdown: false,
+      timestamp: i,
+    }))
+    mockUseWS.mockReturnValue(createMockWS({ messages }))
+    render(<ChatView />)
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    fireEvent.change(screen.getByPlaceholderText('Search messages...'), { target: { value: 'msg-60-end' } })
+    expect(screen.getByText(/^1 results$/)).toBeInTheDocument()
+    expect(screen.getByText('msg-60-end')).toBeInTheDocument()
+    // Clearing the search restores the plain 50-message window.
+    fireEvent.change(screen.getByPlaceholderText('Search messages...'), { target: { value: '' } })
+    expect(screen.getByText(/Load 10 earlier/)).toBeInTheDocument()
   })
 
   it('shows typing indicator when isTyping is true', () => {

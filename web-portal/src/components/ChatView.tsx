@@ -158,11 +158,26 @@ export default function ChatView() {
     [safeMessages, visibleCount, hasHiddenMessages],
   )
 
+  // Search covers every LOADED message, not just the visible window: the
+  // window is the newest VISIBLE_BATCH_SIZE, so a query for anything older
+  // returned "0 results" although the message was right there (HIST / 0-A.28).
   const searchFilteredMessages = useMemo(() => {
     if (!searchQuery.trim()) return visibleMessages
     const q = searchQuery.toLowerCase()
-    return visibleMessages.filter((m) => m.text.toLowerCase().includes(q))
-  }, [visibleMessages, searchQuery])
+    return safeMessages.filter((m) => m.text.toLowerCase().includes(q))
+  }, [visibleMessages, safeMessages, searchQuery])
+
+  // Widen the window to reach the earliest hit, so the hits stay on screen
+  // when the search box is cleared instead of collapsing back behind
+  // "Load earlier".
+  useEffect(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return
+    const earliest = safeMessages.findIndex((m) => m.text.toLowerCase().includes(q))
+    if (earliest === -1) return
+    const needed = safeMessages.length - earliest
+    setVisibleCount((prev) => (needed > prev ? needed : prev))
+  }, [searchQuery, safeMessages])
 
   const hasStreamingMessage = useMemo(
     () => safeMessages.some((m) => m.isStreaming),
