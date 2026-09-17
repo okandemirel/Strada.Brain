@@ -298,6 +298,54 @@ describe("event types", () => {
 // Task 2: MemoryRefresher unit tests
 // =============================================================================
 
+// Codex adversarial review 2026-09-17 round 6 #15: the MemoryRefresher was
+// constructed without a chatId, so re-retrieval during chat A could recall chat B.
+describe("MemoryRefresher recall is scoped to the chat (Codex round 6 #15)", () => {
+  /** A memory manager holding two chats' memories that honours `scope.chatId` the way the shared filter does. */
+  function twoChatMemory(): { manager: IMemoryManager; retrieve: ReturnType<typeof vi.fn> } {
+    const all: RetrievalResult[] = [
+      { ...makeRetrievalResult("chat A remembers the red key"), entry: { ...makeRetrievalResult("chat A remembers the red key").entry, chatId: "chat-A" } as never },
+      { ...makeRetrievalResult("chat B remembers the blue key"), entry: { ...makeRetrievalResult("chat B remembers the blue key").entry, chatId: "chat-B" } as never },
+    ];
+    const retrieve = vi.fn(async (options: { scope?: { chatId?: string } }) => {
+      const chat = options.scope?.chatId;
+      const value = chat === undefined
+        ? all
+        : all.filter((r) => (r.entry as { chatId?: string }).chatId === chat);
+      return { kind: "ok" as const, value };
+    });
+    return { manager: { retrieve } as unknown as IMemoryManager, retrieve };
+  }
+
+  it("a refresher built for chat A recalls only chat A's memory", async () => {
+    const { manager, retrieve } = twoChatMemory();
+    const refresher = new MemoryRefresher(defaultConfig(), { chatId: "chat-A", memoryManager: manager });
+    const result = await refresher.refresh("key", "session-1");
+    expect(result.triggered).toBe(true);
+    expect(result.newMemoryContext).toContain("red key");
+    expect(result.newMemoryContext).not.toContain("blue key");
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({ scope: { chatId: "chat-A" } }));
+  });
+
+  it("a per-call chatId overrides the constructed one (refresher shared across chats)", async () => {
+    const { manager, retrieve } = twoChatMemory();
+    const refresher = new MemoryRefresher(defaultConfig(), { chatId: "chat-A", memoryManager: manager });
+    const result = await refresher.refresh("key", "session-1", "periodic", 0, undefined, "chat-B");
+    expect(result.newMemoryContext).toContain("blue key");
+    expect(result.newMemoryContext).not.toContain("red key");
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({ scope: { chatId: "chat-B" } }));
+  });
+
+  it("without any chatId the session id (the chat id the loop passes) scopes the recall", async () => {
+    const { manager, retrieve } = twoChatMemory();
+    const refresher = new MemoryRefresher(defaultConfig(), { memoryManager: manager });
+    const result = await refresher.refresh("key", "chat-B");
+    expect(result.newMemoryContext).toContain("blue key");
+    expect(result.newMemoryContext).not.toContain("red key");
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({ scope: { chatId: "chat-B" } }));
+  });
+});
+
 describe("MemoryRefresher", () => {
   describe("periodic", () => {
     it("returns true when iteration >= lastRetrievalIteration + interval", async () => {

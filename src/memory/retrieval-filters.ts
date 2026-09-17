@@ -10,11 +10,23 @@
  *
  * Identity scope (plan 3.9): `retrieve` takes `{ userId?, chatId?, projectId? }`.
  * An entry is out of scope when it carries a DIFFERENT identity for a key the
- * scope names. An entry that carries NO identity for that key (a note stored
- * without a chat, a legacy row with chatId "default") is shared and stays in.
+ * scope names. An entry that carries NO userId/projectId for that key stays in.
  * Project knowledge (`type: "project"`) is never personal recall: it is only
  * returned when the caller asks for the type explicitly or the scope names
  * its projectId.
+ *
+ * Chat ownership (Codex round 6 #16): chatId "default"/missing means UNKNOWN
+ * ownership (an imported legacy conversation, a row written before chat ids
+ * existed) — it used to be treated as shared and returned to every scoped
+ * chat. Now only an entry marked explicitly shared (`shared: true` or
+ * `metadata.shared === true`) crosses chats; an unowned entry is returned
+ * only when no chat scope is given or the scope's chatId is itself "default".
+ *
+ * No `quarantineUnownedEntries()` backfill: the rule is evaluated at read
+ * time, so no row has to change for it to hold; unowned rows stay reachable
+ * through unscoped queries and the "default" scope; and a backfill could only
+ * stamp an owner it does not know — exactly the leak #16 forbids. An
+ * explicit share is a deliberate write (`shared: true`), never a migration.
  */
 
 import type {
@@ -43,6 +55,8 @@ export interface FilterableEntry {
   readonly chatId?: string;
   readonly userId?: string;
   readonly projectId?: string;
+  /** Explicitly shared across chats (Codex round 6 #16) — also metadata.shared. */
+  readonly shared?: boolean;
   readonly domain?: string;
   readonly tier?: string;
   readonly importanceScore?: number;
@@ -127,15 +141,29 @@ function entryIdentity(entry: FilterableEntry, key: "userId" | "projectId"): str
   return typeof fromMeta === "string" && fromMeta.length > 0 ? fromMeta : undefined;
 }
 
+/** True when the entry was deliberately shared with every chat (Codex round 6 #16). */
+export function isExplicitlyShared(entry: FilterableEntry): boolean {
+  return entry.shared === true || entry.metadata?.["shared"] === true;
+}
+
+/** True when nobody recorded which chat owns the entry (chatId "default" or missing). */
+export function isUnownedByChat(entry: FilterableEntry): boolean {
+  return entry.chatId === undefined || entry.chatId === UNSCOPED_CHAT_ID;
+}
+
 /**
- * Identity scope check (plan 3.9). A scope key the entry does not carry is
- * not a mismatch (shared memory); a DIFFERENT value is.
+ * Identity scope check (plan 3.9). A userId/projectId the entry does not carry
+ * is not a mismatch; a DIFFERENT value is. For chatId (Codex round 6 #16) an
+ * unowned entry matches only the "default" scope unless explicitly shared.
  */
 export function matchesScope(entry: FilterableEntry, scope: MemoryScope | undefined): boolean {
   if (!scope) return true;
+  if (isExplicitlyShared(entry)) return true;
   if (scope.chatId !== undefined) {
-    const entryChat = entry.chatId;
-    if (entryChat !== undefined && entryChat !== UNSCOPED_CHAT_ID && entryChat !== String(scope.chatId)) {
+    const scopeChat = String(scope.chatId);
+    if (isUnownedByChat(entry)) {
+      if (scopeChat !== UNSCOPED_CHAT_ID) return false;
+    } else if (entry.chatId !== scopeChat) {
       return false;
     }
   }

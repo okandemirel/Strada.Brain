@@ -63,9 +63,12 @@ import {
   attemptSchemaRepair,
   triggerLegacyMigration,
   initializeFileMemory,
+  embeddingProviderIdentity,
 } from "./bootstrap-memory.js";
 import { existsSync } from "node:fs";
 import Database from "better-sqlite3";
+import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
+import type { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -198,6 +201,64 @@ describe("bootstrap-memory", () => {
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining("hash-based fallback embeddings"),
       );
+    });
+
+    // Codex adversarial review 2026-09-17 round 6 #17: embeddingProviderId was
+    // never set, so every model's vectors shared provenance "provider".
+    describe("embedding provider identity (Codex round 6 #17)", () => {
+      function provider(name: string, dimensions: number, model?: string) {
+        return {
+          name,
+          dimensions,
+          ...(model !== undefined ? { model } : {}),
+          embed: vi.fn(async () => ({ embeddings: [new Array(dimensions).fill(0.1)], usage: { totalTokens: 1 } })),
+        } as unknown as CachedEmbeddingProvider;
+      }
+
+      it("passes a stable id built from name, model and dimensions into the AgentDB config", async () => {
+        await initializeMemory(makeConfig(), logger, provider("openai:text-embedding-3-small", 1536));
+        const cfg = vi.mocked(AgentDBMemory).mock.calls[0]![0] as { embeddingProviderId?: string; dimensions: number };
+        expect(cfg.embeddingProviderId).toBe("openai:text-embedding-3-small:1536d");
+        expect(cfg.dimensions).toBe(1536);
+      });
+
+      it("two models never share an id; the same model always gets the same id", () => {
+        const a = embeddingProviderIdentity(provider("openai:text-embedding-3-small", 1536));
+        const b = embeddingProviderIdentity(provider("ollama:nomic-embed-text", 768));
+        const sameNameOtherDims = embeddingProviderIdentity(provider("openai:text-embedding-3-small", 256));
+        expect(a).not.toBe(b);
+        expect(a).not.toBe(sameNameOtherDims);
+        expect(embeddingProviderIdentity(provider("openai:text-embedding-3-small", 1536))).toBe(a);
+        // a public model field is folded in only when the name does not already carry it
+        expect(embeddingProviderIdentity(provider("custom", 8, "my-model"))).toBe("custom:my-model:8d");
+        expect(embeddingProviderIdentity(provider("custom:my-model", 8, "my-model"))).toBe("custom:my-model:8d");
+      });
+
+      it("leaves embeddingProviderId unset without a provider (histogram index)", async () => {
+        await initializeMemory(makeConfig(), logger, undefined);
+        const cfg = vi.mocked(AgentDBMemory).mock.calls[0]![0] as { embeddingProviderId?: string };
+        expect(cfg.embeddingProviderId).toBeUndefined();
+      });
+
+      it("reports unknown-provenance and foreign-provider vectors the re-embed pass repaired", async () => {
+        const reEmbed = vi.fn(async () => ({
+          migrated: 3, total: 10, skipped: 7, hashDetected: 1, unknownDetected: 1, foreignDetected: 1,
+        }));
+        vi.mocked(AgentDBMemory).mockImplementationOnce(function () {
+          return {
+            initialize: mockAgentDBInitialize,
+            startAutoTiering: mockStartAutoTiering,
+            setDecayConfig: mockSetDecayConfig,
+            reEmbedHashEntries: reEmbed,
+          } as unknown as AgentDBMemory;
+        });
+        await initializeMemory(makeConfig(), logger, provider("openai:text-embedding-3-small", 1536));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(reEmbed).toHaveBeenCalledOnce();
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringContaining("Re-embedded 3/3 stale entries (1 hash, 1 unknown provenance, 1 other provider) out of 10 scanned"),
+        );
+      });
     });
 
     it("falls back to FileMemoryManager after AgentDB init failure and repair failure", async () => {

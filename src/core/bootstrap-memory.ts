@@ -19,6 +19,25 @@ import type { IMemoryManager } from "../memory/memory.interface.js";
 import type * as winston from "winston";
 
 /**
+ * Stable identity of an embedding provider for vector provenance (Codex round 6
+ * #17): name (the built-in providers fold the model id into it, e.g.
+ * "openai:text-embedding-3-small"), a public `model` field when the name does
+ * not already carry it, and the dimensions. Two providers that would produce
+ * incomparable vectors never share an id; the same model always gets the same
+ * id, so a restart does not re-embed the store.
+ */
+export function embeddingProviderIdentity(
+  provider: Pick<CachedEmbeddingProvider, "name" | "dimensions"> & { model?: unknown },
+): string {
+  const name = typeof provider.name === "string" && provider.name.length > 0 ? provider.name : "provider";
+  const model = typeof provider.model === "string" && provider.model.length > 0 ? provider.model : undefined;
+  const parts = [name];
+  if (model !== undefined && !name.includes(model)) parts.push(model);
+  parts.push(`${provider.dimensions}d`);
+  return parts.join(":");
+}
+
+/**
  * Initialize memory backend with self-healing.
  *
  * Flow:
@@ -61,6 +80,10 @@ export async function initializeMemory(
           return batch.embeddings[0]!;
         }
       : undefined,
+    // Codex round 6 #17: every model's vectors used to share provenance
+    // "provider"; a model swap could then search one model's index with
+    // another's query. The provenance gate compares this id.
+    embeddingProviderId: embeddingProvider ? embeddingProviderIdentity(embeddingProvider) : undefined,
   };
 
   // Post-init steps shared between first attempt and repair path
@@ -91,7 +114,10 @@ export async function initializeMemory(
     // Fire-and-forget: migrate hash embeddings to real embeddings. The scan
     // runs on every boot (the marker no longer gates it — audited 2026-09-02),
     // so the log names what was scanned and what was found rather than
-    // staying silent, which read like "nothing to repair".
+    // staying silent, which read like "nothing to repair". Since Codex round 6
+    // #17/#18 the same pass re-embeds vectors of unknown origin and vectors
+    // of a different provider id (model swap) — the index never searches
+    // across them, so this is the only path that brings them back.
     const agentdbAny = agentdb as unknown as Record<string, unknown>;
     if (embeddingProvider && typeof agentdbAny.reEmbedHashEntries === "function") {
       (
@@ -100,17 +126,22 @@ export async function initializeMemory(
           total: number;
           skipped: number;
           hashDetected: number;
+          unknownDetected?: number;
+          foreignDetected?: number;
         }>
       )()
         .then((result) => {
-          if (result.hashDetected > 0) {
-            const failed = result.hashDetected - result.migrated;
+          const unknown = result.unknownDetected ?? 0;
+          const foreign = result.foreignDetected ?? 0;
+          const stale = result.hashDetected + unknown + foreign;
+          if (stale > 0) {
+            const failed = stale - result.migrated;
             logger.info(
-              `[Bootstrap] Re-embedded ${result.migrated}/${result.hashDetected} hash entries out of ${result.total} scanned${failed > 0 ? ` (${failed} still hash-based: provider or persist failure)` : ""}`,
+              `[Bootstrap] Re-embedded ${result.migrated}/${stale} stale entries (${result.hashDetected} hash, ${unknown} unknown provenance, ${foreign} other provider) out of ${result.total} scanned${failed > 0 ? ` (${failed} still stale: provider or persist failure)` : ""}`,
             );
           } else {
             logger.info(
-              `[Bootstrap] Embedding scan: ${result.total} entries scanned, 0 hash embeddings found`,
+              `[Bootstrap] Embedding scan: ${result.total} entries scanned, 0 stale embeddings found`,
             );
           }
         })

@@ -103,9 +103,9 @@ describe("identity scope (plan 3.9)", () => {
     expect(matchesScope(a, { projectId: "p2" })).toBe(false);
   });
 
-  it("keeps shared entries (no identity / default chat) and reads identity from metadata", () => {
-    const shared = entry({ chatId: UNSCOPED_CHAT_ID });
-    expect(matchesScope(shared, { chatId: "A" as never, userId: "u1", projectId: "p1" })).toBe(true);
+  it("keeps entries with no userId/projectId and reads identity from metadata", () => {
+    const noIdentity = entry({ chatId: "A" });
+    expect(matchesScope(noIdentity, { chatId: "A" as never, userId: "u1", projectId: "p1" })).toBe(true);
     const viaMeta = entry({ metadata: { userId: "u2" } });
     expect(matchesScope(viaMeta, { userId: "u1" })).toBe(false);
     expect(matchesScope(viaMeta, { userId: "u2" })).toBe(true);
@@ -113,6 +113,39 @@ describe("identity scope (plan 3.9)", () => {
 
   it("no scope keeps today's behaviour", () => {
     expect(matchesScope(entry({ chatId: "A", userId: "u9" }), undefined)).toBe(true);
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 6 #16: chatId "default" (unknown
+// ownership) was treated as SHARED and returned to every scoped chat.
+describe("unowned vs explicitly shared entries (Codex round 6 #16)", () => {
+  const unowned = entry({ chatId: UNSCOPED_CHAT_ID });
+  const missing = entry({ chatId: undefined });
+
+  it("an entry with chatId 'default' or missing is NOT returned to a scoped chat", () => {
+    expect(matchesScope(unowned, { chatId: "A" as never })).toBe(false);
+    expect(matchesScope(missing, { chatId: "A" as never })).toBe(false);
+    expect(matchesRetrievalFilters(unowned, { scope: { chatId: "A" as never } })).toBe(false);
+  });
+
+  it("it is returned when no scope is given, when the scope names no chat, or when the scope's chatId is 'default'", () => {
+    expect(matchesScope(unowned, undefined)).toBe(true);
+    expect(matchesScope(unowned, { userId: "u1" })).toBe(true);
+    expect(matchesScope(unowned, { chatId: UNSCOPED_CHAT_ID as never })).toBe(true);
+    expect(matchesScope(missing, { chatId: UNSCOPED_CHAT_ID as never })).toBe(true);
+  });
+
+  it("an explicitly shared entry (shared: true or metadata.shared) crosses chats", () => {
+    expect(matchesScope(entry({ chatId: UNSCOPED_CHAT_ID, shared: true }), { chatId: "A" as never })).toBe(true);
+    expect(matchesScope(entry({ chatId: undefined, metadata: { shared: true } }), { chatId: "A" as never })).toBe(true);
+    expect(matchesScope(entry({ chatId: "B", shared: true }), { chatId: "A" as never })).toBe(true);
+    // a non-boolean marker is not a share
+    expect(matchesScope(entry({ chatId: UNSCOPED_CHAT_ID, metadata: { shared: "yes" } }), { chatId: "A" as never })).toBe(false);
+  });
+
+  it("an owned entry still matches its own chat and no other", () => {
+    expect(matchesScope(entry({ chatId: "A" }), { chatId: "A" as never })).toBe(true);
+    expect(matchesScope(entry({ chatId: "A" }), { chatId: "B" as never })).toBe(false);
   });
 });
 

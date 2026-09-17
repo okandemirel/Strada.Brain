@@ -562,6 +562,67 @@ describe("retrieveHybrid", () => {
   });
 });
 
+// Codex adversarial review 2026-09-17 round 6 #19: the ×4 over-fetch was a fixed
+// factor, so with limit 1 and four chat-A hits ranked above the one chat-B hit,
+// scope B returned [] although a match existed.
+describe("candidate window widens until limit eligible hits or the index is exhausted (Codex round 6 #19)", () => {
+  const ranking = [
+    { id: "a1", score: 0.95 },
+    { id: "a2", score: 0.94 },
+    { id: "a3", score: 0.93 },
+    { id: "a4", score: 0.92 },
+    { id: "b1", score: 0.5 },
+  ];
+
+  function build(extra: number = 0) {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    for (const r of ranking) {
+      entries.set(r.id, makeEntry(r.id, `deploy note ${r.id}`, { chatId: (r.id.startsWith("a") ? "chat-A" : "chat-B") as any }));
+    }
+    for (let i = 0; i < extra; i++) {
+      entries.set(`c${i}`, makeEntry(`c${i}`, `filler ${i}`, { chatId: "chat-C" as any }));
+    }
+    const full = [...ranking, ...Array.from({ length: extra }, (_, i) => ({ id: `c${i}`, score: 0.1 }))];
+    const search = vi.fn(async (_q: number[], k: number) =>
+      full.slice(0, k).map((r) => ({ chunk: { id: r.id }, score: r.score })),
+    );
+    const store = { search, count: () => full.length };
+    return { ctx: makeCtx(entries, store as any), search };
+  }
+
+  it("limit 1, four chat-A hits above one chat-B hit: scope B still returns the B hit", async () => {
+    const { ctx, search } = build();
+    const hits = await retrieveSemantic(ctx, "deploy", { limit: 1, scope: { chatId: "chat-B" as any } });
+    expect(hits.map((h) => h.entry.id)).toEqual(["b1"]);
+    // first window was 1×4 = 4 (all chat-A), then widened
+    expect(search.mock.calls[0]![1]).toBe(4);
+    expect(search.mock.calls.length).toBeGreaterThan(1);
+    expect(search.mock.calls.at(-1)![1]).toBeGreaterThan(4);
+  });
+
+  it("stops once limit eligible hits are found (no needless widening)", async () => {
+    const { ctx, search } = build(50);
+    const hits = await retrieveSemantic(ctx, "deploy", { limit: 2, scope: { chatId: "chat-A" as any } });
+    expect(hits.map((h) => h.entry.id)).toEqual(["a1", "a2"]);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops at the index size when no eligible hit exists (never loops forever)", async () => {
+    const { ctx, search } = build(50);
+    const hits = await retrieveSemantic(ctx, "deploy", { limit: 1, scope: { chatId: "chat-Z" as any } });
+    expect(hits).toEqual([]);
+    expect(search.mock.calls.at(-1)![1]).toBe(55);
+    expect(search.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it("an unfiltered query keeps a single window", async () => {
+    const { ctx, search } = build();
+    const hits = await retrieveSemantic(ctx, "deploy", { limit: 1 });
+    expect(hits.map((h) => h.entry.id)).toEqual(["a1"]);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("applyMMR", () => {
   it("should return empty array for empty results", () => {
     const result = applyMMR([], [1, 0, 0], 0.5, 5);
@@ -765,14 +826,25 @@ describe("identity scope on retrieve (plan 3.9)", () => {
 
   const query = "staging server deploy";
 
-  it("two chats: scope chatId A returns only A's memories (plus shared), never B's", () => {
+  it("two chats: scope chatId A returns only A's memories, never B's nor an unowned 'default' row (round 6 #16)", () => {
     const hits = retrieveTFIDF(makeCtx(entries), query, {
       mode: "text", query, limit: 10, scope: { chatId: "chat-A" as any },
     });
     const ids = hits.map((h) => h.entry.id as string);
     expect(ids).not.toContain("b1");
     expect(ids).toContain("a1");
-    expect(ids).toContain("shared");
+    expect(ids).not.toContain("shared");
+  });
+
+  it("an explicitly shared entry is returned to a scoped chat (round 6 #16)", () => {
+    entries.set("really-shared", makeEntry("really-shared", "staging server deploy runbook", {
+      chatId: "default" as any, shared: true,
+    } as any));
+    const ids = retrieveTFIDF(makeCtx(entries), query, {
+      mode: "text", query, limit: 10, scope: { chatId: "chat-A" as any },
+    }).map((h) => h.entry.id as string);
+    expect(ids).toContain("really-shared");
+    expect(ids).not.toContain("shared");
   });
 
   it("no scope keeps today's behaviour (both chats returned)", () => {

@@ -73,12 +73,21 @@ interface BaseMemoryEntry {
    */
   readonly userId?: string;
   readonly projectId?: string;
+  /**
+   * Explicitly shared with every chat (Codex round 6 #16; also read from
+   * metadata.shared === true). An entry with chatId "default"/missing and no
+   * such marker is of unknown ownership and is NOT returned to a scoped chat.
+   */
+  readonly shared?: boolean;
 }
 
 /**
  * Identity scope for retrieval (plan 3.9 / 3.11: 05.cap, 13F4, D66).
  * Results carrying a different identity for any named key are excluded;
- * entries carrying no identity for that key are shared and stay in.
+ * entries carrying no userId/projectId for a named key stay in. For chatId
+ * (Codex round 6 #16) an entry of unknown ownership (chatId "default" or
+ * missing) is returned only when the scope's chatId is itself "default" or
+ * the entry is explicitly `shared`.
  */
 export interface MemoryScope {
   readonly userId?: string;

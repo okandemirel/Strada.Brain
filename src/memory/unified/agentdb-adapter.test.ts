@@ -1109,4 +1109,79 @@ describe("AgentDBAdapter", () => {
       expect(mockDb.compact).toHaveBeenCalledOnce();
     });
   });
+
+  // Codex adversarial review 2026-09-17 round 6 #20: importing an exported
+  // entry of type "project" was dropped (count zero).
+  describe("import() of project entries (Codex round 6 #20)", () => {
+    it("accepts type 'project' and preserves projectId", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        kind: "ok",
+        value: { id: "mem_p" as MemoryId, type: "project", content: "x" } as unknown as MemoryEntry,
+      });
+
+      const result = await adapter.import({
+        version: 1,
+        entries: [
+          {
+            id: "old_1",
+            type: "project",
+            content: "the level loader lives in Assets/Scripts/Levels",
+            tags: ["arch"],
+            importance: "high",
+            archived: false,
+            metadata: {},
+            projectId: "proj-42",
+            source: "audit",
+          },
+        ],
+      } as never);
+
+      expect(result).toEqual({ kind: "ok", value: 1 });
+      expect(mockDb.storeEntry).toHaveBeenCalledTimes(1);
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "project",
+        content: "the level loader lives in Assets/Scripts/Levels",
+        projectId: "proj-42",
+        tier: MemoryTier.Persistent,
+        metadata: expect.objectContaining({ projectId: "proj-42", originalId: "old_1" }),
+      }));
+    });
+
+    it("export → import round-trips a project entry with its projectId", async () => {
+      const stored = {
+        id: "mem_p" as MemoryId,
+        type: "project",
+        content: "project knowledge",
+        createdAt: 1_000 as TimestampMs,
+        accessCount: 0,
+        tags: [],
+        importance: "medium",
+        archived: false,
+        metadata: {},
+        projectId: "proj-42",
+        tier: MemoryTier.Persistent,
+      } as unknown as MemoryEntry;
+      (mockDb.getByTier as ReturnType<typeof vi.fn>).mockImplementation(async (tier: MemoryTier) =>
+        tier === MemoryTier.Persistent ? [stored] : [],
+      );
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: stored });
+
+      const exported = await adapter.export();
+      expect(exported.kind).toBe("ok");
+      if (exported.kind !== "ok") return;
+      const entries = (exported.value as { entries: Array<Record<string, unknown>> }).entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ type: "project", projectId: "proj-42" });
+
+      const imported = await adapter.import(exported.value);
+      expect(imported).toEqual({ kind: "ok", value: 1 });
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({ type: "project", projectId: "proj-42" }));
+    });
+
+    it("still drops an entry of unknown type", async () => {
+      const result = await adapter.import({ version: 1, entries: [{ type: "bogus", content: "x" }] } as never);
+      expect(result).toEqual({ kind: "ok", value: 0 });
+      expect(mockDb.storeEntry).not.toHaveBeenCalled();
+    });
+  });
 });

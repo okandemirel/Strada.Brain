@@ -38,6 +38,13 @@ export const HISTOGRAM_PROVENANCE = "histogram";
 export const TFIDF_PROVENANCE = "tfidf";
 /** Provenance used when a provider is configured but has no id. */
 export const DEFAULT_PROVIDER_PROVENANCE = "provider";
+/**
+ * Provenance of a legacy vector that carries no label and is not hash-shaped
+ * (Codex round 6 #18). Nobody knows which embedder made it, so it is stamped
+ * "unknown" — never the current provider's id — and stays out of the provider
+ * index and out of search until `reEmbedHashEntries` re-embeds it.
+ */
+export const UNKNOWN_PROVENANCE = "unknown";
 
 /** Provider model id, "histogram", or "tfidf". */
 export type EmbeddingProvenance = string;
@@ -110,9 +117,15 @@ interface BaseUnifiedMemoryEntry {
    */
   readonly embeddingProvenance?: EmbeddingProvenance;
   readonly domain?: string;
-  /** Identity scope (plan 3.9) — absent = shared. */
+  /** Identity scope (plan 3.9) — absent = unowned (Codex round 6 #16). */
   readonly userId?: string;
   readonly projectId?: string;
+  /**
+   * Explicitly shared with every chat (Codex round 6 #16). Distinct from an
+   * entry whose chatId is "default"/missing, which is of UNKNOWN ownership and
+   * is returned only to an unscoped query or a "default"-scoped one.
+   */
+  readonly shared?: boolean;
 
   // Mutable state
   tier: MemoryTier;

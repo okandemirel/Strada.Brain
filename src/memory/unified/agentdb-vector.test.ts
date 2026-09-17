@@ -50,7 +50,7 @@ import {
   reEmbedHashEntries,
 } from "./agentdb-vector.js";
 import type { AgentDBVectorContext } from "./agentdb-vector.js";
-import { MemoryTier } from "./unified-memory.interface.js";
+import { MemoryTier, UNKNOWN_PROVENANCE } from "./unified-memory.interface.js";
 import type { UnifiedMemoryEntry, UnifiedMemoryConfig } from "./unified-memory.interface.js";
 import type { NormalizedScore } from "../../types/index.js";
 
@@ -402,7 +402,7 @@ describe("reEmbedHashEntries", () => {
       async () => {},
     );
 
-    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0 });
+    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0, unknownDetected: 0, foreignDetected: 0 });
   });
 
   it("should return early if sqliteDb is not available", async () => {
@@ -417,15 +417,16 @@ describe("reEmbedHashEntries", () => {
       async () => {},
     );
 
-    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0 });
+    expect(result).toEqual({ migrated: 0, total: 0, skipped: 0, hashDetected: 0, unknownDetected: 0, foreignDetected: 0 });
   });
 
-  it("should skip entries that are not hash-based", async () => {
+  it("should skip entries that already carry the current provider's provenance", async () => {
     const mockProvider = vi.fn(async () => [0.1, -0.2, 0.3]);
     const entries = new Map<string, UnifiedMemoryEntry>();
-    // Real embedding (has negative values = not hash-based)
+    // Real embedding stamped by this provider — nothing to repair
     entries.set("real1", makeEntry("real1", {
       embedding: [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8],
+      embeddingProvenance: "provider",
     }));
 
     const mockStmt = { run: vi.fn() };
@@ -480,7 +481,7 @@ describe("reEmbedHashEntries", () => {
 // Tests: embedding provenance (plan 0-B.9: audit 05.cap + Codex #18)
 // ---------------------------------------------------------------------------
 
-import { embedWithProvenance, canEnterIndex, indexProvenance, inferProvenance } from "./agentdb-vector.js";
+import { embedWithProvenance, canEnterIndex, indexProvenance, inferProvenance, needsReEmbedding } from "./agentdb-vector.js";
 
 describe("embedWithProvenance (plan 0-B.9)", () => {
   it("stamps provider vectors with the provider id", async () => {
@@ -521,11 +522,63 @@ describe("embedWithProvenance (plan 0-B.9)", () => {
     expect(canEnterIndex(config, { embedding: [0.1, -0.2, 0.3, 0.4], embeddingProvenance: "provider" })).toBe(false);
   });
 
-  it("infers provenance for legacy rows by vector shape", async () => {
+  it("infers 'histogram' for hash-shaped legacy rows and 'unknown' otherwise — never the current provider (round 6 #18)", async () => {
     const config = makeConfig({ dimensions: 8, embeddingProvider: vi.fn(async () => []), embeddingProviderId: "m" } as any);
     const hash = await generateEmbedding(makeConfig({ dimensions: 8 }), "legacy hash row");
     expect(inferProvenance(config, hash)).toBe("histogram");
-    expect(inferProvenance(config, [0.5, -0.5, 0.25, -0.25, 0.1, -0.1, 0.7, -0.7])).toBe("m");
+    expect(inferProvenance(config, [0.5, -0.5, 0.25, -0.25, 0.1, -0.1, 0.7, -0.7])).toBe(UNKNOWN_PROVENANCE);
     expect(inferProvenance(config, null)).toBeUndefined();
+  });
+});
+
+// Codex adversarial review 2026-09-17 round 6 #17/#18: legacy unlabelled vectors
+// were stamped with the CURRENT provider id and entered its index; every model
+// shared provenance "provider".
+describe("unknown and foreign provenance (Codex round 6 #17/#18)", () => {
+  const realVec = [0.5, -0.5, 0.25, -0.25, 0.1, -0.1, 0.7, -0.7];
+
+  it("an unknown vector cannot enter the provider index", () => {
+    const config = makeConfig({ dimensions: 8, embeddingProvider: vi.fn(), embeddingProviderId: "m" } as any);
+    expect(canEnterIndex(config, { embedding: realVec, embeddingProvenance: UNKNOWN_PROVENANCE })).toBe(false);
+    expect(canEnterIndex(config, { embedding: realVec, embeddingProvenance: "m" })).toBe(true);
+  });
+
+  it("needsReEmbedding names histogram, unknown and foreign-provider vectors; a current-provider vector needs nothing", () => {
+    const config = makeConfig({ dimensions: 8, embeddingProvider: vi.fn(), embeddingProviderId: "openai:text-embedding-3-small:8d" } as any);
+    expect(needsReEmbedding(config, { content: "c", embedding: [0.35, 0.36, 0.35, 0.36, 0.35, 0.36, 0.35, 0.36] })).toBe("histogram");
+    expect(needsReEmbedding(config, { content: "c", embedding: realVec })).toBe("unknown");
+    expect(needsReEmbedding(config, { content: "c", embedding: realVec, embeddingProvenance: UNKNOWN_PROVENANCE })).toBe("unknown");
+    expect(needsReEmbedding(config, { content: "c", embedding: realVec, embeddingProvenance: "ollama:nomic-embed-text:8d" })).toBe("foreign");
+    expect(needsReEmbedding(config, { content: "c", embedding: realVec, embeddingProvenance: "openai:text-embedding-3-small:8d" })).toBeNull();
+    expect(needsReEmbedding(config, { content: "c", embedding: null })).toBeNull();
+  });
+
+  it("reEmbedHashEntries re-embeds unknown and foreign vectors with the current provider and stamps its id", async () => {
+    const fresh = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8];
+    const mockProvider = vi.fn(async () => fresh);
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("legacy", makeEntry("legacy", { embedding: realVec }));
+    entries.set("unknown", makeEntry("unknown", { embedding: realVec, embeddingProvenance: UNKNOWN_PROVENANCE }));
+    entries.set("foreign", makeEntry("foreign", { embedding: realVec, embeddingProvenance: "other-model:8d" }));
+    entries.set("current", makeEntry("current", { embedding: realVec, embeddingProvenance: "m:8d" }));
+
+    const stmts = new Map<string, any>();
+    stmts.set("upsertMemory", { run: vi.fn() });
+    const ctx = makeVectorCtx({
+      entries,
+      config: makeConfig({ dimensions: 8, embeddingProvider: mockProvider, embeddingProviderId: "m:8d" } as any),
+      sqliteDb: { transaction: vi.fn((fn: any) => () => fn()) } as any,
+      sqliteStatements: stmts,
+    });
+
+    const result = await reEmbedHashEntries(ctx, async () => false, async () => {});
+
+    expect(mockProvider).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ migrated: 3, total: 4, skipped: 1, hashDetected: 0, unknownDetected: 2, foreignDetected: 1 });
+    for (const id of ["legacy", "unknown", "foreign"]) {
+      expect(entries.get(id)!.embeddingProvenance).toBe("m:8d");
+      expect(entries.get(id)!.embedding).toEqual(fresh);
+    }
+    expect(entries.get("current")!.embedding).toEqual(realVec);
   });
 });

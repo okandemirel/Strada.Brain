@@ -672,6 +672,8 @@ export class AgentDBMemory implements IUnifiedMemory {
         // plan 3.9: identity scope — top-level or metadata-supplied
         userId: entry.userId ?? readIdentity(entry.metadata, "userId"),
         projectId: entry.projectId ?? readIdentity(entry.metadata, "projectId"),
+        // Codex round 6 #16: an explicit share is a deliberate write
+        shared: entry.shared === true || entry.metadata?.["shared"] === true ? true : undefined,
       };
 
       // Type-specific fields
@@ -1411,6 +1413,7 @@ export class AgentDBMemory implements IUnifiedMemory {
               ?? inferProvenance(this.config, embedding),
             userId: parsed.userId as string | undefined,
             projectId: parsed.projectId as string | undefined,
+            shared: parsed.shared === true ? true : undefined,
           };
 
           // Reconstruct as UnifiedMemoryEntry based on type
@@ -1479,8 +1482,11 @@ export class AgentDBMemory implements IUnifiedMemory {
           );
         }
         if (provenanceSkipped > 0) {
+          // Codex round 6 #17/#18: logged once per boot; the provider index
+          // never searches across them. reEmbedHashEntries (bootstrap) re-embeds
+          // histogram, unknown and foreign-provider vectors with the current provider.
           getLoggerSafe().warn(
-            `[AgentDB] Kept ${provenanceSkipped} entries out of the HNSW index — embedding provenance differs from ${indexProvenance(this.config)} (text path still serves them)`,
+            `[AgentDB] Kept ${provenanceSkipped} entries out of the HNSW index — embedding provenance differs from ${indexProvenance(this.config)}; re-embedding needed (text path still serves them)`,
           );
         }
         const store = this.hnswStore;

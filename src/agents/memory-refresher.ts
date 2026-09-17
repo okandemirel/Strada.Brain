@@ -27,7 +27,11 @@ import { getLogger } from "../utils/logger.js";
 
 /** Dependencies injected into MemoryRefresher (all optional for graceful degradation) */
 export interface MemoryRefresherDeps {
-  /** The chat this refresher serves: its recall is scoped to it (plan 3.9). */
+  /**
+   * The chat this refresher serves: its recall is scoped to it (plan 3.9).
+   * Fallback only — a refresher shared across chats passes the chat per
+   * `refresh()` call (Codex round 6 #15).
+   */
   readonly chatId?: string;
   readonly memoryManager?: IMemoryManager;
   readonly ragPipeline?: IRAGPipeline;
@@ -170,6 +174,7 @@ export class MemoryRefresher {
     reason: RefreshReason = "periodic",
     iteration: number = 0,
     cosineDistance?: number,
+    chatId?: string,
   ): Promise<RefreshResult> {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
@@ -183,7 +188,7 @@ export class MemoryRefresher {
         );
       });
       return await Promise.race([
-        this.doRefresh(query, sessionId, reason, iteration, cosineDistance),
+        this.doRefresh(query, sessionId, reason, iteration, cosineDistance, this.resolveChatId(chatId, sessionId)),
         timeoutPromise,
       ]);
     } catch (error) {
@@ -240,12 +245,25 @@ export class MemoryRefresher {
     }
   }
 
+  /**
+   * The chat whose memory this refresh recalls (Codex round 6 #15): the
+   * per-call chat, else the chat the refresher was built for, else the
+   * session id — the orchestrator loop passes the chat id as `sessionId`
+   * (orchestrator-loop-shared.ts), so a refresher constructed without a
+   * chat still never recalls another chat's memory.
+   */
+  private resolveChatId(chatId: string | undefined, sessionId: string): string | undefined {
+    const resolved = chatId ?? this.deps.chatId ?? sessionId;
+    return resolved && resolved.length > 0 ? resolved : undefined;
+  }
+
   private async doRefresh(
     query: string,
     sessionId: string,
     reason: RefreshReason,
     iteration: number,
-    cosineDistance?: number,
+    cosineDistance: number | undefined,
+    chatId: string | undefined,
   ): Promise<RefreshResult> {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
@@ -258,7 +276,7 @@ export class MemoryRefresher {
             query,
             limit: this.config.memoryLimit,
             minScore: 0.15,
-            ...(this.deps.chatId ? { scope: { chatId: this.deps.chatId } } : {}),
+            ...(chatId ? { scope: { chatId } } : {}),
           } as RetrievalOptions)
         : Promise.resolve(null),
 

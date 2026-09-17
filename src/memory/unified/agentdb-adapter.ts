@@ -116,7 +116,9 @@ function isMemoryEntryType(value: unknown): value is MemoryEntryType {
     || value === "command"
     || value === "error"
     || value === "insight"
-    || value === "task";
+    || value === "task"
+    // Codex round 6 #20: an exported "project" entry used to be dropped on import
+    || value === "project";
 }
 
 function importanceToScore(importance: MemoryImportance): number {
@@ -862,6 +864,10 @@ export class AgentDBAdapter implements IMemoryManager {
             ? createBrand(raw["chatId"], "ChatId" as const)
             : undefined,
           domain: readString(raw["projectPath"]) ?? readString(raw["source"]) ?? undefined,
+          // Codex round 6 #20: identity survives the round trip
+          projectId: readString(raw["projectId"]) ?? readString(metadata["projectId"]),
+          userId: readString(raw["userId"]) ?? readString(metadata["userId"]),
+          shared: raw["shared"] === true ? true : undefined,
         } as unknown as Parameters<typeof this.agentdb.storeEntry>[0]);
 
         if (result.kind === "ok") {
@@ -1125,6 +1131,7 @@ export class AgentDBAdapter implements IMemoryManager {
       "parentTaskId",
       "dueDate",
       "chatId",
+      "projectId",
     ] as const) {
       if (raw[key] !== undefined) {
         metadata[key === "version" ? "analysisVersion" : key] = raw[key] as
@@ -1151,6 +1158,9 @@ export class AgentDBAdapter implements IMemoryManager {
       accessCount: entry.accessCount,
       archived: entry.archived,
       metadata: entry.metadata as unknown as Record<string, unknown>,
+      // Codex round 6 #16/#20: identity and the explicit share marker round-trip
+      ...(entry.userId !== undefined ? { userId: entry.userId } : {}),
+      ...(entry.shared === true ? { shared: true } : {}),
     };
 
     switch (entry.type) {

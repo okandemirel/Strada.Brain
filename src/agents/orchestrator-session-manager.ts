@@ -1210,10 +1210,15 @@ export class SessionManager {
   /**
    * Create a MemoryRefresher if re-retrieval is enabled, seeded with initial content hashes.
    * Returns null when re-retrieval is disabled.
+   *
+   * `chatId` (Codex round 6 #15) scopes the refresher's recall to the chat it
+   * serves; without it the refresher falls back to the chat id the loop
+   * passes per `refresh()` call, so chat A's re-retrieval never recalls chat B.
    */
-  createMemoryRefresher(initialContentHashes: string[]): MemoryRefresher | null {
+  createMemoryRefresher(initialContentHashes: string[], chatId?: string): MemoryRefresher | null {
     if (!this.deps.reRetrievalConfig?.enabled) return null;
     const refresher = new MemoryRefresher(this.deps.reRetrievalConfig, {
+      chatId,
       memoryManager: this.deps.memoryManager,
       ragPipeline: this.deps.ragPipeline,
       instinctRetriever: this.deps.instinctRetriever ?? undefined,

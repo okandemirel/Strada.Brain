@@ -169,42 +169,61 @@ export async function retrieveSemantic(
   const filters = toRetrievalFilters(options);
   const now = Date.now();
   const limit = options.limit ?? 5;
+  const filtered = hasActiveFilters(filters);
   // Over-fetch more when a filter narrows the candidate set so the post-filter
-  // still has `limit` matches to return.
-  const candidateCount = limit * (hasActiveFilters(filters) ? 4 : 2);
+  // still has `limit` matches to return. The window is not a fixed factor
+  // (Codex round 6 #19): with limit 1 and four chat-A hits ranked above the
+  // one chat-B hit, a ×4 window returned [] for scope B although a match
+  // existed. It now widens ×4 per round until `limit` eligible hits are found
+  // or the index is exhausted.
+  const indexSize = indexElementCount(ctx);
+  let candidateCount = Math.max(1, limit * (filtered ? 4 : 2));
 
-  // Search HNSW index
-  const hnswResults = await ctx.hnswStore.search(queryEmbedding, candidateCount);
-
-  // Convert to RetrievalResult format
   const results: RetrievalResult<MemoryEntry>[] = [];
+  const seen = new Set<string>();
 
-  for (const hit of hnswResults) {
-    const entry = ctx.entries.get(hit.chunk.id);
-    if (!entry) continue;
+  for (;;) {
+    const hnswResults = await ctx.hnswStore.search(queryEmbedding, candidateCount);
 
-    // Provenance guard: a vector of another embedder must not be scored
-    // against this query even if it somehow reached the index.
-    if (entry.embeddingProvenance !== undefined && entry.embeddingProvenance !== queryProvenance) continue;
+    for (const hit of hnswResults) {
+      if (seen.has(hit.chunk.id)) continue;
+      seen.add(hit.chunk.id);
 
-    // One filter layer shared with retrieveTFIDF (plan 0-B.9 / 3.9)
-    if (!matchesRetrievalFilters(entry, filters, now)) continue;
+      const entry = ctx.entries.get(hit.chunk.id);
+      if (!entry) continue;
 
-    // NOTE: Race condition — in-memory read-modify-write is not atomic.
-    // The retrieval context does not expose direct DB access, so an atomic
-    // SQL increment (access_count = access_count + 1) is not possible here.
-    // Under concurrent retrievals the count may drift, but this is acceptable
-    // for access-frequency heuristics.  A future refactor could add a
-    // dedicated `sqliteIncrementAccessCount` callback to AgentDBRetrievalContext.
-    entry.accessCount++;
-    entry.lastAccessedAt = getNow();
-    ctx.sqlitePersistEntry?.(entry);
+      // Provenance guard: a vector of another embedder must not be scored
+      // against this query even if it somehow reached the index.
+      if (entry.embeddingProvenance !== undefined && entry.embeddingProvenance !== queryProvenance) continue;
 
-    results.push({
-      entry: entry as unknown as MemoryEntry,
-      score: hit.score,
-    });
+      // One filter layer shared with retrieveTFIDF (plan 0-B.9 / 3.9)
+      if (!matchesRetrievalFilters(entry, filters, now)) continue;
+
+      // NOTE: Race condition — in-memory read-modify-write is not atomic.
+      // The retrieval context does not expose direct DB access, so an atomic
+      // SQL increment (access_count = access_count + 1) is not possible here.
+      // Under concurrent retrievals the count may drift, but this is acceptable
+      // for access-frequency heuristics.  A future refactor could add a
+      // dedicated `sqliteIncrementAccessCount` callback to AgentDBRetrievalContext.
+      entry.accessCount++;
+      entry.lastAccessedAt = getNow();
+      ctx.sqlitePersistEntry?.(entry);
+
+      results.push({
+        entry: entry as unknown as MemoryEntry,
+        score: hit.score,
+      });
+    }
+
+    // Enough eligible hits, an unfiltered query (one window is exact), the
+    // index gave back fewer than asked (exhausted), or the window already
+    // covered the whole index.
+    if (results.length >= limit || !filtered) break;
+    if (hnswResults.length < candidateCount || candidateCount >= indexSize) break;
+    candidateCount = Math.min(candidateCount * 4, indexSize);
   }
+
+  results.sort((a, b) => (b.score as number) - (a.score as number));
 
   // Record search time for all paths
   const searchTime = performance.now() - startTime;
@@ -219,6 +238,24 @@ export async function retrieveSemantic(
   }
 
   return results.slice(0, options.limit ?? 5).map(sanitizeResult);
+}
+
+/**
+ * Upper bound for the candidate window (Codex round 6 #19): the HNSW element
+ * count when the store reports one, else the number of entries loaded.
+ */
+function indexElementCount(ctx: AgentDBRetrievalContext): number {
+  const store = ctx.hnswStore as { count?: () => number } | undefined;
+  let size: number | undefined;
+  if (store && typeof store.count === "function") {
+    try {
+      const n = store.count();
+      if (typeof n === "number" && Number.isFinite(n) && n > 0) size = n;
+    } catch {
+      // fall through to the entries map
+    }
+  }
+  return Math.max(1, size ?? ctx.entries.size);
 }
 
 // ---------------------------------------------------------------------------

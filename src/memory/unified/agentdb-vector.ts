@@ -15,6 +15,7 @@ import type {
 import {
   DEFAULT_PROVIDER_PROVENANCE,
   HISTOGRAM_PROVENANCE,
+  UNKNOWN_PROVENANCE,
 } from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
@@ -125,15 +126,35 @@ export function canEnterIndex(
 /**
  * Provenance for a legacy row that carries a vector but no provenance
  * (written before plan 0-B.9): hash-shaped vectors are histograms; anything
- * else is assumed to be the configured provider's.
+ * else is "unknown" (Codex round 6 #18) — it used to be stamped with the
+ * CURRENT provider id, which put a vector of unknown origin into the provider
+ * index. Unknown vectors never enter the index or a search until
+ * `reEmbedHashEntries` re-embeds them.
  */
 export function inferProvenance(
-  config: UnifiedMemoryConfig,
+  _config: UnifiedMemoryConfig,
   embedding: readonly number[] | null | undefined,
 ): EmbeddingProvenance | undefined {
   if (!embedding || embedding.length === 0) return undefined;
   if (isHashBasedEmbedding("", embedding as number[])) return HISTOGRAM_PROVENANCE;
-  return providerProvenance(config);
+  return UNKNOWN_PROVENANCE;
+}
+
+/**
+ * True when the stored vector must be re-embedded before it can serve the
+ * provider index: histogram fallback, unknown origin (#18), or another
+ * provider's vector (#17 — a model swap changes `embeddingProviderId`).
+ */
+export function needsReEmbedding(
+  config: UnifiedMemoryConfig,
+  entry: { content: string; embedding?: readonly number[] | null; embeddingProvenance?: EmbeddingProvenance },
+): "histogram" | "unknown" | "foreign" | null {
+  if (!entry.embedding || entry.embedding.length === 0) return null;
+  const provenance = entry.embeddingProvenance ?? inferProvenance(config, entry.embedding);
+  if (provenance === HISTOGRAM_PROVENANCE) return "histogram";
+  if (provenance === UNKNOWN_PROVENANCE) return "unknown";
+  if (provenance !== providerProvenance(config)) return "foreign";
+  return null;
 }
 
 /** Vector + provenance pair returned by `embedWithProvenance`. */
@@ -424,6 +445,10 @@ export interface ReEmbedResult {
   skipped: number;
   /** Entries the hash-vector detector flagged this pass (migrated + failed). */
   hashDetected: number;
+  /** Entries whose vector has no known embedder (Codex round 6 #18). */
+  unknownDetected: number;
+  /** Entries embedded by a different provider id than the configured one (Codex round 6 #17). */
+  foreignDetected: number;
 }
 
 /**
@@ -448,12 +473,12 @@ export async function reEmbedHashEntries(
 
   if (!ctx.config.embeddingProvider) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — no embedding provider configured");
-    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0 };
+    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0, unknownDetected: 0, foreignDetected: 0 };
   }
 
   if (!ctx.sqliteDb) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — SQLite not available");
-    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0 };
+    return { migrated: 0, total: 0, skipped: 0, hashDetected: 0, unknownDetected: 0, foreignDetected: 0 };
   }
 
   // Collect all entries that have embeddings
@@ -470,6 +495,8 @@ export async function reEmbedHashEntries(
   let migrated = 0;
   let skipped = 0;
   let hashDetected = 0;
+  let unknownDetected = 0;
+  let foreignDetected = 0;
   let hadPersistFailure = false;
 
   // Process in batches
@@ -481,14 +508,16 @@ export async function reEmbedHashEntries(
     }> = [];
 
     for (const entry of batch) {
-      const embeddingArr = entry.embedding as unknown as number[];
-      const isHistogram = entry.embeddingProvenance === HISTOGRAM_PROVENANCE
-        || (entry.embeddingProvenance === undefined && isHashBasedEmbedding(entry.content, embeddingArr));
-      if (!isHistogram) {
+      // Histogram, unknown (#18) and foreign-provider (#17) vectors all need
+      // the current provider's embedding before they can enter its index.
+      const reason = needsReEmbedding(ctx.config, entry);
+      if (reason === null) {
         skipped++;
         continue;
       }
-      hashDetected++;
+      if (reason === "histogram") hashDetected++;
+      else if (reason === "unknown") unknownDetected++;
+      else foreignDetected++;
 
       try {
         const newEmbedding = await ctx.config.embeddingProvider!(entry.content) as Vector<number>;
@@ -576,13 +605,15 @@ export async function reEmbedHashEntries(
   }
 
   if (!hadPersistFailure) {
-    await setMigrationMarker(MARKER_KEY, { migrated, total, skipped, hashDetected });
+    await setMigrationMarker(MARKER_KEY, { migrated, total, skipped, hashDetected, unknownDetected, foreignDetected });
   } else {
     getLoggerSafe().warn("[AgentDB] Re-embed finished with persistence failures; migration marker not set", {
       migrated,
       total,
       skipped,
       hashDetected,
+      unknownDetected,
+      foreignDetected,
     });
   }
 
@@ -591,7 +622,9 @@ export async function reEmbedHashEntries(
     total,
     skipped,
     hashDetected,
+    unknownDetected,
+    foreignDetected,
   });
 
-  return { migrated, total, skipped, hashDetected };
+  return { migrated, total, skipped, hashDetected, unknownDetected, foreignDetected };
 }

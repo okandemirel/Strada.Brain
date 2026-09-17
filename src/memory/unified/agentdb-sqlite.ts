@@ -306,6 +306,8 @@ export function upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEnt
     embeddingProvenance: entry.embeddingProvenance,
     userId: entry.userId,
     projectId: entry.projectId,
+    // Codex round 6 #16: explicit share marker travels with the row
+    shared: entry.shared === true ? true : undefined,
   });
   // already sanitized by caller (agentdb-memory.storeEntry) — metadata values were
   // scrubbed via sanitizeSecretsDeep before being assigned onto the entry.
@@ -430,6 +432,7 @@ export async function loadEntriesWithoutHnsw(ctx: AgentDBSqliteContext): Promise
           embeddingProvenance: parsed.embeddingProvenance as string | undefined,
           userId: parsed.userId as string | undefined,
           projectId: parsed.projectId as string | undefined,
+          shared: parsed.shared === true ? true : undefined,
         };
 
         const unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;
