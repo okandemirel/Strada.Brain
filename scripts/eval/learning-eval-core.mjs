@@ -373,10 +373,56 @@ export function measureRepeatErrorReduction(arms, thresholds) {
  * learning-on arm did not. The second is the stronger claim ("recall made it
  * worse"), the first is the one with a bound.
  */
+/**
+ * Measure 2 when the ABLATION half could not be measured and the QUALITY half
+ * regressed (round 13 #33).
+ *
+ * `rate` is null on purpose: the harmful-recall RATE was not measured, and saying
+ * otherwise would invent a number. The verdict is still REGRESSED, and the reason
+ * names both halves — what was measured and found worse, and what was not measured
+ * at all.
+ */
+function qualityHarmRegression(answerHarm, thresholds, ablationReason, extra = {}) {
+  return {
+    name: "harmful-recall",
+    state: STATE.REGRESSED,
+    reason:
+      `${answerHarm.worse} of ${answerHarm.compared} answer(s) scored WORSE with recalled guidance ` +
+      `(rate ${answerHarm.rate.toFixed(2)} over budget ${thresholds.maxQualityHarmRate}); ` +
+      `the ablation's own harmful-recall rate was NOT measured — ${ablationReason}`,
+    rate: null,
+    threshold: thresholds.maxHarmfulRecallRate,
+    ...extra,
+    answerHarm,
+  };
+}
+
 export function measureHarmfulRecall(arms, thresholds, quality) {
   const control = arms.find((a) => a.name === "warm-learning-off");
   const treatment = arms.find((a) => a.name === "warm-learning-on");
-  if (!treatment) return unmeasured("harmful-recall", "the learning-on arm did not run");
+
+  // ROUND 13 #33 — MEASURED HARM OUTRANKS AN EMPTY DENOMINATOR, so it is read
+  // FIRST. The quality arm compares two real answers to the same prompt, one with
+  // recalled guidance and one without; "every answer scored worse with guidance"
+  // is the strongest evidence this harness produces. It used to sit behind two
+  // early returns — the treatment arm missing, and the SIMULATED ablation having
+  // recalled nothing — so a harm rate of 1 over a budget of 0 was reported as NOT
+  // MEASURED, with the regression visible only in the details of a verdict that
+  // said nothing had been measured.
+  //
+  // `harm` is absent when nothing was compared at all, so nothing is invented.
+  const answerHarm = quality?.harm ?? null;
+  const measuredQualityHarm =
+    answerHarm !== null &&
+    answerHarm.compared > 0 &&
+    answerHarm.rate > thresholds.maxQualityHarmRate
+      ? answerHarm
+      : null;
+
+  if (!treatment) {
+    if (measuredQualityHarm) return qualityHarmRegression(measuredQualityHarm, thresholds, "the learning-on arm did not run");
+    return unmeasured("harmful-recall", "the learning-on arm did not run");
+  }
 
   const byId = new Map((control?.probes ?? []).map((p) => [p.id, p]));
   const outcomeRegressions = [];
@@ -389,19 +435,26 @@ export function measureHarmfulRecall(arms, thresholds, quality) {
   }
 
   const rate = treatment.totals.harmfulRecallRate;
-  // The harm a quality arm measured counts even when the arm as a whole is NOT
-  // MEASURED (some case died at the provider): a regression that was actually
-  // observed must not be dropped along with the incompleteness. `harm` is
-  // absent when nothing was compared at all, so nothing is invented here.
-  const answerHarm = quality?.harm ?? null;
 
   if (rate === null) {
-    return unmeasured(
-      "harmful-recall",
+    const why =
       "the learning-on arm recalled nothing on any held-out probe, so no recall could be harmful " +
-        "(this is NOT evidence that recall is safe — measure 1 will show the same emptiness)",
-      { recalls: 0, outcomeRegressions, costRegressions, ...(answerHarm ? { answerHarm } : {}) },
-    );
+      "(this is NOT evidence that recall is safe — measure 1 will show the same emptiness)";
+    // #33: the ablation half is not measured, but the quality half IS, and it
+    // regressed. REGRESSED beats NOT MEASURED — something ran and was worse.
+    if (measuredQualityHarm) {
+      return qualityHarmRegression(measuredQualityHarm, thresholds, why, {
+        recalls: 0,
+        outcomeRegressions,
+        costRegressions,
+      });
+    }
+    return unmeasured("harmful-recall", why, {
+      recalls: 0,
+      outcomeRegressions,
+      costRegressions,
+      ...(answerHarm ? { answerHarm } : {}),
+    });
   }
 
   const withinRate = rate <= thresholds.maxHarmfulRecallRate;
@@ -788,9 +841,15 @@ export function renderReport(result) {
       L.push(`      reduction: ${pct(m.reduction)} (needs >= ${pct(m.threshold)})`);
     }
     if (m.name === "harmful-recall" && m.state !== STATE.UNMEASURED) {
-      L.push(`      recalled guidance that did not apply: ${m.harmfulRecalls}/${m.recalls} = ${num(m.rate)} (budget ${m.threshold})`);
-      L.push(`      probes the control accepted and learning-on did not: ${m.outcomeRegressions.length ? m.outcomeRegressions.join(", ") : "none"}`);
-      L.push(`      probes that only cost more: ${m.costRegressions.length ? m.costRegressions.join(", ") : "none"}`);
+      // #33: the rate is null when only the QUALITY half was measured. Printing a
+      // ratio out of an unmeasured denominator would read as a measurement.
+      L.push(
+        m.rate === null || m.rate === undefined
+          ? `      recalled guidance that did not apply: NOT MEASURED (budget ${m.threshold})`
+          : `      recalled guidance that did not apply: ${m.harmfulRecalls}/${m.recalls} = ${num(m.rate)} (budget ${m.threshold})`,
+      );
+      L.push(`      probes the control accepted and learning-on did not: ${(m.outcomeRegressions ?? []).length ? m.outcomeRegressions.join(", ") : "none"}`);
+      L.push(`      probes that only cost more: ${(m.costRegressions ?? []).length ? m.costRegressions.join(", ") : "none"}`);
       if (m.answerHarm) L.push(`      answers scored worse WITH guidance: ${m.answerHarm.worse}/${m.answerHarm.compared}`);
     }
     if (m.name === "cost-per-accepted" && m.state !== STATE.UNMEASURED) {

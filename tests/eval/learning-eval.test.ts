@@ -127,6 +127,66 @@ describe("learning-eval reports an empty denominator as unmeasured", () => {
     expect(m.reason).toContain("NOT evidence that recall is safe");
   });
 
+  /**
+   * ROUND 13 #33 — AN EMPTY DENOMINATOR HID A MEASUREMENT THAT HAD TEETH.
+   *
+   * The zero-recall and missing-arm returns came BEFORE the quality arm's harm was
+   * looked at, so a run where every answer scored WORSE with recalled guidance —
+   * harm rate 1, over a budget of 0 — was reported as NOT MEASURED because the
+   * simulated ablation happened to recall nothing. The strongest evidence in the
+   * whole harness, discarded for the weakest reason.
+   */
+  const harmfulQuality = {
+    name: "answer-quality",
+    state: STATE.UNMEASURED,
+    compared: 2,
+    harm: {
+      compared: 2,
+      worse: 2,
+      rate: 1,
+      cases: [
+        { id: "q1", base: 0.9, guided: 0.2 },
+        { id: "q2", base: 0.8, guided: 0.1 },
+      ],
+    },
+    cost: { unit: "provider tokens", tokens: 100, accepted: 0, tokensPerAccepted: null },
+    cases: [],
+  };
+
+  it("reports measured quality harm even when the ablation recalled nothing", () => {
+    const probe = { id: "a", decision: DECISION.NO_RECALL, repeatable: true, repeatedError: true, accepted: true, cost: 3, recalled: [] };
+    const arms = [arm("warm-learning-off", { probes: [probe] }), arm("warm-learning-on", { probes: [probe] })];
+
+    const m = measureHarmfulRecall(arms, DEFAULT_THRESHOLDS, harmfulQuality);
+    // The repro: NOT MEASURED, with the 2-of-2 regression sitting in its details.
+    expect(m.state).toBe(STATE.REGRESSED);
+    expect(m.reason).toContain("WORSE");
+    expect(m.answerHarm.rate).toBe(1);
+    // And it still says the ablation half was not measured, rather than implying
+    // a harmful-recall rate it never had.
+    expect(m.rate).toBeNull();
+    expect(m.reason).toMatch(/recalled nothing|not measured/i);
+  });
+
+  it("reports measured quality harm even when the treatment arm did not run", () => {
+    const m = measureHarmfulRecall([], DEFAULT_THRESHOLDS, harmfulQuality);
+    expect(m.state).toBe(STATE.REGRESSED);
+    expect(m.answerHarm.worse).toBe(2);
+    // The report must not print a ratio out of a denominator nobody measured.
+    const text = renderReport({ arms: [], measures: [m], verdict: STATE.REGRESSED, reasons: [] });
+    expect(text).toContain("recalled guidance that did not apply: NOT MEASURED");
+  });
+
+  it("still reports NOT MEASURED when the quality arm found no harm", () => {
+    const probe = { id: "a", decision: DECISION.NO_RECALL, repeatable: true, repeatedError: true, accepted: true, cost: 3, recalled: [] };
+    const arms = [arm("warm-learning-off", { probes: [probe] }), arm("warm-learning-on", { probes: [probe] })];
+    const clean = { ...harmfulQuality, harm: { compared: 2, worse: 0, rate: 0, cases: [] } };
+    const m = measureHarmfulRecall(arms, DEFAULT_THRESHOLDS, clean);
+    // A measured ZERO is not a measured regression, and an empty ablation is still
+    // not evidence that recall is safe.
+    expect(m.state).toBe(STATE.UNMEASURED);
+  });
+
   it("repeat-error reduction is NOT MEASURED when the control repeated nothing", () => {
     const probe = { id: "a", decision: DECISION.CORRECT, repeatable: true, repeatedError: false, accepted: true, cost: 1, recalled: [] };
     const arms = [arm("warm-learning-off", { probes: [probe] }), arm("warm-learning-on", { probes: [probe] })];
