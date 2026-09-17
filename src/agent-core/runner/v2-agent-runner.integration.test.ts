@@ -19,6 +19,11 @@
 
 import { AgentPhase } from "../../agents/agent-state.js";
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LearningStorage } from "../../learning/storage/learning-storage.js";
+import { LearningPipeline } from "../../learning/pipeline/learning-pipeline.js";
 import { FakeClock } from "../control/clock.js";
 import { createControlPlane } from "../control/control-plane.js";
 import {
@@ -181,6 +186,9 @@ function buildHarness(
   eventEmitter?: { emit: (event: string, payload: unknown) => void },
   // A user-profile store for the prologue's personalization load (loadRunPersonalization).
   userProfileStore?: unknown,
+  // Round 12 #9 — a real LearningPipeline, so the prologue's exposure report and the
+  // credit ledger can be asserted end to end (production wires one here too).
+  learningPipeline?: unknown,
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -207,6 +215,7 @@ function buildHarness(
     ...(eventEmitter ? { eventEmitter } : {}),
     ...(taskConfig ? { taskConfig } : {}),
     ...(userProfileStore ? { userProfileStore } : {}),
+    ...(learningPipeline ? { learningPipeline } : {}),
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
@@ -1247,6 +1256,119 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     expect(toolResults.every((e) => e.appliedInstinctIds.includes("inst-1"))).toBe(true);
     // (c) … and the per-session store was CLEARED on teardown (no cross-run mis-attribution / leak).
     expect([...store.keys()]).toEqual([]);
+  });
+
+  it("r12 #9: the exposure is dated from the prologue's prompt, not from the tool event or its processing", async () => {
+    // GAP1 above proves the run's tool results are ATTRIBUTED to the retrieved
+    // instincts. This proves WHEN the ledger says the run was shown them. Round
+    // 11 #8 gave the credit ledger an exposure column so "N run(s) applied it
+    // AFTER it was retired" means a leak rather than a queue hop; round 12 #9
+    // found that column being filled from the queue instead of from the prompt.
+    // The prologue is where guidance actually enters the prompt, so it is the
+    // only honest source of that timestamp — and it must reach the pipeline.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" }));
+
+    const dir = mkdtempSync(join(tmpdir(), "v2-guidance-exposure-"));
+    const storage = new LearningStorage(join(dir, "learning.db"));
+    storage.initialize();
+    storage.createInstinct({
+      id: "instinct_prologue_shown",
+      name: "prologue rule",
+      type: "error_fix",
+      status: "active",
+      confidence: 0.8,
+      triggerPattern: "CS0246",
+      action: "Add the using directive",
+      contextConditions: [],
+      stats: { timesSuggested: 2, timesApplied: 2, timesFailed: 0, successRate: 1, averageExecutionMs: 5 },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      sourceTrajectoryIds: [],
+      tags: [],
+    } as never);
+    const pipeline = new LearningPipeline(storage, {
+      enabled: true,
+      detectionIntervalMs: 1000,
+      evolutionIntervalMs: 5000,
+      minConfidenceForCreation: 0.5,
+      batchSize: 5,
+    });
+    // Production's settlement barrier (bootstrap): the run's terminal settlement
+    // rides the serial queue BEHIND the run's own tool events (round 10 #14), so
+    // it is captured here and run after them.
+    const deferredSettlements: Array<() => Promise<void> | void> = [];
+    pipeline.setSettlementBarrier((task) => {
+      deferredSettlements.push(task);
+      return true;
+    });
+
+    let shownAt = 0;
+    const getInsightsForTask = vi.fn().mockImplementation(async () => {
+      // The moment the prologue has the guidance in hand and puts it in the
+      // prompt (the append happens on the very next lines of setupAgentCoreRun).
+      shownAt = Date.now();
+      return { insights: ["learned-insight-xyz"], matchedInstinctIds: ["instinct_prologue_shown"] };
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const eventEmitter = {
+      emit: (evt: string, payload: unknown) => {
+        if (evt === "tool:result") events.push(payload as Record<string, unknown>);
+      },
+    };
+    const h = buildHarness(
+      provider,
+      undefined,
+      undefined,
+      { instinctRetriever: { getInsightsForTask } },
+      undefined,
+      eventEmitter,
+      undefined,
+      pipeline,
+    );
+
+    try {
+      await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+      const toolEvents = events.filter((e) => e["toolName"] === "edit_file");
+      expect(toolEvents.length).toBeGreaterThan(0);
+      expect(shownAt, "the prologue never retrieved anything").toBeGreaterThan(0);
+
+      // The queue hop, made visible: the event is handled measurably later than
+      // the prompt that produced it, and its own timestamp is pushed far out — so
+      // a row dated from EITHER of those two clocks is unmistakable.
+      await new Promise((r) => setTimeout(r, 40));
+      const processedAt = Date.now();
+      for (const e of toolEvents) {
+        await pipeline.handleToolResult({ ...e, timestamp: processedAt + 60_000 } as never);
+      }
+      for (const settle of deferredSettlements) await settle();
+
+      const rows = storage.getInstinctCredits({ instinctId: "instinct_prologue_shown" });
+      expect(rows, "the run left no credit row at all").toHaveLength(1);
+      const exposedAt = rows[0]!.exposedAt;
+      expect(exposedAt, "no exposure was recorded").toBeDefined();
+      // TEETH: before the wiring the prologue told nobody, so the ledger fell back
+      // to the event's own timestamp — 60s out here, and in production whatever
+      // the queue happened to be doing.
+      expect(exposedAt!).toBeGreaterThanOrEqual(shownAt);
+      expect(exposedAt!, "the exposure was dated from the event, not the prompt").toBeLessThan(processedAt);
+      // The two facts stay distinct: the settlement is later than the exposure.
+      expect(rows[0]!.timestamp).toBeGreaterThanOrEqual(processedAt);
+    } finally {
+      pipeline.stop();
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("two concurrent runs on ONE chatId each keep their OWN retrieved instincts", async () => {

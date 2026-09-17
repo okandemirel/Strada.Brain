@@ -1319,6 +1319,17 @@ export class Orchestrator {
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
       clearRunInstinctCredits: (chatId, terminal, taskRunId) =>
         this.learningPipeline?.clearRunInstinctCredits(chatId, terminal, taskRunId),
+      // Round 12 #9: the engine knows WHEN guidance entered the prompt (the run
+      // prologue and the mid-run re-retrieval); the credit ledger's exposure
+      // column has to be that moment and not the moment the serial queue reached
+      // the tool event, or "applied AFTER it was retired" reports a queue hop as
+      // a leak.
+      noteGuidanceShown: (chatId, instinctIds, taskRunId) =>
+        this.learningPipeline?.noteGuidanceShown({
+          sessionId: chatId,
+          instinctIds,
+          ...(taskRunId ? { taskRunId } : {}),
+        }),
       settleGoalTree: (conversationScope, status) => this.settleGoalTree(conversationScope, status),
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).

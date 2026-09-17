@@ -367,6 +367,12 @@ export async function portExecuteToolTurn(
               const merged = [...new Set([...current, ...ids])].slice(0, 200);
               deps.currentSessionInstinctIds.set(key, merged);
               deps.propagateInstinctIdsToChannel(chatId, merged);
+              // ROUND 12 #9: these ids entered the prompt NOW (the refreshed
+              // sections are written back into runCtx.systemPrompt below), and
+              // from here on every tool:result claims them. Report the NEW ones:
+              // anything the prologue already showed keeps its earlier exposure
+              // (noteGuidanceShown is earliest-wins).
+              deps.noteGuidanceShown?.(chatId, ids, deps.getTaskExecutionContext()?.taskRunId);
             },
           }
         : {}),

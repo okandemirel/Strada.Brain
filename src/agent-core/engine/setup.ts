@@ -104,6 +104,22 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
   getTaskExecutionContext(): { readonly identityKey?: string; readonly taskRunId?: string } | undefined;
   propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void;
   /**
+   * ROUND 12 #9 — "THIS GUIDANCE IS NOW IN THE PROMPT", reported at the moment it
+   * goes in.
+   *
+   * The credit ledger records WHEN a run was shown a rule, and its leak measure
+   * ("N run(s) applied it AFTER it was retired") only means anything while that
+   * timestamp is the prompt's and not a queue's. The engine is the only place
+   * that knows the moment: the prologue's retrieval below, and the mid-run
+   * re-retrieval in the tool turn. The shell forwards it to
+   * LearningPipeline.noteGuidanceShown.
+   *
+   * Optional: a deps object that does not supply it keeps the previous behaviour
+   * (the ledger then dates the exposure from the tool event's own in-run
+   * timestamp — later than the truth, but never the processing clock).
+   */
+  noteGuidanceShown?(chatId: string, instinctIds: readonly string[], taskRunId?: string): void;
+  /**
    * audited 2026-09-02: run teardown for the learning pipeline's per-run credit
    * ledger — cleared at the same point currentSessionInstinctIds is, so the next
    * run on this chatId can credit the same instincts again.
@@ -390,6 +406,13 @@ export async function setupAgentCoreRun(
       matchedInstinctIds,
     );
     deps.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
+    // ROUND 12 #9: the guidance is IN THE PROMPT as of the append above, and this
+    // is the moment the credit ledger's exposure column must carry. Reported for
+    // exactly what was rendered (the retriever returns ids only for insights it
+    // formatted), which is the same rule the error-recovery hooks apply.
+    if (matchedInstinctIds.length > 0) {
+      deps.noteGuidanceShown?.(chatId, matchedInstinctIds, deps.getTaskExecutionContext()?.taskRunId);
+    }
 
     const lastUserMessage = deps.sessionManager.extractLastUserMessage(session) || queryText;
     const bundle = createAutonomyBundle({
