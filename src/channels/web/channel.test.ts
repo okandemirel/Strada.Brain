@@ -288,6 +288,233 @@ describe("WebChannel post-setup bootstrap", () => {
   });
 });
 
+// ── Audit 13F6 / plan 4.8: the portal's own origin is a host:port, and the
+// proxy token alone is not an identity ──
+//
+// isAllowedOrigin compared only the HOSTNAME, so every page served by any other
+// process on the loopback interface (`http://localhost:<other port>`) counted as
+// the portal's own origin: it could POST to the /api/* proxy and open a chat
+// WebSocket. The browser's same-origin rule is scheme+host+PORT; the port is what
+// names the one server allowed to talk to itself.
+describe("WebChannel origin boundary (13F6 / 4.8)", () => {
+  function proxy(channel: WebChannel, req: unknown, res: unknown, url: string): Promise<void> {
+    return (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, url);
+  }
+
+  function acceptsWsOrigin(channel: WebChannel, headers: Record<string, string>): boolean {
+    return (channel as unknown as {
+      acceptsWsOrigin: (req: { headers: Record<string, string | string[] | undefined> }) => boolean;
+    }).acceptsWsOrigin({ headers });
+  }
+
+  it("refuses a mutable proxy request from another loopback PORT", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: { origin: "http://127.0.0.1:9999" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("refuses a mutable proxy request whose only credential is a foreign-port Referer", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: { referer: "http://localhost:4321/index.html" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("refuses a read-only proxy GET from another loopback PORT", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const req = createMockRequest({
+      method: "GET",
+      url: "/api/metrics",
+      headers: { origin: "http://localhost:5173" },
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proxy(channel, req, res, "/api/metrics");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("never forwards a foreign-port Origin/Referer to the dashboard", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const req = createMockRequest({
+      method: "GET",
+      url: "/api/metrics",
+      headers: { "x-forwarded-for": "127.0.0.1" },
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proxy(channel, req, res, "/api/metrics");
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty("Origin");
+    expect(headers).not.toHaveProperty("Referer");
+  });
+
+  it("refuses a chat WebSocket whose Origin is another loopback port", () => {
+    const channel = new WebChannel(3000, 3100);
+    expect(acceptsWsOrigin(channel, { origin: "http://localhost:9999" })).toBe(false);
+    expect(acceptsWsOrigin(channel, { origin: "http://127.0.0.1:1234" })).toBe(false);
+  });
+
+  // The proxy's Authorization fallback used to trust ANY caller that held the
+  // dashboard token. The token is now only half of the credential: the caller
+  // must also present a profile identity THIS server issued.
+  it("refuses a header-only mutable proxy request that has the token but no identity", async () => {
+    const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: { authorization: "Bearer proxy-secret" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  // ── Guard: the legitimate traffic a stricter rule must still carry ──
+
+  it("still accepts the portal's own origin on its own port", async () => {
+    const channel = new WebChannel(3000, 3100);
+    for (const origin of ["http://localhost:3000", "http://127.0.0.1:3000"]) {
+      const req = createMockRequest({
+        method: "POST",
+        url: "/api/user/autonomous",
+        headers: { origin },
+        body: JSON.stringify({ enabled: true }),
+      });
+      const res = createMockResponse();
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const pending = proxy(channel, req, res, "/api/user/autonomous");
+      req.emitBody();
+      await pending;
+      expect(fetchMock, origin).toHaveBeenCalledTimes(1);
+      expect((fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>).Origin).toBe(origin);
+      expect(res.statusCode).toBe(200);
+    }
+  });
+
+  it("still accepts a header-less non-browser GET and a same-port chat WebSocket", async () => {
+    const channel = new WebChannel(3000, 3100);
+    expect(acceptsWsOrigin(channel, {})).toBe(true);
+    expect(acceptsWsOrigin(channel, { origin: "http://localhost:3000" })).toBe(true);
+
+    const req = createMockRequest({ method: "GET", url: "/api/metrics", headers: {} });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await proxy(channel, req, res, "/api/metrics");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("accepts the token path when it carries an identity this server issued", async () => {
+    const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });
+    const identity = (channel as unknown as {
+      identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+    }).identityStore.issue();
+
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: {
+        authorization: "Bearer proxy-secret",
+        "x-strada-profile-id": identity.profileId,
+        "x-strada-profile-token": identity.profileToken,
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("refuses a forged identity on the token path", async () => {
+    const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });
+    const identity = (channel as unknown as {
+      identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+    }).identityStore.issue();
+
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: {
+        authorization: "Bearer proxy-secret",
+        "x-strada-profile-id": identity.profileId,
+        "x-strada-profile-token": "not-the-token",
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = proxy(channel, req, res, "/api/user/autonomous");
+    req.emitBody();
+    await pending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describe("WebChannel dashboard proxy", () => {
   it("injects the configured dashboard bearer token for proxied requests", async () => {
     const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });
@@ -1794,5 +2021,49 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     // Guard: the undeliverable notice carries no link syntax; it stays a plain
     // text frame rather than being promoted to markdown along with the links.
     expect(sent[1]!.type).toBe("text");
+  });
+
+  // ---------------------------------------------------------------------------
+  // ROUND 9 #24 — what the link exposes cannot be changed under the recipient
+  //
+  // The token used to keep the PATH: after the message was sent, deleting the
+  // file made the link 404, replacing it served the replacement, and pointing
+  // it at a private file through a symlink served that, because the handler
+  // followed whatever was there when the link was clicked.
+  // ---------------------------------------------------------------------------
+  it("serves the attachment it registered after the path is deleted, replaced, or symlinked (round 9 #24)", async () => {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const { mkdtempSync, rmSync, symlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "web-attach-mutable-"));
+    const file = join(dir, "report.md");
+    const secret = join(dir, "id_rsa");
+    writeFileSync(file, "the report the user was sent");
+    writeFileSync(secret, "PRIVATE-KEY-MATERIAL");
+
+    await channel.sendAttachment("chat-1", { type: "document", name: "report.md", url: file });
+    const token = /\/attachments\/([A-Za-z0-9_-]+)\)/.exec(String(sent[0]!.text))![1]!;
+
+    // 1. Deleted: the link still serves what was attached.
+    rmSync(file);
+    let out = await handle(channel, `/attachments/${token}`);
+    expect(out.status).toBe(200);
+    expect(Buffer.concat(out.body).toString()).toBe("the report the user was sent");
+
+    // 2. Replaced by an unrelated file of the same name.
+    writeFileSync(file, "a completely different document");
+    out = await handle(channel, `/attachments/${token}`);
+    expect(Buffer.concat(out.body).toString()).toBe("the report the user was sent");
+
+    // 3. Swapped for a symlink to something private.
+    rmSync(file);
+    symlinkSync(secret, file);
+    out = await handle(channel, `/attachments/${token}`);
+    expect(Buffer.concat(out.body).toString()).toBe("the report the user was sent");
+    expect(Buffer.concat(out.body).toString()).not.toContain("PRIVATE-KEY-MATERIAL");
+    rmSync(dir, { recursive: true, force: true });
   });
 });

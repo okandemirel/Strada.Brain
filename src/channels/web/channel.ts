@@ -38,6 +38,7 @@ import type {
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { hasSecrets } from "../../security/secret-sanitizer.js";
+import { resolveBindHost } from "../../core/bind-host.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -101,6 +102,8 @@ interface SettledConfirmation {
 
 interface WebChannelOptions {
   dashboardAuthToken?: string;
+  /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
+  bindHost?: string;
   identityDbPath?: string;
   /**
    * Where attachment records live. In memory by default (tests, ephemeral
@@ -319,6 +322,9 @@ export class WebChannel
     "supervisor:aborted",
   ]);
 
+  /** Address this channel binds to (14F2/D71). */
+  private readonly bindHost: string;
+
   constructor(
     private readonly port: number = 3000,
     private readonly dashboardPort: number = 3100,
@@ -331,6 +337,7 @@ export class WebChannel
       WebChannel.MAX_SERVED_ATTACHMENTS,
     );
     this.lastMonitorSnapshotByRoot = new LRUCache(WebChannel.MAX_MONITOR_ROOTS);
+    this.bindHost = options.bindHost ?? resolveBindHost();
   }
 
   onMessage(handler: MessageHandler): void {
@@ -400,13 +407,14 @@ export class WebChannel
 
     // maxPayload: 25 MiB accommodates the 20 MB media validation limit with
     // room for base64 overhead (~33% inflation).
-    // verifyClient: reject WebSocket connections whose Origin header does not
-    // match localhost, blocking cross-origin WebSocket hijacking from a
-    // malicious page open in the same browser.
+    // verifyClient: reject WebSocket connections whose Origin header is not
+    // THIS portal's own origin, blocking cross-origin WebSocket hijacking from a
+    // malicious page open in the same browser — including one served by another
+    // process on another loopback port (audit 13F6 / plan 4.8).
     this.wss = new WebSocketServer({
       server: this.server,
       maxPayload: 25 * 1024 * 1024,
-      verifyClient: ({ req }: { req: HttpReq }) => isAllowedOrigin(req.headers.origin),
+      verifyClient: ({ req }: { req: HttpReq }) => this.acceptsWsOrigin(req),
     });
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
 
@@ -417,7 +425,7 @@ export class WebChannel
       };
       try {
         this.server!.once("error", onError);
-        this.server!.listen(this.port, "127.0.0.1", () => {
+        this.server!.listen(this.port, this.bindHost, () => {
           this.server?.off("error", onError);
           res();
         });
@@ -455,7 +463,7 @@ export class WebChannel
     // does the normal map/session cleanup.
     this._wsHeartbeatInterval = setInterval(() => this.wsHeartbeatTick(), WebChannel.WS_HEARTBEAT_MS);
 
-    console.log(`Web channel running at http://127.0.0.1:${this.port}`);
+    console.log(`Web channel running at http://${this.bindHost}:${this.port}`);
   }
 
   private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;
@@ -911,8 +919,19 @@ export class WebChannel
       res.end(entry.data);
       return;
     }
-    if (entry.path && (await this.isServableFile(entry.path))) {
-      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType, "Content-Disposition": disposition, ...WebChannel.NO_CACHE_HEADERS });
+    // A by-reference record (a file too large to snapshot) is served only while
+    // the bytes on disk are still the ones the token was issued for: same real
+    // path, same size, same SHA-256 (round 9 #24). `isServableFile` used to
+    // accept whatever was at the path — a replacement, or a symlink to
+    // something private, which the read stream then followed.
+    if (entry.path && this.attachmentStore.verifyStoredFile(entry)) {
+      res.writeHead(200, {
+        ...WebChannel.SECURITY_HEADERS,
+        "Content-Type": contentType,
+        ...(entry.sizeBytes === undefined ? {} : { "Content-Length": String(entry.sizeBytes) }),
+        "Content-Disposition": disposition,
+        ...WebChannel.NO_CACHE_HEADERS,
+      });
       await pipeline(createReadStream(entry.path), res);
       return;
     }
@@ -2365,26 +2384,65 @@ export class WebChannel
     return Array.isArray(header) ? header[0] : header;
   }
 
+  /**
+   * True when `value` is an Origin/Referer this portal serves itself: a loopback
+   * host on THIS channel's own port. Audit 13F6 / plan 4.8: the check used to
+   * compare the hostname only, so `http://localhost:<any other port>` — a page
+   * from any other process on the machine — was treated as the portal's own.
+   */
+  private isSelfOrigin(value: string): boolean {
+    return isAllowedOrigin(value, { selfPort: this.port });
+  }
+
+  /**
+   * The chat WebSocket handshake gate. An absent Origin is a non-browser client
+   * (allowed, as before); a present one must be this portal's own origin, port
+   * included.
+   */
+  private acceptsWsOrigin(req: HttpReq): boolean {
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin === undefined) return true;
+    return this.isSelfOrigin(origin);
+  }
+
+  /**
+   * True when the caller presents a web profile identity THIS channel issued
+   * (the pair handed out in the `connected` frame). Audit 13F6 / plan 4.8, the
+   * second half: the proxy's Authorization fallback used to accept the dashboard
+   * token from ANY holder, so a token read out of the environment, a log or a
+   * config file was a complete credential. It is now only half of one — the
+   * caller must also name a session the server knows.
+   */
+  private hasVerifiedProfileIdentity(req: HttpReq): boolean {
+    const profileId = this.getSingleHeader(req.headers["x-strada-profile-id"]);
+    const profileToken = this.getSingleHeader(req.headers["x-strada-profile-token"]);
+    if (!profileId || !profileToken) return false;
+    return this.identityStore.verify(profileId, profileToken);
+  }
+
   private isTrustedMutableProxyRequest(req: HttpReq): boolean {
     const origin = this.getSingleHeader(req.headers.origin);
     if (origin !== undefined) {
-      return isAllowedOrigin(origin);
+      return this.isSelfOrigin(origin);
     }
 
     const referer = this.getSingleHeader(req.headers.referer);
     if (referer !== undefined) {
-      return isAllowedOrigin(referer);
+      return this.isSelfOrigin(referer);
     }
 
-    // Only trust Authorization header if a dashboard token is configured
-    // and the header value matches it — prevents CSRF bypass via arbitrary auth headers.
+    // Header-less (non-browser) caller: the configured dashboard token AND an
+    // identity this server issued. The token alone is not an identity.
     if (this.options.dashboardAuthToken) {
       const authHeader = this.getSingleHeader(req.headers.authorization);
       if (authHeader) {
         const token = authHeader.startsWith("Bearer ")
           ? authHeader.slice(7)
           : authHeader;
-        return this.safeTokenEquals(token, this.options.dashboardAuthToken);
+        return (
+          this.safeTokenEquals(token, this.options.dashboardAuthToken) &&
+          this.hasVerifiedProfileIdentity(req)
+        );
       }
     }
 
@@ -2400,12 +2458,12 @@ export class WebChannel
   private isAllowedGetProxyRequest(req: HttpReq): boolean {
     const origin = this.getSingleHeader(req.headers.origin);
     if (origin !== undefined) {
-      return isAllowedOrigin(origin);
+      return this.isSelfOrigin(origin);
     }
 
     const referer = this.getSingleHeader(req.headers.referer);
     if (referer !== undefined) {
-      return isAllowedOrigin(referer);
+      return this.isSelfOrigin(referer);
     }
 
     // No Origin/Referer header — not a browser cross-origin request; allow.
@@ -2490,10 +2548,13 @@ export class WebChannel
       } else if (this.options.dashboardAuthToken) {
         proxyHeaders["Authorization"] = `Bearer ${this.options.dashboardAuthToken}`;
       }
-      if (originHeader && isAllowedOrigin(originHeader)) {
+      // Only this portal's own origin is forwarded, so the dashboard's own
+      // same-origin gate never sees a foreign loopback port laundered through
+      // the proxy (13F6 / 4.8).
+      if (originHeader && this.isSelfOrigin(originHeader)) {
         proxyHeaders["Origin"] = originHeader;
       }
-      if (refererHeader && isAllowedOrigin(refererHeader)) {
+      if (refererHeader && this.isSelfOrigin(refererHeader)) {
         proxyHeaders["Referer"] = refererHeader;
       }
 
