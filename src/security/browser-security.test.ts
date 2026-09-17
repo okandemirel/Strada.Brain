@@ -1,7 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// undici is mocked so the shared address-pinned transport (Codex round 6
+// #11 / #12 / #14) can be exercised without sockets.
+const { mockFetch, agentInstances, closeGate } = vi.hoisted(() => ({
+  mockFetch: vi.fn(),
+  agentInstances: [] as Array<{ options: unknown; closed: boolean; destroyed: boolean }>,
+  closeGate: { wait: undefined as Promise<void> | undefined },
+}));
+vi.mock("undici", () => {
+  class Agent {
+    readonly options: unknown;
+    closed = false;
+    destroyed = false;
+    constructor(options: unknown) {
+      this.options = options;
+      agentInstances.push(this);
+    }
+    async close(): Promise<void> {
+      if (closeGate.wait) await closeGate.wait;
+      this.closed = true;
+    }
+    async destroy(): Promise<void> {
+      this.destroyed = true;
+    }
+  }
+  return { Agent, fetch: mockFetch };
+});
+
 import {
   validateUrlWithConfig,
   assertPublicTarget,
+  discardBody,
+  fetchWithPolicy,
+  AGENT_CLOSE_GRACE_MS,
+  POLICY_MAX_REDIRECTS,
   classifyForbiddenAddress,
   isForbiddenAddress,
   isRedirectStatus,
@@ -277,6 +309,108 @@ describe("BrowserSecurity", () => {
       expect((err as ForbiddenTargetError).code).toBe("FORBIDDEN_TARGET");
       expect((err as ForbiddenTargetError).url).toBe("http://public.example/x");
       expect((err as ForbiddenTargetError).address).toBe("192.168.0.7");
+    });
+  });
+
+  // ── Codex round 6 (2026-09-17) #11 / #12 / #14 on 09edbba6: the ONE
+  // address-pinned, hop-by-hop transport, shared by web_fetch_url, the
+  // browser's document requests and its fallback download. ──
+  describe("fetchWithPolicy (Codex round 6 #11 / #12 / #14)", () => {
+    const table = new Map<string, ResolvedAddress[]>();
+    const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => {
+      const hit = table.get(hostname);
+      if (!hit) throw new Error(`ENOTFOUND ${hostname}`);
+      return hit;
+    });
+
+    function redirect(status: number, location: string) {
+      return {
+        status,
+        ok: false,
+        headers: new Headers({ location }),
+        body: { cancel: vi.fn(async () => undefined) },
+      };
+    }
+
+    beforeEach(() => {
+      table.clear();
+      resolver.mockClear();
+      mockFetch.mockReset();
+      agentInstances.length = 0;
+      closeGate.wait = undefined;
+      table.set("public.example", [{ address: "93.184.216.34", family: 4 }]);
+      table.set("cdn.example", [{ address: "151.101.1.1", family: 4 }]);
+      table.set("internal.corp", [{ address: "10.0.0.5", family: 4 }]);
+    });
+
+    it("vets and pins every hop, cancels redirect bodies, reports the final URL", async () => {
+      const hop0 = redirect(302, "https://cdn.example/final");
+      mockFetch.mockResolvedValueOnce(hop0);
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+
+      const fetched = await fetchWithPolicy("https://public.example/start", { resolver, headers: { "User-Agent": "t" } });
+      expect(fetched.finalUrl).toBe("https://cdn.example/final");
+      expect(fetched.response.status).toBe(200);
+      expect(hop0.body.cancel).toHaveBeenCalledTimes(1);
+      expect(resolver.mock.calls.map((c) => c[0])).toEqual(["public.example", "cdn.example"]);
+      expect(agentInstances).toHaveLength(2);
+      expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ dispatcher: agentInstances[0], redirect: "manual", headers: { "User-Agent": "t" } }));
+      expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ dispatcher: agentInstances[1] }));
+      await fetched.dispose();
+      expect(agentInstances.every((a) => a.closed)).toBe(true);
+    });
+
+    it("refuses a hop into the network before fetching it and disposes the agents", async () => {
+      mockFetch.mockResolvedValueOnce(redirect(301, "http://internal.corp/x"));
+      await expect(fetchWithPolicy("https://public.example/start", { resolver })).rejects.toBeInstanceOf(ForbiddenTargetError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(agentInstances).toHaveLength(1);
+      expect(agentInstances[0]!.closed).toBe(true);
+    });
+
+    it("lets the caller refuse a hop through onHop (block patterns) and bounds the chain", async () => {
+      mockFetch.mockResolvedValue(redirect(302, "https://public.example/loop"));
+      await expect(
+        fetchWithPolicy("https://public.example/start", { resolver, onHop: (url) => { if (url.endsWith("/loop")) throw new Error("hop refused"); } }),
+      ).rejects.toThrow("hop refused");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      mockFetch.mockClear();
+      await expect(fetchWithPolicy("https://public.example/start", { resolver })).rejects.toThrow("Too many redirects");
+      expect(mockFetch).toHaveBeenCalledTimes(POLICY_MAX_REDIRECTS + 1);
+    });
+
+    it("303 (and 301/302 on POST) turn into a body-less GET on the next hop", async () => {
+      mockFetch.mockResolvedValueOnce(redirect(303, "https://public.example/result"));
+      mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+      await fetchWithPolicy("https://public.example/form", { resolver, method: "POST", body: Buffer.from("a=1") });
+      expect(mockFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+      expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "GET", body: undefined }));
+    });
+
+    it("#14 dispose falls back to destroy() when close() would wait on an unread body", async () => {
+      vi.useFakeTimers();
+      try {
+        closeGate.wait = new Promise<void>(() => undefined); // close never returns
+        mockFetch.mockResolvedValueOnce({ status: 200, ok: true, headers: new Headers(), body: null });
+        const fetched = await fetchWithPolicy("https://public.example/", { resolver });
+        const disposing = fetched.dispose();
+        await vi.advanceTimersByTimeAsync(AGENT_CLOSE_GRACE_MS + 1);
+        await disposing;
+        expect(agentInstances[0]!.closed).toBe(false);
+        expect(agentInstances[0]!.destroyed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("discardBody tolerates a missing, already-consumed or throwing body", async () => {
+      await expect(discardBody(undefined)).resolves.toBeUndefined();
+      await expect(discardBody({ body: null })).resolves.toBeUndefined();
+      await expect(discardBody({ body: { cancel: async () => { throw new Error("locked"); } } })).resolves.toBeUndefined();
+      const cancel = vi.fn(async () => undefined);
+      await discardBody({ body: { cancel } });
+      expect(cancel).toHaveBeenCalledTimes(1);
     });
   });
 

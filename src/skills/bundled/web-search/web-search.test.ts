@@ -7,12 +7,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // exercised without the network.
 // ---------------------------------------------------------------------------
 
-const { mockFetch, mockLookup, agentInstances } = vi.hoisted(() => {
-  const agentInstances: Array<{ options: unknown; closed: boolean }> = [];
+const { mockFetch, mockLookup, agentInstances, closeGate } = vi.hoisted(() => {
+  const agentInstances: Array<{ options: unknown; closed: boolean; destroyed: boolean }> = [];
   return {
     mockFetch: vi.fn(),
     mockLookup: vi.fn(),
     agentInstances,
+    /**
+     * Models undici's real `Agent.close()`: it waits for in-flight requests,
+     * and a response body nobody read keeps its request in flight (Codex
+     * round 6 #14). A test sets `wait` to a promise that resolves when the
+     * body is released.
+     */
+    closeGate: { wait: undefined as Promise<void> | undefined },
   };
 });
 
@@ -20,12 +27,17 @@ vi.mock("undici", () => {
   class Agent {
     readonly options: unknown;
     closed = false;
+    destroyed = false;
     constructor(options: unknown) {
       this.options = options;
       agentInstances.push(this);
     }
     async close(): Promise<void> {
+      if (closeGate.wait) await closeGate.wait;
       this.closed = true;
+    }
+    async destroy(): Promise<void> {
+      this.destroyed = true;
     }
   }
   return { Agent, fetch: mockFetch };
@@ -77,6 +89,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   mockLookup.mockReset();
   agentInstances.length = 0;
+  closeGate.wait = undefined;
   dnsTable.clear();
   // Every host used by the legacy tests below is public unless a test says otherwise.
   mockLookup.mockImplementation(async (hostname: string) => {
@@ -191,6 +204,40 @@ describe("web_fetch_url", () => {
 
     const result = await tool.execute({ url: "http://example.com" }, dummyContext);
     expect(result.content).toBe("plain http");
+  });
+
+  // ── Codex round 6 (2026-09-17) #14 on 09edbba6: an HTTP error response's body
+  // was never read or cancelled; Agent.close() (dispose) then waited on the
+  // unfinished stream. ──
+  it("#14 returns promptly on a 404 whose body is unfinished: the body is cancelled before the Agent is closed", async () => {
+    let releaseBody!: () => void;
+    closeGate.wait = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const cancel = vi.fn(async () => {
+      releaseBody();
+    });
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      headers: new Headers(),
+      body: { cancel },
+      text: () => new Promise<string>(() => undefined), // a body that never finishes on its own
+    });
+
+    const started = Date.now();
+    const result = await Promise.race([
+      tool.execute({ url: "https://example.com/missing" }, dummyContext),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("web_fetch_url hung on the unread body")), 500)),
+    ]);
+
+    expect(result.content).toContain("HTTP 404");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(agentInstances).toHaveLength(1);
+    expect(agentInstances[0]!.closed).toBe(true);
+    expect(agentInstances[0]!.destroyed).toBe(false); // graceful close, not the destroy backstop
+    expect(Date.now() - started).toBeLessThan(500);
   });
 
   // ── Plan 0-B.6 (audit 13F1 / D63 + Codex #12): resolved-target SSRF policy ──

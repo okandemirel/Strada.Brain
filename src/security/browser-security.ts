@@ -7,11 +7,17 @@
  * - Resolved-target SSRF policy (`assertPublicTarget`, `isForbiddenAddress`):
  *   classifies the addresses a hostname actually resolves to, not the
  *   hostname string (plan 0-B.6 / audit 13F1 / D63, 4.6 / 13F2 / D64)
+ * - The ONE address-pinned HTTP transport (`fetchWithPolicy`): every hop of a
+ *   redirect chain is vetted by the policy and its TCP connection goes to the
+ *   vetted addresses only (Codex round 6 #11/#12: shared by web_fetch_url, the
+ *   browser's document requests and its fallback downloads)
  * - Rate limiting for browser operations
  * - Security configuration management
  */
 
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupFunction } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 import { getLogger } from "../utils/logger.js";
 
 // ---------- Types ----------
@@ -529,6 +535,189 @@ export async function assertPublicTarget(
   }
 
   return { url: parsed, hostname, addresses };
+}
+
+// ---------- Address-pinned transport (Codex round 6 #11 / #12 / #14) ----------
+//
+// The policy above decides; this section is the only transport that can honour
+// the decision. It is shared: web_fetch_url, the browser's document requests
+// (route.fulfill) and the browser's fallback download all go through it, so a
+// redirect into the network is refused at the hop everywhere, and the socket
+// connects to the address the policy vetted rather than resolving again.
+
+/** Redirect hops fetchWithPolicy will follow (each hop re-checked by the policy). */
+export const POLICY_MAX_REDIRECTS = 5;
+
+/**
+ * How long `dispose()` lets an undici Agent drain gracefully before it is
+ * destroyed. `Agent.close()` waits for in-flight requests, and a response body
+ * nobody read keeps its request in flight forever (Codex round 6 #14) — callers
+ * cancel unread bodies, and this bound is the backstop.
+ */
+export const AGENT_CLOSE_GRACE_MS = 1000;
+
+export interface FetchWithPolicyOptions {
+  signal?: AbortSignal;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: Buffer | string | null;
+  /** Injectable resolver (tests); defaults to dns.lookup. */
+  resolver?: TargetResolver;
+  /** Redirect hop bound; defaults to POLICY_MAX_REDIRECTS. */
+  maxRedirects?: number;
+  /**
+   * Called with every hop URL (initial and each Location) BEFORE it is resolved.
+   * Throw to refuse the hop (e.g. a caller's block-pattern list).
+   */
+  onHop?: (url: string) => void;
+}
+
+export interface PolicyFetchResult {
+  /** The final (non-redirect, or hop-bound) response. */
+  response: Response;
+  /** URL the final response came from (differs from the request when redirected). */
+  finalUrl: string;
+  /** Close every per-hop Agent. Safe to call more than once. */
+  dispose: () => Promise<void>;
+}
+
+/**
+ * Cancel a response body that will not be read. Safe on a missing body or on
+ * one that was already consumed/cancelled — the intent is only that the
+ * Agent's request finishes so `close()` can return (Codex round 6 #14).
+ */
+export async function discardBody(response: { body?: { cancel(): Promise<void> } | null } | undefined): Promise<void> {
+  try {
+    await response?.body?.cancel();
+  } catch {
+    // already consumed, already cancelled, or a body-less mock — nothing to release
+  }
+}
+
+/**
+ * An undici Agent whose socket connect uses ONLY the addresses the policy just
+ * vetted, instead of resolving the hostname a second time. This closes the
+ * check-then-connect (DNS rebinding) window: the address we classified is the
+ * address the TCP connection goes to. TLS still verifies against the hostname
+ * (servername is derived from the URL, not from the pinned address).
+ *
+ * Node's global fetch cannot pin: its RequestInit has no lookup hook and mixing
+ * an npm undici Agent into the bundled fetch is version-fragile, so requests go
+ * through the npm `undici` fetch with this dispatcher.
+ */
+export function pinnedDispatcher(target: ResolvedTarget): Agent {
+  const pinned = target.addresses.map((a) => ({ address: a.address, family: a.family }));
+  const lookup: LookupFunction = (hostname, options, callback) => {
+    if (hostname.toLowerCase() !== target.hostname) {
+      const err: NodeJS.ErrnoException = new Error(`Refusing to connect to unvetted host "${hostname}"`);
+      err.code = "ENOTFOUND";
+      callback(err, options.all ? [] : "");
+      return;
+    }
+    const family =
+      options.family === 4 || options.family === "IPv4" ? 4
+      : options.family === 6 || options.family === "IPv6" ? 6
+      : undefined;
+    const candidates = family ? pinned.filter((a) => a.family === family) : pinned;
+    if (candidates.length === 0) {
+      const err: NodeJS.ErrnoException = new Error(`No vetted address of family ${family ?? "any"} for "${hostname}"`);
+      err.code = "ENOTFOUND";
+      callback(err, options.all ? [] : "");
+      return;
+    }
+    if (options.all) {
+      callback(null, candidates);
+    } else {
+      callback(null, candidates[0]!.address, candidates[0]!.family);
+    }
+  };
+  return new Agent({ connect: { lookup } });
+}
+
+/**
+ * Close an Agent without letting it hang: graceful `close()` first, and if that
+ * has not returned within AGENT_CLOSE_GRACE_MS (an unread body is keeping a
+ * request in flight) fall back to `destroy()`, which aborts the sockets.
+ */
+async function closeAgent(agent: Agent): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const grace = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), AGENT_CLOSE_GRACE_MS);
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([agent.close().then(() => "closed" as const), grace]);
+    if (outcome === "timeout") {
+      await agent.destroy();
+    }
+  } catch {
+    await agent.destroy().catch(() => undefined);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Request `initialUrl`, following redirects by hand: every hop (the initial URL
+ * and each Location) is passed through `assertPublicTarget` immediately before
+ * its request and the connection is pinned to the vetted addresses. A hop that
+ * lands on a forbidden address throws ForbiddenTargetError; redirect bodies are
+ * cancelled so their Agents can close. The caller reads (or discards) the final
+ * body and then calls `dispose()`.
+ */
+export async function fetchWithPolicy(
+  initialUrl: string,
+  options: FetchWithPolicyOptions = {},
+): Promise<PolicyFetchResult> {
+  const agents: Agent[] = [];
+  const dispose = async (): Promise<void> => {
+    await Promise.all(agents.splice(0).map((a) => closeAgent(a).catch(() => undefined)));
+  };
+  const policyOptions: PublicTargetOptions = options.resolver ? { resolver: options.resolver } : {};
+  const maxRedirects = options.maxRedirects ?? POLICY_MAX_REDIRECTS;
+
+  let currentUrl = initialUrl;
+  let method = options.method ?? "GET";
+  let body = options.body ?? null;
+  try {
+    for (let hop = 0; hop <= maxRedirects; hop++) {
+      options.onHop?.(currentUrl);
+      // Re-resolve right before the request: a rebinding host that was public a
+      // moment ago is re-checked, and the agent below connects only to what
+      // this call vetted.
+      const target = await assertPublicTarget(currentUrl, policyOptions);
+      const agent = pinnedDispatcher(target);
+      agents.push(agent);
+
+      const response = (await undiciFetch(currentUrl, {
+        signal: options.signal,
+        method,
+        headers: options.headers ?? {},
+        body: body ?? undefined,
+        redirect: "manual",
+        dispatcher: agent,
+      })) as unknown as Response;
+
+      if (!isRedirectStatus(response.status)) {
+        return { response, finalUrl: currentUrl, dispose };
+      }
+      const location = response.headers.get("location");
+      if (!location) {
+        return { response, finalUrl: currentUrl, dispose };
+      }
+      await discardBody(response);
+      currentUrl = new URL(location, currentUrl).toString();
+      // 303, and 301/302 on POST, become GET without a body (RFC 9110 §15.4).
+      if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
+        method = "GET";
+        body = null;
+      }
+    }
+    throw new Error(`Too many redirects (more than ${maxRedirects}).`);
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }
 
 // ---------- Rate Limiter ----------

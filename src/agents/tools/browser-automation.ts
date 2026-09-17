@@ -10,6 +10,8 @@ import { chromium } from "playwright";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import {
   assertPublicTarget,
+  discardBody,
+  fetchWithPolicy,
   validateUrlWithConfig,
   BrowserRateLimiter,
   BrowserSessionManager,
@@ -85,25 +87,85 @@ function looksLikeExpression(script: string): boolean {
   );
 }
 
-// ─── Network policy (plan 4.6 / audit 13F2 / D64) ────────────────────────────
+// ─── Network policy (plan 4.6 / audit 13F2 / D64; Codex round 6 #11–#13) ────
 //
 // Validating the first URL is not enough: a page can redirect, embed
 // sub-resources, open frames or navigate itself to an internal address after
 // the initial check. The SAME resolved-target policy (`assertPublicTarget`,
 // src/security/browser-security.ts) is applied to every request the context
-// makes (forbidden ones are aborted) and re-checked on every frame navigation
-// (a forbidden destination closes the session).
+// makes, and a forbidden destination closes the session.
+//
+// What the browser lets us enforce, and where (Codex round 6):
+//
+//  #11  Playwright does NOT invoke the route handler for redirected requests:
+//       Chromium follows the redirect inside the same request and Playwright
+//       auto-continues it (coreBundle `_onRequest`: a request carrying
+//       `redirectResponse` is `Fetch.continueRequest`ed with no route — a
+//       fulfilled 3xx is followed the same way). So a public resource that
+//       redirects to an internal endpoint would pass a request-time check.
+//       - Document (navigation) requests: the handler performs the request
+//         ITSELF through `fetchWithPolicy` — the address-pinned undici
+//         transport shared with web_fetch_url — which walks the redirect chain
+//         hop by hop, refusing at the first forbidden hop, and `route.fulfill`s
+//         the vetted final response. `route.fetch` cannot pin the connection,
+//         hence the separate transport. Residual: the page keeps the
+//         pre-redirect URL (fulfill cannot change it).
+//       - Sub-resources keep the request-time route check, plus a POST-HOC
+//         `response` listener that walks `response.request().redirectedFrom()`
+//         and closes the session when any hop fails the policy. It is post-hoc
+//         because the redirect hops never reach the route handler (above); by
+//         the time the response event fires the bytes have already been
+//         fetched, so the only remaining defence is to tear the session down
+//         before a script can read them. A request that got no response (the
+//         internal host is down) leaves no event, which is harmless.
+//  #12  The browser resolves DNS itself, so a request the route continues is
+//       not pinned to the vetted addresses (a rebinding host can answer
+//       public to us and private to Chromium). Documents are covered by the
+//       fulfil path above (pinned), fallback downloads go through the same
+//       transport; sub-resource connections remain the browser's own.
+//  #13  WebSockets never pass through `context.route`; they are refused
+//       outright (`routeWebSocket`) until an address-pinned implementation
+//       exists.
+//
+// The complete fix for the sub-resource residuals is a controlled proxy that
+// owns every connection the browser makes (plan 4.6b).
 
-/** Structural subset of Playwright's Route used by the policy (fake-able in tests). */
+/** Structural subset of Playwright's Request used by the policy (fake-able in tests). */
+export interface PolicyRequest {
+  url(): string;
+  isNavigationRequest(): boolean;
+  resourceType(): string;
+  method(): string;
+  headers(): Record<string, string>;
+  postDataBuffer(): Buffer | null;
+  redirectedFrom(): PolicyRequest | null;
+}
+
+/** Structural subset of Playwright's Route. */
 export interface PolicyRoute {
-  request(): { url(): string };
+  request(): PolicyRequest;
   continue(): Promise<void>;
   abort(errorCode?: string): Promise<void>;
+  fulfill(response: { status: number; headers: Record<string, string>; body: Buffer }): Promise<void>;
+}
+
+/** Structural subset of Playwright's Response. */
+export interface PolicyResponse {
+  url(): string;
+  request(): PolicyRequest;
+}
+
+/** Structural subset of Playwright's WebSocketRoute. */
+export interface PolicyWebSocketRoute {
+  url(): string;
+  close(options?: { code?: number; reason?: string }): Promise<void>;
 }
 
 /** Structural subset of Playwright's BrowserContext. */
 export interface PolicyContext {
   route(url: string, handler: (route: PolicyRoute) => Promise<void> | void): Promise<unknown>;
+  routeWebSocket(url: string, handler: (ws: PolicyWebSocketRoute) => Promise<void> | void): Promise<unknown>;
+  on(event: "response", listener: (response: PolicyResponse) => void): unknown;
 }
 
 /** Structural subset of Playwright's Page. */
@@ -116,22 +178,136 @@ export interface NetworkPolicyOptions {
   resolver?: TargetResolver;
   /** Called when a frame has navigated to a forbidden destination. Should tear the session down. */
   onForbiddenNavigation: (url: string, reason: string) => Promise<void> | void;
+  /**
+   * Called when a sub-resource's redirect chain contains a forbidden hop
+   * (post-hoc, see #11 above). Defaults to `onForbiddenNavigation`.
+   */
+  onForbiddenRedirect?: (url: string, reason: string) => Promise<void> | void;
   /** Called for every aborted request (logging). */
   onBlockedRequest?: (url: string, reason: string) => void;
+  /** Called for every refused WebSocket (logging). */
+  onBlockedWebSocket?: (url: string) => void;
+  /** Bound on one document fetch (all hops); defaults to DOCUMENT_FETCH_TIMEOUT_MS. */
+  documentTimeoutMs?: number;
 }
 
 /** Schemes that never touch the network from the browser; nothing to resolve. */
 const NON_NETWORK_SCHEMES = new Set(["about:", "blob:", "data:"]);
+
+/** Bound on one document fetch through the pinned transport (all redirect hops). */
+const DOCUMENT_FETCH_TIMEOUT_MS = 30_000;
+
+/** Largest document body the fulfil path buffers (documents are fetched into memory). */
+const DOCUMENT_MAX_BYTES = 32 * MB_IN_BYTES;
+
+/**
+ * Request headers the browser sets that must not be forwarded by the pinned
+ * transport: connection management belongs to undici, the length is derived
+ * from the body we send, and undici negotiates (and decodes) its own encodings.
+ */
+const DOCUMENT_REQUEST_HEADERS_DROPPED = new Set([
+  "accept-encoding",
+  "connection",
+  "content-length",
+  "host",
+  "keep-alive",
+  "proxy-connection",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/**
+ * Response headers that describe the wire form we no longer deliver: the body
+ * handed to `fulfill` is decoded and complete.
+ */
+const DOCUMENT_RESPONSE_HEADERS_DROPPED = new Set([
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+]);
 
 function schemeOf(url: string): string {
   const match = /^([a-z][a-z0-9+.-]*:)/i.exec(url);
   return match ? match[1]!.toLowerCase() : "";
 }
 
+function isDocumentRequest(request: PolicyRequest): boolean {
+  return request.isNavigationRequest() || request.resourceType() === "document";
+}
+
+/** Read a body fully, refusing past DOCUMENT_MAX_BYTES (cancels the stream). */
+async function readBounded(response: Response, maxBytes: number): Promise<Buffer> {
+  const declared = response.headers.get("content-length");
+  if (declared && Number(declared) > maxBytes) {
+    await discardBody(response);
+    throw new Error(`Document exceeds ${maxBytes} bytes (content-length ${declared})`);
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`Document exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * #11 (documents): perform the navigation request ourselves through the
+ * pinned, hop-by-hop transport and fulfil the route with the vetted response.
+ * Throws ForbiddenTargetError when any hop is refused; other failures throw too
+ * (the caller aborts the route).
+ */
+async function fulfillDocumentUnderPolicy(
+  route: PolicyRoute,
+  options: NetworkPolicyOptions,
+): Promise<void> {
+  const request = route.request();
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(request.headers())) {
+    if (!DOCUMENT_REQUEST_HEADERS_DROPPED.has(name.toLowerCase())) headers[name] = value;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.documentTimeoutMs ?? DOCUMENT_FETCH_TIMEOUT_MS);
+  timer.unref?.();
+  let dispose: (() => Promise<void>) | undefined;
+  try {
+    const fetched = await fetchWithPolicy(request.url(), {
+      signal: controller.signal,
+      method: request.method(),
+      headers,
+      body: request.postDataBuffer(),
+      ...(options.resolver ? { resolver: options.resolver } : {}),
+    });
+    dispose = fetched.dispose;
+    const response = fetched.response;
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, name) => {
+      if (!DOCUMENT_RESPONSE_HEADERS_DROPPED.has(name.toLowerCase())) responseHeaders[name] = value;
+    });
+    const body = await readBounded(response, DOCUMENT_MAX_BYTES);
+    await route.fulfill({ status: response.status, headers: responseHeaders, body });
+  } finally {
+    clearTimeout(timer);
+    if (dispose) await dispose();
+  }
+}
+
 /**
  * Install the resolved-target policy on a browser context: every request goes
- * through `assertPublicTarget` (abort on refusal) and every frame navigation
- * is re-checked (close on refusal).
+ * through `assertPublicTarget` (abort on refusal), document requests are
+ * fetched by the pinned transport and fulfilled, sub-resource redirect chains
+ * are checked post-hoc, WebSockets are refused, and every frame navigation is
+ * re-checked (close on refusal).
  */
 export async function installNetworkPolicy(
   context: PolicyContext,
@@ -139,9 +315,11 @@ export async function installNetworkPolicy(
   options: NetworkPolicyOptions,
 ): Promise<void> {
   const policyOptions = options.resolver ? { resolver: options.resolver } : {};
+  const onForbiddenRedirect = options.onForbiddenRedirect ?? options.onForbiddenNavigation;
 
   await context.route("**/*", async (route) => {
-    const url = route.request().url();
+    const request = route.request();
+    const url = request.url();
     const scheme = schemeOf(url);
     if (NON_NETWORK_SCHEMES.has(scheme)) {
       await route.continue();
@@ -155,7 +333,55 @@ export async function installNetworkPolicy(
       await route.abort("blockedbyclient").catch(() => undefined);
       return;
     }
-    await route.continue();
+    if (!isDocumentRequest(request)) {
+      await route.continue();
+      return;
+    }
+    // #11: documents are fetched hop by hop under the policy and fulfilled.
+    try {
+      await fulfillDocumentUnderPolicy(route, options);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (error instanceof ForbiddenTargetError) {
+        options.onBlockedRequest?.(url, reason);
+        await route.abort("blockedbyclient").catch(() => undefined);
+      } else {
+        await route.abort("failed").catch(() => undefined);
+      }
+    }
+  });
+
+  // #13: WebSockets bypass `route`; refuse them all. Playwright 1.60 (the pinned
+  // version) has `routeWebSocket`; a handler that never calls
+  // `connectToServer()` leaves the page talking to a mock, and `close()` ends
+  // that. An init script replacing `window.WebSocket` was the alternative and is
+  // weaker (a worker or a saved reference gets the original constructor).
+  await context.routeWebSocket("**/*", async (ws) => {
+    options.onBlockedWebSocket?.(ws.url());
+    await ws.close({ code: 1008, reason: "WebSocket connections are blocked by the network policy" }).catch(() => undefined);
+  });
+
+  // #11 (sub-resources), post-hoc: redirect hops never reach the route handler
+  // (see the section comment), so the chain is inspected when the response
+  // arrives and a forbidden hop tears the session down.
+  context.on("response", (response) => {
+    const hops: string[] = [];
+    for (let req: PolicyRequest | null = response.request(); req?.redirectedFrom(); req = req.redirectedFrom()) {
+      hops.push(req.url());
+    }
+    if (hops.length === 0) return;
+    void (async () => {
+      for (const hop of hops) {
+        if (NON_NETWORK_SCHEMES.has(schemeOf(hop))) continue;
+        try {
+          await assertPublicTarget(hop, policyOptions);
+        } catch (error) {
+          const reason = error instanceof ForbiddenTargetError ? error.message : String(error);
+          await onForbiddenRedirect(hop, reason);
+          return;
+        }
+      }
+    })();
   });
 
   page.on("framenavigated", (frame) => {
@@ -668,39 +894,36 @@ export class BrowserAutomationTool implements ITool {
   }
 
   private async fallbackDownload(url: string, targetPath: string): Promise<ToolExecutionResult> {
+    // Codex round 6 #12: the download goes through the SAME address-pinned,
+    // hop-by-hop transport as web_fetch_url (fetchWithPolicy): every redirect
+    // hop is re-validated against the block patterns (onHop) and the resolved-
+    // target policy, and each connection goes to the vetted addresses only —
+    // the global fetch resolved DNS on its own and could follow a rebinding
+    // host into the network.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.maxNavigationTimeMs);
+    timer.unref?.();
+    let dispose: (() => Promise<void>) | undefined;
     try {
-      // SSRF guard: follow redirects MANUALLY, re-validating every hop. The initial
-      // URL was validated by the caller, but a 3xx Location can point at a private /
-      // link-local / cloud-metadata host — a blind redirect:'follow' would fetch it
-      // and write the response to disk. Never follow a redirect we haven't validated.
-      const MAX_REDIRECTS = 5;
-      let currentUrl = url;
-      let response: Awaited<ReturnType<typeof fetch>> | undefined;
-      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        const hopValidation = validateUrlWithConfig(currentUrl, this.config);
-        if (!hopValidation.valid) {
-          return { content: `Download blocked (URL validation failed): ${hopValidation.reason}`, isError: true };
-        }
-        const hopTarget = await this.checkResolvedTarget(currentUrl);
-        if (hopTarget) return { content: `Download blocked: ${hopTarget.content}`, isError: true };
-        response = await fetch(currentUrl, {
-          method: "GET",
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
-          redirect: "manual",
-        });
-        if (response.status < 300 || response.status >= 400) break;
-        const location = response.headers.get("location");
-        if (!location) break;
-        currentUrl = new URL(location, currentUrl).toString();
-      }
+      const fetched = await fetchWithPolicy(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
+        onHop: (hopUrl) => {
+          const hopValidation = validateUrlWithConfig(hopUrl, this.config);
+          if (!hopValidation.valid) {
+            throw new Error(`URL validation failed: ${hopValidation.reason}`);
+          }
+        },
+      });
+      dispose = fetched.dispose;
+      const response = fetched.response;
 
-      if (!response) {
-        return { content: "Download failed: no response", isError: true };
-      }
       if (response.status >= 300 && response.status < 400) {
-        return { content: "Download failed: too many redirects", isError: true };
+        await discardBody(response);
+        return { content: "Download failed: redirect without a Location", isError: true };
       }
       if (!response.ok) {
+        await discardBody(response);
         return { content: `Download failed: HTTP ${response.status}`, isError: true };
       }
 
@@ -708,6 +931,7 @@ export class BrowserAutomationTool implements ITool {
       if (contentLength) {
         const sizeMb = parseInt(contentLength, 10) / MB_IN_BYTES;
         if (sizeMb > this.config.maxDownloadSizeMb) {
+          await discardBody(response);
           return { content: `Download size (${sizeMb.toFixed(2)}MB) exceeds limit`, isError: true };
         }
       }
@@ -726,10 +950,20 @@ export class BrowserAutomationTool implements ITool {
         metadata: { path: targetPath, size: stats.size },
       };
     } catch (error) {
-      return {
-        content: `Download failed: ${error instanceof Error ? error.message : String(error)}`,
-        isError: true,
-      };
+      if (error instanceof ForbiddenTargetError) {
+        return { content: `Download blocked: ${error.message}`, isError: true };
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Too many redirects")) {
+        return { content: "Download failed: too many redirects", isError: true };
+      }
+      if (message.startsWith("URL validation failed")) {
+        return { content: `Download blocked (${message})`, isError: true };
+      }
+      return { content: `Download failed: ${message}`, isError: true };
+    } finally {
+      clearTimeout(timer);
+      if (dispose) await dispose();
     }
   }
 
@@ -761,8 +995,19 @@ export class BrowserAutomationTool implements ITool {
 
       if (this.config.blockLocalhost) {
         await installNetworkPolicy(context, page, {
+          documentTimeoutMs: this.config.maxNavigationTimeMs,
           onBlockedRequest: (url, reason) =>
             this.logger.warn("Browser request blocked by network policy", { sessionId, url, reason }),
+          onBlockedWebSocket: (url) =>
+            this.logger.warn("Browser WebSocket refused by network policy", { sessionId, url }),
+          onForbiddenRedirect: async (url, reason) => {
+            this.logger.warn("Browser sub-resource redirect chain hit a forbidden hop; closing session", {
+              sessionId,
+              url,
+              reason,
+            });
+            await this.closeSession(sessionId);
+          },
           onForbiddenNavigation: async (url, reason) => {
             this.logger.warn("Browser navigated to a forbidden destination; closing session", {
               sessionId,

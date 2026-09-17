@@ -2,14 +2,11 @@
 // Web Search bundled skill — fetch URL content and search the web via DuckDuckGo.
 // ---------------------------------------------------------------------------
 
-import type { LookupFunction } from "node:net";
-import { Agent, fetch as undiciFetch } from "undici";
 import type { ITool, ToolContext, ToolExecutionResult } from "../../../agents/tools/tool.interface.js";
 import {
-  assertPublicTarget,
+  discardBody,
+  fetchWithPolicy,
   ForbiddenTargetError,
-  isRedirectStatus,
-  type ResolvedTarget,
 } from "../../../security/browser-security.js";
 
 // ---------------------------------------------------------------------------
@@ -24,9 +21,6 @@ const FETCH_TIMEOUT_MS = 10_000;
 
 /** Maximum number of search results to return. */
 const MAX_SEARCH_RESULTS = 5;
-
-/** Redirect hops web_fetch_url will follow (each hop re-checked by the SSRF policy). */
-const MAX_REDIRECTS = 5;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,94 +49,10 @@ function validateUrl(url: string): { ok: true; url: string } | { ok: false; erro
   return { ok: true, url: trimmed };
 }
 
-/**
- * An undici Agent whose socket connect uses ONLY the addresses the policy just
- * vetted, instead of resolving the hostname a second time. This closes the
- * check-then-connect (DNS rebinding) window: the address we classified is the
- * address the TCP connection goes to. TLS still verifies against the hostname
- * (servername is derived from the URL, not from the pinned address).
- *
- * Node's global fetch cannot pin: its RequestInit has no lookup hook and mixing
- * an npm undici Agent into the bundled fetch is version-fragile, so the request
- * goes through the npm `undici` fetch with this dispatcher.
- */
-function pinnedDispatcher(target: ResolvedTarget): Agent {
-  const pinned = target.addresses.map((a) => ({ address: a.address, family: a.family }));
-  const lookup: LookupFunction = (hostname, options, callback) => {
-    if (hostname.toLowerCase() !== target.hostname) {
-      const err: NodeJS.ErrnoException = new Error(`Refusing to connect to unvetted host "${hostname}"`);
-      err.code = "ENOTFOUND";
-      callback(err, options.all ? [] : "");
-      return;
-    }
-    const family =
-      options.family === 4 || options.family === "IPv4" ? 4
-      : options.family === 6 || options.family === "IPv6" ? 6
-      : undefined;
-    const candidates = family ? pinned.filter((a) => a.family === family) : pinned;
-    if (candidates.length === 0) {
-      const err: NodeJS.ErrnoException = new Error(`No vetted address of family ${family ?? "any"} for "${hostname}"`);
-      err.code = "ENOTFOUND";
-      callback(err, options.all ? [] : "");
-      return;
-    }
-    if (options.all) {
-      callback(null, candidates);
-    } else {
-      callback(null, candidates[0]!.address, candidates[0]!.family);
-    }
-  };
-  return new Agent({ connect: { lookup } });
-}
-
-/**
- * GET `initialUrl`, following redirects by hand: every hop (the initial URL
- * and each Location) is passed through `assertPublicTarget` immediately
- * before its request and the connection is pinned to the vetted addresses.
- * A hop that lands on a forbidden address throws ForbiddenTargetError.
- */
-async function fetchWithPolicy(
-  initialUrl: string,
-  signal: AbortSignal,
-): Promise<{ response: Response; dispose: () => Promise<void> }> {
-  const agents: Agent[] = [];
-  const dispose = async (): Promise<void> => {
-    await Promise.all(agents.splice(0).map((a) => a.close().catch(() => undefined)));
-  };
-
-  let currentUrl = initialUrl;
-  try {
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      // Re-resolve right before the request: a rebinding host that was public a
-      // moment ago is re-checked, and the agent below connects only to what
-      // this call vetted.
-      const target = await assertPublicTarget(currentUrl);
-      const agent = pinnedDispatcher(target);
-      agents.push(agent);
-
-      const response = (await undiciFetch(currentUrl, {
-        signal,
-        headers: { "User-Agent": "StradaBrain/1.0" },
-        redirect: "manual",
-        dispatcher: agent,
-      })) as unknown as Response;
-
-      if (!isRedirectStatus(response.status)) {
-        return { response, dispose };
-      }
-      const location = response.headers.get("location");
-      if (!location) {
-        return { response, dispose };
-      }
-      await response.body?.cancel().catch(() => undefined);
-      currentUrl = new URL(location, currentUrl).toString();
-    }
-    throw new Error(`Too many redirects (more than ${MAX_REDIRECTS}).`);
-  } catch (error) {
-    await dispose();
-    throw error;
-  }
-}
+// The address-pinned, hop-by-hop transport (`fetchWithPolicy`) lives in
+// src/security/browser-security.ts so web_fetch_url, the browser's document
+// requests and its fallback download share ONE implementation (Codex round 6
+// #11 / #12).
 
 /**
  * Extract search result snippets from DuckDuckGo HTML response.
@@ -211,11 +121,17 @@ const webFetchUrl: ITool = {
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let dispose: (() => Promise<void>) | undefined;
     try {
-      const fetched = await fetchWithPolicy(validation.url, controller.signal);
+      const fetched = await fetchWithPolicy(validation.url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "StradaBrain/1.0" },
+      });
       dispose = fetched.dispose;
       const response = fetched.response;
 
       if (!response.ok) {
+        // Codex round 6 #14: a body nobody reads keeps the request in flight and
+        // `Agent.close()` (in dispose) would wait on it. Release it first.
+        await discardBody(response);
         return { content: `Error: HTTP ${response.status} ${response.statusText}` };
       }
 
