@@ -318,6 +318,44 @@ describe("RAGPipeline", () => {
       expect(output).not.toContain(longContent);
     });
 
+    /**
+     * D48 / audit 05.F5: callers pushed every result they handed in as
+     * "already injected" and logged them as shown, while the budget loop had
+     * dropped the tail.
+     */
+    it("reports the spans it actually included and the ones it dropped (D48)", () => {
+      const longContent = "x".repeat(500);
+      const results = [
+        { chunk: makeChunk({ id: "high", symbol: "HighScoreSystem", content: longContent }), vectorScore: 0.9, finalScore: 0.9 },
+        { chunk: makeChunk({ id: "low", symbol: "LowScoreHelper", content: longContent }), vectorScore: 0.4, finalScore: 0.4 },
+      ];
+      const budget = { maxTokens: 150, truncationStrategy: "drop_lowest" as const, contextLines: 2 };
+
+      const formatted = pipeline.formatContextWithSpans(results, budget);
+
+      expect(formatted.included.map((r) => r.chunk.id)).toEqual(["high"]);
+      expect(formatted.dropped.map((r) => r.chunk.id)).toEqual(["low"]);
+      expect(formatted.text).toBe(pipeline.formatContext(results, budget));
+    });
+
+    it("reports the TRUNCATED content it rendered, not the span it was handed (D48)", () => {
+      const longContent = "x".repeat(500);
+      const results = [
+        { chunk: makeChunk({ id: "big", symbol: "BigSystem", content: longContent }), vectorScore: 0.9, finalScore: 0.9 },
+      ];
+
+      const formatted = pipeline.formatContextWithSpans(results, {
+        maxTokens: 10,
+        truncationStrategy: "drop_lowest",
+        contextLines: 2,
+      });
+
+      expect(formatted.included).toHaveLength(1);
+      expect(formatted.included[0]!.chunk.content).toHaveLength(40);
+      expect(formatted.text).toContain(formatted.included[0]!.chunk.content);
+      expect(formatted.dropped).toEqual([]);
+    });
+
     it("returns an empty string for an empty results array", () => {
       expect(pipeline.formatContext([])).toBe("");
     });

@@ -517,6 +517,45 @@ describe("MemoryRefresher", () => {
       expect(result.newRagContext).not.toContain("memory A");
     });
 
+    /**
+     * D48 / audit 05.F5: every deduped result was marked as injected and
+     * counted as shown, including the ones the context budget dropped — so a
+     * span nobody ever saw could never be retrieved again.
+     */
+    it("counts and remembers only the RAG spans that fit the budget (D48)", async () => {
+      const fits = makeSearchResult("rag that fits the budget");
+      const overflow = makeSearchResult("rag dropped by the budget");
+      const bus = mockEventBus();
+      // A pipeline whose budget takes exactly the first span.
+      const ragPipe = {
+        search: vi.fn(async () => [fits, overflow]),
+        formatContext: vi.fn((r: SearchResult[]) => r.slice(0, 1).map((x) => x.chunk.content).join("\n---\n")),
+        formatContextWithSpans: vi.fn((r: SearchResult[]) => ({
+          text: r.slice(0, 1).map((x) => x.chunk.content).join("\n---\n"),
+          included: r.slice(0, 1),
+          dropped: r.slice(1),
+        })),
+      };
+
+      const refresher = new MemoryRefresher(defaultConfig(), {
+        ragPipeline: ragPipe as unknown as IRAGPipeline,
+        eventBus: bus,
+      } as MemoryRefresherDeps);
+
+      const first = await refresher.refresh("q1", "s1", "periodic", 5);
+      expect(first.newRagContext).toContain("rag that fits the budget");
+      expect(first.newRagContext).not.toContain("rag dropped by the budget");
+
+      // TEETH 1: the event reported 2 new RAG spans when one was rendered.
+      const emitted = bus.calls.find((c) => c.event === "memory:re_retrieved");
+      expect((emitted?.payload as { newRagCount: number }).newRagCount).toBe(1);
+
+      // TEETH 2: the dropped span had been booked as injected, so the next
+      // retrieval could never offer it again.
+      const second = await refresher.refresh("q2", "s1", "periodic", 10);
+      expect(second.newRagContext).toContain("rag dropped by the budget");
+    });
+
     it("deduplicates across successive refresh calls", async () => {
       const deps: MemoryRefresherDeps = {
         memoryManager: mockMemoryManager([

@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { glob } from "glob";
 import type {
+  FormattedContext,
   IRAGPipeline,
   IEmbeddingProvider,
   IVectorStore,
@@ -465,13 +466,26 @@ export class RAGPipeline implements IRAGPipeline {
   // ---------------------------------------------------------------------------
 
   formatContext(results: SearchResult[], budget?: ContextBudget): string {
-    if (results.length === 0) return "";
+    return this.formatContextWithSpans(results, budget).text;
+  }
+
+  /**
+   * WHAT WAS SHOWN IS WHAT FIT. Callers used to mark every result they handed in
+   * as injected — including the spans this method dropped for the budget — so a
+   * span nobody ever saw was reported as shown and could never be retrieved
+   * again (D48 / audit 05.F5). The included list carries the content as
+   * rendered, truncation included.
+   */
+  formatContextWithSpans(results: SearchResult[], budget?: ContextBudget): FormattedContext {
+    if (results.length === 0) return { text: "", included: [], dropped: [] };
 
     const b: ContextBudget = { ...DEFAULT_BUDGET, ...budget };
     const charBudget = b.maxTokens * 4;
 
     // Build chunks to include, respecting the character budget.
     const toInclude: RAGSearchResult[] = [];
+    /** The ORIGINAL results behind toInclude (entries may be truncated copies). */
+    const shown = new Set<SearchResult>();
     let usedChars = 0;
 
     if (b.truncationStrategy === "drop_lowest") {
@@ -481,6 +495,7 @@ export class RAGPipeline implements IRAGPipeline {
         const chunkChars = result.chunk.content.length;
         if (usedChars + chunkChars > charBudget) break;
         toInclude.push(result);
+        shown.add(result);
         usedChars += chunkChars;
       }
       // Guarantee at least one chunk: if nothing fit (the top chunk alone exceeds
@@ -492,6 +507,7 @@ export class RAGPipeline implements IRAGPipeline {
           ...top,
           chunk: { ...top.chunk, content: top.chunk.content.slice(0, charBudget) },
         });
+        shown.add(top);
       }
     } else {
       // truncate_content: include all chunks but truncate the last one.
@@ -500,6 +516,7 @@ export class RAGPipeline implements IRAGPipeline {
         if (remaining <= 0) break;
         if (result.chunk.content.length <= remaining) {
           toInclude.push(result);
+          shown.add(result);
           usedChars += result.chunk.content.length;
         } else {
           // Truncate the content of this chunk to fit the remaining budget.
@@ -511,6 +528,7 @@ export class RAGPipeline implements IRAGPipeline {
             },
           };
           toInclude.push(truncated);
+          shown.add(result);
           break;
         }
       }
@@ -527,7 +545,11 @@ export class RAGPipeline implements IRAGPipeline {
       return `${header}\n\`\`\`csharp\n${chunk.content}\n\`\`\``;
     });
 
-    return sections.join("\n\n");
+    return {
+      text: sections.join("\n\n"),
+      included: toInclude,
+      dropped: results.filter((result) => !shown.has(result)),
+    };
   }
 
   // ---------------------------------------------------------------------------

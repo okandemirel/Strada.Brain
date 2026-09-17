@@ -602,18 +602,32 @@ export async function buildSystemPromptWithContext(
         queryEmbedding: params.preComputedEmbedding,
       });
       if (ragResults.length > 0) {
-        const ragFormatted = ctx.ragPipeline.formatContext(ragResults, {
+        const ragBudgetSpec = {
           maxTokens: ragBudget,
-          truncationStrategy: "drop_lowest",
+          truncationStrategy: "drop_lowest" as const,
           contextLines: 3,
-        });
-        systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
-        for (const r of ragResults) initialContentHashes.push(r.chunk.content);
-        logger.debug("Injected RAG context", {
-          chatId: params.chatId,
-          resultCount: ragResults.length,
-          topScore: ragResults[0]!.finalScore.toFixed(3),
-        });
+        };
+        // Report from what the formatter INCLUDED, not from what we handed it:
+        // the spans the budget dropped were never in the prompt, and marking
+        // them injected made them unretrievable for the rest of the run
+        // (D48 / audit 05.F5).
+        const formatted = ctx.ragPipeline.formatContextWithSpans
+          ? ctx.ragPipeline.formatContextWithSpans(ragResults, ragBudgetSpec)
+          : {
+              text: ctx.ragPipeline.formatContext(ragResults, ragBudgetSpec),
+              included: ragResults,
+              dropped: [],
+            };
+        if (formatted.included.length > 0) {
+          systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${formatted.text}\n<!-- re-retrieval:rag:end -->\n`;
+          for (const r of formatted.included) initialContentHashes.push(r.chunk.content);
+          logger.debug("Injected RAG context", {
+            chatId: params.chatId,
+            resultCount: formatted.included.length,
+            droppedCount: formatted.dropped.length,
+            topScore: formatted.included[0]!.finalScore.toFixed(3),
+          });
+        }
       }
     } catch {
       // RAG failure is non-fatal

@@ -183,6 +183,21 @@ export interface SearchResult<T extends Chunk = Chunk> {
   readonly matchExplanation?: string;
 }
 
+/**
+ * What a context formatter actually produced.
+ *
+ * The included list is the spans that were RENDERED, with their content as rendered
+ * (truncated where the formatter truncated), so a caller can report, hash and
+ * dedup exactly what the model was shown. Everything the budget refused is in
+ * the dropped list — it was never shown, so it must stay retrievable (D48 / audit
+ * 05.F5).
+ */
+export interface FormattedContext {
+  readonly text: string;
+  readonly included: SearchResult[];
+  readonly dropped: SearchResult[];
+}
+
 /** Alias for SearchResult used in RAG pipeline */
 export type RAGSearchResult = SearchResult;
 
@@ -551,6 +566,17 @@ export interface IRAGPipeline {
   
   /** Format search results into context */
   formatContext(results: SearchResult[], budget?: ContextBudget): string;
+
+  /**
+   * Same rendering as {@link formatContext}, but it also reports which spans it
+   * actually included and which the budget dropped. Callers that record "what
+   * the model was shown" (dedup hashes, counts, telemetry) MUST report from
+   * this, not from the results they handed in (D48 / audit 05.F5).
+   *
+   * Optional so third-party pipelines keep compiling; callers fall back to
+   * formatContext and treat every result as included.
+   */
+  formatContextWithSpans?(results: SearchResult[], budget?: ContextBudget): FormattedContext;
   
   /** Get pipeline statistics */
   getStats(): IndexingStats;

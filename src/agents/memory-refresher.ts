@@ -310,7 +310,9 @@ export class MemoryRefresher {
         : Promise.resolve(null),
 
       this.deps.instinctRetriever
-        ? this.deps.instinctRetriever.getInsightsForTask(query)
+        // item 3.1: the run's user, so their own teaching is retrievable and
+        // nobody else's is.
+        ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, this.deps.userId)
         : Promise.resolve(null),
     ]);
 
@@ -337,17 +339,32 @@ export class MemoryRefresher {
     let newRagCount = 0;
     if (ragResult.status === "fulfilled" && ragResult.value) {
       const results = ragResult.value as SearchResult[];
-      const deduped = results.filter((r) => {
-        const hash = computeContentHash(r.chunk.content);
-        if (this.injectedContentHashes.has(hash)) return false;
-        this.trackContentHash(hash);
-        return true;
-      });
+      // Candidates only: nothing is booked as injected until the formatter says
+      // it actually rendered it (D48 / audit 05.F5 — the budget drops the tail,
+      // and a span nobody saw must stay retrievable).
+      const deduped = results.filter(
+        (r) => !this.injectedContentHashes.has(computeContentHash(r.chunk.content)),
+      );
       if (deduped.length > 0) {
-        newRagContext = this.deps.ragPipeline
-          ? this.deps.ragPipeline.formatContext(deduped)
-          : deduped.map((r) => r.chunk.content).join("\n---\n");
-        newRagCount = deduped.length;
+        const pipeline = this.deps.ragPipeline;
+        const formatted = pipeline?.formatContextWithSpans
+          ? pipeline.formatContextWithSpans(deduped)
+          : {
+              text: pipeline
+                ? pipeline.formatContext(deduped)
+                : deduped.map((r) => r.chunk.content).join("\n---\n"),
+              included: deduped,
+              dropped: [] as SearchResult[],
+            };
+        // Report and remember the spans that were SHOWN — as shown (a truncated
+        // span's own text, so its unseen tail stays retrievable).
+        for (const shown of formatted.included) {
+          this.trackContentHash(computeContentHash(shown.chunk.content));
+        }
+        if (formatted.included.length > 0) {
+          newRagContext = formatted.text;
+          newRagCount = formatted.included.length;
+        }
       }
     }
 
