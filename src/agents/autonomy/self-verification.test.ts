@@ -304,6 +304,69 @@ describe("SelfVerification", () => {
    * build that never ran all produced lastBuildOk: true, an empty pending
    * list and needsVerification(): false.
    */
+  /**
+   * Codex wave 0-A review 2026-09-17 #1, reproduced against a real
+   * `npx tsc --noEmit` on a project with a TS2322: `ok_exit_codes: [0, 2]`
+   * made the exit-2 result isError: false, and lastBuildOk went true with an
+   * "error TS2322" body. Accepting an exit code keeps a predicate off the
+   * breaker; it does not make a verifier pass.
+   */
+  describe("an accepted non-zero exit is not a passing proof (Codex 2026-09-17 #1)", () => {
+    const wroteCs = (): SelfVerification => {
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Assets/Bad.cs" }, { toolCallId: "w", content: "written", isError: false });
+      expect(verifier.needsVerification()).toBe(true);
+      return verifier;
+    };
+
+    it("tsc exit 2 with ok_exit_codes [0,2] keeps the compile debt (metadata carries the code)", () => {
+      const verifier = wroteCs();
+      verifier.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, {
+        toolCallId: "v",
+        content: "$ npx tsc --noEmit\nsrc/a.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\nExit code: 2",
+        isError: false,
+        metadata: { exitCode: 2 },
+      });
+      expect(verifier.getState().lastBuildOk).toBe(false);
+      expect(verifier.needsVerification()).toBe(true);
+    });
+
+    it("a batch child without metadata is judged by its own Exit code line", () => {
+      const verifier = wroteCs();
+      verifier.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, {
+        toolCallId: "v",
+        content: "$ npx tsc --noEmit\nerror TS2322: nope\nExit code: 2",
+        isError: false,
+      });
+      expect(verifier.getState().lastBuildOk).toBe(false);
+    });
+
+    it("a test run that exited 1 under ok_exit_codes [0,1] leaves the test gate open", () => {
+      const verifier = wroteCs();
+      verifier.track("file_write", { path: "Assets/Tests/BadTests.cs" }, { toolCallId: "w2", content: "written", isError: false });
+      verifier.track("shell_exec", { command: "npx vitest run", ok_exit_codes: [0, 1] }, {
+        toolCallId: "t",
+        content: "$ npx vitest run\n Tests  1 failed | 2 passed (3)\nExit code: 1",
+        isError: false,
+        metadata: { exitCode: 1 },
+      });
+      expect(verifier.getState().lastBuildOk).toBe(false);
+      expect(verifier.needsVerification()).toBe(true);
+    });
+
+    it("guard: an accepted exit 0 still settles the debt", () => {
+      const verifier = wroteCs();
+      verifier.track("shell_exec", { command: "npx tsc --noEmit", ok_exit_codes: [0, 2] }, {
+        toolCallId: "v",
+        content: "$ npx tsc --noEmit\nExit code: 0",
+        isError: false,
+        metadata: { exitCode: 0 },
+      });
+      expect(verifier.getState().lastBuildOk).toBe(true);
+      expect(verifier.needsVerification()).toBe(false);
+    });
+  });
+
   describe("an inspection is not a verification (Codex 2026-09-12 AE#3)", () => {
     const wrote = (): SelfVerification => {
       const verifier = new SelfVerification();

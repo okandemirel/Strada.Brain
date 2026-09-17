@@ -112,6 +112,18 @@ export function toolReportsVerdict(
  * mentioned "No such file or directory" an infrastructure failure, and
  * repeated red runs could then disable the shell (Codex 2026-09-17 #3).
  */
+/**
+ * Did a shell verifier exit non-zero? The tool's metadata carries the raw
+ * code for a direct call; a batch child keeps only its "Exit code: N" line.
+ */
+function shellExitedNonZero(output: string | undefined, result: { content?: unknown; metadata?: Record<string, unknown> }): boolean {
+  const meta = result.metadata?.["exitCode"];
+  if (typeof meta === "number") return meta !== 0;
+  const body = output !== undefined && output !== "" ? output : typeof result.content === "string" ? result.content : "";
+  const line = /^Exit code: (\d+)\s*$/mu.exec(body);
+  return line !== null && Number(line[1]) !== 0;
+}
+
 function infrastructureFailure(result: { isError?: boolean; content?: unknown; metadata?: Record<string, unknown> }): boolean {
   if (result.isError !== true) return false;
   const meta = result.metadata ?? {};
@@ -327,7 +339,13 @@ export class SelfVerification {
           this.lastBuildOk = null;
           continue;
         }
-        const ok = !executedTool.isError && !bodyReportsFailure;
+        // ACCEPTANCE IS NOT PROOF. `ok_exit_codes: [0, 2]` makes a compiler's
+        // exit 2 an accepted result (isError: false) so a predicate does not
+        // trip the breaker — but `error TS2322` under an accepted exit 2
+        // cleared the verification debt and published lastBuildOk: true
+        // (Codex 2026-09-17 wave 0-A review #1). A verifier that exited
+        // non-zero has not passed, whatever the caller agreed to accept.
+        const ok = !executedTool.isError && !bodyReportsFailure && !(shell && shellExitedNonZero(executedTool.output, result));
         this.lastBuildOk = ok;
         this.lastVerificationAt = Date.now();
         publishedBuildStates.set(this.publishKey, {
