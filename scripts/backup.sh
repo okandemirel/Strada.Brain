@@ -75,18 +75,23 @@ calculate_checksum() {
 # quietly missing data.
 #
 # Now: dist/core/database-backup.js builds the list from the runtime path table
-# plus whatever *.db the memory root holds, and copies each with SQLite's own
-# online backup API (better-sqlite3 `db.backup()`), verifying integrity_check on
-# every produced file. It prints one path per line; we checksum those.
+# — every root the runtime uses (the memory root AND the Strada home, which is
+# where hub-owners.db and trusted-skills.db live) plus whatever *.db those
+# directories hold — and copies each with SQLite's own online backup API
+# (better-sqlite3 `db.backup()`), verifying integrity_check on every produced
+# file. It prints one path per line, the restore manifest last; we checksum those.
 backup_databases() {
     info "Backing up SQLite databases (online backup API)..."
 
     local memory_root
     memory_root="$(get_memory_root)"
 
+    # A missing memory root is NOT "nothing to back up": hub bindings
+    # (hub-owners.db) and skill approvals (trusted-skills.db) live in the Strada
+    # home, and the helper inventories that root too (round 10 #22). Returning
+    # here skipped them as well.
     if [[ ! -d "$memory_root" ]]; then
-        warn "Memory root not found at $memory_root — no databases to back up"
-        return 0
+        warn "Memory root not found at $memory_root — backing up the Strada home only"
     fi
 
     if [[ ! -f "$DB_BACKUP_CLI" ]]; then
@@ -100,7 +105,7 @@ backup_databases() {
     produced="$(node "$DB_BACKUP_CLI" --source "$memory_root" --dest "$BACKUP_TEMP_DIR" --timestamp "$TIMESTAMP")"
 
     if [[ -z "$produced" ]]; then
-        warn "No databases found under $memory_root"
+        warn "No databases found under $memory_root or the Strada home"
         return 0
     fi
 
@@ -116,7 +121,7 @@ backup_databases() {
         count=$((count + 1))
     done <<< "$produced"
 
-    info "Backed up ${count} database(s) from ${memory_root}"
+    info "Backed up ${count} file(s) from ${memory_root} and the Strada home"
 }
 
 # Backup RAG Vector Store
