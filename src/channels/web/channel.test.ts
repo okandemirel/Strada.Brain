@@ -2526,3 +2526,409 @@ describe("WebChannel file delivery (2026-09-10)", () => {
     await channel.disconnect();
   });
 });
+
+// ── Plan 6.14: the shared-instance management model, on ONE channel instance ──
+//
+// One daemon serves more than one person: the portal hands every browser its own
+// profile identity and they all reach the SAME channel, the same workspace bus,
+// the same dashboard proxy and the same .env. The model (src/channels/web/
+// instance-access.ts): an identity sees and controls its own traffic; only the
+// instance owner — the first identity this instance issued — configures or
+// controls the instance; an unattributed request is granted only while the
+// instance has a single identity.
+//
+// The exit criterion is this suite: TWO live identities on one instance.
+describe("WebChannel shared instance: two identities (plan 6.14)", () => {
+  const OWNER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const GUEST_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  type IdentityStoreView = {
+    issue: (id?: string) => { profileId: string; profileToken: string };
+    ownerProfileId: () => string | undefined;
+    isOwner: (id: string | undefined) => boolean;
+    count: () => number;
+  };
+
+  function identityStore(channel: WebChannel): IdentityStoreView {
+    return (channel as unknown as { identityStore: IdentityStoreView }).identityStore;
+  }
+
+  /** A live socket holding `profileId`, with the token that proves it. */
+  function connect(channel: WebChannel, profileId: string) {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const identity = identityStore(channel).issue(profileId);
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "session_init",
+      profileId: identity.profileId,
+      profileToken: identity.profileToken,
+    })));
+    const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+    return {
+      socket,
+      profileId: identity.profileId,
+      profileToken: identity.profileToken,
+      chatId: String(connected.chatId),
+      frames: (type: string) => socket.getSentMessages().filter((m) => m.type === type),
+      dump: () => JSON.stringify(socket.getSentMessages()),
+    };
+  }
+
+  /** Owner first (the first identity an instance issues owns it), guest second. */
+  function twoIdentities(port = 3000) {
+    const channel = new WebChannel(port, 3100);
+    const owner = connect(channel, OWNER_ID);
+    const guest = connect(channel, GUEST_ID);
+    return { channel, owner, guest };
+  }
+
+  function ws(channel: WebChannel, chatId: string, payload: Record<string, unknown>): Promise<void> {
+    return (channel as unknown as {
+      handleWsMessage: (chatId: string, data: Record<string, unknown>) => Promise<void>;
+    }).handleWsMessage(chatId, payload);
+  }
+
+  /** A real GET against handleHttp, with headers, collecting status + body. */
+  async function httpGet(channel: WebChannel, url: string, headers: Record<string, string> = {}) {
+    const out: { status?: number; headers?: Record<string, string>; body: Buffer[] } = { body: [] };
+    const res = new Writable({ write(chunk, _enc, cb) { out.body.push(Buffer.from(chunk)); cb(); } }) as unknown as
+      import("node:http").ServerResponse & { headersSent: boolean };
+    Object.assign(res, {
+      headersSent: false,
+      writeHead: (status: number, h: Record<string, string>) => { out.status = status; out.headers = h; res.headersSent = true; return res; },
+    });
+    await (channel as unknown as { handleHttp: (req: unknown, res: unknown) => Promise<void> })
+      .handleHttp({ method: "GET", url, headers }, res);
+    if (!(res as unknown as Writable).writableFinished) await new Promise((r) => (res as unknown as Writable).once("finish", r));
+    return { ...out, text: Buffer.concat(out.body).toString() };
+  }
+
+  it("makes the FIRST identity the instance owner and every later one a guest", async () => {
+    const { channel, owner, guest } = twoIdentities();
+    const store = identityStore(channel);
+    expect(store.ownerProfileId()).toBe(owner.profileId);
+    expect(store.isOwner(owner.profileId)).toBe(true);
+    expect(store.isOwner(guest.profileId)).toBe(false);
+    expect(store.count()).toBe(2);
+    await channel.disconnect();
+  });
+
+  it("delivers each identity's monitor frames, chat frames and confirmations only to its own socket", async () => {
+    const { channel, owner, guest } = twoIdentities();
+
+    channel.broadcastRaw(JSON.stringify({
+      type: "monitor:dag_init",
+      payload: { rootId: "ep-owner", nodes: [{ id: "n1", task: "owner-secret-request" }] },
+      origin: owner.profileId,
+      timestamp: 1,
+    }));
+    await channel.sendText(owner.chatId, "owner-secret-answer");
+    const confirmation = channel.requestConfirmation({
+      chatId: owner.chatId,
+      question: "owner-secret-question",
+      options: ["yes", "no"],
+    });
+
+    expect(owner.frames("monitor:dag_init")).toHaveLength(1);
+    expect(owner.frames("text").some((f) => f.text === "owner-secret-answer")).toBe(true);
+    expect(owner.frames("confirmation")).toHaveLength(1);
+
+    expect(guest.frames("monitor:dag_init")).toHaveLength(0);
+    expect(guest.frames("confirmation")).toHaveLength(0);
+    expect(guest.dump()).not.toContain("owner-secret");
+
+    // …and the guest cannot answer the owner's confirmation either.
+    const confirmId = String(owner.frames("confirmation")[0]!.confirmId);
+    await ws(channel, guest.chatId, { type: "confirmation_response", confirmId, option: "yes" });
+    expect(guest.frames("confirmation_ack")).toHaveLength(0);
+
+    // The owner's own answer still settles it.
+    await ws(channel, owner.chatId, { type: "confirmation_response", confirmId, option: "no" });
+    expect(await confirmation).toBe("no");
+
+    await channel.disconnect();
+  });
+
+  it("refuses a guest the owner's attachment, by bare token and with its own identity", async () => {
+    const { channel, owner, guest } = twoIdentities();
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    await channel.sendAttachment(owner.chatId, {
+      type: "image", name: "owner-frame.png", data: png, mimeType: "image/png", size: png.length,
+    });
+
+    // The link only the owner's socket received carries its own proof.
+    const delivered = owner.frames("attachment")[0]!;
+    const href = String(delivered.href);
+    expect(guest.frames("attachment")).toHaveLength(0);
+    expect(href).toMatch(/^\/attachments\/[A-Za-z0-9_-]+\?v=[A-Za-z0-9_-]+$/);
+    const token = href.slice("/attachments/".length).split("?")[0]!;
+
+    // The owner's own link serves the bytes.
+    const mine = await httpGet(channel, href);
+    expect(mine.status).toBe(200);
+    expect(Buffer.concat(mine.body)).toEqual(png);
+
+    // The guest read the token off a shared screen: the bare link is refused,
+    // and the refusal says who was refused and why.
+    const bare = await httpGet(channel, `/attachments/${token}`);
+    expect(bare.status).toBe(403);
+    expect(bare.text).toContain(owner.profileId);
+    expect(bare.text).toContain("attachment:read");
+
+    // …and so is the signed link once the guest presents its OWN identity: a
+    // leaked URL stops working for anyone who has an identity of their own.
+    const asGuest = await httpGet(channel, href, {
+      "x-strada-profile-id": guest.profileId,
+      "x-strada-profile-token": guest.profileToken,
+    });
+    expect(asGuest.status).toBe(403);
+    expect(asGuest.text).toContain(guest.profileId);
+    expect(asGuest.text).toContain("guest");
+
+    // The owner presenting its headers is still served.
+    const asOwner = await httpGet(channel, href, {
+      "x-strada-profile-id": owner.profileId,
+      "x-strada-profile-token": owner.profileToken,
+    });
+    expect(asOwner.status).toBe(200);
+
+    await channel.disconnect();
+  });
+
+  it("refuses a guest's setup write through the dashboard proxy and lets the owner's through", async () => {
+    const { channel, owner, guest } = twoIdentities();
+    const proxy = (req: unknown, res: unknown, url: string) => (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, url);
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // An impeccable same-origin POST — but from the GUEST identity.
+    const guestReq = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": guest.profileId,
+        "x-strada-profile-token": guest.profileToken,
+      },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-guest" }),
+    });
+    const guestRes = createMockResponse();
+    const guestPending = proxy(guestReq, guestRes, "/api/settings/env");
+    guestReq.emitBody();
+    await guestPending;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(guestRes.statusCode).toBe(403);
+    expect(guestRes.body).toContain(guest.profileId);
+    expect(guestRes.body).toContain("setup:write");
+    expect(guestRes.body).toContain(owner.profileId);
+
+    // The owner's identical write goes through.
+    const ownerReq = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "x-strada-profile-id": owner.profileId,
+        "x-strada-profile-token": owner.profileToken,
+      },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-owner" }),
+    });
+    const ownerRes = createMockResponse();
+    const ownerPending = proxy(ownerReq, ownerRes, "/api/settings/env");
+    ownerReq.emitBody();
+    await ownerPending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ownerRes.statusCode).toBe(200);
+
+    // An unattributed write is refused too, once the instance IS shared: with
+    // two identities here it can no longer be assumed to be the owner's.
+    const anonReq = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-anon" }),
+    });
+    const anonRes = createMockResponse();
+    const anonPending = proxy(anonReq, anonRes, "/api/settings/env");
+    anonReq.emitBody();
+    await anonPending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(anonRes.statusCode).toBe(403);
+    expect(anonRes.body).toContain("deny:unidentified");
+
+    await channel.disconnect();
+  });
+
+  it("keeps a single-identity instance working: its setup write needs no headers", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const solo = connect(channel, OWNER_ID);
+    expect(identityStore(channel).count()).toBe(1);
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/settings/env",
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: "sk-solo" }),
+    });
+    const res = createMockResponse();
+    const pending = (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, "/api/settings/env");
+    req.emitBody();
+    await pending;
+
+    expect(solo.profileId).toBe(OWNER_ID);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    await channel.disconnect();
+  });
+
+  it("refuses a guest cancelling or inspecting the owner's task, and names it", async () => {
+    const { channel, owner, guest } = twoIdentities();
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-owner" ? owner.chatId : null));
+
+    // The chat-surface cancel: the shorter route to the same power.
+    await ws(channel, guest.chatId, { type: "cancel_task", taskId: "task-owner" });
+    expect(seen).not.toContain("/cancel task-owner");
+    const refusal = guest.frames("text").map((f) => String(f.text)).join("\n");
+    expect(refusal).toContain(guest.profileId);
+    expect(refusal).toContain("task-owner");
+
+    // Inspecting it (a verify run against the owner's task) is refused as well.
+    await ws(channel, guest.chatId, {
+      type: "verify:check_criterion", taskId: "task-owner", criterionId: "c1", checkType: "build",
+    });
+    const verdict = guest.frames("verify:check_result").at(-1)!;
+    expect(verdict.status).toBe("fail");
+    expect(String(verdict.error)).toContain(guest.profileId);
+
+    // The owner still cancels its own task.
+    await ws(channel, owner.chatId, { type: "cancel_task", taskId: "task-owner" });
+    expect(seen).toContain("/cancel task-owner");
+
+    await channel.disconnect();
+  });
+
+  it("refuses a guest instance control (pause the run, switch provider, autonomous mode)", async () => {
+    const { channel, owner, guest } = twoIdentities();
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+
+    await ws(channel, guest.chatId, { type: "monitor:pause" });
+    await ws(channel, guest.chatId, { type: "provider_switch", provider: "openai", model: "gpt-5" });
+    await ws(channel, guest.chatId, { type: "autonomous_toggle", enabled: true });
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    const refusals = guest.frames("text").map((f) => String(f.text)).join("\n");
+    expect(refusals).toContain(guest.profileId);
+    expect(refusals).toContain(owner.profileId);
+    expect(refusals.match(/Refused:/g)?.length).toBe(3);
+
+    // The owner has all three powers.
+    await ws(channel, owner.chatId, { type: "monitor:pause" });
+    await ws(channel, owner.chatId, { type: "provider_switch", provider: "openai", model: "gpt-5" });
+    await ws(channel, owner.chatId, { type: "autonomous_toggle", enabled: true });
+    expect(emit).toHaveBeenCalledWith("monitor:pause", expect.objectContaining({ type: "monitor:pause" }));
+    expect(seen).toEqual(["/model openai/gpt-5", "/autonomous on"]);
+
+    await channel.disconnect();
+  });
+
+  // ── The legacy-adoption path (resolveLegacyProfileId), end to end ──
+  //
+  // profileId is a PUBLIC value: it is sent to the client and kept in
+  // localStorage. An unauthenticated client that names an existing profileId
+  // must get a fresh identity, never that profile's history.
+  it("does not let an unauthenticated client claim an existing profileId and inherit its history", async () => {
+    const channel = new WebChannel();
+    const victim = connect(channel, OWNER_ID);
+    channel.broadcastRaw(JSON.stringify({
+      type: "monitor:dag_init",
+      payload: { rootId: "ep-owner", nodes: [{ id: "n1", task: "owner-secret-request" }] },
+      origin: victim.profileId,
+      timestamp: 1,
+    }));
+    expect(victim.frames("monitor:dag_init")).toHaveLength(1);
+
+    for (const claim of [{ legacyProfileChatId: OWNER_ID }, { profileChatId: OWNER_ID }, { profileId: OWNER_ID, profileToken: "guessed" }]) {
+      const socket = createMockSocket();
+      (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "session_init", ...claim })));
+      const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+
+      expect(connected.profileId, JSON.stringify(claim)).not.toBe(OWNER_ID);
+      expect(JSON.stringify(socket.getSentMessages())).not.toContain("owner-secret");
+      expect(socket.getSentMessages().filter((m) => m.type === "monitor:dag_init")).toHaveLength(0);
+      // …and the claim did not overwrite the victim's token either.
+      expect(identityStore(channel).isOwner(OWNER_ID)).toBe(true);
+    }
+
+    await channel.disconnect();
+  });
+  // A reconnect token is a CHAT credential; a profile token an IDENTITY one. A
+  // chat's replayed board and its buffered answers belong to the identity that
+  // owns the chat, so presenting one identity's chat token while authenticating
+  // as another must not hand over that chat.
+  it("does not hand one identity's chat to another identity that reconnects into it", async () => {
+    const { channel, owner, guest } = twoIdentities();
+
+    // An answer produced while the owner's browser is away is buffered for its chat.
+    owner.socket.close();
+    await channel.sendMarkdown(owner.chatId, "owner-secret-final");
+
+    const ownerChatToken = String(
+      (channel as unknown as { recentlyDisconnected: Map<string, { reconnectToken: string }> })
+        .recentlyDisconnected.get(owner.chatId)!.reconnectToken,
+    );
+
+    // The guest holds the owner's CHAT token but authenticates as itself.
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "session_init",
+      chatId: owner.chatId,
+      reconnectToken: ownerChatToken,
+      profileId: guest.profileId,
+      profileToken: guest.profileToken,
+    })));
+    const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+
+    expect(connected.chatId).not.toBe(owner.chatId);
+    expect(connected.profileId).toBe(guest.profileId);
+    expect(JSON.stringify(socket.getSentMessages())).not.toContain("owner-secret-final");
+
+    // …while the owner's own reconnect into its own chat still gets it back.
+    const again = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(again);
+    again.emit("message", Buffer.from(JSON.stringify({
+      type: "session_init",
+      chatId: owner.chatId,
+      reconnectToken: ownerChatToken,
+      profileId: owner.profileId,
+      profileToken: owner.profileToken,
+    })));
+    const back = again.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+    expect(back.chatId).toBe(owner.chatId);
+    expect(JSON.stringify(again.getSentMessages())).toContain("owner-secret-final");
+
+    await channel.disconnect();
+  });
+});

@@ -15,7 +15,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
-import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
+import { randomBytes, timingSafeEqual, randomUUID, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin, normalizeOrigin } from "../../security/origin-validation.js";
@@ -26,6 +26,16 @@ import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import { WebAttachmentStore } from "./web-attachment-store.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
+import {
+  decideInstanceAccess,
+  instanceRoleOf,
+  ownerOnlyProxySurface,
+  type AccessDecision,
+  type InstanceActor,
+  type InstanceFacts,
+  type InstanceResource,
+  type InstanceSurface,
+} from "./instance-access.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type {
   IChannelAdapter,
@@ -285,6 +295,23 @@ export class WebChannel
    * frame both replayed here and previously received live renders only once.
    */
   private readonly pendingDelivery = new Map<string, Record<string, unknown>[]>();
+
+  /**
+   * chatId → the profile identity that owns it, kept past disconnect so an
+   * attachment or a frame produced while the browser is away is still
+   * attributable (plan 6.14). Bounded; least-recently-touched evicted.
+   */
+  private readonly profileByChat = new LRUCache<string, string>(500);
+  /** attachment token → the profile identity it was delivered to (plan 6.14). */
+  private readonly attachmentOwnerByToken = new LRUCache<string, string>(500);
+  /**
+   * Per-process key signing attachment links. A browser cannot put a profile
+   * header on an `<img src>`, so the href this server hands to the owning
+   * socket carries its own proof: `?v=HMAC(token, ownerProfileId)`. Only the
+   * owner's socket ever received that href, so presenting it IS the owner's
+   * claim — and a guest with the bare token has nothing to present.
+   */
+  private readonly attachmentLinkKey = randomBytes(32);
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
@@ -592,10 +619,39 @@ export class WebChannel
     if (ownership.allowed) return true;
     this.sendToClient(chatId, {
       type: "text",
-      text: "Task does not belong to this chat.",
+      text: `Refused: ${this.taskRefusalReason(taskId, chatId, ownership.owner, context)}.`,
       messageId: randomUUID(),
     });
     return false;
+  }
+
+  /**
+   * Plan 6.14, surface task:control: a refusal names the identity that was
+   * refused and what it tried, not just "does not belong to this chat" — on a
+   * shared instance the person reading it needs to know WHICH identity was
+   * turned away. Also logs the refusal.
+   */
+  private taskRefusalReason(
+    taskId: string,
+    chatId: string,
+    owner: string | null,
+    context: string,
+  ): string {
+    const facts = this.instanceFacts();
+    const actor = this.actorForChat(chatId, facts);
+    const ownerProfileId = owner ? this.profileByChat.get(owner) : undefined;
+    const refusedWho = actor.profileId ? `${actor.role} identity ${actor.profileId}` : `unidentified caller (chat ${chatId})`;
+    const belongsTo = ownerProfileId ? `identity ${ownerProfileId}` : `chat ${owner}`;
+    const reason = `${refusedWho} may not control this task "${taskId}": it belongs to ${belongsTo}`;
+    getLoggerSafe().warn("[WebChannel] instance access refused", {
+      surface: "task:control" satisfies InstanceSurface,
+      code: "deny:other-identity",
+      context,
+      profileId: actor.profileId ?? null,
+      chatId,
+      reason,
+    });
+    return reason;
   }
 
   /**
@@ -754,15 +810,106 @@ export class WebChannel
       // Not JSON — don't cache
     }
 
+    // One instance snapshot for the whole fan-out: the visibility rule is the
+    // same for every socket in this broadcast and the store must not be read
+    // per client per frame.
+    const facts = origin === undefined ? undefined : this.instanceFacts();
     for (const [, client] of this.clients) {
       if (client.ws.readyState !== 1) continue;
-      if (!this.monitorFrameVisibleTo(origin, client.profileId)) continue;
+      if (!this.monitorFrameVisibleTo(origin, client.profileId, facts)) continue;
       try {
         client.ws.send(message);
       } catch {
         // Connection may have closed between readyState check and send
       }
     }
+  }
+
+  // ===========================================================================
+  // Shared-instance management model (plan 6.14) — see ./instance-access.ts
+  // ===========================================================================
+
+  /** What this instance is: its owner, and whether more than one identity lives here. */
+  private instanceFacts(): InstanceFacts {
+    try {
+      const ownerProfileId = this.identityStore.ownerProfileId();
+      return { shared: this.identityStore.count() > 1, ...(ownerProfileId ? { ownerProfileId } : {}) };
+    } catch (err) {
+      // A store failure must not silently widen access: an instance whose owner
+      // cannot be read is treated as shared with an unknown owner, so every
+      // owner-only surface refuses instead of falling through to "allowed".
+      getLoggerSafe().warn("[WebChannel] identity store unreadable — treating instance as shared", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { shared: true };
+    }
+  }
+
+  /** The actor a live socket represents: its profile identity and its role here. */
+  private actorFor(profileId: string | undefined, chatId: string | undefined, facts: InstanceFacts): InstanceActor {
+    const role = instanceRoleOf(profileId, facts, (candidate) => this.isIssuedProfileId(candidate));
+    return {
+      role,
+      ...(role === "unidentified" ? {} : { profileId: profileId! }),
+      ...(chatId ? { chatId } : {}),
+    };
+  }
+
+  /** The actor behind a chatId, whether or not its socket is live right now. */
+  private actorForChat(chatId: string, facts: InstanceFacts): InstanceActor {
+    const profileId = this.clients.get(chatId)?.profileId ?? this.profileByChat.get(chatId);
+    // Before session_init a client's profileId is its own chatId, which the
+    // identity store never issued — instanceRoleOf then reports "unidentified".
+    return this.actorFor(profileId, chatId, facts);
+  }
+
+  /**
+   * Ask the model, log every refusal with the identity and the reason, and hand
+   * the decision back. The reason is never dropped: a caller either forwards it
+   * to the refused client or puts it in the HTTP body.
+   */
+  private decide(
+    surface: InstanceSurface,
+    actor: InstanceActor,
+    opts: { resource?: InstanceResource; what?: string; facts?: InstanceFacts } = {},
+  ): AccessDecision {
+    const decision = decideInstanceAccess({
+      surface,
+      actor,
+      instance: opts.facts ?? this.instanceFacts(),
+      ...(opts.resource ? { resource: opts.resource } : {}),
+      ...(opts.what ? { what: opts.what } : {}),
+    });
+    if (!decision.allowed) {
+      getLoggerSafe().warn("[WebChannel] instance access refused", {
+        surface,
+        code: decision.code,
+        profileId: actor.profileId ?? null,
+        chatId: actor.chatId ?? null,
+        reason: decision.reason,
+      });
+    }
+    return decision;
+  }
+
+  /**
+   * Gate a WS control message on `surface`. On refusal the client is told which
+   * identity was refused and why, and the handler must `break`.
+   */
+  private allowWsAction(
+    surface: InstanceSurface,
+    chatId: string,
+    opts: { resource?: InstanceResource; what?: string } = {},
+  ): boolean {
+    const facts = this.instanceFacts();
+    const decision = this.decide(surface, this.actorForChat(chatId, facts), { ...opts, facts });
+    if (decision.allowed) return true;
+    this.sendToClient(chatId, {
+      type: "text",
+      text: `Refused: ${decision.reason}`,
+      messageId: randomUUID(),
+    });
+    return false;
   }
 
   /**
@@ -787,14 +934,31 @@ export class WebChannel
    *     scope) ⇒ nobody's private traffic, so it stays visible. The portal is
    *     still the operator's window onto the other channels' activity.
    *
-   * Chosen over an "admin profile that sees everything": the portal has no
-   * admin/operator role today, so such a profile would be an unwired flag — and
-   * the honest per-profile boundary is the thing the audit asked for.
+   * Chosen over an "admin profile that sees everything": the instance owner
+   * configures and controls the instance (plan 6.14) but is deliberately given
+   * no power to read another identity's boards, so "shared instance" never
+   * means "the operator reads everyone's chat".
+   *
+   * Since plan 6.14 the rule is stated by the instance-access model
+   * (`monitor:frames`, scope own-identity) rather than inline here: an origin
+   * that is another identity on this instance is that identity's own traffic,
+   * and an origin belonging to nobody here is nobody's private traffic.
    */
-  private monitorFrameVisibleTo(origin: string | undefined, profileId: string): boolean {
+  private monitorFrameVisibleTo(origin: string | undefined, profileId: string, facts?: InstanceFacts): boolean {
     if (origin === undefined) return true;
     if (origin === profileId) return true;
-    return !this.isIssuedProfileId(origin);
+    const instance = facts ?? this.instanceFacts();
+    // Only an origin this channel issued names an identity to be separated from;
+    // anything else (a Telegram chat id, a CLI scope) is nobody's private traffic.
+    const resource: InstanceResource = this.isIssuedProfileId(origin) ? { profileId: origin } : {};
+    // The socket's scope is always named, even before session_init (where it is
+    // the chatId): a frame belonging to SOME identity is never handed to a
+    // different scope, whether or not a second identity exists yet.
+    const actor: InstanceActor = {
+      role: instanceRoleOf(profileId, instance, (candidate) => this.isIssuedProfileId(candidate)),
+      profileId,
+    };
+    return decideInstanceAccess({ surface: "monitor:frames", actor, resource, instance }).allowed;
   }
 
   /**
@@ -835,6 +999,7 @@ export class WebChannel
    * irrelevant; within a root, index 0 (dag_init) precedes its incrementals.
    */
   private replayMonitorState(ws: WebSocket, profileId: string): void {
+    const facts = this.instanceFacts();
     for (const frames of this.lastMonitorSnapshotByRoot.values()) {
       for (const msg of frames) {
         if (ws.readyState !== 1) return;
@@ -842,7 +1007,7 @@ export class WebChannel
         // per-profile boundary as the live fan-out. Without this a reconnecting
         // profile was handed EVERY retained root's board, including the ones a
         // live broadcast would already have withheld.
-        if (!this.monitorFrameVisibleTo(this.frameOrigin(msg), profileId)) continue;
+        if (!this.monitorFrameVisibleTo(this.frameOrigin(msg), profileId, facts)) continue;
         try {
           ws.send(msg);
         } catch {
@@ -940,7 +1105,10 @@ export class WebChannel
       });
       return;
     }
-    const href = `/attachments/${token}`;
+    // Plan 6.14: the link is scoped to the identity it is delivered to. A
+    // browser cannot put a profile header on an `<img src>`, so the href itself
+    // carries the owner's proof; a guest holding the bare token has none.
+    const href = `/attachments/${token}${this.attachmentLinkSuffix(token, chatId)}`;
     const size = typeof attachment.size === "number" ? ` (${(attachment.size / 1024).toFixed(0)} KB)` : "";
     const kind = attachment.type === "image" ? "image" : "file";
     // The markdown text every existing renderer already handles stays as the
@@ -980,8 +1148,78 @@ export class WebChannel
     });
   }
 
+  /**
+   * Bind a freshly registered attachment to the identity behind `chatId` and
+   * return the query suffix that proves it (`?v=…`). Empty when the chat has no
+   * identity at all (a daemon-side chat that never completed session_init):
+   * such an attachment belongs to nobody, and the model grants it under
+   * `allow:unattributed` / `allow:sole-identity` instead of a signature.
+   */
+  private attachmentLinkSuffix(token: string, chatId: string): string {
+    const ownerProfileId = this.clients.get(chatId)?.profileId ?? this.profileByChat.get(chatId);
+    if (!ownerProfileId || !this.isIssuedProfileId(ownerProfileId)) return "";
+    this.attachmentOwnerByToken.set(token, ownerProfileId);
+    return `?v=${this.attachmentLinkSignature(token, ownerProfileId)}`;
+  }
+
+  /** HMAC binding an attachment token to the identity it was delivered to. */
+  private attachmentLinkSignature(token: string, profileId: string): string {
+    return createHmac("sha256", this.attachmentLinkKey)
+      .update(`${token} ${profileId}`)
+      .digest("base64url");
+  }
+
+  /**
+   * Who may GET this attachment (plan 6.14, surface `attachment:read`). The
+   * owning identity is named by the token→identity binding made at delivery;
+   * the request proves it either with the signed link this server handed to
+   * that identity's socket, or with the profile headers a non-browser caller
+   * can send. A verified identity that is NOT the owner is refused even when it
+   * presents a valid signature, so a leaked link stops working for anyone who
+   * has an identity of their own.
+   */
+  private decideAttachmentAccess(req: HttpReq | undefined, token: string, query: string): AccessDecision {
+    const facts = this.instanceFacts();
+    const owner = this.attachmentOwnerByToken.get(token);
+    const headerProfileId = req ? this.getSingleHeader(req.headers["x-strada-profile-id"]) : undefined;
+    const headerToken = req ? this.getSingleHeader(req.headers["x-strada-profile-token"]) : undefined;
+    const verifiedHeaderProfile =
+      headerProfileId && headerToken && this.identityStore.verify(headerProfileId, headerToken)
+        ? headerProfileId
+        : undefined;
+
+    const presented = new URLSearchParams(query).get("v") ?? "";
+    const signatureNamesOwner =
+      owner !== undefined &&
+      presented.length > 0 &&
+      this.safeTokenEquals(presented, this.attachmentLinkSignature(token, owner));
+
+    // The actor: a verified header identity if one was sent, else the identity
+    // the signed link names, else nobody.
+    const actorProfileId = verifiedHeaderProfile ?? (signatureNamesOwner ? owner : undefined);
+    const actor = this.actorFor(actorProfileId, undefined, facts);
+    return this.decide("attachment:read", actor, {
+      facts,
+      what: token,
+      ...(owner ? { resource: { profileId: owner } } : {}),
+    });
+  }
+
   /** GET /attachments/<token> — the registered file, or 404. */
-  private async serveAttachment(res: ServerResponse, token: string): Promise<void> {
+  private async serveAttachment(
+    res: ServerResponse,
+    token: string,
+    query: string = "",
+    req?: HttpReq,
+  ): Promise<void> {
+    const access = this.decideAttachmentAccess(req, token, query);
+    if (!access.allowed) {
+      // 403, not 404: the refusal names the identity that was refused, so a
+      // shared instance can be debugged instead of silently losing files.
+      res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json", ...WebChannel.NO_CACHE_HEADERS });
+      res.end(JSON.stringify({ error: "Forbidden", reason: access.reason, surface: access.surface, code: access.code }));
+      return;
+    }
     const entry = this.attachmentStore.get(token);
     if (!entry) {
       res.writeHead(404, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/plain" });
@@ -1195,7 +1433,11 @@ export class WebChannel
 
     // A file the daemon handed to this chat (see sendAttachment).
     if (req.method === "GET" && url.startsWith("/attachments/")) {
-      await this.serveAttachment(res, url.slice("/attachments/".length).split("?")[0]!);
+      const rest = url.slice("/attachments/".length);
+      const queryStart = rest.indexOf("?");
+      const attachmentToken = queryStart >= 0 ? rest.slice(0, queryStart) : rest;
+      const attachmentQuery = queryStart >= 0 ? rest.slice(queryStart + 1) : "";
+      await this.serveAttachment(res, attachmentToken, attachmentQuery, req);
       return;
     }
 
@@ -1368,6 +1610,24 @@ export class WebChannel
     ws.on("error", handleDisconnect);
   }
 
+  /**
+   * May `profileId` take over chat `chatId` (plan 6.14, surface chat:frames)?
+   * Yes while the chat belongs to no identity this process has seen, or to this
+   * very identity; no when it belongs to another one — the reclaim is dropped
+   * and the caller keeps its fresh chat instead of inheriting a stranger's
+   * replayed board and buffered answers.
+   */
+  private mayReclaimChat(chatId: string, profileId: string): boolean {
+    const recorded = this.profileByChat.get(chatId);
+    if (recorded === undefined || recorded === profileId) return true;
+    const facts = this.instanceFacts();
+    return this.decide("chat:frames", this.actorFor(profileId, chatId, facts), {
+      facts,
+      resource: { profileId: recorded },
+      what: `chat ${chatId}`,
+    }).allowed;
+  }
+
   private tryReclaimSession(
     client: WsClient,
     oldId: string,
@@ -1433,18 +1693,27 @@ export class WebChannel
     const requestedChatId = typeof data.chatId === "string" ? data.chatId : "";
     const requestedReconnectToken = typeof data.reconnectToken === "string" ? data.reconnectToken : "";
 
+    // The identity is resolved BEFORE the reclaim (plan 6.14): a reconnect token
+    // is a CHAT credential, a profile token an IDENTITY one, and the chat's
+    // replayed board plus its buffered answers belong to the identity that owns
+    // the chat. Reclaiming chat X while authenticating as a different identity
+    // would hand X's history to whoever holds only X's chat token.
+    const identity = this.resolveWebIdentity(data);
+    client.profileId = identity.profileId;
+
     let chatId = client.chatId;
     let reconnectToken = client.reconnectToken;
-    if (requestedChatId && requestedReconnectToken) {
+    if (requestedChatId && requestedReconnectToken && this.mayReclaimChat(requestedChatId, identity.profileId)) {
       const reclaimed = this.tryReclaimSession(client, requestedChatId, requestedReconnectToken);
       if (reclaimed) {
         chatId = reclaimed.chatId;
         reconnectToken = reclaimed.reconnectToken;
       }
     }
-
-    const identity = this.resolveWebIdentity(data);
-    client.profileId = identity.profileId;
+    // Remember which identity owns this chat past its disconnect, so anything
+    // produced for the chat while the browser is away is still attributable to
+    // an identity (plan 6.14).
+    this.profileByChat.set(chatId, identity.profileId);
     const cfgResult = loadConfigSafe();
     if (cfgResult.kind === "err") {
       getLoggerSafe().warn("Failed to load config for language preference, defaulting to en", { error: cfgResult.error });
@@ -1661,6 +1930,10 @@ export class WebChannel
       case "provider_switch": {
         const provider = String(data.provider ?? "").trim();
         if (!provider || !this.handler) break;
+        // Plan 6.14, surface instance:control — one daemon, one provider/model
+        // selection. A guest switching it changes what EVERY identity on this
+        // instance runs on (and what it costs the owner).
+        if (!this.allowWsAction("instance:control", chatId, { what: `provider switch to ${provider}` })) break;
         const model = typeof data.model === "string" ? data.model.trim() : "";
         const safeProvider = provider.replace(/[^a-zA-Z0-9._\-]/g, '');
         const safeModel = model.replace(/[^a-zA-Z0-9._:\-\/]/g, '');
@@ -1707,6 +1980,9 @@ export class WebChannel
       case "autonomous_toggle": {
         const enabled = Boolean(data.enabled);
         if (!this.handler) break;
+        // Plan 6.14, surface instance:control: autonomous mode is a property of
+        // the daemon, not of one chat.
+        if (!this.allowWsAction("instance:control", chatId, { what: `autonomous ${enabled ? "on" : "off"}` })) break;
         const hours = typeof data.hours === "number" && data.hours > 0 ? data.hours : undefined;
         const text = `/autonomous ${enabled ? "on" : "off"}${hours ? " " + hours : ""}`;
         const msg: IncomingMessage = {
@@ -1732,6 +2008,12 @@ export class WebChannel
         if (!this.handler) break;
         const rawTaskId = typeof data.taskId === "string" ? data.taskId.trim() : "";
         const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(rawTaskId) ? rawTaskId : "";
+        // Plan 6.14, surface task:control. The monitor:* commands have checked
+        // task↔chat ownership since the CWE-639 fix; THIS handler did not, so a
+        // guest on a shared instance could cancel the owner's named task from
+        // the chat surface — the same power by the shorter route. A bare
+        // /cancel (no taskId) still acts only on this chat's own active task.
+        if (safeTaskId && !await this.checkMonitorTaskOwnership(safeTaskId, chatId, "cancel_task")) break;
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
@@ -1871,6 +2153,10 @@ export class WebChannel
       case "monitor:resume": {
         const payloadSize = JSON.stringify(data).length;
         if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        // Plan 6.14, surface instance:control. Unlike every other monitor:*
+        // command these name no task: they pause and resume the whole run, for
+        // everyone. Owner-only.
+        if (!this.allowWsAction("instance:control", chatId, { what: String(data.type) })) break;
         if (this.workspaceBusEmitter) {
           this.workspaceBusEmitter(data.type as string, data);
         }
@@ -1941,7 +2227,8 @@ export class WebChannel
             taskId: safeTaskId,
             criterionId: safeCriterionId,
             status: "fail",
-            error: "Task does not belong to this chat",
+            // Plan 6.14: the refusal names the identity that was refused.
+            error: `Refused: ${this.taskRefusalReason(safeTaskId, chatId, ownershipCheck.owner, "verify:check_criterion")}`,
           });
           break;
         }
@@ -2107,6 +2394,8 @@ export class WebChannel
             taskId: safeTaskId,
             accepted: false,
             supervisorVerdict: "invalid_request",
+            // Plan 6.14: the refusal names the identity that was refused.
+            reason: `Refused: ${this.taskRefusalReason(safeTaskId, chatId, gateOwnership.owner, "verify:gate_decision")}`,
           });
           break;
         }
@@ -2647,6 +2936,31 @@ export class WebChannel
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
       return;
+    }
+
+    // Plan 6.14: the origin check above proves the request came from THIS
+    // portal — it says nothing about WHICH of the instance's identities sent it.
+    // Setup/settings writes and daemon control are owner-only, so a guest's
+    // mutation is refused here even though its origin is impeccable.
+    if (method !== "GET") {
+      const ownerOnly = ownerOnlyProxySurface(pathOnly);
+      if (ownerOnly) {
+        const facts = this.instanceFacts();
+        const profileId = this.getSingleHeader(req.headers["x-strada-profile-id"]);
+        const profileToken = this.getSingleHeader(req.headers["x-strada-profile-token"]);
+        const verified = profileId && profileToken && this.identityStore.verify(profileId, profileToken)
+          ? profileId
+          : undefined;
+        const decision = this.decide(ownerOnly, this.actorFor(verified, undefined, facts), {
+          facts,
+          what: `${method} ${pathOnly}`,
+        });
+        if (!decision.allowed) {
+          res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Forbidden", reason: decision.reason, surface: decision.surface, code: decision.code }));
+          return;
+        }
+      }
     }
 
     // GET requests are read-only but still browser-reachable, so a cross-origin
