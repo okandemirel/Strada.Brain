@@ -155,6 +155,8 @@ export class MessageQueue<T> {
         for (let i = 0; i < batchSize; i++) {
           const entry = this.entries[0];
           if (!entry) break;
+          // A head parked for its backoff pauses the whole queue: FIFO.
+          if (entry.retryAfter != null && Date.now() < entry.retryAfter) break;
 
           try {
             const result = await this.opts.processItem(entry.item);
@@ -174,21 +176,26 @@ export class MessageQueue<T> {
               entry.reject(error instanceof Error ? error : new Error(String(error)));
               this.removeEntry(entry);
             } else {
+              // THE HEAD STAYS THE HEAD. Removing it for the backoff let the
+              // next entry send in the same pass — and any pass before the
+              // timer re-inserted it — so B overtook A after A's one transient
+              // failure (audit 12F5 / D62, 2026-09-13). The head is PARKED in
+              // place with a retryAfter; every pass stops at it until then,
+              // and the timer resumes the queue.
               const delay = this.computeRetryDelay(entry.retries);
-              this.removeEntry(entry);
+              entry.retryAfter = Date.now() + delay;
               const timer = setTimeout(() => {
                 this.timerMap.delete(timer);
                 if (this.opts.isConnected && !this.opts.isConnected()) {
                   entry.reject(new Error("Discord channel disconnected"));
+                  this.removeEntry(entry);
                   return;
                 }
-                // Re-insert at the HEAD, not the tail: this entry was at the
-                // front of the FIFO queue, so pushing it to the back would let
-                // messages enqueued during its backoff be delivered ahead of it,
-                // breaking Discord's in-order delivery. unshift preserves FIFO.
-                this.entries.unshift(entry);
+                entry.retryAfter = undefined;
+                void this.processQueue();
               }, delay);
               this.timerMap.set(timer, entry);
+              break;
             }
           }
         }
@@ -243,6 +250,9 @@ export class MessageQueue<T> {
     for (const [timer, entry] of this.timerMap) {
       clearTimeout(timer);
       entry.reject(new Error(reason));
+      // A parked head stays in the queue during its backoff; it leaves with
+      // its timer.
+      this.removeEntry(entry);
     }
     this.timerMap.clear();
   }

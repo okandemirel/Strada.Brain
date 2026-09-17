@@ -200,19 +200,50 @@ describe("MessageQueue – retry backoff (FIFO mode)", () => {
       }),
     );
 
-    void q.enqueue("item");
+    q.enqueue("item").catch(() => {});
     await q.processQueue();
 
-    // After first failure retries=1 and a timer is set; item is NOT in queue yet.
+    // After the first failure the item is PARKED at the head with retries=1
+    // and a timer; nothing behind it can send (audit 12F5 / D62).
     expect(callCount).toBe(1);
     expect(q.timerMap.size).toBe(1);
-    expect(q.size).toBe(0); // removed from queue pending re-push
-
-    // Advance time so the retry timer fires and re-pushes the item.
-    await vi.runAllTimersAsync();
     expect(q.size).toBe(1);
-    const entry = q.entries[0]!;
-    expect(entry.retries).toBe(1);
+    expect(q.entries[0]!.retries).toBe(1);
+    expect(q.entries[0]!.retryAfter).toBeGreaterThan(Date.now());
+
+    // The timer resumes the queue and the item is retried.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(callCount).toBe(2);
+  });
+
+  it("a transient failure at the head ends the pass: B does not overtake A (audit 12F5 / D62)", async () => {
+    // A and B are both queued; A fails once. The old pass removed A for its
+    // backoff and went on to send B in the same pass, so B overtook A.
+    let failA = true;
+    const sent: string[] = [];
+    const q = new MessageQueue<string>(
+      makeOpts<string>({
+        baseDelayMs: 1000,
+        processItem: async (item) => {
+          if (item === "A" && failA) {
+            failA = false;
+            throw new Error("transient");
+          }
+          sent.push(item);
+        },
+      }),
+    );
+    q.enqueue("A").catch(() => {});
+    void q.enqueue("B");
+    await q.processQueue();
+    // The pass stopped at A's failure; A is parked at the head, B behind it,
+    // and another pass before the timer sends nothing either.
+    expect(sent).toEqual([]);
+    expect(q.entries.map((e) => e.item)).toEqual(["A", "B"]);
+    await q.processQueue();
+    expect(sent).toEqual([]);
+    await vi.runAllTimersAsync();
+    expect(sent).toEqual(["A", "B"]);
   });
 
   it("re-inserts a transiently-failed entry at the HEAD to preserve FIFO order", async () => {
@@ -232,19 +263,28 @@ describe("MessageQueue – retry backoff (FIFO mode)", () => {
       }),
     );
 
+    const sent: string[] = [];
+    (q as unknown as { opts: { processItem: (item: string) => Promise<void> } }).opts.processItem = async (item) => {
+      if (item === "A" && failA) {
+        failA = false;
+        throw new Error("transient");
+      }
+      sent.push(item);
+    };
     const pA = q.enqueue("A");
     pA.catch(() => {});
-    await q.processQueue(); // "A" fails, removed from queue pending re-push
-    expect(q.size).toBe(0);
+    await q.processQueue(); // "A" fails and is parked at the head
+    expect(q.entries.map((e) => e.item)).toEqual(["A"]);
     expect(q.timerMap.size).toBe(1);
 
-    // A later message arrives during "A"'s backoff window.
+    // A later message arrives during "A"'s backoff window — behind it.
     void q.enqueue("B");
-    expect(q.entries.map((e) => e.item)).toEqual(["B"]);
-
-    // Retry timer fires — "A" must land at the front, ahead of "B".
-    await vi.runAllTimersAsync();
     expect(q.entries.map((e) => e.item)).toEqual(["A", "B"]);
+    expect(sent).toEqual([]);
+
+    // Retry timer fires — "A" goes first, then "B".
+    await vi.runAllTimersAsync();
+    expect(sent).toEqual(["A", "B"]);
   });
 
   it("rejects the item after maxRetries exceeded", async () => {

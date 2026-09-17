@@ -767,7 +767,7 @@ describe("DiscordChannel queue behaviour (characterization)", () => {
     expect(internal.messageQueue).toHaveLength(0);
   });
 
-  it("retry counter: after a transient failure the item moves to a retry timer", async () => {
+  it("retry counter: after a transient failure the item is PARKED at the head with a retry timer (audit 12F5)", async () => {
     const ch = makeChannel();
     const internal = ch as unknown as InternalChannel;
 
@@ -780,8 +780,9 @@ describe("DiscordChannel queue behaviour (characterization)", () => {
 
     await internal.processMessageQueue();
 
-    // After first failure: item removed from queue and a retry timer is set.
-    expect(internal.messageQueue).toHaveLength(0);
+    // After the first failure the item stays at the HEAD (nothing behind it
+    // may overtake it) and a retry timer is set.
+    expect(internal.messageQueue).toHaveLength(1);
     expect(internal.retryTimers.size).toBe(1);
   });
 });
