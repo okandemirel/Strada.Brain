@@ -5686,6 +5686,16 @@ export class CampaignManager {
         const unasked = new Set((answer.unasked ?? []).map(requirementKey));
         for (const [key] of slice) if (!unasked.has(key)) askedKeys.add(key);
       }
+      // WHAT NOBODY ASKED IS STILL OPEN. The tail beyond the pass's cap and
+      // anything the resolver declined vanished from the answer, so a game
+      // with requirement 160 missing could deliver on 150 closures (Codex
+      // 2026-09-17 on 2b44aa8f). Open, unstamped: the next pass asks it first.
+      for (const [key, ms] of candidates) {
+        if (askedKeys.has(key)) continue;
+        const name = coverageGapOf(ms[0]!);
+        if (!asked.includes(name)) asked.push(name);
+        judged.open.push(name);
+      }
       // Stamped whether or not the answer closed them: what matters is that
       // this pass ASKED, so the next one can ask the others.
       const askedNow = Date.now();

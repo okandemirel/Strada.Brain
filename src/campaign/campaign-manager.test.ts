@@ -3910,10 +3910,13 @@ describe("CampaignManager", () => {
       })),
     } as unknown as Campaign;
 
-    await openRequirements(campaign);
+    const first = await openRequirements(campaign);
     expect(seen).toHaveLength(5);
     const stamped = campaign.milestones.filter((m) => typeof m.coverageJudgedAtMs === "number");
     expect(stamped).toHaveLength(150);
+    // …and the ten nobody asked are still OPEN, not silently delivered
+    // (Codex 2026-09-17 on 2b44aa8f).
+    for (let i = 151; i <= 160; i++) expect(first.open).toContain(`Req${i}: absent`);
     // The next pass asks the ten nobody asked yet, first.
     seen.length = 0;
     await openRequirements(campaign);
