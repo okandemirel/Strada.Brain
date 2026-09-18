@@ -1636,6 +1636,49 @@ describe("every store asks before opening (round 13 #18)", () => {
     }
   });
 
+  it("a refused open leaves no empty database behind", async () => {
+    // The question is asked with the connection already open, and opening CREATES
+    // the file — so a first-ever open during a restore used to leave a zero-length
+    // database at a path the restore may be mid-swap on. SQLite reads that as a
+    // valid EMPTY database that passes integrity_check, which is the trap
+    // `unusableDatabaseSource` exists for.
+    homeWithLock(process.pid);
+    const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
+    const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-empty-"));
+    dirs.push(dbDir);
+    const file = path.join(dbDir, "memory.db");
+    const db = new Database(file);
+    expect(existsSync(file)).toBe(true);
+    expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("a refused open never removes a database that has content (guard)", async () => {
+    homeWithLock(process.pid);
+    const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
+    const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-keep-"));
+    dirs.push(dbDir);
+    const file = path.join(dbDir, "memory.db");
+    // Somebody's data: one table, one row, written before the maintenance window.
+    const seed = new Database(file);
+    seed.exec("CREATE TABLE kept (id INTEGER PRIMARY KEY)");
+    seed.prepare("INSERT INTO kept VALUES (1)").run();
+    seed.close();
+    const before = statSync(file).size;
+    expect(before).toBeGreaterThan(0);
+
+    const db = new Database(file);
+    expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    expect(existsSync(file)).toBe(true);
+    expect(statSync(file).size).toBe(before);
+    const reopened = new Database(file, { readonly: true });
+    try {
+      expect((reopened.prepare("SELECT COUNT(*) AS n FROM kept").get()).n).toBe(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("a lock left by a DEAD holder never keeps the daemon out of its own store (guard)", async () => {
     homeWithLock(0x7ffffffe);
     const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
