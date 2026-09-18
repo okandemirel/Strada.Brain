@@ -263,22 +263,37 @@ function applyPatch(repoDir, patchText, label, { reverse = false } = {}) {
   return { ok: false, detail: tail(`${first.stderr}${threeWay.stderr}`, 6) || "git apply failed" };
 }
 
+/** The revision the candidate started from, so its work can be diffed against it. */
+function currentRev(repoDir) {
+  const res = git(repoDir, ["rev-parse", "HEAD"]);
+  return res.ok ? res.stdout.trim() : null;
+}
+
 /**
- * Collects the candidate's work as a diff, including files it added.
+ * Restores the task's test files from the base revision.
  *
- * `git diff` alone misses new files, and a fix that adds a class would read as
- * "the agent produced nothing". `--intent-to-add` on the untracked files is what
- * makes them appear in the diff without staging content. Ignored files stay
- * ignored, so build output never lands in the patch.
+ * A candidate that edits or deletes the benchmark's tests would otherwise break
+ * the re-apply of testPatch — escaping measurement entirely, which is a cheap
+ * way for a weak agent never to be scored — or smuggle its fix into the
+ * assertions. The tests are not the candidate's to write.
  */
-function workingTreeDiff(repoDir) {
-  const untracked = git(repoDir, ["ls-files", "--others", "--exclude-standard"]);
-  const files = untracked.ok ? untracked.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-  for (let i = 0; i < files.length; i += 100) {
-    git(repoDir, ["add", "--intent-to-add", "--", ...files.slice(i, i + 100)]);
+function restoreTestFiles(repoDir, testPatch, baseRev, testPatchPaths) {
+  const paths = testPatchPaths(testPatch);
+  if (paths.length === 0 || !baseRev) return [];
+  const restored = [];
+  for (const rel of paths) {
+    const dirty = git(repoDir, ["diff", "--name-only", baseRev, "--", rel]);
+    if (!dirty.ok || dirty.stdout.trim() === "") continue;
+    const back = git(repoDir, ["checkout", baseRev, "--", rel]);
+    if (back.ok) restored.push(rel);
+    else {
+      // The file does not exist at base (the test patch adds it); removing the
+      // candidate's version is the equivalent restore.
+      const removed = git(repoDir, ["rm", "-q", "-f", "--ignore-unmatch", "--", rel]);
+      if (removed.ok) restored.push(rel);
+    }
   }
-  const diff = git(repoDir, ["diff"]);
-  return diff.ok ? diff.stdout : "";
+  return restored;
 }
 
 /**
@@ -427,8 +442,8 @@ const STRADA_CANDIDATE_NOT_RUN =
   "credit on its own. Pass --candidate '<command>' to evaluate an agent, or " +
   "--candidate gold for the reference-patch control run.";
 
-function runCandidate({ args, task, api, repoDir, taskDir, logDir }) {
-  const { classifyPatchOutput } = api.runner;
+function runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev }) {
+  const { captureCandidatePatch } = api.runner;
   if (args.candidate === null || args.candidate === "strada") {
     return { kind: "unavailable", patch: null, patchSource: "none", unavailableReason: STRADA_CANDIDATE_NOT_RUN };
   }
@@ -460,7 +475,13 @@ function runCandidate({ args, task, api, repoDir, taskDir, logDir }) {
     return { kind: "command", patch: null, patchSource: "none", timedOut: true, durationMs, exitCode: res.status };
   }
   const patchFile = fs.existsSync(patchOut) ? fs.readFileSync(patchOut, "utf8") : "";
-  const { patch, source } = classifyPatchOutput({ patchFile, workingTreeDiff: workingTreeDiff(repoDir) });
+  // Against baseRev, not `git diff`: a candidate that staged, committed, or
+  // branched its fix must not read as having produced nothing.
+  const { patch, source } = captureCandidatePatch({
+    runGit: (gitArgs) => git(repoDir, gitArgs),
+    baseRev,
+    patchFile,
+  });
   return { kind: "command", patch, patchSource: source, exitCode: res.status, durationMs };
 }
 
@@ -623,7 +644,17 @@ async function runTask(task, args, api) {
     }
 
     // ── candidate ──
-    const candidate = runCandidate({ args, task, api, repoDir, taskDir, logDir });
+    // Recorded BEFORE the candidate runs: everything it does is measured
+    // against this, however it chooses to leave the tree.
+    const baseRev = currentRev(repoDir);
+    if (!baseRev) {
+      return finish({
+        notRun: { reason: "harness-error", detail: "could not resolve HEAD before the candidate ran" },
+        baseline,
+        deviations,
+      });
+    }
+    const candidate = runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev });
     if (candidate.kind === "unavailable" || candidate.timedOut) {
       return finish({ baseline, candidate, deviations });
     }
@@ -638,6 +669,14 @@ async function runTask(task, args, api) {
     }
 
     // ── score ──
+    // The candidate's edits to the benchmark's own tests are discarded first,
+    // so it can neither dodge the tests nor rewrite the assertions.
+    const restoredTests = restoreTestFiles(repoDir, task.testPatch, baseRev, api.runner.testPatchPaths);
+    if (restoredTests.length > 0) {
+      deviations.push(
+        `candidate edits to ${restoredTests.length} test file(s) were discarded before scoring: ${restoredTests.join(", ")}`,
+      );
+    }
     const testPatchOn = applyPatch(repoDir, task.testPatch, "test-patch");
     if (!testPatchOn.ok) {
       return finish({
@@ -771,10 +810,19 @@ async function main(argv) {
     attempts,
   };
   if (args.report) fs.writeFileSync(args.report, `${JSON.stringify(payload, null, 2)}\n`);
-  if (args.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else process.stdout.write(`${api.runner.renderRunReport(report, attempts)}\n`);
-  process.stdout.write(`\nverdict: ${decision.verdict} (exit ${decision.exitCode})\n`);
-  for (const r of decision.reasons) process.stdout.write(`  ${r}\n`);
+  // In --json mode stdout is a document, not a log: a trailing human footer
+  // makes `| jq` fail on an otherwise perfectly good run, so it goes to stderr.
+  const footer = [
+    `verdict: ${decision.verdict} (exit ${decision.exitCode})`,
+    ...decision.reasons.map((r) => `  ${r}`),
+  ].join("\n");
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    process.stderr.write(`${footer}\n`);
+  } else {
+    process.stdout.write(`${api.runner.renderRunReport(report, attempts)}\n`);
+    process.stdout.write(`\n${footer}\n`);
+  }
   return decision.exitCode;
 }
 

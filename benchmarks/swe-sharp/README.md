@@ -61,8 +61,27 @@ STRADA_BENCH_WORKDIR      STRADA_BENCH_PATCH_OUT STRADA_BENCH_PROBLEM_FILE
 STRADA_BENCH_TIMEOUT_MS
 ```
 
-Write a unified diff to `$STRADA_BENCH_PATCH_OUT`, or just edit the working tree
-— the harness takes `git diff` (new files included) when no patch file appears.
+Write a unified diff to `$STRADA_BENCH_PATCH_OUT`, or just leave the work in the
+checkout. When no patch file appears, the harness diffs the final tree against
+the revision recorded **before** the candidate ran, so it does not matter how the
+candidate left things: unstaged, `git add`-ed, committed, or committed on a branch
+it created are all captured, as are files it added. `git diff` alone would have
+meant "unstaged only", and an agent that stages its fix — a very ordinary thing
+for an agent to do — would have been reported as producing no patch at all: a
+false zero indistinguishable from a real measurement.
+
+`.gitignore`d files are never part of the patch, so build output cannot become
+the candidate's answer.
+
+**The tests are not the candidate's to write.** Before scoring, every file the
+`testPatch` touches is restored from the base revision, and the restoration is
+recorded on the attempt. Without that, a candidate could edit or delete the
+benchmark's tests and either break the test patch — escaping measurement
+entirely, which is a cheap way for a weak agent never to be scored — or move its
+"fix" into the assertions.
+
+`--json` writes only the JSON document to stdout (the verdict footer goes to
+stderr), so `… --json | jq` works on a completed run.
 
 Two candidates are built in. `gold` applies the task's reference patch: a CONTROL
 run that measures the harness, labelled as such in every report, never an agent
@@ -106,8 +125,9 @@ the loop has to relax what the repos pin and it records each change on the
 attempt:
 
 - `global.json` `rollForward` is set to `latestMajor`, then **committed inside the
-  throwaway checkout** — an uncommitted harness edit would show up in `git diff`
-  and be attributed to the candidate.
+  throwaway checkout** before the candidate's base revision is recorded — an
+  uncommitted harness edit would land in the candidate's diff and be attributed
+  to it.
 - `DOTNET_ROLL_FORWARD=LatestMajor` lets a `net7.0` test assembly run on the
   installed .NET 10 runtime. Without it every one of these tasks is `not-run`.
 - Only the newest .NET-Core-family target framework is tested; `net472` cannot
@@ -124,16 +144,18 @@ produced.
 
 ### Six tasks, six repositories, gold control
 
-`--candidate gold`, 76 s wall for all six, per-task wall times shown:
+`--candidate gold`, 117 s wall for all six. Run twice — before and after the
+patch-capture change below — with identical verdicts; the wall times here are
+from the later run:
 
 | task | result | wall | TRX |
 |---|---|---|---|
-| `autofac__autofac-1362` | RESOLVED, proven | 12.8 s | 3 / 3 passed |
-| `gui-cs__terminal-gui-3195` | RESOLVED, proven | 14.7 s | 1 / 1 passed |
-| `restsharp__restsharp-1676` | RESOLVED, proven | 9.5 s | 1 / 1 passed |
-| `spectreconsole__spectre-console-1303` | RESOLVED, proven | 17.9 s | 1 / 1 passed |
-| `serilog__serilog-1897` | RESOLVED, proven | 13.5 s | 15 / 15 passed |
-| `devlooped__moq-1079` | **NOT RUN** (`runtime-unavailable`) | 7.1 s | — |
+| `autofac__autofac-1362` | RESOLVED, proven | 27.5 s | 3 / 3 passed |
+| `gui-cs__terminal-gui-3195` | RESOLVED, proven | 30.2 s | 1 / 1 passed |
+| `restsharp__restsharp-1676` | RESOLVED, proven | 21.1 s | 1 / 1 passed |
+| `spectreconsole__spectre-console-1303` | RESOLVED, proven | 20.3 s | 1 / 1 passed |
+| `serilog__serilog-1897` | RESOLVED, proven | 10.0 s | 15 / 15 passed |
+| `devlooped__moq-1079` | **NOT RUN** (`runtime-unavailable`) | 6.9 s | — |
 
 `resolved 5/5 (rate 1.0), proven fail→pass 5/5, NOT RUN 1`, **exit 3** — because
 a requested task did not run. The Moq task targets `netcoreapp3.1`, whose test
@@ -167,6 +189,26 @@ and the two PASS_TO_PASS tests as `Passed`; after the gold patch all three are
 `Passed`. That is an observed fail→pass transition, not an inferred one — and the
 wrong-edit row is the check that the harness can tell a fix from a non-fix at
 all.
+
+### Two more false zeros, found by review and fixed
+
+A candidate that **staged or committed** its fix was scored as producing no
+patch, because the capture used `git diff`. The fix diffs against the revision
+recorded before the candidate ran. Measured both ways on
+`autofac__autofac-1362` with fixture candidates that `git add` and `git commit`:
+
+| fixture candidate | before the fix | after the fix |
+|---|---|---|
+| applies the reference fix, stages it, commits it | "candidate produced no patch" (false zero) | RESOLVED, proven, 21.0 s, trx 3 / 3 passed |
+| appends a comment, stages it, commits it | "candidate produced no patch" | unresolved, "1 FAIL_TO_PASS not passing", 37.0 s, trx 3 total / 2 passed / 1 failed |
+
+The second row matters as much as the first: the harness now tests the staged
+work and still says no when the work is not a fix.
+
+`--json` also printed a human verdict footer on stdout, so piping a completed
+run into a parser failed. Verified fixed: `… --candidate gold --json | node`
+`JSON.parse` → `verdict ran-and-met-budget exit 0 resolved 1/1 trx
+{total:3,passed:3,failed:0}`.
 
 ### What has NOT been run
 

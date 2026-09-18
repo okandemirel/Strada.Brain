@@ -917,6 +917,74 @@ export function classifyPatchOutput(input: {
   return { patch: null, source: "none" };
 }
 
+/** Minimal git surface the patch capture needs, so it can be tested. */
+export type RunGit = (args: string[]) => { ok: boolean; stdout: string };
+
+/**
+ * Captures everything the candidate changed, however it chose to leave the tree.
+ *
+ * `git diff` answers "what is unstaged" — which is not the question. A candidate
+ * that fixes the bug and then runs `git add`, or commits, or works on a branch it
+ * created, leaves `git diff` empty, and the harness would score it as having
+ * produced NO PATCH: a false zero that looks exactly like a measurement of an
+ * agent that gave up. Diffing the final tree against the revision recorded
+ * BEFORE the candidate ran covers all of those: staged, committed, on another
+ * branch, or merely edited in place.
+ *
+ * `--intent-to-add` on untracked files is what makes an added file part of the
+ * diff. Ignored files stay ignored, so build output never lands in the patch.
+ */
+export function captureCandidatePatch(input: {
+  readonly runGit: RunGit;
+  readonly baseRev: string;
+  readonly patchFile?: string | null;
+}): { patch: string | null; source: PatchSource } {
+  const untracked = input.runGit(["ls-files", "--others", "--exclude-standard"]);
+  const files = untracked.ok
+    ? untracked.stdout
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+  for (let i = 0; i < files.length; i += 100) {
+    input.runGit(["add", "--intent-to-add", "--", ...files.slice(i, i + 100)]);
+  }
+  // `git diff <rev>` is rev→working-tree, so it includes staged and committed
+  // work. A plain `git diff` would not.
+  const diff = input.runGit(["diff", input.baseRev]);
+  return classifyPatchOutput({
+    patchFile: input.patchFile ?? "",
+    workingTreeDiff: diff.ok ? diff.stdout : "",
+  });
+}
+
+/**
+ * The files a patch touches.
+ *
+ * Used to restore the task's test files from the base revision before the test
+ * patch is re-applied. A candidate that edits or deletes the benchmark's tests
+ * would otherwise either break the test patch — escaping the score entirely,
+ * which is a cheap way for a weak agent to never be measured — or smuggle its
+ * "fix" into the assertions. The tests are not the candidate's to write.
+ */
+export function testPatchPaths(patch: string): string[] {
+  const paths = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const both = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (both) {
+      paths.add(both[1]!);
+      paths.add(both[2]!);
+      continue;
+    }
+    const minus = /^--- a\/(.+)$/.exec(line);
+    if (minus) paths.add(minus[1]!);
+    const plus = /^\+\+\+ b\/(.+)$/.exec(line);
+    if (plus) paths.add(plus[1]!);
+  }
+  paths.delete("/dev/null");
+  return [...paths].sort();
+}
+
 export function isDiffLike(text: string): boolean {
   if (text.trim() === "") return false;
   // A diff needs a hunk to change anything. "diff --git" alone appears in

@@ -8,7 +8,11 @@
  * number, and nothing about the output says it is wrong.
  */
 
-import { describe, expect, it } from "vitest";
+import { execSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPETITOR_BASELINES,
   EXIT,
@@ -19,6 +23,7 @@ import {
   buildRequiredTestFilter,
   buildRunReport,
   buildTestCommand,
+  captureCandidatePatch,
   checkBaseline,
   chooseFramework,
   chooseSolution,
@@ -32,9 +37,11 @@ import {
   mergeTestReports,
   relaxGlobalJson,
   renderRunReport,
+  testPatchPaths,
   type AttemptInput,
   type CandidateResult,
   type MergedReport,
+  type RunGit,
   type TaskAttempt,
 } from "./swe-sharp-runner.js";
 import type { TestOutcome } from "./trx-report.js";
@@ -629,6 +636,112 @@ describe("classifyPatchOutput / isDiffLike", () => {
     expect(classifyPatchOutput({}).source).toBe("none");
     expect(isDiffLike("diff --git a/x b/x\n")).toBe(false); // header, no hunk
     expect(isDiffLike(PATCH)).toBe(true);
+  });
+});
+
+describe("captureCandidatePatch — however the candidate left the tree", () => {
+  // Real git, because the bug being prevented here is a git semantics bug:
+  // `git diff` means "unstaged", and a candidate that stages its fix would be
+  // scored as having produced nothing at all.
+  let dir: string;
+  let baseRev: string;
+
+  const sh = (cmd: string): string =>
+    execSync(cmd, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const runGit: RunGit = (args) => {
+    const res = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+    return { ok: res.status === 0, stdout: res.stdout ?? "" };
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "swe-sharp-capture-"));
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 1; }\n");
+    sh("git init -q");
+    sh("git add -- Thing.cs");
+    sh('git -c user.email=a@b -c user.name=t commit -qm base -- Thing.cs');
+    baseRev = sh("git rev-parse HEAD").trim();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("captures a fix the candidate STAGED (git add) instead of leaving unstaged", () => {
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 2; }\n");
+    sh("git add -- Thing.cs");
+    expect(sh("git diff").trim()).toBe(""); // this is why the old code reported no patch
+    const out = captureCandidatePatch({ runGit, baseRev });
+    expect(out.patch).toContain("V => 2");
+    expect(out.source).toBe("working-tree");
+  });
+
+  it("captures a fix the candidate COMMITTED", () => {
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 3; }\n");
+    sh("git add -- Thing.cs");
+    sh('git -c user.email=a@b -c user.name=t commit -qm fix -- Thing.cs');
+    const out = captureCandidatePatch({ runGit, baseRev });
+    expect(out.patch).toContain("V => 3");
+  });
+
+  it("captures a fix the candidate committed on a NEW BRANCH", () => {
+    sh("git checkout -q -b agent-work");
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 4; }\n");
+    sh("git add -- Thing.cs");
+    sh('git -c user.email=a@b -c user.name=t commit -qm fix -- Thing.cs');
+    const out = captureCandidatePatch({ runGit, baseRev });
+    expect(out.patch).toContain("V => 4");
+  });
+
+  it("captures a NEW FILE the candidate added, staged or not", () => {
+    writeFileSync(path.join(dir, "Added.cs"), "class Added { }\n");
+    const unstaged = captureCandidatePatch({ runGit, baseRev });
+    expect(unstaged.patch).toContain("Added.cs");
+    sh("git add -- Added.cs");
+    expect(captureCandidatePatch({ runGit, baseRev }).patch).toContain("Added.cs");
+  });
+
+  it("still reports no patch when the candidate changed nothing", () => {
+    expect(captureCandidatePatch({ runGit, baseRev }).patch).toBeNull();
+  });
+
+  it("ignores files git is told to ignore, so build output never becomes the patch", () => {
+    writeFileSync(path.join(dir, ".gitignore"), "bin/\n");
+    sh("git add -- .gitignore");
+    sh('git -c user.email=a@b -c user.name=t commit -qm ignore -- .gitignore');
+    baseRev = sh("git rev-parse HEAD").trim();
+    mkdirSync(path.join(dir, "bin"));
+    writeFileSync(path.join(dir, "bin", "Thing.dll"), "binary");
+    expect(captureCandidatePatch({ runGit, baseRev }).patch).toBeNull();
+  });
+
+  it("prefers an explicit patch file over the tree", () => {
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 5; }\n");
+    const out = captureCandidatePatch({ runGit, baseRev, patchFile: PATCH });
+    expect(out.source).toBe("patch-file");
+    expect(out.patch).toBe(PATCH);
+  });
+});
+
+describe("testPatchPaths", () => {
+  it("lists the files a test patch touches, so they can be restored", () => {
+    const patch = [
+      "diff --git a/test/T/A.cs b/test/T/A.cs",
+      "--- a/test/T/A.cs",
+      "+++ b/test/T/A.cs",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "diff --git a/test/T/New.cs b/test/T/New.cs",
+      "--- /dev/null",
+      "+++ b/test/T/New.cs",
+      "@@ -0,0 +1 @@",
+      "+z",
+    ].join("\n");
+    expect(testPatchPaths(patch)).toEqual(["test/T/A.cs", "test/T/New.cs"]);
+  });
+
+  it("does not report /dev/null as a path to restore", () => {
+    expect(testPatchPaths("--- /dev/null\n+++ b/a.cs\n")).toEqual(["a.cs"]);
   });
 });
 
