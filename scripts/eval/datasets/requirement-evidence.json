@@ -467,6 +467,22 @@
       "source": "Codex 2026-09-18 round 13 #27 (the Score < 10 / Score > 10 pair the finding names)"
     },
     {
+      "id": "gravity-by-gravity-setter",
+      "requirement": "Set gravity = -10",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/GravitySetter.cs" },
+      "expected": "proven",
+      "rationale": "The landed line names the file that sets gravity, the same shape as save-by-savesystem. The SIGN is part of the requirement's identity (round 14 #10) and never part of the evidence match, so keeping it did not make this stricter.",
+      "source": "Codex 2026-09-18 round 14 #10 (the Set gravity = -10 / = 10 pair the finding names)"
+    },
+    {
+      "id": "drop-rate-by-not-met-percentage",
+      "requirement": "Drop rate: 5%",
+      "evidence": { "status": "green", "gddClaims": ["GDD drop rate = 5%: NOT MET — measured 0%"] },
+      "expected": "not_proven",
+      "rationale": "A document-number line that says the percentage was NOT MET is a measurement of ABSENCE; quoting it would close the requirement with the finding against it.",
+      "source": "src/campaign/gdd-claims.ts (describeClaims writes the NOT MET form) + round 14 #10's percentage family"
+    },
+    {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
       "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },

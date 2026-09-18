@@ -474,3 +474,144 @@ describe("#31 inherited evidence cannot outlive its tree", () => {
     expect(current[0]).toContain(`tree:${REV_NOW}`);
   });
 });
+
+// ─── round 14 #10 — every character that changes the ASK ────────────────────
+
+/**
+ * The same class as `Score < 10` / `Score > 10` (round 13 #27), swept in one
+ * pass: a character the tokenizer discards before the fingerprint, where the
+ * two readings are different asks. A sign is the one the finding names; the
+ * rest of the family is here so a third patch is not needed later.
+ */
+describe("#10 signs, quantities and units are part of the content", () => {
+  const notCosmetic: Array<[string, string]> = [
+    // THE FINDING: a unary sign. Gravity down is not gravity up.
+    ["Set gravity = -10", "Set gravity = 10"],
+    ["Set gravity = -10", "Set gravity = +10"],
+    ["The score may go to -5", "The score may go to 5"],
+    // A percentage is not a count.
+    ["Drop rate: 5%", "Drop rate: 5"],
+    ["Crit chance 25%", "Crit chance 20%"],
+    // A multiplier is not a count.
+    ["2× damage on a critical hit", "2 damage on a critical hit"],
+    // An approximation is not a target.
+    ["~60 fps in the built player", "60 fps in the built player"],
+    // A unit symbol, and a price that is not a quantity.
+    ["Rotate the turret 90° per second", "Rotate the turret 90 per second"],
+    ["The starter pack costs $5", "The starter pack costs 5"],
+    // …and a sign the requirement OPENS with, which the list-decoration
+    // stripper used to eat before the tokenizer ever saw it.
+    ["-10 gravity is the floor", "10 gravity is the floor"],
+  ];
+  it.each(notCosmetic)("NOT cosmetic: %s ↔ %s", (a, b) => {
+    expect(contentFingerprint(a)).not.toBe(contentFingerprint(b));
+    expect(isCosmeticRewording(a, b)).toBe(false);
+  });
+
+  // THE OPPOSITE DIRECTION: none of this may turn ordinary decoration, a
+  // hyphen or a redundant plus into a rewording.
+  const stillCosmetic: Array<[string, string]> = [
+    ["Set gravity = -10", "- **set gravity = -10.**"],
+    // A hyphen JOINING words or a word to a number is not a sign.
+    ["Auto-save every level", "Auto save every level"],
+    ["The level-10 boss must be defeatable", "The level 10 boss must be defeatable"],
+    // A leading plus on a number is not a value: +10 is ten.
+    ["Set gravity = +10", "Set gravity = 10"],
+    // …and a struck-through heading is decoration, not an approximation.
+    ["~~Shop~~", "Shop"],
+    // A list marker is still a list marker: dash, SPACE, then the number.
+    ["- 10 levels", "10 levels"],
+    ["1. 10 levels", "10 levels"],
+  ];
+  it.each(stillCosmetic)("still cosmetic: %s ↔ %s", (a, b) => {
+    expect(isCosmeticRewording(a, b)).toBe(true);
+  });
+
+  it("a proven requirement whose sign flipped is REOPENED, never carried", () => {
+    const before = reconcileRequirements({ texts: ["Set gravity = -10"], gdd: GDD_1 }).identities;
+    const after = identifyRequirements({
+      previous: before,
+      texts: ["Set gravity = 10"],
+      gdd: GDD_2,
+      proven: new Set([before[0]!.id]),
+      provenAtRevision: REV_PROVEN,
+    });
+    expect(after.result.identities[0]!.evidenceCarried).not.toBe(true);
+    expect(after.result.identities[0]!.reopened).toBe(true);
+    // …and the two wordings are not one requirement for scheduling either.
+    expect(requirementKey(after.encoded[0]!)).not.toBe(requirementKey(encodeRequirement(before[0]!)));
+  });
+
+  it("…while a cosmetic rewording of the SAME signed ask still inherits its closure", async () => {
+    // A wording that normalizes to the same string keeps its id outright (the
+    // revision did not reword it at all); this one is a real rewording whose
+    // CONTENT is unchanged — the copula and a modal — so the proof carries.
+    const before = reconcileRequirements({ texts: ["Gravity is set to -10"], gdd: GDD_1 }).identities;
+    const { encoded, result } = identifyRequirements({
+      previous: before,
+      texts: ["Gravity must be set to -10"],
+      gdd: GDD_2,
+      proven: new Set([before[0]!.id]),
+      provenAtRevision: REV_PROVEN,
+    });
+    expect(result.identities[0]!.evidenceCarried).toBe(true);
+    const { planner } = plannerWith([JSON.stringify({ verdicts: [{ id: 1, delivered: false }] })]);
+    const answer = await planner.resolveCoverageGaps(
+      "# GDD",
+      encoded,
+      [{ title: "Sprint A", status: "green", commitNote: "1 commit(s): Assets/Scripts/GravitySetter.cs" }],
+      { revision: REV_PROVEN },
+    );
+    expect(answer.closed).toEqual(encoded);
+  });
+});
+
+// ─── round 14 #9 — the requirement that lives only in a prompt ──────────────
+
+describe("#9 a prompt-only legacy requirement is not re-minted", () => {
+  const PROMPT_ONLY = "Audio: no milestone implemented it";
+
+  it("the audit's re-listing of it is not a second sprint", async () => {
+    // A row persisted before `coverageGap` existed keeps its requirement in its
+    // PROMPT. restoreLegacyWordings read the field and not the prompt, so the
+    // audit minted a fresh `req:…` whose key is not this row's text key — a
+    // second sprint for work already running, with a fresh repair budget.
+    const { planner } = plannerWith([JSON.stringify({ missing: [PROMPT_ONLY] })]);
+    const campaign = {
+      id: "c-r14-9",
+      gddText: "# GDD\n\nThe game has music.",
+      gddSha256: "f".repeat(64),
+      gddRevision: 1,
+      milestones: [
+        { id: "m1", title: "Sprint A", prompt: "build it", status: "green", attempts: 1 },
+        {
+          id: "mcov1",
+          title: "Coverage completion 1.1 — Audio",
+          prompt: `The build's milestone ladder finished, but auditing it found this undelivered:\n- ${PROMPT_ONLY}\n\nImplement it.`,
+          status: "running",
+          attempts: 1,
+        },
+      ],
+    } as unknown as Campaign;
+
+    const sprints = await coveragePaths({ planner }).buildCoverageRemediation(campaign);
+
+    expect(sprints ?? []).toHaveLength(0);
+    expect(campaign.coverageAuditNote ?? "").toContain("already have sprints");
+  });
+
+  it("a row whose requirement is only its TRUNCATED TITLE is never spoken for", () => {
+    // `coverageRequirementOf` marks that case unidentified, and it must stay
+    // that way here: "Boss Alpha" and "Boss Beta" both truncate to the same
+    // title, so letting a title answer for a requirement merges two of them
+    // (Codex 2026-09-12 X#2).
+    const campaign = {
+      milestones: [
+        { id: "mcov1", title: "Coverage completion 1.1 — Boss Alpha: absent", prompt: "no item line here", status: "running", attempts: 1 },
+      ],
+    } as unknown as Campaign;
+    const [stamped] = identifyRequirements({ texts: ["Boss Alpha: absent"], gdd: GDD_1 }).encoded;
+
+    expect(restoreLegacyWordings(campaign, [stamped!])).toEqual([stamped]);
+  });
+});

@@ -664,7 +664,24 @@ export function restoreLegacyWordings(
     const key = requirementKey(raw);
     if (key !== "" && !legacy.has(key)) legacy.set(key, raw);
   };
-  for (const m of campaign.milestones) if (m.id.startsWith("mcov")) remember(m.coverageGap);
+  for (const m of campaign.milestones) {
+    if (!m.id.startsWith("mcov")) continue;
+    // THE ROW THAT NEVER HAD THE FIELD. A sprint persisted before
+    // `coverageGap` existed keeps its requirement in its PROMPT, and reading the
+    // field alone left that row unspoken for: the audit minted a fresh `req:…`
+    // for the same ask, whose key is not this row's text key, and scheduled it
+    // again with a fresh repair budget (Codex 2026-09-18 round 14 #9). The
+    // prompt line IS the requirement, and `coverageRequirementOf` is the one
+    // reader that knows it.
+    //
+    // ONLY WHERE IT IS IDENTIFIED. Its last resort is the 60-character TITLE,
+    // which truncates: "Boss Alpha: absent" and "Boss Beta: absent" both reduce
+    // to the same prefix, so letting a title answer for a requirement would
+    // merge two different ones (Codex 2026-09-12 X#2). A guessed requirement may
+    // be scheduled and reported, never spoken for.
+    const own = coverageRequirementOf(m);
+    if (own.identified) remember(own.text);
+  }
   for (const gap of campaign.pendingCoverageGaps ?? []) remember(gap);
   if (legacy.size === 0) return [...named];
   return named.map((item) => {

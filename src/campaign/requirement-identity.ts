@@ -124,7 +124,10 @@ const RUN_TAIL_RE =
  * opening "3. Save progress" is a list marker, and "3.000" opening "3.000
  * coins" is a figure — stripping the latter turned three thousand into zero.
  */
-const LEADING_DECORATION_RE = /^[\s>*_`\-–—•·]*(?:\d+[.)]\s+)*[\s>*_`]*/u;
+// A leading dash is decoration ("- Save progress") EXCEPT when it is stuck to
+// a digit: "-10 gravity" opens with a NEGATIVE NUMBER, and eating that sign made
+// it "10 gravity" (Codex 2026-09-18 round 14 #10).
+const LEADING_DECORATION_RE = /^(?:[\s>*_`•·]|[-–—](?!\d))*(?:\d+[.)]\s+)*[\s>*_`]*/u;
 /** …and the decoration at the other end, a closing full stop included. */
 const TRAILING_DECORATION_RE = /[\s>*_`•·.]+$/u;
 
@@ -181,10 +184,20 @@ const COSMETIC_FILLERS = new Set([
  */
 const NEGATIONS = new Set(["not", "no", "never", "none", "nor", "without", "non", "cannot", "cant", "dont", "doesnt", "isnt"]);
 
-/** "3,000" and "3.000" are 3000; "2.5" is 2.5 (a decimal, not a separator). */
+/**
+ * "3,000" and "3.000" are 3000; "2.5" is 2.5 (a decimal, not a separator).
+ *
+ * THE SIGN IS PART OF THE VALUE. "-10" is not "10": a proven `Set gravity = -10`
+ * reworded to `Set gravity = 10` had the same fingerprint, so it inherited the
+ * proof and never reopened (round 14 #10). A LEADING PLUS is not part of the
+ * value — "+10" is ten — so it is folded away, and only a minus survives. The
+ * approximation marker does survive: "~60 fps" is a different ask from "60 fps".
+ */
 function normalizeNumber(token: string): string {
-  if (/^\d{1,3}(?:[.,]\d{3})+$/u.test(token)) return token.replace(/[.,]/gu, "");
-  return token.replace(/,/gu, "");
+  const marker = /^[-~]/u.exec(token)?.[0] ?? "";
+  const digits = token.replace(/^[+\-~≈]+/u, "");
+  if (/^\d{1,3}(?:[.,]\d{3})+$/u.test(digits)) return marker + digits.replace(/[.,]/gu, "");
+  return marker + digits.replace(/,/gu, "");
 }
 
 /**
@@ -200,8 +213,33 @@ function normalizeNumber(token: string): string {
  * "auto-save", a slash in "Assets/Art/Hero.png" and the asterisks of markdown
  * emphasis are decoration, not meaning.
  */
-const OPERATOR_TOKEN_RE = /<=|>=|==|!=|[≤≥≠<>=+]/u;
-const OPERATOR_CANONICAL: Record<string, string> = { "≤": "<=", "≥": ">=", "≠": "!=", "==": "=" };
+const OPERATOR_TOKEN_RE = /^(?:<=|>=|==|!=|[≤≥≠<>=+×÷%°$€£¥])$/u;
+const OPERATOR_CANONICAL: Record<string, string> = { "≤": "<=", "≥": ">=", "≠": "!=", "==": "=", "÷": "/" };
+
+/**
+ * The token pattern, in one place because its ORDER is load-bearing.
+ *
+ *   1. the two-character comparisons, before their first character can match
+ *      alone ("<=" is not "<" followed by "=");
+ *   2. a NUMBER WITH ITS MARKER — a sign or an approximation stuck to the
+ *      digits. The lookbehind is what keeps a hyphen a hyphen: in "level-10"
+ *      and "auto-save" the dash JOINS, and calling it a sign would make
+ *      "level-10 boss" a different requirement from "level 10 boss";
+ *   3. the single-character symbols that change an ask — comparison, the
+ *      postfix "60+", a multiplier, a percentage, a degree, a currency. A bare
+ *      "-" is deliberately NOT one of them (see 2), and neither are "*", "/"
+ *      or "~" on their own: those are markdown emphasis, a path separator and
+ *      a strikethrough;
+ *   4. letters.
+ *
+ * CONSIDERED AND DELIBERATELY LEFT OUT: "/" and ":" between digits ("1/2",
+ * "1:30"). Both are separators far more often than they are content — a path
+ * and the audit's own diagnostic colon — and no requirement pair in this repo
+ * turns on one. A unit written in LETTERS ("10s" against "10ms") already
+ * separates itself, because there is no length floor any more.
+ */
+const CONTENT_TOKEN_RE =
+  /<=|>=|==|!=|(?<![\p{L}\p{N}])[+\-~≈]?\d+(?:[.,]\d+)*|[≤≥≠<>=+×÷%°$€£¥]|\p{L}+/gu;
 
 /**
  * The CONTENT TOKENS of a wording, in order: numbers verbatim, operators
@@ -224,12 +262,10 @@ export function contentTokens(text: string): string[] {
   // Numbers (with their separators), operators, or letter runs; every other
   // character is a separator. normalizeWording has already split camelCase and
   // folded case.
-  const words = [
-    ...normalizeWording(text).matchAll(/<=|>=|==|!=|[≤≥≠<>=+]|\d+(?:[.,]\d+)*|\p{L}+/gu),
-  ].map((m) => m[0]);
+  const words = [...normalizeWording(text).matchAll(CONTENT_TOKEN_RE)].map((m) => m[0]);
   const out: string[] = [];
   for (const word of words) {
-    if (/^\d/u.test(word)) {
+    if (/^[+\-~≈]?\d/u.test(word)) {
       out.push(normalizeNumber(word));
       continue;
     }
