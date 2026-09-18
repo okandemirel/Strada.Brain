@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import { DaemonStorage } from "./daemon-storage.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -806,6 +807,80 @@ describe("the budget owner registry records arrival, and never invents it (round
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Codex round 14 #1. The (host, pid) rebuild was copy, drop, rename — three
+ * statements. A crash between them left `budget_owners_v2` behind, and the next
+ * boot failed outright with "table already exists"; two processes initializing at
+ * once raced the same way.
+ */
+describe("the budget owners rebuild survives a crash and a race (round 14 #1)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A pid-keyed table with one row, exactly as a pre-round-13 install has it. */
+  function legacyDatabase(): string {
+    const dir = mkdtempSync(join(tmpdir(), "owners-rebuild-"));
+    dirs.push(dir);
+    const file = join(dir, "daemon.db");
+    const raw = new Database(file);
+    raw.exec(`CREATE TABLE budget_owners (
+      owner_pid INTEGER PRIMARY KEY,
+      owner_generation TEXT NOT NULL,
+      heartbeat_at INTEGER NOT NULL
+    )`);
+    raw.prepare("INSERT INTO budget_owners VALUES (4242, 'legacy-gen', ?)").run(Date.now());
+    raw.close();
+    return file;
+  }
+
+  it("opens a database left mid-rebuild by an earlier crash, and keeps the row", () => {
+    const file = legacyDatabase();
+    // The crash residue: the half-finished copy, with the original still there.
+    const raw = new Database(file);
+    raw.exec("CREATE TABLE budget_owners_v2 (owner_host TEXT NOT NULL DEFAULT '', owner_pid INTEGER NOT NULL, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL, registered_seq INTEGER, registered_at INTEGER, PRIMARY KEY (owner_host, owner_pid))");
+    raw.close();
+
+    const storage = new DaemonStorage(file);
+    expect(() => storage.initialize()).not.toThrow();
+    try {
+      const rows = storage.listBudgetOwners();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ ownerPid: 4242, ownerGeneration: "legacy-gen" });
+      // The row's host is unrecorded, which is what it always meant.
+      expect(rows[0]!.ownerHost).toBeUndefined();
+      // And the table really is keyed by (host, pid) now.
+      const info = storage.getDatabase().prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string; pk: number }>;
+      expect(info.find((c) => c.name === "owner_host")?.pk).toBeGreaterThan(0);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("two initializers on one database both end up with the migrated table", () => {
+    const file = legacyDatabase();
+    const first = new DaemonStorage(file);
+    const second = new DaemonStorage(file);
+    try {
+      first.initialize();
+      // The second one inspects a table the first already migrated.
+      expect(() => second.initialize()).not.toThrow();
+      for (const storage of [first, second]) {
+        expect(storage.listBudgetOwners()).toHaveLength(1);
+      }
+      // No residue from either pass.
+      const leftovers = first.getDatabase()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'budget_owners%'")
+        .all() as Array<{ name: string }>;
+      expect(leftovers.map((row) => row.name)).toEqual(["budget_owners"]);
+    } finally {
+      first.close();
+      second.close();
     }
   });
 });

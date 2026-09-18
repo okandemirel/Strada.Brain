@@ -74,8 +74,27 @@ async function doctor(home, project) {
     return { code: 0, out: `${stdout}\n${stderr}`, ms: Date.now() - started };
   } catch (error) {
     const out = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
-    return { code: typeof error.code === "number" ? error.code : 1, out, ms: Date.now() - started };
+    return {
+      code: typeof error.code === "number" ? error.code : 1,
+      out,
+      ms: Date.now() - started,
+      // A TOOL THAT IS NOT THERE IS NOT A FAILING DOCTOR (round 14 #16). With
+      // npx or the tsx loader absent, all three steps read FAIL and the run
+      // exited 1 — a measured verdict about something that never executed.
+      ...(missingTool(error) ? { missingTool: missingTool(error) } : {}),
+    };
   }
+}
+
+/** The executable or loader this environment does not have, if that is why. */
+function missingTool(error) {
+  const code = error?.code;
+  const text = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (code === "ENOENT") return "npx (or node) is not on PATH";
+  if (/ERR_UNKNOWN_FILE_EXTENSION|Cannot find module 'tsx'|tsx: not found|command not found/i.test(text)) {
+    return "the tsx loader is not installed (run npm install)";
+  }
+  return undefined;
 }
 
 async function unityProject(root) {
@@ -139,11 +158,16 @@ async function main() {
       const saysNoEnv = /No \.env file was found/i.test(result.out);
       const namesSetup = /strada setup|setup:web/i.test(result.out);
       const blocking = /blocking issues/i.test(result.out) || result.code !== 0;
-      s.state = saysNoEnv && namesSetup && blocking ? "pass" : "fail";
-      s.detail = s.state === "pass"
-        ? "failed with blocking issues, said no .env was found and named the setup command"
-        : `expected a blocking failure naming the missing .env and the setup command; ` +
-          `saw noEnv=${saysNoEnv} namesSetup=${namesSetup} blocking=${blocking}`;
+      if (result.missingTool) {
+        s.state = "not-run";
+        s.detail = `not run: ${result.missingTool}`;
+      } else {
+        s.state = saysNoEnv && namesSetup && blocking ? "pass" : "fail";
+        s.detail = s.state === "pass"
+          ? "failed with blocking issues, said no .env was found and named the setup command"
+          : `expected a blocking failure naming the missing .env and the setup command; ` +
+            `saw noEnv=${saysNoEnv} namesSetup=${namesSetup} blocking=${blocking}`;
+      }
     }
 
     // 2. Write a configuration the way the wizard does.
@@ -176,6 +200,7 @@ async function main() {
       ].join("\n");
       let diskMatchesCommit = false;
       let childError = "";
+      let childMissingTool;
       try {
         const { stdout } = await run("npx", ["tsx", "--eval", script], {
           cwd: REPO,
@@ -194,12 +219,14 @@ async function main() {
         diskMatchesCommit = JSON.parse(stdout.trim().split("\n").pop() ?? "{}").diskMatchesCommit === true;
       } catch (error) {
         childError = String(error?.stderr ?? error?.message ?? error).slice(0, 300);
+        childMissingTool = missingTool(error);
       }
       s.ms = Date.now() - started;
       const onDisk = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
       const ok = diskMatchesCommit && onDisk.includes(project);
-      s.state = ok ? "pass" : "fail";
-      s.detail = ok
+      s.state = childMissingTool ? "not-run" : ok ? "pass" : "fail";
+      if (childMissingTool) s.detail = `not run: ${childMissingTool}`;
+      else s.detail = ok
         ? `wrote ${envPath} and read back the project path`
         : `diskMatchesCommit=${diskMatchesCommit}; the file ${onDisk ? "does not name the project" : "was not written"}${childError ? `; ${childError}` : ""}`;
     }
@@ -216,10 +243,15 @@ async function main() {
       // rehearsal found it doing exactly that on an invalid one, because
       // loadConfigSafe's `kind: "err"` matched no branch.
       const crashed = /Cannot read properties of undefined|Unhandled Rejection/.test(result.out);
-      s.state = configPasses && matrixShown && namesWhatIsMissing && !crashed ? "pass" : "fail";
-      s.detail = s.state === "pass"
-        ? "configuration passed and the matrix named what the project still lacks"
-        : `configPasses=${configPasses} matrixShown=${matrixShown} namesMissing=${namesWhatIsMissing} crashed=${crashed}`;
+      if (result.missingTool) {
+        s.state = "not-run";
+        s.detail = `not run: ${result.missingTool}`;
+      } else {
+        s.state = configPasses && matrixShown && namesWhatIsMissing && !crashed ? "pass" : "fail";
+        s.detail = s.state === "pass"
+          ? "configuration passed and the matrix named what the project still lacks"
+          : `configPasses=${configPasses} matrixShown=${matrixShown} namesMissing=${namesWhatIsMissing} crashed=${crashed}`;
+      }
     }
   } finally {
     if (!args.keep) {

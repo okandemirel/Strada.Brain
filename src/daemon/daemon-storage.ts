@@ -858,10 +858,20 @@ export class DaemonStorage {
    * how they were already read.
    */
   private migrateBudgetOwnersToHostKey(): void {
-    const info = this.db!.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string; pk: number }>;
-    const hostIsKey = info.some((column) => column.name === "owner_host" && column.pk > 0);
-    if (hostIsKey) return;
-    this.db!.exec(`
+    // ONE TRANSACTION, AND THE CHECK INSIDE IT (Codex round 14 #1). Copy, drop,
+    // rename was three statements: a crash between them left `budget_owners_v2`
+    // behind — the next boot then failed with "table already exists" — or
+    // stranded the original's rows. Two processes initializing at once raced the
+    // same way. BEGIN IMMEDIATE takes the write lock before the inspection, so
+    // the loser re-reads a finished schema and does nothing.
+    const rebuild = this.db!.transaction(() => {
+      const info = this.db!.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string; pk: number }>;
+      const hostIsKey = info.some((column) => column.name === "owner_host" && column.pk > 0);
+      if (hostIsKey) return;
+      // A leftover from a crash mid-rebuild: its rows are a COPY of rows the
+      // original still holds, so dropping it loses nothing.
+      this.db!.exec("DROP TABLE IF EXISTS budget_owners_v2");
+      this.db!.exec(`
       CREATE TABLE budget_owners_v2 (
         owner_host TEXT NOT NULL DEFAULT '',
         owner_pid INTEGER NOT NULL,
@@ -875,7 +885,11 @@ export class DaemonStorage {
         SELECT COALESCE(owner_host, ''), owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at FROM budget_owners;
       DROP TABLE budget_owners;
       ALTER TABLE budget_owners_v2 RENAME TO budget_owners;
-    `);
+      `);
+    });
+    // `immediate` so concurrent initializers serialize instead of both
+    // inspecting an unmigrated table and both rebuilding it.
+    rebuild.immediate();
   }
 
   /**
