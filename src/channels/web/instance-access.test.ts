@@ -163,6 +163,44 @@ describe("instance access model — own-identity surfaces", () => {
   });
 });
 
+// ── Round 15 #2: the anonymous fallback is one rule, on both scopes ───────────
+//
+// Round 13 #9 tightened the owner-only scope: an unattributed caller is refused
+// once an owner is recorded, because `shared` counts identities and one
+// REGISTERED OWNER is already somebody to be separated from. The own-identity
+// scope kept the old reading, so an anonymous request for an identity's own
+// resource (its canvas, its attachment) was granted on a one-identity instance.
+// The reason the fallback is safe is the same on both scopes, so the condition has
+// to be the same on both.
+describe("instance access model — the anonymous fallback (round 15 #2)", () => {
+  const scoped = (Object.keys(SURFACE_POLICY) as InstanceSurface[]).filter(
+    (s) => SURFACE_POLICY[s].scope === "own-identity",
+  );
+
+  it.each(scoped)("refuses an anonymous request for an owned %s once an owner is recorded", (surface) => {
+    const decision = decideInstanceAccess({
+      surface,
+      actor: anonActor,
+      resource: { profileId: OWNER },
+      instance: solo,
+      what: "thing-1",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("deny:other-identity");
+  });
+
+  it.each(scoped)("still serves an anonymous request where no owner was ever recorded — %s", (surface) => {
+    const decision = decideInstanceAccess({
+      surface,
+      actor: anonActor,
+      resource: { profileId: "some-session" },
+      instance: { shared: false },
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allow:sole-identity");
+  });
+});
+
 describe("instance access model — no silent fallthrough", () => {
   const surfaces = Object.keys(SURFACE_POLICY) as InstanceSurface[];
   const actors = [ownerActor, guestActor, anonActor];

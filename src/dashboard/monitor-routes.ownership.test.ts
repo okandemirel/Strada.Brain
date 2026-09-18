@@ -132,14 +132,22 @@ describe("monitor REST gate decisions belong to the task's identity (round 14 sw
     expect(seen).toEqual([]);
   });
 
-  it("stays as permissive as the WebSocket path for an id that names no known task", async () => {
-    const out = res();
-    handleMonitorRoute("/api/monitor/task/node-1/approve", "POST", req(as(GUEST)), out, undefined, taskManager(OWNER), bus as never, log);
+  // ROUND 15 #4 MOVED THIS LINE. Round 14 mirrored the channel's "an id we cannot
+  // resolve is allowed" here; the channel has since stopped saying that, because a
+  // task no identity owns is the INSTANCE's own work (the daemon's, a trigger's) —
+  // and the instance's work is the owner's, not everybody's. The operator keeps
+  // every gate decision it has always had; a guest gets none.
+  it("treats a task whose owner cannot be established as the instance's: the owner decides, a guest does not", async () => {
+    const refused = res();
+    handleMonitorRoute("/api/monitor/task/node-1/approve", "POST", req(as(GUEST)), refused, undefined, taskManager(OWNER), bus as never, log);
     await new Promise((r) => setTimeout(r, 20));
-    // A bare DAG node id: the channel's own resolver answers "no owner" and
-    // allows, and a stricter rule here would refuse gate decisions the operator
-    // has always been able to make.
-    expect(out._status).toBe(200);
+    expect(refused._status).toBe(403);
+    expect(seen).toEqual([]);
+
+    const allowed = res();
+    handleMonitorRoute("/api/monitor/task/node-1/approve", "POST", req(as(OWNER)), allowed, undefined, taskManager(OWNER), bus as never, log);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(allowed._status).toBe(200);
     expect(seen).toHaveLength(1);
   });
 

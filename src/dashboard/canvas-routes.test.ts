@@ -264,8 +264,14 @@ describe("handleCanvasRoute", () => {
       expect(savedState.updatedAt).toBeLessThanOrEqual(Date.now());
     });
 
-    it("uses provided id or defaults to sessionId", async () => {
-      // With custom id
+    // ROUND 15 #1 CHANGED THIS CONTRACT, DELIBERATELY. `id` is the storage PRIMARY
+    // KEY, so a body id let a caller authorized for one session write another
+    // session's row — content and ownership column both. The id now comes from the
+    // row this session already has, or from the session itself; a body id is
+    // ignored, because no client needs to name the primary key of a row it is not
+    // addressing.
+    it("ignores a body id and keys the row by the session", async () => {
+      // A body id is not honoured…
       const body1 = JSON.stringify({ id: "custom-id", shapes: [] });
       const req1 = createMockReq(body1);
       handleCanvasRoute("/api/canvas/session-abc", "PUT", req1, res, storage);
@@ -275,7 +281,7 @@ describe("handleCanvasRoute", () => {
       });
 
       const saved1 = (storage.save as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CanvasState;
-      expect(saved1.id).toBe("custom-id");
+      expect(saved1.id).toBe("session-abc");
 
       // Without custom id — defaults to sessionId
       const res2 = createMockRes();

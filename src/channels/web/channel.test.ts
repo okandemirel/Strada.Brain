@@ -3218,7 +3218,14 @@ describe("WebChannel attachment ownership survives a restart (plan 6.14)", () =>
   });
 
   // Guard: a one-person instance is untouched — its own unattributed links work.
-  it("still serves an unowned attachment on a single-identity instance", async () => {
+  // ROUND 15 #2 MOVED THIS LINE. The attachment here is not unowned — the solo
+  // identity owns it — so the link it was delivered with carries the proof (?v=)
+  // and keeps working. What no longer works is the BARE token: an anonymous caller
+  // asking for a file that belongs to a named identity, which this instance
+  // answered 200 to merely because it had only one identity. One identity means
+  // one person's private files, not "no private files"; and the owner's own
+  // browser always holds the signed link, so nothing the owner does changes.
+  it("serves the owner's signed link on a single-identity instance and refuses the bare token", async () => {
     const dbs = paths();
     const channel = new WebChannel(3000, 3100, dbs);
     const solo = connect(channel, OWNER_ID);
@@ -3227,8 +3234,20 @@ describe("WebChannel attachment ownership survives a restart (plan 6.14)", () =>
     });
     const href = String(solo.frames("attachment")[0]!.href);
     const token = href.slice("/attachments/".length).split("?")[0]!;
+    expect(href).toContain("?v=");
+
+    // The link handed to the owning socket: served.
     expect((await httpGet(channel, href)).status).toBe(200);
-    expect((await httpGet(channel, `/attachments/${token}`)).status).toBe(200);
+    // The same token with no proof at all: refused, by name.
+    const bare = await httpGet(channel, `/attachments/${token}`);
+    expect(bare.status).toBe(403);
+    expect(bare.text).toContain(solo.profileId);
+    // …and the owner presenting its pair instead of the signature is served.
+    const withHeaders = await httpGet(channel, `/attachments/${token}`, {
+      "x-strada-profile-id": solo.profileId,
+      "x-strada-profile-token": solo.profileToken,
+    });
+    expect(withHeaders.status).toBe(200);
     await channel.disconnect();
   });
 });
@@ -3554,6 +3573,98 @@ describe("WebChannel shared instance: the ways around the owner check (round 13)
     owner.send({ type: "message", text: "/cancel task-owner" });
     await settle();
     expect(seen).toContain("/cancel task-owner");
+
+    await channel.disconnect();
+  });
+
+  // ── Round 15 #1, swept onto the WebSocket: a frame that names a session ────
+  it("refuses a canvas:save frame that names another identity's session", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+
+    guest.send({ type: "canvas:save", sessionId: owner.profileId });
+    await settle();
+    expect(emit).not.toHaveBeenCalled();
+    expect(guest.text()).toContain(guest.profileId);
+
+    // Its own session saves, as the portal sends it.
+    guest.send({ type: "canvas:save", sessionId: guest.profileId });
+    await settle();
+    expect(emit).toHaveBeenCalledWith("canvas:save", expect.objectContaining({ sessionId: guest.profileId }));
+
+    await channel.disconnect();
+  });
+
+  // ── Round 15 #4: an unknown owner is not a grant ───────────────────────────
+  //
+  // THE DEFECT. The task↔chat resolver bootstrap wires is a CHECKPOINT lookup, and
+  // a task has no checkpoint until one is written — so for a freshly queued task
+  // it answers null, and "null ⇒ allow, it is probably a portal-ephemeral id" then
+  // handed a guest the owner's brand-new task through /goal cancel, /cancel,
+  // monitor:retry_task and the rest. The gap between submitting a task and its
+  // first checkpoint was an authorization hole, and it is widest exactly when the
+  // task is most worth cancelling.
+  //
+  // The model already had the answer: task:control is own-identity with
+  // `unattributedIsPublic: false`, so a task nobody can be shown to own is INSTANCE
+  // traffic — the daemon's, the campaign's — and instance traffic is the owner's.
+  // A guest is refused; the owner keeps working; nothing depends on a checkpoint
+  // having been written yet.
+  it("refuses a guest a task whose owner cannot be resolved, and lets the owner drive it", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    // Exactly what bootstrap's checkpoint-backed resolver answers for a task that
+    // has not written a checkpoint yet.
+    channel.setTaskOwnerResolver(() => null);
+
+    guest.send({ type: "message", text: "/goal cancel task-fresh" });
+    guest.send({ type: "message", text: "/cancel task-fresh" });
+    await settle();
+    expect(seen).toEqual([]);
+    expect(guest.text()).toContain("task-fresh");
+
+    guest.send({ type: "monitor:retry_task", taskId: "task-fresh" });
+    await settle();
+    expect(emit).not.toHaveBeenCalled();
+
+    // The instance owner drives it by every one of those routes.
+    owner.send({ type: "message", text: "/goal cancel task-fresh" });
+    await settle();
+    expect(seen).toContain("/goal cancel task-fresh");
+    owner.send({ type: "monitor:retry_task", taskId: "task-fresh" });
+    await settle();
+    expect(emit).toHaveBeenCalledWith("monitor:retry_task", expect.objectContaining({ taskId: "task-fresh" }));
+
+    await channel.disconnect();
+  });
+
+  it("keeps a resolvable task working for the identity that owns it", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    // A checkpoint exists and names the GUEST's chat: the guest may drive its own
+    // task, and the owner may not reach into it (the owner gets no surveillance
+    // power over another identity's work).
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-guest" ? guest.chatId : null));
+
+    guest.send({ type: "message", text: "/cancel task-guest" });
+    await settle();
+    expect(seen).toContain("/cancel task-guest");
+
+    owner.send({ type: "message", text: "/cancel task-guest" });
+    await settle();
+    expect(seen.filter((t) => t === "/cancel task-guest")).toHaveLength(1);
+    expect(owner.text()).toContain("task-guest");
 
     await channel.disconnect();
   });

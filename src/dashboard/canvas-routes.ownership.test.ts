@@ -201,3 +201,77 @@ describe("canvas routes: one identity's canvas is not another's (round 14 #2)", 
     expect(storage.getBySession(OWNER)).not.toBeNull();
   });
 });
+
+// ── Codex round 15 #1 + #2 ────────────────────────────────────────────────────
+describe("the canvas the request names is the canvas it writes (round 15 #1)", () => {
+  // THE DEFECT. `id` is the storage PRIMARY KEY and the save took it from the
+  // BODY, while authorization checked the session in the URL: a guest PUT to its
+  // own /api/canvas/guest with {id:"owner-profile", version:1} updated the OWNER's
+  // row — its shapes AND its user_id, i.e. the ownership column itself. Authorized
+  // one identifier, wrote another.
+  it("refuses to let a body id retarget the write to another identity's row", async () => {
+    await ownerCanvas();
+    const before = storage.getBySession(OWNER)!;
+
+    const res = await call("PUT", `/api/canvas/${GUEST}`, as(GUEST), {
+      id: OWNER,
+      version: before.version,
+      shapes: [{ id: "g1", type: "note", text: "the guest's overwrite" }],
+    });
+
+    // The guest's OWN canvas is written (it is allowed to have one)…
+    expect(res.status).toBe(200);
+    // …and the owner's row is exactly as it was: content, version and owner.
+    const after = storage.getBySession(OWNER)!;
+    expect(after.shapes).toContain("the owner's plan");
+    expect(after.shapes).not.toContain("the guest's overwrite");
+    expect(after.userId).toBe(OWNER);
+    expect(after.version).toBe(before.version);
+    // The guest's own row exists under its own id, not the owner's.
+    expect(storage.getBySession(GUEST)!.id).not.toBe(OWNER);
+  });
+
+  it("keeps the owner's own re-save working, body id or not", async () => {
+    await ownerCanvas();
+    const first = storage.getBySession(OWNER)!;
+
+    const res = await call("PUT", `/api/canvas/${OWNER}`, as(OWNER), {
+      id: "something-else-entirely",
+      version: first.version,
+      shapes: [{ id: "s2", type: "note", text: "the owner's second plan" }],
+    });
+
+    expect(res.status).toBe(200);
+    const after = storage.getBySession(OWNER)!;
+    expect(after.shapes).toContain("the owner's second plan");
+    // Still one row, still keyed as it was created.
+    expect(after.id).toBe(first.id);
+  });
+});
+
+describe("anonymous canvas access needs an ownerless instance (round 15 #2)", () => {
+  // THE DEFECT. Round 13 #9 tightened the OWNER-ONLY branch so that an
+  // unattributed caller is refused once an owner is recorded — and left the
+  // own-identity branch hanging on `shared` alone. With exactly one issued
+  // identity the instance is not shared, so an unauthenticated GET of that
+  // identity's canvas was answered `allow:sole-identity`. One identity means one
+  // person's private work, not "no private work".
+  it("refuses an anonymous read of a canvas on a one-identity instance", async () => {
+    setInstanceIdentityStore(identities({ issued: [OWNER] }));
+    await call("PUT", `/api/canvas/${OWNER}`, as(OWNER), {
+      shapes: [{ id: "s1", type: "note", text: "the owner's plan" }],
+    });
+
+    const read = await call("GET", `/api/canvas/${OWNER}`);
+    expect(read.status).toBe(403);
+    expect(JSON.stringify(read.json)).not.toContain("the owner's plan");
+
+    const exported = await call("POST", `/api/canvas/${OWNER}/export`);
+    expect(exported.status).toBe(403);
+
+    // The owner itself is served, with the pair the portal attaches.
+    const own = await call("GET", `/api/canvas/${OWNER}`, as(OWNER));
+    expect(own.status).toBe(200);
+    expect(JSON.stringify(own.json)).toContain("the owner's plan");
+  });
+});

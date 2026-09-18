@@ -1793,3 +1793,81 @@ describe("DashboardServer: owner-only mutations on the dashboard port (round 13 
     expect(started.loop.stop).not.toHaveBeenCalled();
   });
 });
+
+// ── Codex round 15 #3: the suffix that walked past the classification ─────────
+//
+// THE DEFECT. The handler matched `url.startsWith("/api/user/autonomous")`, so
+// `/api/user/autonomousXYZ?chatId=<victim>` satisfied it — while
+// `ownerOnlyProxySurface` matches the canonical path exactly and therefore did NOT
+// classify that URL. The central gate saw an unclassified path, let it through,
+// and the handler flipped the named identity's autonomous mode. Authorized one
+// string, acted on another.
+describe("DashboardServer: a suffix is not the route (round 15 #3)", () => {
+  let server: DashboardServer | null = null;
+
+  afterEach(async () => {
+    setInstanceIdentityStore(null);
+    if (server) { await server.stop(); server = null; }
+  });
+
+  function identities() {
+    const issued = ["owner-profile", "guest-profile"];
+    return {
+      verify: (profileId: string, token: string) => issued.includes(profileId) && token === `token-${profileId}`,
+      ownerProfileId: () => "owner-profile",
+      has: (profileId: string) => issued.includes(profileId),
+      count: () => issued.length,
+    };
+  }
+  const as = (profileId: string) => ({
+    "x-strada-profile-id": profileId,
+    "x-strada-profile-token": `token-${profileId}`,
+  });
+
+  it("does not change a victim's autonomous mode through /api/user/autonomousXYZ", async () => {
+    setInstanceIdentityStore(identities());
+    const setAutonomousMode = vi.fn().mockResolvedValue(undefined);
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      userProfileStore: {
+        setAutonomousMode,
+        isAutonomousMode: vi.fn().mockResolvedValue({ enabled: false }),
+      } as never,
+    });
+    try {
+      await server.start();
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") return;
+      throw err;
+    }
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const post = (path: string, headers: Record<string, string>) =>
+      fetch(`http://localhost:${addr.port}${path}`, {
+        method: "POST",
+        headers: { Origin: `http://localhost:${addr.port}`, "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ enabled: true }),
+      });
+
+    // The suffix, as a guest: nothing is set, whatever the status.
+    const suffixed = await post("/api/user/autonomousXYZ?chatId=victim", as("guest-profile"));
+    expect(setAutonomousMode).not.toHaveBeenCalled();
+    expect(suffixed.status).toBeGreaterThanOrEqual(400);
+
+    // …and as the OWNER too: an unclassified path is not a route, for anybody.
+    const asOwner = await post("/api/user/autonomousXYZ?chatId=victim", as("owner-profile"));
+    expect(setAutonomousMode).not.toHaveBeenCalled();
+    expect(asOwner.status).toBeGreaterThanOrEqual(400);
+
+    // The canonical path still works for the owner, and is refused for the guest.
+    const guestCanonical = await post("/api/user/autonomous?chatId=victim", as("guest-profile"));
+    expect(guestCanonical.status).toBe(403);
+    expect(setAutonomousMode).not.toHaveBeenCalled();
+
+    const ownerCanonical = await post("/api/user/autonomous?chatId=victim", as("owner-profile"));
+    expect(ownerCanonical.status).toBe(200);
+    expect(setAutonomousMode).toHaveBeenCalledTimes(1);
+  });
+});

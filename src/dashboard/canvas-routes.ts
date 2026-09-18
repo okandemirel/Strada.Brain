@@ -121,6 +121,15 @@ function isValidSessionId(id: string): boolean {
 // WHO IS ASKING (round 14 #2)
 // =============================================================================
 
+/** The stored row for `sessionId`, or undefined — never throwing at the caller. */
+function storedCanvas(canvasStorage: CanvasStorage, sessionId: string): CanvasState | undefined {
+  try {
+    return canvasStorage.getBySession(sessionId) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The identity a canvas belongs to: the owner recorded on the row, else the
  * session the canvas is keyed by — which IS the portal's profile id.
@@ -357,7 +366,20 @@ export function handleCanvasRoute(
         : [];
 
       const state: CanvasState = {
-        id: parsed.id ?? sessionId,
+        // ROUND 15 #1 — THE ROW THAT IS AUTHORIZED IS THE ROW THAT IS WRITTEN.
+        //
+        // `id` is the storage PRIMARY KEY (canvas_states.id, the target of every
+        // upsert) and it came from the BODY, while authorization checked the
+        // SESSION in the URL. A guest PUT to its own /api/canvas/<guest> carrying
+        // {id:"<owner>", version:1} therefore updated the OWNER's row — its
+        // shapes and its user_id, i.e. the ownership column itself. Two
+        // identifiers, one checked and the other acted on.
+        //
+        // The id now comes from the row this session already has, or from the
+        // session itself for a first save. A body id is ignored outright rather
+        // than validated: there is no request in which a client needs to name the
+        // primary key of a row it is not addressing.
+        id: storedCanvas(canvasStorage, sessionId)?.id ?? sessionId,
         sessionId,
         userId: writerIdentity.viewer,
         projectFingerprint: parsed.projectFingerprint,

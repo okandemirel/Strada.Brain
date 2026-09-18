@@ -186,20 +186,52 @@ describe("WebIdentityStore owner reassignment (round 14 #7)", () => {
   // TEST THE RECOVERY YOU DOCUMENT. The runbook prints a one-line UPDATE for
   // operators who would rather not load the module; this reads that very line out
   // of docs/RUNBOOK.md and runs it, so the two cannot drift apart.
-  it("the SQL the runbook prints has the same effect as the method", () => {
+  /** The handover SQL the runbook prints, read out of the runbook itself. */
+  function runbookHandoverSql(): string {
     const runbook = readFileSync(join(process.cwd(), "docs", "RUNBOOK.md"), "utf8");
-    const printed = /UPDATE web_instance_meta SET value = '<the new profile id>' WHERE key = 'owner_profile_id';/
-      .exec(runbook);
+    const printed = /UPDATE web_instance_meta[\s\S]*?;/.exec(runbook);
     expect(printed, "docs/RUNBOOK.md must print the owner handover SQL").not.toBeNull();
+    return printed![0];
+  }
 
+  it("the SQL the runbook prints has the same effect as the method", () => {
+    const statement = runbookHandoverSql();
     const { dbPath, replacement } = instanceWithLostOwner();
     const raw = new Database(dbPath);
-    raw.prepare(printed![0].replace("<the new profile id>", replacement)).run();
+    const result = raw.prepare(statement.replace(/<the new profile id>/g, replacement)).run();
+    expect(result.changes).toBe(1);
     raw.close();
 
     const restarted = new WebIdentityStore(dbPath);
     expect(restarted.isOwner(replacement)).toBe(true);
     restarted.close();
+  });
+
+  // ROUND 15 #6. The printed SQL was an unconditional UPDATE, so a typo — or a
+  // profile id copied from the wrong browser — became the owner of the instance
+  // and SURVIVED the restart: an owner nobody can present, and every owner-only
+  // power refused for everybody, from a recovery procedure. `reassignOwner()`
+  // already refused an unissued id; the line an operator actually pastes has to
+  // refuse it too, and has to say that it did.
+  it("the SQL the runbook prints REFUSES an id this instance never issued", () => {
+    const { dbPath, lost } = instanceWithLostOwner();
+    const raw = new Database(dbPath);
+    const statement = runbookHandoverSql();
+
+    const result = raw.prepare(statement.replace(/<the new profile id>/g, "typo-not-an-identity")).run();
+    // Nothing was written, and the operator can SEE that nothing was written.
+    expect(result.changes).toBe(0);
+    raw.close();
+
+    const restarted = new WebIdentityStore(dbPath);
+    expect(restarted.ownerProfileId()).toBe(lost);
+    restarted.close();
+  });
+
+  it("the runbook tells the operator to check that the handover applied", () => {
+    const runbook = readFileSync(join(process.cwd(), "docs", "RUNBOOK.md"), "utf8");
+    // A refusal the operator cannot see is a refusal that will be missed.
+    expect(runbook).toMatch(/changes\(\)/);
   });
 
   it("the runbook tells the operator NOT to delete the owner row", () => {

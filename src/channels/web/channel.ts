@@ -588,7 +588,7 @@ export class WebChannel
     taskId: string,
     chatId: string,
     context: string,
-  ): Promise<{ allowed: boolean; owner: string | null }> {
+  ): Promise<{ allowed: boolean; owner: string | null; reason?: string }> {
     if (!this.taskOwnerResolver) return { allowed: true, owner: null };
     let owner: string | null | undefined;
     try {
@@ -598,20 +598,15 @@ export class WebChannel
       // store is down, so any failure falls through to allow-and-log.
       owner = await this.taskOwnerResolver(taskId);
     } catch (err) {
-      getLoggerSafe().warn("task ownership resolver threw — allowing and logging", {
+      getLoggerSafe().warn("task ownership resolver threw — asking the model instead", {
         context,
         taskId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return { allowed: true, owner: null };
+      return this.decideUnownedTask(taskId, chatId, context);
     }
     if (owner == null) {
-      getLoggerSafe().info("task ownership unknown — allowing (transient/portal-only task)", {
-        context,
-        taskId,
-        chatId,
-      });
-      return { allowed: true, owner: null };
+      return this.decideUnownedTask(taskId, chatId, context);
     }
     if (owner !== chatId) {
       getLoggerSafe().warn("task ownership mismatch — cross-chat action rejected", {
@@ -625,10 +620,48 @@ export class WebChannel
     return { allowed: true, owner };
   }
 
+  /**
+   * ROUND 15 #4 — AN UNKNOWN OWNER IS NOT A GRANT.
+   *
+   * The resolver bootstrap wires is a CHECKPOINT lookup, and a task has no
+   * checkpoint until one is written: for a freshly queued task it answers null.
+   * "null ⇒ allow, it is probably a portal-ephemeral id" therefore handed a guest
+   * the owner's brand-new task — through /cancel, /goal cancel, monitor:retry_task
+   * and every other task route — and the hole was widest exactly when the task was
+   * most worth cancelling. A resolver that is DOWN said the same thing.
+   *
+   * The model already answers this: `task:control` is own-identity and a task no
+   * identity can be shown to own is instance traffic, which the instance owner
+   * controls (`unattributedIsInstanceTraffic`). So the guest is refused, the owner
+   * keeps working, and nothing depends on whether a checkpoint has been written.
+   */
+  private decideUnownedTask(
+    taskId: string,
+    chatId: string,
+    context: string,
+  ): { allowed: boolean; owner: null; reason?: string } {
+    const facts = this.instanceFacts();
+    const decision = this.decide("task:control", this.actorForChat(chatId, facts), {
+      facts,
+      resource: {},
+      what: taskId,
+    });
+    if (!decision.allowed) {
+      getLoggerSafe().warn("task ownership unknown — refused by the shared-instance model", {
+        context,
+        taskId,
+        chatId,
+        code: decision.code,
+      });
+      return { allowed: false, owner: null, reason: decision.reason };
+    }
+    return { allowed: true, owner: null };
+  }
+
   private async checkVerifyTaskOwnership(
     taskId: string,
     chatId: string,
-  ): Promise<{ allowed: boolean; owner: string | null }> {
+  ): Promise<{ allowed: boolean; owner: string | null; reason?: string }> {
     return this.checkTaskOwnership(taskId, chatId, "verify");
   }
 
@@ -637,7 +670,9 @@ export class WebChannel
     if (ownership.allowed) return true;
     this.sendToClient(chatId, {
       type: "text",
-      text: `Refused: ${this.taskRefusalReason(taskId, chatId, ownership.owner, context)}.`,
+      // The model's own reason when it made the decision (an unowned task), else
+      // the cross-chat wording with the owning identity named.
+      text: `Refused: ${ownership.reason ?? this.taskRefusalReason(taskId, chatId, ownership.owner, context)}.`,
       messageId: randomUUID(),
     });
     return false;
@@ -2641,11 +2676,26 @@ export class WebChannel
         break;
       }
       case "canvas:save": {
+        // ROUND 15 #1, THE SAME SHAPE ON THIS TRANSPORT. The frame carried a
+        // client-named `sessionId` and this handler passed it on: a guest naming
+        // the owner's session would have had the owner's canvas saved for it, the
+        // way a body `id` retargeted the REST write. Nothing consumes this event
+        // today, which is precisely why it is worth fixing now rather than after
+        // something does.
+        //
+        // A canvas session IS the portal's profile id (useCanvasStore.setSessionId),
+        // so the session that acts is the socket's own identity. A frame naming a
+        // different one is refused rather than silently rewritten, so a portal that
+        // disagrees with the server about who it is says so out loud.
         const saveSessionId = typeof data.sessionId === "string" ? data.sessionId : "";
         const safeSaveSession = /^[a-zA-Z0-9_-]+$/.test(saveSessionId) ? saveSessionId : "";
         if (!safeSaveSession) {
           getLoggerSafe().warn("canvas:save rejected — invalid sessionId", { raw: saveSessionId });
           break;
+        }
+        const ownSession = client?.profileId ?? chatId;
+        if (safeSaveSession !== ownSession) {
+          if (!this.allowWsAction("canvas:state", chatId, { resource: { profileId: safeSaveSession }, what: `canvas ${safeSaveSession}` })) break;
         }
         if (this.workspaceBusEmitter) {
           this.workspaceBusEmitter("canvas:save", {

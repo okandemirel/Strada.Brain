@@ -129,21 +129,29 @@ the oldest established identity simply undoes:
    localStorage (DevTools → Application → Local Storage);
 2. stop the daemon (§2) — this database must not be open for a write twice;
 3. hand ownership over, either through `WebIdentityStore.reassignOwner(<profile
-   id>)` or with the SQL it performs:
+   id>)` or with the SQL it performs — which writes NOTHING unless that id is one
+   this instance actually issued, and tells you which happened:
 
    ```sh
    sqlite3 "$HOME/.strada/db/web-identities.db" \
-     "UPDATE web_instance_meta SET value = '<the new profile id>' WHERE key = 'owner_profile_id';"
+     "UPDATE web_instance_meta SET value = '<the new profile id>'
+       WHERE key = 'owner_profile_id'
+         AND EXISTS (SELECT 1 FROM web_identities WHERE profile_id = '<the new profile id>');
+      SELECT changes() AS applied;"
    ```
 
-4. start the daemon. The replacement browser is the owner; the lost identity
-   becomes an ordinary guest.
+   `applied` is **1** when the handover happened and **0** when the id is not an
+   identity this instance issued — a typo, or a profile copied from the wrong
+   browser. A 0 means nothing changed: fix the id and run it again.
 
-An id the instance never issued is refused and the owner is left alone, so a typo
-in step 3 cannot leave the instance with an owner nobody can present. Deleting
-the whole `web-identities.db` also works and is the nuclear option: every
-identity is revoked, every browser gets a fresh one, and the first to connect
-owns the instance again.
+4. start the daemon, and confirm: the replacement browser writes settings without
+   a refusal, and the lost identity is now an ordinary guest.
+
+Both routes refuse an id the instance never issued and leave the current owner
+alone, so a typo in step 3 cannot leave the instance with an owner nobody can
+present and every owner-only power refused for everybody. Deleting the whole
+`web-identities.db` is the nuclear option: every identity is revoked, every
+browser gets a fresh one, and the first to connect owns the instance again.
 
 | Symptom | Read | Do |
 |---|---|---|

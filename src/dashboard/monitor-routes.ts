@@ -218,8 +218,16 @@ function allowGateDecision(
 ): boolean {
   const task = getActiveStandaloneTasks(taskManager).find((candidate) => candidate.id === taskId)
   const owner = task?.userId?.trim()
-  if (!owner) return true
-  const verdict = authorizeInstanceRequest(req.headers, 'task:control', what, { profileId: owner })
+  // ROUND 15 #4: an id whose owner cannot be established is NOT a grant. Round 14
+  // mirrored the channel's "unknown ⇒ allow" here; the channel has since stopped
+  // saying that, because a task nobody owns is the instance's own work and the
+  // instance's work is the owner's. Same rule, same model call, both transports.
+  const verdict = authorizeInstanceRequest(
+    req.headers,
+    'task:control',
+    what,
+    owner ? { profileId: owner } : {},
+  )
   if (verdict.kind === 'unavailable') {
     getLoggerSafe().error('Monitor gate decision refused: the instance\'s identities cannot be read', {
       what,

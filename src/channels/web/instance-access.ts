@@ -97,6 +97,22 @@ export interface SurfacePolicy {
    *         become readable by whoever asks (plan 6.14).
    */
   readonly unattributedIsPublic: boolean;
+  /**
+   * ROUND 15 #4 — what "belongs to no identity" means on a surface where the
+   * INSTANCE itself is a legitimate actor.
+   *
+   * A task nobody can be shown to own is the daemon's, the campaign's, a
+   * trigger's — the instance's own work. Refusing it to everybody would take the
+   * operator's cancel and gate-approval away from exactly the runs that most need
+   * them; granting it to everybody is what round 15 #4 reported. So on
+   * `task:control` it is the OWNER's: instance traffic is controlled by whoever
+   * controls the instance.
+   *
+   * Deliberately NOT set on attachment:read or chat:frames: an attachment with no
+   * recorded owner must not become readable by the owner, because owner powers
+   * change the instance and never read other people (plan 6.14).
+   */
+  readonly unattributedIsInstanceTraffic?: boolean;
   /** Reads into a refusal: "<who> may not <verb>". */
   readonly verb: string;
   /** What the owner may do on this surface (the model, as a table row). */
@@ -159,6 +175,7 @@ export const SURFACE_POLICY: Readonly<Record<InstanceSurface, SurfacePolicy>> = 
   "task:control": {
     scope: "own-identity",
     unattributedIsPublic: false,
+    unattributedIsInstanceTraffic: true,
     verb: "control this task",
     owner: "own tasks only (cancel/retry/resume/move/gate)",
     guest: "own tasks only (cancel/retry/resume/move/gate)",
@@ -245,6 +262,25 @@ export function instanceRoleOf(
   return isIssuedIdentity(profileId) ? "guest" : "unidentified";
 }
 
+/**
+ * May a caller that proved NO identity be served at all (round 13 #9, round 15 #2)?
+ *
+ * Only where there is nobody to be separated from: no second identity, and no
+ * recorded owner. `shared` counts identities, so an instance with exactly one
+ * REGISTERED OWNER is not shared — and treating that as "nobody to separate" was
+ * the hole twice over: it handed owner-only powers to any unattributed caller
+ * (round 13 #9, closed then for the owner-only scope only) and it handed that one
+ * identity's own canvas, chat and attachments to anyone who asked (round 15 #2).
+ * One identity means one person's private work, not "no private work".
+ *
+ * What survives is the instance that has never issued a web identity at all — the
+ * CLI/dashboard-only deployment, where there is genuinely no owner and no
+ * identity's traffic to separate.
+ */
+function anonymousFallbackAvailable(instance: InstanceFacts): boolean {
+  return !instance.shared && instance.ownerProfileId === undefined;
+}
+
 function nameActor(actor: InstanceActor): string {
   if (actor.profileId) return `${actor.role} identity ${actor.profileId}`;
   if (actor.chatId) return `unidentified caller (chat ${actor.chatId})`;
@@ -298,7 +334,7 @@ export function decideInstanceAccess(req: AccessRequest): AccessDecision {
     // the caller must present the pair that proves it is the owner. The portal
     // attaches that pair to its own API requests (round 13 #7), so the ordinary
     // one-person browser keeps working.
-    if (!req.instance.shared && req.instance.ownerProfileId === undefined) {
+    if (anonymousFallbackAvailable(req.instance)) {
       return {
         allowed: true,
         code: "allow:sole-identity",
@@ -331,6 +367,25 @@ export function decideInstanceAccess(req: AccessRequest): AccessDecision {
     // Nobody can be shown to own it. On a one-person instance that is the one
     // person's; on a shared one it is a refusal, because "unknown owner" must
     // never widen into "anyone may" (plan 6.14).
+    //
+    // Instance traffic first (round 15 #4): a task no identity owns is the
+    // daemon's or the campaign's work, and the instance's work is the owner's.
+    if (policy.unattributedIsInstanceTraffic && req.actor.role === "owner") {
+      return {
+        allowed: true,
+        code: "allow:owner",
+        surface,
+        reason: `${who} may ${policy.verb}${what}: no identity is recorded for it, so it is this instance's own work and the owner controls it`,
+      };
+    }
+    //
+    // DELIBERATELY NOT the round 15 #2 rule: that one is about a resource with a
+    // NAMED owner, where an anonymous caller must not be handed somebody's work.
+    // Here the row belongs to nobody at all — an attachment written before the
+    // owner column existed — and on a one-person instance the only identity there
+    // is is the one person. Requiring proof here would break every legacy
+    // attachment link instead (a browser cannot put a header on an <img src>, and
+    // an ownerless row has no signature to present), with nobody to protect.
     if (!req.instance.shared) {
       return {
         allowed: true,
@@ -352,12 +407,12 @@ export function decideInstanceAccess(req: AccessRequest): AccessDecision {
   if (req.actor.chatId !== undefined && resourceChat !== undefined && resourceChat === req.actor.chatId) {
     return { allowed: true, code: "allow:self", surface, reason: `${who} may ${policy.verb}${what}: its own` };
   }
-  if (req.actor.profileId === undefined && !req.instance.shared) {
+  if (req.actor.profileId === undefined && anonymousFallbackAvailable(req.instance)) {
     return {
       allowed: true,
       code: "allow:sole-identity",
       surface,
-      reason: `${who} may ${policy.verb}${what}: this instance has a single identity, so there is no other identity to separate it from`,
+      reason: `${who} may ${policy.verb}${what}: this instance has recorded no owner and no other identity, so there is no identity to separate it from`,
     };
   }
   return {

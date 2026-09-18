@@ -24,6 +24,20 @@ import {
 } from "./server-types.js";
 
 /**
+ * ROUND 15 #3 — THE PATH A ROUTE MATCHES IS THE PATH THAT WAS AUTHORIZED.
+ *
+ * `url.startsWith("/api/user/autonomous")` also matches
+ * `/api/user/autonomousXYZ`, and the shared-instance classification table does
+ * NOT match that — so the dashboard's central gate saw an unclassified path, let
+ * it by, and this handler then changed the autonomous setting of whichever
+ * `?chatId=` the caller named. The canonical pathname is compared exactly now, so
+ * the value that is authorized and the value that acts are the same string.
+ */
+function canonicalPath(url: string): string {
+  return url.split("?")[0] ?? url;
+}
+
+/**
  * Try to handle personality and user routes. Returns true if the route was handled.
  */
 export function handlePersonalityRoutes(
@@ -177,7 +191,7 @@ export function handlePersonalityRoutes(
   }
 
   // GET /api/user/autonomous -- Check autonomous mode status
-  if (method === "GET" && url.startsWith("/api/user/autonomous")) {
+  if (method === "GET" && canonicalPath(url) === "/api/user/autonomous") {
     if (!ctx.userProfileStore) {
       sendJsonError(res, 501, "User profile store not available");
       return true;
@@ -212,7 +226,7 @@ export function handlePersonalityRoutes(
   }
 
   // POST /api/user/autonomous -- Set autonomous mode
-  if (method === "POST" && url.startsWith("/api/user/autonomous")) {
+  if (method === "POST" && canonicalPath(url) === "/api/user/autonomous") {
     if (!ctx.userProfileStore) {
       sendJsonError(res, 501, "User profile store not available");
       return true;
