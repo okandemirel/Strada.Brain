@@ -1519,6 +1519,13 @@ async function bootstrapImpl(
     instinctRetriever,
     trajectoryReplayRetriever,
     eventEmitter: learningResult.eventBus,
+    // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
+    // nulls: guidance exposure ("this rule was in the prompt"), run credit
+    // settlement, teaching and correction capture, and error-recovery learning
+    // all become no-ops, and the coverage command can only ever report absence
+    // because nothing in a real run ever reported presence.
+    learningPipeline: learningResult.pipeline,
+    errorLearningHooks: learningResult.errorLearningHooks,
     metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
@@ -2715,6 +2722,7 @@ async function initializeLearning(
       patternMatcher,
       taskPlanner,
       errorRecovery,
+      errorLearningHooks,
       eventBus,
       learningQueue,
       interventionEngine,

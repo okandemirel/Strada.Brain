@@ -120,6 +120,15 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
    */
   noteGuidanceShown?(chatId: string, instinctIds: readonly string[], taskRunId?: string): void;
   /**
+   * The error-learning hooks, when the host has a learning pipeline.
+   *
+   * The bundle's ErrorRecoveryEngine is the one this engine calls `analyze()` on,
+   * so it is the one that has to hold the hooks; startup used to enable learning
+   * on a separate engine no run ever touched. Optional — a host without learning
+   * returns undefined and recovery simply does not learn.
+   */
+  errorLearningHooks?(): import("../../learning/hooks/error-learning-hooks.js").ErrorLearningHooks | undefined;
+  /**
    * audited 2026-09-02: run teardown for the learning pipeline's per-run credit
    * ledger — cleared at the same point currentSessionInstinctIds is, so the next
    * run on this chatId can credit the same instincts again.
@@ -415,8 +424,22 @@ export async function setupAgentCoreRun(
     }
 
     const lastUserMessage = deps.sessionManager.extractLastUserMessage(session) || queryText;
+    // RECOVERY LEARNS ON THE ENGINE THE RUN ACTUALLY USES. The scope is the one
+    // the credit ledger keys by (chatId as the session, the live run id), so a
+    // recovery exposure sits beside the guidance exposures of the same run
+    // instead of under a scope nothing queries.
+    const errorLearningHooks = deps.errorLearningHooks?.();
     const bundle = createAutonomyBundle({
       prompt: lastUserMessage,
+      ...(errorLearningHooks === undefined
+        ? {}
+        : {
+            errorLearning: {
+              hooks: errorLearningHooks,
+              sessionId: chatId,
+              resolveTaskRunId: () => deps.getTaskExecutionContext()?.taskRunId,
+            },
+          }),
       // Step 0 / gap #8 — v1 workers use the background-epoch iteration budget (runBackgroundTask
       // :3407); only interactive uses the interactive limit. The prior v2 prologue used the
       // interactive limit for ALL modes, giving workers the wrong autonomy-bundle budget.

@@ -71,6 +71,16 @@ export interface ErrorRecoveryConfig {
   enableLearning?: boolean;
   /** Session ID for learning correlation */
   sessionId?: string;
+  /**
+   * WHICH RUN IS EXECUTING RIGHT NOW (round 15 #13, offered by the learning lane).
+   *
+   * An engine outlives no run but is used by many, so the run scope cannot be a
+   * field: it is asked for at the moment an error is analysed. Exposure and
+   * judgement then carry the SAME scope everything else uses -- the credit
+   * ledger's `noteGuidanceShown` keys by (sessionId, taskRunId), and an exposure
+   * filed under a different scope is an exposure the coverage query cannot find.
+   */
+  resolveTaskRunId?: () => string | undefined;
 }
 
 interface CachedResolution {
@@ -229,6 +239,17 @@ export class ErrorRecoveryEngine {
    * This is how a caller that needs the record to have landed (a test, a
    * teardown) asks for it.
    */
+  /** The run this error belongs to, when the host knows it. */
+  private currentTaskRunId(): string | undefined {
+    try {
+      return this.config.resolveTaskRunId?.();
+    } catch {
+      // A host that cannot answer leaves the scope unrecorded -- which reads as
+      // "no run named", never as a wrong run.
+      return undefined;
+    }
+  }
+
   async flushLearning(): Promise<void> {
     await this.learningWork;
   }
@@ -321,7 +342,11 @@ export class ErrorRecoveryEngine {
       ...(params.appliedInstinctIds === undefined
         ? {}
         : { appliedInstinctIds: params.appliedInstinctIds }),
-      ...(params.taskRunId === undefined ? {} : { taskRunId: params.taskRunId }),
+      // The caller's run if it named one, else the run that is executing: what
+      // must never happen is the exposure and its judgement disagreeing.
+      ...((params.taskRunId ?? this.currentTaskRunId()) === undefined
+        ? {}
+        : { taskRunId: params.taskRunId ?? this.currentTaskRunId() }),
       ...(correlationId === undefined ? {} : { correlationId }),
       ...(params.derivation === undefined ? {} : { derivation: params.derivation }),
     });
@@ -372,6 +397,7 @@ export class ErrorRecoveryEngine {
         errorOutput: result.content,
         analysis: { hasErrors: true, errorCount: 0, summary: "", recoveryInjection: "" },
         sessionId: this.config.sessionId ?? "default",
+        ...(this.currentTaskRunId() === undefined ? {} : { taskRunId: this.currentTaskRunId() }),
         timestamp: new Date(),
         ...(observed?.filePath === undefined ? {} : { filePath: observed.filePath }),
         ...(observed === undefined ? {} : { metadata: observed.metadata }),

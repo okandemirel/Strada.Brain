@@ -16,6 +16,7 @@ import { TypedEventBus, type IEventBus, type LearningEventMap } from "../event-b
 import type { LearningQueue } from "../../learning/pipeline/learning-queue.js";
 import type { TaskPlanner } from "../../agents/autonomy/task-planner.js";
 import type { ErrorRecoveryEngine } from "../../agents/autonomy/error-recovery.js";
+import type { ErrorLearningHooks } from "../../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../../learning/intervention/intervention-engine.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
 import { InstinctRetriever } from "../../agents/instinct-retriever.js";
@@ -102,7 +103,15 @@ export interface LearningResult {
   storage?: LearningStorage;
   patternMatcher?: PatternMatcher;
   taskPlanner: TaskPlanner;
+  /**
+   * The engine startup built. NOTHING RUNS ON IT: a task builds its own bundle
+   * (createAutonomyBundle), and that engine is what analyses tool failures. Kept
+   * because callers hold the shape, but the hooks below are how recovery learning
+   * actually reaches a run.
+   */
   errorRecovery: ErrorRecoveryEngine;
+  /** The error-learning hooks, for the per-task engine to use. */
+  errorLearningHooks?: ErrorLearningHooks;
   eventBus?: IEventBus<LearningEventMap>;
   learningQueue?: LearningQueue;
   interventionEngine?: InterventionEngine;

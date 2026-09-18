@@ -81,6 +81,7 @@ import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
 import { CorrectionDetector } from "../learning/feedback/correction-detector.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
+import type { ErrorLearningHooks } from "../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
@@ -900,6 +901,7 @@ export class Orchestrator {
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   private readonly metricsRecorder: MetricsRecorder | null;
   private readonly learningPipeline: LearningPipeline | null;
+  private readonly errorLearningHooks: ErrorLearningHooks | null;
   private readonly interventionEngine: InterventionEngine | null;
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
   private readonly currentSessionInstinctIds = new Map<string, string[]>();
@@ -1061,6 +1063,14 @@ export class Orchestrator {
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
     learningPipeline?: LearningPipeline;
+    /**
+     * The error-learning hooks built beside the pipeline.
+     *
+     * They used to be handed to an ErrorRecoveryEngine created at startup and
+     * used by nothing; the engine a run calls `analyze()` on is built per task in
+     * `createAutonomyBundle`, so the hooks have to reach THAT one.
+     */
+    errorLearningHooks?: ErrorLearningHooks;
     interventionEngine?: InterventionEngine;
     goalDecomposer?: GoalDecomposer;
     interruptedGoalTrees?: GoalTree[];
@@ -1154,6 +1164,7 @@ export class Orchestrator {
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
     this.learningPipeline = opts.learningPipeline ?? null;
+    this.errorLearningHooks = opts.errorLearningHooks ?? null;
     this.interventionEngine = opts.interventionEngine ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
     for (const tree of opts.interruptedGoalTrees ?? []) {
@@ -1316,6 +1327,7 @@ export class Orchestrator {
       maybeUpdateUserProfileFromPrompt: (chatId, identityKey, queryText, userId) =>
         this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId),
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
+      errorLearningHooks: () => this.errorLearningHooks ?? undefined,
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
       clearRunInstinctCredits: (chatId, terminal, taskRunId) =>

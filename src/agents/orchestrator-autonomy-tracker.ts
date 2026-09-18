@@ -20,6 +20,24 @@ export interface AutonomyBundle {
 }
 
 export interface CreateAutonomyBundleParams {
+  /**
+   * THE ENGINE THE RUN USES IS THE ENGINE THAT LEARNS.
+   *
+   * `enableLearning` was called once at startup on an ErrorRecoveryEngine that
+   * nothing ever ran: every task builds its own bundle here, and this engine —
+   * the one `analyze()` is called on for every failing tool result — had no hooks
+   * at all. So no recovery exposure was ever recorded, no learned solution was
+   * ever injected, and the coverage number could only ever report absence.
+   *
+   * The hooks are optional because a host without a learning pipeline has none,
+   * and `sessionId` is the chat scope the credit ledger already keys by, so an
+   * exposure recorded here is findable beside the guidance exposures.
+   */
+  readonly errorLearning?: {
+    readonly hooks: import("../learning/hooks/error-learning-hooks.js").ErrorLearningHooks;
+    readonly sessionId?: string;
+    readonly resolveTaskRunId?: () => string | undefined;
+  };
   readonly prompt: string;
   readonly iterationBudget: number;
   readonly stradaDeps?: StradaDepsStatus;
@@ -73,6 +91,15 @@ export function conformanceAppliesTo(
 
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
   const errorRecovery = new ErrorRecoveryEngine();
+  if (params.errorLearning) {
+    errorRecovery.enableLearning(params.errorLearning.hooks, {
+      enableLearning: true,
+      ...(params.errorLearning.sessionId === undefined ? {} : { sessionId: params.errorLearning.sessionId }),
+      ...(params.errorLearning.resolveTaskRunId === undefined
+        ? {}
+        : { resolveTaskRunId: params.errorLearning.resolveTaskRunId }),
+    });
+  }
   // dotnet_build only when there is something for it to build. In a Unity
   // project without a solution it is filtered out of the offered tools, so
   // naming it in the verify checkpoint asks for a tool the run does not have.
