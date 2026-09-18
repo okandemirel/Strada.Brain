@@ -525,8 +525,15 @@ export class LearningPipeline {
     // Round 12 #9: the run is over, so what it was shown is no longer an open
     // fact. Keeping it would date the NEXT run's exposure from this one's prompt.
     this.runGuidanceShownAt.delete(LearningPipeline.runCreditKey(sessionId, runId));
-    // Round 13 #25: and so is what it was shown and did not use.
-    this.runNonApplied.delete(LearningPipeline.runCreditKey(sessionId, runId));
+    // Round 13 #25: and so is what it was shown and did not use — but only when
+    // the key is the CHAT's, because the next run reuses that key and must not
+    // inherit this run's judgements. A run-scoped key is never reused, so its
+    // record stays as the dedup for a straggler that arrives after teardown
+    // (round 14 #13; with a terminal verdict it has also moved into
+    // `settledRuns.credited`). Bounded by MAX_SHOWN_RUNS either way.
+    if (runId?.trim() === undefined || runId.trim() === "") {
+      this.runNonApplied.delete(LearningPipeline.runCreditKey(sessionId, runId));
+    }
     this.evictSessionPendingResolutions(sessionId, runId);
   }
 
@@ -623,7 +630,15 @@ export class LearningPipeline {
     // the verdict the first one recorded.
     if (existing) return existing.credited;
 
-    const credited = new Set<string>();
+    // ROUND 14 #13 — THE DEDUP MUST OUTLIVE THE RUN, because a late event does.
+    // `credited` is what stops an event that arrives after teardown being credited
+    // twice, and the rules this run was shown and demonstrably did NOT use belong
+    // in it: their exposure is already settled, with a negative row. Seeded here
+    // because `settleAndForgetRun` deletes `runNonApplied` immediately afterwards —
+    // without this the straggler found no record, was judged by the run's
+    // (successful) verdict, and wrote a positive `terminal` row beside the negative
+    // `observed` one. One exposure, two contradictory rows, one queue delay later.
+    const credited = new Set<string>(this.runNonApplied.get(creditKey)?.keys() ?? []);
     this.settledRuns.set(creditKey, { sessionId, runId, terminal, credited });
     while (this.settledRuns.size > LearningPipeline.MAX_SETTLED_RUNS) {
       const oldest = this.settledRuns.keys().next();

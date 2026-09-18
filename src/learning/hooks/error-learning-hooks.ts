@@ -439,13 +439,15 @@ export class ErrorLearningHooks {
     this.shownGuidance.delete(errorId);
     if (!shown || shown.instinctIds.length === 0) return;
 
-    // ROUND 13 #24 — NO EVIDENCE, NO PENALTY. Absence of a text match is not
-    // evidence: "Compile the referenced dependency before rebuilding" and "Build
-    // the dependency project first" are the same remedy in different words, and
-    // penalising the second because the run reported the first is punishing a rule
-    // for wording. Repeated, it takes a CORRECT rule under the recovery gate and
-    // stops it being recalled at all — the gate tightened until learning went
-    // dark. So an unjudged exposure is counted and named, never guessed at.
+    // ROUND 13 #24 / ROUND 14 #14 — NO EXPLICIT, COMPLETE REPORT, NO PENALTY.
+    // Neither the absence of a text match nor the presence of one is evidence:
+    // "Compile the referenced dependency before rebuilding" and "Build the
+    // dependency project first" are the same remedy in different words, and a
+    // resolution that names TWO rules' actions used both. Either way, penalising a
+    // rule for the words around it takes a CORRECT rule under the recovery gate
+    // and stops it being recalled at all — the gate tightened until learning went
+    // dark. Only {@link applicationEvidence}'s report branch sets `demonstrated`;
+    // everything else is an unjudged exposure, counted and named, never guessed at.
     if (!evidence.demonstrated) {
       this.unjudgedExposures += 1;
       return;
@@ -484,11 +486,25 @@ export class ErrorLearningHooks {
    */
   private applicationEvidence(resolution: ResolutionContext): ApplicationEvidence {
     if (resolution.appliedInstinctIds !== undefined) {
-      const reported = resolution.appliedInstinctIds
-        .map((id) => String(id).trim())
-        .filter((id) => id.length > 0 && this.storage.getInstinct(id) !== null);
+      const reported = resolution.appliedInstinctIds.map((id) => String(id).trim()).filter((id) => id.length > 0);
+      // COMPLETE means every id in it can be checked against what was shown. An
+      // id the store does not know breaks that: the rule it names may be one of
+      // the shown rules under another identity, so "everything else misfired" is
+      // no longer a fact about this report (round 14 #14).
+      const unknown = reported.filter((id) => this.storage.getInstinct(id) === null);
+      if (unknown.length > 0) {
+        return { applied: reported.filter((id) => !unknown.includes(id)), demonstrated: false };
+      }
       return { applied: reported, demonstrated: true };
     }
+    // ROUND 14 #14 — A TEXT MATCH IDENTIFIES A RULE TO REINFORCE AND NOTHING ELSE.
+    // It used to return `demonstrated: true`, which made every OTHER shown rule a
+    // misfire on the strength of one substring hit: report a resolution that names
+    // TWO rules' actions — both used — and the first match won while the second was
+    // penalised for its wording. That is the same defect as #24, one layer down,
+    // and the third time it has been caught. Matching is a guess about what was
+    // used; only a report is knowledge. So `demonstrated` stays FALSE here,
+    // whatever the text says, and the exposure is counted as unjudged.
     const action = normalizeAction(resolution.action);
     if (action.length >= MIN_ACTION_MATCH_CHARS) {
       for (const instinct of this.storage.getInstincts()) {
@@ -496,7 +512,7 @@ export class ErrorLearningHooks {
         const candidate = normalizeAction(instinct.action);
         if (candidate.length < MIN_ACTION_MATCH_CHARS) continue;
         if (action.includes(candidate) || candidate.includes(action)) {
-          return { applied: [instinct.id], demonstrated: true };
+          return { applied: [instinct.id], demonstrated: false };
         }
       }
     }

@@ -102,6 +102,43 @@ describe("a resolution recorded through the recovery engine", () => {
     expect(hooks.getStats().activeErrors).toBe(0);
   });
 
+  /**
+   * ROUND 14 #15 — an older queued resolution erased a newer error.
+   *
+   * `recordResolution` deleted the open error for the tool unconditionally, and it
+   * is scheduled rather than awaited. So A's resolution, draining after failure B
+   * has already been analysed for the same tool, removed B's correlation — and
+   * B's eventual success had nothing to close, leaving its exposure unjudged for
+   * ever. Only the entry the resolution is actually FOR may be removed.
+   */
+  it("does not erase a newer error's correlation when an older resolution drains", async () => {
+    taughtRule(RULE, "Build the dependency project first, then re-run");
+
+    // Failure A, then A's repair lands: the report is scheduled, not yet run.
+    engine.analyze("dotnet_build", failing);
+    engine.analyze("dotnet_build", { content: "Build succeeded", isError: false });
+
+    // Failure B on the SAME tool, analysed while A's report is still in flight.
+    // Another CS0006, so the same rule is shown for B too — both exposures are
+    // real exposures, and both must end up judged or counted.
+    const secondError =
+      "Assets/Other.cs(9,4): CS0006 — Metadata file 'Strada.Other.dll' could not be found";
+    engine.analyze("dotnet_build", { content: secondError, isError: true });
+    expect(hooks.getStats().activeErrors).toBe(2);
+
+    // A's queued report drains here.
+    await engine.flushLearning();
+
+    // B's own repair lands. Its exposure must still be closable.
+    engine.analyze("dotnet_build", { content: "Build succeeded", isError: false });
+    await engine.flushLearning();
+
+    // The repro: A's drain had deleted B's correlation, so this stayed at 1 and
+    // B's exposure was never judged or counted.
+    expect(hooks.getStats().activeErrors).toBe(0);
+    expect(hooks.getStats().unjudgedExposures).toBe(2);
+  });
+
   it("is reported by the runtime when the same tool succeeds afterwards", async () => {
     taughtRule(RULE, "Build the dependency project first, then re-run");
     engine.analyze("dotnet_build", failing);

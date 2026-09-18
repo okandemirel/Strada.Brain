@@ -176,6 +176,60 @@ describe("#24 — a rule that was RIGHT is not penalised for wording", () => {
     ).toHaveLength(1);
   });
 
+  /**
+   * ROUND 14 #14 — THE THIRD TIME THIS EXACT THING HAS BEEN CAUGHT.
+   *
+   * #24 made a penalty require evidence but left the TEXT path able to supply it:
+   * a resolution whose text matched a rule's action identified that rule as
+   * applied, which made every other shown rule a "demonstrated" misfire. Report a
+   * resolution that names BOTH rules' actions — both were used — and the first
+   * match wins while the second is penalised for the words it happens to use.
+   *
+   * A text match can no longer establish non-application at all. It may still
+   * identify a rule to REINFORCE; it may never be the reason another rule is
+   * punished. When the report is not explicit and complete, the answer is "we do
+   * not know", and that is counted rather than guessed.
+   */
+  it("penalises neither rule when one resolution names both their actions", async () => {
+    const first = taughtRule("cs0006-build-dependency", CS0006, TAUGHT_ACTION);
+    const second = taughtRule("cs0006-restore-packages", CS0006, "Restore the NuGet packages first");
+    const context = errorContext(CS0006);
+    const shown = hooks.onBeforeErrorAnalysis(context);
+    const shownIds = shown.suggestions.map((s) => String(s.instinct?.id));
+    expect(shownIds).toContain(String(first.id));
+    expect(shownIds).toContain(String(second.id));
+
+    // The run did both, and says so in one sentence.
+    await hooks.onAfterErrorResolution(
+      resolution(context, `${TAUGHT_ACTION}, and restore the NuGet packages first`),
+    );
+
+    for (const rule of [first, second]) {
+      expect(
+        storage.getInstinctCredits({ instinctId: String(rule.id) }).filter((c) => !c.applied),
+        `${String(rule.id)} was penalised for its wording`,
+      ).toHaveLength(0);
+      expect(storage.getInstinct(String(rule.id))!.confidence).toBeGreaterThanOrEqual(rule.confidence);
+    }
+    // Nobody said WHICH guidance was used, so nothing was judged — and it says so.
+    expect(hooks.getStats().unjudgedExposures).toBe(1);
+  });
+
+  it("treats a report naming an unknown rule as incomplete, not as evidence", async () => {
+    const rule = taughtRule("cs0006-build-dependency", CS0006, TAUGHT_ACTION);
+    const context = errorContext(CS0006);
+    hooks.onBeforeErrorAnalysis(context);
+    // An id the store does not know means the report cannot be checked against
+    // what was shown: the rule it names might be this one under another name.
+    await hooks.onAfterErrorResolution(
+      resolution(context, "Did something else", { appliedInstinctIds: ["rule-that-does-not-exist"] }),
+    );
+    expect(
+      storage.getInstinctCredits({ instinctId: String(rule.id) }).filter((c) => !c.applied),
+    ).toHaveLength(0);
+    expect(hooks.getStats().unjudgedExposures).toBe(1);
+  });
+
   it("counts the exposures it could not judge instead of guessing at them", async () => {
     taughtRule("cs0006-build-dependency", CS0006, TAUGHT_ACTION);
     const context = errorContext(CS0006);
@@ -205,17 +259,23 @@ describe("#24 — a rule that was RIGHT is not penalised for wording", () => {
       storage.getInstinctCredits({ instinctId: String(evolved.id) }).filter((c) => !c.applied),
     ).toHaveLength(0);
 
-    // The permanent rule WAS a misfire on that run (the run used the other one),
-    // which is the penalty working as intended.
+    // And NOTHING is penalised on the strength of that text match (round 14 #14):
+    // matching identifies a rule to reinforce, never a reason to punish another —
+    // the resolution might have used both, in words of its own.
     const permanentPenalties = () =>
       storage.getInstinctCredits({ instinctId: String(permanent.id) }).filter((c) => !c.applied).length;
-    expect(permanentPenalties()).toBe(1);
+    expect(permanentPenalties()).toBe(0);
 
-    // Now the run applies the permanent rule instead: no new penalty for it.
+    // The permanent rule, reported as the one that WAS used: still no penalty, and
+    // now the report is explicit, so the exposure is judged rather than counted.
     const second = errorContext(CS0006);
     hooks.onBeforeErrorAnalysis(second);
-    await hooks.onAfterErrorResolution(resolution(second, "Restore the NuGet packages first"));
-    expect(permanentPenalties()).toBe(1);
+    await hooks.onAfterErrorResolution(
+      resolution(second, "Restore the NuGet packages first", {
+        appliedInstinctIds: [String(permanent.id)],
+      }),
+    );
+    expect(permanentPenalties()).toBe(0);
   });
 });
 
@@ -265,5 +325,95 @@ describe("#25 — one exposure, one ledger row", () => {
   it("weighs a misfire below a real failure", () => {
     expect(NON_APPLICATION_BETA).toBeLessThan(0.8 / 2);
     expect(NON_APPLICATION_BETA).toBeGreaterThan(0);
+  });
+
+  /**
+   * ROUND 14 #13 — the dedup died with the run.
+   *
+   * The non-application is remembered per run so a later event cannot credit the
+   * same exposure — but the run's teardown DELETED that memory, and the retained
+   * verdict a late event settles against did not carry it. So an event that
+   * arrived after teardown was judged by the run's (successful) verdict and wrote
+   * a positive `terminal` row beside the negative `observed` one. The same
+   * contradiction as #25, one queue delay later.
+   */
+  it("does not credit a settled non-application when the queued event arrives late", async () => {
+    const shownRule = taughtRule("cs0006-build-dependency", CS0006, TAUGHT_ACTION);
+    const usedRule = taughtRule("cs0006-remove-stale-reference", CS0006, "Remove the stale reference");
+    const sessionId = "session-late";
+    const runId = "run-late";
+    const context = errorContext(CS0006, sessionId);
+    hooks.onBeforeErrorAnalysis(context);
+
+    await hooks.onAfterErrorResolution(
+      resolution(context, "Removed the stale reference", {
+        appliedInstinctIds: [String(usedRule.id)],
+        taskRunId: runId,
+      }),
+    );
+    // The run ends well, and is forgotten.
+    pipeline.clearRunInstinctCredits(sessionId, { success: true, verdictScore: 1 }, runId);
+
+    // NOW the tool event the serial queue was still holding arrives, naming the
+    // rule the run was carrying.
+    await pipeline.handleToolResult({
+      sessionId,
+      taskRunId: runId,
+      toolName: "dotnet_build",
+      input: { file_path: "/fixture/App.csproj" },
+      output: "Build succeeded",
+      success: true,
+      appliedInstinctIds: [String(shownRule.id)],
+      timestamp: Date.now(),
+    });
+
+    const rows = storage.getInstinctCredits({ instinctId: String(shownRule.id) });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.applied).toBe(false);
+    expect(rows.some((r) => r.success)).toBe(false);
+  });
+
+  /**
+   * The same straggler, for a teardown that knew no terminal verdict.
+   *
+   * Nothing is remembered in `settledRuns` on that path — there is no verdict to
+   * remember — so seeding `credited` cannot help: what protects this exposure is
+   * that the run-scoped non-application record is NOT deleted at teardown (a
+   * run-scoped key is never reused, unlike the chat's). Without it the late event
+   * re-registered pending credit and the next teardown settled it.
+   */
+  it("does not re-open a settled non-application when the run had no terminal verdict", async () => {
+    const shownRule = taughtRule("cs0006-build-dependency", CS0006, TAUGHT_ACTION);
+    const usedRule = taughtRule("cs0006-remove-stale-reference", CS0006, "Remove the stale reference");
+    const sessionId = "session-no-verdict";
+    const runId = "run-no-verdict";
+    const context = errorContext(CS0006, sessionId);
+    hooks.onBeforeErrorAnalysis(context);
+
+    await hooks.onAfterErrorResolution(
+      resolution(context, "Removed the stale reference", {
+        appliedInstinctIds: [String(usedRule.id)],
+        taskRunId: runId,
+      }),
+    );
+    // No terminal verdict: settled from what the run was observed to do.
+    pipeline.clearRunInstinctCredits(sessionId, undefined, runId);
+
+    await pipeline.handleToolResult({
+      sessionId,
+      taskRunId: runId,
+      toolName: "dotnet_build",
+      input: { file_path: "/fixture/App.csproj" },
+      output: "Build succeeded",
+      success: true,
+      appliedInstinctIds: [String(shownRule.id)],
+      timestamp: Date.now(),
+    });
+    // A later teardown of the same run must find nothing to credit.
+    pipeline.clearRunInstinctCredits(sessionId, { success: true, verdictScore: 1 }, runId);
+
+    const rows = storage.getInstinctCredits({ instinctId: String(shownRule.id) });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.applied).toBe(false);
   });
 });

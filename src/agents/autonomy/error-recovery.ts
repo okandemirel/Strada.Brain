@@ -297,7 +297,14 @@ export class ErrorRecoveryEngine {
 
     const open = this.openErrors.get(params.toolName);
     const correlationId = params.correlationId ?? open?.correlationId;
-    this.openErrors.delete(params.toolName);
+    // ROUND 14 #15 — REMOVE ONLY THE ENTRY THIS RESOLUTION IS FOR. The delete was
+    // unconditional, and this method is SCHEDULED rather than awaited: A's
+    // resolution draining after failure B had already been analysed for the same
+    // tool removed B's correlation, so B's eventual success had nothing to close
+    // and its exposure stayed unjudged for ever.
+    if (open !== undefined && open.correlationId === correlationId) {
+      this.openErrors.delete(params.toolName);
+    }
 
     await this.learningHooks.onAfterErrorResolution({
       errorContext: {
