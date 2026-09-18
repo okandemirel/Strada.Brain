@@ -884,3 +884,242 @@ describe("the budget owners rebuild survives a crash and a race (round 14 #1)", 
     }
   });
 });
+
+/**
+ * Codex round 15 #8 and #9. The round-14 rebuild still lost rows and still
+ * raced:
+ *
+ *   #8 a leftover `budget_owners_v2` was DROPPED on the assumption that its rows
+ *      are always a copy of rows the original still holds — and when the crash
+ *      landed after `DROP TABLE budget_owners`, the schema constant recreated an
+ *      empty composite-key table, so the migration saw a finished key, did
+ *      nothing, and dropped the only copy of every row.
+ *   #9 the column inspections sat OUTSIDE the transaction, so a second
+ *      initializer could finish the whole migration between one process's
+ *      inspection and its now-stale ALTER, killing that boot with
+ *      `duplicate column name`.
+ */
+describe("the owners rebuild reconciles crash residue instead of discarding it (round 15 #8)", () => {
+  const dirs: string[] = [];
+  const opened: Database.Database[] = [];
+  afterEach(() => {
+    for (const raw of opened.splice(0)) {
+      try {
+        raw.close();
+      } catch {
+        // already closed by the test
+      }
+    }
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function newDatabaseFile(): string {
+    const dir = mkdtempSync(join(tmpdir(), "owners-residue-"));
+    dirs.push(dir);
+    return join(dir, "daemon.db");
+  }
+
+  const V2_SHAPE =
+    "CREATE TABLE budget_owners_v2 (owner_host TEXT NOT NULL DEFAULT '', owner_pid INTEGER NOT NULL, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL, registered_seq INTEGER, registered_at INTEGER, PRIMARY KEY (owner_host, owner_pid))";
+
+  it("keeps a row that exists ONLY in the leftover copy", () => {
+    const file = newDatabaseFile();
+    const raw = new Database(file);
+    // The original, still pid-keyed, holding one row.
+    raw.exec(
+      "CREATE TABLE budget_owners (owner_pid INTEGER PRIMARY KEY, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL)",
+    );
+    raw.prepare("INSERT INTO budget_owners VALUES (4242, 'original-gen', ?)").run(Date.now());
+    // The leftover copy, holding a row the original does NOT have: a second
+    // machine's owner, which only the composite-key shape could ever store.
+    raw.exec(V2_SHAPE);
+    raw
+      .prepare("INSERT INTO budget_owners_v2 VALUES ('other-host', 999, 'only-in-copy', ?, NULL, NULL)")
+      .run(Date.now());
+    raw.close();
+
+    const storage = new DaemonStorage(file);
+    storage.initialize();
+    try {
+      const owners = storage.listBudgetOwners();
+      expect(owners).toHaveLength(2);
+      expect(owners.find((owner) => owner.ownerPid === 4242)?.ownerGeneration).toBe("original-gen");
+      const salvaged = owners.find((owner) => owner.ownerPid === 999);
+      expect(salvaged?.ownerGeneration).toBe("only-in-copy");
+      expect(salvaged?.ownerHost).toBe("other-host");
+      // And the residue is gone once its rows are safe.
+      const leftovers = storage
+        .getDatabase()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'budget_owners%'")
+        .all() as Array<{ name: string }>;
+      expect(leftovers.map((row) => row.name)).toEqual(["budget_owners"]);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("salvages the rows when the crash landed after the original was dropped", () => {
+    const file = newDatabaseFile();
+    const raw = new Database(file);
+    // Exactly what a crash between DROP and RENAME leaves: no `budget_owners`
+    // at all, every row in the copy. The schema constant will recreate an EMPTY
+    // composite-key table, which is what made round 14 call this migrated.
+    raw.exec(V2_SHAPE);
+    raw
+      .prepare("INSERT INTO budget_owners_v2 VALUES ('', 4242, 'survivor-gen', ?, 7, 12345)")
+      .run(Date.now());
+    raw.close();
+
+    const storage = new DaemonStorage(file);
+    storage.initialize();
+    try {
+      const owners = storage.listBudgetOwners();
+      expect(owners).toHaveLength(1);
+      expect(owners[0]).toMatchObject({ ownerPid: 4242, ownerGeneration: "survivor-gen" });
+      // The claim order and the arrival time came across too — they are the
+      // evidence that decides supersession.
+      expect(owners[0]!.registeredSeq).toBe(7);
+      expect(owners[0]!.registeredAt).toBe(12345);
+      const leftovers = storage
+        .getDatabase()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'budget_owners%'")
+        .all() as Array<{ name: string }>;
+      expect(leftovers.map((row) => row.name)).toEqual(["budget_owners"]);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("prefers the live registry over the stale snapshot when both name one pid", () => {
+    const file = newDatabaseFile();
+    const raw = new Database(file);
+    raw.exec(
+      "CREATE TABLE budget_owners (owner_pid INTEGER PRIMARY KEY, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL)",
+    );
+    // The live table has been written to since the crash: a newer incarnation
+    // took the pid. The snapshot still remembers the older one.
+    raw.prepare("INSERT INTO budget_owners VALUES (4242, 'current-gen', ?)").run(Date.now());
+    raw.exec(V2_SHAPE);
+    raw
+      .prepare("INSERT INTO budget_owners_v2 VALUES ('', 4242, 'superseded-gen', ?, NULL, NULL)")
+      .run(Date.now() - 60_000);
+    raw.close();
+
+    const storage = new DaemonStorage(file);
+    storage.initialize();
+    try {
+      const owners = storage.listBudgetOwners();
+      expect(owners).toHaveLength(1);
+      expect(owners[0]!.ownerGeneration).toBe("current-gen");
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("leaves nothing to reconcile after a successful rebuild", () => {
+    const file = newDatabaseFile();
+    const raw = new Database(file);
+    raw.exec(
+      "CREATE TABLE budget_owners (owner_pid INTEGER PRIMARY KEY, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL)",
+    );
+    raw.prepare("INSERT INTO budget_owners VALUES (4242, 'legacy-gen', ?)").run(Date.now());
+    raw.close();
+
+    const storage = new DaemonStorage(file);
+    storage.initialize();
+    try {
+      // The staging table lives in the TEMP database, so the main file carries
+      // no half-finished copy a later boot would have to interpret.
+      const mainTables = storage
+        .getDatabase()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'budget_owners%'")
+        .all() as Array<{ name: string }>;
+      expect(mainTables.map((row) => row.name)).toEqual(["budget_owners"]);
+      const staging = storage
+        .getDatabase()
+        .prepare("SELECT name FROM temp.sqlite_master WHERE name LIKE 'owner_key_rebuild%'")
+        .all();
+      expect(staging).toEqual([]);
+    } finally {
+      storage.close();
+    }
+  });
+});
+
+describe("every budget schema change is decided under the write lock (round 15 #9)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("holds the write lock while it inspects and alters the budget tables", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owners-serialized-"));
+    dirs.push(dir);
+    const file = join(dir, "daemon.db");
+    // A registry from before the host, the arrival time and the claim order
+    // existed, so all three owner ALTERs fire. (`budget_reservations` is left to
+    // the schema constant: a hand-made one would be missing columns the prepared
+    // statements name.)
+    const raw = new Database(file);
+    raw.exec(
+      "CREATE TABLE budget_owners (owner_pid INTEGER PRIMARY KEY, owner_generation TEXT NOT NULL, heartbeat_at INTEGER NOT NULL)",
+    );
+    raw.close();
+
+    // WHY THIS AND NOT A STAGED RACE: the defect was that the decision to ALTER
+    // was made on a column list read OUTSIDE the lock, so another process could
+    // invalidate it before the statement ran. What makes that impossible is that
+    // no other process can write between the read and the write -- so that is
+    // what is asserted, from the outside: while the migration is altering the
+    // schema, a second connection must not be able to take the write lock.
+    //
+    // A DEFERRED transaction would fail this: it takes its read snapshot first
+    // and asks for the lock only at its first write, which is the same stale
+    // decision wearing a transaction.
+    const budgetSchemaWrite = /ALTER TABLE budget_|CREATE TABLE budget_owners |DROP TABLE budget_owners/;
+    const originalExec = Database.prototype.exec;
+    const originalPrepare = Database.prototype.prepare;
+    const writesOutsideTransaction: string[] = [];
+    const inspectionsOutsideTransaction: string[] = [];
+    let secondConnectionVerdict = "never probed";
+    Database.prototype.exec = function patchedExec(this: Database.Database, sql: string) {
+      if (budgetSchemaWrite.test(sql)) {
+        const statement = sql.trim().split("\n")[0]!.trim();
+        if (!this.inTransaction) writesOutsideTransaction.push(statement);
+        if (secondConnectionVerdict === "never probed" && this.inTransaction) {
+          // `timeout: 0` so a held lock answers immediately instead of waiting.
+          const other = new Database(file, { timeout: 0 });
+          try {
+            other.exec("BEGIN IMMEDIATE");
+            other.exec("ROLLBACK");
+            secondConnectionVerdict = `a second connection took the write lock during: ${statement}`;
+          } catch {
+            secondConnectionVerdict = "write lock held";
+          } finally {
+            other.close();
+          }
+        }
+      }
+      return originalExec.call(this, sql);
+    } as typeof Database.prototype.exec;
+    Database.prototype.prepare = function patchedPrepare(this: Database.Database, sql: string) {
+      if (/PRAGMA table_info\(budget_/.test(sql) && !this.inTransaction) {
+        inspectionsOutsideTransaction.push(sql.trim());
+      }
+      return originalPrepare.call(this, sql);
+    } as typeof Database.prototype.prepare;
+
+    const storage = new DaemonStorage(file);
+    try {
+      storage.initialize();
+    } finally {
+      Database.prototype.exec = originalExec;
+      Database.prototype.prepare = originalPrepare;
+      storage.close();
+    }
+
+    expect(writesOutsideTransaction).toEqual([]);
+    expect(inspectionsOutsideTransaction).toEqual([]);
+    expect(secondConnectionVerdict).toBe("write lock held");
+  });
+});

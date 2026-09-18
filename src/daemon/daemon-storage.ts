@@ -486,39 +486,15 @@ export class DaemonStorage {
         // Column already exists -- safe to ignore
       }
     }
-    const reservationColumns = this.db.prepare("PRAGMA table_info(budget_reservations)").all() as Array<{ name: string }>;
-    if (!reservationColumns.some((column) => column.name === "owner_generation")) {
-      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN owner_generation TEXT DEFAULT NULL");
-    }
-    if (!reservationColumns.some((column) => column.name === "reconciled_at")) {
-      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN reconciled_at INTEGER DEFAULT NULL");
-    }
-    // A registry written before round 11 #5 has no registration time. Every
-    // owner statement names the column, so this must run before they are
-    // prepared; rows already there stay NULL, which reads as "no proof of when
-    // this incarnation arrived" and therefore keeps the owner's headroom.
-    const ownerColumns = this.db.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string }>;
-    if (!ownerColumns.some((column) => column.name === "registered_at")) {
-      this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_at INTEGER DEFAULT NULL");
-    }
-    // Round 12 #2: whose pid each row is about. NULL/'' = this host.
-    if (!ownerColumns.some((column) => column.name === "owner_host")) {
-      this.db.exec("ALTER TABLE budget_owners ADD COLUMN owner_host TEXT NOT NULL DEFAULT ''");
-    }
-    if (!reservationColumns.some((column) => column.name === "owner_host")) {
-      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN owner_host TEXT DEFAULT NULL");
-    }
-    // Round 13 #1: the durable claim order beside the wall clock.
-    if (!ownerColumns.some((column) => column.name === "registered_seq")) {
-      this.db.exec("ALTER TABLE budget_owners ADD COLUMN registered_seq INTEGER DEFAULT NULL");
-    }
-    if (!reservationColumns.some((column) => column.name === "claim_seq")) {
-      this.db.exec("ALTER TABLE budget_reservations ADD COLUMN claim_seq INTEGER DEFAULT NULL");
-    }
-    // Round 13 #2: a registry keyed by pid alone cannot hold two machines. The
-    // rebuild keeps every row (its host reads as unrecorded, exactly what it
-    // meant) and is a no-op once the primary key is already composite.
-    this.migrateBudgetOwnersToHostKey();
+    // ONE SERIALIZED MIGRATION FOR THE WHOLE WALLET SCHEMA (Codex round 15 #9).
+    // These inspections and their ALTERs used to run before the rebuild's
+    // transaction, so two initializers raced: A read the legacy column list, B
+    // took the write lock and finished the entire migration, and A's now-stale
+    // ALTER killed the boot with `duplicate column name: registered_at`.
+    // Everything that inspects or changes the budget tables now happens inside
+    // one BEGIN IMMEDIATE, and every ALTER is re-checked in there -- so the
+    // loser of the race does nothing instead of failing.
+    this.migrateBudgetSchema();
     // PROJECT HISTORY (plan 6.6). A daemon.db from before this table gets it
     // from the schema constant above; one written by an EARLIER shape of it
     // gains the missing columns here. This must run before prepareStatements(),
@@ -851,28 +827,99 @@ export class DaemonStorage {
   }
 
   /**
-   * Rebuild `budget_owners` with (host, pid) as its primary key.
+   * Every budget-schema change, once, under one write lock.
    *
-   * SQLite cannot ALTER a primary key, so the table is recreated and copied.
-   * Rows written before the host existed keep '' — "not recorded" — which is
-   * how they were already read.
+   * Round 15 #9: the column inspections and their ALTERs sat outside the
+   * rebuild's transaction, so a second initializer could complete the migration
+   * between another's inspection and its ALTER, and the loser's boot died with
+   * `duplicate column name`. Re-reading each column list inside BEGIN IMMEDIATE
+   * makes the loser a no-op, which is what it always meant to be.
    */
-  private migrateBudgetOwnersToHostKey(): void {
-    // ONE TRANSACTION, AND THE CHECK INSIDE IT (Codex round 14 #1). Copy, drop,
-    // rename was three statements: a crash between them left `budget_owners_v2`
-    // behind — the next boot then failed with "table already exists" — or
-    // stranded the original's rows. Two processes initializing at once raced the
-    // same way. BEGIN IMMEDIATE takes the write lock before the inspection, so
-    // the loser re-reads a finished schema and does nothing.
-    const rebuild = this.db!.transaction(() => {
-      const info = this.db!.prepare("PRAGMA table_info(budget_owners)").all() as Array<{ name: string; pk: number }>;
-      const hostIsKey = info.some((column) => column.name === "owner_host" && column.pk > 0);
-      if (hostIsKey) return;
-      // A leftover from a crash mid-rebuild: its rows are a COPY of rows the
-      // original still holds, so dropping it loses nothing.
-      this.db!.exec("DROP TABLE IF EXISTS budget_owners_v2");
-      this.db!.exec(`
-      CREATE TABLE budget_owners_v2 (
+  private migrateBudgetSchema(): void {
+    const migrate = this.db!.transaction(() => {
+      const columnsOf = (table: string): Set<string> =>
+        new Set(
+          (this.db!.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+            (column) => column.name,
+          ),
+        );
+      const addColumn = (table: string, column: string, definition: string): void => {
+        if (columnsOf(table).has(column)) return;
+        this.db!.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+      };
+      addColumn("budget_reservations", "owner_generation", "owner_generation TEXT DEFAULT NULL");
+      addColumn("budget_reservations", "reconciled_at", "reconciled_at INTEGER DEFAULT NULL");
+      // A registry written before round 11 #5 has no registration time. Every
+      // owner statement names the column, so this must run before they are
+      // prepared; rows already there stay NULL, which reads as "no proof of when
+      // this incarnation arrived" and therefore keeps the owner's headroom.
+      addColumn("budget_owners", "registered_at", "registered_at INTEGER DEFAULT NULL");
+      // Round 12 #2: whose pid each row is about. NULL/'' = this host.
+      addColumn("budget_owners", "owner_host", "owner_host TEXT NOT NULL DEFAULT ''");
+      addColumn("budget_reservations", "owner_host", "owner_host TEXT DEFAULT NULL");
+      // Round 13 #1: the durable claim order beside the wall clock.
+      addColumn("budget_owners", "registered_seq", "registered_seq INTEGER DEFAULT NULL");
+      addColumn("budget_reservations", "claim_seq", "claim_seq INTEGER DEFAULT NULL");
+      // Round 13 #2: a registry keyed by pid alone cannot hold two machines.
+      this.reconcileBudgetOwnerKey();
+    });
+    // `immediate` so concurrent initializers serialize instead of both
+    // inspecting an unmigrated schema and both changing it.
+    migrate.immediate();
+  }
+
+  /**
+   * Give `budget_owners` a (host, pid) primary key, keeping every row that
+   * exists anywhere -- including in what an earlier crashed attempt left behind.
+   *
+   * SQLite cannot ALTER a primary key, so the table has to be recreated and
+   * copied. Round 14 put that in one transaction; round 15 #8 found the two
+   * things it still got wrong with a leftover `budget_owners_v2`:
+   *
+   *   - it was DROPPED on the assumption that its rows are always a copy of
+   *     rows the original still holds, and
+   *   - when the crash landed after `DROP TABLE budget_owners`, the schema
+   *     constant recreated an EMPTY composite-key table, so the migration saw a
+   *     finished key and did nothing while `_v2` held every row.
+   *
+   * So residue is reconciled, never discarded: rows found in a leftover table
+   * are merged into the live registry, and the live row wins a collision
+   * because it is the one processes have gone on writing to -- the leftover is a
+   * snapshot taken before the crash. Resurrecting a row that was pruned in
+   * between costs nothing; pruning runs again on the next heartbeat.
+   *
+   * And the rebuild itself no longer leaves residue to reconcile: the rows are
+   * staged in a TEMP table, which lives in this connection's temp database, so a
+   * crash rolls the main database back to exactly where it was.
+   *
+   * Runs inside migrateBudgetSchema's transaction.
+   */
+  private reconcileBudgetOwnerKey(): void {
+    // Captured BEFORE the staging table exists, so the list is only residue.
+    const leftovers = (
+      this.db!.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'budget_owners=_%' ESCAPE '='",
+      ).all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    const info = this.db!.prepare("PRAGMA table_info(budget_owners)").all() as Array<{
+      name: string;
+      pk: number;
+    }>;
+    const hostIsKey = info.some((column) => column.name === "owner_host" && column.pk > 0);
+
+    if (hostIsKey) {
+      // Nothing to rebuild -- but a leftover can still hold rows this table does
+      // not, which is exactly the crash-after-DROP case above.
+      for (const leftover of leftovers) {
+        this.mergeOwnerRows(leftover, "budget_owners");
+        this.db!.exec(`DROP TABLE ${leftover}`);
+      }
+      return;
+    }
+
+    this.db!.exec(`
+      DROP TABLE IF EXISTS temp.owner_key_rebuild;
+      CREATE TEMP TABLE owner_key_rebuild (
         owner_host TEXT NOT NULL DEFAULT '',
         owner_pid INTEGER NOT NULL,
         owner_generation TEXT NOT NULL,
@@ -881,15 +928,50 @@ export class DaemonStorage {
         registered_at INTEGER,
         PRIMARY KEY (owner_host, owner_pid)
       );
-      INSERT OR REPLACE INTO budget_owners_v2 (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at)
-        SELECT COALESCE(owner_host, ''), owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at FROM budget_owners;
-      DROP TABLE budget_owners;
-      ALTER TABLE budget_owners_v2 RENAME TO budget_owners;
-      `);
-    });
-    // `immediate` so concurrent initializers serialize instead of both
-    // inspecting an unmigrated table and both rebuilding it.
-    rebuild.immediate();
+    `);
+    // The live table first, so its rows win; then anything only a leftover has.
+    this.mergeOwnerRows("budget_owners", "temp.owner_key_rebuild");
+    for (const leftover of leftovers) {
+      this.mergeOwnerRows(leftover, "temp.owner_key_rebuild");
+    }
+    this.db!.exec("DROP TABLE budget_owners");
+    for (const leftover of leftovers) {
+      this.db!.exec(`DROP TABLE ${leftover}`);
+    }
+    this.db!.exec(`
+      CREATE TABLE budget_owners (
+        owner_host TEXT NOT NULL DEFAULT '',
+        owner_pid INTEGER NOT NULL,
+        owner_generation TEXT NOT NULL,
+        heartbeat_at INTEGER NOT NULL,
+        registered_seq INTEGER,
+        registered_at INTEGER,
+        PRIMARY KEY (owner_host, owner_pid)
+      );
+      INSERT INTO budget_owners (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at)
+        SELECT owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at
+        FROM temp.owner_key_rebuild;
+      DROP TABLE temp.owner_key_rebuild;
+    `);
+  }
+
+  /**
+   * Copy owner rows into another table, keeping the destination's row when both
+   * name the same (host, pid). Columns the source predates read as unrecorded.
+   */
+  private mergeOwnerRows(from: string, into: string): void {
+    const columns = new Set(
+      (this.db!.prepare(`PRAGMA table_info(${from})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    );
+    const host = columns.has("owner_host") ? "COALESCE(owner_host, '')" : "''";
+    const seq = columns.has("registered_seq") ? "registered_seq" : "NULL";
+    const at = columns.has("registered_at") ? "registered_at" : "NULL";
+    this.db!.exec(`
+      INSERT OR IGNORE INTO ${into} (owner_host, owner_pid, owner_generation, heartbeat_at, registered_seq, registered_at)
+        SELECT ${host}, owner_pid, owner_generation, heartbeat_at, ${seq}, ${at} FROM ${from};
+    `);
   }
 
   /**
