@@ -1636,21 +1636,41 @@ describe("every store asks before opening (round 13 #18)", () => {
     }
   });
 
-  it("a refused open leaves no empty database behind", async () => {
-    // The question is asked with the connection already open, and opening CREATES
-    // the file — so a first-ever open during a restore used to leave a zero-length
-    // database at a path the restore may be mid-swap on. SQLite reads that as a
-    // valid EMPTY database that passes integrity_check, which is the trap
-    // `unusableDatabaseSource` exists for.
+  it("a refused open deletes nothing, because it cannot vouch for the pathname", async () => {
+    // Round 14 unlinked a still-empty file here; round 15 #7 showed the race:
+    // between the size check and the unlink, the restore can rename a POPULATED
+    // database onto that pathname, and the cleanup then deletes restored data.
+    // Same lesson as the `.env` recovery mutex — never remove a pathname on the
+    // strength of an earlier observation. An empty file left behind is harmless:
+    // the restore replaces every destination it owns.
     homeWithLock(process.pid);
     const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
     const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-empty-"));
     dirs.push(dbDir);
     const file = path.join(dbDir, "memory.db");
     const db = new Database(file);
+    try {
+      expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    } finally {
+      db.close();
+    }
+    // The file the OPEN created is still there — and that is the safe answer.
     expect(existsSync(file)).toBe(true);
-    expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    expect(statSync(file).size).toBe(0);
+  });
+
+  it("a store that wants no file created asks BEFORE it opens", async () => {
+    // That is the only place the question can be answered without creating
+    // anything, and it is what LearningStorage.initialize does.
+    const home = homeWithLock(process.pid);
+    const { LearningStorage } = await import("../learning/storage/learning-storage.js");
+    const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-early-"));
+    dirs.push(dbDir);
+    const file = path.join(dbDir, "learning.db");
+    const storage = new LearningStorage(file);
+    expect(() => storage.initialize()).toThrow(/maintenance operation/i);
     expect(existsSync(file)).toBe(false);
+    expect(home).toBeTruthy();
   });
 
   it("a refused open never removes a database that has content (guard)", async () => {

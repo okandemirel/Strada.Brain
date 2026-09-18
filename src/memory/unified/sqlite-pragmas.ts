@@ -8,7 +8,6 @@
  */
 
 import type Database from "better-sqlite3";
-import { rmSync, statSync } from "node:fs";
 import { assertNoMaintenanceExclusion } from "../../core/database-backup.js";
 import { resolveStradaHome } from "../../common/runtime-paths.js";
 import { getLogger } from "../../utils/logger.js";
@@ -36,27 +35,6 @@ const CACHE_SIZES: Record<SqliteProfile, number> = {
  * Sets: WAL journal mode, NORMAL synchronous, profile-specific cache_size,
  * temp_store = memory, busy_timeout = 5000ms, foreign_keys = ON.
  */
-/**
- * Close a refused connection and delete the file if it is still empty.
- *
- * Zero length is the whole test: a database with any content at all is
- * somebody's data and is never touched. An in-memory database has no file.
- */
-function discardEmptyDatabaseFile(db: Database.Database): void {
-  const file = db.name;
-  try {
-    db.close();
-  } catch {
-    // Already closed, or closing failed: the size check below still decides.
-  }
-  if (!file || file === ":memory:" || file === "") return;
-  try {
-    if (statSync(file).size === 0) rmSync(file, { force: true });
-  } catch {
-    // No file, or not ours to remove: leave it exactly as it is.
-  }
-}
-
 export function configureSqlitePragmas(
   db: Database.Database,
   profile: SqliteProfile,
@@ -71,20 +49,19 @@ export function configureSqlitePragmas(
   // lock left by a dead process is the restore's to refuse, never a reason to
   // keep the daemon out of its own databases.
   //
-  // AND A REFUSAL MUST LEAVE NOTHING BEHIND. This question is asked with the
-  // connection already open, and `new Database(path)` CREATES the file — so a
-  // first-ever open during a restore left a zero-length database at a path the
-  // restore may be mid-swap on. SQLite reads that as a valid EMPTY database
-  // that passes integrity_check, which is exactly the trap
-  // `unusableDatabaseSource` exists for. So the refusal closes the connection
-  // and removes the file IT just created — only ever a zero-length one, where
-  // there is no data to lose.
-  try {
-    assertNoMaintenanceExclusion(resolveStradaHome(), `open ${db.name}`);
-  } catch (refusal) {
-    discardEmptyDatabaseFile(db);
-    throw refusal;
-  }
+  // AND IT DELETES NOTHING. This question is asked with the connection already
+  // open, so `new Database(path)` has created the file — and round 14 answered
+  // that by unlinking it when it was still zero length. Round 15 #7 showed why
+  // that was wrong: between the size check and the unlink, the restore can
+  // rename a POPULATED database onto that pathname, and the cleanup then
+  // deletes the restored data. It is the same lesson as the `.env` recovery
+  // mutex — never remove a pathname on the strength of an earlier observation.
+  //
+  // An empty file left behind is harmless where it matters: the restore
+  // replaces every destination it owns, and `unusableDatabaseSource` already
+  // refuses a zero-byte SOURCE. A store that wants no file created at all asks
+  // BEFORE it opens, which is what `LearningStorage.initialize` does.
+  assertNoMaintenanceExclusion(resolveStradaHome(), `open ${db.name}`);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma(`cache_size = ${CACHE_SIZES[profile]}`);
