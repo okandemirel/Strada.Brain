@@ -108,6 +108,48 @@ batch editor is always NOT MEASURED — it is a loop rate, not the player's.
 | Lease dir left behind after a crash | `.strada-lease-owner.json` pid not alive | the next boot salvages it (commits to a `lease-salvage/*` branch) — do not delete by hand |
 | `Task workspace had conflicting files — project kept, agent copy quarantined` | `<project>/.strada/lease-conflicts/` | the project's copy won because it changed during the run; merge by hand if the agent's copy is wanted |
 
+## 6b. The portal's instance owner (shared instances)
+
+One daemon serves more than one browser. The FIRST identity the portal ever
+issues owns the instance: only the owner writes settings and `.env`, starts or
+stops the daemon, switches the provider, toggles autonomous mode or decides a
+change review. Everyone else is a guest, whose own chats, boards, canvases,
+attachments and tasks stay their own. The owner is recorded in
+`<memory.dbPath>/web-identities.db` and survives restarts; the model itself is
+`src/channels/web/instance-access.ts`.
+
+**If the owner's browser loses its storage** it comes back as a guest, and every
+owner-only power is then refused with a reason that names the identity. That is
+inherent to "the first identity owns the instance", and the way back is an
+explicit handover — NOT deleting the owner row, which the boot-time adoption of
+the oldest established identity simply undoes:
+
+1. open the portal in the replacement browser and let it connect once. It is
+   issued an identity and stores it as `strada-profileId` in that browser's
+   localStorage (DevTools → Application → Local Storage);
+2. stop the daemon (§2) — this database must not be open for a write twice;
+3. hand ownership over, either through `WebIdentityStore.reassignOwner(<profile
+   id>)` or with the SQL it performs:
+
+   ```sh
+   sqlite3 "$HOME/.strada/db/web-identities.db" \
+     "UPDATE web_instance_meta SET value = '<the new profile id>' WHERE key = 'owner_profile_id';"
+   ```
+
+4. start the daemon. The replacement browser is the owner; the lost identity
+   becomes an ordinary guest.
+
+An id the instance never issued is refused and the owner is left alone, so a typo
+in step 3 cannot leave the instance with an owner nobody can present. Deleting
+the whole `web-identities.db` also works and is the nuclear option: every
+identity is revoked, every browser gets a fresh one, and the first to connect
+owns the instance again.
+
+| Symptom | Read | Do |
+|---|---|---|
+| `deny:guest-owner-only` / `deny:unidentified` on settings, daemon control or a change review | the refusal names the identity and the owner | you are a guest on this instance: hand ownership over as above, or ask the owner |
+| `unavailable:identity-store` (HTTP 503) on those surfaces | the log line `identity store could not be opened` / `not examinable` | the identity database exists and cannot be read (permissions on `<memory.dbPath>`, a lock, a corrupt page). Nothing is granted while it cannot be read — fix the file, no restart needed |
+
 ## 7. Checks you can run yourself
 
 Each of these PERFORMS the thing it reports, and each says NOT MEASURED (never

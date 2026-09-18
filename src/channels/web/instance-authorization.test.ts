@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,7 +36,10 @@ beforeEach(() => {
 
 afterEach(() => {
   setInstanceIdentityStore(null);
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) {
+    try { chmodSync(dir, 0o700); } catch { /* already gone */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const dbPath = () => join(memoryDbDir, "web-identities.db");
@@ -127,6 +130,30 @@ describe("instance identity state is three-way (round 13 #14)", () => {
     expect(verdict.kind).toBe("decision");
     if (verdict.kind !== "decision") return;
     expect(verdict.decision.allowed).toBe(true);
+  });
+
+  // ROUND 14 #6. `existsSync` answers false for EVERY stat failure, EACCES
+  // included — so removing traversal permission on the directory (a hardened
+  // deployment, a botched chown, a backup process) made the resolver report
+  // "this instance has issued no web identity" and hand owner powers to anyone.
+  // The absence of a file and the inability to look are different answers.
+  it("reports `unavailable` when the identity directory cannot be traversed", () => {
+    seedIdentities();
+    setInstanceIdentityStore(null);
+    chmodSync(memoryDbDir, 0o000);
+    try {
+      // A readable stat would say "the file is there"; an unreadable one must not
+      // say "there is no file".
+      const state = instanceIdentityState();
+      expect(state.kind).toBe("unavailable");
+      const verdict = authorizeInstanceRequest({}, "instance:control", "POST /api/daemon/stop");
+      expect(verdict.kind).toBe("unavailable");
+    } finally {
+      chmodSync(memoryDbDir, 0o700);
+    }
+
+    // …and once permission is back, the very next request is judged normally.
+    expect(instanceIdentityState().kind).toBe("store");
   });
 
   it("reports `unavailable` when a store that WAS readable stops being readable", () => {

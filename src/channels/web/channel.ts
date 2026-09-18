@@ -990,17 +990,26 @@ export class WebChannel
     const parsed = detectCommand(text);
     if (parsed.type !== "command") return true;
     const privilege = commandPrivilege(parsed.command, parsed.args);
-    if (privilege === undefined) return true;
+    if (privilege.kind === "open") return true;
     const what = `/${parsed.command} ${parsed.args.join(" ")}`.trim();
-    if (privilege === "task") {
+
+    // ROUND 14 #4: the same requirement the control FRAMES have. Round 13 closed
+    // the frames and the model, and left this gap between them: on an instance
+    // with no owner recorded, `allow:sole-identity` admitted a privileged command
+    // typed by a socket that had never identified itself, while the equivalent
+    // `monitor:pause` frame from that same socket was refused. One power must not
+    // have two answers depending on the shape the caller chose.
+    if (!this.hasInitializedSession(chatId, what)) return false;
+
+    if (privilege.kind === "task") {
       // The command names ONE task: the question is whose it is, exactly as for
-      // the dedicated control frames.
-      const raw = (parsed.args[0] ?? "").trim();
-      const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(raw) ? raw : "";
+      // the dedicated control frames. The classifier says which argument it is —
+      // `/goal cancel <id>` names it second (round 14 #3).
+      const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(privilege.taskId) ? privilege.taskId : "";
       if (!safeTaskId) return true; // not a task id at all — the handler will say so
       return await this.checkMonitorTaskOwnership(safeTaskId, chatId, `command ${what}`);
     }
-    return this.allowWsAction(privilege, chatId, { what });
+    return this.allowWsAction(privilege.surface, chatId, { what });
   }
 
   /**

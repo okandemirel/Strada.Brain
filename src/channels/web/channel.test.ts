@@ -3356,6 +3356,82 @@ describe("WebChannel shared instance: the ways around the owner check (round 13)
     await channel.disconnect();
   });
 
+  // ── Round 14 #4: a TYPED privileged command needs a session too ────────────
+  //
+  // THE DEFECT. Round 13 #9 required an initialized session for the control
+  // FRAMES and round 13 #11 authorized the typed commands through the model — so
+  // on an instance with no owner yet the model's own `allow:sole-identity` let a
+  // pre-session_init socket type `/daemon stop` while the equivalent
+  // `monitor:pause` frame from the same socket was refused. One power, two
+  // answers, decided by which shape the caller happened to use.
+  it("refuses /daemon stop typed before session_init, even with no owner recorded", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    expect(store(channel).ownerProfileId()).toBeUndefined();
+
+    const stranger = open(channel);
+    stranger.send({ type: "message", text: "/daemon stop" });
+    stranger.send({ type: "message", text: "/autonomous on" });
+    stranger.send({ type: "message", text: "/run rm -rf build" });
+    await settle();
+
+    expect(seen).toEqual([]);
+    expect(stranger.text()).toContain("session_init");
+
+    // An ordinary request from the same socket still works: the requirement is on
+    // the powers, not on talking.
+    stranger.send({ type: "message", text: "build me a level" });
+    await settle();
+    expect(seen).toEqual(["build me a level"]);
+
+    // …and a socket that identified itself first may type them.
+    const proper = open(channel);
+    proper.send({ type: "session_init" });
+    proper.send({ type: "message", text: "/daemon stop" });
+    await settle();
+    expect(seen).toContain("/daemon stop");
+
+    await channel.disconnect();
+  });
+
+  // ── Round 14 #3, through the channel: /goal cancel is /cancel ──────────────
+  it("refuses a guest cancelling the owner's task through /goal cancel", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+    const seen: string[] = [];
+    channel.onMessage(async (msg) => { seen.push(msg.text ?? ""); });
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-owner" ? owner.chatId : null));
+
+    guest.send({ type: "message", text: "/goal cancel task-owner" });
+    await settle();
+    expect(seen).not.toContain("/goal cancel task-owner");
+    expect(guest.text()).toContain("task-owner");
+
+    // Reading it is refused too — inspecting another identity's task is the same
+    // surface as controlling it.
+    guest.send({ type: "message", text: "/detail task-owner" });
+    guest.send({ type: "message", text: "/status task-owner" });
+    await settle();
+    expect(seen).not.toContain("/detail task-owner");
+    expect(seen).not.toContain("/status task-owner");
+
+    // The guest's own goals, lists and bare forms are untouched.
+    guest.send({ type: "message", text: "/goal build me a level" });
+    guest.send({ type: "message", text: "/goal list" });
+    guest.send({ type: "message", text: "/status" });
+    await settle();
+    expect(seen).toEqual(["/goal build me a level", "/goal list", "/status"]);
+
+    // …and the owner drives its own task by any of those routes.
+    owner.send({ type: "message", text: "/goal cancel task-owner" });
+    await settle();
+    expect(seen).toContain("/goal cancel task-owner");
+
+    await channel.disconnect();
+  });
+
   it("refuses an unattributed settings write once an owner is recorded, even with one identity", async () => {
     const channel = new WebChannel(3000, 3100);
     const owner = identify(channel, OWNER_ID);

@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { validateWebhookAuth } from "../daemon/triggers/webhook-trigger.js";
 import type { IdentityState } from "../identity/identity-state.js";
 import { sendJson, sendJsonError, type RouteContext } from "./server-types.js";
+import { verifiedRequestIdentity } from "../channels/web/instance-authorization.js";
 
 /**
  * Try to handle daemon-related routes. Returns true if the route was handled.
@@ -47,10 +48,29 @@ export function handleDaemonRoutes(
       return true;
     }
 
+    // ROUND 14 #8 — WHO DECIDED, NOT WHAT IT ARRIVED OVER.
+    //
+    // This passed the literal "dashboard" as `decidedBy`, and the approval queue
+    // records `decidedBy` as the project-history row's OWNER (owner.userId). No
+    // identity is called "dashboard", so the verified owner who approved a tool
+    // call could not read back the decision it had just made: the row was
+    // attributed to the transport and reached nobody. The decider is the identity
+    // the request PROVES; the transport is this route, which is already in the
+    // log line. A request that proves no identity decides unattributed (scope
+    // 'unknown', reaching nobody) rather than under a fictitious name — and on an
+    // instance with an owner it does not get this far, because the dashboard's
+    // shared-instance gate refuses it first.
+    const decider = verifiedRequestIdentity(req.headers);
+    if (decider.kind === "unavailable") {
+      sendJsonError(res, 503, `Identity state unavailable: ${decider.why}`);
+      return true;
+    }
+    const decidedBy = decider.viewer;
+
     try {
       const result = action === "approve"
-        ? ctx.daemonApprovalQueue.approve(approvalId, "dashboard")
-        : ctx.daemonApprovalQueue.deny(approvalId, "dashboard");
+        ? ctx.daemonApprovalQueue.approve(approvalId, decidedBy)
+        : ctx.daemonApprovalQueue.deny(approvalId, decidedBy);
       // Audited 2026-09-02: the route answered {status:"approved"} whatever the
       // entry's state. A decision that did not land (expired, already decided)
       // is refused with the actual status so the caller sees why.

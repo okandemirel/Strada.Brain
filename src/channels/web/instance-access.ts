@@ -69,6 +69,7 @@ export type InstanceSurface =
   | "chat:frames"
   | "confirmation:answer"
   | "attachment:read"
+  | "canvas:state"
   | "task:control"
   | "instance:control"
   | "setup:write";
@@ -137,6 +138,23 @@ export const SURFACE_POLICY: Readonly<Record<InstanceSurface, SurfacePolicy>> = 
     verb: "download this attachment",
     owner: "own attachments only",
     guest: "own attachments only",
+  },
+  /**
+   * ROUND 14 #2. The portal keys every canvas by the browser's own profile id
+   * (`useCanvasStore.setSessionId(profileId)`) and the REST routes are its only
+   * writers, so a canvas row IS one identity's work — its shapes carry the notes
+   * and plans that identity typed. Nothing checked it: a guest could read,
+   * overwrite and DELETE another identity's canvas by naming its session.
+   *
+   * `unattributedIsPublic: false` for the same reason as chat: a row whose owner
+   * cannot be established is nobody's, and on a shared instance that is a refusal.
+   */
+  "canvas:state": {
+    scope: "own-identity",
+    unattributedIsPublic: false,
+    verb: "read or change this canvas",
+    owner: "own canvas only",
+    guest: "own canvas only",
   },
   "task:control": {
     scope: "own-identity",
@@ -377,6 +395,11 @@ export const SETUP_WRITE_PROXY_PATHS: readonly string[] = [
   "/api/routing/preset",
   "/api/budget/config",
   "/api/models/refresh",
+  // ROUND 14 #5: the SAME handler answers on both spellings
+  // (server-provider-routes.ts), and only the first was in this table — so the
+  // shared provider catalogue could be refreshed by a guest through the alias.
+  // An alias is not a different route.
+  "/api/providers/models/refresh",
   "/api/personality/switch",
   "/api/personality/profiles",
   "/api/vaults",
@@ -438,31 +461,56 @@ export const INSTANCE_CONTROL_PROXY_PATHS: readonly string[] = [
 // command.
 
 
+/**
+ * What a typed command needs before it may be dispatched.
+ *
+ * ROUND 14 #3 made this a union rather than a surface-or-nothing: a command that
+ * acts on ONE task has to say WHICH argument names it. `/goal cancel <task>` is
+ * `/cancel <task>` with a word in front (handleGoal forwards it verbatim), and
+ * the task id is `args[1]` there — a classifier that could only point at
+ * `args[0]` had to call the whole command unprivileged, which is exactly how the
+ * guest's cancel of the owner's task got through.
+ */
+export type CommandAuthorization =
+  /** Needs nothing: a read, or the caller's own traffic scoped by the handler. */
+  | { readonly kind: "open" }
+  /** Only the instance owner may (daemon control, configuration writes). */
+  | { readonly kind: "owner-only"; readonly surface: InstanceSurface }
+  /** Acts on one named task: the caller must own that task. */
+  | { readonly kind: "task"; readonly taskId: string };
+
 /** How a command's privilege depends on its arguments. */
-type CommandPrivilege =
+type CommandRule =
   | { readonly kind: "never" }
   | { readonly kind: "always"; readonly surface: InstanceSurface }
   /** Privileged unless the first argument is one of these read subcommands. */
   | { readonly kind: "unless-read"; readonly surface: InstanceSurface; readonly reads: readonly string[] }
   /** Privileged only when the first argument is one of these write subcommands. */
   | { readonly kind: "when-write"; readonly surface: InstanceSurface; readonly writes: readonly string[] }
-  /** Acts on ONE task: own-identity, and privileged only when a task is named. */
-  | { readonly kind: "names-task" };
+  /** Acts on the task named at `args[at]`, when there is one. */
+  | { readonly kind: "names-task"; readonly at: number }
+  /** Acts on the task named at `args[at]` when `args[0]` is one of `subs`. */
+  | { readonly kind: "sub-names-task"; readonly subs: readonly string[]; readonly at: number };
 
-const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandPrivilege>> = {
-  // Reads of this instance and of the caller's own traffic.
-  status: { kind: "never" },
+const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandRule>> = {
+  // Reads of this instance, and the caller's own lists.
   tasks: { kind: "never" },
-  detail: { kind: "never" },
   help: { kind: "never" },
-  goal: { kind: "never" },
   agent: { kind: "never" },
   measure: { kind: "never" },
   guardian: { kind: "never" },
-  // The caller's own task, by name.
-  cancel: { kind: "names-task" },
-  pause: { kind: "names-task" },
-  resume: { kind: "names-task" },
+  // ROUND 14 #3: these NAME a task and the handler looks it up by id across the
+  // whole process. The model's own words are "controlling, cancelling or
+  // INSPECTING another identity's task", so reading one is the same surface as
+  // cancelling it; the bare forms act on the caller's own chat and stay open.
+  status: { kind: "names-task", at: 0 },
+  detail: { kind: "names-task", at: 0 },
+  cancel: { kind: "names-task", at: 0 },
+  pause: { kind: "names-task", at: 0 },
+  resume: { kind: "names-task", at: 0 },
+  // `/goal cancel <id>` is handleCancel with one more word in front. Every other
+  // form submits or lists the caller's own work.
+  goal: { kind: "sub-names-task", subs: ["cancel"], at: 1 },
   // The caller's own run, resumed from its own checkpoint (no task argument).
   retry: { kind: "never" },
   continue: { kind: "never" },
@@ -484,30 +532,47 @@ const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandPrivilege>> = {
   vault: { kind: "when-write", surface: "setup:write", writes: ["init", "sync"] },
 };
 
+const OPEN: CommandAuthorization = { kind: "open" };
+
+/** A task id an enforcement site can act on, or undefined when the argument is not one. */
+function taskArgument(args: readonly string[], at: number): string | undefined {
+  const raw = (args[at] ?? "").trim();
+  return raw.length > 0 ? raw : undefined;
+}
+
 /**
- * The owner-only surface a chat command exercises, or undefined when it needs no
- * owner-only power. `"task"` means the command acts on the ONE task it names, so
- * the caller's enforcement is task↔identity ownership rather than an owner check.
+ * What this command needs before it may run. Callers enforce: `owner-only` goes
+ * to `decideInstanceAccess`, `task` to the task↔identity ownership check, and
+ * `open` straight through.
  */
 export function commandPrivilege(
   command: TaskCommand,
   args: readonly string[] = [],
-): InstanceSurface | "task" | undefined {
+): CommandAuthorization {
   const rule = COMMAND_PRIVILEGE[command];
-  if (rule === undefined) return undefined;
+  if (rule === undefined) return OPEN;
   const sub = (args[0] ?? "").trim().toLowerCase();
   switch (rule.kind) {
     case "never":
-      return undefined;
+      return OPEN;
     case "always":
-      return rule.surface;
-    case "unless-read":
+      return { kind: "owner-only", surface: rule.surface };
+    case "unless-read": {
       // No argument at all is the "show me" form of every one of these.
-      return sub && !rule.reads.includes(sub) ? rule.surface : undefined;
+      if (!sub || rule.reads.includes(sub)) return OPEN;
+      return { kind: "owner-only", surface: rule.surface };
+    }
     case "when-write":
-      return rule.writes.includes(sub) ? rule.surface : undefined;
-    case "names-task":
-      return sub ? "task" : undefined;
+      return rule.writes.includes(sub) ? { kind: "owner-only", surface: rule.surface } : OPEN;
+    case "names-task": {
+      const taskId = taskArgument(args, rule.at);
+      return taskId ? { kind: "task", taskId } : OPEN;
+    }
+    case "sub-names-task": {
+      if (!rule.subs.includes(sub)) return OPEN;
+      const taskId = taskArgument(args, rule.at);
+      return taskId ? { kind: "task", taskId } : OPEN;
+    }
   }
 }
 

@@ -98,12 +98,13 @@ describe("instance access model — own-identity surfaces", () => {
     (s) => SURFACE_POLICY[s].scope === "own-identity",
   );
 
-  it("covers boards, chat, confirmations, attachments and task control", () => {
+  it("covers boards, chat, confirmations, attachments, canvases and task control", () => {
     expect(scoped).toEqual([
       "monitor:frames",
       "chat:frames",
       "confirmation:answer",
       "attachment:read",
+      "canvas:state",
       "task:control",
     ]);
   });
@@ -260,55 +261,68 @@ describe("instance access model — unattributable resources", () => {
 // gated; `{type:"message",text:"/daemon stop"}` was not, because it is "just a
 // message" until a channel-agnostic command handler dispatches it. These tests
 // pin the classification the enforcement sites use.
+/** The owner-only surface a command needs, or undefined when it needs none. */
+function surfaceOf(command: TaskCommand, args: readonly string[]): InstanceSurface | undefined {
+  const verdict = commandPrivilege(command, args);
+  return verdict.kind === "owner-only" ? verdict.surface : undefined;
+}
+
+/** True when a command needs no authorization at all. */
+function isOpen(command: TaskCommand, args: readonly string[]): boolean {
+  return commandPrivilege(command, args).kind === "open";
+}
+
 describe("instance access model — privileged chat commands (round 13 #11)", () => {
   it("classifies daemon control, provider switch and autonomous mode as instance control", () => {
-    expect(commandPrivilege("daemon", ["stop"])).toBe("instance:control");
-    expect(commandPrivilege("daemon", ["start"])).toBe("instance:control");
-    expect(commandPrivilege("autonomous", ["on", "24"])).toBe("instance:control");
-    expect(commandPrivilege("autonomous", ["off"])).toBe("instance:control");
-    expect(commandPrivilege("model", ["pin", "openai/gpt-5"])).toBe("instance:control");
-    expect(commandPrivilege("model", ["openai"])).toBe("instance:control");
-    expect(commandPrivilege("campaign", ["revive"])).toBe("instance:control");
+    expect(surfaceOf("daemon", ["stop"])).toBe("instance:control");
+    expect(surfaceOf("daemon", ["start"])).toBe("instance:control");
+    expect(surfaceOf("autonomous", ["on", "24"])).toBe("instance:control");
+    expect(surfaceOf("autonomous", ["off"])).toBe("instance:control");
+    expect(surfaceOf("model", ["pin", "openai/gpt-5"])).toBe("instance:control");
+    expect(surfaceOf("model", ["openai"])).toBe("instance:control");
+    expect(surfaceOf("campaign", ["revive"])).toBe("instance:control");
     // Arbitrary shell in the shared project, as the daemon — always.
-    expect(commandPrivilege("run", ["rm", "-rf", "build"])).toBe("instance:control");
-    expect(commandPrivilege("run", [])).toBe("instance:control");
+    expect(surfaceOf("run", ["rm", "-rf", "build"])).toBe("instance:control");
+    expect(surfaceOf("run", [])).toBe("instance:control");
   });
 
   it("classifies configuration writes as setup writes", () => {
-    expect(commandPrivilege("routing", ["preset", "performance"])).toBe("setup:write");
-    expect(commandPrivilege("token", ["1000000"])).toBe("setup:write");
-    expect(commandPrivilege("persona", ["switch", "mentor"])).toBe("setup:write");
-    expect(commandPrivilege("vault", ["init", "/tmp/x"])).toBe("setup:write");
-    expect(commandPrivilege("vault", ["sync"])).toBe("setup:write");
+    expect(surfaceOf("routing", ["preset", "performance"])).toBe("setup:write");
+    expect(surfaceOf("token", ["1000000"])).toBe("setup:write");
+    expect(surfaceOf("persona", ["switch", "mentor"])).toBe("setup:write");
+    expect(surfaceOf("vault", ["init", "/tmp/x"])).toBe("setup:write");
+    expect(surfaceOf("vault", ["sync"])).toBe("setup:write");
   });
 
   // Refusing reads would be a defect of its own: a guest may see what this
   // instance is doing, it just may not change it.
   it("leaves reads, and the caller's own traffic, open", () => {
-    for (const command of ["status", "tasks", "detail", "help", "goal", "agent", "measure", "guardian", "retry", "continue"] as const) {
-      expect(commandPrivilege(command, ["anything"]), command).toBeUndefined();
+    for (const command of ["tasks", "help", "agent", "measure", "guardian", "retry", "continue"] as const) {
+      expect(commandPrivilege(command, ["anything"]).kind, command).toBe("open");
     }
-    expect(commandPrivilege("daemon", [])).toBeUndefined();
-    expect(commandPrivilege("daemon", ["status"])).toBeUndefined();
-    expect(commandPrivilege("autonomous", [])).toBeUndefined();
-    expect(commandPrivilege("autonomous", ["status"])).toBeUndefined();
-    expect(commandPrivilege("model", [])).toBeUndefined();
-    expect(commandPrivilege("model", ["list"])).toBeUndefined();
-    expect(commandPrivilege("model", ["info", "openai"])).toBeUndefined();
-    expect(commandPrivilege("routing", ["info"])).toBeUndefined();
-    expect(commandPrivilege("token", [])).toBeUndefined();
-    expect(commandPrivilege("persona", ["list"])).toBeUndefined();
-    expect(commandPrivilege("vault", ["status"])).toBeUndefined();
-    expect(commandPrivilege("campaign", [])).toBeUndefined();
+    // …and a goal that is a description, not a subcommand, is the caller's own work.
+    expect(commandPrivilege("goal", ["anything"]).kind).toBe("open");
+    expect(isOpen("daemon", [])).toBe(true);
+    expect(isOpen("daemon", ["status"])).toBe(true);
+    expect(isOpen("autonomous", [])).toBe(true);
+    expect(isOpen("autonomous", ["status"])).toBe(true);
+    expect(isOpen("model", [])).toBe(true);
+    expect(isOpen("model", ["list"])).toBe(true);
+    expect(isOpen("model", ["info", "openai"])).toBe(true);
+    expect(isOpen("routing", ["info"])).toBe(true);
+    expect(isOpen("token", [])).toBe(true);
+    expect(isOpen("persona", ["list"])).toBe(true);
+    expect(isOpen("vault", ["status"])).toBe(true);
+    expect(isOpen("campaign", [])).toBe(true);
   });
 
   it("sends a command that NAMES a task to the task-ownership check instead", () => {
-    expect(commandPrivilege("cancel", ["task-7"])).toBe("task");
-    expect(commandPrivilege("pause", ["task-7"])).toBe("task");
-    expect(commandPrivilege("resume", ["task-7"])).toBe("task");
+    expect(commandPrivilege("cancel", ["task-7"])).toEqual({ kind: "task", taskId: "task-7" });
+    expect(commandPrivilege("pause", ["task-7"])).toEqual({ kind: "task", taskId: "task-7" });
+    expect(commandPrivilege("resume", ["task-7"])).toEqual({ kind: "task", taskId: "task-7" });
     // Bare forms act on this chat's own active task, which is already its own.
-    expect(commandPrivilege("cancel", [])).toBeUndefined();
-    expect(commandPrivilege("pause", [])).toBeUndefined();
+    expect(isOpen("cancel", [])).toBe(true);
+    expect(isOpen("pause", [])).toBe(true);
   });
 
   // COMMAND_PRIVILEGE is Record<TaskCommand, …> and so is this: adding a command
@@ -326,8 +340,8 @@ describe("instance access model — privileged chat commands (round 13 #11)", ()
       for (const args of [[], ["stop"], ["status"], ["on"], ["task-7"]]) {
         const verdict = commandPrivilege(command, args);
         expect(
-          verdict === undefined || verdict === "task" || verdict === "instance:control" || verdict === "setup:write",
-          `${command} ${args.join(" ")} → ${String(verdict)}`,
+          ["open", "task", "owner-only"].includes(verdict.kind),
+          `${command} ${args.join(" ")} → ${JSON.stringify(verdict)}`,
         ).toBe(true);
       }
     }
@@ -339,11 +353,11 @@ describe("instance access model — privileged chat commands (round 13 #11)", ()
     const parsed = detectCommand("/daemon stop");
     expect(parsed.type).toBe("command");
     if (parsed.type !== "command") return;
-    expect(commandPrivilege(parsed.command, parsed.args)).toBe("instance:control");
+    expect(surfaceOf(parsed.command, parsed.args)).toBe("instance:control");
 
     const typed = detectCommand("/model pin openai/gpt-5");
     if (typed.type !== "command") throw new Error("not a command");
-    expect(commandPrivilege(typed.command, typed.args)).toBe("instance:control");
+    expect(surfaceOf(typed.command, typed.args)).toBe("instance:control");
   });
 });
 
@@ -365,5 +379,38 @@ describe("owner-only proxy paths cover every entry to the same power (round 13 #
     for (const path of ["/api/canvas", "/api/monitor/tasks", "/api/chat/history", "/api/metrics", "/api/skills"]) {
       expect(ownerOnlyProxySurface(path), path).toBeUndefined();
     }
+  });
+});
+
+// ── Round 14 #3 + #5: the table is only as good as its coverage ───────────────
+describe("instance access model — the coverage round 14 found missing", () => {
+  // #3. `/goal cancel <task>` is `/cancel <task>` with one more word in front:
+  // handleGoal forwards it straight to handleCancel. The table classified `goal`
+  // as never-privileged, so the guest's cancel of the owner's task walked through
+  // the one door that was not watched.
+  it("sends /goal cancel <task> to the task-ownership check, at the right argument", () => {
+    expect(commandPrivilege("goal", ["cancel", "task-owner"])).toEqual({ kind: "task", taskId: "task-owner" });
+    expect(commandPrivilege("goal", ["cancel"]).kind).toBe("open"); // the caller's own newest task
+    expect(commandPrivilege("goal", ["list"]).kind).toBe("open");
+    expect(commandPrivilege("goal", ["build", "me", "a", "level"]).kind).toBe("open");
+  });
+
+  // Reading somebody else's task is the other half of task:control — the model's
+  // own words are "controlling, cancelling or INSPECTING another identity's task",
+  // and /status <id> / /detail <id> read any task in the process by id.
+  it("sends /status <task> and /detail <task> to the same check", () => {
+    expect(commandPrivilege("status", ["task-owner"])).toEqual({ kind: "task", taskId: "task-owner" });
+    expect(commandPrivilege("detail", ["task-owner"])).toEqual({ kind: "task", taskId: "task-owner" });
+    // The bare forms are scoped to the caller's own chat by the handler.
+    expect(commandPrivilege("status", []).kind).toBe("open");
+    expect(commandPrivilege("detail", []).kind).toBe("open");
+  });
+
+  // #5. Two URLs, one power: the provider catalogue refresh answers on both
+  // /api/models/refresh and /api/providers/models/refresh, and only the first was
+  // in the table. An alias is not a different route.
+  it("classifies every alias of a power identically", () => {
+    expect(ownerOnlyProxySurface("/api/models/refresh")).toBe("setup:write");
+    expect(ownerOnlyProxySurface("/api/providers/models/refresh")).toBe("setup:write");
   });
 });

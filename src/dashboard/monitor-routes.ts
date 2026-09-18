@@ -18,6 +18,8 @@ import type { GoalStorage } from '../goals/index.js'
 import type { GoalTree, GoalNodeId } from '../goals/types.js'
 import type { WorkspaceBus } from './workspace-bus.js'
 import { calculateProgress } from '../goals/goal-progress.js'
+import { authorizeInstanceRequest } from '../channels/web/instance-authorization.js'
+import { getLoggerSafe } from '../utils/logger.js'
 
 // =============================================================================
 // ACTIVITY RING BUFFER
@@ -173,6 +175,8 @@ interface MonitorTaskRecord {
   id: string
   chatId: string
   channelType: string
+  /** The identity the task was submitted for; for the web channel, its profileId. */
+  userId?: string
   title: string
   status: string
   createdAt: number
@@ -185,6 +189,62 @@ interface MonitorTaskRecord {
 interface MonitorTaskManager {
   listAllActiveTasks(): MonitorTaskRecord[]
   listRecoverableTasks?(limit?: number): MonitorTaskRecord[]
+}
+
+/**
+ * WHOSE GATE DECISION IS THIS (round 14 sweep)?
+ *
+ * `POST /api/monitor/task/:id/approve|skip` pushes a decision onto the workspace
+ * bus for whichever task the URL names, and checked nothing — while the WebSocket
+ * twins (`monitor:approve_gate`, `monitor:skip_task`) have checked task↔identity
+ * ownership since the CWE-639 fix. Same power, same instance, one transport
+ * guarded and the other not.
+ *
+ * The rule mirrors the channel's, including where the channel is permissive: an
+ * id that names no task this process knows (a bare DAG node id) and a task that
+ * names no identity are both allowed, because the channel's own resolver answers
+ * "no owner" for them and refusing here would take away gate decisions the
+ * operator has always been able to make. What is closed is the case this defect
+ * class is about: a task that demonstrably belongs to another identity.
+ *
+ * Returns false when the request was answered (403 or 503) and must not proceed.
+ */
+function allowGateDecision(
+  req: IncomingMessage,
+  res: ServerResponse,
+  taskManager: MonitorTaskManager | undefined,
+  taskId: string,
+  what: string,
+): boolean {
+  const task = getActiveStandaloneTasks(taskManager).find((candidate) => candidate.id === taskId)
+  const owner = task?.userId?.trim()
+  if (!owner) return true
+  const verdict = authorizeInstanceRequest(req.headers, 'task:control', what, { profileId: owner })
+  if (verdict.kind === 'unavailable') {
+    getLoggerSafe().error('Monitor gate decision refused: the instance\'s identities cannot be read', {
+      what,
+      why: verdict.why,
+    })
+    jsonResponse(res, 503, {
+      error: 'Identity state unavailable',
+      reason: `whose task this is cannot be established right now: ${verdict.why}. Refusing rather than guessing.`,
+      code: 'unavailable:identity-store',
+    })
+    return false
+  }
+  if (verdict.decision.allowed) return true
+  getLoggerSafe().warn('Monitor gate decision refused by the shared-instance model', {
+    what,
+    code: verdict.decision.code,
+    reason: verdict.decision.reason,
+  })
+  jsonResponse(res, 403, {
+    error: 'Forbidden',
+    reason: verdict.decision.reason,
+    surface: verdict.decision.surface,
+    code: verdict.decision.code,
+  })
+  return false
 }
 
 function getActiveStandaloneTasks(taskManager: MonitorTaskManager | undefined): MonitorTaskRecord[] {
@@ -401,6 +461,7 @@ export function handleMonitorRoute(
   if (method === 'POST' && approveMatch) {
     const taskId = decodeURIComponent(approveMatch[1]!)
     if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    if (!allowGateDecision(req, res, taskManager, taskId, `POST /api/monitor/task/${taskId}/approve`)) return true
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true
@@ -431,6 +492,7 @@ export function handleMonitorRoute(
   if (method === 'POST' && skipMatch) {
     const taskId = decodeURIComponent(skipMatch[1]!)
     if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    if (!allowGateDecision(req, res, taskManager, taskId, `POST /api/monitor/task/${taskId}/skip`)) return true
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true

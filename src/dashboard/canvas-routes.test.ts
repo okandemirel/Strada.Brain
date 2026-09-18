@@ -186,7 +186,11 @@ describe("handleCanvasRoute", () => {
       expect(storage.save).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: "session-abc",
-          userId: "user-1",
+          // ROUND 14 #2: the row's owner is the identity the REQUEST proves, not
+          // the `userId: "user-1"` this body claims. This instance has issued no
+          // identity, so the column stays empty rather than recording a caller's
+          // assertion about itself.
+          userId: undefined,
           projectFingerprint: "proj-xyz",
         }),
       );

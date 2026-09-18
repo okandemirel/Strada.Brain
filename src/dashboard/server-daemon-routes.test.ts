@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { handleDaemonRoutes, buildTriggerHistory } from "./server-daemon-routes.js";
 import {
   createMockReq,
@@ -8,6 +8,7 @@ import {
   type MockRes,
 } from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
+import { setInstanceIdentityStore } from "../channels/web/instance-authorization.js";
 
 vi.mock("../utils/logger.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/logger.js")>();
@@ -89,7 +90,8 @@ describe("handleDaemonRoutes — POST /api/daemon/approvals/:id/(approve|deny)",
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(responseJson(res)).toEqual({ status: "approved" });
-    expect(queue.approve).toHaveBeenCalledWith("e1", "dashboard");
+    // ROUND 14 #8: "dashboard" is a transport, not a decider.
+    expect(queue.approve).toHaveBeenCalledWith("e1", undefined);
   });
 
   it("returns 409 naming the actual status when the decision did not land (audited 2026-09-02)", () => {
@@ -120,7 +122,7 @@ describe("handleDaemonRoutes — POST /api/daemon/approvals/:id/(approve|deny)",
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(responseJson(res)).toEqual({ status: "denied" });
-    expect(queue.deny).toHaveBeenCalledWith("e2", "dashboard");
+    expect(queue.deny).toHaveBeenCalledWith("e2", undefined);
   });
 
   it("returns 404 for a malformed approval URL (no action segment)", () => {
@@ -361,5 +363,78 @@ describe("buildTriggerHistory", () => {
       { daemonStorage: storage as unknown as RouteContext["daemonStorage"] },
     );
     expect(result[0]!.fires).toEqual([]);
+  });
+});
+
+// ── Round 14 #8: who decided, not what it arrived over ────────────────────────
+//
+// THE DEFECT. The route passed the literal "dashboard" as `decidedBy`, and the
+// approval queue records `decidedBy` as the project-history row's OWNER
+// (owner.userId). No identity is called "dashboard", so the verified owner who
+// approved the tool call could not read back the decision it had just made: the
+// history row was attributed to the transport. The identity of the decider and
+// the label of the pipe it came down are two different facts.
+describe("handleDaemonRoutes — the approval decision names the identity (round 14 #8)", () => {
+  const OWNER = "owner-profile";
+
+  function identities() {
+    const issued = [OWNER, "guest-profile"];
+    return {
+      verify: (profileId: string, token: string) => issued.includes(profileId) && token === `token-${profileId}`,
+      ownerProfileId: () => OWNER,
+      has: (profileId: string) => issued.includes(profileId),
+      count: () => issued.length,
+    };
+  }
+
+  function queueFor() {
+    const entry = { id: "e1", toolName: "shell_exec", triggerName: "cron", status: "pending", createdAt: Date.now(), expiresAt: null };
+    return {
+      getById: vi.fn(() => entry),
+      approve: vi.fn(() => ({ applied: true, status: "approved" })),
+      deny: vi.fn(() => ({ applied: true, status: "denied" })),
+    };
+  }
+
+  function routeAs(url: string, headers: Record<string, string>, queue: ReturnType<typeof queueFor>) {
+    const res = createMockRes();
+    const req = createMockReq();
+    (req as unknown as { headers: Record<string, string> }).headers = headers;
+    const ctx = makeCtx({ daemonApprovalQueue: queue as unknown as RouteContext["daemonApprovalQueue"] });
+    const handled = handleDaemonRoutes(url, "POST", req, res, ctx);
+    return { handled, res };
+  }
+
+  afterEach(() => setInstanceIdentityStore(null));
+
+  it("passes the VERIFIED profile id, so the owner can read its own decision back", () => {
+    setInstanceIdentityStore(identities());
+    const queue = queueFor();
+    const { res } = routeAs("/api/daemon/approvals/e1/approve", {
+      "x-strada-profile-id": OWNER,
+      "x-strada-profile-token": `token-${OWNER}`,
+    }, queue);
+
+    expect(res.statusCode).toBe(200);
+    expect(queue.approve).toHaveBeenCalledWith("e1", OWNER);
+  });
+
+  it("records nothing rather than a falsehood when the caller proved no identity", () => {
+    setInstanceIdentityStore(identities());
+    const queue = queueFor();
+    routeAs("/api/daemon/approvals/e1/deny", {}, queue);
+    // Unattributed, which the queue records as scope 'unknown' reaching nobody —
+    // not owned by a fictitious identity called "dashboard".
+    expect(queue.deny).toHaveBeenCalledWith("e1", undefined);
+  });
+
+  it("names nobody when the id is claimed but the token does not verify", () => {
+    setInstanceIdentityStore(identities());
+    const queue = queueFor();
+    routeAs("/api/daemon/approvals/e1/approve", {
+      "x-strada-profile-id": OWNER,
+      "x-strada-profile-token": "guessed",
+    }, queue);
+    expect(queue.approve).toHaveBeenCalledWith("e1", undefined);
   });
 });

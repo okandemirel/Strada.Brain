@@ -9,12 +9,34 @@
  *   POST   /api/canvas/:sessionId/export       -- export shapes as JSON
  *
  * Follows the inline route-matching pattern used by DashboardServer.
+ *
+ * WHOSE CANVAS IS IT (Codex round 14 #2). The portal keys every canvas by the
+ * browser's own profile id (`useCanvasStore.setSessionId(profileId)`) and these
+ * routes are the only writers there are, so a row IS one identity's work — the
+ * notes and plans it typed. Nothing checked that: a guest's
+ * `DELETE /api/canvas/<the owner's profile>` reached storage and answered 200, a
+ * GET handed back the owner's shapes, and a PUT wrote whatever `userId` the body
+ * claimed — an ownership field under the caller's control.
+ *
+ * Every route now asks the shared-instance model (surface `canvas:state`, scope
+ * own-identity) through the one resolver every HTTP surface uses
+ * (src/channels/web/instance-authorization.ts):
+ *   - the OWNER of a row is its stored `user_id`, else the session it is keyed by;
+ *   - the CALLER is the verified profile pair, never a claimed header or body field;
+ *   - a project listing returns the caller's own canvases rather than refusing,
+ *     because "list mine" is the question it is asked;
+ *   - an instance that has issued no web identity keeps working untouched, and an
+ *     identity store that cannot be read is a 503, not an implicit grant.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { CANVAS_VERSION_ABSENT } from "./canvas-storage.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
-import { getLogger } from "../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../utils/logger.js";
+import {
+  authorizeInstanceRequest,
+  verifiedRequestIdentity,
+} from "../channels/web/instance-authorization.js";
 
 // =============================================================================
 // HELPERS
@@ -96,6 +118,69 @@ function isValidSessionId(id: string): boolean {
 }
 
 // =============================================================================
+// WHO IS ASKING (round 14 #2)
+// =============================================================================
+
+/**
+ * The identity a canvas belongs to: the owner recorded on the row, else the
+ * session the canvas is keyed by — which IS the portal's profile id.
+ *
+ * A canvas that does not exist yet belongs to the session named in the URL, not
+ * to nobody: that is what makes a first save work for the identity making it
+ * (`/api/canvas/<my profile>`) while refusing a guest that reaches for a session
+ * id it does not own — including one with no row behind it yet, which would
+ * otherwise let a guest pre-empt another identity's canvas.
+ */
+function canvasOwner(canvasStorage: CanvasStorage, sessionId: string): string {
+  let stored: CanvasState | null = null;
+  try {
+    stored = canvasStorage.getBySession(sessionId);
+  } catch {
+    // A storage failure is reported by the route that was going to use it; for
+    // the purpose of ownership, fall back to the session the URL names.
+    return sessionId;
+  }
+  return stored?.userId?.trim() || stored?.sessionId || sessionId;
+}
+
+/** Answer and return false when this caller may not touch `sessionId`'s canvas. */
+function allowCanvas(
+  req: IncomingMessage,
+  res: ServerResponse,
+  canvasStorage: CanvasStorage,
+  sessionId: string,
+  what: string,
+): boolean {
+  const owner = canvasOwner(canvasStorage, sessionId);
+  const verdict = authorizeInstanceRequest(req.headers, "canvas:state", what, { profileId: owner });
+  if (verdict.kind === "unavailable") {
+    getLoggerSafe().error("Canvas request refused: the instance's identities cannot be read", {
+      what,
+      why: verdict.why,
+    });
+    jsonResponse(res, 503, {
+      error: "Identity state unavailable",
+      reason: `whose canvas this is cannot be established right now: ${verdict.why}. Refusing rather than guessing.`,
+      code: "unavailable:identity-store",
+    });
+    return false;
+  }
+  if (verdict.decision.allowed) return true;
+  getLoggerSafe().warn("Canvas request refused by the shared-instance model", {
+    what,
+    code: verdict.decision.code,
+    reason: verdict.decision.reason,
+  });
+  jsonResponse(res, 403, {
+    error: "Forbidden",
+    reason: verdict.decision.reason,
+    surface: verdict.decision.surface,
+    code: verdict.decision.code,
+  });
+  return false;
+}
+
+// =============================================================================
 // ROUTE HANDLER
 // =============================================================================
 
@@ -103,6 +188,9 @@ function isValidSessionId(id: string): boolean {
  * Handle /api/canvas/* requests.
  * Returns true if the request was handled, false if it should fall through.
  */
+/** The listing route, named once for the refusal reasons. */
+const PROJECT_LISTING = "/api/canvas/project";
+
 export function handleCanvasRoute(
   url: string,
   method: string,
@@ -125,8 +213,30 @@ export function handleCanvasRoute(
       jsonResponse(res, 400, { error: "Invalid project fingerprint" });
       return true;
     }
+    // A listing is scoped, not refused: "which of MY canvases are in this
+    // project" is the question, and answering it with somebody else's rows was
+    // the leak. A caller that proves no identity gets nothing on an instance
+    // that has identities — there is no row it can be shown to own.
+    const reader = verifiedRequestIdentity(req.headers);
+    if (reader.kind === "unavailable") {
+      jsonResponse(res, 503, {
+        error: "Identity state unavailable",
+        reason: `whose canvases these are cannot be established right now: ${reader.why}. Refusing rather than guessing.`,
+        code: "unavailable:identity-store",
+      });
+      return true;
+    }
     try {
-      const canvases = canvasStorage.listByProject(fingerprint);
+      const canvases = canvasStorage.listByProject(fingerprint).filter((canvas) => {
+        const owner = canvas.userId?.trim() || canvas.sessionId;
+        const verdict = authorizeInstanceRequest(
+          req.headers,
+          "canvas:state",
+          `GET ${PROJECT_LISTING} ${canvas.sessionId}`,
+          { profileId: owner },
+        );
+        return verdict.kind === "decision" && verdict.decision.allowed;
+      });
       jsonResponse(res, 200, { canvases });
     } catch {
       jsonResponse(res, 500, { error: "Failed to list canvases" });
@@ -142,6 +252,7 @@ export function handleCanvasRoute(
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
+    if (!allowCanvas(req, res, canvasStorage, sessionId, `POST /api/canvas/${sessionId}/export`)) return true;
     try {
       const state = canvasStorage.getBySession(sessionId);
       if (!state) {
@@ -184,6 +295,7 @@ export function handleCanvasRoute(
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
+    if (!allowCanvas(req, res, canvasStorage, sessionId, `GET /api/canvas/${sessionId}`)) return true;
     try {
       const state = canvasStorage.getBySession(sessionId);
       if (!state) {
@@ -202,6 +314,20 @@ export function handleCanvasRoute(
     const sessionId = decodeURIComponent(sessionMatch[1]!);
     if (!isValidSessionId(sessionId)) {
       jsonResponse(res, 400, { error: "Invalid session id" });
+      return true;
+    }
+    if (!allowCanvas(req, res, canvasStorage, sessionId, `PUT /api/canvas/${sessionId}`)) return true;
+    // WHO OWNS WHAT THIS WRITES. `parsed.userId` came from the body, so the row's
+    // ownership column was set by the caller — including to somebody else. The
+    // owner of a row is the identity the request PROVES; when it proves none the
+    // column is left as it was (an instance with no identities records nobody).
+    const writerIdentity = verifiedRequestIdentity(req.headers);
+    if (writerIdentity.kind === "unavailable") {
+      jsonResponse(res, 503, {
+        error: "Identity state unavailable",
+        reason: `whose canvas this would be cannot be established right now: ${writerIdentity.why}. Refusing rather than guessing.`,
+        code: "unavailable:identity-store",
+      });
       return true;
     }
     void readJsonBody<Partial<CanvasState>>(req, res).then((parsed) => {
@@ -233,7 +359,7 @@ export function handleCanvasRoute(
       const state: CanvasState = {
         id: parsed.id ?? sessionId,
         sessionId,
-        userId: parsed.userId,
+        userId: writerIdentity.viewer,
         projectFingerprint: parsed.projectFingerprint,
         shapes: JSON.stringify(validShapes),
         connections: JSON.stringify(validConnections(parsed.connections, sessionId)),
@@ -275,6 +401,7 @@ export function handleCanvasRoute(
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
+    if (!allowCanvas(req, res, canvasStorage, sessionId, `DELETE /api/canvas/${sessionId}`)) return true;
     try {
       const deleted = canvasStorage.delete(sessionId);
       jsonResponse(res, 200, { status: deleted ? "deleted" : "not_found", sessionId });

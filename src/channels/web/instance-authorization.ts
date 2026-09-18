@@ -27,7 +27,7 @@
  *                  503 and deny, because an unreadable owner is an unknown owner.
  */
 
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { join } from "node:path";
 import { getCachedConfig } from "../../config/config.js";
@@ -37,6 +37,7 @@ import {
   instanceRoleOf,
   type AccessDecision,
   type InstanceFacts,
+  type InstanceResource,
   type InstanceSurface,
 } from "./instance-access.js";
 import { WebIdentityStore } from "./web-identity-store.js";
@@ -121,12 +122,27 @@ export function instanceIdentityState(): InstanceIdentityState {
     // behaviour every one of these surfaces already had.
     return { kind: "none", why: "no configuration is loaded, so this process serves no portal identities" };
   }
-  if (!existsSync(dbPath)) {
-    // Only an EXISTING database is opened: creating one here would invent an
-    // identity table for a project that has never served a portal. The absence
-    // is re-checked on the next request, so the first request of a process does
-    // not fix the answer for its lifetime.
-    return { kind: "none", why: `this instance has issued no web identity (${dbPath} does not exist)` };
+  // ROUND 14 #6: `existsSync` COLLAPSES every stat failure into false — EACCES
+  // included. Remove traversal permission on the identity directory (a hardened
+  // deployment, a botched chown, a backup process holding it) and this read
+  // answered "there is no identity database", which every caller took as "this
+  // instance has issued no identity", which is a grant. The absence of a file and
+  // the inability to look are different answers and must stay different.
+  //
+  // Only an EXISTING database is opened: creating one here would invent an
+  // identity table for a project that has never served a portal. ENOENT is
+  // re-checked on the next request, so the first request of a process does not
+  // fix the answer for its lifetime.
+  try {
+    statSync(dbPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return { kind: "none", why: `this instance has issued no web identity (${dbPath} does not exist)` };
+    }
+    const why = `the identity database at ${dbPath} could not be examined (${code ?? String(error)})`;
+    getLoggerSafe().warn("[instance-access] identity database not examinable", { dbPath, code: code ?? null });
+    return { kind: "unavailable", why };
   }
   try {
     openedStore = new WebIdentityStore(dbPath);
@@ -168,11 +184,16 @@ export type InstanceAuthorization =
 /**
  * May the caller behind `headers` act on `surface`? The single entry point for
  * every HTTP surface, so a new one cannot invent its own semantics.
+ *
+ * `resource` names who the thing being touched belongs to, for the own-identity
+ * surfaces (a canvas, an attachment): omit it for the owner-only ones, where the
+ * instance itself is the resource.
  */
 export function authorizeInstanceRequest(
   headers: IncomingHttpHeaders | undefined,
   surface: InstanceSurface,
   what: string,
+  resource?: InstanceResource,
 ): InstanceAuthorization {
   const state = instanceIdentityState();
   if (state.kind === "unavailable") return { kind: "unavailable", why: state.why };
@@ -186,6 +207,7 @@ export function authorizeInstanceRequest(
         actor: { role: "unidentified" },
         instance: { shared: false },
         what,
+        ...(resource ? { resource } : {}),
       }),
     };
   }
@@ -218,6 +240,7 @@ export function authorizeInstanceRequest(
     actor: { ...(verified ? { profileId: verified } : {}), role },
     instance: facts,
     what,
+    ...(resource ? { resource } : {}),
   });
   if (!decision.allowed) {
     getLoggerSafe().warn("[instance-access] request refused", {
@@ -231,7 +254,7 @@ export function authorizeInstanceRequest(
 }
 
 export type ViewerResolution =
-  /** `viewer` absent ⇒ the caller proved no identity: it may see only shared rows. */
+  /** `viewer` absent ⇒ the caller proved no identity. */
   | { readonly kind: "viewer"; readonly viewer?: string }
   | { readonly kind: "unavailable"; readonly why: string };
 
@@ -242,7 +265,7 @@ export type ViewerResolution =
  * used to take it from `?viewer=`, which made a public profile id into the SQL
  * principal: anyone could read the owner's private history by naming it.
  */
-export function verifiedRequestViewer(headers: IncomingHttpHeaders | undefined): ViewerResolution {
+export function verifiedRequestIdentity(headers: IncomingHttpHeaders | undefined): ViewerResolution {
   const state = instanceIdentityState();
   if (state.kind === "unavailable") return { kind: "unavailable", why: state.why };
   if (state.kind === "none") return { kind: "viewer" };
@@ -254,3 +277,9 @@ export function verifiedRequestViewer(headers: IncomingHttpHeaders | undefined):
     return { kind: "unavailable", why: `the identity database could not be read: ${String(error)}` };
   }
 }
+
+/**
+ * The identity a read should be scoped to — the same resolution, under the name
+ * the project-history routes use for it.
+ */
+export const verifiedRequestViewer = verifiedRequestIdentity;

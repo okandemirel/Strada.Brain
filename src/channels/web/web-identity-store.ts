@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export interface WebIdentity {
   profileId: string;
@@ -126,11 +127,11 @@ export class WebIdentityStore {
    * necessarily the argument.
    *
    * OPERATIONAL NOTE: the owner is sticky and lives in this database
-   * (`<memory.dbPath>/web-identities.db`), so an operator who loses the
-   * browser's localStorage comes back as a GUEST — that is inherent to "the
-   * first identity owns the instance" and not a bug. Recovery is to delete the
-   * `owner_profile_id` row (or the database file) while the daemon is stopped;
-   * the next identity issued claims the instance again.
+   * (`<memory.dbPath>/web-identities.db`), so an operator who loses the browser's
+   * localStorage comes back as a GUEST — inherent to "the first identity owns the
+   * instance", not a bug. {@link reassignOwner} is the way back; deleting the
+   * `owner_profile_id` row is NOT (round 14 #7: adoption puts the unreachable
+   * identity straight back).
    */
   claimOwner(profileId: string): string | undefined {
     const normalized = profileId.trim();
@@ -138,6 +139,59 @@ export class WebIdentityStore {
       return this.ownerProfileId();
     }
     this.stmtClaimOwner.run(WebIdentityStore.OWNER_KEY, normalized, Date.now());
+    return this.ownerProfileId();
+  }
+
+  /**
+   * THE OWNER RECOVERY, AND WHY IT IS A HANDOVER RATHER THAN A DELETION
+   * (round 14 #7).
+   *
+   * The old advice on `claimOwner` was "delete the \`owner_profile_id\` row and
+   * restart; the next identity issued claims the instance". That stopped being
+   * true the moment `initialize()` learned to adopt the oldest ESTABLISHED
+   * identity (round 13 #8, which exists so that upgrading an instance does not
+   * hand it to the next newcomer): after the deletion, adoption restores the very
+   * identity whose browser storage was lost, and the replacement browser stays a
+   * guest forever. A written-down procedure that a later fix disabled is worse
+   * than none.
+   *
+   * So ownership is handed over explicitly, to an identity this instance has
+   * actually issued:
+   *
+   *   1. open the portal in the replacement browser and let it connect once —
+   *      it is issued an identity (a guest) and stores it as `strada-profileId`
+   *      in that browser's localStorage;
+   *   2. stop the daemon (this database must not be open twice for a write);
+   *   3. run the handover, either through this method or with the SQL it performs:
+   *        UPDATE web_instance_meta SET value = '<the new profile id>'
+   *         WHERE key = 'owner_profile_id';
+   *   4. start the daemon. The replacement browser is the owner; the lost
+   *      identity becomes an ordinary guest, and its own chats and attachments
+   *      stay its own.
+   *
+   * Deleting the whole database file also works and is the nuclear option: every
+   * identity is revoked, every browser gets a fresh one, and the first to connect
+   * owns the instance again.
+   *
+   * Refuses — and leaves the owner untouched — for an identity this instance
+   * never issued, so a typo in step 3 cannot leave the instance with an owner
+   * nobody can present and every owner-only power permanently refused.
+   */
+  reassignOwner(profileId: string): string | undefined {
+    const normalized = profileId.trim();
+    if (!normalized || !this.has(normalized)) {
+      getLoggerSafe().warn("[WebIdentityStore] owner reassignment refused: not an identity this instance issued", {
+        profileId: normalized || null,
+      });
+      return this.ownerProfileId();
+    }
+    this.db!
+      .prepare(
+        `INSERT INTO web_instance_meta (key, value, created_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(WebIdentityStore.OWNER_KEY, normalized, Date.now());
+    getLoggerSafe().warn("[WebIdentityStore] the instance owner was reassigned", { ownerProfileId: normalized });
     return this.ownerProfileId();
   }
 

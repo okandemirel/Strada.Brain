@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
@@ -108,5 +108,105 @@ describe("WebIdentityStore ownership on an upgraded database (round 13 #8)", () 
     const firstEver = store.issue();
     expect(store.ownerProfileId()).toBe(firstEver.profileId);
     store.close();
+  });
+});
+
+/**
+ * Codex round 14 #7 — THE DOCUMENTED RECOVERY HAS TO BE A RECOVERY.
+ *
+ * The owner is the first identity this instance issued, so an operator who loses
+ * the browser's localStorage comes back as a guest. The comment on claimOwner
+ * told them to delete the `owner_profile_id` row and restart — which was true
+ * until round 13 #8 taught `initialize()` to adopt the oldest established
+ * identity: adoption now restores the very identity they cannot reach, and the
+ * replacement browser stays a guest forever. A recovery procedure that the fix
+ * for another defect quietly disabled is worse than none, because it is written
+ * down.
+ */
+describe("WebIdentityStore owner reassignment (round 14 #7)", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function instanceWithLostOwner(): { dbPath: string; lost: string; replacement: string } {
+    const dir = mkdtempSync(join(tmpdir(), "strada-owner-recovery-"));
+    tempDirs.push(dir);
+    const dbPath = join(dir, "web-identities.db");
+    const store = new WebIdentityStore(dbPath);
+    const lost = store.issue("the-lost-browser").profileId;      // owner, storage wiped
+    const replacement = store.issue("the-new-browser").profileId; // the operator's new tab
+    expect(store.ownerProfileId()).toBe(lost);
+    store.close();
+    return { dbPath, lost, replacement };
+  }
+
+  it("the old advice — delete the owner row and restart — no longer recovers anything", () => {
+    const { dbPath, lost, replacement } = instanceWithLostOwner();
+    const raw = new Database(dbPath);
+    raw.prepare("DELETE FROM web_instance_meta WHERE key = 'owner_profile_id'").run();
+    raw.close();
+
+    // Round 13 #8's adoption puts the unreachable identity straight back.
+    const restarted = new WebIdentityStore(dbPath);
+    expect(restarted.ownerProfileId()).toBe(lost);
+    expect(restarted.isOwner(replacement)).toBe(false);
+    restarted.close();
+  });
+
+  it("reassignOwner hands the instance to the replacement identity, and a restart keeps it", () => {
+    const { dbPath, lost, replacement } = instanceWithLostOwner();
+
+    const offline = new WebIdentityStore(dbPath);
+    expect(offline.reassignOwner(replacement)).toBe(replacement);
+    expect(offline.isOwner(replacement)).toBe(true);
+    expect(offline.isOwner(lost)).toBe(false);
+    offline.close();
+
+    // The daemon comes back up: adoption must not undo a deliberate handover.
+    const restarted = new WebIdentityStore(dbPath);
+    expect(restarted.ownerProfileId()).toBe(replacement);
+    restarted.close();
+  });
+
+  it("refuses to hand the instance to an identity it never issued", () => {
+    const { dbPath, lost } = instanceWithLostOwner();
+    const store = new WebIdentityStore(dbPath);
+
+    // A typo in the recovery procedure must not brick every owner-only power.
+    expect(store.reassignOwner("a-profile-that-does-not-exist")).toBe(lost);
+    expect(store.reassignOwner("")).toBe(lost);
+    expect(store.ownerProfileId()).toBe(lost);
+    store.close();
+  });
+
+  // TEST THE RECOVERY YOU DOCUMENT. The runbook prints a one-line UPDATE for
+  // operators who would rather not load the module; this reads that very line out
+  // of docs/RUNBOOK.md and runs it, so the two cannot drift apart.
+  it("the SQL the runbook prints has the same effect as the method", () => {
+    const runbook = readFileSync(join(process.cwd(), "docs", "RUNBOOK.md"), "utf8");
+    const printed = /UPDATE web_instance_meta SET value = '<the new profile id>' WHERE key = 'owner_profile_id';/
+      .exec(runbook);
+    expect(printed, "docs/RUNBOOK.md must print the owner handover SQL").not.toBeNull();
+
+    const { dbPath, replacement } = instanceWithLostOwner();
+    const raw = new Database(dbPath);
+    raw.prepare(printed![0].replace("<the new profile id>", replacement)).run();
+    raw.close();
+
+    const restarted = new WebIdentityStore(dbPath);
+    expect(restarted.isOwner(replacement)).toBe(true);
+    restarted.close();
+  });
+
+  it("the runbook tells the operator NOT to delete the owner row", () => {
+    const runbook = readFileSync(join(process.cwd(), "docs", "RUNBOOK.md"), "utf8");
+    // The advice that stopped working is named as such, so nobody follows the old
+    // one out of habit (round 14 #7).
+    expect(runbook).toContain("NOT deleting the owner row");
+    expect(runbook).toContain("reassignOwner");
   });
 });
