@@ -38,6 +38,15 @@ export interface ErrorContext {
   analysis: ErrorAnalysis;
   /** Session/task identifier */
   sessionId: string;
+  /**
+   * Which RUN this error happened in, when the caller knows it (round 15 #13).
+   *
+   * Recovery usually does not: it is handed a tool result, not a run. Where it is
+   * supplied, exposures and their judgements are keyed by it — the same scope
+   * everything else uses — and where it is absent both ends fall back to the
+   * episode's correlation id. What must never happen is the two ends disagreeing.
+   */
+  taskRunId?: string;
   /** Timestamp of error */
   timestamp: Date;
   /** File being processed (if known) */
@@ -100,6 +109,9 @@ export interface ResolutionContext {
  * (tightening a gate cuts both ways).
  */
 export const NON_APPLICATION_BETA = 0.25;
+
+/** Verdict score a successfully resolved error credits its applied rule with. */
+const RESOLVED_VERDICT_SCORE = 0.9;
 
 /** What the run used, and whether "the rest misfired" is a fact (round 13 #24). */
 interface ApplicationEvidence {
@@ -262,6 +274,14 @@ export class ErrorLearningHooks {
         sessionId: String(context.sessionId ?? ""),
         instinctIds: shown.instinctIds,
         shownAt: shown.shownAt,
+        // ROUND 15 #13 — ONE KEY, CARRIED THROUGH TO THE JUDGEMENT. Recovery knows
+        // nothing about the run it sits inside, only the EPISODE it is handling,
+        // and `errorId` is that episode at both ends (r13 #26 made it stable). With
+        // no key at all every later episode collapsed onto the first blank-run row,
+        // which keeps the earliest `shown_at` — so recent windows read NOT MEASURED
+        // while exposures were happening — and the judgement looked under a key
+        // that held nothing. `exposureEpisode` computes the same value there.
+        exposureRunId: this.exposureEpisode(errorId, context.taskRunId),
       });
     }
 
@@ -299,7 +319,7 @@ export class ErrorLearningHooks {
     const evidence = this.applicationEvidence(resolution);
     const applied = evidence.applied[0] === undefined ? null : { id: evidence.applied[0] };
     if (resolution.success) {
-      await this.handleSuccessfulResolution(resolution, applied);
+      await this.handleSuccessfulResolution(resolution, applied, errorId, evidence);
     } else {
       this.handleFailedResolution(resolution, applied);
     }
@@ -325,17 +345,21 @@ export class ErrorLearningHooks {
     errorContext: ErrorContext;
     success: boolean;
     verdictScore?: number;
-  }): void {
-    if (!this.enabled) return;
+  }): { confidenceBefore: number; confidenceAfter: number } | undefined {
+    if (!this.enabled) return undefined;
 
     const instinct = this.storage.getInstinct(instinctId);
-    if (!instinct) return;
+    if (!instinct) return undefined;
 
     const updatedInstinct = this.confidenceScorer.updateConfidence(instinct, context.success, context.verdictScore);
     this.storage.updateInstinct(updatedInstinct);
 
     // Update status if needed
     this.updateInstinctStatus(updatedInstinct);
+    // The movement is RETURNED rather than re-derived by the caller: the
+    // judgement writer records what actually happened here, and re-deriving it
+    // would be a second confidence update for one application (round 15 #14).
+    return { confidenceBefore: instinct.confidence, confidenceAfter: updatedInstinct.confidence };
   }
 
   /**
@@ -378,15 +402,42 @@ export class ErrorLearningHooks {
   private async handleSuccessfulResolution(
     resolution: ResolutionContext,
     appliedInstinct: { id: string } | null,
+    errorId: string,
+    evidence: ApplicationEvidence,
   ): Promise<void> {
 
     if (appliedInstinct) {
       // Reinforce the applied instinct
-      this.reinforceInstinct(appliedInstinct.id, {
+      const moved = this.reinforceInstinct(appliedInstinct.id, {
         errorContext: resolution.errorContext,
         success: true,
-        verdictScore: 0.9, // High score for successful resolution
+        verdictScore: RESOLVED_VERDICT_SCORE,
       });
+      // ROUND 15 #14 — AND SAY SO, THROUGH THE ONE JUDGEMENT WRITER. Reinforcing
+      // moves the confidence and records nothing, so an application the system had
+      // directly observed still left its exposure UNJUDGED: coverage read
+      // "shown 1, judged 0" for the very run whose report had just changed the
+      // rule's confidence. A gap number that counts observed applications as gaps
+      // makes progress indistinguishable from noise.
+      //
+      // Only a DEMONSTRATED application is reported: a rule identified by matching
+      // the resolution's wording is not an observation (round 14 #14), and claiming
+      // it as one here would put the guess back in through the ledger.
+      if (moved !== undefined && evidence.demonstrated) {
+        this.pipeline.noteGuidanceApplied({
+          sessionId: String(resolution.errorContext.sessionId ?? ""),
+          ...(resolution.taskRunId ? { taskRunId: resolution.taskRunId } : {}),
+          instinctId: appliedInstinct.id,
+          ...(this.shownGuidance.get(errorId)?.shownAt === undefined
+            ? {}
+            : { exposedAt: this.shownGuidance.get(errorId)!.shownAt }),
+          success: true,
+          verdictScore: RESOLVED_VERDICT_SCORE,
+          confidenceBefore: moved.confidenceBefore,
+          confidenceAfter: moved.confidenceAfter,
+          exposureRunId: this.exposureEpisode(errorId, resolution.errorContext.taskRunId),
+        });
+      }
     } else if (this.describesARepair(resolution)) {
       // No instinct was applied - consider creating one from this successful resolution
       await this.considerInstinctFromResolution(resolution);
@@ -465,8 +516,22 @@ export class ErrorLearningHooks {
         instinctId,
         exposedAt: shown.shownAt,
         betaDelta: NON_APPLICATION_BETA,
+        // r15 #13: the same episode key the exposure row went in under.
+        exposureRunId: this.exposureEpisode(errorId, resolution.errorContext.taskRunId),
       });
     }
+  }
+
+  /**
+   * The key this episode's durable exposure rows live under (round 15 #13).
+   *
+   * The run's own id when the producer knows it — that is the scope everything
+   * else uses — and otherwise the correlation id, which identifies THIS recovery
+   * episode and is the same value at exposure time and at judgement time. What
+   * must never happen is the two ends computing different keys.
+   */
+  private exposureEpisode(errorId: string, taskRunId?: string): string {
+    return taskRunId?.trim() || errorId;
   }
 
   /**
@@ -486,16 +551,21 @@ export class ErrorLearningHooks {
    */
   private applicationEvidence(resolution: ResolutionContext): ApplicationEvidence {
     if (resolution.appliedInstinctIds !== undefined) {
-      const reported = resolution.appliedInstinctIds.map((id) => String(id).trim()).filter((id) => id.length > 0);
-      // COMPLETE means every id in it can be checked against what was shown. An
-      // id the store does not know breaks that: the rule it names may be one of
-      // the shown rules under another identity, so "everything else misfired" is
-      // no longer a fact about this report (round 14 #14).
-      const unknown = reported.filter((id) => this.storage.getInstinct(id) === null);
-      if (unknown.length > 0) {
-        return { applied: reported.filter((id) => !unknown.includes(id)), demonstrated: false };
+      const raw = resolution.appliedInstinctIds.map((id) => String(id ?? "").trim());
+      // COMPLETE means every id in it can be checked against what was shown. Two
+      // ways that fails, and both make the report unusable rather than empty:
+      //
+      //   - an id the store does not know (round 14 #14): the rule it names may be
+      //     one of the shown rules under another identity;
+      //   - a BLANK id (round 15 #16): `[" "]` used to be FILTERED to `[]`, which
+      //     is the explicit statement "I used none of what I was shown" — so
+      //     garbage input established non-application and penalised a rule. An
+      //     empty array is a statement; an array of nothing usable is a mistake.
+      const usable = raw.filter((id) => id.length > 0 && this.storage.getInstinct(id) !== null);
+      if (usable.length !== raw.length) {
+        return { applied: usable, demonstrated: false };
       }
-      return { applied: reported, demonstrated: true };
+      return { applied: usable, demonstrated: true };
     }
     // ROUND 14 #14 — A TEXT MATCH IDENTIFIES A RULE TO REINFORCE AND NOTHING ELSE.
     // It used to return `demonstrated: true`, which made every OTHER shown rule a

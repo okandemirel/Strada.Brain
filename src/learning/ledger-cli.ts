@@ -28,6 +28,7 @@ import type { Command } from "commander";
 import { join } from "node:path";
 import { loadConfigSafe } from "../config/config.js";
 import { LearningStorage } from "./storage/learning-storage.js";
+import { DEFAULT_LEARNING_CONFIG } from "./types.js";
 import {
   buildInstinctLedger,
   exposureCoverage,
@@ -126,8 +127,12 @@ export function registerLearningCommands(program: Command): void {
         sinceMs = Date.now() - days * 86_400_000;
       }
       try {
+        // The retained window is part of the answer (round 15 #15): rows older
+        // than this are swept by the pipeline's retention pass, so a window
+        // reaching further back cannot be read as "nothing happened then".
+        const retentionDays = DEFAULT_LEARNING_CONFIG.exposureRetentionDays;
         const coverage = withLearningStorage((storage) =>
-          exposureCoverage(storage, sinceMs === undefined ? {} : { sinceMs }),
+          exposureCoverage(storage, { ...(sinceMs === undefined ? {} : { sinceMs }), retentionDays }),
         );
         console.log(opts.json ? JSON.stringify(coverage, null, 2) : renderExposureCoverage(coverage));
       } catch (error) {

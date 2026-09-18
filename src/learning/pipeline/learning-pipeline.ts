@@ -339,6 +339,21 @@ export class LearningPipeline {
     instinctIds: readonly string[];
     /** When it entered the prompt. Defaults to now — the caller IS the prompt. */
     shownAt?: number;
+    /**
+     * ROUND 15 #13 — THE DURABLE EXPOSURE ROW'S OWN KEY, when the producer has no
+     * `taskRunId` to give.
+     *
+     * Error recovery knows nothing about the run it is inside; it knows the
+     * EPISODE it is handling (its correlation id). Recording its exposures under a
+     * blank run collapsed every later episode onto the first row — which keeps the
+     * earliest `shown_at`, so a window covering recent activity found nothing and
+     * printed NOT MEASURED while exposures were happening — and put the row under a
+     * key no judgement would look for.
+     *
+     * Defaults to `taskRunId`. A producer that passes it must pass the SAME value
+     * to the judgement, which is what makes the row findable.
+     */
+    exposureRunId?: string;
   }): void {
     if (params.instinctIds.length === 0) return;
     const shownAt = params.shownAt ?? Date.now();
@@ -365,10 +380,11 @@ export class LearningPipeline {
       // credit row's absence cannot tell "shown and never judged" from "never
       // shown". This row can.
       try {
+        const exposureRunId = params.exposureRunId?.trim() || params.taskRunId?.trim();
         this.storage.recordInstinctExposure({
           instinctId: id,
           sessionId: params.sessionId,
-          ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
+          ...(exposureRunId ? { taskRunId: exposureRunId } : {}),
           shownAt,
         });
       } catch {
@@ -406,6 +422,8 @@ export class LearningPipeline {
     exposedAt?: number;
     /** Beta weight of ONE non-application. A fraction of a real failure. */
     betaDelta: number;
+    /** r15 #13: the key the exposure row was recorded under, when not the run's. */
+    exposureRunId?: string;
   }): "recorded" | "duplicate" | "already-settled" | "unknown-instinct" {
     const instinctId = String(params.instinctId).trim();
     if (!instinctId) return "unknown-instinct";
@@ -466,6 +484,79 @@ export class LearningPipeline {
       params.taskRunId?.trim() || undefined,
       exposedAt,
       false,
+      params.exposureRunId?.trim() || undefined,
+    );
+    return "recorded";
+  }
+
+  /**
+   * ROUND 15 #14 — AN APPLICATION SOMEBODY REPORTED, THROUGH THE SAME WRITER.
+   *
+   * The explicit-application path went through {@link ErrorLearningHooks}
+   * `reinforceInstinct`, which moves the confidence and writes nothing else. So an
+   * application the system had DIRECTLY OBSERVED still left its exposure unjudged:
+   * coverage read `shown: 1, judged: 0` while the rule's confidence had just
+   * changed because of it. A number built to say how much is unmeasured was
+   * overstating the gap, which makes progress indistinguishable from noise — the
+   * opposite of what the exposure log is for.
+   *
+   * The caller keeps ownership of the confidence movement and passes what it did,
+   * so routing the judgement here adds a row and a judgement but NOT a second
+   * update. The exposure is then settled for this run, exactly as a
+   * non-application is: the run's terminal credit must not judge it again.
+   */
+  noteGuidanceApplied(params: {
+    sessionId: string;
+    taskRunId?: string;
+    instinctId: string;
+    exposedAt?: number;
+    /** The outcome the application was judged by. */
+    success: boolean;
+    verdictScore: number;
+    /** The movement the caller ALREADY made — recorded, never re-applied. */
+    confidenceBefore: number;
+    confidenceAfter: number;
+    /** r15 #13: the key the exposure row was recorded under, when not the run's. */
+    exposureRunId?: string;
+  }): "recorded" | "duplicate" | "unknown-instinct" {
+    const instinctId = String(params.instinctId).trim();
+    if (!instinctId) return "unknown-instinct";
+    const instinct = this.storage.getInstinct(instinctId as InstinctId);
+    if (!instinct) return "unknown-instinct";
+
+    const creditKey = LearningPipeline.runCreditKey(params.sessionId, params.taskRunId);
+    let judged = this.runNonApplied.get(creditKey);
+    if (!judged) {
+      judged = new Map<string, Set<number>>();
+      this.runNonApplied.set(creditKey, judged);
+      while (this.runNonApplied.size > LearningPipeline.MAX_SHOWN_RUNS) {
+        const oldest = this.runNonApplied.keys().next();
+        if (oldest.done || oldest.value === creditKey) break;
+        this.runNonApplied.delete(oldest.value);
+      }
+    }
+    const exposedAt = params.exposedAt ?? Date.now();
+    let exposures = judged.get(instinctId);
+    if (exposures?.has(exposedAt) === true) return "duplicate";
+    if (!exposures) {
+      exposures = new Set<number>();
+      judged.set(instinctId, exposures);
+    }
+    exposures.add(exposedAt);
+    this.settledRuns.get(creditKey)?.credited.add(instinctId);
+    // Judged once: the run's own settlement must not credit it a second time.
+    this.runPendingCredits.get(creditKey)?.delete(instinctId);
+
+    this.recordCreditLedgerSafe(
+      params.sessionId,
+      { ...instinct, confidence: params.confidenceBefore },
+      { success: params.success, verdictScore: params.verdictScore },
+      "observed",
+      params.confidenceAfter,
+      params.taskRunId?.trim() || undefined,
+      exposedAt,
+      true,
+      params.exposureRunId?.trim() || undefined,
     );
     return "recorded";
   }
@@ -743,6 +834,8 @@ export class LearningPipeline {
     exposedAt?: number,
     /** r13 #25: false = shown and demonstrably not used. Omitted ⇒ applied. */
     applied?: boolean,
+    /** r15 #13: the key the exposure row is under, when not the run's own. */
+    exposureRunId?: string,
   ): void {
     try {
       this.storage.recordInstinctCredit({
@@ -767,10 +860,11 @@ export class LearningPipeline {
     // that did not close its exposure would leave the coverage number lying in the
     // pessimistic direction.
     try {
+      const exposureKey = exposureRunId ?? taskRunId;
       this.storage.markInstinctExposureJudged({
         instinctId: String(instinct.id),
         sessionId,
-        ...(taskRunId ? { taskRunId } : {}),
+        ...(exposureKey ? { taskRunId: exposureKey } : {}),
         judgedAs: applied === false ? "not-applied" : "credited",
       });
     } catch {
@@ -1863,6 +1957,31 @@ export class LearningPipeline {
     this.storage.markTrajectoriesProcessed(unprocessed.map(t => t.id));
 
     this.pruneObservations();
+    this.pruneExposures();
+  }
+
+  /**
+   * Retention sweep for the guidance exposure log (round 15 #15).
+   *
+   * `pruneInstinctExposures` existed and NOTHING called it, so the table grew for
+   * ever across restarts and maintenance — and an unbounded table whose reporting
+   * window is unstated eventually makes "since N days" mean something other than
+   * what the reader assumes. Swept on the same periodic pass as the observations,
+   * and the retained window is printed by `strada learning coverage`.
+   *
+   * Returns what it measured, so a caller never mistakes a no-op for a sweep.
+   */
+  pruneExposures(): { deleted: number; olderThanMs: number; retentionDays: number } {
+    const retentionDays = this.config.exposureRetentionDays;
+    const olderThanMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    let deleted = 0;
+    try {
+      deleted = this.storage.pruneInstinctExposures(olderThanMs);
+    } catch {
+      // A sweep that cannot run is not a reason to fail the periodic pass; the
+      // next one retries, and the reported window still says what it covers.
+    }
+    return { deleted, olderThanMs, retentionDays };
   }
 
   /**

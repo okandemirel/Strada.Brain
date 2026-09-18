@@ -356,6 +356,14 @@ export interface ExposureCoverage {
   /** Window start, or undefined for "everything on record". */
   since?: number;
   until: number;
+  /**
+   * How long exposure rows are KEPT (round 15 #15). Rows older than this are swept
+   * by the pipeline's retention pass, so a window reaching further back than this
+   * cannot be read as "this is all that ever happened".
+   */
+  retentionDays?: number;
+  /** True when the requested window starts before retention keeps rows. */
+  windowExceedsRetention: boolean;
   perInstinct: ExposureCoverageRow[];
 }
 
@@ -372,7 +380,7 @@ export interface ExposureCoverage {
  */
 export function exposureCoverage(
   storage: LearningStorage,
-  opts?: { sinceMs?: number; now?: number },
+  opts?: { sinceMs?: number; now?: number; retentionDays?: number },
 ): ExposureCoverage {
   const now = opts?.now ?? Date.now();
   const rows = storage
@@ -383,6 +391,12 @@ export function exposureCoverage(
     .map((r) => ({ ...r, unjudged: r.shown - r.judged }));
   const shown = rows.reduce((sum, r) => sum + r.shown, 0);
   const judged = rows.reduce((sum, r) => sum + r.judged, 0);
+  // #15: a window is only as long as retention. Asking for a year when rows live
+  // ninety days does not make the missing months read as quiet months.
+  const retainedFrom =
+    opts?.retentionDays === undefined ? undefined : now - opts.retentionDays * 86_400_000;
+  const windowExceedsRetention =
+    retainedFrom !== undefined && (opts?.sinceMs === undefined || opts.sinceMs < retainedFrom);
   return {
     measured: shown > 0,
     shown,
@@ -390,6 +404,8 @@ export function exposureCoverage(
     unjudged: shown - judged,
     ...(opts?.sinceMs === undefined ? {} : { since: opts.sinceMs }),
     until: now,
+    ...(opts?.retentionDays === undefined ? {} : { retentionDays: opts.retentionDays }),
+    windowExceedsRetention,
     perInstinct: rows,
   };
 }
@@ -417,6 +433,14 @@ export function renderExposureCoverage(coverage: ExposureCoverage): string {
     "reported using or not using — it is invisible to the misfire measurement, so",
     "these are the runs 'no misfires found' does not cover.",
   ];
+  if (coverage.retentionDays !== undefined) {
+    lines.push(
+      coverage.windowExceedsRetention
+        ? `Exposure rows are kept for ${coverage.retentionDays} day(s), which is LESS than the window ` +
+            `asked for — anything older than that was swept and is not counted above.`
+        : `Exposure rows are kept for ${coverage.retentionDays} day(s), which covers this window.`,
+    );
+  }
   const worst = coverage.perInstinct.filter((r) => r.unjudged > 0).slice(0, 10);
   if (worst.length > 0) {
     lines.push("");

@@ -685,6 +685,15 @@ export interface LearningConfig {
    * call for the life of the daemon (~1.25 MB/day measured) with no bound.
    */
   readonly observationRetentionDays: number;
+  /**
+   * How long a guidance EXPOSURE row is kept (round 15 #15).
+   *
+   * `instinct_exposure_log` had no retention path at all, so it grew for ever and
+   * the window a coverage report could honestly cover was unstated. The reporting
+   * command prints this number, because "since 180 days" means something
+   * different from what a reader assumes once rows older than this are gone.
+   */
+  readonly exposureRetentionDays: number;
 }
 
 /** Default learning configuration */
@@ -701,6 +710,9 @@ export const DEFAULT_LEARNING_CONFIG: LearningConfig = {
   autoArchiveThreshold: 0.2 as NormalizedScore,
   trajectoryLevelCredit: false,
   observationRetentionDays: 30,
+  // Longer than observations: the coverage number is read over weeks, and an
+  // exposure row is a few dozen bytes.
+  exposureRetentionDays: 90,
 };
 
 // =============================================================================
