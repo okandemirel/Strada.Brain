@@ -12,8 +12,9 @@
  *
  * The model, in one sentence: **an identity sees and controls its own traffic;
  * only the instance owner configures or controls the instance itself; and an
- * unattributed request is granted only while this instance has a single
- * identity (nobody to be separated from).**
+ * unattributed request is granted only where there is nobody to be separated
+ * from — no other identity, and (for the owner's own powers) no recorded owner
+ * at all.**
  *
  * ── Roles ──────────────────────────────────────────────────────────────────
  *   owner        the instance owner: the FIRST identity this instance ever
