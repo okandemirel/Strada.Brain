@@ -421,3 +421,29 @@ describe("createDMPolicy", () => {
     expect(policy).toBeInstanceOf(DMPolicy);
   });
 });
+
+/**
+ * Codex round 15 #10. My round-14 rule read the command boundary as whitespace
+ * only, so two spellings of a recursive delete walked past it: a quoted wrapper
+ * (`cmd.exe /c "rmdir /s /q Assets"`) and attached Windows switches
+ * (`rmdir/s/q Assets`). And `find … -delete` was never considered at all.
+ */
+describe("a recursive delete is refused however it is spelled (round 15 #10)", () => {
+  it("sees through a quoted wrapper and attached switches", () => {
+    expect(destructiveShellFlag('cmd.exe /c "rmdir /s /q Assets"')).toBe("action");
+    expect(destructiveShellFlag("rmdir/s/q Assets")).toBe("action");
+    expect(destructiveShellFlag("powershell -Command 'rmdir -Recurse Assets'")).toBe("action");
+  });
+
+  it("refuses find's own delete family", () => {
+    expect(destructiveShellFlag("find Assets -delete")).toBe("action");
+    expect(destructiveShellFlag("find Assets -name '*.meta' -exec rm {} +")).toBe("action");
+    expect(destructiveShellFlag('cmd /c "find Assets -delete"')).toBe("action");
+  });
+
+  it("still lets the inspection those tools exist for through (guard)", () => {
+    expect(destructiveShellFlag("find Assets -name '*.cs'")).toBeNull();
+    expect(destructiveShellFlag("rmdir Assets/PixelFlow/Core")).toBeNull();
+    expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
+  });
+});

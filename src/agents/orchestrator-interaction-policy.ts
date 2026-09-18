@@ -38,6 +38,17 @@ const LOCAL_TECHNICAL_DECISION_PATTERN =
 const SAFE_SHELL_SEGMENT_PATTERN =
   /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
 
+/**
+ * Options that turn one of the read tools above into a WRITE.
+ *
+ * Codex round 15 #11: `find Assets -delete` began with `find`, so the
+ * deterministic fallback approved it outright — a recursive delete admitted by
+ * a pattern meant for inspection. `sed -i` and find's `-exec`/`-fprint` family
+ * are the same shape: the verb reads, the flag writes.
+ */
+const MUTATING_READ_TOOL_OPTION =
+  /(?:^|\s)(?:-delete\b|-exec(?:dir)?\b|-ok(?:dir)?\b|-fprint(?:f|0)?\b|-fls\b|-i(?:\.\w+)?\b|--in-place\b|-print0\s*\|)/i;
+
 export const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
 Decide whether the proposed shell command should execute automatically.
 
@@ -66,6 +77,23 @@ function looksLikeLocalTechnicalChoice(text: string): boolean {
 
 export function normalizeInteractiveText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A shell command as it will ACTUALLY RUN — trimmed at the ends, untouched
+ * inside.
+ *
+ * Codex round 15 #12: the review path ran the command through
+ * `normalizeInteractiveText`, which collapses every run of whitespace into a
+ * single space. NEWLINES ARE COMMAND SEPARATORS, so
+ * `echo inspection complete\nfind Assets -delete` reached the classifier and
+ * the LLM reviewer as ONE harmless `echo` that merely prints those words —
+ * while the shell that executed it saw two commands and deleted the tree. A
+ * reviewer that is shown a different program from the one that runs is not a
+ * reviewer. Quoted whitespace is preserved for the same reason.
+ */
+export function normalizeShellCommandForReview(value: unknown): string {
+  return String(value ?? "").trim();
 }
 
 export function resolveExecutionPolicy(
@@ -310,5 +338,10 @@ export function isSafeShellFallback(command: string): boolean {
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
 
-  return segments.length > 0 && segments.every((segment) => SAFE_SHELL_SEGMENT_PATTERN.test(segment));
+  return (
+    segments.length > 0 &&
+    segments.every(
+      (segment) => SAFE_SHELL_SEGMENT_PATTERN.test(segment) && !MUTATING_READ_TOOL_OPTION.test(segment),
+    )
+  );
 }

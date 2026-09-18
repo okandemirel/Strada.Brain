@@ -168,6 +168,7 @@ import type {
 import {
   formatRequestedPlan,
   normalizeInteractiveText as normalizePolicyText,
+  normalizeShellCommandForReview,
   resolveExecutionPolicy,
   reviewAutonomousPlan,
   reviewAutonomousQuestion,
@@ -4439,7 +4440,10 @@ export class Orchestrator {
   ): Promise<SelfManagedWriteReview> | SelfManagedWriteReview {
     switch (toolName) {
       case "shell_exec": {
-        const command = this.normalizeInteractiveText(input["command"]);
+        // THE COMMAND AS IT WILL RUN, newlines included (round 15 #12):
+        // collapsing whitespace here made `echo ok\nfind Assets -delete` look
+        // like a single harmless echo to both the classifier and the reviewer.
+        const command = normalizeShellCommandForReview(input["command"]);
         if (!command) {
           return { approved: false, reason: "shell command is missing" };
         }

@@ -295,7 +295,16 @@ export function destructiveShellFlag(rawCommand: string): DestructiveShellFlag {
   //
   // What stays refused: a RECURSIVE rmdir, which on Windows (`rmdir /s`) really
   // is rm -rf. Everything else goes to the reviewer like any other command.
-  if (/(?:^|[\s;&|])rmdir\b/.test(command) && /(?:^|[\s;&|])(?:\/s\b|-r\b|-R\b|--recursive\b)/.test(command)) {
+  // Round 15 #10: a quote or an attached switch is a command boundary too.
+  // `cmd.exe /c "rmdir /s /q Assets"` and `rmdir/s/q Assets` both reach a
+  // recursive delete, and both missed a boundary written as whitespace.
+  // The switch needs no separator before it: `rmdir/s/q` attaches it to the
+  // verb, and PowerShell spells it `-Recurse` (the command is lowercased above).
+  if (/(?:^|[\s;&|"'(`])rmdir\b/.test(command) && /(?:\/s\b|--recursive\b|-recurse\b|-r\b)/.test(command)) {
+    return "action";
+  }
+  // `find … -delete` / `-exec rm` is a recursive delete spelled differently.
+  if (/(?:^|[\s;&|"'(`])find\b/i.test(command) && /(?:^|\s)(?:-delete\b|-exec(?:dir)?\b|-ok(?:dir)?\b)/i.test(command)) {
     return "action";
   }
   const destructiveActions = [

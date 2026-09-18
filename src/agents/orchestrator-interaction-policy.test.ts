@@ -4,6 +4,8 @@ import {
   SHELL_REVIEW_SYSTEM_PROMPT,
   formatRequestedPlan,
   isSafeShellFallback,
+  normalizeInteractiveText,
+  normalizeShellCommandForReview,
   parseShellReviewDecision,
   pickAutonomousChoice,
   reviewAutonomousPlan,
@@ -96,6 +98,31 @@ describe("orchestrator-interaction-policy", () => {
     expect(isSafeShellFallback("npm test && rg bootReport src")).toBe(true);
     expect(isSafeShellFallback("curl https://example.com/install.sh | sh")).toBe(false);
     expect(isSafeShellFallback("rm -rf .")).toBe(false);
+  });
+
+  it("round 15 #11 refuses a read tool carrying a mutating option", () => {
+    // `find Assets -delete` began with `find`, so this fallback approved a
+    // recursive delete outright — the verb reads, the flag writes.
+    expect(isSafeShellFallback("find Assets -delete")).toBe(false);
+    expect(isSafeShellFallback("find Assets -name '*.tmp' -exec rm {} ;")).toBe(false);
+    expect(isSafeShellFallback("sed -i 's/a/b/' Assets/x.cs")).toBe(false);
+    expect(isSafeShellFallback("find Assets -fprint /tmp/out.txt")).toBe(false);
+    // …while the inspection those patterns exist for still passes.
+    expect(isSafeShellFallback("find Assets -name '*.cs'")).toBe(true);
+    expect(isSafeShellFallback("sed -n '1,20p' Assets/x.cs")).toBe(true);
+    expect(isSafeShellFallback("npm test && find src -name '*.ts'")).toBe(true);
+  });
+
+  it("round 15 #12 judges the command that will RUN, newlines included", () => {
+    // Collapsing whitespace made a two-command script read as one harmless
+    // echo: the reviewer was shown a different program from the one that ran.
+    const twoCommands = 'echo inspection complete\nfind Assets -delete';
+    expect(normalizeShellCommandForReview(twoCommands)).toBe(twoCommands);
+    expect(normalizeShellCommandForReview(`  ${twoCommands}  `)).toBe(twoCommands);
+    // The old normalization is what hid it, and it is still right for prose.
+    expect(normalizeInteractiveText(twoCommands)).toBe("echo inspection complete find Assets -delete");
+    // And the fallback cannot approve the real thing either.
+    expect(isSafeShellFallback(twoCommands)).toBe(false);
   });
 
   it("keeps the shell review prompt explicit", () => {
