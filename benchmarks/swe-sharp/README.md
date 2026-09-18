@@ -73,12 +73,19 @@ false zero indistinguishable from a real measurement.
 `.gitignore`d files are never part of the patch, so build output cannot become
 the candidate's answer.
 
-**The tests are not the candidate's to write.** Before scoring, every file the
-`testPatch` touches is restored from the base revision, and the restoration is
-recorded on the attempt. Without that, a candidate could edit or delete the
-benchmark's tests and either break the test patch — escaping measurement
-entirely, which is a cheap way for a weak agent never to be scored — or move its
-"fix" into the assertions.
+**The tests are not the candidate's to write.** Before scoring, every path the
+`testPatch` touches is put back to its base state — present with the base
+content, or absent — whatever the candidate did to it, and the restoration is
+recorded on the attempt. The postcondition is stated positively on purpose: an
+earlier version asked `git diff` which paths had changed and restored those, and
+a diff does not mention an untracked file. A candidate whose patch ADDS a file
+the test patch also adds (a snapshot expectation file, say) kept it, `git apply
+testPatch` then failed with "already exists", and the attempt became `not-run` —
+so trying to write the benchmark's expectations was a way to escape measurement
+rather than to be scored, and the row read like an environment problem.
+
+If a test path cannot be put back, the task is `not-run` with a harness error:
+whatever the suite reports next would not be a measurement of the candidate.
 
 `--json` writes only the JSON document to stdout (the verdict footer goes to
 stderr), so `… --json | jq` works on a completed run.
@@ -144,18 +151,18 @@ produced.
 
 ### Six tasks, six repositories, gold control
 
-`--candidate gold`, 117 s wall for all six. Run twice — before and after the
-patch-capture change below — with identical verdicts; the wall times here are
-from the later run:
+`--candidate gold`, 93 s wall for all six. Run three times as the scoring path
+changed — every run produced identical verdicts; the wall times here are from the
+most recent:
 
 | task | result | wall | TRX |
 |---|---|---|---|
-| `autofac__autofac-1362` | RESOLVED, proven | 27.5 s | 3 / 3 passed |
-| `gui-cs__terminal-gui-3195` | RESOLVED, proven | 30.2 s | 1 / 1 passed |
-| `restsharp__restsharp-1676` | RESOLVED, proven | 21.1 s | 1 / 1 passed |
-| `spectreconsole__spectre-console-1303` | RESOLVED, proven | 20.3 s | 1 / 1 passed |
-| `serilog__serilog-1897` | RESOLVED, proven | 10.0 s | 15 / 15 passed |
-| `devlooped__moq-1079` | **NOT RUN** (`runtime-unavailable`) | 6.9 s | — |
+| `autofac__autofac-1362` | RESOLVED, proven | 20.1 s | 3 / 3 passed |
+| `gui-cs__terminal-gui-3195` | RESOLVED, proven | 21.1 s | 1 / 1 passed |
+| `restsharp__restsharp-1676` | RESOLVED, proven | 12.2 s | 1 / 1 passed |
+| `spectreconsole__spectre-console-1303` | RESOLVED, proven | 18.5 s | 1 / 1 passed |
+| `serilog__serilog-1897` | RESOLVED, proven | 12.5 s | 15 / 15 passed |
+| `devlooped__moq-1079` | **NOT RUN** (`runtime-unavailable`) | 8.2 s | — |
 
 `resolved 5/5 (rate 1.0), proven fail→pass 5/5, NOT RUN 1`, **exit 3** — because
 a requested task did not run. The Moq task targets `netcoreapp3.1`, whose test
@@ -190,7 +197,7 @@ and the two PASS_TO_PASS tests as `Passed`; after the gold patch all three are
 wrong-edit row is the check that the harness can tell a fix from a non-fix at
 all.
 
-### Two more false zeros, found by review and fixed
+### Three more false zeros, found by review and fixed
 
 A candidate that **staged or committed** its fix was scored as producing no
 patch, because the capture used `git diff`. The fix diffs against the revision
@@ -201,6 +208,21 @@ recorded before the candidate ran. Measured both ways on
 |---|---|---|
 | applies the reference fix, stages it, commits it | "candidate produced no patch" (false zero) | RESOLVED, proven, 21.0 s, trx 3 / 3 passed |
 | appends a comment, stages it, commits it | "candidate produced no patch" | unresolved, "1 FAIL_TO_PASS not passing", 37.0 s, trx 3 total / 2 passed / 1 failed |
+
+A third escape, on `spectreconsole__spectre-console-1303`, whose `testPatch` adds
+a snapshot expectation file: a candidate that supplies a patch adding *that same
+file* instead of fixing the bug.
+
+| | result |
+|---|---|
+| before | `NOT RUN (test-patch-failed)`: "…ValueColor.Output.verified.txt: already exists in working directory", 19.6 s — unmeasured |
+| after | **unresolved**, "build failed", 19.4 s, and the attempt records `candidate edits to 1 test file(s) were discarded before scoring` |
+
+"build failed" is the honest answer there: the restored test patch calls
+`BreakdownChart.WithValueColor`, which only exists after the real fix, so the
+test project does not compile (`error CS1061`) — the cheat is scored, not excused.
+The gold control on the same task still resolves (22.1 s, trx 1 / 1 passed), so
+the restoration did not break the honest path.
 
 The second row matters as much as the first: the harness now tests the staged
 work and still says no when the work is not a fix.

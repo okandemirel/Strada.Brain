@@ -985,6 +985,57 @@ export function testPatchPaths(patch: string): string[] {
   return [...paths].sort();
 }
 
+/**
+ * Puts every path the test patch touches back to its base state — present with
+ * the base content, or absent — regardless of what the candidate did to it.
+ *
+ * Stated positively on purpose. The first version of this asked `git diff` which
+ * paths had changed and restored those, and a diff does not notice an untracked
+ * file: a candidate whose patch ADDS a file that the test patch also adds left
+ * that file on disk, restoration skipped it, `git apply testPatch` then failed
+ * with "already exists", and the task became `not-run`. So a candidate that
+ * tried to write the benchmark's expectation files escaped measurement entirely,
+ * and the row read like an environment problem. The postcondition here is not
+ * "changed paths were restored" but "these paths are as the base revision left
+ * them", which is the property the test patch actually needs.
+ *
+ * The returned list is only for reporting — restoration happens either way, so a
+ * mistake in deciding what "differed" can never affect scoring.
+ */
+export function restoreTestPaths(input: {
+  readonly runGit: RunGit;
+  readonly baseRev: string;
+  readonly testPatch: string;
+  /** Reads a repo-relative file; null when it does not exist. */
+  readonly readFile: (rel: string) => string | null;
+  /** Deletes a repo-relative file if present. */
+  readonly deleteFile: (rel: string) => void;
+}): { restored: string[]; failed: string[] } {
+  const restored: string[] = [];
+  const failed: string[] = [];
+  for (const rel of testPatchPaths(input.testPatch)) {
+    const atBase = input.runGit(["cat-file", "-e", `${input.baseRev}:${rel}`]).ok;
+    if (atBase) {
+      const base = input.runGit(["show", `${input.baseRev}:${rel}`]);
+      const differs = !base.ok || input.readFile(rel) !== base.stdout;
+      // Unconditional: the file must end up matching base whatever it looks like now.
+      const back = input.runGit(["checkout", input.baseRev, "--", rel]);
+      if (!back.ok) failed.push(rel);
+      else if (differs) restored.push(rel);
+      continue;
+    }
+    // The base revision does not have this file, so it must not exist — whether
+    // the candidate left it tracked, staged, committed or untracked.
+    const present = input.readFile(rel) !== null;
+    input.runGit(["rm", "-q", "-f", "--cached", "--ignore-unmatch", "--", rel]);
+    if (present) {
+      input.deleteFile(rel);
+      restored.push(rel);
+    }
+  }
+  return { restored, failed };
+}
+
 export function isDiffLike(text: string): boolean {
   if (text.trim() === "") return false;
   // A diff needs a hunk to change anything. "diff --git" alone appears in

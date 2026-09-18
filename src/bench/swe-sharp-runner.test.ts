@@ -9,7 +9,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -36,6 +36,7 @@ import {
   looksLikeTestProject,
   mergeTestReports,
   relaxGlobalJson,
+  restoreTestPaths,
   renderRunReport,
   testPatchPaths,
   type AttemptInput,
@@ -719,6 +720,119 @@ describe("captureCandidatePatch — however the candidate left the tree", () => 
     const out = captureCandidatePatch({ runGit, baseRev, patchFile: PATCH });
     expect(out.source).toBe("patch-file");
     expect(out.patch).toBe(PATCH);
+  });
+});
+
+describe("restoreTestPaths — the base state, stated positively", () => {
+  // Real git again: the defect this prevents is that `git diff` does not notice
+  // an untracked file, so a candidate could leave a file the test patch also
+  // adds and make the task unscoreable instead of scored.
+  let dir: string;
+  let baseRev: string;
+
+  const sh = (cmd: string): string =>
+    execSync(cmd, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const runGit: RunGit = (args) => {
+    const res = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+    return { ok: res.status === 0, stdout: res.stdout ?? "" };
+  };
+  const restore = (testPatch: string) =>
+    restoreTestPaths({
+      runGit,
+      baseRev,
+      testPatch,
+      readFile: (rel) => {
+        const abs = path.join(dir, rel);
+        return existsSync(abs) ? readFileSync(abs, "utf8") : null;
+      },
+      deleteFile: (rel) => rmSync(path.join(dir, rel), { force: true }),
+    });
+
+  // A test patch that edits one existing file and adds one new one.
+  const TEST_PATCH = [
+    "diff --git a/test/Existing.cs b/test/Existing.cs",
+    "--- a/test/Existing.cs",
+    "+++ b/test/Existing.cs",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "diff --git a/test/Expectation.verified.txt b/test/Expectation.verified.txt",
+    // `new file mode` is what tells git apply that /dev/null is not a path to
+    // strip; real test patches carry it, and so must this fixture.
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/test/Expectation.verified.txt",
+    "@@ -0,0 +1 @@",
+    "+expected",
+  ].join("\n");
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "swe-sharp-restore-"));
+    mkdirSync(path.join(dir, "test"));
+    writeFileSync(path.join(dir, "test", "Existing.cs"), "old\n");
+    sh("git init -q");
+    sh("git add -- test/Existing.cs");
+    sh("git -c user.email=a@b -c user.name=t commit -qm base -- test/Existing.cs");
+    baseRev = sh("git rev-parse HEAD").trim();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removes an UNTRACKED file the candidate added at a path the test patch adds", () => {
+    // The defect: `git diff <base>` never mentions this file, so restoration
+    // skipped it and applying the test patch failed with "already exists".
+    writeFileSync(path.join(dir, "test", "Expectation.verified.txt"), "cheat\n");
+    const out = restore(TEST_PATCH);
+    expect(existsSync(path.join(dir, "test", "Expectation.verified.txt"))).toBe(false);
+    expect(out.restored).toContain("test/Expectation.verified.txt");
+    expect(out.failed).toEqual([]);
+  });
+
+  it("removes it when the candidate STAGED it, and when the candidate COMMITTED it", () => {
+    writeFileSync(path.join(dir, "test", "Expectation.verified.txt"), "cheat\n");
+    sh("git add -- test/Expectation.verified.txt");
+    restore(TEST_PATCH);
+    expect(existsSync(path.join(dir, "test", "Expectation.verified.txt"))).toBe(false);
+
+    writeFileSync(path.join(dir, "test", "Expectation.verified.txt"), "cheat\n");
+    sh("git add -- test/Expectation.verified.txt");
+    sh("git -c user.email=a@b -c user.name=t commit -qm cheat -- test/Expectation.verified.txt");
+    restore(TEST_PATCH);
+    expect(existsSync(path.join(dir, "test", "Expectation.verified.txt"))).toBe(false);
+  });
+
+  it("puts a rewritten test file back to its base content", () => {
+    writeFileSync(path.join(dir, "test", "Existing.cs"), "assert nothing\n");
+    const out = restore(TEST_PATCH);
+    expect(readFileSync(path.join(dir, "test", "Existing.cs"), "utf8")).toBe("old\n");
+    expect(out.restored).toContain("test/Existing.cs");
+  });
+
+  it("puts a DELETED test file back", () => {
+    rmSync(path.join(dir, "test", "Existing.cs"));
+    const out = restore(TEST_PATCH);
+    expect(readFileSync(path.join(dir, "test", "Existing.cs"), "utf8")).toBe("old\n");
+    expect(out.restored).toContain("test/Existing.cs");
+  });
+
+  it("reports nothing restored when the candidate left the test files alone", () => {
+    const out = restore(TEST_PATCH);
+    expect(out.restored).toEqual([]);
+    expect(out.failed).toEqual([]);
+    // …and the base file is still there, untouched.
+    expect(readFileSync(path.join(dir, "test", "Existing.cs"), "utf8")).toBe("old\n");
+  });
+
+  it("leaves the test patch applicable afterwards, which is the whole point", () => {
+    writeFileSync(path.join(dir, "test", "Expectation.verified.txt"), "cheat\n");
+    writeFileSync(path.join(dir, "test", "Existing.cs"), "tampered\n");
+    restore(TEST_PATCH);
+    const patchFile = path.join(dir, "test-patch.diff");
+    writeFileSync(patchFile, `${TEST_PATCH}\n`);
+    const applied = spawnSync("git", ["-C", dir, "apply", "--check", patchFile], { encoding: "utf8" });
+    expect(applied.status).toBe(0);
   });
 });
 

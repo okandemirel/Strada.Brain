@@ -270,30 +270,29 @@ function currentRev(repoDir) {
 }
 
 /**
- * Restores the task's test files from the base revision.
+ * Puts every path the testPatch touches back to its base state.
  *
- * A candidate that edits or deletes the benchmark's tests would otherwise break
- * the re-apply of testPatch — escaping measurement entirely, which is a cheap
- * way for a weak agent never to be scored — or smuggle its fix into the
- * assertions. The tests are not the candidate's to write.
+ * The decision lives in `restoreTestPaths` (tested against real git). This is
+ * only the file-system adapter. Note what it does NOT do: ask a diff which
+ * paths changed. A diff does not mention an untracked file, and a candidate
+ * whose patch adds a file the test patch also adds would have kept it, made
+ * `git apply testPatch` fail with "already exists", and turned its own attempt
+ * into a `not-run` — escaping measurement instead of being scored.
  */
-function restoreTestFiles(repoDir, testPatch, baseRev, testPatchPaths) {
-  const paths = testPatchPaths(testPatch);
-  if (paths.length === 0 || !baseRev) return [];
-  const restored = [];
-  for (const rel of paths) {
-    const dirty = git(repoDir, ["diff", "--name-only", baseRev, "--", rel]);
-    if (!dirty.ok || dirty.stdout.trim() === "") continue;
-    const back = git(repoDir, ["checkout", baseRev, "--", rel]);
-    if (back.ok) restored.push(rel);
-    else {
-      // The file does not exist at base (the test patch adds it); removing the
-      // candidate's version is the equivalent restore.
-      const removed = git(repoDir, ["rm", "-q", "-f", "--ignore-unmatch", "--", rel]);
-      if (removed.ok) restored.push(rel);
-    }
-  }
-  return restored;
+function restoreTestFiles(repoDir, testPatch, baseRev, api) {
+  if (!baseRev) return { restored: [], failed: [] };
+  return api.runner.restoreTestPaths({
+    runGit: (gitArgs) => git(repoDir, gitArgs),
+    baseRev,
+    testPatch,
+    readFile: (rel) => {
+      const abs = path.join(repoDir, rel);
+      return fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+    },
+    deleteFile: (rel) => {
+      fs.rmSync(path.join(repoDir, rel), { force: true });
+    },
+  });
 }
 
 /**
@@ -671,11 +670,24 @@ async function runTask(task, args, api) {
     // ── score ──
     // The candidate's edits to the benchmark's own tests are discarded first,
     // so it can neither dodge the tests nor rewrite the assertions.
-    const restoredTests = restoreTestFiles(repoDir, task.testPatch, baseRev, api.runner.testPatchPaths);
-    if (restoredTests.length > 0) {
+    const restoration = restoreTestFiles(repoDir, task.testPatch, baseRev, api);
+    if (restoration.restored.length > 0) {
       deviations.push(
-        `candidate edits to ${restoredTests.length} test file(s) were discarded before scoring: ${restoredTests.join(", ")}`,
+        `candidate edits to ${restoration.restored.length} test file(s) were discarded before scoring: ${restoration.restored.join(", ")}`,
       );
+    }
+    if (restoration.failed.length > 0) {
+      // The tests could not be put back to their base state, so whatever the
+      // suite reports next is not a measurement of the candidate.
+      return finish({
+        notRun: {
+          reason: "harness-error",
+          detail: `could not restore test file(s) to base: ${restoration.failed.join(", ")}`,
+        },
+        baseline,
+        candidate,
+        deviations,
+      });
     }
     const testPatchOn = applyPatch(repoDir, task.testPatch, "test-patch");
     if (!testPatchOn.ok) {
