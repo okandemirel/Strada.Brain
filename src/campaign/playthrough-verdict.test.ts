@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync , symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
+import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL, PLAYER_PLAYTHROUGH_VERDICT_REL, isInsideRoot, isProjectScopedRelativePath } from "./playthrough-verdict.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "playthrough-verdict-")); });
@@ -465,6 +465,22 @@ describe("the reader keeps absence absent", () => {
     expect(readPlaythroughVerdict(root, 0).scenarios?.find((row) => row.id === "save-load")).toMatchObject({ status: "reached" });
   });
 
+  it("accepts a save whose NAME contains dots, because a segment is what climbs (wiring)", () => {
+    // The rules above are only worth having if the reader uses them: the
+    // substring test refused this honest filename outright, and the scenario
+    // read as not-reached with the save sitting right there on disk.
+    const dotted = join("Recordings", "playthrough", "save..slot-1.bak");
+    mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(root, dotted), SAVE_BYTES);
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
+      { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
+        saveCompleted: true, loadCompleted: true, artifact: dotted,
+        saveId: "x", loadedSaveId: "x", savedStateHash: SAVE_SHA256, loadedStateHash: SAVE_SHA256 },
+    ] } });
+    writeFrames(2);
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load")).toMatchObject({ status: "reached" });
+  });
+
   it("a save/load that names no artifact is not measured on the producer's word alone", () => {
     write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
       { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
@@ -554,5 +570,45 @@ describe("the reader keeps absence absent", () => {
     mkdirSync(join(root, "Recordings", "playthrough", "frame_00000.png"), { recursive: true });
     mkdirSync(join(root, "Recordings", "playthrough", "frame_00001.png"), { recursive: true });
     expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "win")).toMatchObject({ status: "not-reached" });
+  });
+});
+
+/**
+ * Codex round 15 #18. The save-artifact rule asked both of its path questions in
+ * POSIX only: a path was "relative" if it had no leading "/", and "inside the
+ * project" if its realpath began with `${projectRoot}/`. On Windows the second
+ * one can NEVER be true — realpath answers `C:\project\Recordings\save.json` —
+ * so every save artifact on disk read as "not reached", and the verdict reported
+ * something the run had not failed to do. The rules are now the platform's own,
+ * injectable so Windows semantics are testable from a Mac.
+ */
+describe("the save-artifact path rules hold on both platforms (round 15 #18)", () => {
+  it("accepts a real Windows path inside the project, and still refuses one outside it", () => {
+    expect(isInsideRoot("C:\\project", "C:\\project\\Recordings\\save.json", win32)).toBe(true);
+    expect(isInsideRoot("C:\\project", "C:\\project", win32)).toBe(false);
+    expect(isInsideRoot("C:\\project", "C:\\elsewhere\\save.json", win32)).toBe(false);
+    expect(isInsideRoot("C:\\project", "C:\\project-sibling\\save.json", win32)).toBe(false);
+    // The POSIX answers are unchanged.
+    expect(isInsideRoot("/project", "/project/Recordings/save.json", posix)).toBe(true);
+    expect(isInsideRoot("/project", "/project-sibling/save.json", posix)).toBe(false);
+  });
+
+  it("knows a Windows absolute path is absolute", () => {
+    for (const absolute of ["C:\\saves\\save.json", "\\saves\\save.json", "\\\\server\\share\\save.json"]) {
+      expect(isProjectScopedRelativePath(absolute, win32)).toBe(false);
+    }
+    expect(isProjectScopedRelativePath("Recordings\\playthrough\\save.json", win32)).toBe(true);
+    expect(isProjectScopedRelativePath("/saves/save.json", posix)).toBe(false);
+  });
+
+  it("refuses a climb written with either separator, and does not mistake a dotted name for one", () => {
+    for (const climb of ["../outside/save.json", "..\\outside\\save.json", "Recordings/../../save.json"]) {
+      expect(isProjectScopedRelativePath(climb, win32)).toBe(false);
+      expect(isProjectScopedRelativePath(climb, posix)).toBe(false);
+    }
+    // A SEGMENT is what climbs; a filename that merely contains ".." does not.
+    // The substring test used to refuse this honest name outright.
+    expect(isProjectScopedRelativePath("Recordings/playthrough/save..bak", posix)).toBe(true);
+    expect(isProjectScopedRelativePath("Recordings/playthrough/..hidden/save.json", posix)).toBe(true);
   });
 });

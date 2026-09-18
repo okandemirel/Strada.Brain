@@ -23,6 +23,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
 import { describePlaythroughScenarios, parsePlaythroughScenarios, type ScenarioPlaythroughEvidence } from "./playthrough-scenarios.js";
+import * as posixAndWin32 from "node:path";
 import { basename, dirname } from "node:path";
 export { parsePlaythroughScenarios, scenariosForRequirement, isRequirementShownByPlaythrough, describePlaythroughScenarios } from "./playthrough-scenarios.js";
 
@@ -298,6 +299,39 @@ function countCapturedFrames(dir: string): number | undefined {
 
 
 /**
+ * The two path questions the save-artifact rule asks, with the platform's own
+ * rules injectable — so Windows semantics are testable from anywhere.
+ *
+ * Codex round 15 #18: both questions were asked in POSIX only. A relative path
+ * was rejected on a leading "/", which misses `C:\saves\x` and `\saves\x`; and
+ * containment compared against `${root}/`, which no Windows realpath can ever
+ * match, so a save artifact that WAS on disk read as "not reached".
+ */
+export type PathRules = Pick<typeof posixAndWin32, "isAbsolute" | "relative">;
+
+/** Path segments, with either separator -- Windows accepts both. */
+function splitSegments(value: string): string[] {
+  return value.split(/[\\/]+/);
+}
+
+/**
+ * Is this a path the producer may name: relative, non-empty, and climbing
+ * nowhere? Traversal is judged by SEGMENT, so a file honestly named `save..bak`
+ * is not mistaken for a climb.
+ */
+export function isProjectScopedRelativePath(relative: string, rules: PathRules = posixAndWin32): boolean {
+  if (relative.trim() === "" || rules.isAbsolute(relative)) return false;
+  return !splitSegments(relative).includes("..");
+}
+
+/** Does an already-resolved `candidate` sit strictly under `root`? */
+export function isInsideRoot(root: string, candidate: string, rules: PathRules = posixAndWin32): boolean {
+  const step = rules.relative(root, candidate);
+  if (step === "" || rules.isAbsolute(step)) return false;
+  return splitSegments(step)[0] !== "..";
+}
+
+/**
  * Is the save artifact a scenario names a REAL save, and the one it claims?
  *
  * Round 14 #11: `existsSync` accepted anything inside the project — including
@@ -317,7 +351,9 @@ function artifactIsPresent(
   expectedSha256: string | undefined,
   verdictPath: string,
 ): boolean {
-  if (relative.includes("..") || relative.startsWith("/") || relative.trim() === "") return false;
+  // A path the producer may name at all: relative, non-empty, climbing nowhere
+  // -- on whatever platform this is (round 15 #18).
+  if (!isProjectScopedRelativePath(relative)) return false;
   if (expectedSha256 === undefined || !/^[0-9a-f]{64}$/i.test(expectedSha256)) return false;
   try {
     const target = join(projectRoot, relative);
@@ -326,7 +362,11 @@ function artifactIsPresent(
     // The verdict cannot be its own evidence, and neither can a capture.
     if (realpathSync(target) === realpathSync(verdictPath)) return false;
     if (/^frame_.*\.(png|jpg|jpeg)$/i.test(basename(target))) return false;
-    if (!realpathSync(target).startsWith(`${realpathSync(projectRoot)}/`)) return false;
+    // Containment with no hardcoded separator (round 15 #18): the old
+    // `${realpath(projectRoot)}/` prefix could never match a Windows realpath,
+    // so every real save artifact there read as "not reached" -- a gate that
+    // tightens itself into a false negative reports something the run did not do.
+    if (!isInsideRoot(realpathSync(projectRoot), realpathSync(target))) return false;
     return createHash("sha256").update(readFileSync(target)).digest("hex") === expectedSha256.toLowerCase();
   } catch {
     return false;
