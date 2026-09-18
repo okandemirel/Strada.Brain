@@ -483,6 +483,22 @@
       "source": "src/campaign/gdd-claims.ts (describeClaims writes the NOT MET form) + round 14 #10's percentage family"
     },
     {
+      "id": "webgl2-by-webgl1-commit",
+      "requirement": "Support WebGL2",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/WebGL1Bootstrap.cs" },
+      "expected": "not_proven",
+      "rationale": "A WebGL1 bootstrap is not WebGL2 support. camelCase splitting hands the predicate the bare fragment 'web' out of 'WebGL2', which is why a sibling version closed this — the evidence half of Codex round 15 #17.",
+      "source": "Codex 2026-09-18 round 15 #17 (the WebGL1 / WebGL2 pair the finding names)"
+    },
+    {
+      "id": "webgl2-by-webgl2-commit",
+      "requirement": "Support WebGL2",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/WebGL2Bootstrap.cs" },
+      "expected": "proven",
+      "rationale": "The landed line names the version the requirement asks for. The version rule must be a filter on the WRONG version, not on every versioned requirement, so this direction is measured too.",
+      "source": "Codex 2026-09-18 round 15 #17 (the opposite direction of the same pair)"
+    },
+    {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
       "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },

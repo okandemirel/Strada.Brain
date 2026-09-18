@@ -927,6 +927,16 @@ function stemsOf(text: string): string[] {
 }
 
 /**
+ * The stems of a text with a boundary inserted after every digit, so a version
+ * glued to the next word is its own piece: "WebGL2Bootstrap" → web, gl2,
+ * bootstrap. Used ONLY by the version check in `quoteIsAbout` (round 15 #17) —
+ * splitting digits globally would drop "10ms" and "3d" from every comparison.
+ */
+function versionParts(text: string): Set<string> {
+  return new Set(stemsOf(text.replace(/(\p{N})(\p{L})/gu, "$1 $2")));
+}
+
+/**
  * The words a requirement is ABOUT: its distinctive stems (three letters or
  * more after stemming, not a stopword), with its verdict suffix dropped.
  */
@@ -961,6 +971,27 @@ export function quoteIsAbout(requirement: string, fact: string): boolean {
   const tokens = requirementTokens(requirement);
   if (tokens.length === 0) return false;
   const factStems = new Set(stemsOf(line));
+  // A VERSIONED NAME IS NOT ITS FRAGMENT. camelCase is split so that
+  // `SaveSystem` meets `Save System`, which also hands this predicate the bare
+  // prefix "web" out of "WebGL2" — and a commit naming WebGL1 then shared a stem
+  // with a requirement about WebGL2 and closed it (Codex 2026-09-18 round 15
+  // #17, the evidence half of the same family the content fingerprint had).
+  // So when the requirement itself names a version, a tier or an index — a stem
+  // carrying a digit — the evidence must name THAT one, not a sibling. A
+  // requirement with no such stem is judged exactly as before, and the cost when
+  // the evidence writes the version some other way ("WebGL 2.0") is a repair
+  // round, never a missing feature.
+  // The comparison is between VERSION-BEARING PIECES, on both sides, because the
+  // evidence glues the next word on: "WebGL2Bootstrap.cs" has no lowercase →
+  // uppercase boundary after the digit, so the ordinary stemmer reads it as one
+  // word. `versionParts` splits digit → letter for this check ALONE; the
+  // ordinary stemmer is left exactly as it is, so the whole-stem rule that keeps
+  // "saver" out of "save" (round 6 #1) is untouched.
+  const required = new Set([...tokens].flatMap((t) => [...versionParts(t)]).filter((t) => /\d/u.test(t)));
+  if (required.size > 0) {
+    const named = versionParts(line);
+    if (![...required].some((t) => named.has(t))) return false;
+  }
   return tokens.some((t) => factStems.has(t));
 }
 

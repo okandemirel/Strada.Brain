@@ -76,6 +76,14 @@ describe("contentTokens", () => {
   });
 });
 
+/**
+ * THE CANONICAL TABLE FOR THIS FAMILY LIVES IN
+ * requirement-identity-closure.test.ts ("the content fingerprint — one table
+ * for the whole family"): signs, operators, approximations, digits glued to a
+ * word, units, percentages and ranges, in both directions. A new member of the
+ * family belongs THERE, as one line. What is below stays because it is the
+ * worked example this function's own doc comment names.
+ */
 describe("isCosmeticRewording — the rule stated in code", () => {
   const cosmetic: Array<[string, string]> = [
     ["Save progress across restarts: absent", "- **Saving progress across restarts.**"],

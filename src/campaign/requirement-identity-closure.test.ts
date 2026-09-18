@@ -29,7 +29,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { CampaignManager, requirementKey, restoreLegacyWordings } from "./campaign-manager.js";
-import { CampaignPlanner } from "./campaign-planner.js";
+import { CampaignPlanner, closingFact, quotableFactsOf } from "./campaign-planner.js";
 import {
   contentFingerprint,
   encodeRequirement,
@@ -86,28 +86,105 @@ function coveragePaths(overrides: Record<string, unknown>): CoveragePaths {
   return manager as unknown as CoveragePaths;
 }
 
-// ─── #27 — a semantic change is never cosmetic ──────────────────────────────
+// ─── THE FINGERPRINT TABLE — one place for the whole family ─────────────────
 
-describe("#27 short semantic tokens and operators are part of the content", () => {
-  it("does not merge two-letter subjects: Enable AI is not Enable UI", () => {
-    expect(contentFingerprint("Enable AI")).not.toBe(contentFingerprint("Enable UI"));
-    expect(isCosmeticRewording("Enable AI", "Enable UI")).toBe(false);
+/**
+ * WHAT THE CONTENT FINGERPRINT MUST SEE, as a table.
+ *
+ * Three rounds in a row found one member of one family: a character that
+ * changes the ASK and that the tokenizer threw away before fingerprinting, so a
+ * proven requirement carried its closure onto a different requirement — an
+ * operator (round 13 #27), a sign (round 14 #10), an approximation and a digit
+ * glued to a word (round 15 #17). The cases are listed here rather than
+ * discovered one round at a time: the next member of the family is ONE LINE in
+ * MUST_DIFFER, next to the class it belongs to.
+ *
+ * Each row is [class, one wording, another wording]. MUST_DIFFER rows are two
+ * different asks and may never share a content fingerprint; MUST_MATCH rows are
+ * one ask written twice and must share one, because a rewording that changed
+ * nothing has to keep what was already proven about it (that direction costs a
+ * repair round every time it is got wrong).
+ */
+const MUST_DIFFER: Array<[string, string, string]> = [
+  // Comparison and equality — the ask is the threshold.
+  ["operator", "Score < 10", "Score > 10"],
+  ["operator", "Score >= 10", "Score > 10"],
+  // A unary sign. Gravity down is not gravity up.
+  ["sign", "Set gravity = -10", "Set gravity = 10"],
+  ["sign", "Set gravity = -10", "Set gravity = +10"],
+  ["sign", "The score may go to -5", "The score may go to 5"],
+  ["sign at the start", "-10 gravity is the floor", "10 gravity is the floor"],
+  // An approximation is not a target, in either of its two characters.
+  ["approximation ~", "~60 fps in the built player", "60 fps in the built player"],
+  ["approximation ≈", "≈60 fps in the built player", "60 fps in the built player"],
+  // A DIGIT GLUED TO A WORD is a version, a tier or an index (round 15 #17).
+  ["digit after letters", "Support WebGL1", "Support WebGL2"],
+  ["digit after letters", "The L3 Bomb must spawn", "The L5 Bomb must spawn"],
+  ["digit after letters", "Use HDRP2 for the render pipeline", "Use HDRP for the render pipeline"],
+  // Quantity markers: a percentage is not a count, a price is not a quantity.
+  ["percentage", "Drop rate: 5%", "Drop rate: 5"],
+  ["percentage", "Crit chance 25%", "Crit chance 20%"],
+  ["multiplier", "2× damage on a critical hit", "2 damage on a critical hit"],
+  ["degree", "Rotate the turret 90° per second", "Rotate the turret 90 per second"],
+  ["currency", "The starter pack costs $5", "The starter pack costs 5"],
+  ["postfix +", "60+ fps", "60 fps"],
+  // Units, which separate themselves now that there is no length floor.
+  ["unit", "The boot takes 10s", "The boot takes 10ms"],
+  // A range differs by its own numbers.
+  ["range", "Spawn 10-20 enemies", "Spawn 10-30 enemies"],
+  // The classes that were already right, kept here so the table is the whole rule.
+  ["figure", "12 levels", "13 levels"],
+  ["short subject", "Enable AI", "Enable UI"],
+  ["preposition", "Save progress to disk", "Save progress disk"],
+  ["negation", "The boss is defeated", "The boss is not defeated"],
+  ["added clause", "Save progress across restarts", "Save progress across restarts and to the cloud"],
+  ["fresh diagnosis", "Shop: absent", "Shop: the UI shell exists but nothing sells"],
+];
+
+const MUST_MATCH: Array<[string, string, string]> = [
+  ["markdown decoration", "Save progress across restarts: absent", "- **Saving progress across restarts.**"],
+  ["verdict suffix", "Shop: absent", "shop"],
+  ["copula and modal", "The shop must be implemented", "The shop is implemented"],
+  ["run tail", "Boss fight: absent, attempt 2", "Boss fight: absent"],
+  ["case and spacing", "Score < 10", "score  <  10."],
+  ["decoration on a short subject", "- **Enable AI**", "Enable AI: absent"],
+  ["run tail on a figure", "The game runs at 60 fps", "the game runs at 60 fps, attempt 3"],
+  // A leading plus is not a value: +10 IS ten.
+  ["redundant plus", "Set gravity = +10", "Set gravity = 10"],
+  // A dash that JOINS is not a sign, or "level 10 boss" would be a new ask.
+  ["joining hyphen", "Auto-save every level", "Auto save every level"],
+  ["joining hyphen", "The level-10 boss must be defeatable", "The level 10 boss must be defeatable"],
+  // A strikethrough is decoration; only a tilde on DIGITS is an approximation.
+  ["strikethrough", "~~Shop~~", "Shop"],
+  // A list marker is a dash, a SPACE, then the item — including a numbered one.
+  ["list marker", "- 10 levels", "10 levels"],
+  ["numbered list marker", "1. 10 levels", "10 levels"],
+  ["camelCase", "SaveSystem must persist", "Save System must persist"],
+  ["thousands separator", "3,000 coins", "3.000 coins"],
+  ["inflection", "The game restarts", "The game restart"],
+];
+
+describe("the content fingerprint — one table for the whole family", () => {
+  it.each(MUST_DIFFER)("%s: DIFFERENT asks — %s ↔ %s", (_class, a, b) => {
+    expect(contentFingerprint(a)).not.toBe(contentFingerprint(b));
+    expect(isCosmeticRewording(a, b)).toBe(false);
   });
 
-  it("keeps comparison operators: Score < 10 is not Score > 10", () => {
-    expect(contentFingerprint("Score < 10")).not.toBe(contentFingerprint("Score > 10"));
-    expect(isCosmeticRewording("Score < 10", "Score > 10")).toBe(false);
-    // …and "at least 60 fps" is not "60 fps".
-    expect(isCosmeticRewording("60+ fps", "60 fps")).toBe(false);
+  it.each(MUST_MATCH)("%s: ONE ask — %s ↔ %s", (_class, a, b) => {
+    expect(contentFingerprint(a)).toBe(contentFingerprint(b));
+    expect(isCosmeticRewording(a, b)).toBe(true);
   });
 
-  it("keeps a two-letter preposition, which the doctrine already claimed it did", () => {
-    // The module's own comment: prepositions stay in, because "save TO disk"
-    // is not "save FROM disk". A two-letter one was dropped by the length
-    // filter, so "to disk" and bare "disk" were one requirement.
-    expect(isCosmeticRewording("Save progress to disk", "Save progress disk")).toBe(false);
+  it("every row is a pair of distinct wordings (the table cannot pass by accident)", () => {
+    for (const [, a, b] of [...MUST_DIFFER, ...MUST_MATCH]) expect(a).not.toBe(b);
+    expect(MUST_DIFFER.length).toBeGreaterThan(20);
+    expect(MUST_MATCH.length).toBeGreaterThan(12);
   });
+});
 
+// ─── what the fingerprint decides about a CLOSURE ───────────────────────────
+
+describe("#27/#10/#17 a changed ask never inherits the proof of another", () => {
   it("a proven requirement's evidence is never inherited by a different short-token ask", () => {
     const before = reconcileRequirements({ texts: ["Enable AI"], gdd: GDD_1 }).identities;
     const after = identifyRequirements({
@@ -131,12 +208,18 @@ describe("#27 short semantic tokens and operators are part of the content", () =
     expect(after.result.identities[0]!.reopened).toBe(true);
   });
 
-  // THE OPPOSITE DIRECTION: keeping short tokens must not turn decoration,
-  // case or the audit's verdict suffix into a rewording.
-  it("a genuinely cosmetic rewording of a short-token ask still carries", () => {
-    expect(isCosmeticRewording("- **Enable AI**", "Enable AI: absent")).toBe(true);
-    expect(isCosmeticRewording("Score < 10", "score  <  10.")).toBe(true);
-    expect(isCosmeticRewording("The game runs at 60 fps", "the game runs at 60 fps, attempt 3")).toBe(true);
+  it("…and a version digit does the same: WebGL1's proof is not WebGL2's", () => {
+    const before = reconcileRequirements({ texts: ["Support WebGL1"], gdd: GDD_1 }).identities;
+    const after = identifyRequirements({
+      previous: before,
+      texts: ["Support WebGL2"],
+      gdd: GDD_2,
+      proven: new Set([before[0]!.id]),
+      provenAtRevision: REV_PROVEN,
+    });
+    expect(after.result.identities[0]!.evidenceCarried).not.toBe(true);
+    expect(after.result.identities[0]!.reopened).toBe(true);
+    expect(requirementKey(after.encoded[0]!)).not.toBe(requirementKey(encodeRequirement(before[0]!)));
   });
 });
 
@@ -475,58 +558,9 @@ describe("#31 inherited evidence cannot outlive its tree", () => {
   });
 });
 
-// ─── round 14 #10 — every character that changes the ASK ────────────────────
+// ─── round 14 #10 — a sign decides a closure ────────────────────────────────
 
-/**
- * The same class as `Score < 10` / `Score > 10` (round 13 #27), swept in one
- * pass: a character the tokenizer discards before the fingerprint, where the
- * two readings are different asks. A sign is the one the finding names; the
- * rest of the family is here so a third patch is not needed later.
- */
-describe("#10 signs, quantities and units are part of the content", () => {
-  const notCosmetic: Array<[string, string]> = [
-    // THE FINDING: a unary sign. Gravity down is not gravity up.
-    ["Set gravity = -10", "Set gravity = 10"],
-    ["Set gravity = -10", "Set gravity = +10"],
-    ["The score may go to -5", "The score may go to 5"],
-    // A percentage is not a count.
-    ["Drop rate: 5%", "Drop rate: 5"],
-    ["Crit chance 25%", "Crit chance 20%"],
-    // A multiplier is not a count.
-    ["2× damage on a critical hit", "2 damage on a critical hit"],
-    // An approximation is not a target.
-    ["~60 fps in the built player", "60 fps in the built player"],
-    // A unit symbol, and a price that is not a quantity.
-    ["Rotate the turret 90° per second", "Rotate the turret 90 per second"],
-    ["The starter pack costs $5", "The starter pack costs 5"],
-    // …and a sign the requirement OPENS with, which the list-decoration
-    // stripper used to eat before the tokenizer ever saw it.
-    ["-10 gravity is the floor", "10 gravity is the floor"],
-  ];
-  it.each(notCosmetic)("NOT cosmetic: %s ↔ %s", (a, b) => {
-    expect(contentFingerprint(a)).not.toBe(contentFingerprint(b));
-    expect(isCosmeticRewording(a, b)).toBe(false);
-  });
-
-  // THE OPPOSITE DIRECTION: none of this may turn ordinary decoration, a
-  // hyphen or a redundant plus into a rewording.
-  const stillCosmetic: Array<[string, string]> = [
-    ["Set gravity = -10", "- **set gravity = -10.**"],
-    // A hyphen JOINING words or a word to a number is not a sign.
-    ["Auto-save every level", "Auto save every level"],
-    ["The level-10 boss must be defeatable", "The level 10 boss must be defeatable"],
-    // A leading plus on a number is not a value: +10 is ten.
-    ["Set gravity = +10", "Set gravity = 10"],
-    // …and a struck-through heading is decoration, not an approximation.
-    ["~~Shop~~", "Shop"],
-    // A list marker is still a list marker: dash, SPACE, then the number.
-    ["- 10 levels", "10 levels"],
-    ["1. 10 levels", "10 levels"],
-  ];
-  it.each(stillCosmetic)("still cosmetic: %s ↔ %s", (a, b) => {
-    expect(isCosmeticRewording(a, b)).toBe(true);
-  });
-
+describe("#10 signs and quantities decide what carries", () => {
   it("a proven requirement whose sign flipped is REOPENED, never carried", () => {
     const before = reconcileRequirements({ texts: ["Set gravity = -10"], gdd: GDD_1 }).identities;
     const after = identifyRequirements({
@@ -613,5 +647,38 @@ describe("#9 a prompt-only legacy requirement is not re-minted", () => {
     const [stamped] = identifyRequirements({ texts: ["Boss Alpha: absent"], gdd: GDD_1 }).encoded;
 
     expect(restoreLegacyWordings(campaign, [stamped!])).toEqual([stamped]);
+  });
+});
+
+// ─── round 15 #17, the other door ───────────────────────────────────────────
+
+/**
+ * The FINGERPRINT half of #17 stops `WebGL1`'s identity from becoming
+ * `WebGL2`'s. The evidence matcher is a second door to the same outcome: it
+ * splits camelCase (so `SaveSystem` meets `Save System`), which hands it the
+ * bare fragment `web` out of `WebGL2` — and a commit naming WebGL1 then shares
+ * a stem with a requirement about WebGL2 and closes it. Same consequence, same
+ * family: a proven ask closing a different ask.
+ */
+describe("#17 a versioned name is not its fragment (the evidence half)", () => {
+  const facts = (commitNote: string): string[] => quotableFactsOf([{ status: "green", commitNote }]);
+
+  it("a WebGL1 commit does not close a WebGL2 requirement", () => {
+    expect(closingFact("Support WebGL2", facts("2 commit(s): Assets/Scripts/WebGL1Bootstrap.cs"))).toBeUndefined();
+  });
+
+  it("…and the WebGL2 commit still does (the opposite direction)", () => {
+    expect(closingFact("Support WebGL2", facts("2 commit(s): Assets/Scripts/WebGL2Bootstrap.cs"))).toBe(
+      "landed: 2 commit(s): Assets/Scripts/WebGL2Bootstrap.cs",
+    );
+  });
+
+  it("a requirement that names no version is judged exactly as before", () => {
+    // The rule may only bite where the requirement itself carries the version:
+    // an unversioned ask keeps every stem it had.
+    expect(closingFact("Save progress across restarts", facts("2 commit(s): Assets/Scripts/SaveSystem.cs"))).toBe(
+      "landed: 2 commit(s): Assets/Scripts/SaveSystem.cs",
+    );
+    expect(closingFact("Shop: absent", facts("1 commit(s): Assets/Art/Hero.png"))).toBeUndefined();
   });
 });

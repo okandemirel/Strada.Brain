@@ -194,7 +194,12 @@ const NEGATIONS = new Set(["not", "no", "never", "none", "nor", "without", "non"
  * approximation marker does survive: "~60 fps" is a different ask from "60 fps".
  */
 function normalizeNumber(token: string): string {
-  const marker = /^[-~]/u.exec(token)?.[0] ?? "";
+  // BOTH SPELLINGS OF "ABOUT". The marker set the digits are stripped of and
+  // the marker set that is KEPT were written separately, and "≈" was in the
+  // first list only — so "≈60 fps" fingerprinted as "60 fps" while "~60 fps"
+  // did not (Codex 2026-09-18 round 15 #17). One canonical marker, both
+  // spellings mapped onto it.
+  const marker = /^[-~≈]/u.exec(token)?.[0].replace("≈", "~") ?? "";
   const digits = token.replace(/^[+\-~≈]+/u, "");
   if (/^\d{1,3}(?:[.,]\d{3})+$/u.test(digits)) return marker + digits.replace(/[.,]/gu, "");
   return marker + digits.replace(/,/gu, "");
@@ -217,29 +222,62 @@ const OPERATOR_TOKEN_RE = /^(?:<=|>=|==|!=|[≤≥≠<>=+×÷%°$€£¥])$/u;
 const OPERATOR_CANONICAL: Record<string, string> = { "≤": "<=", "≥": ">=", "≠": "!=", "==": "=", "÷": "/" };
 
 /**
- * The token pattern, in one place because its ORDER is load-bearing.
+ * WHAT THE FINGERPRINT KEEPS, AND WHAT IT DROPS — the whole rule, in one place.
  *
- *   1. the two-character comparisons, before their first character can match
- *      alone ("<=" is not "<" followed by "=");
- *   2. a NUMBER WITH ITS MARKER — a sign or an approximation stuck to the
- *      digits. The lookbehind is what keeps a hyphen a hyphen: in "level-10"
- *      and "auto-save" the dash JOINS, and calling it a sign would make
- *      "level-10 boss" a different requirement from "level 10 boss";
- *   3. the single-character symbols that change an ask — comparison, the
- *      postfix "60+", a multiplier, a percentage, a degree, a currency. A bare
- *      "-" is deliberately NOT one of them (see 2), and neither are "*", "/"
- *      or "~" on their own: those are markdown emphasis, a path separator and
- *      a strikethrough;
- *   4. letters.
+ * Three consecutive review rounds each found one member of ONE family: a
+ * character that changes the ASK and that this pattern discarded, so a proven
+ * requirement handed its closure to a different requirement. An operator (round
+ * 13 #27), a unary sign (round 14 #10), an approximation and a digit glued to a
+ * word (round 15 #17). The enumeration below exists so the next member is a
+ * decision rather than a discovery, and the table in
+ * requirement-identity-closure.test.ts walks every class in both directions.
  *
- * CONSIDERED AND DELIBERATELY LEFT OUT: "/" and ":" between digits ("1/2",
- * "1:30"). Both are separators far more often than they are content — a path
- * and the audit's own diagnostic colon — and no requirement pair in this repo
- * turns on one. A unit written in LETTERS ("10s" against "10ms") already
- * separates itself, because there is no length floor any more.
+ * KEPT, because two readings that differ only here are different asks:
+ *   • DIGITS, wherever they sit — on their own ("13 levels"), or GLUED TO A WORD
+ *     ("WebGL1", "L3 Bomb", "HDRP2", "v1"). A digit after letters is a version,
+ *     a tier or an index; dropping it collapsed every identifier into its
+ *     siblings (#17). Separators inside a figure are folded, so "3,000" and
+ *     "3.000" are both 3000 and "2.5" stays 2.5.
+ *   • A SIGN on a number ("-10" is not "10"), and only when it is stuck to the
+ *     digits and preceded by nothing alphanumeric — see the dropped list.
+ *     A leading PLUS is folded away, because "+10" is ten.
+ *   • AN APPROXIMATION on a number, in both spellings ("~60", "≈60"): "about
+ *     sixty" is not a target of sixty.
+ *   • COMPARISON AND EQUALITY ("<", ">", "=", "<=", ">=", "!=", and "≤ ≥ ≠"
+ *     folded onto the ASCII forms): the threshold IS the ask.
+ *   • QUANTITY AND UNIT MARKERS: the postfix "+" ("60+ fps" is "at least"), "×"
+ *     and "÷", "%" (a percentage is not a count), "°", and the currencies (a
+ *     price is not a quantity).
+ *   • WORDS, at any length, as their stems. There is no length floor: it used to
+ *     drop "AI", "UI", "2D" and every two-letter preposition (#27).
+ *   • NEGATIONS, verbatim, whatever their length.
+ *
+ * DROPPED, because two readings that differ only here are ONE ask, and minting a
+ * new identity for them would lose a proof that still stands:
+ *   • A BARE "-": in "auto-save" and "level-10" the dash JOINS. Reading it as a
+ *     sign would make "level 10 boss" a different requirement — so a sign is
+ *     recognized only where nothing alphanumeric precedes it, which also leaves
+ *     a range ("10-20") as its two numbers.
+ *   • A STANDALONE "~": markdown strikethrough ("~~Shop~~"). Only a tilde on
+ *     DIGITS is an approximation.
+ *   • MARKDOWN AND LIST DECORATION ("*", "_", "`", ">", bullets, "1." with a
+ *     space): an editor adds and removes it without changing the ask. A dash
+ *     stuck to a digit is not decoration (#10).
+ *   • "/" AND ":" BETWEEN DIGITS ("1/2", "1:30"): considered and left out. Both
+ *     are separators far more often than content — a path, and the audit's own
+ *     diagnostic colon — and no requirement pair in this repo turns on one.
+ *   • ARTICLES, THE COPULA AND THE MODALS (COSMETIC_FILLERS): deliberately tiny,
+ *     because every word in it is a word two requirements may differ by and
+ *     still be the same one. Prepositions and quantifiers are NOT in it.
+ *   • CASE, WHITESPACE, the audit's verdict suffix and a run-specific tail: see
+ *     normalizeWording.
+ *
+ * The ORDER of the alternation is load-bearing: the two-character comparisons
+ * first (so "<=" is not "<" then "="), then a MARKED number, then a bare number,
+ * then the single-character symbols, then letters.
  */
 const CONTENT_TOKEN_RE =
-  /<=|>=|==|!=|(?<![\p{L}\p{N}])[+\-~≈]?\d+(?:[.,]\d+)*|[≤≥≠<>=+×÷%°$€£¥]|\p{L}+/gu;
+  /<=|>=|==|!=|(?<![\p{L}\p{N}])[+\-~≈]\d+(?:[.,]\d+)*|\d+(?:[.,]\d+)*|[≤≥≠<>=+×÷%°$€£¥]|\p{L}+/gu;
 
 /**
  * The CONTENT TOKENS of a wording, in order: numbers verbatim, operators
