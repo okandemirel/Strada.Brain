@@ -279,10 +279,25 @@ export type DestructiveShellFlag = "action" | "shape" | null;
 export function destructiveShellFlag(rawCommand: string): DestructiveShellFlag {
   const command = rawCommand.toLowerCase();
   const dangerous = [
-    "rm ", "del ", "rmdir", "format", "mkfs", "dd ",
+    "rm ", "del ", "format", "mkfs", "dd ",
     "shutdown", "reboot", "truncate ", "shred ", "chmod 777",
   ];
   if (dangerous.some((p) => command.includes(p))) return "action";
+  // `rmdir` IS NOT `rm -rf`, AND OUR OWN GATES DEMAND IT. POSIX rmdir removes
+  // only EMPTY directories and fails with ENOTEMPTY otherwise — it is the
+  // counterpart of mkdir and cannot destroy data. Refusing it outright meant
+  // the conformance gate could tell a worker "move this code under
+  // Assets/Modules/<Name>Module/" and this gate would then forbid removing the
+  // empty directory it had just left behind: measured live 2026-09-18, 14
+  // refusals of `rmdir Assets/PixelFlow/Core/Sim/Data …` in ten minutes, the
+  // sprint spending its turns on a cleanup nothing would allow. A substring
+  // match also refused any command whose PATH merely contained "rmdir".
+  //
+  // What stays refused: a RECURSIVE rmdir, which on Windows (`rmdir /s`) really
+  // is rm -rf. Everything else goes to the reviewer like any other command.
+  if (/(?:^|[\s;&|])rmdir\b/.test(command) && /(?:^|[\s;&|])(?:\/s\b|-r\b|-R\b|--recursive\b)/.test(command)) {
+    return "action";
+  }
   const destructiveActions = [
     /(?:curl|wget|fetch)\s.*\|\s*(ba)?sh/,     // Pipe-to-shell
     /\|\s*(?:ba)?sh\b/,                          // Any pipe to sh/bash

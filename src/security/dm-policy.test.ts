@@ -362,6 +362,28 @@ describe("a destructive ACT and a merely suspicious SHAPE are different question
     expect(destructiveShellFlag("dd if=/dev/zero of=/dev/disk2")).toBe("action");
   });
 
+  it("lets a plain rmdir through, because our own conformance gate demands it", () => {
+    // Measured live 2026-09-18: the conformance gate told a worker to move game
+    // code under Assets/Modules/<Name>Module/, and this gate then refused the
+    // removal of the empty directory it had just left behind — 14 refusals of
+    // `rmdir Assets/PixelFlow/Core/Sim/Data …` in ten minutes, the sprint
+    // spending its turns on a cleanup nothing would allow. POSIX rmdir removes
+    // only EMPTY directories and fails with ENOTEMPTY otherwise.
+    expect(destructiveShellFlag("rmdir Assets/PixelFlow/Core/Sim/Data Assets/PixelFlow/Core")).toBeNull();
+    expect(destructiveShellFlag("rmdir -p Assets/Modules/Old/Empty")).toBeNull();
+    // A path that merely CONTAINS the word is not a command either.
+    expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
+  });
+
+  it("still refuses a RECURSIVE rmdir, which on Windows is rm -rf", () => {
+    expect(destructiveShellFlag("rmdir /s /q Assets")).toBe("action");
+    expect(destructiveShellFlag("rmdir -r Assets")).toBe("action");
+    expect(destructiveShellFlag("rmdir --recursive Assets")).toBe("action");
+    // And everything that was already refused still is.
+    expect(destructiveShellFlag("rm -rf Assets")).toBe("action");
+    expect(destructiveShellFlag("rmdir Assets && rm -rf Library")).toBe("action");
+  });
+
   it("names the shape, so the reviewer reads what it actually does", () => {
     // Measured live 2026-09-12 05:03: a sprint asked for the size of a PNG it
     // had just written and the gate refused the command unread, costing the
