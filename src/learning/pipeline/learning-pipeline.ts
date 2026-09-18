@@ -358,6 +358,23 @@ export class LearningPipeline {
       if (!id) continue;
       const already = shown.get(id);
       if (already === undefined || shownAt < already) shown.set(id, shownAt);
+      // DURABLE, because "how much of the misfire measurement is not being made"
+      // is a question about a period and not about this process's lifetime. Since
+      // round 13 #24 / round 14 #14 an exposure is only judged when something
+      // REPORTS what was applied, so the unjudged ones are the majority — and a
+      // credit row's absence cannot tell "shown and never judged" from "never
+      // shown". This row can.
+      try {
+        this.storage.recordInstinctExposure({
+          instinctId: id,
+          sessionId: params.sessionId,
+          ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
+          shownAt,
+        });
+      } catch {
+        // The row is the record, not the mechanism: a storage failure must never
+        // stop guidance reaching the prompt that is already on its way.
+      }
     }
   }
 
@@ -744,6 +761,20 @@ export class LearningPipeline {
       });
     } catch {
       // Fire-and-forget: the run's teardown continues either way.
+    }
+    // This exposure has now been judged, whichever way it went. The exposure log
+    // measures how much of the guidance we show is ever decided about; a decision
+    // that did not close its exposure would leave the coverage number lying in the
+    // pessimistic direction.
+    try {
+      this.storage.markInstinctExposureJudged({
+        instinctId: String(instinct.id),
+        sessionId,
+        ...(taskRunId ? { taskRunId } : {}),
+        judgedAs: applied === false ? "not-applied" : "credited",
+      });
+    } catch {
+      // Same contract as the row above: a bookkeeping failure is not a run failure.
     }
   }
 

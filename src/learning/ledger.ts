@@ -329,6 +329,108 @@ function measureNoEffect(
   return { at: last };
 }
 
+/** One rule's share of the exposure coverage. */
+export interface ExposureCoverageRow {
+  instinctId: string;
+  /** Exposures recorded in the window — (run, instinct) pairs. */
+  shown: number;
+  /** How many of them anything ever judged. */
+  judged: number;
+  unjudged: number;
+  firstShownAt: number;
+  lastShownAt: number;
+}
+
+/** How much of the guidance this installation shows is ever judged. */
+export interface ExposureCoverage {
+  /**
+   * FALSE when no exposure was recorded in the window at all. That is not
+   * "nothing went unjudged": it is nobody having reported an exposure — a missing
+   * producer, a fresh database, or a window with no activity. The difference is
+   * the whole point of the number.
+   */
+  measured: boolean;
+  shown: number;
+  judged: number;
+  unjudged: number;
+  /** Window start, or undefined for "everything on record". */
+  since?: number;
+  until: number;
+  perInstinct: ExposureCoverageRow[];
+}
+
+/**
+ * THE DENOMINATOR OF THE MISFIRE MEASUREMENT (round 14 follow-up to #14).
+ *
+ * Round 13 #24 and round 14 #14 stopped this system inferring which guidance a
+ * run applied from the wording of its resolution, because that inference punished
+ * rules that were right. What replaces an inference is not silence: an exposure
+ * nothing judged is recorded as such, and this counts them.
+ *
+ * So `findSuspectGuidance` reporting no suspects can finally be read correctly —
+ * "nothing looks wrong" only means something if we know how much was looked at.
+ */
+export function exposureCoverage(
+  storage: LearningStorage,
+  opts?: { sinceMs?: number; now?: number },
+): ExposureCoverage {
+  const now = opts?.now ?? Date.now();
+  const rows = storage
+    .getExposureCoverage({
+      ...(opts?.sinceMs === undefined ? {} : { since: opts.sinceMs }),
+      until: now,
+    })
+    .map((r) => ({ ...r, unjudged: r.shown - r.judged }));
+  const shown = rows.reduce((sum, r) => sum + r.shown, 0);
+  const judged = rows.reduce((sum, r) => sum + r.judged, 0);
+  return {
+    measured: shown > 0,
+    shown,
+    judged,
+    unjudged: shown - judged,
+    ...(opts?.sinceMs === undefined ? {} : { since: opts.sinceMs }),
+    until: now,
+    perInstinct: rows,
+  };
+}
+
+/** The coverage as a person reads it. Never prints a zero that looks like health. */
+export function renderExposureCoverage(coverage: ExposureCoverage): string {
+  const window =
+    coverage.since === undefined
+      ? "over everything on record"
+      : `since ${new Date(coverage.since).toISOString()} (last ${formatDurationMs(coverage.until - coverage.since)})`;
+  if (!coverage.measured) {
+    return [
+      `Guidance exposure ${window}: NOT MEASURED.`,
+      "No exposure was recorded, so nothing here says whether the guidance this",
+      "installation shows is being judged. That is not the same as none of it going",
+      "unjudged: it means no exposure reached this log — a producer that does not",
+      "report exposures, a fresh database, or no activity in this window.",
+    ].join("\n");
+  }
+  const pct = ((coverage.judged / coverage.shown) * 100).toFixed(0);
+  const lines = [
+    `Guidance exposure ${window}: ${coverage.shown} exposure(s) recorded, ` +
+      `${coverage.judged} judged (${pct}%), ${coverage.unjudged} still unjudged.`,
+    "An unjudged exposure is guidance that reached a prompt and that nothing ever",
+    "reported using or not using — it is invisible to the misfire measurement, so",
+    "these are the runs 'no misfires found' does not cover.",
+  ];
+  const worst = coverage.perInstinct.filter((r) => r.unjudged > 0).slice(0, 10);
+  if (worst.length > 0) {
+    lines.push("");
+    lines.push("Least measured guidance first:");
+    for (const row of worst) {
+      lines.push(
+        `  ${row.instinctId}  shown ${row.shown}, judged ${row.judged}` +
+          `  (last shown ${new Date(row.lastShownAt).toISOString()})`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 export interface SuspectGuidance {
   id: string;
   name: string;

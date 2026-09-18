@@ -2,9 +2,16 @@
  * THE LEDGER'S CLI SURFACE (plan 6.4).
  *
  *   strada learning suspects            — which guidance in effect looks wrong
+ *   strada learning coverage            — how much of what we show is ever judged
  *   strada learning search <text>       — find a rule by what it says
  *   strada learning ledger <id>         — the whole record for one rule
  *   strada learning retire <id> --reason "…"   — stop it, and show that it stopped
+ *
+ * `coverage` is the one that keeps `suspects` honest. Since round 13 #24 and round
+ * 14 #14 a misfire is only recorded where something REPORTED which guidance a run
+ * applied, so "no suspects" means nothing until you know how many exposures were
+ * judged at all. It answers that, over a period, from rows rather than from a
+ * counter that dies with the process.
  *
  * There was no `strada learning` group before this: the lifecycle log was
  * written and read only by tests, and the dashboard's /api/learning/* routes
@@ -23,7 +30,9 @@ import { loadConfigSafe } from "../config/config.js";
 import { LearningStorage } from "./storage/learning-storage.js";
 import {
   buildInstinctLedger,
+  exposureCoverage,
   findSuspectGuidance,
+  renderExposureCoverage,
   renderLedgerEntry,
   renderSuspects,
   retireGuidance,
@@ -99,6 +108,28 @@ export function registerLearningCommands(program: Command): void {
           console.log(`    then: ${row.action.slice(0, 120)}`);
         }
         console.log(`\n${rows.length} match(es). Full record: strada learning ledger <id>`);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+  learning
+    .command("coverage")
+    .description("How much of the guidance this installation shows is ever judged (the misfire measurement's denominator)")
+    .option("--since-days <n>", "Only exposures shown in the last N days (default: everything on record)")
+    .option("--json", "Output as JSON")
+    .action((opts: { sinceDays?: string; json?: boolean }) => {
+      let sinceMs: number | undefined;
+      if (opts.sinceDays !== undefined) {
+        const days = Number.parseFloat(opts.sinceDays);
+        if (!Number.isFinite(days) || days <= 0) fail(`--since-days must be a positive number, got "${opts.sinceDays}"`);
+        sinceMs = Date.now() - days * 86_400_000;
+      }
+      try {
+        const coverage = withLearningStorage((storage) =>
+          exposureCoverage(storage, sinceMs === undefined ? {} : { sinceMs }),
+        );
+        console.log(opts.json ? JSON.stringify(coverage, null, 2) : renderExposureCoverage(coverage));
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error));
       }

@@ -369,10 +369,20 @@ export class LearningStorage {
     // probes for attached users, but a probe only describes the instant it ran:
     // a store that opens learning.db while the swap is in flight ends up writing
     // to an inode that is about to be renamed away and deleted, and the restore
-    // reports success while the installation is not using restored state. So the
-    // opener asks the same lock file the restore claims. Only a LIVE holder
-    // blocks — a lock left by a dead process is the restore's to refuse, never a
-    // reason to keep the daemon out of its own store.
+    // reports success while the installation is not using restored state.
+    //
+    // NOT REDUNDANT with the same question inside `configureSqlitePragmas`
+    // (586077c4), which is what makes every store in this system join the
+    // protocol. That one is asked with the connection already open, and
+    // `new Database(path)` CREATES the file — so a refusal there leaves a
+    // zero-byte database at a path the restore may be mid-swap on, and SQLite
+    // opens a zero-byte file as a valid EMPTY database that passes
+    // integrity_check (see `unusableDatabaseSource`). Asked HERE, a refusal
+    // touches nothing at all. Measured both ways; maintenance-exclusion.test.ts
+    // asserts the file does not appear, so do not drop this as duplication.
+    //
+    // Only a LIVE holder blocks either way — a lock left by a dead process is the
+    // restore's to refuse, never a reason to keep the daemon out of its own store.
     assertNoMaintenanceExclusion(resolveStradaHome(), `open ${this.dbPath}`);
     const dir = dirname(this.dbPath);
     if (dir && dir !== ".") {
@@ -584,6 +594,40 @@ export class LearningStorage {
         applied INTEGER NOT NULL DEFAULT 1
       );
       CREATE INDEX IF NOT EXISTS idx_credit_log_instinct ON instinct_credit_log(instinct_id, timestamp DESC);
+    `);
+
+    // EVERY EXPOSURE, JUDGED OR NOT (round 14 follow-up to #14).
+    //
+    // A credit row exists only where something was DECIDED. Since round 13 #24 and
+    // round 14 #14 stopped the system inferring application from the wording of a
+    // resolution, most exposures are decided by nobody — and the absence of a
+    // credit row cannot tell "shown and never judged" from "never shown". So
+    // "no misfires found" and "nobody looked" read identically, which is the
+    // defect class those two findings were about.
+    //
+    // One row per (instinct, session, run): the exposure unit the credit ledger
+    // already uses. `judged_at` NULL is the recorded absence — the thing a report
+    // can count and name. Deliberately NOT a nullable outcome on
+    // instinct_credit_log: `ledger.ts` reads that table as evidence
+    // (`credits.filter((c) => !c.success)`), so an unjudged row there would be
+    // counted as a FAILURE — a recorded absence turning into negative evidence,
+    // which is the very thing being fixed.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS instinct_exposure_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instinct_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        task_run_id TEXT NOT NULL DEFAULT '',
+        -- When the guidance reached the prompt. EARLIEST wins, exactly as the
+        -- in-memory exposure does: a mid-run re-retrieval is the same exposure.
+        shown_at INTEGER NOT NULL,
+        -- NULL = nothing ever judged this exposure. That is the measurement.
+        judged_at INTEGER,
+        judged_as TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_exposure_unique
+        ON instinct_exposure_log(instinct_id, session_id, task_run_id);
+      CREATE INDEX IF NOT EXISTS idx_exposure_shown ON instinct_exposure_log(shown_at DESC);
     `);
 
     // Phase 6: Create weekly counters table
@@ -2531,6 +2575,117 @@ export class LearningStorage {
       entry.exposedAt ?? null,
       entry.applied === false ? 0 : 1,
     );
+  }
+
+  /**
+   * "This guidance reached a prompt" — recorded whether or not anyone ever judges
+   * it (round 14 follow-up to #14).
+   *
+   * One row per (instinct, session, run). Repeats of the same exposure keep the
+   * EARLIEST `shown_at`, because that is what "when it was shown" means everywhere
+   * else in this system, and they never reset a judgement already recorded.
+   */
+  recordInstinctExposure(entry: {
+    instinctId: string;
+    sessionId: string;
+    taskRunId?: string;
+    shownAt: number;
+  }): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO instinct_exposure_log (instinct_id, session_id, task_run_id, shown_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(instinct_id, session_id, task_run_id)
+        DO UPDATE SET shown_at = MIN(shown_at, excluded.shown_at)
+    `).run(entry.instinctId, entry.sessionId, entry.taskRunId?.trim() ?? "", entry.shownAt);
+  }
+
+  /**
+   * Something decided what this exposure meant. Only the FIRST judgement counts —
+   * a run's outcome is decided once, and a second writer must not overwrite what
+   * the first recorded.
+   *
+   * Returns whether a row moved, so a caller never mistakes "no such exposure" for
+   * "judged". An exposure nobody recorded is not invented here: the producer of
+   * the exposure is {@link recordInstinctExposure}, and a judgement with no
+   * exposure behind it means the guidance reached the prompt through a path that
+   * does not report exposures — which must read as unmeasured, not as judged.
+   */
+  markInstinctExposureJudged(entry: {
+    instinctId: string;
+    sessionId: string;
+    taskRunId?: string;
+    judgedAs: "credited" | "not-applied";
+    judgedAt?: number;
+  }): boolean {
+    this.ensureConnection();
+    const info = this.db!.prepare(`
+      UPDATE instinct_exposure_log SET judged_at = ?, judged_as = ?
+      WHERE instinct_id = ? AND session_id = ? AND task_run_id = ? AND judged_at IS NULL
+    `).run(
+      entry.judgedAt ?? Date.now(),
+      entry.judgedAs,
+      entry.instinctId,
+      entry.sessionId,
+      entry.taskRunId?.trim() ?? "",
+    );
+    return info.changes > 0;
+  }
+
+  /**
+   * How many exposures were recorded in a window, and how many of them anything
+   * judged — per instinct. The denominator of "are we measuring our own guidance".
+   */
+  getExposureCoverage(options?: { since?: number; until?: number; instinctId?: string }): Array<{
+    instinctId: string;
+    shown: number;
+    judged: number;
+    firstShownAt: number;
+    lastShownAt: number;
+  }> {
+    this.ensureConnection();
+    let sql = `
+      SELECT instinct_id,
+             COUNT(*) AS shown,
+             SUM(CASE WHEN judged_at IS NULL THEN 0 ELSE 1 END) AS judged,
+             MIN(shown_at) AS first_shown_at,
+             MAX(shown_at) AS last_shown_at
+      FROM instinct_exposure_log WHERE 1=1`;
+    const params: (string | number)[] = [];
+    if (options?.since !== undefined) {
+      sql += " AND shown_at >= ?";
+      params.push(options.since);
+    }
+    if (options?.until !== undefined) {
+      sql += " AND shown_at <= ?";
+      params.push(options.until);
+    }
+    if (options?.instinctId) {
+      sql += " AND instinct_id = ?";
+      params.push(options.instinctId);
+    }
+    sql += " GROUP BY instinct_id ORDER BY (COUNT(*) - SUM(CASE WHEN judged_at IS NULL THEN 0 ELSE 1 END)) DESC";
+    const rows = this.db!.prepare(sql).all(...params) as Array<{
+      instinct_id: string;
+      shown: number;
+      judged: number;
+      first_shown_at: number;
+      last_shown_at: number;
+    }>;
+    return rows.map((r) => ({
+      instinctId: r.instinct_id,
+      shown: r.shown,
+      judged: r.judged ?? 0,
+      firstShownAt: r.first_shown_at,
+      lastShownAt: r.last_shown_at,
+    }));
+  }
+
+  /** Drop exposure rows older than a cutoff; returns how many went. */
+  pruneInstinctExposures(olderThanMs: number): number {
+    this.ensureConnection();
+    const info = this.db!.prepare("DELETE FROM instinct_exposure_log WHERE shown_at < ?").run(olderThanMs);
+    return info.changes;
   }
 
   /** The runs one instinct influenced, newest first. */

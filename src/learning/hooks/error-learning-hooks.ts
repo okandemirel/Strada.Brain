@@ -623,7 +623,14 @@ export class ErrorLearningHooks {
   getStats(): {
     activeErrors: number;
     totalTracked: number;
-    /** r13 #24: exposures left unjudged because no application was reported. */
+    /**
+     * r13 #24: exposures left unjudged because no application was reported —
+     * SINCE THIS PROCESS STARTED, and only those this hook saw. It is a live
+     * counter, not the measurement: a restart forgets it and a second producer of
+     * exposures is not in it. The durable answer is `strada learning coverage`
+     * (`exposureCoverage` over `instinct_exposure_log`), which counts recorded
+     * exposures per period and reports NOT MEASURED when none were recorded.
+     */
     unjudgedExposures: number;
   } {
     return {
