@@ -1593,3 +1593,60 @@ describe("a restore that must not destroy live data (round 13)", () => {
     });
   });
 });
+
+/**
+ * Codex round 13 #18, the opener side, completed: EVERY store joins the
+ * exclusion, not only the one that remembered to ask.
+ *
+ * `LearningStorage` called `assertNoMaintenanceExclusion` itself, which left the
+ * other ~20 stores free to open a database mid-swap — and an opener that arrives
+ * between a destination's check and its rename writes to an inode the restore is
+ * about to delete, so the restore reports success while the installation is not
+ * using restored state. Every store in this system configures its pragmas
+ * through one helper, so that is where the question is asked.
+ */
+describe("every store asks before opening (round 13 #18)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    delete process.env["STRADA_HOME"];
+  });
+
+  function homeWithLock(holderPid: number): string {
+    const home = mkdtempSync(path.join(tmpdir(), "strada-exclusion-home-"));
+    dirs.push(home);
+    writeFileSync(
+      path.join(home, "maintenance.lock"),
+      `${JSON.stringify({ pid: holderPid, purpose: "restore", startedAtIso: new Date().toISOString() })}\n`,
+    );
+    process.env["STRADA_HOME"] = home;
+    return home;
+  }
+
+  it("refuses to configure a database while a LIVE maintenance holder is swapping", async () => {
+    homeWithLock(process.pid);
+    const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
+    const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-db-"));
+    dirs.push(dbDir);
+    const db = new Database(path.join(dbDir, "memory.db"));
+    try {
+      expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("a lock left by a DEAD holder never keeps the daemon out of its own store (guard)", async () => {
+    homeWithLock(0x7ffffffe);
+    const { configureSqlitePragmas } = await import("../memory/unified/sqlite-pragmas.js");
+    const Database = (await import("better-sqlite3")).default;
+    const dbDir = mkdtempSync(path.join(tmpdir(), "strada-exclusion-db2-"));
+    dirs.push(dbDir);
+    const db = new Database(path.join(dbDir, "memory.db"));
+    try {
+      expect(() => configureSqlitePragmas(db, "memory")).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+});

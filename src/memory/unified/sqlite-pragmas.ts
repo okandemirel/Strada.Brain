@@ -8,6 +8,8 @@
  */
 
 import type Database from "better-sqlite3";
+import { assertNoMaintenanceExclusion } from "../../core/database-backup.js";
+import { resolveStradaHome } from "../../common/runtime-paths.js";
 import { getLogger } from "../../utils/logger.js";
 
 function getLoggerSafe() {
@@ -37,6 +39,16 @@ export function configureSqlitePragmas(
   db: Database.Database,
   profile: SqliteProfile,
 ): void {
+  // THE EXCLUSION IS A PROTOCOL, AND THIS IS WHERE EVERY STORE JOINS IT
+  // (Codex round 13 #18). A restore refuses while a database still has users,
+  // but an opener that arrives mid-swap writes to an inode about to be renamed
+  // away and deleted — the restore then reports success while the installation
+  // is not using restored state. `LearningStorage` asked on its own; every
+  // other store in this system configures its pragmas here, so asking here
+  // means a store added tomorrow cannot forget. Only a LIVE holder blocks: a
+  // lock left by a dead process is the restore's to refuse, never a reason to
+  // keep the daemon out of its own databases.
+  assertNoMaintenanceExclusion(resolveStradaHome(), `open ${db.name}`);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma(`cache_size = ${CACHE_SIZES[profile]}`);
