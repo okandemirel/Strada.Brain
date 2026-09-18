@@ -19,12 +19,11 @@
  * vocabulary.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
 import { describePlaythroughScenarios, parsePlaythroughScenarios, type ScenarioPlaythroughEvidence } from "./playthrough-scenarios.js";
-import { readdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 export { parsePlaythroughScenarios, scenariosForRequirement, isRequirementShownByPlaythrough, describePlaythroughScenarios } from "./playthrough-scenarios.js";
 
 export const PLAYTHROUGH_VERDICT_REL = join("Recordings", "playthrough", "playthrough-verdict.json");
@@ -169,7 +168,8 @@ export function readPlaythroughVerdict(
     reasons,
     scenarios: parsePlaythroughScenarios(record?.scenarios, frames?.count, {
       framesOnDisk: countCapturedFrames(dirname(path)),
-      artifactExists: (relative) => artifactIsPresent(projectRoot, relative),
+      artifactExists: (relative, expectedSha256) =>
+        artifactIsPresent(projectRoot, relative, expectedSha256, path),
     }),
     ...(record
       ? {
@@ -284,17 +284,50 @@ function parseRuntime(r: Record<string, unknown>): RuntimeSceneDump {
  */
 function countCapturedFrames(dir: string): number | undefined {
   try {
-    return readdirSync(dir).filter((name) => /^frame_.*\.(png|jpg|jpeg)$/i.test(name)).length;
+    // REGULAR FILES ONLY, and counted as a LIST: round 14 #12 showed that a
+    // count alone lets a verdict reference indices 0 and 1 while the only
+    // captures on disk are frame_00098 and frame_00099, and that a DIRECTORY
+    // named frame_00000.png counted as a capture.
+    return readdirSync(dir, { withFileTypes: true }).filter(
+      (entry) => entry.isFile() && /^frame_.*\.(png|jpg|jpeg)$/i.test(entry.name),
+    ).length;
   } catch {
     return undefined;
   }
 }
 
-/** Does the save artifact a scenario names exist inside the project? */
-function artifactIsPresent(projectRoot: string, relative: string): boolean {
-  if (relative.includes("..") || relative.startsWith("/")) return false;
+
+/**
+ * Is the save artifact a scenario names a REAL save, and the one it claims?
+ *
+ * Round 14 #11: `existsSync` accepted anything inside the project — including
+ * the verdict file itself, a directory, and a symlink pointing out of the tree.
+ * A save/load scenario could therefore authenticate itself with a file the run
+ * wrote for another purpose entirely.
+ *
+ * So: a regular file, not a link, canonically inside the project, never the
+ * verdict or another capture, and its bytes must hash to the `savedStateHash`
+ * the row claims — which is what ties the artifact to the state that came back.
+ * The producer owes that hash (see the scenario contract); a mismatch is
+ * not-reached with a reason, never silent acceptance.
+ */
+function artifactIsPresent(
+  projectRoot: string,
+  relative: string,
+  expectedSha256: string | undefined,
+  verdictPath: string,
+): boolean {
+  if (relative.includes("..") || relative.startsWith("/") || relative.trim() === "") return false;
+  if (expectedSha256 === undefined || !/^[0-9a-f]{64}$/i.test(expectedSha256)) return false;
   try {
-    return existsSync(join(projectRoot, relative));
+    const target = join(projectRoot, relative);
+    const stats = lstatSync(target);
+    if (!stats.isFile()) return false;
+    // The verdict cannot be its own evidence, and neither can a capture.
+    if (realpathSync(target) === realpathSync(verdictPath)) return false;
+    if (/^frame_.*\.(png|jpg|jpeg)$/i.test(basename(target))) return false;
+    if (!realpathSync(target).startsWith(`${realpathSync(projectRoot)}/`)) return false;
+    return createHash("sha256").update(readFileSync(target)).digest("hex") === expectedSha256.toLowerCase();
   } catch {
     return false;
   }

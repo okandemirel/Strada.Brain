@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync , symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -36,11 +36,19 @@ function writeFrames(count: number): void {
   }
 }
 
-/** The save the run wrote and read back, named by the scenario row. */
+/**
+ * The save the run wrote and read back, named by the scenario row.
+ *
+ * Round 14 #11: the row's `savedStateHash` is the sha256 of THESE BYTES, which
+ * is what stops a scenario authenticating itself with some other file the run
+ * happened to write (the verdict included).
+ */
 const SAVE_ARTIFACT = join("Recordings", "playthrough", "save-slot-1.json");
+const SAVE_BYTES = '{"level":3,"coins":12}';
+const SAVE_SHA256 = createHash("sha256").update(SAVE_BYTES).digest("hex");
 function writeSaveArtifact(): void {
   mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
-  writeFileSync(join(root, SAVE_ARTIFACT), "{}");
+  writeFileSync(join(root, SAVE_ARTIFACT), SAVE_BYTES);
 }
 
 describe("scenario verdict integration", () => {
@@ -436,7 +444,7 @@ describe("the reader keeps absence absent", () => {
       { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
       { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
         saveCompleted: true, loadCompleted: true, artifact: SAVE_ARTIFACT,
-        saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+        saveId: "x", loadedSaveId: "x", savedStateHash: SAVE_SHA256, loadedStateHash: SAVE_SHA256 },
     ];
     // Nothing but the verdict file: no frames, no save.
     write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: selfAsserted } });
@@ -460,7 +468,7 @@ describe("the reader keeps absence absent", () => {
   it("a save/load that names no artifact is not measured on the producer's word alone", () => {
     write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
       { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
-        saveCompleted: true, loadCompleted: true, saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+        saveCompleted: true, loadCompleted: true, saveId: "x", loadedSaveId: "x", savedStateHash: SAVE_SHA256, loadedStateHash: SAVE_SHA256 },
     ] } });
     writeFrames(2);
     const row = readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load");
@@ -477,9 +485,74 @@ describe("the reader keeps absence absent", () => {
     write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
       { id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
         saveCompleted: true, loadCompleted: true, artifact: `../${outside.split("/").pop()}/save.json`,
-        saveId: "x", loadedSaveId: "x", savedStateHash: "x", loadedStateHash: "x" },
+        saveId: "x", loadedSaveId: "x", savedStateHash: SAVE_SHA256, loadedStateHash: SAVE_SHA256 },
     ] } });
     writeFrames(2);
     expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load")).toMatchObject({ status: "not-reached" });
+  });
+
+  /**
+   * Codex round 14 #11 and #12. My round-13 fix asked the right question and
+   * accepted the wrong answers: ANY existing path inside the project counted as
+   * a save artifact — the verdict file itself, a directory, a symlink out of the
+   * tree — and a frame COUNT was treated as proof that the referenced indices
+   * existed.
+   */
+  it("#11 the verdict cannot be its own save artifact, and neither can a directory or a link", () => {
+    const row = (artifact: string) => ({
+      id: "save-load", startAccepted: true, reached: true, actions: 2, frames: { before: 0, after: 1 },
+      saveCompleted: true, loadCompleted: true, artifact,
+      saveId: "x", loadedSaveId: "x", savedStateHash: SAVE_SHA256, loadedStateHash: SAVE_SHA256,
+    });
+    const outside = join(root, "..", `outside-artifact-${Date.now()}`);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "save.json"), SAVE_BYTES);
+    mkdirSync(join(root, "Recordings", "playthrough", "a-directory"), { recursive: true });
+    symlinkSync(join(outside, "save.json"), join(root, "Recordings", "playthrough", "linked.json"));
+
+    for (const artifact of [
+      join("Recordings", "playthrough", "playthrough-verdict.json"), // itself
+      join("Recordings", "playthrough", "a-directory"),
+      join("Recordings", "playthrough", "linked.json"),
+      join("Recordings", "playthrough", "frame_00000.png"), // a capture, not a save
+    ]) {
+      write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [row(artifact)] } });
+      writeFrames(2);
+      const result = readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load");
+      expect(result, artifact).toMatchObject({ status: "not-reached" });
+    }
+
+    // A real save file whose bytes hash to the state the row claims IS accepted.
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [row(SAVE_ARTIFACT)] } });
+    writeFrames(2);
+    writeSaveArtifact();
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load")).toMatchObject({ status: "reached" });
+
+    // …and the same file with the WRONG hash is not: the artifact is bound to
+    // the state that came back, not merely present.
+    writeFileSync(join(root, SAVE_ARTIFACT), "{}");
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "save-load")).toMatchObject({ status: "not-reached" });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("#12 a DIRECTORY named like a capture is not a capture (and an index is a position)", () => {
+    // An index is a POSITION in this verdict's capture order, not a file number,
+    // so two captures numbered 98 and 99 are positions 0 and 1 — that reading is
+    // the documented contract and stays.
+    write({ ...ok, frames: { count: 2, flat: 0, maxMotionShare: 0.3 }, record: { ...ok.record, scenarios: [
+      { id: "win", startAccepted: true, reached: true, reachedOutcome: true, outcome: "Won", actions: 2, frames: { before: 0, after: 1 } },
+    ] } });
+    mkdirSync(join(root, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(root, "Recordings", "playthrough", "frame_00098.png"), "png");
+    writeFileSync(join(root, "Recordings", "playthrough", "frame_00099.png"), "png");
+    const sparse = readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "win");
+    expect(sparse).toMatchObject({ status: "reached" });
+
+    // A DIRECTORY named like a capture is not a capture.
+    rmSync(join(root, "Recordings", "playthrough", "frame_00098.png"));
+    rmSync(join(root, "Recordings", "playthrough", "frame_00099.png"));
+    mkdirSync(join(root, "Recordings", "playthrough", "frame_00000.png"), { recursive: true });
+    mkdirSync(join(root, "Recordings", "playthrough", "frame_00001.png"), { recursive: true });
+    expect(readPlaythroughVerdict(root, 0).scenarios?.find((r) => r.id === "win")).toMatchObject({ status: "not-reached" });
   });
 });
