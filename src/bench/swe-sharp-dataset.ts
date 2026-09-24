@@ -14,6 +14,9 @@
  * tested rather than inlined into the fetch script.
  */
 
+import path from "node:path";
+import { z } from "zod";
+
 /**
  * Parses a Python repr list of strings.
  *
@@ -107,6 +110,97 @@ export interface SweSharpTask {
   readonly testPatch: string;
   readonly failToPass: readonly string[];
   readonly passToPass: readonly string[];
+}
+
+// ─── Validation (CMP-3) ────────────────────────────────────────────────────────
+//
+// A task row is external data: `--tasks <file>` and fetch-tasks.mjs take rows
+// from a remote dataset. Its fields reach `git` argv, a clone URL, directory
+// names and `fs.rmSync`, so every row is validated before any of that happens.
+
+/** The files a unified diff touches (both sides), `/dev/null` excluded. */
+export function patchPaths(patch: string): string[] {
+  const paths = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const both = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (both) {
+      paths.add(both[1]!);
+      paths.add(both[2]!);
+      continue;
+    }
+    const minus = /^--- a\/(.+)$/.exec(line);
+    if (minus) paths.add(minus[1]!);
+    const plus = /^\+\+\+ b\/(.+)$/.exec(line);
+    if (plus) paths.add(plus[1]!);
+  }
+  paths.delete("/dev/null");
+  return [...paths].sort();
+}
+
+/**
+ * A path that stays inside a checkout on every platform: relative (no root, no
+ * drive), no `..` segment under either separator, nothing inside `.git`, and
+ * no leading `:` that git would read as pathspec magic.
+ */
+export function isSafeRepoRelativePath(rel: string): boolean {
+  if (rel.length === 0 || rel.includes("\0") || rel.startsWith(":")) return false;
+  if (path.posix.isAbsolute(rel) || path.win32.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return false;
+  return !rel.split(/[\\/]+/).some((segment) => segment === ".." || segment.toLowerCase() === ".git");
+}
+
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+const isDotName = (s: string): boolean => s === "." || s === "..";
+
+const SweSharpTaskSchema = z.object({
+  // Becomes a directory name under the cache: a plain name, never a path.
+  instanceId: z.string().max(200).regex(SAFE_NAME).refine((s) => !isDotName(s), "must not be . or .."),
+  // owner/name on GitHub — the clone URL is built from it (repoCloneUrl).
+  repo: z
+    .string()
+    .max(200)
+    .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
+    .refine((s) => !s.split("/").some(isDotName), "owner and name must not be . or .."),
+  // A commit id, and nothing git could read as an option.
+  baseCommit: z.string().regex(/^[0-9a-fA-F]{7,40}$/, "must be a 7-40 character hex commit id"),
+  problemStatement: z.string(),
+  goldPatch: z.string(),
+  testPatch: z.string().superRefine((patch, ctx) => {
+    const unsafe = patchPaths(patch).filter((rel) => !isSafeRepoRelativePath(rel));
+    if (unsafe.length > 0) {
+      ctx.addIssue({ code: "custom", message: `touches paths outside the checkout: ${unsafe.slice(0, 3).join(", ")}` });
+    }
+  }),
+  failToPass: z.array(z.string()),
+  passToPass: z.array(z.string()),
+});
+
+/** Validates one task row. Throws naming the row and the field that is wrong. */
+export function parseSweSharpTask(row: unknown, label = "task"): SweSharpTask {
+  const parsed = SweSharpTaskSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  const id = typeof (row as { instanceId?: unknown } | null)?.instanceId === "string"
+    ? ` ${truncate(String((row as { instanceId: string }).instanceId))}`
+    : "";
+  const issues = parsed.error.issues
+    .slice(0, 5)
+    .map((issue) => `${issue.path.join(".") || "(row)"}: ${issue.message}`)
+    .join("; ");
+  throw new Error(`Invalid ${label}${id}: ${issues}`);
+}
+
+/** Validates a whole task list; the first invalid row stops it. */
+export function parseSweSharpTasks(rows: unknown): SweSharpTask[] {
+  if (!Array.isArray(rows)) throw new Error("tasks must be an array");
+  return rows.map((row, index) => parseSweSharpTask(row, `task #${index}`));
+}
+
+/** The https clone URL for a validated `owner/name`. */
+export function repoCloneUrl(repo: string): string {
+  const url = new URL(`https://github.com/${repo}.git`);
+  if (url.protocol !== "https:" || url.host !== "github.com" || url.pathname !== `/${repo}.git`) {
+    throw new Error(`Refusing clone URL for repo ${truncate(repo)}`);
+  }
+  return url.href;
 }
 
 /**

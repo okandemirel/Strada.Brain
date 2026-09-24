@@ -9,7 +9,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,6 +25,7 @@ import {
   buildTestCommand,
   captureCandidatePatch,
   checkBaseline,
+  checkoutFileAdapters,
   chooseFramework,
   chooseSolution,
   chooseTestProjects,
@@ -38,6 +39,7 @@ import {
   relaxGlobalJson,
   restoreTestPaths,
   renderRunReport,
+  taskRunDir,
   testPatchPaths,
   type AttemptInput,
   type CandidateResult,
@@ -825,6 +827,57 @@ describe("restoreTestPaths — the base state, stated positively", () => {
     expect(readFileSync(path.join(dir, "test", "Existing.cs"), "utf8")).toBe("old\n");
   });
 
+  it("never reads, restores or deletes a path outside the checkout (CMP-3)", () => {
+    // A file next to the checkout, which a `../` path in the test patch names.
+    const outside = path.join(dir, "..", `${path.basename(dir)}-victim.txt`);
+    writeFileSync(outside, "keep me\n");
+    const touched: string[] = [];
+    try {
+      const out = restoreTestPaths({
+        runGit: (args) => {
+          touched.push(args.join(" "));
+          return runGit(args);
+        },
+        baseRev,
+        testPatch: `--- /dev/null\n+++ b/../${path.basename(outside)}\n@@ -0,0 +1 @@\n+x\n`,
+        readFile: (rel) => {
+          touched.push(`read ${rel}`);
+          return "present";
+        },
+        deleteFile: (rel) => {
+          touched.push(`delete ${rel}`);
+          rmSync(path.join(dir, rel), { force: true });
+        },
+      });
+      expect(out.failed).toEqual([`../${path.basename(outside)}`]);
+      expect(touched).toEqual([]);
+      expect(readFileSync(outside, "utf8")).toBe("keep me\n");
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  });
+
+  it("the checkout's file adapters refuse a path that leads out, even through a symlink (CMP-3)", () => {
+    const victimDir = mkdtempSync(path.join(tmpdir(), "swe-sharp-victim-"));
+    try {
+      writeFileSync(path.join(victimDir, "authorized_keys"), "keys\n");
+      const { readFile, deleteFile } = checkoutFileAdapters(dir);
+      expect(() => deleteFile("../x")).toThrow(/outside the checkout/);
+      // A directory symlink a patch could have created, pointing out of the checkout.
+      symlinkSync(victimDir, path.join(dir, "test", "link"), "dir");
+      expect(() => deleteFile("test/link/authorized_keys")).toThrow(/outside the checkout/);
+      expect(() => readFile("test/link/authorized_keys")).toThrow(/outside the checkout/);
+      expect(readFileSync(path.join(victimDir, "authorized_keys"), "utf8")).toBe("keys\n");
+      // Inside, it behaves as the adapter always did.
+      expect(readFile("test/Existing.cs")).toBe("old\n");
+      expect(readFile("test/Missing.cs")).toBeNull();
+      deleteFile("test/Existing.cs");
+      expect(existsSync(path.join(dir, "test", "Existing.cs"))).toBe(false);
+    } finally {
+      rmSync(victimDir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves the test patch applicable afterwards, which is the whole point", () => {
     writeFileSync(path.join(dir, "test", "Expectation.verified.txt"), "cheat\n");
     writeFileSync(path.join(dir, "test", "Existing.cs"), "tampered\n");
@@ -896,5 +949,89 @@ describe("assertCacheDirIsSafe", () => {
     expect(() => assertCacheDirIsSafe("/tmp/strada-swe-sharp", "/repo", "/home/u")).not.toThrow();
     // A sibling whose name merely starts with the repo path is not inside it.
     expect(() => assertCacheDirIsSafe("/repo-cache", "/repo", "/home/u")).not.toThrow();
+  });
+});
+
+describe("taskRunDir (CMP-3)", () => {
+  it("keeps the per-task directory — which is removed recursively — under <cache>/runs", () => {
+    const cache = path.resolve(tmpdir(), "strada-swe-sharp");
+    expect(taskRunDir(cache, "acme__thing-1", 42)).toBe(path.join(cache, "runs", "acme__thing-1-42"));
+    for (const id of ["../../home/u", "a/b", "a\\b", ""]) {
+      expect(() => taskRunDir(cache, id, 42), id).toThrow(/outside/);
+    }
+  });
+});
+
+// The script itself, with `git` replaced by a recorder: what reaches git argv.
+describe.skipIf(process.platform === "win32")("run-tasks.mjs — task rows reach git only validated (CMP-3)", () => {
+  const SCRIPT = path.resolve("scripts/bench/swe-sharp/run-tasks.mjs");
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  let work: string;
+  let gitLog: string;
+
+  beforeEach(() => {
+    work = mkdtempSync(path.join(tmpdir(), "swe-sharp-script-"));
+    gitLog = path.join(work, "git.log");
+    const fakeGit = path.join(work, "fake-git");
+    // Records every invocation; `init` succeeds, anything else fails, so a run
+    // stops at the first fetch without touching a network.
+    writeFileSync(
+      fakeGit,
+      `#!/usr/bin/env node\nconst fs = require("node:fs");\n` +
+        `fs.appendFileSync(${JSON.stringify(gitLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n` +
+        `process.exit(process.argv.includes("init") ? 0 : 1);\n`,
+    );
+    chmodSync(fakeGit, 0o755);
+  });
+
+  afterEach(() => {
+    rmSync(work, { recursive: true, force: true });
+  });
+
+  const runScript = (task: Record<string, unknown>) => {
+    const tasksFile = path.join(work, "tasks.json");
+    writeFileSync(tasksFile, JSON.stringify({ tasks: [task] }));
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, "--tasks", tasksFile, "--candidate", "gold", "--cache-dir", path.join(work, "cache"), "--json"],
+      {
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { ...process.env, STRADA_BENCH_GIT: path.join(work, "fake-git"), STRADA_BENCH_DOTNET: path.join(work, "no-dotnet") },
+      },
+    );
+  };
+  const task = (overrides: Record<string, unknown> = {}) => ({
+    instanceId: "acme__thing-1",
+    repo: "acme/thing",
+    baseCommit: SHA,
+    problemStatement: "p",
+    goldPatch: "",
+    testPatch: "",
+    failToPass: ["Ns.T.Fix"],
+    passToPass: [],
+    ...overrides,
+  });
+  const gitCalls = (): string[][] =>
+    existsSync(gitLog)
+      ? readFileSync(gitLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
+      : [];
+
+  it("an option-shaped baseCommit is refused before git ever runs", () => {
+    const res = runScript(task({ baseCommit: `--upload-pack=touch ${path.join(work, "pwned")}; git-upload-pack` }));
+    expect(res.status).toBe(2);
+    expect(res.stderr).toMatch(/baseCommit/);
+    expect(gitCalls()).toEqual([]);
+    expect(existsSync(path.join(work, "pwned"))).toBe(false);
+  });
+
+  it("a valid row fetches over https with --end-of-options before the positionals", () => {
+    const res = runScript(task());
+    expect(res.status).toBe(3); // the (fake) fetch failed: not-run, not a score
+    const fetch = gitCalls().find((args) => args.includes("fetch"));
+    expect(fetch).toBeDefined();
+    const eoo = fetch!.indexOf("--end-of-options");
+    expect(eoo).toBeGreaterThan(-1);
+    expect(fetch!.slice(eoo + 1)).toEqual(["https://github.com/acme/thing.git", SHA]);
   });
 });

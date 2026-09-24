@@ -6,8 +6,17 @@
  * logic buried in a script that only runs when .NET is installed.
  */
 
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { parsePythonStringList, decodeTestList, selectSubset } from "./swe-sharp-dataset.js";
+import {
+  parsePythonStringList,
+  decodeTestList,
+  isSafeRepoRelativePath,
+  parseSweSharpTask,
+  parseSweSharpTasks,
+  repoCloneUrl,
+  selectSubset,
+} from "./swe-sharp-dataset.js";
 import {
   evaluateResolution,
   summarize,
@@ -222,5 +231,70 @@ describe("summarize", () => {
 
   it("reports zero rather than dividing by zero on an empty run", () => {
     expect(summarize([]).resolvedRate).toBe(0);
+  });
+});
+
+describe("parseSweSharpTask — a task row is validated before it reaches git or the disk (CMP-3)", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const TEST_PATCH = [
+    "diff --git a/test/T.cs b/test/T.cs",
+    "--- a/test/T.cs",
+    "+++ b/test/T.cs",
+    "@@ -1 +1 @@",
+    "-a",
+    "+b",
+  ].join("\n");
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    instanceId: "acme__thing-1",
+    repo: "acme/thing",
+    baseCommit: SHA,
+    problemStatement: "p",
+    goldPatch: "",
+    testPatch: TEST_PATCH,
+    failToPass: ["Ns.T.Fix"],
+    passToPass: [],
+    ...overrides,
+  });
+
+  it("accepts a well-formed row, and every pinned task", () => {
+    expect(parseSweSharpTask(row()).baseCommit).toBe(SHA);
+    expect(parseSweSharpTask(row({ baseCommit: "0123abc" })).baseCommit).toBe("0123abc");
+    const pinned = JSON.parse(readFileSync("benchmarks/swe-sharp/tasks.json", "utf8")) as { tasks: unknown[] };
+    expect(parseSweSharpTasks(pinned.tasks)).toHaveLength(pinned.tasks.length);
+  });
+
+  it("refuses a baseCommit git could read as an option", () => {
+    expect(() => parseSweSharpTask(row({ baseCommit: "--upload-pack=touch x; git-upload-pack" }))).toThrow(
+      /baseCommit/,
+    );
+    expect(() => parseSweSharpTask(row({ baseCommit: "HEAD" }))).toThrow(/baseCommit/);
+    expect(() => parseSweSharpTask(row({ baseCommit: "0123ab" }))).toThrow(/baseCommit/);
+  });
+
+  it("refuses a repo that is not a plain owner/name, and an instanceId that is a path", () => {
+    for (const repo of ["acme/../x", "acme/thing/extra", "user@evil.example/x", "acme", "../acme"]) {
+      expect(() => parseSweSharpTask(row({ repo })), repo).toThrow(/repo/);
+    }
+    for (const instanceId of ["../../etc", "a/b", "..", "a\\b"]) {
+      expect(() => parseSweSharpTask(row({ instanceId })), instanceId).toThrow(/instanceId/);
+    }
+  });
+
+  it("refuses a testPatch that touches a path outside the checkout", () => {
+    const escaping = (p: string) => `--- /dev/null\n+++ b/${p}\n@@ -0,0 +1 @@\n+x\n`;
+    for (const p of ["../../home/u/.ssh/authorized_keys", "test/../../x", "/etc/passwd", ".git/config", "C:/x"]) {
+      expect(() => parseSweSharpTask(row({ testPatch: escaping(p) })), p).toThrow(/testPatch/);
+    }
+    expect(isSafeRepoRelativePath("test/T.cs")).toBe(true);
+    expect(isSafeRepoRelativePath("test\\..\\..\\x")).toBe(false);
+  });
+
+  it("names the row that is wrong", () => {
+    expect(() => parseSweSharpTasks([row(), row({ baseCommit: "-x" })])).toThrow(/task #1 acme__thing-1/);
+    expect(() => parseSweSharpTasks({})).toThrow(/array/);
+  });
+
+  it("clones over https from github.com only", () => {
+    expect(repoCloneUrl("acme/thing")).toBe("https://github.com/acme/thing.git");
   });
 });

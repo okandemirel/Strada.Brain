@@ -25,7 +25,9 @@
  * `swe-sharp-resolution.ts` do that, and this module feeds them.
  */
 
+import fs from "node:fs";
 import path from "node:path";
+import { isSafeRepoRelativePath, patchPaths } from "./swe-sharp-dataset.js";
 import {
   evaluateResolution,
   summarize,
@@ -968,21 +970,7 @@ export function captureCandidatePatch(input: {
  * "fix" into the assertions. The tests are not the candidate's to write.
  */
 export function testPatchPaths(patch: string): string[] {
-  const paths = new Set<string>();
-  for (const line of patch.split("\n")) {
-    const both = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-    if (both) {
-      paths.add(both[1]!);
-      paths.add(both[2]!);
-      continue;
-    }
-    const minus = /^--- a\/(.+)$/.exec(line);
-    if (minus) paths.add(minus[1]!);
-    const plus = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (plus) paths.add(plus[1]!);
-  }
-  paths.delete("/dev/null");
-  return [...paths].sort();
+  return patchPaths(patch);
 }
 
 /**
@@ -1014,6 +1002,12 @@ export function restoreTestPaths(input: {
   const restored: string[] = [];
   const failed: string[] = [];
   for (const rel of testPatchPaths(input.testPatch)) {
+    // A path that leaves the checkout is never read, restored or deleted
+    // (CMP-3). Reporting it as failed makes the task not-run, not scored.
+    if (!isSafeRepoRelativePath(rel)) {
+      failed.push(rel);
+      continue;
+    }
     const atBase = input.runGit(["cat-file", "-e", `${input.baseRev}:${rel}`]).ok;
     if (atBase) {
       const base = input.runGit(["show", `${input.baseRev}:${rel}`]);
@@ -1034,6 +1028,65 @@ export function restoreTestPaths(input: {
     }
   }
   return { restored, failed };
+}
+
+/** True when `candidate` is `root` itself or lies below it. */
+function isWithin(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * `rel` under `root`, or null when it would land anywhere else — by `..`, by an
+ * absolute path, or by a symlinked directory on the way (a patch can create
+ * one). Symlinks are judged by where they really lead.
+ */
+export function containedCheckoutPath(root: string, rel: string): string | null {
+  if (!isSafeRepoRelativePath(rel)) return null;
+  const realRoot = fs.realpathSync(root);
+  const abs = path.resolve(realRoot, rel);
+  if (!isWithin(realRoot, abs)) return null;
+  // The nearest ancestor that exists (at worst the root itself) must really be inside.
+  let parent = path.dirname(abs);
+  while (parent !== realRoot && !fs.existsSync(parent)) parent = path.dirname(parent);
+  return isWithin(realRoot, fs.realpathSync(parent)) ? abs : null;
+}
+
+/**
+ * The file-system half of `restoreTestPaths` for a real checkout. Every path
+ * is contained first: one that resolves outside the checkout is neither read
+ * nor deleted, whatever the task file says.
+ */
+export function checkoutFileAdapters(repoDir: string): {
+  readFile: (rel: string) => string | null;
+  deleteFile: (rel: string) => void;
+} {
+  const inside = (rel: string): string => {
+    const abs = containedCheckoutPath(repoDir, rel);
+    if (abs === null) throw new Error(`refusing a path outside the checkout: ${rel}`);
+    return abs;
+  };
+  return {
+    readFile: (rel) => {
+      const abs = inside(rel);
+      if (!fs.existsSync(abs)) return null;
+      // A final symlink is read only when it points back into the checkout.
+      if (!isWithin(fs.realpathSync(repoDir), fs.realpathSync(abs))) return "";
+      return fs.readFileSync(abs, "utf8");
+    },
+    // rmSync removes a symlink itself, never its target.
+    deleteFile: (rel) => fs.rmSync(inside(rel), { force: true }),
+  };
+}
+
+/** The per-task work directory under `<cacheDir>/runs`, refused if the id would leave it. */
+export function taskRunDir(cacheDir: string, instanceId: string, pid: number): string {
+  const runs = path.resolve(cacheDir, "runs");
+  const dir = path.resolve(runs, `${instanceId}-${pid}`);
+  if (!/^[A-Za-z0-9._-]+$/.test(instanceId) || path.dirname(dir) !== runs) {
+    throw new Error(`refusing a task work directory outside ${runs}: ${instanceId}`);
+  }
+  return dir;
 }
 
 export function isDiffLike(text: string): boolean {

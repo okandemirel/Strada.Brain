@@ -25,7 +25,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 // The FAIL_TO_PASS columns are Python repr strings, not JSON, and a decoder
 // that fails soft to [] makes every task vacuously resolved — that has to be
 // covered by tests, not by a script nobody runs without .NET installed.
-import { decodeTestList, selectSubset } from "../../../dist/bench/swe-sharp-dataset.js";
+import { decodeTestList, parseSweSharpTask, selectSubset } from "../../../dist/bench/swe-sharp-dataset.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,7 +108,10 @@ const excluded = all.length - scoreable.length;
 // Round-robin across repositories. Sorting by id and slicing is deterministic
 // too, but the first 50 ids of this dataset come from only 3 of its
 // repositories, so that subset would measure three codebases.
-const tasks = selectSubset(scoreable, COUNT);
+// Upstream rows are external data, and a pinned row's fields reach git argv, a
+// clone URL and the disk: a selected row that is not what it claims to be is
+// refused here, before it is pinned (CMP-3).
+const tasks = selectSubset(scoreable, COUNT).map((t) => parseSweSharpTask(t, "upstream row"));
 const payload = {
   dataset: DATASET,
   count: tasks.length,

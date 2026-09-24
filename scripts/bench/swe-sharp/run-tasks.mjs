@@ -79,6 +79,7 @@ async function loadBenchModules() {
     from: registered ? "src (tsx)" : "dist",
     runner: await load("swe-sharp-runner"),
     trx: await load("trx-report"),
+    dataset: await load("swe-sharp-dataset"),
   };
 }
 
@@ -210,7 +211,7 @@ const NETWORK_ERROR =
  * explicit sha is the whole history this benchmark needs; a full clone of efcore
  * or Avalonia is gigabytes for one commit.
  */
-function materialiseCheckout(task, cacheDir, repoDir) {
+function materialiseCheckout(task, cacheDir, repoDir, url) {
   const slug = task.repo.replace(/[^A-Za-z0-9._-]/g, "__");
   const bare = path.join(cacheDir, "repos", `${slug}.git`);
   if (!fs.existsSync(bare)) {
@@ -218,10 +219,11 @@ function materialiseCheckout(task, cacheDir, repoDir) {
     const init = run(GIT, ["init", "--bare", "--quiet", bare]);
     if (!init.ok) return { reason: "harness-error", detail: `git init --bare failed: ${tail(init.stderr, 3)}` };
   }
-  const has = git(bare, ["cat-file", "-e", `${task.baseCommit}^{commit}`]);
+  // The task row was validated (parseSweSharpTasks); `--end-of-options` keeps
+  // git from reading a positional as an option all the same.
+  const has = git(bare, ["cat-file", "-e", "--end-of-options", `${task.baseCommit}^{commit}`]);
   if (!has.ok) {
-    const url = `https://github.com/${task.repo}.git`;
-    const fetched = git(bare, ["fetch", "--quiet", "--depth", "1", url, task.baseCommit], {
+    const fetched = git(bare, ["fetch", "--quiet", "--depth", "1", "--end-of-options", url, task.baseCommit], {
       timeout: 600_000,
     });
     if (!fetched.ok) {
@@ -235,7 +237,7 @@ function materialiseCheckout(task, cacheDir, repoDir) {
   fs.mkdirSync(repoDir, { recursive: true });
   const init = run(GIT, ["init", "--quiet", repoDir]);
   if (!init.ok) return { reason: "harness-error", detail: `git init failed: ${tail(init.stderr, 3)}` };
-  const fetch = git(repoDir, ["fetch", "--quiet", "--depth", "1", bare, task.baseCommit], {
+  const fetch = git(repoDir, ["fetch", "--quiet", "--depth", "1", "--end-of-options", bare, task.baseCommit], {
     timeout: 600_000,
   });
   if (!fetch.ok) {
@@ -281,17 +283,13 @@ function currentRev(repoDir) {
  */
 function restoreTestFiles(repoDir, testPatch, baseRev, api) {
   if (!baseRev) return { restored: [], failed: [] };
+  // Contained adapters: a path that resolves outside the checkout is never
+  // read or deleted, whatever the task file says (CMP-3).
   return api.runner.restoreTestPaths({
     runGit: (gitArgs) => git(repoDir, gitArgs),
     baseRev,
     testPatch,
-    readFile: (rel) => {
-      const abs = path.join(repoDir, rel);
-      return fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
-    },
-    deleteFile: (rel) => {
-      fs.rmSync(path.join(repoDir, rel), { force: true });
-    },
+    ...api.runner.checkoutFileAdapters(repoDir),
   });
 }
 
@@ -488,7 +486,8 @@ function runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev }) {
 
 async function runTask(task, args, api) {
   const started = Date.now();
-  const taskDir = path.join(args.cacheDir, "runs", `${task.instanceId}-${process.pid}`);
+  // Contained: the directory is removed recursively when the task ends.
+  const taskDir = api.runner.taskRunDir(args.cacheDir, task.instanceId, process.pid);
   const repoDir = path.join(taskDir, "repo");
   const logDir = path.join(taskDir, "logs");
   const resultsDir = path.join(taskDir, "trx");
@@ -505,7 +504,7 @@ async function runTask(task, args, api) {
     api.runner.classifyAttempt({ ...base, durationMs: Date.now() - started, ...extra });
 
   try {
-    const cloneFailure = materialiseCheckout(task, args.cacheDir, repoDir);
+    const cloneFailure = materialiseCheckout(task, args.cacheDir, repoDir, api.dataset.repoCloneUrl(task.repo));
     if (cloneFailure) return finish({ notRun: cloneFailure });
 
     const deviations = relaxSdkPins(repoDir, api.runner.relaxGlobalJson);
@@ -755,15 +754,17 @@ async function main(argv) {
   const { EXIT } = api.runner;
 
   let pinned;
+  let tasks;
   try {
     pinned = JSON.parse(fs.readFileSync(args.tasks, "utf8"));
     if (!Array.isArray(pinned.tasks) || pinned.tasks.length === 0) throw new Error("no tasks in the file");
+    // Every row is validated before any field reaches git, a URL or the disk.
+    tasks = api.dataset.parseSweSharpTasks(pinned.tasks);
   } catch (err) {
     process.stderr.write(`cannot read task set ${args.tasks}: ${String(err.message ?? err)}\n`);
     return EXIT.USAGE;
   }
 
-  let tasks = pinned.tasks;
   if (args.only.length > 0) {
     const known = new Set(tasks.map((t) => t.instanceId));
     const missing = args.only.filter((id) => !known.has(id));
