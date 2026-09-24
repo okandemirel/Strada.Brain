@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
 import {
+  DEFAULT_STOP_TIMEOUT_MS,
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
   stopRuntimeProcesses,
 } from "./runtime-lifecycle.js";
+import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
 describe("runtime lifecycle", () => {
   afterEach(() => {
@@ -99,5 +101,34 @@ describe("runtime lifecycle", () => {
     expect(result.stopped).toEqual([runtime]);
     expect(result.failed).toEqual([]);
     expect(sentSignals).toContain("SIGTERM");
+  });
+
+  it("gives a runtime its whole graceful-shutdown budget before SIGKILL (COR-5)", async () => {
+    expect(DEFAULT_STOP_TIMEOUT_MS).toBeGreaterThan(SHUTDOWN_TIMEOUT_MS);
+
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // A shutdown that settles the background executor (10 s), commits leases
+    // and flushes stores: well inside the runtime's own budget.
+    const exitsAt = now + 30_000;
+    const sentSignals: Array<NodeJS.Signals | number | undefined> = [];
+    const runtime: RuntimeProcessInfo = { pid: 4242, cwd: "/repo/Strada.Brain", command: "node dist/index.js start" };
+    const result = await stopRuntimeProcesses([runtime], {
+      signalProcess: (_pid, signal) => {
+        sentSignals.push(signal);
+        if (signal === 0 && now >= exitsAt) {
+          const err = new Error("missing") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+        return true;
+      },
+      delayMs: async (ms) => {
+        now += ms;
+      },
+    });
+
+    expect(sentSignals).not.toContain("SIGKILL");
+    expect(result.stopped).toEqual([runtime]);
   });
 });

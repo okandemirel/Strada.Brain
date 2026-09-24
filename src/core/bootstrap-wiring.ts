@@ -40,6 +40,7 @@ import type { DelegationManager as DelegationManagerType } from "../agents/multi
 import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
 import { fireDevKnowledgeCompletionNote } from "../vault/dev-knowledge-writer.js";
 import type { DevKnowledgeNoteWriter } from "../vault/dev-knowledge-writer.js";
+import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
 export function wireMessageHandler(
   channel: IChannelAdapter,
@@ -294,8 +295,6 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
   };
 
   const run = async (): Promise<void> => {
-    const SHUTDOWN_TIMEOUT_MS = 60_000;
-
     const gracefulShutdown = async (): Promise<void> => {
       logger.info("Shutting down Strada Brain...");
 
@@ -517,7 +516,7 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       ]);
     } catch (err) {
       if (err instanceof Error && err.message === "Shutdown timeout exceeded") {
-        logger.error("Forced shutdown: graceful shutdown took longer than 60s; pending I/O may be interrupted");
+        logger.error(`Forced shutdown: graceful shutdown took longer than ${SHUTDOWN_TIMEOUT_MS / 1000}s; pending I/O may be interrupted`);
         process.exit(1);
       }
       throw err;

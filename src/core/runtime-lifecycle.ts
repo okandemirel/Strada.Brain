@@ -3,6 +3,7 @@ import { formatChannelSpec, isValidChannelSpec, parseChannelSpec } from "../chan
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
+import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
 export interface StopRuntimeProcessesOptions {
   force?: boolean;
@@ -18,7 +19,12 @@ export interface StopRuntimeProcessesResult {
   alreadyStopped: RuntimeProcessInfo[];
 }
 
-const DEFAULT_STOP_TIMEOUT_MS = 8_000;
+/**
+ * SIGKILL only after the runtime's own shutdown budget has run out, plus time
+ * to exit. The old 8 s killed a restart mid-shutdown — before the background
+ * executor's 10 s settle, lease commits and store flushes (COR-5).
+ */
+export const DEFAULT_STOP_TIMEOUT_MS = SHUTDOWN_TIMEOUT_MS + 5_000;
 const DEFAULT_POLL_MS = 200;
 
 export function getMatchingLocalRuntimeProcesses(

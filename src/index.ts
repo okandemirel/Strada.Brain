@@ -55,6 +55,7 @@ import {
   type RootLaunchOptions,
 } from "./core/launcher.js";
 import {
+  DEFAULT_STOP_TIMEOUT_MS,
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
@@ -850,6 +851,12 @@ async function runStatusCommand(): Promise<void> {
   }
 }
 
+/** A graceful stop can take a minute; say so, or people Ctrl-C it into a hard kill. */
+function announceGracefulStop(force: boolean): void {
+  if (force) return;
+  console.log(`Waiting up to ${Math.round(DEFAULT_STOP_TIMEOUT_MS / 1000)}s for a graceful shutdown (--force stops immediately)...`);
+}
+
 async function runKillCommand(force: boolean): Promise<void> {
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
@@ -861,6 +868,7 @@ async function runKillCommand(force: boolean): Promise<void> {
     return;
   }
 
+  announceGracefulStop(force);
   const result = await stopRuntimeProcesses(matchingRuntimes, { force });
   for (const runtime of result.stopped) {
     console.log(`Stopped PID ${runtime.pid}.`);
@@ -901,6 +909,7 @@ async function runRestartCommand(
 
   if (matchingRuntimes.length > 0) {
     console.log(`Restarting ${matchingRuntimes.length} local runtime process${matchingRuntimes.length === 1 ? "" : "es"}...`);
+    announceGracefulStop(force);
     const result = await stopRuntimeProcesses(matchingRuntimes, { force });
     if (result.failed.length > 0) {
       for (const runtime of result.failed) {
