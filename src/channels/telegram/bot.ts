@@ -314,17 +314,22 @@ export class TelegramChannel implements IChannelAdapter {
       // already-bounded chunk — otherwise an oversized answer throws "too long"
       // on the Markdown send AND again on the fallback, dropping the whole reply.
       for (const chunk of chunkTelegramMessage(markdown)) {
-        try {
-          await this.sendChunkWithRetry(id, chunk, { parse_mode: "Markdown" });
-        } catch (err) {
-          getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
-            chatId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          await this.sendChunkWithRetry(id, chunk);
-        }
+        await this.sendMarkdownChunk(id, chatId, chunk);
       }
     });
+  }
+
+  /** One already-bounded chunk as Markdown, falling back to plain text. */
+  private async sendMarkdownChunk(id: number, chatId: string, chunk: string): Promise<void> {
+    try {
+      await this.sendChunkWithRetry(id, chunk, { parse_mode: "Markdown" });
+    } catch (err) {
+      getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await this.sendChunkWithRetry(id, chunk);
+    }
   }
 
   async sendTypingIndicator(chatId: string): Promise<void> {
@@ -416,7 +421,11 @@ export class TelegramChannel implements IChannelAdapter {
     accumulatedText: string
   ): Promise<void> {
     try {
-      const text = accumulatedText || "...";
+      // CHN-22: a preview past the message limit failed every edit and froze;
+      // it now shows the latest part of the answer, within the limit.
+      const text = accumulatedText.length > TELEGRAM_MAX_CHARS
+        ? `…${accumulatedText.slice(-(TELEGRAM_MAX_CHARS - 1))}`
+        : accumulatedText || "...";
       await this.bot.api.editMessageText(
         parseInt(chatId, 10),
         parseInt(streamId, 10),
@@ -429,32 +438,45 @@ export class TelegramChannel implements IChannelAdapter {
 
   /**
    * Finalize the streaming message with the complete markdown text.
+   *
+   * CHN-22: the placeholder takes the first chunk and the rest follow as new
+   * messages, all on the chat's send chain. An answer over the limit used to
+   * fail both edits and then be re-sent in full under the frozen partial.
    */
   async finalizeStreamingMessage(
     chatId: string,
     streamId: string,
     finalText: string
   ): Promise<void> {
-    try {
-      await this.bot.api.editMessageText(
-        parseInt(chatId, 10),
-        parseInt(streamId, 10),
-        finalText,
-        { parse_mode: "Markdown" }
-      );
-    } catch {
-      // Fallback: try without markdown
+    const id = parseInt(chatId, 10);
+    const messageId = parseInt(streamId, 10);
+    const chunks = chunkTelegramMessage(finalText);
+    if (chunks.length === 0) return;
+    await this.enqueueSend(chatId, async () => {
+      let rest = chunks.slice(1);
+      if (!(await this.editStreamPlaceholder(id, messageId, chunks[0]!))) {
+        // Last resort: the placeholder cannot be reused, send the whole answer.
+        rest = chunks;
+      }
+      for (const chunk of rest) {
+        await this.sendMarkdownChunk(id, chatId, chunk);
+      }
+    });
+  }
+
+  /** Edit the streaming placeholder (Markdown, then plain). False when neither edit took. */
+  private async editStreamPlaceholder(id: number, messageId: number, text: string): Promise<boolean> {
+    for (const markdown of [true, false]) {
       try {
-        await this.bot.api.editMessageText(
-          parseInt(chatId, 10),
-          parseInt(streamId, 10),
-          finalText
-        );
-      } catch {
-        // Last resort: send a new message
-        await this.sendMarkdown(chatId, finalText);
+        if (markdown) await this.bot.api.editMessageText(id, messageId, text, { parse_mode: "Markdown" });
+        else await this.bot.api.editMessageText(id, messageId, text);
+        return true;
+      } catch (err) {
+        // The placeholder already shows exactly this text: that is success.
+        if (String(err instanceof Error ? err.message : err).includes("message is not modified")) return true;
       }
     }
+    return false;
   }
 
   private setupMiddleware(): void {
