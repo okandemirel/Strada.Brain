@@ -15,6 +15,7 @@ import { setSkillEnabled } from "../skills/skill-config.js";
 import { fetchRegistry, searchRegistry } from "../skills/skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "../skills/skill-installer.js";
 import { sendJson, sendJsonError } from "./server-types.js";
+import { safeDecodeSegment } from "./route-segment.js";
 import type { RouteContext } from "./server-types.js";
 
 /**
@@ -119,8 +120,8 @@ export function handleSkillsRoutes(
   // as though nothing happened (R3 / D36).
   const enableMatch = url.match(/^\/api\/skills\/([^/]+)\/enable$/);
   if (enableMatch && method === "POST") {
-    const name = decodeURIComponent(enableMatch[1] ?? "");
-    if (!isValidSkillName(name)) {
+    const name = safeDecodeSegment(enableMatch[1] ?? "");
+    if (name === undefined || !isValidSkillName(name)) {
       sendJsonError(res, 400, "Invalid skill name");
       return true;
     }
@@ -135,8 +136,8 @@ export function handleSkillsRoutes(
   // POST /api/skills/:name/disable
   const disableMatch = url.match(/^\/api\/skills\/([^/]+)\/disable$/);
   if (disableMatch && method === "POST") {
-    const name = decodeURIComponent(disableMatch[1] ?? "");
-    if (!isValidSkillName(name)) {
+    const name = safeDecodeSegment(disableMatch[1] ?? "");
+    if (name === undefined || !isValidSkillName(name)) {
       sendJsonError(res, 400, "Invalid skill name");
       return true;
     }

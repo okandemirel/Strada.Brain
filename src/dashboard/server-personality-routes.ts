@@ -22,6 +22,7 @@ import {
   sendJsonError,
   type RouteContext,
 } from "./server-types.js";
+import { safeDecodeSegment } from "./route-segment.js";
 
 /**
  * ROUND 15 #3 — THE PATH A ROUTE MATCHES IS THE PATH THAT WAS AUTHORIZED.
@@ -117,7 +118,7 @@ export function handlePersonalityRoutes(
       sendJsonError(res, 501, "Soul loader not available");
       return true;
     }
-    const profileName = decodeURIComponent(url.slice("/api/personality/profiles/".length).split("?")[0]!);
+    const profileName = safeDecodeSegment(url.slice("/api/personality/profiles/".length).split("?")[0]!);
     if (!profileName || !PROFILE_NAME_RE.test(profileName)) {
       sendJsonError(res, 400, "Invalid profile name");
       return true;

@@ -6,6 +6,7 @@ import type { IVault, VaultQuery, VaultStats } from '../vault/vault.interface.js
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
+import { safeDecodeSegment } from './route-segment.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
 import { VaultQueryError } from '../vault/obsidian-vault.js';
@@ -188,6 +189,19 @@ export function buildVaultRetrievalStatsSnapshot(
 }
 
 /**
+ * The vault a route's `:id` segment names, or undefined once the answer is sent:
+ * 400 for an id that does not decode (CHN-1 — decodeURIComponent throws on it),
+ * 404 for an unknown one.
+ */
+function vaultForSegment(registry: VaultRegistry, segment: string, res: ServerResponse): IVault | undefined {
+  const id = safeDecodeSegment(segment);
+  if (id === undefined) { sendJsonError(res, 400, 'invalid vault id'); return undefined; }
+  const vault = registry.get(id);
+  if (!vault) { sendJsonError(res, 404, 'vault not found'); return undefined; }
+  return vault;
+}
+
+/**
  * DashboardServer handler-pattern adapter for the vault routes.
  * Mirrors handleSkillsRoutes / handleSystemRoutes shape so it can be wired
  * the same way from server.ts. Returns true when the route matched.
@@ -297,7 +311,8 @@ export function handleVaultRoutes(
   // DELETE /api/vaults/:id — unregister + dispose a vault.
   const deleteMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)$/);
   if (deleteMatch && method === 'DELETE') {
-    const id = decodeURIComponent(deleteMatch[1]!);
+    const id = safeDecodeSegment(deleteMatch[1]!);
+    if (id === undefined) { sendJsonError(res, 400, 'invalid vault id'); return true; }
     const vault = registry.get(id);
     if (!vault) { sendJsonError(res, 404, 'vault not found'); return true; }
     registry.unregister(id);
@@ -317,8 +332,8 @@ export function handleVaultRoutes(
   // Phase 2: /api/vaults/:id/canvas
   const canvasMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/canvas$/);
   if (canvasMatch && method === 'GET') {
-    const vv = registry.get(decodeURIComponent(canvasMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const vv = vaultForSegment(registry, canvasMatch[1]!, res);
+    if (!vv) return true;
     void Promise.resolve(vv.readCanvas?.() ?? { nodes: [], edges: [] })
       .then((c) => sendJson(res, c))
       .catch(() => sendJsonError(res, 500, 'canvas unavailable'));
@@ -328,8 +343,8 @@ export function handleVaultRoutes(
   // POST /api/vaults/:id/regenerate-canvas — force canvas rebuild
   const regenCanvasMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/regenerate-canvas$/);
   if (regenCanvasMatch && method === 'POST') {
-    const vv = registry.get(decodeURIComponent(regenCanvasMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const vv = vaultForSegment(registry, regenCanvasMatch[1]!, res);
+    if (!vv) return true;
     void Promise.resolve(vv.regenerateCanvas?.())
       .then(() => sendJson(res, { ok: true }))
       .catch(() => sendJsonError(res, 500, 'regenerate failed'));
@@ -339,8 +354,8 @@ export function handleVaultRoutes(
   // Phase 2: /api/vaults/:id/symbols/by-name?q=…
   const byNameMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/by-name$/);
   if (byNameMatch && method === 'GET') {
-    const vv = registry.get(decodeURIComponent(byNameMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const vv = vaultForSegment(registry, byNameMatch[1]!, res);
+    if (!vv) return true;
     const q = u.searchParams.get('q') ?? '';
     if (!q || q.length > 200) { sendJsonError(res, 400, 'invalid q'); return true; }
     void Promise.resolve(vv.findSymbolsByName?.(q, 20) ?? [])
@@ -352,9 +367,9 @@ export function handleVaultRoutes(
   // Phase 2: /api/vaults/:id/symbols/:symbolId/callers
   const callersMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/([^/]+)\/callers$/);
   if (callersMatch && method === 'GET') {
-    const vv = registry.get(decodeURIComponent(callersMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
-    const sid = decodeURIComponent(callersMatch[2]!);
+    const vv = vaultForSegment(registry, callersMatch[1]!, res);
+    if (!vv) return true;
+    const sid = safeDecodeSegment(callersMatch[2]!);
     if (!sid || sid.length > 1024) { sendJsonError(res, 400, 'invalid symbol id'); return true; }
     void Promise.resolve(vv.findCallers?.(sid) ?? [])
       .then((items) => sendJson(res, { items }))
@@ -365,9 +380,9 @@ export function handleVaultRoutes(
   // Symbol summary: /api/vaults/:id/symbols/:symbolId/summarize
   const summarizeMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/(.+)\/summarize$/);
   if (summarizeMatch && method === 'POST') {
-    const vv = registry.get(decodeURIComponent(summarizeMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
-    const symbolId = decodeURIComponent(summarizeMatch[2]!);
+    const vv = vaultForSegment(registry, summarizeMatch[1]!, res);
+    if (!vv) return true;
+    const symbolId = safeDecodeSegment(summarizeMatch[2]!);
     if (!symbolId || symbolId.length > 1024) { sendJsonError(res, 400, 'invalid symbol id'); return true; }
     if (!ctx.llmProvider) { sendJsonError(res, 503, 'LLM provider not available'); return true; }
 
@@ -390,10 +405,10 @@ export function handleVaultRoutes(
   // Wikilink backlinks: /api/vaults/:id/notes/:path/backlinks
   const backlinksMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/notes\/(.+)\/backlinks$/);
   if (backlinksMatch && method === 'GET') {
-    const vv = registry.get(decodeURIComponent(backlinksMatch[1]!));
-    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
-    const notePath = decodeURIComponent(backlinksMatch[2]!);
-    if (isUnsafePath(notePath)) { sendJsonError(res, 400, 'invalid path'); return true; }
+    const vv = vaultForSegment(registry, backlinksMatch[1]!, res);
+    if (!vv) return true;
+    const notePath = safeDecodeSegment(backlinksMatch[2]!);
+    if (notePath === undefined || isUnsafePath(notePath)) { sendJsonError(res, 400, 'invalid path'); return true; }
     void Promise.resolve(vv.listBacklinks?.(notePath) ?? { wikilinks: [], callers: [] })
       .then((result) => sendJson(res, result))
       .catch(() => sendJsonError(res, 500, 'backlinks failed'));
@@ -404,8 +419,8 @@ export function handleVaultRoutes(
   const m = pathOnly.match(/^\/api\/vaults\/([^/]+)\/(stats|tree|file|search|sync)$/);
   if (!m) return false;
   const [, id, op] = m;
-  const vault = registry.get(decodeURIComponent(id!));
-  if (!vault) { sendJsonError(res, 404, 'vault not found'); return true; }
+  const vault = vaultForSegment(registry, id!, res);
+  if (!vault) return true;
 
   if (op === 'stats' && method === 'GET') {
     void vault.stats()

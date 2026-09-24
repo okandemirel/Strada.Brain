@@ -20,6 +20,7 @@ import type { WorkspaceBus } from './workspace-bus.js'
 import { calculateProgress } from '../goals/goal-progress.js'
 import { authorizeInstanceRequest } from '../channels/web/instance-authorization.js'
 import { getLoggerSafe } from '../utils/logger.js'
+import { safeDecodeSegment } from './route-segment.js'
 
 // =============================================================================
 // ACTIVITY RING BUFFER
@@ -427,8 +428,8 @@ export function handleMonitorRoute(
   // ── GET /api/monitor/task/:id ─────────────────────────────────────────
   const taskDetailMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)$/)
   if (method === 'GET' && taskDetailMatch) {
-    const taskId = decodeURIComponent(taskDetailMatch[1]!)
-    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    const taskId = safeDecodeSegment(taskDetailMatch[1]!)
+    if (taskId === undefined || taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     try {
       if (goalStorage) {
         // Search across active trees for the node
@@ -467,8 +468,8 @@ export function handleMonitorRoute(
   // ── POST /api/monitor/task/:id/approve ────────────────────────────────
   const approveMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)\/approve$/)
   if (method === 'POST' && approveMatch) {
-    const taskId = decodeURIComponent(approveMatch[1]!)
-    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    const taskId = safeDecodeSegment(approveMatch[1]!)
+    if (taskId === undefined || taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     if (!allowGateDecision(req, res, taskManager, taskId, `POST /api/monitor/task/${taskId}/approve`)) return true
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
@@ -498,8 +499,8 @@ export function handleMonitorRoute(
   // ── POST /api/monitor/task/:id/skip ───────────────────────────────────
   const skipMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)\/skip$/)
   if (method === 'POST' && skipMatch) {
-    const taskId = decodeURIComponent(skipMatch[1]!)
-    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    const taskId = safeDecodeSegment(skipMatch[1]!)
+    if (taskId === undefined || taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     if (!allowGateDecision(req, res, taskManager, taskId, `POST /api/monitor/task/${taskId}/skip`)) return true
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })

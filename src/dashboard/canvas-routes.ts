@@ -33,6 +33,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { CANVAS_VERSION_ABSENT } from "./canvas-storage.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 import { getLogger, getLoggerSafe } from "../utils/logger.js";
+import { safeDecodeSegment } from "./route-segment.js";
 import {
   authorizeInstanceRequest,
   verifiedRequestIdentity,
@@ -217,8 +218,8 @@ export function handleCanvasRoute(
   // -- GET /api/canvas/project/:fingerprint -- list canvases for a project ---
   const projectMatch = url.match(/^\/api\/canvas\/project\/([^/?]+)(?:\?.*)?$/);
   if (method === "GET" && projectMatch) {
-    const fingerprint = decodeURIComponent(projectMatch[1]!);
-    if (!isValidSessionId(fingerprint)) {
+    const fingerprint = safeDecodeSegment(projectMatch[1]!);
+    if (fingerprint === undefined || !isValidSessionId(fingerprint)) {
       jsonResponse(res, 400, { error: "Invalid project fingerprint" });
       return true;
     }
@@ -256,8 +257,8 @@ export function handleCanvasRoute(
   // -- POST /api/canvas/:sessionId/export -- export canvas shapes as JSON ----
   const exportMatch = url.match(/^\/api\/canvas\/([^/?]+)\/export$/);
   if (method === "POST" && exportMatch) {
-    const sessionId = decodeURIComponent(exportMatch[1]!);
-    if (!isValidSessionId(sessionId)) {
+    const sessionId = safeDecodeSegment(exportMatch[1]!);
+    if (sessionId === undefined || !isValidSessionId(sessionId)) {
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
@@ -299,8 +300,8 @@ export function handleCanvasRoute(
   // -- GET /api/canvas/:sessionId -- return canvas state ---------------------
   const sessionMatch = url.match(/^\/api\/canvas\/([^/?]+)(?:\?.*)?$/);
   if (method === "GET" && sessionMatch) {
-    const sessionId = decodeURIComponent(sessionMatch[1]!);
-    if (!isValidSessionId(sessionId)) {
+    const sessionId = safeDecodeSegment(sessionMatch[1]!);
+    if (sessionId === undefined || !isValidSessionId(sessionId)) {
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
@@ -320,8 +321,8 @@ export function handleCanvasRoute(
 
   // -- PUT /api/canvas/:sessionId -- save (upsert) canvas state -------------
   if (method === "PUT" && sessionMatch) {
-    const sessionId = decodeURIComponent(sessionMatch[1]!);
-    if (!isValidSessionId(sessionId)) {
+    const sessionId = safeDecodeSegment(sessionMatch[1]!);
+    if (sessionId === undefined || !isValidSessionId(sessionId)) {
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }
@@ -418,8 +419,8 @@ export function handleCanvasRoute(
   // -- DELETE /api/canvas/:sessionId -- delete canvas state ------------------
   const deleteMatch = url.match(/^\/api\/canvas\/([^/?]+)$/);
   if (method === "DELETE" && deleteMatch) {
-    const sessionId = decodeURIComponent(deleteMatch[1]!);
-    if (!isValidSessionId(sessionId)) {
+    const sessionId = safeDecodeSegment(deleteMatch[1]!);
+    if (sessionId === undefined || !isValidSessionId(sessionId)) {
       jsonResponse(res, 400, { error: "Invalid session id" });
       return true;
     }

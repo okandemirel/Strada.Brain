@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
@@ -635,7 +635,7 @@ export class DashboardServer {
   async start(): Promise<void> {
     const logger = getLogger();
 
-    this.server = createServer((req, res) => {
+    const dispatch = (req: IncomingMessage, res: ServerResponse): void => {
       const url = req.url ?? "/";
       const method = req.method ?? "GET";
 
@@ -790,6 +790,19 @@ export class DashboardServer {
       // SPA fallback (non-API, non-root paths that weren't handled above)
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
+    };
+
+    // CHN-1: every route handler runs synchronously inside this listener, so a
+    // throw from any of them (a malformed escape, a bad stored column) would
+    // leave it as an uncaughtException — and the daemon's policy for that is a
+    // full shutdown. One request's bad input is that request's error, never the
+    // process's.
+    this.server = createServer((req, res) => {
+      try {
+        dispatch(req, res);
+      } catch (error) {
+        DashboardServer.answerDispatchFailure(req, res, error);
+      }
     });
 
     return new Promise<void>((resolve, reject) => {
@@ -806,6 +819,30 @@ export class DashboardServer {
         resolve();
       });
     });
+  }
+
+  /**
+   * The answer for a request whose handler threw (CHN-1): 400 when the URL
+   * itself did not decode, 500 otherwise. Never rethrows — the whole point is
+   * that the exception stops here.
+   */
+  private static answerDispatchFailure(req: IncomingMessage, res: ServerResponse, error: unknown): void {
+    const isClientError = error instanceof URIError;
+    try {
+      getLogger().warn("Dashboard request handler threw", {
+        method: req.method,
+        path: (req.url ?? "/").split("?")[0],
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      res.writeHead(isClientError ? 400 : 500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: isClientError ? "Bad Request" : "Internal Server Error" }));
+    } catch {
+      res.destroy();
+    }
   }
 
   /**

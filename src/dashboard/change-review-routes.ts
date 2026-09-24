@@ -65,6 +65,8 @@ import {
   type InstanceIdentityStoreView,
 } from "../channels/web/instance-authorization.js";
 import { getLoggerSafe } from "../utils/logger.js";
+// Round 12 #12 / CHN-1: an id that does not decode is a 400, never a throw.
+import { safeDecodeSegment } from "./route-segment.js";
 
 /** Route prefix. Registered before the file-explorer routes, which 404 the rest. */
 export const CHANGE_REVIEW_ROUTE_PREFIX = "/api/workspace/change-review";
@@ -249,19 +251,6 @@ function parseDecisions(body: DecisionsRequest | null): { decisions: DecisionInp
   return { decisions };
 }
 
-/**
- * One path segment as an id, or undefined when it is not decodable at all
- * (round 12 #12). `decodeURIComponent("%")` throws a URIError; a client bug is
- * a 400, never an exception out of the router.
- */
-function decodeReviewId(segment: string): string | undefined {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return undefined;
-  }
-}
-
 /** The same decisions, in a comparable order: a retry is a set, not a sequence. */
 function decisionKey(decisions: readonly RecordedDecision[], onBlocked: string | undefined): string {
   return [
@@ -381,7 +370,7 @@ export function handleChangeReviewRoute(
     // ROUND 12 #12: "%" is not a decodable escape and decodeURIComponent throws
     // a URIError. This ran outside any try, synchronously, so a malformed URL
     // left the route by throwing instead of answering.
-    const reviewId = decodeReviewId(oneMatch[1]!);
+    const reviewId = safeDecodeSegment(oneMatch[1]!);
     if (reviewId === undefined || !isReviewId(reviewId)) {
       jsonResponse(res, 400, { error: "Not a change review id" });
       return true;
@@ -411,7 +400,7 @@ export function handleChangeReviewRoute(
       return true;
     }
     // Round 12 #12: the same malformed-escape throw as the GET above.
-    const reviewId = decodeReviewId(decisionsMatch[1]!);
+    const reviewId = safeDecodeSegment(decisionsMatch[1]!);
     if (reviewId === undefined) {
       jsonResponse(res, 400, { error: "Not a change review id" });
       return true;

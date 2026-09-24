@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from "prom-client";
 import { getLogger } from "../utils/logger.js";
 import { resolveBindHost } from "../core/bind-host.js";
@@ -164,36 +164,21 @@ export class PrometheusMetrics {
   async start(): Promise<void> {
     if (this.server) return;
 
-    this.server = createServer(async (req, res) => {
-      const url = req.url ?? "/";
-
-      if (url === "/metrics") {
-        // Update dynamic metrics before serving
-        this.updateDynamicMetrics();
-        
-        res.writeHead(200, { "Content-Type": this.register.contentType });
-        res.end(await this.register.metrics());
-        return;
-      }
-
-      if (url === "/health") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ 
-          status: "ok", 
-          prometheus: true,
-          metricsEndpoint: "/metrics"
-        }));
-        return;
-      }
-
-      if (url === "/") {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(PROMETHEUS_INFO_HTML);
-        return;
-      }
-
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not Found");
+    // CHN-1: the handler is async, so a failure (a collector that throws while
+    // the registry serializes) is a rejection nobody awaits. Answer it here
+    // instead of feeding the process's unhandled-rejection policy.
+    this.server = createServer((req, res) => {
+      this.handleRequest(req, res).catch((error: unknown) => {
+        this.logger.warn("Prometheus request failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("Internal Server Error");
+        } else {
+          res.destroy();
+        }
+      });
     });
 
     return new Promise((resolve, reject) => {
@@ -219,6 +204,41 @@ export class PrometheusMetrics {
         onError(error as NodeJS.ErrnoException);
       }
     });
+  }
+
+  /** One scrape/probe request. */
+  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = req.url ?? "/";
+
+    if (url === "/metrics") {
+      // Update dynamic metrics before serving
+      this.updateDynamicMetrics();
+
+      // Serialize BEFORE committing a status, so a failure can still be a 500.
+      const body = await this.register.metrics();
+      res.writeHead(200, { "Content-Type": this.register.contentType });
+      res.end(body);
+      return;
+    }
+
+    if (url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        prometheus: true,
+        metricsEndpoint: "/metrics"
+      }));
+      return;
+    }
+
+    if (url === "/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(PROMETHEUS_INFO_HTML);
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not Found");
   }
 
   /**

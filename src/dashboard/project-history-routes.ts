@@ -48,6 +48,7 @@ import {
 import { verifiedRequestViewer } from "../channels/web/instance-authorization.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { RouteContext } from "./server-types.js";
+import { safeDecodeSegment } from "./route-segment.js";
 
 export const PROJECT_HISTORY_ROUTE_PREFIX = "/api/workspace/history";
 
@@ -120,14 +121,8 @@ export function handleProjectHistoryRoutes(
   // not a lookup: it never becomes a query.
   let eventId: string | undefined;
   if (segments.length === 1) {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(segments[0]!);
-    } catch {
-      jsonResponse(res, 400, { error: "Not a project history event id" });
-      return true;
-    }
-    if (!isProjectHistoryEventId(decoded)) {
+    const decoded = safeDecodeSegment(segments[0]!);
+    if (decoded === undefined || !isProjectHistoryEventId(decoded)) {
       jsonResponse(res, 400, { error: "Not a project history event id" });
       return true;
     }
