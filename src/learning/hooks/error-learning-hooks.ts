@@ -15,6 +15,8 @@ import type {
   ErrorDetails,
   ErrorCategory,
   ContextConditionId,
+  Instinct,
+  InstinctStatus,
 } from "../types.js";
 import { createBrand, type JsonObject } from "../../types/index.js";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
@@ -148,6 +150,18 @@ const MATCHABLE_STATUSES = new Set(["active", "proposed", "evolved", "permanent"
  * it would attribute an application to whichever rule happened to be terse.
  */
 const MIN_ACTION_MATCH_CHARS = 12;
+
+/**
+ * Statuses automatic evidence never moves a rule out of: a retired rule
+ * ('deprecated'), a superseded one ('evolved') and one held out of use
+ * ('quarantined') change only by a deliberate act, not by a recovery report
+ * that happens to name them.
+ */
+const TERMINAL_FOR_AUTOMATIC_EVIDENCE: ReadonlySet<InstinctStatus> = new Set<InstinctStatus>([
+  "deprecated",
+  "evolved",
+  "quarantined",
+]);
 
 /** Compare actions as MEANING-BEARING text, not as raw strings. */
 function normalizeAction(action: string): string {
@@ -360,10 +374,7 @@ export class ErrorLearningHooks {
     if (!instinct) return undefined;
 
     const updatedInstinct = this.confidenceScorer.updateConfidence(instinct, context.success, context.verdictScore);
-    this.storage.updateInstinct(updatedInstinct);
-
-    // Update status if needed
-    this.updateInstinctStatus(updatedInstinct);
+    this.settleInstinct(updatedInstinct);
     // The movement is RETURNED rather than re-derived by the caller: the
     // judgement writer records what actually happened here, and re-deriving it
     // would be a second confidence update for one application (round 15 #14).
@@ -386,10 +397,7 @@ export class ErrorLearningHooks {
     if (!instinct) return;
 
     const updatedInstinct = this.confidenceScorer.updateConfidence(instinct, false, 0.2);
-    this.storage.updateInstinct(updatedInstinct);
-
-    // Update status if needed
-    this.updateInstinctStatus(updatedInstinct);
+    this.settleInstinct(updatedInstinct);
 
     // Record the failure for pattern analysis
     this.pipeline.observeToolUse({
@@ -637,18 +645,22 @@ export class ErrorLearningHooks {
     }
   }
 
-  private updateInstinctStatus(instinct: import("../types.js").Instinct): void {
-    // A frozen lifecycle state is not a function of confidence (improvement on
-    // audit 04.6): getStatus() would return a quarantined instinct to service
-    // and demote a permanent one to 'evolved' — silently, on one reinforcement.
-    if (instinct.status === "quarantined" || instinct.status === "permanent") return;
-    const newStatus = this.confidenceScorer.getStatus(instinct.confidence);
-    
-    if (newStatus !== instinct.status) {
-      // Create updated instinct with new status (readonly properties require new object)
-      const updatedInstinct = { ...instinct, status: newStatus, updatedAt: Date.now() as import("../../types/index.js").TimestampMs };
-      this.storage.updateInstinct(updatedInstinct);
+  /**
+   * Persist a rule's new evidence and run the lifecycle on it.
+   *
+   * One lifecycle authority: the pipeline's state machine (promotion with an
+   * observation minimum, cooling before deprecation, lifecycle log and events).
+   * This hook used to run its own confidence-to-status table, which retired the
+   * best rules into 'evolved' (out of retrieval), demoted 'active' rules,
+   * deprecated without cooling and revived rules that had been retired.
+   */
+  private settleInstinct(instinct: Instinct): void {
+    if (TERMINAL_FOR_AUTOMATIC_EVIDENCE.has(instinct.status)) {
+      // The evidence is kept; the retirement or hold stands.
+      this.storage.updateInstinct(instinct);
+      return;
     }
+    this.pipeline.updateInstinctStatus(instinct);
   }
 
   private buildRecoveryInjection(matches: PatternMatch[], _context: ErrorContext): string {

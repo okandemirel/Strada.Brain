@@ -464,3 +464,91 @@ describe("recovery guidance respects who owns a rule", () => {
     expect(forUser("alice")).toContain("private package feed");
   });
 });
+
+// LRN-11: the recovery path ran its own confidence-to-status table
+// (ConfidenceScorer.getStatus). It retired the best rules into 'evolved' (out of
+// retrieval and interventions), demoted active rules to 'proposed' on one
+// failure, and revived retired rules. The pipeline's state machine is the one
+// lifecycle authority.
+describe("recovery evidence goes through the pipeline's lifecycle (LRN-11)", () => {
+  let storage: LearningStorage;
+  let hooks: ErrorLearningHooks;
+  let tempDir: string;
+
+  const errorContext = {
+    sessionId: "s1",
+    toolName: "dotnet_build",
+    errorOutput: "error CS0246: type not found",
+    analysis: { hasErrors: true, errorCount: 1, summary: "1 missing_type", recoveryInjection: "" },
+    timestamp: new Date(),
+  } as unknown as ErrorContext;
+
+  function rule(id: string, status: "active" | "deprecated", alpha: number, beta: number) {
+    storage.createInstinct({
+      id: id as never,
+      name: id,
+      type: "error_fix",
+      status,
+      confidence: (alpha / (alpha + beta)) as never,
+      triggerPattern: "error CS0246: type not found",
+      action: "add the missing using directive",
+      contextConditions: [],
+      stats: { timesSuggested: 10, timesApplied: 10, timesFailed: 0, successRate: 1, averageExecutionMs: 0 },
+      bayesianAlpha: alpha,
+      bayesianBeta: beta,
+      createdAt: Date.now() as never,
+      updatedAt: Date.now() as never,
+      sourceTrajectoryIds: [],
+      tags: [],
+    });
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "hooks-lifecycle-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    hooks = new ErrorLearningHooks(
+      new LearningPipeline(storage),
+      new PatternMatcher(storage),
+      new ConfidenceScorer(),
+      storage,
+    );
+    hooks.enable();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("a rule reinforced past 0.9 stays active and retrievable", () => {
+    rule("rule_strong", "active", 10, 1);
+
+    hooks.reinforceInstinct("rule_strong", { errorContext, success: true, verdictScore: 0.9 });
+
+    const after = storage.getInstinct("rule_strong")!;
+    expect(after.confidence).toBeGreaterThan(0.9);
+    expect(after.status).toBe("active");
+    expect(storage.getInstincts({ status: "active" }).map((i) => i.id)).toContain("rule_strong");
+  });
+
+  it("one failed application does not demote an active rule", () => {
+    rule("rule_one_failure", "active", 3, 1);
+
+    hooks.penalizeInstinct("rule_one_failure", { errorContext, reason: "the build still failed" });
+
+    const after = storage.getInstinct("rule_one_failure")!;
+    expect(after.confidence).toBeLessThan(0.7);
+    expect(after.status).toBe("active");
+  });
+
+  it("reinforcing a retired rule leaves it retired", () => {
+    rule("rule_retired", "deprecated", 3, 1);
+
+    hooks.reinforceInstinct("rule_retired", { errorContext, success: true, verdictScore: 0.9 });
+
+    const after = storage.getInstinct("rule_retired")!;
+    expect(after.confidence).toBeGreaterThan(0.7);
+    expect(after.status).toBe("deprecated");
+  });
+});
