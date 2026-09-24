@@ -159,6 +159,14 @@ describe("health ask_user is a reaction to a failure, never to a success", () =>
     expect(ledger.verdict({ ...INERT, lastStepFailed: false })).toEqual({ decision: "continue" });
   });
 
+  it("the gate tick right after a failure-site retry does not retry (and back off) again", () => {
+    const { ledger } = ledgerAfter(["F", "F"]);
+    const failSite = ledger.verdict({ ...INERT, lastStepFailed: true });
+    expect(failSite).toMatchObject({ decision: "retry", backoffMs: 10_000 });
+    // Nothing is recorded between the failure site's yield and the next gate tick.
+    expect(ledger.verdict({ ...INERT, lastStepFailed: false })).toEqual({ decision: "continue" });
+  });
+
   it("the failure-site verdict still asks on the window rate (v1 parity)", () => {
     const { ledger } = ledgerAfter(["F", "F", "S", "F", "S", "F"]);
     expect(ledger.verdict({ ...INERT, lastStepFailed: true }).decision).toBe("ask_user");

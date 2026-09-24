@@ -164,7 +164,9 @@ class FailureLedgerImpl implements FailureLedger {
     }
     // A stale single failure must not force a retry when the model has signaled completion —
     // defer to rule 8 (the success about to be recorded would clear `consecutive` anyway).
-    if (this.core.consecutive > 0 && !input.modelProposedDone) {
+    // Failure-site only as well: the failure site already slept this backoff, and no
+    // record happens before the next gate tick, so a gate retry slept it a second time.
+    if (input.lastStepFailed && this.core.consecutive > 0 && !input.modelProposedDone) {
       return {
         decision: "retry",
         backoffMs: this.core.backoffMs(),

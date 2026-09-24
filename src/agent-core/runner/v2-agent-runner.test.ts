@@ -803,6 +803,32 @@ describe("V2AgentRunner — retry (verdict retry → backoff → continue)", () 
     // recordHealthSuccess fires on every successful step after the recovery (≥1).
     expect(port.spies.recordHealthSuccess.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("one failure is backed off once: one backoff event, one 10 s wait before the next call", async () => {
+    // The failure site sleeps the backoff; the next gate tick used to re-derive the same retry
+    // verdict (nothing is recorded in between) and sleep it a second time.
+    const health = mkHealth({ backoffMs: () => 10_000 });
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(
+      scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" }), mkResponse({ stopReason: "end_turn" })]),
+    );
+    const port = mkPort(mkProvider(), { onClassifyFailure: () => health.recordFailure() });
+    port.spies.recordHealthSuccess.mockImplementation(() => health.recordSuccess());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed");
+    const events = handles.events();
+    expect(events.filter((e) => e.type === "backoff")).toHaveLength(1);
+    const starts = events.filter((e) => e.type === "model.call.started");
+    const backoff = events.find((e) => e.type === "backoff");
+    expect(starts.length).toBeGreaterThanOrEqual(2);
+    // drive() advances the FakeClock in 5 s strides: one 10 s sleep lands in [10 s, 20 s).
+    const waited = starts[1]!.ts - backoff!.ts;
+    expect(waited).toBeGreaterThanOrEqual(10_000);
+    expect(waited).toBeLessThan(20_000);
+  });
 });
 
 describe("V2AgentRunner — abort (verdict stop)", () => {

@@ -455,8 +455,9 @@ export class V2AgentRunner implements AgentRunner {
             // change the verdict.
           }
           if (gate.decision === "retry" || gate.decision === "pause") {
-            // A pending failure/stall asks for a backoff before THIS step. Back off (emitting the
-            // beat first), then FALL THROUGH to take the step — the step's success is what clears
+            // Defensive: the gate passes lastStepFailed:false and callStalled:false, so the ledger
+            // returns neither — the failure site below owns the one backoff per failure. If it
+            // ever does: back off (emitting the beat first), then FALL THROUGH to take the step — the step's success is what clears
             // the failure run. Re-looping to the gate here would spin (the failure state is not
             // cleared until a call succeeds), so the backoff-then-step is the correct shape.
             await this.handleYield(bus, clock, io, emit, gate);
