@@ -6,7 +6,7 @@
  */
 
 import { readFile, readdir, stat, realpath } from "node:fs/promises";
-import { join, relative, extname, resolve } from "node:path";
+import { join, relative, extname, resolve, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { UNITY_EXCLUDED_DIRS } from "../agents/tools/unity/meta-file-utils.js";
 
@@ -125,6 +125,9 @@ export async function scanGuidReferences(
   const references: GuidReference[] = [];
   const scannedRoots: string[] = [];
   const incomplete: string[] = [];
+  // Real paths already walked: a symlinked folder is followed, and a link back
+  // into a walked tree must not be walked twice (or forever).
+  const visited = new Set<string>();
 
   // Resolve to real path to prevent symlink escapes
   let resolvedProject: string;
@@ -146,7 +149,7 @@ export async function scanGuidReferences(
       continue; // Root absent in this project
     }
     scannedRoots.push(rootName);
-    await scanDirectory(rootPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults, incomplete);
+    await scanDirectory(rootPath, resolvedProject, targetGuid, references, 0, maxDepth, maxResults, incomplete, visited);
   }
 
   return { references, scannedRoots, incomplete };
@@ -174,7 +177,10 @@ async function scanDirectory(
   maxDepth: number,
   maxResults: number,
   incomplete: string[],
+  visited: Set<string>,
 ): Promise<void> {
+  if (visited.has(dirPath)) return;
+  visited.add(dirPath);
   // Was: three silent `return`s (depth cap, readdir failure, result cap) that
   // left the caller unable to tell "searched everything" from "stopped early".
   // Each early exit now records why. Audited 2026-09-02.
@@ -197,15 +203,39 @@ async function scanDirectory(
   }
 
   for (const entry of entries) {
-    const fullPath = join(dirPath, entry.name);
+    let fullPath = join(dirPath, entry.name);
+    let isDirectory = entry.isDirectory();
 
-    if (entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      // A symlinked folder or asset is part of the project to Unity (shared
+      // asset folders, local packages). A Dirent reports it as neither a
+      // directory nor a file, so it was skipped silently and an asset
+      // referenced only from inside it read as safe to delete.
+      let target: string;
+      let targetIsDirectory: boolean;
+      try {
+        target = await realpath(fullPath);
+        targetIsDirectory = (await stat(target)).isDirectory();
+      } catch {
+        continue; // Dangling link: nothing behind it can reference anything.
+      }
+      const relevant = targetIsDirectory || SEARCHABLE_EXTENSIONS.has(extname(entry.name).toLowerCase());
+      if (!relevant) continue;
+      if (target !== projectPath && !target.startsWith(projectPath + sep)) {
+        incomplete.push(`symlink ${relDir}/${entry.name} leads outside the project; not read`);
+        continue;
+      }
+      fullPath = target;
+      isDirectory = targetIsDirectory;
+    }
+
+    if (isDirectory) {
       if (UNITY_EXCLUDED_DIRS.has(entry.name)) continue;
       if (references.length >= maxResults) {
         incomplete.push(`result cap ${maxResults} reached before ${relDir}/${entry.name}/`);
         return;
       }
-      await scanDirectory(fullPath, projectPath, targetGuid, references, depth + 1, maxDepth, maxResults, incomplete);
+      await scanDirectory(fullPath, projectPath, targetGuid, references, depth + 1, maxDepth, maxResults, incomplete, visited);
     } else if (references.length >= maxResults) {
       if (SEARCHABLE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
         incomplete.push(`result cap ${maxResults} reached before ${relDir}/${entry.name}`);

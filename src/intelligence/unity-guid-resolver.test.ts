@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkSafeToDelete, scanGuidReferences, GUID_SCAN_MAX_DEPTH } from "./unity-guid-resolver.js";
@@ -263,5 +263,58 @@ describe("checkSafeToDelete never reports an unfinished scan as safe (audited 20
 
     expect(res.safe).toBe(true);
     expect(res.scanIncomplete ?? []).toEqual([]);
+  });
+});
+
+// LRN-13: a symlinked folder (shared assets, local packages) is part of the
+// project to Unity, but a Dirent reports it as neither a directory nor a file,
+// so the walk skipped it silently and an asset referenced only from inside it
+// read as safe to delete.
+describe("checkSafeToDelete follows symlinked folders (LRN-13)", () => {
+  let root: string;
+  let outside: string;
+  const guid = "c".repeat(32);
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "guid-symlink-"));
+    outside = await mkdtemp(join(tmpdir(), "guid-symlink-outside-"));
+    await mkdir(join(root, "Assets"), { recursive: true });
+    await writeFile(join(root, "Assets", "Texture.png"), "png");
+    await writeFile(join(root, "Assets", "Texture.png.meta"), `guid: ${guid}\n`);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("finds a reference inside a symlinked folder that stays in the project", async () => {
+    await mkdir(join(root, "SharedAssets"), { recursive: true });
+    await writeFile(join(root, "SharedAssets", "Hero.prefab"), `m_Texture: {fileID: 1, guid: ${guid}, type: 3}\n`);
+    // "junction" makes this work on Windows without symlink privileges; POSIX ignores it.
+    await symlink(join(root, "SharedAssets"), join(root, "Assets", "Shared"), "junction");
+
+    const res = await checkSafeToDelete(root, "Assets/Texture.png");
+
+    expect(res.safe).toBe(false);
+    expect(res.references.map((r) => r.filePath.replace(/\\/g, "/"))).toContain("SharedAssets/Hero.prefab");
+  });
+
+  it("a symlinked folder that leads outside the project makes the verdict unverified, not safe", async () => {
+    await writeFile(join(outside, "Hero.prefab"), `m_Texture: {fileID: 1, guid: ${guid}, type: 3}\n`);
+    await symlink(outside, join(root, "Assets", "Shared"), "junction");
+
+    const res = await checkSafeToDelete(root, "Assets/Texture.png");
+
+    expect(res.safe).toBe(false);
+    expect(res.scanIncomplete?.some((reason) => reason.includes("Shared"))).toBe(true);
+  });
+
+  it("a link back into the walked tree does not loop", async () => {
+    await symlink(join(root, "Assets"), join(root, "Assets", "Loop"), "junction");
+
+    const res = await checkSafeToDelete(root, "Assets/Texture.png");
+
+    expect(res.safe).toBe(true);
   });
 });
