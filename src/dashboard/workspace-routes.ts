@@ -13,17 +13,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve, relative, normalize, extname } from "node:path";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { isSensitivePath } from "../security/path-guard.js";
 
 // =============================================================================
 // CONSTANTS
 // =============================================================================
 
-const DENYLIST = [
-  ".env",
-  ".env.local",
-  ".env.production",
-  ".env.staging",
-  ".env.development",
+/**
+ * Bulky or VCS-internal directories the explorer never browses. These are not
+ * secrets: which files are secret is path-guard's call (`isSensitivePath`), the
+ * same list the file tools enforce, so the two surfaces cannot drift apart.
+ */
+const EXPLORER_EXCLUDED_DIRS = [
   "node_modules",
   ".git/objects",
   ".git/refs",
@@ -123,7 +124,8 @@ export interface PathSafetyResult {
  *   2. Normalize and reject traversal sequences (..)
  *   3. Resolve to absolute path, verify it is within projectRoot
  *   4. Enforce max depth
- *   5. Check denylist (exact match and prefix match)
+ *   5. Check the denylist per segment, case-insensitively, plus path-guard's
+ *      sensitive-file list (the endpoints repeat this on the real path)
  */
 export function isPathSafe(requestedPath: string, projectRoot: string): PathSafetyResult {
   // 1. Reject null bytes
@@ -153,14 +155,48 @@ export function isPathSafe(requestedPath: string, projectRoot: string): PathSafe
     return { safe: false, resolved: "", error: "Path too deep" };
   }
 
-  // 5. Denylist check — exact match or prefix
-  for (const denied of DENYLIST) {
-    if (rel === denied || rel.startsWith(denied + "/") || rel.startsWith(denied + "\\")) {
-      return { safe: false, resolved: "", error: `Path denied: ${denied}` };
-    }
+  // 5. Denylist check — every segment, case-insensitively (see deniedReason)
+  const denied = deniedReason(rel);
+  if (denied) {
+    return { safe: false, resolved: "", error: `Path denied: ${denied}` };
   }
 
   return { safe: true, resolved };
+}
+
+/**
+ * A path as Windows opens it: an NTFS stream suffix (`name:stream`) is dropped
+ * and trailing dots and spaces are stripped from every segment, so a name with
+ * a trailing dot opens the file without it there. Applied on every platform
+ * because it can only make the check stricter.
+ */
+function win32OpenedForm(segments: readonly string[]): string[] {
+  return segments.map((segment) => {
+    const colon = segment.indexOf(":");
+    return (colon >= 0 ? segment.slice(0, colon) : segment).replace(/[. ]+$/, "");
+  });
+}
+
+/**
+ * Why a project-relative path may not be served, or undefined when it may.
+ *
+ * The old check compared the whole relative path against a short,
+ * case-sensitive list, so nested, differently-cased or unlisted secret files
+ * were served. Both the path as written and its Windows-opened form are
+ * checked, and the endpoints re-run this on the symlink-resolved path (see
+ * verifyRealPath), because that is the file actually read.
+ */
+function deniedReason(rel: string): string | undefined {
+  const segments = rel.split(/[/\\]/).filter(Boolean);
+  for (const form of [segments, win32OpenedForm(segments)]) {
+    const joined = form.join("/");
+    const padded = `/${joined.toLowerCase()}/`;
+    for (const excluded of EXPLORER_EXCLUDED_DIRS) {
+      if (padded.includes(`/${excluded}/`)) return excluded;
+    }
+    if (isSensitivePath(joined)) return "sensitive file";
+  }
+  return undefined;
 }
 
 // =============================================================================
@@ -174,18 +210,20 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown): void 
 
 /**
  * After initial isPathSafe check, verify the real (symlink-resolved) path
- * is still within the project root.
+ * is still within the project root and is not itself denied: the lexical
+ * check never sees where a symlink, a case variant or a Windows alias lands.
  *
  * Returns:
  *   { status: 'ok', realPath } — safe to access
  *   { status: 'escaped' }      — symlink points outside project
+ *   { status: 'denied' }       — resolves to a denied or sensitive path
  *   { status: 'not_found' }    — path does not exist
  *   { status: 'error' }        — other filesystem error
  */
 async function verifyRealPath(
   resolvedPath: string,
   projectRoot: string,
-): Promise<{ status: "ok"; realPath: string } | { status: "escaped" | "not_found" | "error" }> {
+): Promise<{ status: "ok"; realPath: string } | { status: "escaped" | "denied" | "not_found" | "error" }> {
   try {
     const real = await realpath(resolvedPath);
     const projectReal = await realpath(projectRoot);
@@ -193,6 +231,7 @@ async function verifyRealPath(
     if (rel.startsWith("..") || resolve(projectReal, rel) !== real) {
       return { status: "escaped" };
     }
+    if (deniedReason(rel)) return { status: "denied" };
     return { status: "ok", realPath: real };
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -244,8 +283,8 @@ export function handleWorkspaceRoute(
     void (async () => {
       const realCheck = await verifyRealPath(check.resolved, projectRoot);
       if (realCheck.status !== "ok") {
-        const statusCode = realCheck.status === "escaped" ? 403 : realCheck.status === "not_found" ? 404 : 500;
-        const msg = realCheck.status === "escaped" ? "Path escapes project boundary" : realCheck.status === "not_found" ? "Directory not found" : "Failed to access path";
+        const statusCode = realCheck.status === "escaped" || realCheck.status === "denied" ? 403 : realCheck.status === "not_found" ? 404 : 500;
+        const msg = realCheck.status === "escaped" ? "Path escapes project boundary" : realCheck.status === "denied" ? "Path denied" : realCheck.status === "not_found" ? "Directory not found" : "Failed to access path";
         jsonResponse(res, statusCode, { error: msg });
         return;
       }
@@ -306,8 +345,8 @@ export function handleWorkspaceRoute(
     void (async () => {
       const realCheck = await verifyRealPath(check.resolved, projectRoot);
       if (realCheck.status !== "ok") {
-        const statusCode = realCheck.status === "escaped" ? 403 : realCheck.status === "not_found" ? 404 : 500;
-        const msg = realCheck.status === "escaped" ? "Path escapes project boundary" : realCheck.status === "not_found" ? "File not found" : "Failed to access path";
+        const statusCode = realCheck.status === "escaped" || realCheck.status === "denied" ? 403 : realCheck.status === "not_found" ? 404 : 500;
+        const msg = realCheck.status === "escaped" ? "Path escapes project boundary" : realCheck.status === "denied" ? "Path denied" : realCheck.status === "not_found" ? "File not found" : "Failed to access path";
         jsonResponse(res, statusCode, { error: msg });
         return;
       }
