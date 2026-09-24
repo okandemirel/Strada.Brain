@@ -48,6 +48,14 @@ vi.mock("../channels/slack/app.js", () => ({
   resolveSlackHttpPort: vi.fn(() => 3200),
 }));
 
+vi.mock("../channels/teams/channel.js", () => ({
+  TeamsChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "teams", _args: args };
+  }),
+  // TEAMS_PORT parsing itself is covered in channels/teams/channel.test.ts.
+  resolveTeamsPort: vi.fn(() => 3979),
+}));
+
 vi.mock("../security/auth.js", () => ({
   AuthManager: vi.fn(),
 }));
@@ -199,6 +207,18 @@ describe("initializeChannel", () => {
       host: "0.0.0.0",
       port: 3200,
     });
+  });
+
+  // COR-16: the Teams webhook listener binds like every other listener.
+  it("wires Teams to BIND_HOST's address and TEAMS_PORT", async () => {
+    const config = makeConfig({
+      bindHost: "0.0.0.0",
+      teams: { appId: "app-id", appPassword: "app-pass", allowedUserIds: [], allowOpenAccess: false },
+    });
+    const channel = await initializeChannel("teams", config, auth);
+    const args = (channel as any)._args as unknown[];
+    expect(args[2]).toBe(3979);
+    expect(args[4]).toBe("0.0.0.0");
   });
 
   it("should default to telegram channel for unknown channelType", async () => {

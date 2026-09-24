@@ -88,7 +88,7 @@ export async function initializeChannel(
 
 
     case "teams": {
-      const { TeamsChannel } = await import("../channels/teams/channel.js");
+      const { TeamsChannel, resolveTeamsPort } = await import("../channels/teams/channel.js");
       const teamsAppId = config.teams.appId;
       const teamsAppPassword = config.teams.appPassword;
       const allowOpenAccess = config.teams.allowOpenAccess;
@@ -104,12 +104,14 @@ export async function initializeChannel(
           "MISSING_TEAMS_CONFIG",
         );
       }
+      // The Bot Framework webhook binds like every other listener (COR-16):
+      // BIND_HOST for the address (0.0.0.0 in a container), TEAMS_PORT for the port.
       return new TeamsChannel(
         teamsAppId,
         teamsAppPassword,
-        3978,
+        resolveTeamsPort(),
         allowedUserIds,
-        "127.0.0.1",
+        config.bindHost,
         allowOpenAccess,
         appType,
         appTenantId,

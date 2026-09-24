@@ -75,7 +75,7 @@ node dist/index.js doctor      # checks install, build, config, and embedding re
 > asserted in `src/config/config.test.ts` and threaded through to the adapter.
 
 ### 4. Expose the local messaging endpoint
-The channel listens on `127.0.0.1:3978` and serves `POST /api/messages`.
+The channel listens on `127.0.0.1:3978` (`BIND_HOST` and `TEAMS_PORT` change the address and port) and serves `POST /api/messages`.
 
 - Start a tunnel to `http://127.0.0.1:3978` (e.g. `ngrok http 3978`, dev tunnel,
   or your reverse proxy).

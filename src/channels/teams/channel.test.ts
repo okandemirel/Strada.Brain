@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { TeamsChannel } from "./channel.js";
+import { DEFAULT_TEAMS_PORT, resolveTeamsPort, TeamsChannel } from "./channel.js";
 
 // Controls how the mocked HTTP server resolves a listen() call: succeed via the
 // callback, or fail by emitting an 'error' event (e.g. EADDRINUSE).
@@ -445,5 +445,19 @@ describe("TeamsChannel", () => {
     });
 
     await channel2.disconnect();
+  });
+});
+
+describe("resolveTeamsPort (COR-16)", () => {
+  it("reads TEAMS_PORT, defaulting to the Bot Framework port", () => {
+    expect(resolveTeamsPort({})).toBe(DEFAULT_TEAMS_PORT);
+    expect(resolveTeamsPort({ TEAMS_PORT: " " })).toBe(3978);
+    expect(resolveTeamsPort({ TEAMS_PORT: "4010" })).toBe(4010);
+  });
+
+  it("refuses a value that is not a port instead of silently using another", () => {
+    for (const bad of ["abc", "0", "70000", "39.5", "-1"]) {
+      expect(() => resolveTeamsPort({ TEAMS_PORT: bad }), bad).toThrow(/Invalid TEAMS_PORT/);
+    }
   });
 });

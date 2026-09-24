@@ -68,6 +68,24 @@ async function importBotbuilder(): Promise<BotbuilderModule> {
   return mod as BotbuilderModule;
 }
 
+/** The Bot Framework webhook port when TEAMS_PORT is unset — the Bot Framework default. */
+export const DEFAULT_TEAMS_PORT = 3978;
+
+/**
+ * The webhook listener's port (COR-16): `TEAMS_PORT`, else 3978. An invalid
+ * value throws — as with SLACK_HTTP_PORT, a listener that silently falls back
+ * after the operator asked for another port is the worse failure.
+ */
+export function resolveTeamsPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["TEAMS_PORT"]?.trim();
+  if (!raw) return DEFAULT_TEAMS_PORT;
+  const port = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid TEAMS_PORT ${JSON.stringify(env["TEAMS_PORT"])}: expected a port number 1-65535`);
+  }
+  return port;
+}
+
 export class TeamsChannel implements IChannelAdapter {
   readonly name = "teams";
 
@@ -92,7 +110,7 @@ export class TeamsChannel implements IChannelAdapter {
   constructor(
     private readonly appId: string,
     private readonly appPassword: string,
-    private readonly port: number = 3978,
+    private readonly port: number = DEFAULT_TEAMS_PORT,
     private readonly allowedUserIds: readonly string[] = [],
     private readonly listenHost: string = "127.0.0.1",
     private readonly allowOpenAccess: boolean = false,

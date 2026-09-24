@@ -964,6 +964,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `TEAMS_APP_PASSWORD` | Microsoft Teams app password |
 | `TEAMS_ALLOWED_USER_IDS` | Comma-separated Teams user IDs allowed to message the bot |
 | `TEAMS_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Teams traffic without a user allowlist |
+| `TEAMS_PORT` | Port of the Bot Framework webhook listener (default `3978`; binds `BIND_HOST`) |
 
 ### Features
 
