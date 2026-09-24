@@ -379,10 +379,17 @@ services:
     restart: unless-stopped
     profiles:
       - monitoring
+    entrypoint:
+      - /bin/sh
+      - -c
+      - '[ -n "$$GF_SECURITY_ADMIN_PASSWORD" ] || { echo "GRAFANA_ADMIN_PASSWORD must be set - do not use default passwords" >&2; exit 1; }; exec /run.sh'
     
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set - do not use default passwords in production}
+      # Not a required-variable interpolation (":?"): compose evaluates those for every service when it loads
+      # the file, so a stack without the monitoring profile refused to start.
+      # The entrypoint above refuses instead, only when Grafana itself runs.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3001}
     

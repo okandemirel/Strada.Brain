@@ -362,3 +362,13 @@ describe("the development stack is opt-in (OPS-5)", () => {
     expect(users.at(-1)).not.toMatch(/^(?:root|0)(?::|$)/);
   });
 });
+
+describe("docker-compose.yml loads without optional-profile secrets", () => {
+  it("has no ${VAR:?} interpolation, which compose checks for every service at load time", () => {
+    expect(compose).not.toMatch(/\$\{[A-Z0-9_]+:\?/);
+  });
+
+  it("still refuses to start Grafana without an admin password", () => {
+    expect(compose).toMatch(/GF_SECURITY_ADMIN_PASSWORD" \] \|\| \{ echo "GRAFANA_ADMIN_PASSWORD must be set/);
+  });
+});

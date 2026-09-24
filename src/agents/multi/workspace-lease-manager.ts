@@ -170,9 +170,9 @@ export type WorkspaceCommandRunner = (params: {
   cwd: string;
   timeoutMs: number;
   /**
-   * Byte ceiling for captured output. The default runner keeps only the TAIL
-   * once output passes its cap, which is the right call for logs and the wrong
-   * one for a command whose output IS the data.
+   * Byte ceiling for captured output. The default runner keeps the head and
+   * tail once output passes its cap, which suits logs and is wrong for a
+   * command whose output IS the data.
    */
   maxOutput?: number;
   /** Extra process environment (a temporary GIT_INDEX_FILE for commit replay). */

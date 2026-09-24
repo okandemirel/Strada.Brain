@@ -181,8 +181,8 @@ cp your-key.pem nginx/ssl/key.pem
 # All services
 docker compose up -d
 
-# Without monitoring
-docker compose up -d strada-brain redis nginx
+# Without monitoring (Redis is opt-in: add --profile redis)
+docker compose up -d strada-brain nginx
 
 # With monitoring
 docker compose --profile monitoring up -d
@@ -230,7 +230,7 @@ docker compose --profile monitoring up -d
 ```
 
 Access:
-- Grafana: http://localhost:3000 (admin/admin)
+- Grafana: http://localhost:3001 (user `GRAFANA_ADMIN_USER`, default `admin`; password `GRAFANA_ADMIN_PASSWORD`, which must be set — Grafana refuses to start without it)
 - Prometheus: http://localhost:9091
 
 ### Default Grafana Dashboard
@@ -261,11 +261,12 @@ docker inspect strada-brain
 ### Health Check Failing
 
 ```bash
-# Test health endpoint
+# Test health endpoints (portal on 3000, dashboard API on 3100; both bound to loopback)
+curl http://localhost:3000/health
 curl http://localhost:3100/health
 
 # Check if ports are bound
-netstat -tlnp | grep 3100
+netstat -tlnp | grep -E ':(3000|3100)'
 ```
 
 ### SSL Errors

@@ -283,7 +283,8 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
    * Update a plain-loop step node's status IN MEMORY only (no WS emit). Used mid-batch:
    * stepBatch marks the prior node 'completed' here, then re-emits the FULL dag_init, whose
    * node list carries this updated status — so a separate task_update would be redundant
-   * (frontend setDAG REPLACES the root topology). Single source = the dag_init re-emit.
+   * (the portal MERGES a dag_init into the root's board, keeping each card's details, and only
+   * dag_restructure replaces it). Single source = the dag_init re-emit.
    */
   function setStepStatusInMemory(
     episode: EpisodeState,
