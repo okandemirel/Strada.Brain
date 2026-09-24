@@ -537,7 +537,10 @@ export class LocalModelRunner {
       if (pipUp.code !== 0) return { ok: false, detail: `pip upgrade failed: ${pipUp.stderr.slice(0, 300)}` };
 
       if (spec.installMethod === "repo") {
-        return this.installFromRepo(spec, env, onProgress);
+        // Awaited so a throw inside the repo install (an unreadable
+        // requirements file, a failed write) lands in the catch below and
+        // comes back as { ok: false } instead of rejecting past it.
+        return await this.installFromRepo(spec, env, onProgress);
       }
 
       onProgress?.(`installing ${spec.pipPackages.length} pip packages (this is the long step)…`);

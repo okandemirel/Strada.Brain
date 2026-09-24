@@ -90,6 +90,15 @@ describe("LocalModelRunner", () => {
     expect(readdirSync(fakeHome)).toEqual([]);
   });
 
+  it("reports a repo install that throws as a failed install instead of rejecting", async () => {
+    // spawnOk "clones" nothing, so reading the repo's requirements file throws
+    // inside installFromRepo; install() must still answer { ok: false }.
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    const result = await runner.install(getModelSpec("triposr")!);
+    expect(result.ok).toBe(false);
+    expect(existsSync(marker("triposr"))).toBe(false);
+  });
+
   it("surfaces pip failures instead of marking the model installed", async () => {
     // A venv that already exists takes the pip path, so the failure is pip's.
     mkdirSync(join(dir, "venv", "bin"), { recursive: true });
