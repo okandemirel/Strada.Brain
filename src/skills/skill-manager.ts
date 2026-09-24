@@ -19,7 +19,7 @@ import { parseFrontmatter } from "./frontmatter-parser.js";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
 import { readSkillConfig } from "./skill-config.js";
-import { assessWorkspaceSkillTrust } from "./skill-trust.js";
+import { assessWorkspaceSkillTrust, type SkillTrustVerdict } from "./skill-trust.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { SkillEntry, SkillRequirements, SkillStatus } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
@@ -85,7 +85,14 @@ export class SkillManager {
   async loadAll(projectRoot?: string, extraDirs?: string[]): Promise<SkillEntry[]> {
     const logger = getLoggerSafe();
     const config = await readSkillConfig();
-    const discovered = await discoverSkills(projectRoot, extraDirs);
+    // SEC-12: which copy of a name wins is decided AFTER the workspace trust
+    // verdict, not by discovery order alone (see resolveShadowedSkills).
+    const workspaceTrust = new Map<string, SkillTrustVerdict>();
+    const discovered = await resolveShadowedSkills(
+      await discoverSkills(projectRoot, extraDirs, { includeShadowed: true }),
+      projectRoot,
+      workspaceTrust,
+    );
 
     /** Parked: not going to be registered. Restores env, records the entry. */
     const park = (skill: DiscoveredSkill, status: Exclude<SkillStatus, "active">, reason?: string): void => {
@@ -148,7 +155,8 @@ export class SkillManager {
         // checkout. Without an approval record outside the project it is not
         // imported at all.
         if (skill.tier === "workspace") {
-          const trust = await assessWorkspaceSkillTrust(projectRoot ?? dirname(dirname(skill.path)), skill.path, name);
+          const trust = workspaceTrust.get(skill.path)
+            ?? await assessWorkspaceSkillTrust(projectRoot ?? dirname(dirname(skill.path)), skill.path, name);
           if (!trust.trusted) {
             park(skill, "untrusted", trust.reason);
             logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
@@ -432,6 +440,58 @@ export class SkillManager {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * SEC-12: one skill per name, where a WORKSPACE skill — content of the checked
+ * out repository — displaces a managed, bundled or extra skill of the same name
+ * only when its code is approved for this project (`strada skill trust`).
+ *
+ * Discovery used to dedupe by name before any trust verdict, workspace first,
+ * so any repository could silently replace a bundled skill (and its tools) by
+ * reusing its name. A body-only workspace skill has no code to approve, so it
+ * never shadows a lower tier either. The losing workspace copy is dropped with
+ * a warning; the verdicts computed here are handed back through `trust` so
+ * loadAll does not scan the same directory twice.
+ */
+async function resolveShadowedSkills(
+  discovered: readonly DiscoveredSkill[],
+  projectRoot: string | undefined,
+  trust: Map<string, SkillTrustVerdict>,
+): Promise<DiscoveredSkill[]> {
+  const byName = new Map<string, DiscoveredSkill[]>();
+  for (const skill of discovered) {
+    const group = byName.get(skill.manifest.name);
+    if (group) group.push(skill);
+    else byName.set(skill.manifest.name, [skill]);
+  }
+
+  const winners: DiscoveredSkill[] = [];
+  for (const [name, group] of byName) {
+    const first = group[0]!;
+    const fallback = group[1];
+    if (first.tier !== "workspace" || !fallback) {
+      winners.push(first);
+      continue;
+    }
+    let approved = false;
+    try {
+      const verdict = await assessWorkspaceSkillTrust(projectRoot ?? dirname(dirname(first.path)), first.path, name);
+      trust.set(first.path, verdict);
+      approved = verdict.trusted && verdict.sha256 !== null;
+    } catch {
+      approved = false; // an unreadable skill cannot prove its approval
+    }
+    if (approved) {
+      winners.push(first);
+      continue;
+    }
+    getLoggerSafe().warn(
+      `Workspace skill "${name}" at ${first.path} is not approved for this project, so it does not replace the ${fallback.tier} skill of the same name`,
+    );
+    winners.push(fallback);
+  }
+  return winners;
+}
 
 /** `requires` minus the `skills` gate, which loadAll measures itself. Same object when there is nothing to strip. */
 function withoutSkillsGate(requires: SkillRequirements | undefined): SkillRequirements | undefined {

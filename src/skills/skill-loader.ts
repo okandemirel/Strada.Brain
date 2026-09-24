@@ -72,14 +72,19 @@ const TIERS: Array<{ tier: SkillEntry["tier"]; dir: (projectRoot?: string) => st
  * frontmatter and validates required fields (`name`, `version`, `description`).
  *
  * When the same skill name appears in multiple tiers, the higher-precedence
- * tier (earlier in scan order) wins.
+ * tier (earlier in scan order) wins — unless `includeShadowed` is set, in which
+ * case the lower-tier copies are returned too (after the winner, in scan
+ * order), so a caller that must first decide whether the winner may win at
+ * all (SEC-12: an unapproved workspace skill) can fall back to them.
  */
 export async function discoverSkills(
   projectRoot?: string,
   extraDirs?: string[],
+  options: { includeShadowed?: boolean } = {},
 ): Promise<DiscoveredSkill[]> {
   const logger = getLoggerSafe();
   const byName = new Map<string, DiscoveredSkill>();
+  const shadowed: DiscoveredSkill[] = [];
 
   // Build the list of (tier, directory) pairs to scan
   const scanList: Array<{ tier: SkillEntry["tier"]; dir: string }> = [];
@@ -145,7 +150,8 @@ export async function discoverSkills(
         }
 
         // Higher-precedence tier wins: only insert if not already seen
-        if (byName.has(name)) {
+        const alreadySeen = byName.has(name);
+        if (alreadySeen && !options.includeShadowed) {
           logger.debug(`Skill "${name}" already discovered from higher-precedence tier; skipping ${tier} at ${skillDir}`);
           continue;
         }
@@ -171,14 +177,16 @@ export async function discoverSkills(
         };
 
         const trimmedBody = bodyContent?.trim();
-        byName.set(name, { manifest, tier, path: skillDir, ...(trimmedBody ? { body: trimmedBody } : {}) });
+        const discovered: DiscoveredSkill = { manifest, tier, path: skillDir, ...(trimmedBody ? { body: trimmedBody } : {}) };
+        if (alreadySeen) shadowed.push(discovered);
+        else byName.set(name, discovered);
       } catch (err) {
         logger.warn(`Error scanning skill directory ${skillDir}: ${err instanceof Error ? err.message : err}`);
       }
     }
   }
 
-  return [...byName.values()];
+  return [...byName.values(), ...shadowed];
 }
 
 // ---------------------------------------------------------------------------
