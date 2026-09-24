@@ -6,7 +6,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, sep } from "node:path";
 import { glob } from "glob";
 import { computeContentHash } from "../chunker.js";
 import type {
@@ -16,7 +16,7 @@ import type {
   VectorEntry,
 } from "../rag.interface.js";
 import { createBrand } from "../../types/index.js";
-import type { TimestampMs } from "../../types/index.js";
+import type { FilePath, TimestampMs } from "../../types/index.js";
 import type {
   FrameworkDocChunk,
   PackageRoot,
@@ -25,10 +25,20 @@ import type {
 import { chunkMarkdown, chunkXmlDocs, chunkCSharpExample } from "./doc-chunker.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
+/**
+ * What "already indexed" compares: the content AND the package version, since
+ * the chunk ids embed the version and an upgrade must re-key them.
+ */
+function sourceHash(pkg: PackageRoot, content: string): string {
+  return `${pkg.version}:${computeContentHash(content)}`;
+}
+
 export class DocRAGPipeline {
   private readonly embeddingProvider: IEmbeddingProvider;
   private readonly vectorStore: IVectorStore;
   private fileHashes = new Map<string, string>();
+  /** Chunk ids each source produced when last indexed, keyed like fileHashes. */
+  private chunkIdsByKey = new Map<string, string[]>();
   private indexedChunkCount = 0;
 
   constructor(embeddingProvider: IEmbeddingProvider, vectorStore: IVectorStore) {
@@ -104,9 +114,48 @@ export class DocRAGPipeline {
       }
     }
 
+    await this.removeStaleChunks(pkg, new Set([...mdFiles, ...csFiles, ...exampleFiles]));
+
     logger?.debug(`Doc RAG: indexed ${totalChunks} chunks from ${pkg.name}`);
     this.indexedChunkCount += totalChunks;
     return totalChunks;
+  }
+
+  /**
+   * Remove this package's chunks that no current source produces (MEM-12):
+   * sections a shrunk file lost, every chunk of an older package version (the
+   * chunk ids embed the version, so an upgrade re-keys them all), and chunks
+   * of files that are gone. The store persists across restarts, so it is
+   * asked what it holds rather than trusting this process's memory.
+   */
+  private async removeStaleChunks(pkg: PackageRoot, seenFiles: Set<string>): Promise<void> {
+    const prefix = pkg.path.endsWith(sep) ? pkg.path : pkg.path + sep;
+    const files = new Set<string>(seenFiles);
+    for (const f of this.vectorStore.listIndexedFiles?.() ?? []) {
+      if (f.filePath.startsWith(prefix)) files.add(f.filePath);
+    }
+    const stale: string[] = [];
+    for (const filePath of files) {
+      const live = new Set([
+        ...(seenFiles.has(filePath) ? this.chunkIdsByKey.get(filePath) ?? [] : []),
+        ...(seenFiles.has(filePath) ? this.chunkIdsByKey.get(`xml:${filePath}`) ?? [] : []),
+      ]);
+      for (const id of this.vectorStore.getFileChunkIds(filePath as FilePath)) {
+        if (!live.has(id)) stale.push(id);
+      }
+    }
+    if (stale.length > 0) await this.vectorStore.remove(stale);
+  }
+
+  /**
+   * Embed and store one source's chunks, then record it as indexed. The hash
+   * is recorded only after the store succeeded: recording it first meant an
+   * embedding failure left the file marked done and never retried (MEM-12).
+   */
+  private async storeSourceChunks(key: string, hash: string, chunks: FrameworkDocChunk[]): Promise<void> {
+    await this.embedAndStore(chunks);
+    this.chunkIdsByKey.set(key, chunks.map((c) => c.id));
+    this.fileHashes.set(key, hash);
   }
 
   // ---------------------------------------------------------------------------
@@ -131,9 +180,8 @@ export class DocRAGPipeline {
 
   private async indexMarkdownFile(filePath: string, pkg: PackageRoot): Promise<number> {
     const content = await readFile(filePath, "utf-8");
-    const hash = computeContentHash(content);
+    const hash = sourceHash(pkg, content);
     if (this.fileHashes.get(filePath) === hash) return 0;
-    this.fileHashes.set(filePath, hash);
 
     const name = basename(filePath).toLowerCase();
     const docSource: DocSourceType =
@@ -144,36 +192,37 @@ export class DocRAGPipeline {
           : "framework_docs";
 
     const chunks = chunkMarkdown(content, filePath, pkg, docSource);
-    await this.embedAndStore(chunks);
+    await this.storeSourceChunks(filePath, hash, chunks);
     return chunks.length;
   }
 
   private async indexXmlDocFile(filePath: string, pkg: PackageRoot): Promise<number> {
     const content = await readFile(filePath, "utf-8");
 
-    // Only process files that contain XML doc comments
-    if (!content.includes("/// <summary>")) return 0;
-
     const xmlHashKey = `xml:${filePath}`;
-    const hash = computeContentHash(content);
+    // Only process files that contain XML doc comments; one that no longer
+    // has any produces no chunks, and the package sweep drops its old ones.
+    if (!content.includes("/// <summary>")) {
+      this.chunkIdsByKey.delete(xmlHashKey);
+      this.fileHashes.delete(xmlHashKey);
+      return 0;
+    }
+
+    const hash = sourceHash(pkg, content);
     if (this.fileHashes.get(xmlHashKey) === hash) return 0;
-    this.fileHashes.set(xmlHashKey, hash);
 
     const chunks = chunkXmlDocs(content, filePath, pkg);
-    if (chunks.length === 0) return 0;
-
-    await this.embedAndStore(chunks);
+    await this.storeSourceChunks(xmlHashKey, hash, chunks);
     return chunks.length;
   }
 
   private async indexExampleFile(filePath: string, pkg: PackageRoot): Promise<number> {
     const content = await readFile(filePath, "utf-8");
-    const hash = computeContentHash(content);
+    const hash = sourceHash(pkg, content);
     if (this.fileHashes.get(filePath) === hash) return 0;
-    this.fileHashes.set(filePath, hash);
 
     const chunks = chunkCSharpExample(content, filePath, pkg);
-    await this.embedAndStore(chunks);
+    await this.storeSourceChunks(filePath, hash, chunks);
     return chunks.length;
   }
 
