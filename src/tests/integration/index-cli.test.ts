@@ -1,4 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -35,6 +37,33 @@ describe("index CLI lifecycle commands", () => {
     expect(output).toContain("Version: v");
     expect(output).not.toContain("Strada Launcher");
   });
+
+  it("exits non-zero when an async command fails (COR-8)", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "strada-cli-exit-"));
+    try {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        NO_COLOR: "1",
+        STRADA_SOURCE_CHECKOUT: "false",
+        STRADA_HOME: home,
+        UNITY_PROJECT_PATH: path.join(home, "no-such-project"),
+      };
+      for (const key of Object.keys(env)) {
+        if (/_API_KEY$|_AUTH_TOKEN$/.test(key)) delete env[key];
+      }
+      // `supervise` loads the config inside its async action; an invalid one rejects it.
+      const run = spawnSync(process.execPath, ["--import", "tsx", INDEX_ENTRY, "supervise"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env,
+        timeout: 60_000,
+      });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("Invalid configuration");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 90_000);
 
   it("shows dedicated help for kill and restart", () => {
     const killHelp = runIndexCli(["kill", "--help"]);

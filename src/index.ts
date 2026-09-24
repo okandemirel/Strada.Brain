@@ -24,7 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
-import { createLogger } from "./utils/logger.js";
+import { createLogger, getLoggerSafe } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
 // NOTE: ./core/bootstrap.js is deliberately NOT imported statically. It pulls
 // in the entire agent/vault/provider stack: measured on its own, 313 ms and
@@ -69,8 +69,9 @@ const runtimePaths = initializeRuntimeEnvironment({ moduleUrl: import.meta.url }
 
 setupGlobalErrorHandlers(
   (error) => {
-    const logger = createLogger("error", "strada-brain-error.log");
-    logger.error("Fatal error", { error: error.message, stack: error.stack });
+    // Never createLogger here: it is first-call-wins, so a rejection before
+    // startApp would pin the whole process to an error-only logger (COR-8).
+    getLoggerSafe().error("Unhandled rejection", { error: error.message, stack: error.stack });
   },
 );
 
@@ -437,8 +438,16 @@ program.action(async (opts: RootLaunchOptions) => {
   await runRootLauncher(opts);
 });
 
-// Run CLI
-program.parse();
+// Run CLI. parse() drops the promise an async action returns, so a command
+// that failed was an unhandled rejection and the CLI still exited 0 (COR-8).
+program.parseAsync().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  getLoggerSafe().error("Command failed", {
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  process.exitCode = 1;
+});
 
 // ============================================================================
 // Application Startup
