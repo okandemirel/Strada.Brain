@@ -10,6 +10,7 @@
 
 import type { AgentEvent } from "./agent-event.js";
 import type { LiveSink } from "./event-bus.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export interface BoundedSinkOptions {
   readonly id: string;
@@ -33,6 +34,27 @@ export function createBoundedSink(opts: BoundedSinkOptions): LiveSink {
   let queue: AgentEvent[] = [];
   let flushing = false;
   let closed = false;
+  let flushFailureLogged = false;
+
+  /**
+   * The "MUST NOT throw" contract, enforced here: deliver() starts pump() without awaiting it,
+   * so a throwing flush became one unhandled rejection per event, and a persistently failing
+   * consumer (a busy database behind the progress path) could trip the process's rejection-storm
+   * shutdown. The failed batch is dropped; later batches still flow. Logged once per sink.
+   */
+  async function safeFlush(batch: readonly AgentEvent[]): Promise<void> {
+    try {
+      await opts.flush(batch);
+    } catch (error) {
+      if (flushFailureLogged) return;
+      flushFailureLogged = true;
+      getLoggerSafe().warn("[agent-core] event sink flush failed; dropping the batch", {
+        sink: opts.id,
+        events: batch.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   function coalesce(ev: AgentEvent): void {
     if (ev.type === "model.delta") {
@@ -58,7 +80,7 @@ export function createBoundedSink(opts: BoundedSinkOptions): LiveSink {
       while (queue.length > 0 && !closed) {
         const batch = queue;
         queue = [];
-        await opts.flush(batch); // a slow flush queues new events; emit() never waits on this
+        await safeFlush(batch); // a slow flush queues new events; emit() never waits on this
       }
     } finally {
       flushing = false;
@@ -79,7 +101,7 @@ export function createBoundedSink(opts: BoundedSinkOptions): LiveSink {
       if (queue.length) {
         const b = queue;
         queue = [];
-        await opts.flush(b);
+        await safeFlush(b);
       }
     },
   };

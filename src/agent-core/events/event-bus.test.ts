@@ -280,6 +280,53 @@ describe("bounded sink — back-pressure", () => {
     expect(flushedOnClose.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("a throwing flush drops its batch without an unhandled rejection; later batches still flow", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const flushed: AgentEvent[] = [];
+      let calls = 0;
+      const sink = createBoundedSink({
+        id: "throwing",
+        flush(batch) {
+          calls++;
+          if (calls <= 40) throw new Error("SQLITE_BUSY: database is locked");
+          flushed.push(...batch);
+        },
+      });
+      const beat = (i: number): AgentEvent =>
+        ({ type: "heartbeat", source: "loop-yield", seq: i, ts: 0, runId: "r" }) as AgentEvent;
+      for (let i = 1; i <= 50; i++) {
+        sink.deliver(beat(i));
+        await Promise.resolve();
+      }
+      await new Promise((r) => setTimeout(r, 20)); // let any unhandled rejection surface
+      expect(rejections).toEqual([]);
+      expect(flushed.length).toBeGreaterThan(0);
+
+      // close() draining into a failing consumer resolves too (the run's finally awaits it).
+      let held = false;
+      const sink2 = createBoundedSink({
+        id: "throwing-on-close",
+        async flush() {
+          if (!held) {
+            held = true;
+            await new Promise(() => {}); // hold the first batch so the next stays queued
+          }
+          throw new Error("disk full");
+        },
+      });
+      sink2.deliver(beat(1));
+      sink2.deliver(beat(2));
+      await expect(sink2.close?.()).resolves.toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
   it("bus.close() awaits sink.close()", async () => {
     const clock = new FakeClock();
     const bus = createAgentRunEventBus({ runId: "r", clock });
