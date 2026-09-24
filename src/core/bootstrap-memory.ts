@@ -13,6 +13,7 @@ import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { runAutomaticMigration } from "../memory/unified/migration.js";
 import type { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
+import { isHnswAvailable } from "../rag/hnsw/hnsw-vector-store.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type * as winston from "winston";
 
@@ -240,6 +241,12 @@ export async function initializeMemory(
     const initResult = await agentdb.initialize();
     if (initResult.kind === "err") throw initResult.error;
     logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
+    if (!isHnswAvailable()) {
+      // X-6: say at boot why memory search is slower than it could be.
+      logger.warn(
+        "hnswlib-node is not installed: AgentDB memory uses exact vector search (fine at the default tier caps, slower as the store grows). For the HNSW index install a C++ toolchain and run: npm install hnswlib-node",
+      );
+    }
     return await finalizeAgentDB(agentdb);
   } catch (error) {
     // A failed initialize() already released its handles; a failure after it

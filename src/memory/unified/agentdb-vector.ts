@@ -18,7 +18,7 @@ import {
   UNKNOWN_PROVENANCE,
 } from "./unified-memory.interface.js";
 import type { HNSWConfig, HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
-import { createHNSWVectorStore, isHnswAvailable } from "../../rag/hnsw/hnsw-vector-store.js";
+import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { VectorEntry } from "../../rag/rag.interface.js";
 import type {
   TimestampMs,
@@ -261,6 +261,9 @@ export function agentDbHnswConfig(config: UnifiedMemoryConfig): Partial<HNSWConf
     efSearch: config.hnswParams.efSearch,
     metric: "cosine",
     quantization: config.quantizationType,
+    // AgentDB is unusable without a vector index; its store is bounded by
+    // the tier caps, so exact search is a workable fallback (X-6).
+    allowExactFallback: true,
   };
 }
 
@@ -272,8 +275,7 @@ export function agentDbHnswConfig(config: UnifiedMemoryConfig): Partial<HNSWConf
  * the current configuration (most often one written for other embedding
  * dimensions after a provider switch, or a damaged file) is therefore
  * discarded and the store starts empty, instead of failing initialize() and
- * putting every AgentDB memory out of reach (MEM-2). When hnswlib-node itself
- * is missing there is nothing to reset, so that error still propagates.
+ * putting every AgentDB memory out of reach (MEM-2).
  */
 export async function openAgentDbHnswStore(
   dbPath: string,
@@ -284,7 +286,7 @@ export async function openAgentDbHnswStore(
   try {
     return await createHNSWVectorStore(vectorStorePath, hnswConfig);
   } catch (error) {
-    if (!isHnswAvailable() || !existsSync(vectorStorePath)) throw error;
+    if (!existsSync(vectorStorePath)) throw error;
     getLoggerSafe().warn(
       "[AgentDBMemory] Persisted HNSW index cannot be opened with the current configuration; discarding it (it is rebuilt from SQLite)",
       { path: vectorStorePath, dimensions: config.dimensions, error: String(error) },

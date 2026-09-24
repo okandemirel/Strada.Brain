@@ -26,6 +26,11 @@ vi.mock("../memory/unified/agentdb-adapter.js", () => ({
   }),
 }));
 
+const mockIsHnswAvailable = vi.fn(() => true);
+vi.mock("../rag/hnsw/hnsw-vector-store.js", () => ({
+  isHnswAvailable: () => mockIsHnswAvailable(),
+}));
+
 const mockRunAutomaticMigration = vi.fn();
 vi.mock("../memory/unified/migration.js", () => ({
   runAutomaticMigration: (...args: unknown[]) => mockRunAutomaticMigration(...args),
@@ -245,6 +250,13 @@ describe("bootstrap-memory", () => {
           expect.stringContaining("Re-embedded 3/3 stale entries (1 hash, 1 unknown provenance, 1 other provider) out of 10 scanned"),
         );
       });
+    });
+
+    it("says at boot that AgentDB searches exactly when hnswlib-node is missing (X-6)", async () => {
+      mockIsHnswAvailable.mockReturnValueOnce(false);
+      const result = await initializeMemory(makeConfig(), logger);
+      expect((result as any)._tag).toBe("agentdb-adapter");
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("hnswlib-node is not installed"));
     });
 
     it("falls back to FileMemoryManager after AgentDB init failure", async () => {

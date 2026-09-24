@@ -33,6 +33,100 @@ export function isHnswAvailable(): boolean {
   return hnswAvailable;
 }
 
+const nativeHnswAvailable = hnswAvailable;
+
+/** @internal test hook: pretend hnswlib-node is missing (true) or restore (null). */
+export function _simulateMissingHnswForTests(missing: boolean | null): void {
+  hnswAvailable = missing === true ? false : nativeHnswAvailable;
+}
+
+/**
+ * Exact (brute-force) stand-in for hnswlib's HierarchicalNSW (X-6).
+ *
+ * hnswlib-node is an optional native dependency, but AgentDB memory cannot
+ * run without a vector index; where the native build fails (typically Windows
+ * without build tools) every AgentDB memory used to be unreachable. A store
+ * opened with `allowExactFallback` uses this instead. It implements only the
+ * subset of the HierarchicalNSW API the store calls, with the same distance
+ * conventions ("ip": 1 - dot, "l2": squared distance). Search scans every
+ * live point — O(n·d), bounded by the store's capacity (maxElements), which is
+ * a few milliseconds at AgentDB's default tier caps. It persists nothing of
+ * its own: the store's vector sidecar holds every vector and loadIndex
+ * rebuilds from it.
+ */
+class ExactVectorIndex {
+  private readonly points = new Map<number, Float64Array>();
+  private capacity = 0;
+
+  constructor(
+    private readonly space: string,
+    private readonly dimensions: number,
+  ) {}
+
+  initIndex(maxElements: number): void {
+    this.capacity = maxElements;
+    this.points.clear();
+  }
+
+  resizeIndex(maxElements: number): void {
+    this.capacity = Math.max(maxElements, this.points.size);
+  }
+
+  setEf(): void {
+    // Exact search has no ef parameter.
+  }
+
+  addPoint(vector: number[], label: number): void {
+    if (vector.length !== this.dimensions) {
+      throw new Error(`Invalid vector size: ${vector.length} (expected ${this.dimensions})`);
+    }
+    if (!this.points.has(label) && this.points.size >= this.capacity) {
+      throw new Error("The number of elements exceeds the specified limit");
+    }
+    this.points.set(label, Float64Array.from(vector));
+  }
+
+  markDelete(label: number): void {
+    this.points.delete(label);
+  }
+
+  searchKnn(query: number[], k: number): { neighbors: number[]; distances: number[] } {
+    const scored: Array<{ label: number; distance: number }> = [];
+    for (const [label, point] of this.points) {
+      scored.push({ label, distance: this.distance(query, point) });
+    }
+    scored.sort((a, b) => a.distance - b.distance);
+    const top = scored.slice(0, Math.max(0, k));
+    return { neighbors: top.map((h) => h.label), distances: top.map((h) => h.distance) };
+  }
+
+  async writeIndex(file: string): Promise<void> {
+    // A marker only, so the store's "an index exists" check still holds.
+    writeFileSync(file, `${EXACT_INDEX_FORMAT}\n`, "utf-8");
+  }
+
+  async readIndex(): Promise<void> {
+    // Nothing to read: loadIndex re-adds the sidecar vectors.
+  }
+
+  private distance(query: number[], point: Float64Array): number {
+    let acc = 0;
+    if (this.space === "l2") {
+      for (let i = 0; i < point.length; i++) {
+        const d = (query[i] ?? 0) - point[i]!;
+        acc += d * d;
+      }
+      return acc;
+    }
+    for (let i = 0; i < point.length; i++) acc += (query[i] ?? 0) * point[i]!;
+    return 1 - acc;
+  }
+}
+
+/** metadata.json `indexFormat` values: which index wrote hnsw.index. */
+const NATIVE_INDEX_FORMAT = "hnswlib";
+const EXACT_INDEX_FORMAT = "strada-exact-v1";
+
 /**
  * Binary sidecar for the raw vectors.
  *
@@ -203,6 +297,12 @@ export interface HNSWConfig {
   quantization?: QuantizationType;
   /** Random seed for reproducibility */
   seed?: number;
+  /**
+   * When hnswlib-node is missing, fall back to exact (brute-force) search
+   * instead of failing initialize(). Opt-in: suited to bounded stores such as
+   * AgentDB memory, not to large code indexes.
+   */
+  allowExactFallback?: boolean;
 }
 
 /**
@@ -306,6 +406,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private writeSerializer: HnswWriteSerializer | null = null;
   /** Coalesce guard: at most one background compaction rebuild scheduled at a time. */
   private rebuildScheduled = false;
+  /** True when hnswlib-node is missing and the exact fallback index is in use. */
+  private usingExactIndex = false;
 
   constructor(storePath: string, config: Partial<HNSWConfig> = {}) {
     this.storePath = storePath;
@@ -330,11 +432,18 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    if (!hnswAvailable) {
+    if (!hnswAvailable && !this.config.allowExactFallback) {
       throw new Error(
         "hnswlib-node is not available. HNSW vector search requires the optional " +
-          "hnswlib-node native module. On Windows, install Python 3 and C++ Build Tools " +
-          "(npm install --global windows-build-tools) then run: npm install hnswlib-node",
+          "hnswlib-node native module, which builds with Python 3 and a C++ toolchain " +
+          "(on Windows: Visual Studio Build Tools with the C++ workload). Then run: npm install hnswlib-node",
+      );
+    }
+    this.usingExactIndex = !hnswAvailable;
+    if (this.usingExactIndex) {
+      getLoggerSafe().warn(
+        "[HNSWVectorStore] hnswlib-node is not available; using exact vector search (slower on large stores)",
+        { path: this.storePath, maxElements: this.config.maxElements },
       );
     }
 
@@ -348,7 +457,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       // For cosine similarity, we use "ip" (inner product) space
       // because cosine = dot product of normalized vectors
       const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
-      this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
+      this.hnswIndex = this.createIndex(spaceName, this.config.dimensions);
 
       // Try to load existing index
       const indexPath = join(this.storePath, "hnsw.index");
@@ -900,6 +1009,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       // of the JSON on purpose — see writeVectorSidecar.
       vectorsByIndex: [],
       vectorsFormat: VECTOR_SIDECAR_FORMAT,
+      indexFormat: this.usingExactIndex ? EXACT_INDEX_FORMAT : NATIVE_INDEX_FORMAT,
       quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
     };
 
@@ -964,10 +1074,28 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Load HNSW index
     const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
-    this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
-    await this.hnswIndex.readIndex(indexPath);
-    this.hnswIndex.setEf(this.config.efSearch);
-    this.hnswIndex.resizeIndex(this.config.maxElements);
+    this.hnswIndex = this.createIndex(spaceName, this.config.dimensions);
+    const storedFormat = metadata.indexFormat ?? NATIVE_INDEX_FORMAT;
+    if (!this.usingExactIndex && storedFormat === NATIVE_INDEX_FORMAT) {
+      await this.hnswIndex.readIndex(indexPath);
+      this.hnswIndex.setEf(this.config.efSearch);
+      this.hnswIndex.resizeIndex(this.config.maxElements);
+    } else {
+      // hnsw.index is not in this runtime's format (the exact fallback wrote
+      // a marker, or this runtime has no hnswlib): rebuild from the vectors.
+      this.hnswIndex.initIndex(
+        Math.max(this.config.maxElements, this.chunks.size, 1),
+        this.config.M,
+        this.config.efConstruction,
+        this.config.seed ?? 42,
+      );
+      this.hnswIndex.setEf(this.config.efSearch);
+      for (const [index, vector] of this.vectorsByIndex) {
+        if (this.chunks.has(index) && !this.deletedIndices.has(index)) {
+          this.hnswIndex.addPoint(vector, index);
+        }
+      }
+    }
 
     if (this.chunks.size === 0 && this.nextIndex > 0) {
       getLoggerSafe().warn(
@@ -1019,7 +1147,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       const requiredCapacity = Math.max(this.config.maxElements, chunks.length + 1000);
       const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
 
-      this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
+      this.hnswIndex = this.createIndex(spaceName, this.config.dimensions);
       this.hnswIndex.initIndex(
         requiredCapacity,
         this.config.M,
@@ -1108,12 +1236,24 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     return vector.map((v) => v / norm);
   }
 
+  /** The native HNSW index, or the exact fallback when hnswlib-node is missing. */
+  private createIndex(spaceName: string, dimensions: number): InstanceType<typeof HierarchicalNSW> {
+    return this.usingExactIndex
+      ? new ExactVectorIndex(spaceName, dimensions)
+      : new HierarchicalNSW(spaceName, dimensions);
+  }
+
+  /** True when this store searches exactly because hnswlib-node is missing. */
+  isExactSearch(): boolean {
+    return this.usingExactIndex;
+  }
+
   private recreateIndex(requiredCapacity: number): void {
     const normalizedCapacity = Math.max(requiredCapacity, 1);
     this.config = { ...this.config, maxElements: normalizedCapacity };
 
     const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
-    this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
+    this.hnswIndex = this.createIndex(spaceName, this.config.dimensions);
     this.hnswIndex.initIndex(
       normalizedCapacity,
       this.config.M,
