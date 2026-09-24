@@ -563,6 +563,24 @@ describe("AgentManager", () => {
       expect(usage.usedUsd).toBeGreaterThan(0);
     });
 
+    it("books one usage event once, with the unified manager wired (not again as daemon spend)", async () => {
+      daemonStorage.migrateBudgetSource(); // as bootstrap does before the unified manager records
+      const unified = new UnifiedBudgetManager(daemonStorage, { emit: () => {} }, {});
+      manager.setUnifiedBudgetManager(unified);
+      mockUsageEvent = { provider: "claude", inputTokens: 100_000, outputTokens: 50_000 };
+
+      await manager.routeMessage(makeMsg());
+
+      const [agent] = manager.getAllAgents();
+      const perAgent = budgetTracker.getAgentUsage(agent!.id, agent!.budgetCapUsd).usedUsd;
+      expect(perAgent).toBeGreaterThan(0);
+      const rows = daemonStorage.getDatabase()
+        .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries")
+        .get() as { n: number; total: number };
+      expect(rows.n).toBe(1);
+      expect(rows.total).toBeCloseTo(perAgent, 10);
+    });
+
     it("rejects message when agent budget is exceeded", async () => {
       // First message creates the agent
       await manager.routeMessage(makeMsg());

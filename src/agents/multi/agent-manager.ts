@@ -746,6 +746,9 @@ export class AgentManager {
           return;
         }
         const model = usage.model ?? usage.provider;
+        // One row per cost. Both recorders write the same budget_entries table, and the
+        // unified row already carries the agent id the per-agent cap sums; recording through
+        // both booked every cost twice (the second as daemon spend).
         if (this._unifiedBudgetManager) {
           this._unifiedBudgetManager.recordCost(costUsd, "agent", {
             model,
@@ -753,6 +756,7 @@ export class AgentManager {
             tokensOut: usage.outputTokens,
             agentId,
           });
+          return;
         }
         this.budgetTracker.recordCost(agentId, costUsd, {
           model,
