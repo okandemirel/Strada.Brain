@@ -80,6 +80,7 @@ async function loadBenchModules() {
     runner: await load("swe-sharp-runner"),
     trx: await load("trx-report"),
     dataset: await load("swe-sharp-dataset"),
+    bounded: await load("bounded-command"),
   };
 }
 
@@ -439,7 +440,7 @@ const STRADA_CANDIDATE_NOT_RUN =
   "credit on its own. Pass --candidate '<command>' to evaluate an agent, or " +
   "--candidate gold for the reference-patch control run.";
 
-function runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev }) {
+async function runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev }) {
   const { captureCandidatePatch } = api.runner;
   if (args.candidate === null || args.candidate === "strada") {
     return { kind: "unavailable", patch: null, patchSource: "none", unavailableReason: STRADA_CANDIDATE_NOT_RUN };
@@ -453,10 +454,16 @@ function runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev }) {
   fs.writeFileSync(problemFile, `# ${task.instanceId}\n\n${task.problemStatement}\n`);
   const patchOut = path.join(taskDir, "candidate.patch");
   const started = Date.now();
-  const res = run(process.env.SHELL ?? "/bin/sh", ["-c", args.candidate], {
+  // The budget binds the candidate's whole process tree, and a candidate that
+  // exited is done even if a background child still holds its output (CMP-9).
+  const res = await api.bounded.runBoundedCommand({
+    command: process.env.SHELL ?? "/bin/sh",
+    args: ["-c", args.candidate],
     cwd: repoDir,
-    timeout: args.candidateTimeout,
+    timeoutMs: args.candidateTimeout,
     env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
       STRADA_BENCH_INSTANCE_ID: task.instanceId,
       STRADA_BENCH_REPO: task.repo,
       STRADA_BENCH_BASE_COMMIT: task.baseCommit,
@@ -652,7 +659,7 @@ async function runTask(task, args, api) {
         deviations,
       });
     }
-    const candidate = runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev });
+    const candidate = await runCandidate({ args, task, api, repoDir, taskDir, logDir, baseRev });
     if (candidate.kind === "unavailable" || candidate.timedOut) {
       return finish({ baseline, candidate, deviations });
     }
