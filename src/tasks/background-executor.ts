@@ -349,13 +349,34 @@ export class BackgroundExecutor {
    */
   private readonly runReservations = new Map<string, string>();
   private readonly projectPath?: string;
+  /**
+   * Every timer this executor arms, cleared by shutdown() (TSK-22): the
+   * reaper handle was a local nobody could clear, and keep-alive, re-arm and
+   * settle-retry timers kept firing into a closed TaskStorage after shutdown,
+   * each failure re-parking the mission on yet another timer.
+   */
+  private reaper: ReturnType<typeof setInterval> | undefined;
+  // Created on first use: harnesses build executors without the constructor.
+  private timers: Set<ReturnType<typeof setTimeout>> | undefined;
+  private disposed: boolean | undefined;
+
+  /** An unref'd setTimeout that shutdown() clears and that never fires after it. */
+  private schedule(fn: () => void, delayMs: number): void {
+    if (this.disposed === true) return;
+    const timer = setTimeout(() => {
+      this.timers?.delete(timer);
+      if (this.disposed !== true) fn();
+    }, delayMs);
+    timer.unref?.();
+    (this.timers ??= new Set()).add(timer);
+  }
 
   constructor(opts: BackgroundExecutorOptions) {
     // Stuck-task reaper: an executing task with no progress signal for an hour
     // is wedged (bridge flap, dead provider, lost lease). Reap it so the queue
     // advances; user-origin missions resubmit via mission keep-alive. Measured
     // 2026-08-24: a task sat 'executing' for 1h+ while the queue starved.
-    const reaper = setInterval(() => {
+    this.reaper = setInterval(() => {
       try {
         this.reapStuckTasks();
         this.reapLostWorkspaces();
@@ -363,7 +384,7 @@ export class BackgroundExecutor {
         // The reaper must never become the crash it guards against.
       }
     }, 5 * 60_000);
-    reaper.unref?.();
+    this.reaper.unref?.();
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
     this.projectPath = opts.projectPath;
@@ -407,7 +428,7 @@ export class BackgroundExecutor {
    * already continuing under a fresh task id.
    */
   private scheduleKeepAliveRearm(): void {
-    const timer = setTimeout(() => {
+    this.schedule(() => {
       try {
         const manager = this.taskManager as (ITaskManager & {
           listRecoverableTasks?: (limit?: number) => Array<Task>;
@@ -528,11 +549,10 @@ export class BackgroundExecutor {
           if (staggerMs === 0) {
             this.scheduleMissionKeepAlive(task, rearmReason, { spendAttempt: false });
           } else {
-            const t = setTimeout(
+            this.schedule(
               () => this.scheduleMissionKeepAlive(task, rearmReason, { spendAttempt: false }),
               staggerMs,
             );
-            t.unref?.();
           }
         }
         // Tasks the restart itself parked. recoverOnStartup marks a user task
@@ -586,15 +606,13 @@ export class BackgroundExecutor {
           };
           if (staggerMs === 0) resume();
           else {
-            const t = setTimeout(resume, staggerMs);
-            t.unref?.();
+            this.schedule(resume, staggerMs);
           }
         }
       } catch {
         // Recovery is best-effort; a failure here must not affect boot.
       }
     }, 90_000);
-    timer.unref?.();
   }
 
   setDaemonBudgetTracker(tracker: BudgetTracker): void {
@@ -619,6 +637,11 @@ export class BackgroundExecutor {
    */
   async shutdown(): Promise<void> {
     const logger = getLogger();
+    this.disposed = true;
+    if (this.reaper) clearInterval(this.reaper);
+    this.reaper = undefined;
+    for (const timer of this.timers ?? []) clearTimeout(timer);
+    this.timers?.clear();
     logger.info("[BackgroundExecutor] Shutting down", {
       queueSize: this.queue.length,
       activeConversations: this.activeConversations.size,
@@ -2210,8 +2233,7 @@ export class BackgroundExecutor {
                 error: err instanceof Error ? err.message : String(err),
               });
               if (attempt >= 5) return;
-              const again = setTimeout(() => settle(attempt + 1), 5_000 * (attempt + 1));
-              again.unref?.();
+              this.schedule(() => settle(attempt + 1), 5_000 * (attempt + 1));
             }
           };
           settle(0);
@@ -2684,7 +2706,7 @@ export class BackgroundExecutor {
             `Mission parked on the budget window. ${BUDGET_WAIT_MARKER} Last blocker: ${reason.slice(0, 160)}`,
           );
         } catch { /* the notice above still stands */ }
-        const rearm = setTimeout(() => {
+        this.schedule(() => {
           try {
             // EVERY probe on this path can throw — the budget predicate reads
             // storage — and the empty catch below took the last scheduled
@@ -2731,7 +2753,6 @@ export class BackgroundExecutor {
             try { this.scheduleMissionKeepAlive(task, reason); } catch { /* the mission is beyond recovery here */ }
           }
         }, 60 * 60_000);
-        rearm.unref?.();
         return true;
       }
       return false;
@@ -2777,7 +2798,7 @@ export class BackgroundExecutor {
         `Transient failure — ${saidReason}. Auto-retry ${shown}/${MAX_MISSION_RETRIES} in ~${Math.round(effectiveBackoffMs / 1000)}s.${carry}`,
       );
     } catch { /* block-marking is cosmetic here */ }
-    const timer = setTimeout(() => {
+    this.schedule(() => {
       // Someone else may have already resubmitted this mission while the
       // backoff ran — the campaign layer reacts to the same settlement on its
       // own clock, and its grace window can expire before this timer fires
@@ -2880,7 +2901,6 @@ export class BackgroundExecutor {
         this.scheduleMissionKeepAlive(task, `could not resubmit after backoff — ${reason.slice(0, 150)}`);
       }
     }, effectiveBackoffMs);
-    timer.unref?.();
     getLoggerSafe().info("Mission keep-alive scheduled", {
       taskId: task.id, attempt: decision.attempt + 1, backoffMs: effectiveBackoffMs, reason: reason.slice(0, 120),
       ...(cooldownWaitMs > 0 ? { waitingOutProviderCooldownMs: cooldownWaitMs } : {}),

@@ -4256,3 +4256,23 @@ describe("BackgroundExecutor - the settle phase is not part of the run", () => {
     expect(taskManager.fail).not.toHaveBeenCalled();
   });
 });
+
+// TSK-22: the reaper interval was a local nobody could clear, and keep-alive /
+// re-arm timers were never tracked, so they outlived shutdown() and fired into
+// a closed TaskStorage.
+describe("BackgroundExecutor - shutdown clears its timers", () => {
+  it("leaves no timer behind after shutdown()", async () => {
+    vi.useFakeTimers();
+    try {
+      const executor = new BackgroundExecutor({ orchestrator: createMockOrchestrator() as any });
+      executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      await executor.shutdown();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
