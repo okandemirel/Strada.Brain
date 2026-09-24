@@ -5,6 +5,7 @@ import {
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
+  restartNeedsWebPorts,
   stopRuntimeProcesses,
 } from "./runtime-lifecycle.js";
 import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
@@ -65,6 +66,14 @@ describe("runtime lifecycle", () => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
+  });
+
+  it("waits for the web ports on restart for every spec that includes web (COR-25)", () => {
+    expect(restartNeedsWebPorts("web")).toBe(true);
+    expect(restartNeedsWebPorts("web,telegram")).toBe(true);
+    expect(restartNeedsWebPorts("telegram,web")).toBe(true);
+    expect(restartNeedsWebPorts("telegram")).toBe(false);
+    expect(restartNeedsWebPorts("cli")).toBe(false);
   });
 
   it("gracefully stops running runtime processes", async () => {

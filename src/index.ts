@@ -59,6 +59,7 @@ import {
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
+  restartNeedsWebPorts,
   stopRuntimeProcesses,
   waitForPortFree,
 } from "./core/runtime-lifecycle.js";
@@ -956,7 +957,7 @@ async function runRestartCommand(
     }
 
     // Wait for ports to become free after stopping old process (TIME_WAIT)
-    if (nextChannel === "web") {
+    if (restartNeedsWebPorts(nextChannel)) {
       const configResult = loadConfigSafe();
       if (configResult.kind === "ok") {
         const { web, dashboard } = configResult.value;

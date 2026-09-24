@@ -57,6 +57,16 @@ export function inferChannelFromRuntimeCommand(
   return defaultChannel;
 }
 
+/**
+ * Whether a restart into `channelSpec` must first wait for the web ports: any
+ * spec that includes web ("web,telegram" too), not only the bare "web" — the
+ * new runtime's busy-port check would otherwise see the dying one's ports and
+ * refuse to start (COR-25).
+ */
+export function restartNeedsWebPorts(channelSpec: string): boolean {
+  return isValidChannelSpec(channelSpec) && parseChannelSpec(channelSpec).includes("web");
+}
+
 export async function isTcpPortBusy(port: number, host: string = "127.0.0.1"): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const server = createServer();
