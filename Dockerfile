@@ -8,9 +8,10 @@
 # Build:
 #   docker build -t strada-brain:latest .
 #
-# Run:
+# Run (the web portal and its chat WebSocket are on 3000; publish on the host's
+# loopback and put a TLS proxy in front to serve other machines):
 #   docker run -d --name strada-brain \
-#     -p 3100:3100 -p 9090:9090 \
+#     -p 127.0.0.1:3000:3000 \
 #     -v $(pwd)/project:/app/project:ro \
 #     -v strada-home:/app/.strada \
 #     -v strada-memory:/app/.strada-memory \
@@ -150,18 +151,29 @@ ENV NODE_ENV=production \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_AUDIT=false \
+    BIND_HOST=0.0.0.0 \
+    WEB_CHANNEL_PORT=3000 \
+    DASHBOARD_ENABLED=true \
     DASHBOARD_PORT=3100 \
-    METRICS_PORT=9090 \
-    HEALTH_CHECK_PORT=3100
+    PROMETHEUS_PORT=9090
+
+# BIND_HOST: the listeners default to 127.0.0.1, which inside a container is the
+# container's own loopback, so a published port would reach nothing. Which host
+# interface a port is published on is decided by `-p` / compose `ports:`.
+# The CMD below starts the web channel: the portal, its chat WebSocket and
+# /health on 3000. It proxies the portal's /api/* to the dashboard on 3100.
+# Prometheus metrics are served on 9090 when ENABLE_PROMETHEUS=true.
 
 # Expose ports
-# 3100 - Dashboard UI
-# 9090 - Prometheus metrics
-EXPOSE 3100 9090
+# 3000 - Web portal + chat WebSocket + /health
+# 3100 - Dashboard API
+# 9090 - Prometheus metrics (ENABLE_PROMETHEUS=true)
+EXPOSE 3000 3100 9090
 
-# Health check
+# Health check: the web channel's own /health. 127.0.0.1, not localhost, which
+# busybox wget may resolve to ::1 only.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --start-interval=5s --retries=3 \
-    CMD wget -q --spider http://localhost:3100/health || exit 1
+    CMD wget -q --spider http://127.0.0.1:3000/health || exit 1
 
 # Use dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
@@ -179,11 +191,11 @@ RUN apk add --no-cache git
 
 # Set environment
 ENV NODE_ENV=development \
-    DASHBOARD_PORT=3100 \
-    METRICS_PORT=9090
+    BIND_HOST=0.0.0.0 \
+    DASHBOARD_PORT=3100
 
 # Expose ports
-EXPOSE 3100 9090
+EXPOSE 3000 3100 9090
 
 # Run in dev mode with hot reload
 CMD ["npm", "run", "dev"]

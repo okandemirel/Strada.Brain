@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -150,14 +150,21 @@ function serviceEnvironment(block: string[]): Map<string, string> {
 }
 
 /** `ENV` values of a Dockerfile's `production` stage (both `A=b` and `A b` forms). */
-function productionStageEnv(dockerfile: string): { env: Map<string, string>; user: string | undefined; runs: string[] } {
+function productionStageEnv(dockerfile: string): {
+  env: Map<string, string>;
+  user: string | undefined;
+  runs: string[];
+  lines: string[];
+} {
   const joined = dockerfile.replace(/\\\r?\n/g, " ");
   const stage = joined.split(/^FROM\s+/m).find((chunk) => /^\S+\s+AS\s+production\b/i.test(chunk)) ?? "";
   const env = new Map<string, string>();
   let user: string | undefined;
   const runs: string[] = [];
+  const lines: string[] = [];
   for (const raw of stage.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
+    if (line) lines.push(line);
     if (/^ENV\s/i.test(line)) {
       const body = line.slice(4).trim();
       const pairs = [...body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|\S*)/g)];
@@ -173,7 +180,7 @@ function productionStageEnv(dockerfile: string): { env: Map<string, string>; use
       runs.push(line);
     }
   }
-  return { env, user, runs };
+  return { env, user, runs, lines };
 }
 
 const covers = (mount: string, target: string) => target === mount || target.startsWith(`${mount}/`);
@@ -221,5 +228,109 @@ describe.each([
     const chown = /chown\s+(?:-R\s+)?([^\s:]+)(?::\S+)?\s+(\S+)/.exec(creates!);
     expect(chown?.[1]).toBe(user);
     expect(covers(chown![2]!.replace(/\/+$/, ""), stradaHome)).toBe(true);
+  });
+});
+
+/** Every env var name the application source reads (non-test `.ts` under src/). */
+function envVarsReadBySource(): Set<string> {
+  const names = new Set<string>();
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "tests" && entry.name !== "node_modules") walk(full);
+      } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+        const text = readFileSync(full, "utf8");
+        // env["X"], env.X, and a name held in a `const SOMETHING_ENV = "X"`.
+        const pattern = /\benv\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]|\benv\.([A-Z][A-Z0-9_]*)\b|\bconst\s+\w+_ENV\s*=\s*["']([A-Z][A-Z0-9_]*)["']/g;
+        for (const m of text.matchAll(pattern)) {
+          names.add((m[1] ?? m[2] ?? m[3])!);
+        }
+      }
+    }
+  };
+  walk(path.join(repoRoot, "src"));
+  return names;
+}
+
+/**
+ * OPS-6. The image starts the web channel (portal, chat WebSocket, /health on
+ * WEB_CHANNEL_PORT, default 3000), but the Dockerfile exposed and health-checked
+ * 3100, compose published only 3100/9090, and nginx proxied everything to 3100:
+ * a permanently unhealthy container whose product UI was never reachable. Env
+ * vars the application never reads (METRICS_PORT, HEALTH_CHECK_PORT, REDIS_URL,
+ * PORT, ENCRYPTION_KEY) made it look configured.
+ */
+describe.each([
+  ["docker-compose.yml", "Dockerfile"],
+  [path.join("docker", "docker-compose.security.yml"), path.join("docker", "Dockerfile.hardened")],
+])("%s serves the web channel it starts (OPS-6)", (composeFile, dockerfilePath) => {
+  const composeSource = readFileSync(path.join(repoRoot, composeFile), "utf8");
+  const dockerfile = productionStageEnv(readFileSync(path.join(repoRoot, dockerfilePath), "utf8"));
+  const block = serviceBlock(composeSource, "strada-brain");
+  const composeEnv = serviceEnvironment(block);
+  const env = (key: string) => composeEnv.get(key) ?? dockerfile.env.get(key);
+  const webPort = env("WEB_CHANNEL_PORT");
+
+  it("starts the web channel and pins its port", () => {
+    const cmd = dockerfile.lines.find((line) => /^CMD\s/i.test(line));
+    expect(cmd).toMatch(/"start",\s*"--channel",\s*"web"/);
+    expect(webPort).toMatch(/^\d+$/);
+  });
+
+  it("binds all interfaces inside the container (its loopback is unreachable)", () => {
+    expect(env("BIND_HOST")).toMatch(/^(?:\$\{BIND_HOST:-)?0\.0\.0\.0\}?$/);
+  });
+
+  it("exposes, publishes and health-checks the web channel port", () => {
+    const expose = dockerfile.lines.find((line) => /^EXPOSE\s/i.test(line)) ?? "";
+    expect(expose.split(/\s+/)).toContain(webPort);
+    const healthcheck = dockerfile.lines.find((line) => /^HEALTHCHECK\s/i.test(line)) ?? "";
+    expect(healthcheck).toContain(`:${webPort}/health`);
+    const composeHealth = block.find((line) => /^\s+test:/.test(line)) ?? "";
+    expect(composeHealth).toContain(`:${webPort}/health`);
+    const published = publishedPorts(composeSource).filter((p) => p.service === "strada-brain");
+    expect(published.some((p) => p.mapping.endsWith(`:${webPort}`))).toBe(true);
+  });
+
+  it("sets no env var the application never reads", () => {
+    const read = envVarsReadBySource();
+    // Read by the OS, npm or Node rather than by src/.
+    const external = new Set(["HOME", "USER", "NODE_ENV"]);
+    const unread = [...new Set([...dockerfile.env.keys(), ...composeEnv.keys()])]
+      .filter((key) => !external.has(key) && !key.startsWith("NPM_CONFIG_") && !read.has(key));
+    expect(unread).toEqual([]);
+  });
+});
+
+describe("docker-compose.yml wiring (OPS-6)", () => {
+  const block = serviceBlock(compose, "strada-brain");
+  const composeEnv = serviceEnvironment(block);
+
+  it("does not make strada-brain wait on a service it never uses", () => {
+    expect(block.some((line) => /^ {4}depends_on:/.test(line))).toBe(false);
+  });
+
+  it("enables the Prometheus exporter on the port Prometheus scrapes", () => {
+    const scrape = readFileSync(path.join(repoRoot, "monitoring", "prometheus.yml"), "utf8");
+    expect(composeEnv.get("ENABLE_PROMETHEUS")).toMatch(/true/);
+    expect(scrape).toContain(`strada-brain:${composeEnv.get("PROMETHEUS_PORT")}`);
+  });
+
+  it("publishes no two services on the same default host port", () => {
+    const hostPorts = publishedPorts(compose)
+      .map((p) => /^(?:127\.0\.0\.1:)?\$\{\w+:-(\d+)\}:/.exec(p.mapping)?.[1])
+      .filter((port): port is string => port !== undefined);
+    expect(hostPorts.length).toBeGreaterThan(0);
+    expect(new Set(hostPorts).size, hostPorts.join(",")).toBe(hostPorts.length);
+  });
+});
+
+describe("nginx.conf targets the web channel (OPS-6)", () => {
+  it("proxies to the port the image's web channel listens on", () => {
+    const conf = readFileSync(path.join(repoRoot, "nginx", "nginx.conf"), "utf8");
+    const dockerfile = productionStageEnv(readFileSync(path.join(repoRoot, "Dockerfile"), "utf8"));
+    const upstream = /upstream\s+strata_backend\s*\{[^}]*\bserver\s+strada-brain:(\d+)/.exec(conf);
+    expect(upstream?.[1]).toBe(dockerfile.env.get("WEB_CHANNEL_PORT"));
   });
 });

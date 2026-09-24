@@ -68,11 +68,18 @@ services:
       # (CHN-2). Prometheus scrapes this container as `strada-brain`; add the
       # public hostname nginx serves, since nginx forwards the client's Host.
       - HTTP_ALLOWED_HOSTS=strada-brain,${HTTP_ALLOWED_HOSTS:-}
+      # The public origin nginx serves (e.g. https://brain.example.com): the
+      # portal's WebSocket and mutating requests are refused from any other.
+      - WEB_TRUSTED_ORIGINS=${WEB_TRUSTED_ORIGINS:-}
 
-      # Dashboard & Monitoring
+      # Web portal + chat WebSocket + /health: what nginx proxies to (OPS-6)
+      - WEB_CHANNEL_PORT=3000
+
+      # Dashboard API (the portal proxies its /api/* here) & Prometheus exporter
       - DASHBOARD_ENABLED=${DASHBOARD_ENABLED:-true}
       - DASHBOARD_PORT=3100
-      - METRICS_PORT=9090
+      - ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS:-true}
+      - PROMETHEUS_PORT=9090
       
       # Memory
       - MEMORY_ENABLED=${MEMORY_ENABLED:-true}
@@ -81,12 +88,6 @@ services:
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_FILE=/app/logs/strada-brain.log
-      
-      # Redis (optional - for distributed rate limiting)
-      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD:-changeme}@redis:6379}
-      
-      # Health check
-      - HEALTH_CHECK_PORT=3100
     
     volumes:
       # Unity project (read-only for security)
@@ -126,8 +127,9 @@ services:
     # ports bypass host firewalls such as ufw, so a mapping without a host IP
     # would expose the dashboard and metrics on every interface.
     ports:
-      - "127.0.0.1:${DASHBOARD_PORT:-3100}:3100"  # Dashboard UI
-      - "127.0.0.1:${METRICS_PORT:-9090}:9090"    # Prometheus metrics
+      - "127.0.0.1:${WEB_CHANNEL_PORT:-3000}:3000"  # Web portal + chat WebSocket
+      - "127.0.0.1:${DASHBOARD_PORT:-3100}:3100"    # Dashboard API
+      - "127.0.0.1:${METRICS_PORT:-9090}:9090"      # Prometheus metrics
     
     # Resource limits
     deploy:
@@ -145,8 +147,10 @@ services:
         window: 120s
     
     # Health check
+    # The web channel's /health (OPS-6). 127.0.0.1, not localhost, which
+    # busybox wget may resolve to ::1 only.
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -170,23 +174,23 @@ services:
     networks:
       - strada-network
     
-    # Dependencies
-    depends_on:
-      redis:
-        condition: service_healthy
-    
     # Graceful shutdown
     stop_grace_period: 30s
     stop_signal: SIGTERM
 
   # ===========================================================================
-  # Redis - Distributed Rate Limiting & Caching
+  # Redis (opt-in: `--profile redis`)
   # ===========================================================================
+  # Nothing in Strada.Brain reads REDIS_URL today, so the application neither
+  # waits for nor talks to this service (OPS-6); it is kept only for operators
+  # who run their own tooling against it. Set REDIS_PASSWORD when you enable it.
   redis:
     image: redis:7.4-alpine
     container_name: strada-redis
     hostname: redis
     restart: unless-stopped
+    profiles:
+      - redis
     
     command: >
       redis-server
@@ -376,7 +380,7 @@ services:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set - do not use default passwords in production}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3001}
     
     volumes:
       - type: volume
@@ -392,8 +396,9 @@ services:
         read_only: true
     
     # Host loopback only (OPS-4); put it behind the TLS proxy to publish it.
+    # 3001 on the host: 3000 is the Strada web portal.
     ports:
-      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     
     networks:
       - strada-network
