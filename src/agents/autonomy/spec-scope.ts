@@ -15,6 +15,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stripCsComments } from "./csharp-source.js";
 
 export interface ScheduledElement {
   /** Unlock level tag from the schedule table, e.g. "L36". */
@@ -54,51 +55,9 @@ export function elementCodeTokens(name: string): string[] {
  * (e.g. `L21`) followed by an element name — the shape GDDs in this genre
  * use for their element schedule (PixelFlow §4.1).
  */
-/** C# source with // and /* *\/ comments removed (strings are left as they are). */
-/**
- * C# source with comments removed, strings kept. A regex that ignored string
- * literals cut `string sep="//";` and everything after it, and one that
- * skipped slashes after a colon kept `retry:// TODO Element` (Codex
- * 2026-09-11 C#30). This walks the source instead.
- */
-export function stripCsComments(source: string): string {
-  let out = "";
-  let i = 0;
-  const n = source.length;
-  while (i < n) {
-    const c = source[i]!;
-    const next = source[i + 1];
-    if (c === '"' || c === "'") {
-      const quote = c;
-      const verbatim = quote === '"' && source[i - 1] === "@";
-      out += c;
-      i += 1;
-      while (i < n) {
-        const d = source[i]!;
-        if (!verbatim && d === "\\") { out += d + (source[i + 1] ?? ""); i += 2; continue; }
-        if (verbatim && d === '"' && source[i + 1] === '"') { out += '""'; i += 2; continue; }
-        out += d;
-        i += 1;
-        if (d === quote) break;
-      }
-      continue;
-    }
-    if (c === "/" && next === "/") {
-      while (i < n && source[i] !== "\n") i += 1;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      i += 2;
-      while (i < n && !(source[i] === "*" && source[i + 1] === "/")) i += 1;
-      i += 2;
-      out += " ";
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return out;
-}
+// The walker lives in csharp-source.ts, shared by every C# rule; re-exported
+// here for the callers that import it from this module.
+export { stripCsComments };
 
 /** Second-cell text that names a person or a role rather than a game element. */
 const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lead|qa|pm|owner|manager)\b|\b(?:producer|designer|artist|engineer|programmer|lead|qa|manager)\s*$/i;

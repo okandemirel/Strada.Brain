@@ -113,6 +113,23 @@ function anyAssetReferences(assetsRoot: string, guid: string): boolean {
   return false;
 }
 
+/**
+ * Does Packages/manifest.json depend on a package Unity fetches into
+ * Library/PackageCache (a registry version or a git URL, not `file:`)?
+ */
+function manifestNamesRegistryPackages(projectPath: string): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(joinPath(projectPath, "Packages", "manifest.json"), "utf8")) as {
+      dependencies?: unknown;
+    };
+    const deps = manifest.dependencies;
+    if (typeof deps !== "object" || deps === null) return false;
+    return Object.values(deps).some((spec) => typeof spec === "string" && !spec.startsWith("file:"));
+  } catch {
+    return false;
+  }
+}
+
 function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
@@ -120,6 +137,7 @@ import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { assessFrameworkBypass, assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
+import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
 
 const STRADA_GENERATOR_TOOLS: ReadonlySet<string> = new Set([
   "strada_create_module",
@@ -263,32 +281,37 @@ function defaultTestSources(dir: string): string[] {
   return sources;
 }
 
-/** Every .cs under a directory, with its path and line count. */
+/** Every .cs under a directory, with its path (relative to it) and line count. */
 function defaultSourceSizes(dir: string): Array<{ path: string; lines: number }> {
   if (!existsSync(dir)) return [];
   const sizes: Array<{ path: string; lines: number }> = [];
-  const walk = (current: string, depth: number): void => {
+  const walk = (current: string, prefix: string, depth: number): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const full = joinPath(current, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (depth > 0) walk(full, depth - 1);
+        if (depth > 0) walk(full, rel, depth - 1);
         continue;
       }
       if (!entry.name.endsWith(".cs")) continue;
       try {
-        sizes.push({ path: entry.name, lines: readFileSync(full, "utf8").split("\n").length });
+        sizes.push({ path: rel, lines: readFileSync(full, "utf8").split("\n").length });
       } catch {
         // Unreadable file: no evidence either way.
       }
     }
   };
-  walk(dir, 4);
+  walk(dir, "", 4);
   return sizes;
 }
 
-/** Does this source actually declare a test NUnit will run? */
+/**
+ * Does this source actually declare a test NUnit will run? Read through the
+ * shared C# reader (audited 2026-09-24): `[Timeout(1000), Test]` counted as no
+ * test while a commented-out `// [Test]` counted as one.
+ */
 function declaresTest(source: string): boolean {
-  return /\[\s*(Test|UnityTest|TestCase|TestCaseSource)\b/.test(source);
+  return declaresCsTest(source);
 }
 
 function defaultListDir(dir: string): string[] {
@@ -318,6 +341,21 @@ const NEVER_RUN_GATE_LIMIT = 3;
 const UNBOUND_PREFABS_GATE_LIMIT = 3;
 /** Same shape again: ask three times, then say which was the last. */
 const NOTHING_DRAWN_GATE_LIMIT = 3;
+/**
+ * The budget of every gate that had none. MODULE INCOMPLETE, FILE TOO LONG,
+ * REFERENCE DANGLING and the rest asked on every call, so one the run could
+ * not clear (vendor code, a registry package's guid) looped until loop
+ * recovery blocked the run (audited 2026-09-24).
+ */
+const GATE_ASK_LIMIT = 3;
+
+/** What a budgeted gate says when it asks for the last time. */
+function lastAskNote(asked: { last: boolean }): string {
+  return asked.last
+    ? " This is the last time this is asked. If it still holds when you finish, say so in " +
+        "your report — name what is left and why — rather than reporting the work as done."
+    : "";
+}
 
 /**
  * Where a class stops being one thing.
@@ -439,6 +477,9 @@ function moduleRootsIn(text: string): string[] {
 
 function moduleRootFor(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, "/");
+  // A vendor's `…/Modules/<X>/` is not a Strada module the run owes a
+  // ModuleConfig, tests or line limits (audited 2026-09-24).
+  if (isVendorPath(normalized)) return null;
   const match = MODULE_PATH_RE.exec(normalized);
   if (!match) return null;
   const idx = normalized.indexOf(match[0]);
@@ -484,38 +525,34 @@ export class StradaConformanceGuard {
   private usedFrameworkGenerator = false;
   /** Whether this run tried to run the game, not only to build it. */
   private attemptedPlaymodeVerification = false;
-  /**
-   * How many times the never-run gate has been raised.
-   *
-   * Any rule that depends on a tool being present has to be able to give up.
-   * unity_playmode_verify reaches a project through its Strada.MCP submodule, so
-   * a checkout that predates the tool cannot satisfy this gate however many
-   * times it is told to — and a gate that cannot be cleared stops being a rule
-   * and becomes a loop.
-   */
-  private nothingDrawnRaised = 0;
-  private nothingDrawnRaisedAtCall: number | null = null;
-  private unboundPrefabsRaised = 0;
-  private unboundPrefabsRaisedAtCall: number | null = null;
-  private neverRunGateRaised = 0;
-  /**
-   * Tool-call count when the never-run gate was last raised.
-   *
-   * getPrompt() is not called once per turn — it is called wherever a caller
-   * wants to know whether a gate is open, and some of those calls discard the
-   * text. Counting calls spent the three-ask budget on questions nobody asked
-   * the agent, so the budget is spent per turn of actual work instead: the same
-   * gate raised again with no tool call in between is the same asking.
-   */
-  private neverRunGateRaisedAtCall: number | null = null;
   /** Whether this run asked what art the user already owns. */
   private searchedOwnedAssets = false;
   /** Art files this run originated inside Assets/, newest last. */
   private readonly authoredArtFiles = new Set<string>();
-  private assetsUnsourcedRaised = 0;
-  private assetsUnsourcedRaisedAtCall: number | null = null;
-  private elementAssetCoverageRaised = 0;
-  private elementAssetCoverageRaisedAtCall: number | null = null;
+  /**
+   * How many times each gate has been raised, and the tool-call count when it
+   * last was.
+   *
+   * Every gate has to be able to give up. unity_playmode_verify reaches a
+   * project through its Strada.MCP submodule, so a checkout that predates the
+   * tool cannot satisfy the never-run gate however many times it is told to;
+   * a vendor file or an uncached package guid cannot satisfy a content gate
+   * either — and a gate that cannot be cleared stops being a rule and becomes
+   * a loop.
+   *
+   * getPrompt() is not called once per turn — it is called wherever a caller
+   * wants to know whether a gate is open, and some of those calls discard the
+   * text. Counting calls spent the ask budget on questions nobody asked the
+   * agent, so the budget is spent per turn of actual work instead: the same
+   * gate raised again with no tool call in between is the same asking.
+   */
+  private readonly asks = new Map<string, { raised: number; atCall: number | null }>();
+  /**
+   * C# files this run wrote, as resolved paths. The file-content rules (line
+   * length, reimplementation) judge these, not every file that happens to
+   * sit in a module or under Assets/.
+   */
+  private readonly writtenSources = new Set<string>();
   private toolCallsSeen = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
@@ -616,6 +653,8 @@ export class StradaConformanceGuard {
           const moduleRoot = moduleRootFor(filePath);
           if (moduleRoot) this.touchedModuleRoots.add(moduleRoot);
           if (isInsideAssets(filePath)) this.wroteProjectCode = true;
+          const projectPath = this.opts?.projectPath;
+          if (projectPath) this.writtenSources.add(resolvePath(projectPath, filePath));
           logGuardWrite(executedTool.toolName, filePath);
         }
         if (filePath && isCompilableFile(filePath)) {
@@ -648,6 +687,26 @@ export class StradaConformanceGuard {
   /** Whether this guard will ever raise a gate — false for a run that opted out (see conformanceAppliesTo). */
   isEnabled(): boolean {
     return this.opts?.enabled !== false;
+  }
+
+  /**
+   * Spend one ask of a gate's budget: null once it is spent, else whether
+   * this is the last ask (see `asks`).
+   */
+  private ask(gate: string, limit: number): { last: boolean } | null {
+    const state = this.asks.get(gate) ?? { raised: 0, atCall: null };
+    if (state.raised >= limit) return null;
+    if (state.atCall !== this.toolCallsSeen) {
+      state.raised += 1;
+      state.atCall = this.toolCallsSeen;
+    }
+    this.asks.set(gate, state);
+    return { last: state.raised === limit };
+  }
+
+  /** Did this run write the file at this resolved path? */
+  private wrote(file: string): boolean {
+    return this.writtenSources.has(resolvePath(file));
   }
 
   needsConformanceReview(): boolean {
@@ -898,9 +957,18 @@ export class StradaConformanceGuard {
     const assetsRoot = joinPath(projectPath, "Assets");
     if (!existsSync(assetsRoot)) return [];
 
+    // Registry packages (TextMeshPro, URP, Input System) live in
+    // Library/PackageCache, not Packages/: a reference into one was accused of
+    // dangling (audited 2026-09-24). Without that cache on disk their guids
+    // cannot be known, and a census that cannot see them judges nothing.
+    const packageCache = joinPath(projectPath, "Library", "PackageCache");
+    if (!existsSync(packageCache) && manifestNamesRegistryPackages(projectPath)) {
+      debugLog("Registry packages not cached; not judging dangling references", { projectPath });
+      return [];
+    }
     const known = new Set<string>();
     let censusComplete = true;
-    for (const base of [assetsRoot, joinPath(projectPath, "Packages")]) {
+    for (const base of [assetsRoot, joinPath(projectPath, "Packages"), packageCache]) {
       if (!existsSync(base)) continue;
       // Filtered INSIDE the walk so the budget counts .meta files. Audited
       // 2026-09-02: the unfiltered default 4000-file walk was filled by the
@@ -975,7 +1043,8 @@ export class StradaConformanceGuard {
           continue; // Unreadable: absence of evidence.
         }
 
-        const prefabFields = source.match(
+        // A commented-out field declares nothing.
+        const prefabFields = stripCsComments(source).match(
           /\[SerializeField\][^;]{0,120}\bGameObject\b[^;]{0,80};/gu,
         );
         if (!prefabFields || prefabFields.length === 0) continue;
@@ -1047,7 +1116,9 @@ export class StradaConformanceGuard {
       if (!existsSync(dir)) continue;
 
       for (const source of readSizes(dir)) {
-        if (source.lines > MAX_SOURCE_LINES) {
+        // Only what this run wrote: an untouched 261-line Legacy.cs beside a
+        // one-line fix was named on every call (audited 2026-09-24).
+        if (source.lines > MAX_SOURCE_LINES && this.wrote(joinPath(dir, source.path))) {
           oversized.push({ label: `${source.path} (${source.lines} lines)`, lines: source.lines });
         }
       }
@@ -1165,7 +1236,7 @@ export class StradaConformanceGuard {
     if (!projectPath) return [];
     if (!existsSync(joinPath(projectPath, "Assets"))) return [];
     try {
-      return assessFrameworkBypass(projectPath);
+      return assessFrameworkBypass(projectPath, undefined, (file) => this.wrote(file));
     } catch {
       return [];
     }
@@ -1427,20 +1498,23 @@ export class StradaConformanceGuard {
     // still got MODULE INCOMPLETE and FILE TOO LONG on every call.
     if (!this.isEnabled()) return null;
     const incomplete = this.incompleteModules();
-    if (incomplete.length > 0) {
+    const incompleteAsk = incomplete.length > 0 ? this.ask("module-incomplete", GATE_ASK_LIMIT) : null;
+    if (incompleteAsk) {
       return (
         "[STRADA MODULE INCOMPLETE] These module directories are missing what makes them a module: " +
         `${incomplete.join("; ")}. ` +
         "A module without a *ModuleConfig.cs is never registered with the framework, and without an " +
         ".asmdef it cannot compile against Strada.Core at all — the folder layout alone does nothing. " +
-        "Create them (strada_create_module produces both) before declaring the task complete."
+        "Create them (strada_create_module produces both) before declaring the task complete." +
+        lastAskNote(incompleteAsk)
       );
     }
 
     // Ahead of the coverage gate: a duplicate name means nothing in the project
     // compiles at all, which makes any advice about test coverage moot.
     const duplicates = this.duplicateAssemblyNames();
-    if (duplicates.length > 0) {
+    const duplicateAsk = duplicates.length > 0 ? this.ask("duplicate-assembly", GATE_ASK_LIMIT) : null;
+    if (duplicateAsk) {
       return (
         "[STRADA DUPLICATE ASSEMBLY] Two .asmdef files claim the same assembly name: " +
         `${duplicates.join("; ")}. ` +
@@ -1448,7 +1522,8 @@ export class StradaConformanceGuard {
         "compile ANY assembly while a duplicate exists. Delete the one that does not belong " +
         "or rename it, and make sure each test file sits under the assembly meant to compile " +
         "it — a .cs beside a Tests/ root .asmdef belongs to neither Tests/Runtime nor " +
-        "Tests/Editor."
+        "Tests/Editor." +
+        lastAskNote(duplicateAsk)
       );
     }
 
@@ -1471,17 +1546,20 @@ export class StradaConformanceGuard {
     // Ahead of the view question: a scene with no camera draws nothing at all,
     // so views would not help. Measured 2026-08-21: every prefab carried a
     // SpriteRenderer and the only scene held one GameObject and no Camera.
-    if (views && views.camerslessScenes.length > 0) {
+    const cameraAsk = views && views.camerslessScenes.length > 0 ? this.ask("no-camera", GATE_ASK_LIMIT) : null;
+    if (views && cameraAsk) {
       return (
         "[STRADA NO CAMERA] " +
         `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn — ` +
         "not the prefabs, not a view layer, nothing. Every prefab in this project already " +
         "carries a renderer, so this is the first thing between the game and a picture. Add a " +
         "camera to the scene spec you pass to unity_scene_build." +
-        this.alsoOpen()
+        this.alsoOpen() +
+        lastAskNote(cameraAsk)
       );
     }
-    if (views && !views.hasViews) {
+    const viewsAsk = views && !views.hasViews ? this.ask("nothing-renders", GATE_ASK_LIMIT) : null;
+    if (views && viewsAsk) {
       return (
         "[STRADA NOTHING RENDERS] This project has " +
         `${views.prefabCount} prefab(s) and ${views.scriptCount} script(s), and not one of those ` +
@@ -1495,7 +1573,8 @@ export class StradaConformanceGuard {
         "MonoBehaviours — do not make them one; add views that observe them. Read the framework " +
         "before writing this: the types above are in Packages/Submodules/Strada.Core/Runtime/Sync " +
         "and Runtime/Patterns." +
-        this.alsoOpen()
+        this.alsoOpen() +
+        lastAskNote(viewsAsk)
       );
     }
 
@@ -1507,7 +1586,8 @@ export class StradaConformanceGuard {
     // C# game inside the shell. Every rule here passed, because none of them
     // asked what the framework was for.
     const bypasses = this.assessBypass();
-    if (bypasses.length > 0) {
+    const bypassAsk = bypasses.length > 0 ? this.ask("reimplemented", GATE_ASK_LIMIT) : null;
+    if (bypassAsk) {
       return (
         "[STRADA REIMPLEMENTED] This project built its own version of things Strada.Core " +
         "already provides: " +
@@ -1517,7 +1597,8 @@ export class StradaConformanceGuard {
         "tools read, its bus is what the module graph and the dependency views are built on. " +
         "Read the subsystem before replacing it; if it genuinely does not fit, say why rather " +
         "than working around it silently." +
-        ""
+        "" +
+        lastAskNote(bypassAsk)
       );
     }
 
@@ -1527,7 +1608,8 @@ export class StradaConformanceGuard {
     // A reference that resolves to nothing, before the broader complaints. The
     // config exists and looks assigned; only the guid says otherwise.
     const dangling = this.danglingAssetReferences();
-    if (dangling.length > 0) {
+    const danglingAsk = dangling.length > 0 ? this.ask("reference-dangling", GATE_ASK_LIMIT) : null;
+    if (danglingAsk) {
       return (
         "[STRADA REFERENCE DANGLING] These assets reference a guid that no asset in this " +
         `project has: ${dangling.join("; ")}. Unity resolves such a field to null, and a config ` +
@@ -1535,18 +1617,16 @@ export class StradaConformanceGuard {
         "empty object silently — no error, no warning, and nothing spawned at run time. Point the " +
         "field at the asset that exists, or create the asset the guid names. Measured: a project " +
         "with 44 of 44 tests passing drew an empty sky because one reference pointed at a guid " +
-        "that had never existed."
+        "that had never existed." +
+        lastAskNote(danglingAsk)
       );
     }
 
 
     const unbound = this.unboundPrefabConfigs();
-    if (unbound.length > 0 && this.unboundPrefabsRaised < UNBOUND_PREFABS_GATE_LIMIT) {
-      if (this.unboundPrefabsRaisedAtCall !== this.toolCallsSeen) {
-        this.unboundPrefabsRaised += 1;
-        this.unboundPrefabsRaisedAtCall = this.toolCallsSeen;
-      }
-      const lastAsk = this.unboundPrefabsRaised === UNBOUND_PREFABS_GATE_LIMIT;
+    const unboundAsk = unbound.length > 0 ? this.ask("prefabs-unbound", UNBOUND_PREFABS_GATE_LIMIT) : null;
+    if (unboundAsk) {
+      const lastAsk = unboundAsk.last;
       return (
         "[STRADA PREFABS UNBOUND] These configs declare prefab fields and no asset instance " +
         `exists for them: ${unbound.join(", ")}. Unity resolves a config to its data through ` +
@@ -1566,7 +1646,8 @@ export class StradaConformanceGuard {
     }
 
     const wiring = this.assessWiring();
-    if (wiring && !wiring.wired) {
+    const wiringAsk = wiring && !wiring.wired ? this.ask("not-assembled", GATE_ASK_LIMIT) : null;
+    if (wiring && wiringAsk) {
       return (
         "[STRADA GAME NOT ASSEMBLED] This run wrote game code but the project is not a " +
         `runnable game: ${wiring.problems.map((p) => p.detail).join("; ")}. ` +
@@ -1581,7 +1662,8 @@ export class StradaConformanceGuard {
         "Anything the game spawns at runtime belongs in the same spec as an object with a " +
         "prefabPath and keepInScene: false. If that tool is not among the ones you have, this " +
         "project's Strada.MCP submodule predates it: say so plainly rather than reporting the " +
-        "task complete, because the project still only compiles."
+        "task complete, because the project still only compiles." +
+        lastAskNote(wiringAsk)
       );
     }
 
@@ -1595,13 +1677,15 @@ export class StradaConformanceGuard {
     // Counting the container rather than its contents is the same mistake as
     // counting compile errors without checking that anything compiled.
     const empty = this.emptyTestAssemblies();
-    if (empty.length > 0) {
+    const emptyAsk = empty.length > 0 ? this.ask("test-assembly-empty", GATE_ASK_LIMIT) : null;
+    if (emptyAsk) {
       return (
         "[STRADA TEST ASSEMBLY EMPTY] These test assemblies contain no test at all: " +
         `${empty.join("; ")}. ` +
         "An .asmdef with no [Test] or [UnityTest] beside it compiles to an empty assembly, " +
         "reports zero failures because it runs nothing, and makes the coverage rule pass while " +
-        "covering nothing. Write the tests, or delete the assembly and stop claiming it."
+        "covering nothing. Write the tests, or delete the assembly and stop claiming it." +
+        lastAskNote(emptyAsk)
       );
     }
 
@@ -1611,18 +1695,21 @@ export class StradaConformanceGuard {
     // class is almost always doing several jobs that the pattern set already has
     // homes for.
     const oversized = this.oversizedSources();
-    if (oversized.length > 0) {
+    const oversizedAsk = oversized.length > 0 ? this.ask("file-too-long", GATE_ASK_LIMIT) : null;
+    if (oversizedAsk) {
       return (
         "[STRADA FILE TOO LONG] These files are past " + `${MAX_SOURCE_LINES} lines: ` +
         `${oversized.join("; ")}. ` +
         "Split them the way the framework already divides work: a command per action, a service " +
         "for state and collaboration, a model for data, a system for per-frame work. A command is " +
-        "usually the cheapest cut — it takes one action out whole, with its own test."
+        "usually the cheapest cut — it takes one action out whole, with its own test." +
+        lastAskNote(oversizedAsk)
       );
     }
 
     const untested = this.untestedAssemblies();
-    if (untested.length > 0) {
+    const untestedAsk = untested.length > 0 ? this.ask("module-tests-missing", GATE_ASK_LIMIT) : null;
+    if (untestedAsk) {
       return (
         "[STRADA MODULE TESTS MISSING] These assemblies have no test assembly of their own: " +
         `${untested.join("; ")}. ` +
@@ -1632,7 +1719,8 @@ export class StradaConformanceGuard {
         "each its own directory (Tests/Runtime/<Assembly>/ and Tests/Editor/<Assembly>/); " +
         "several .asmdef files in one folder makes the whole project fail to build. " +
         "One shared test assembly referencing every layer defeats the split: no layer can be " +
-        "tested in isolation and a change anywhere rebuilds everything."
+        "tested in isolation and a change anywhere rebuilds everything." +
+        lastAskNote(untestedAsk)
       );
     }
 
@@ -1640,12 +1728,9 @@ export class StradaConformanceGuard {
     // only one whose window closes: once the art exists, the question of whether
     // the user already had it has stopped being worth asking.
     const unsourced = this.assetsUnsourcedReason();
-    if (unsourced !== null && this.assetsUnsourcedRaised < ASSETS_UNSOURCED_GATE_LIMIT) {
-      if (this.assetsUnsourcedRaisedAtCall !== this.toolCallsSeen) {
-        this.assetsUnsourcedRaised += 1;
-        this.assetsUnsourcedRaisedAtCall = this.toolCallsSeen;
-      }
-      const lastAsk = this.assetsUnsourcedRaised === ASSETS_UNSOURCED_GATE_LIMIT;
+    const unsourcedAsk = unsourced !== null ? this.ask("assets-unsourced", ASSETS_UNSOURCED_GATE_LIMIT) : null;
+    if (unsourcedAsk) {
+      const lastAsk = unsourcedAsk.last;
       return (
         `[STRADA ASSETS UNSOURCED] ${unsourced}. ` +
         "Run unity_my_assets_cloud — it searches the Asset Store packages already downloaded on this " +
@@ -1669,12 +1754,9 @@ export class StradaConformanceGuard {
     // the schedule against ART — each element needs a sprite that exists AND
     // is bound into something that renders it.
     const coverage = this.elementAssetCoverageReason();
-    if (coverage !== null && this.elementAssetCoverageRaised < ELEMENT_ASSET_COVERAGE_GATE_LIMIT) {
-      if (this.elementAssetCoverageRaisedAtCall !== this.toolCallsSeen) {
-        this.elementAssetCoverageRaised += 1;
-        this.elementAssetCoverageRaisedAtCall = this.toolCallsSeen;
-      }
-      const lastAsk = this.elementAssetCoverageRaised === ELEMENT_ASSET_COVERAGE_GATE_LIMIT;
+    const coverageAsk = coverage !== null ? this.ask("element-assets", ELEMENT_ASSET_COVERAGE_GATE_LIMIT) : null;
+    if (coverageAsk) {
+      const lastAsk = coverageAsk.last;
       return (
         `[STRADA ELEMENT ASSETS MISSING] ${coverage}. ` +
         "The design's element schedule is the contract for what must be VISIBLE, not only " +
@@ -1696,12 +1778,9 @@ export class StradaConformanceGuard {
     // something to fix, while this one only knows the outcome. Placed earlier it
     // shadowed all of them.
     const notDrawn = this.nothingDrawnReason();
-    if (notDrawn !== null && this.nothingDrawnRaised < NOTHING_DRAWN_GATE_LIMIT) {
-      if (this.nothingDrawnRaisedAtCall !== this.toolCallsSeen) {
-        this.nothingDrawnRaised += 1;
-        this.nothingDrawnRaisedAtCall = this.toolCallsSeen;
-      }
-      const lastAsk = this.nothingDrawnRaised === NOTHING_DRAWN_GATE_LIMIT;
+    const drawnAsk = notDrawn !== null ? this.ask("nothing-drawn", NOTHING_DRAWN_GATE_LIMIT) : null;
+    if (drawnAsk) {
+      const lastAsk = drawnAsk.last;
       return (
         this.specScopePrompt() ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
@@ -1724,16 +1803,11 @@ export class StradaConformanceGuard {
     //
     // Only asked once the project is actually assembled, because a play-mode run
     // of an unassembled project has nothing to load.
-    if (
-      !this.attemptedPlaymodeVerification &&
-      wiring?.wired === true &&
-      this.neverRunGateRaised < NEVER_RUN_GATE_LIMIT
-    ) {
-      if (this.neverRunGateRaisedAtCall !== this.toolCallsSeen) {
-        this.neverRunGateRaised += 1;
-        this.neverRunGateRaisedAtCall = this.toolCallsSeen;
-      }
-      const last = this.neverRunGateRaised === NEVER_RUN_GATE_LIMIT;
+    const neverRunAsk = !this.attemptedPlaymodeVerification && wiring?.wired === true
+      ? this.ask("never-run", NEVER_RUN_GATE_LIMIT)
+      : null;
+    if (neverRunAsk) {
+      const last = neverRunAsk.last;
       return (
         "[STRADA GAME NEVER RUN] The scene is assembled and wired, but this run never started " +
         "the game. A wired scene is not a running one: a bootstrapper can initialize into a " +
@@ -1749,14 +1823,14 @@ export class StradaConformanceGuard {
     }
 
 
-    if (!this.needsConformanceReview()) {
-      return null;
-    }
+    const reviewAsk = this.needsConformanceReview() ? this.ask("conformance-review", GATE_ASK_LIMIT) : null;
+    if (!reviewAsk) return null;
 
     return (
       "[STRADA CONFORMANCE REQUIRED] Before declaring the task complete, inspect the installed " +
       "Strada.Core/Strada.Modules/Strada.MCP authoritative sources for the touched APIs or patterns, " +
-      "confirm the implementation matches their real contracts/conventions, then continue."
+      "confirm the implementation matches their real contracts/conventions, then continue." +
+      lastAskNote(reviewAsk)
     );
   }
 }

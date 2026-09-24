@@ -80,12 +80,15 @@ describe("a game that is assembled and renders nothing", () => {
     // A game nobody can see is a bigger fact than which event bus it uses, and
     // the run must hear both rather than discovering the second after the first.
     const { root, configPath, scripts } = assembledProject();
+    const events = join(scripts, "Events.cs");
     writeFileSync(
-      join(scripts, "Events.cs"),
+      events,
       Array.from({ length: 8 }, (_, i) => `public event Action E${i};`).join("\n"),
     );
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);
+    // The reimplementation rule counts what THIS run wrote (AUT-4).
+    guard.trackToolCall("file_write", { path: events }, false);
 
     const prompt = guard.getPrompt() ?? "";
 

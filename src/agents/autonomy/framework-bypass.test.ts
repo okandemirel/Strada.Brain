@@ -108,7 +108,7 @@ describe("the gate the guard actually raises", () => {
   } as const;
 
   /** An assembled, rendering game that still wrote its own event system. */
-  function project(): { root: string; configPath: string } {
+  function project(): { root: string; configPath: string; servicePath: string } {
     const root = mkdtempSync(join(os.tmpdir(), "bypass-gate-"));
     const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
     const scripts = join(moduleRoot, "Scripts");
@@ -118,7 +118,8 @@ describe("the gate the guard actually raises", () => {
     writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
     writeFileSync(join(scripts, "Board.asmdef"), JSON.stringify({ name: "Board" }));
     writeFileSync(join(scripts, "CubeView.cs"), "public class CubeView : MonoBehaviour {}");
-    writeFileSync(join(scripts, "BoardService.cs"), events(8));
+    const servicePath = join(scripts, "BoardService.cs");
+    writeFileSync(servicePath, events(8));
     writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
 
     const prefabs = join(moduleRoot, "Prefabs");
@@ -133,16 +134,18 @@ describe("the gate the guard actually raises", () => {
       join(scenes, "Main.unity"),
       "Camera:\n  m_Enabled: 1\n  _gameConfig: {fileID: 11400000, guid: abc}",
     );
-    return { root, configPath };
+    return { root, configPath, servicePath };
   }
 
   it("names the rendering problem too, instead of hiding it behind this one", () => {
     // Measured 2026-08-21: an agent told to stop reimplementing spent that time
     // building a fourth service-and-system pair for rendering, because the gate
     // that would have said nothing renders was queued behind this one.
-    const { root, configPath } = project();
+    const { root, configPath, servicePath } = project();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
     guard.trackToolCall("file_write", { path: configPath }, false);
+    // The rule counts what THIS run wrote (AUT-4).
+    guard.trackToolCall("file_write", { path: servicePath }, false);
 
     const prompt = guard.getPrompt() ?? "";
 
@@ -153,9 +156,11 @@ describe("the gate the guard actually raises", () => {
   });
 
   it("blocks a run that reimplemented a subsystem, counting what it wrote", () => {
-    const { root, configPath } = project();
+    const { root, configPath, servicePath } = project();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
     guard.trackToolCall("file_write", { path: configPath }, false);
+    // The rule counts what THIS run wrote (AUT-4).
+    guard.trackToolCall("file_write", { path: servicePath }, false);
 
     const prompt = guard.getPrompt();
 

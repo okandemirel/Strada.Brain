@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
+import { isVendorPath, stripCsComments } from "./csharp-source.js";
 
 /**
  * Whether a run delivered a game or a library.
@@ -88,8 +89,11 @@ function walk(dir: string, match?: (file: string) => boolean, budget = 12_000): 
 const WIRING_FILE_RE = /\.(?:unity|asset)$/iu;
 const isWiringFile = (f: string): boolean => WIRING_FILE_RE.test(f) || f.endsWith("ModuleConfig.cs");
 const RENDER_FILE_RE = /\.(?:prefab|cs|unity)$/iu;
-const isRenderFile = (f: string): boolean => RENDER_FILE_RE.test(f);
-const isSourceFile = (f: string): boolean => f.endsWith(".cs");
+// Vendor code under Assets/Plugins is not the run's to answer for: a plugin's
+// own Debug.Log calls or demo scenes held the bypass and camera gates shut
+// after a one-line edit elsewhere (audited 2026-09-24).
+const isRenderFile = (f: string): boolean => RENDER_FILE_RE.test(f) && !isVendorPath(f);
+const isSourceFile = (f: string): boolean => f.endsWith(".cs") && !isVendorPath(f);
 
 /**
  * A serialized object reference that is actually null.
@@ -315,7 +319,7 @@ export function assessViewLayer(
   for (const script of scripts) {
     let text: string;
     try {
-      text = io.readFile(script);
+      text = stripCsComments(io.readFile(script), { blankStrings: true });
     } catch {
       continue;
     }
@@ -327,6 +331,7 @@ export function assessViewLayer(
   // one GameObject and no Camera — so the question "what puts a prefab on
   // screen" had a second answer nobody had asked for.
   const cameraless: string[] = [];
+  let cameraPrefabs: ReadonlySet<string> | null = null;
   for (const scene of files.filter((f) => f.endsWith(".unity"))) {
     let text: string;
     try {
@@ -334,7 +339,12 @@ export function assessViewLayer(
     } catch {
       continue;
     }
-    if (!/^Camera:/mu.test(text)) cameraless.push(scene.slice(scene.lastIndexOf("/") + 1));
+    if (/^Camera:/mu.test(text)) continue;
+    // A camera placed as a prefab instance lives in the prefab's file, not
+    // the scene's: such a scene was accused of holding no camera.
+    cameraPrefabs ??= cameraPrefabGuids(prefabs, io);
+    if (instancedPrefabGuids(text).some((guid) => cameraPrefabs!.has(guid))) continue;
+    cameraless.push(scene.slice(scene.lastIndexOf("/") + 1));
   }
 
   return {
@@ -343,6 +353,26 @@ export function assessViewLayer(
     scriptCount: scripts.length,
     camerslessScenes: cameraless,
   };
+}
+
+/** Guids of the prefabs a scene instantiates (its PrefabInstance documents). */
+function instancedPrefabGuids(sceneText: string): string[] {
+  return [...sceneText.matchAll(/m_SourcePrefab:\s*\{[^}]*guid:\s*([0-9a-f]{32})/gu)].map((m) => m[1]!);
+}
+
+/** Guids of the prefabs that carry a Camera component. */
+function cameraPrefabGuids(prefabs: readonly string[], io: SceneWiringIo): ReadonlySet<string> {
+  const guids = new Set<string>();
+  for (const prefab of prefabs) {
+    try {
+      if (!/^Camera:/mu.test(io.readFile(prefab))) continue;
+      const guid = /^guid:\s*([0-9a-f]{32})\s*$/mu.exec(io.readFile(`${prefab}.meta`))?.[1];
+      if (guid) guids.add(guid);
+    } catch {
+      // Unreadable prefab or meta: no evidence of a camera.
+    }
+  }
+  return guids;
 }
 
 /** A thing the project built for itself that Strada.Core already provides. */
@@ -402,10 +432,17 @@ const BYPASS_RULES: ReadonlyArray<{
  * uses of Logging's 10. Six of Strada.Core's 194 public types were used at all.
  * The project inherited SystemBase to get a tick, took [Inject], registered a
  * ModuleConfig, and wrote a plain C# game inside the shell.
+ *
+ * `authored`, when given, limits what counts as the project's OWN version to
+ * the files this run wrote: a vendor pack's or a legacy file's Debug.Log calls
+ * accused every later run of reimplementing logging, and no edit the run was
+ * asked to make could clear it (audited 2026-09-24). Whether the framework's
+ * version is used is still read across the project's own code.
  */
 export function assessFrameworkBypass(
   projectPath: string,
   io: SceneWiringIo = defaultIo,
+  authored?: (file: string) => boolean,
 ): FrameworkBypass[] {
   const assets = join(projectPath, "Assets");
   if (!io.exists(assets)) return [];
@@ -414,13 +451,18 @@ export function assessFrameworkBypass(
   // listing (audited 2026-09-02).
   const scripts = io
     .listFiles(assets, isSourceFile)
-    .filter((f) => f.endsWith(".cs") && !/[/\\]Tests?[/\\]/u.test(f));
+    .filter((f) => isSourceFile(f) && !/[/\\]Tests?[/\\]/u.test(f));
   if (scripts.length === 0) return [];
 
-  const sources: string[] = [];
+  // Comments and string contents are not code: a comment naming StradaLog
+  // cleared the logging rule, and a commented-out Debug.Log counted against it.
+  const sources: Array<{ text: string; mine: boolean }> = [];
   for (const script of scripts) {
     try {
-      sources.push(io.readFile(script));
+      sources.push({
+        text: stripCsComments(io.readFile(script), { blankStrings: true }),
+        mine: authored === undefined || authored(script),
+      });
     } catch {
       // Unreadable file: absence of evidence, not evidence of bypass.
     }
@@ -428,9 +470,9 @@ export function assessFrameworkBypass(
 
   const out: FrameworkBypass[] = [];
   for (const rule of BYPASS_RULES) {
-    if (sources.some((text) => rule.theirs.test(text))) continue;
+    if (sources.some(({ text }) => rule.theirs.test(text))) continue;
     const count = sources.reduce(
-      (total, text) => total + (text.match(rule.mine)?.length ?? 0),
+      (total, { text, mine }) => total + (mine ? (text.match(rule.mine)?.length ?? 0) : 0),
       0,
     );
     if (count >= rule.floor) out.push({ what: rule.what, count, instead: rule.instead });

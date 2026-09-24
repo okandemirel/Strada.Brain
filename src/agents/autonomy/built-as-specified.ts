@@ -38,6 +38,7 @@ import { inflateSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import type { SceneWiringIo } from "./scene-wiring.js";
+import { stripCsComments } from "./csharp-source.js";
 
 // ─── I/O ───────────────────────────────────────────────────────────────────
 
@@ -785,9 +786,13 @@ export function isScaffoldingScene(scenePath: string): boolean {
 
 // ─── Primitive geometry in runtime code ────────────────────────────────────
 
-/** Comments stripped, so a commented-out mention is not evidence of anything. */
+/**
+ * Comments stripped, so a commented-out mention is not evidence of anything.
+ * The shared walker: a regex here cut `"//"` inside a string and everything
+ * after it on the line.
+ */
 function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//gu, " ").replace(/\/\/[^\n]*/gu, " ");
+  return stripCsComments(source);
 }
 
 const PRIMITIVE_RE = /\bGameObject\s*\.\s*CreatePrimitive\b|\bPrimitiveType\s*\.\s*[A-Z]/u;

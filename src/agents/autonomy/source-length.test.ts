@@ -23,7 +23,7 @@ const deps = {
 } as const;
 
 /** A fully assembled project, so only the length rule can object. */
-function project(sourceLines: number): { root: string; configPath: string } {
+function project(sourceLines: number): { root: string; configPath: string; servicePath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "length-"));
   const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
   const scripts = join(moduleRoot, "Scripts");
@@ -33,7 +33,8 @@ function project(sourceLines: number): { root: string; configPath: string } {
   writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
   writeFileSync(join(scripts, "Game.Board.asmdef"), '{"name":"Game.Board"}');
   writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
-  writeFileSync(join(scripts, "BoardService.cs"), "// x\n".repeat(sourceLines));
+  const servicePath = join(scripts, "BoardService.cs");
+  writeFileSync(servicePath, "// x\n".repeat(sourceLines));
 
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
@@ -43,13 +44,15 @@ function project(sourceLines: number): { root: string; configPath: string } {
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
   writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
-  return { root, configPath };
+  return { root, configPath, servicePath };
 }
 
 const promptFor = (lines: number): string => {
-  const { root, configPath } = project(lines);
+  const { root, configPath, servicePath } = project(lines);
   const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
   guard.trackToolCall("file_write", { path: configPath }, false);
+  // The length rule judges the files this run wrote (AUT-4).
+  guard.trackToolCall("file_write", { path: servicePath }, false);
   guard.trackToolCall("unity_playmode_verify", { projectPath: root }, false);
   return guard.getPrompt() ?? "";
 };
