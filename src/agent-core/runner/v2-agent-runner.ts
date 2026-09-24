@@ -304,18 +304,19 @@ export class V2AgentRunner implements AgentRunner {
     // fires, so (a) the failure gate's user-cancel short-circuit and rule 1/1b see the benign reason,
     // and (b) the terminal reads it into AgentRunResult.cancelReason. {once:true} + a guarded cancel
     // (the token may already have ended) keep this a single, side-effect-free hook over the whole run.
+    const onExternalAbort = (): void => {
+      try {
+        runClock.taskToken.cancel({ kind: "user-cancel" });
+      } catch {
+        /* run already ended — the token is the single source of truth, first write wins */
+      }
+    };
     if (io.externalSignal) {
-      io.externalSignal.addEventListener(
-        "abort",
-        () => {
-          try {
-            runClock.taskToken.cancel({ kind: "user-cancel" });
-          } catch {
-            /* run already ended — the token is the single source of truth, first write wins */
-          }
-        },
-        { once: true },
-      );
+      io.externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+      // A signal aborted BEFORE the run opened never fires "abort" again: without this the run
+      // started live, every call rejected on the aborted signal, and the rejections were counted
+      // as provider failures until the run ended blocked instead of cancelled.
+      if (io.externalSignal.aborted) onExternalAbort();
     }
 
     // ─── Mid-task /token RAISE: subscribe the LIVE Budget to runtime config changes ────────────────
@@ -1022,6 +1023,8 @@ export class V2AgentRunner implements AgentRunner {
     } finally {
       // Release the mid-task budget-raise subscription first (idempotent; no-op when unwired).
       unsubBudgetConfig?.();
+      // A long-lived caller signal must not keep this run's closure (and its token) reachable.
+      io.externalSignal?.removeEventListener("abort", onExternalAbort);
       // Durability + cleanup on EVERY exit (happy or throw) — v1 did this in its finally
       // (orchestrator.ts:4645-4666). persistTerminal advances session.lastJournalSnapshot;
       // skipping it on a throw corrupts the next turn's prologue. dispose()+close() are idempotent.

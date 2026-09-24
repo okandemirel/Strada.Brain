@@ -831,6 +831,38 @@ describe("V2AgentRunner — retry (verdict retry → backoff → continue)", () 
   });
 });
 
+describe("V2AgentRunner — a signal already aborted when the run opens", () => {
+  it("is a user-cancel: no model call, no health failure", async () => {
+    // An "abort" listener added after the fact never fires; the run used to start live, every
+    // call rejected on the aborted signal, and each rejection was recorded as a provider failure.
+    const health = mkHealth();
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), { onClassifyFailure: () => health.recordFailure() });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    const io = { ...mkIO("background"), externalSignal: AbortSignal.abort() };
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), io));
+
+    expect(result.cancelReason).toEqual({ kind: "user-cancel" });
+    expect(port.spies.classifyFailureForVerdict).not.toHaveBeenCalled();
+    expect(handles.events().some((e) => e.type === "model.call.started")).toBe(false);
+    expect(result.status).not.toBe("blocked");
+  });
+
+  it("removes its abort listener when the run ends", async () => {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const runner = mkRunner(handles.plane, gateway, mkPort(mkProvider()), handles.clock);
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+
+    await drive(handles.clock, runner.run(mkRequest(), { ...mkIO("background"), externalSignal: controller.signal }));
+
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+});
+
 describe("V2AgentRunner — abort (verdict stop)", () => {
   it("health shouldAbort → stop hard → AgentRunResult failed", async () => {
     const handles = mkPlane({ health: { shouldAbort: () => true } });

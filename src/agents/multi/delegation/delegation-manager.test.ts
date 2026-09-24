@@ -1848,3 +1848,37 @@ describe("a timed-out delegation does not release its lease under a running tool
     }
   });
 });
+
+describe("a delegation whose budget expires while it waits for its lease", () => {
+  it("never starts the sub-agent run and is recorded as a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn();
+      const release = vi.fn(async () => undefined);
+      const commit = vi.fn(async () => ({ written: [], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null }));
+      // Acquisition waits (orphan salvage / the project write lock) past the 60 s budget.
+      const acquireLease = vi.fn(() => new Promise((resolve) => {
+        setTimeout(() => resolve({
+          id: "lease-1", kind: "temp-copy", sourceRoot: "/test/project", leaseRoot: "/tmp/leases",
+          path: "/tmp/leases/lease-1", createdAt: Date.now(), commit, release,
+        }), 61_000);
+      }));
+      const log = new DelegationLog(new Database(":memory:"));
+      const mgr = new DelegationManager(buildManagerOpts({ delegationLog: log, workspaceLeaseManager: { acquireLease } as never }));
+      const pending = mgr.delegate({
+        type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+      }).catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(61_000 + DELEGATION_ABORT_GRACE_MS + 5);
+      const outcome = await pending;
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/timed out/);
+      expect(scriptedRunnerRun).not.toHaveBeenCalled();
+      expect(log.getHistory(1)[0]!.status).toBe("timeout");
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

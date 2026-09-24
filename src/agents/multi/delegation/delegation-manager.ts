@@ -739,6 +739,11 @@ export class DelegationManager {
           workerId: subAgentId,
         })
         : undefined;
+      // The timeout is armed before the lease, and acquisition can wait on orphan salvage and
+      // the project write lock: a delegation already out of time must not start its run.
+      if (abortController.signal.aborted) {
+        throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
+      }
       const orchestrator = new Orchestrator({
         providerManager,
         tools: subAgentTools,
