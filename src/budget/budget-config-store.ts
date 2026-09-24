@@ -13,6 +13,11 @@ function parseNum(s: string | undefined): number | undefined {
   return Number.isFinite(n) && n >= -1 ? n : undefined;  // -1 = unlimited
 }
 
+/** A 0-100 percentage as a 0-1 fraction; out-of-range values are ignored. */
+function percentAsFraction(pct: number | undefined): number | undefined {
+  return pct !== undefined && pct >= 0 && pct <= 100 ? pct / 100 : undefined;
+}
+
 export class BudgetConfigStore {
   private readonly storage: BudgetStorage;
   private readonly env: NodeJS.ProcessEnv;
@@ -103,7 +108,13 @@ export class BudgetConfigStore {
       subLimits: {
         daemonDailyUsd: val("subLimits.daemonDailyUsd", "STRADA_DAEMON_DAILY_BUDGET", DEFAULT_BUDGET_CONFIG.subLimits.daemonDailyUsd),
         agentDefaultUsd: val("subLimits.agentDefaultUsd", "AGENT_DEFAULT_BUDGET_USD", DEFAULT_BUDGET_CONFIG.subLimits.agentDefaultUsd),
-        verificationPct: val("subLimits.verificationPct", "SUPERVISOR_VERIFICATION_BUDGET_PCT", DEFAULT_BUDGET_CONFIG.subLimits.verificationPct),
+        // The stored value is a fraction (updateConfig validates 0..1), but the
+        // env var is a PERCENT everywhere else (config schema int 0-50, read
+        // as /100 by the supervisor): the documented `15` showed as 1500%.
+        verificationPct:
+          parseNum(overrides["subLimits.verificationPct"]) ??
+          percentAsFraction(parseNum(this.env["SUPERVISOR_VERIFICATION_BUDGET_PCT"])) ??
+          DEFAULT_BUDGET_CONFIG.subLimits.verificationPct,
       },
       ...(interactiveOverride !== undefined && interactiveOverride >= -1
         ? { interactiveTokenBudget: interactiveOverride }

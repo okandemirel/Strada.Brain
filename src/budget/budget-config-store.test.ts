@@ -40,6 +40,18 @@ describe("BudgetConfigStore", () => {
     expect(config.dailyLimitUsd).toBe(25);
   });
 
+  // The env var is a percent everywhere else (config schema, supervisor);
+  // read here as a fraction, the documented `15` became 1500%.
+  it("reads SUPERVISOR_VERIFICATION_BUDGET_PCT as a percent", () => {
+    process.env.SUPERVISOR_VERIFICATION_BUDGET_PCT = "15";
+    try {
+      store = new BudgetConfigStore(mockStorage as never);
+      expect(store.getConfig().subLimits.verificationPct).toBeCloseTo(0.15);
+    } finally {
+      delete process.env.SUPERVISOR_VERIFICATION_BUDGET_PCT;
+    }
+  });
+
   it("portal override takes priority over env var", () => {
     process.env.STRADA_BUDGET_DAILY_USD = "25";
     mockStorage.getAllBudgetConfig.mockReturnValue({ dailyLimitUsd: "50" });
