@@ -5806,6 +5806,57 @@ DONE`,
     expect(toolResultBlock?.is_error).toBe(true);
   });
 
+  it("refuses a destructive act chained after an allowlisted command, whatever the reviewer says", async () => {
+    // An allowlist match on the first segment used to skip the destructive-act
+    // refusal for the whole line, and then override the reviewer's rejection.
+    const shellTool = createMockTool("shell_exec", true);
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const usage = { inputTokens: 10, outputTokens: 10 };
+    const turns = [
+      { text: "Checking the working tree.", toolCalls: [], stopReason: "end_turn", usage },
+      {
+        text: "",
+        toolCalls: [{ id: "tc-shell-chained", name: "shell_exec", input: { command: "git status; find . -delete" } }],
+        stopReason: "tool_use",
+        usage,
+      },
+    ];
+    mockProvider.chat.mockImplementation(async (systemPrompt: unknown) => {
+      if (String(systemPrompt).includes("shell safety arbiter")) {
+        return {
+          text: JSON.stringify({ decision: "reject", reason: "deletes the tree", taskAligned: false, bounded: false }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage,
+        };
+      }
+      return turns.shift() ?? { text: "Stopped.", toolCalls: [], stopReason: "end_turn", usage };
+    });
+
+    await runBackgroundTask(backgroundOrch, "Check the working tree", {
+      chatId: "bg-chained-destructive-shell",
+      channelType: "cli",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(shellTool.execute).not.toHaveBeenCalled();
+    const toolResults = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
+    expect(toolResults.some((content) => content.includes("shell command looks destructive"))).toBe(true);
+  });
+
   it("returns error result for unknown tool", async () => {
     const toolResponse: ProviderResponse = {
       text: "",

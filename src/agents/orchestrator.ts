@@ -54,7 +54,6 @@ import {
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
-import { matchProjectScopedAllowlist } from "./autonomy/project-shell-allowlist.js";
 import { validatePath } from "../security/path-guard.js";
 import { vaultFileRead, isVaultInsideProject, MAX_SYMBOL_LEN } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
@@ -4440,19 +4439,18 @@ export class Orchestrator {
           // isDestructiveOperation (direct call or batch), so the human decides.
           return { approved: true };
         }
-        // Allowlist FIRST: it is a bounded guarantee, not an escape hatch —
-        // Unity batchmode/dotnet build against this project were being killed
-        // here by the destructive-shape heuristic before the reviewer (or the
-        // allowlist override inside it) ever ran. Measured 2026-08-24.
-        const allowlistedShell =
-          matchProjectScopedAllowlist(command, this.projectPath) !== null;
         // A destructive ACT is refused outright; a command that merely carries
         // an execution SHAPE (a subshell, an interpreter one-liner) goes to the
         // reviewer, which can read what it actually does. Refusing the shape
         // unread cost a sprint its turn for `ls … && file … && python3 -c
         // <read the image's size>` — a measurement the agent could have
         // written to a file and run anyway (measured live 2026-09-12 05:03).
-        if (!allowlistedShell && destructiveShellFlag(command) === "action") {
+        // No allowlist match skips this: the allowlist used to, because the
+        // old substring check refused Unity batchmode/dotnet build (measured
+        // 2026-08-24), and a match on one segment of a chained command then
+        // waved the whole line past it. The check now reads program
+        // positions, so those builds pass it on their own.
+        if (destructiveShellFlag(command) === "action") {
           return { approved: false, reason: "shell command looks destructive" };
         }
         // Thread the project root so the deterministic project-scoped allowlist
