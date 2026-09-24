@@ -201,6 +201,17 @@ function vaultForSegment(registry: VaultRegistry, segment: string, res: ServerRe
   return vault;
 }
 
+/** Vault ids whose POST /api/vaults is between its duplicate check and register(), per registry. */
+const pendingRegistrations = new WeakMap<VaultRegistry, Set<string>>();
+function registrationsInFlight(registry: VaultRegistry): Set<string> {
+  let pending = pendingRegistrations.get(registry);
+  if (!pending) {
+    pending = new Set();
+    pendingRegistrations.set(registry, pending);
+  }
+  return pending;
+}
+
 /**
  * DashboardServer handler-pattern adapter for the vault routes.
  * Mirrors handleSkillsRoutes / handleSystemRoutes shape so it can be wired
@@ -260,7 +271,12 @@ export function handleVaultRoutes(
       const dirCheck = await resolveExistingDirectory(parsed.rootPath);
       if (!dirCheck.ok) { sendJsonError(res, 400, dirCheck.error); return; }
       const id = makeVaultId(parsed.kind, dirCheck.realPath);
-      if (registry.get(id)) { sendJsonError(res, 409, 'vault already registered'); return; }
+      // CHN-14: factory.create() is awaited between this check and register(),
+      // so a double-click used to pass the check twice, index the same root twice
+      // and leak the first vault. An id being registered counts as registered.
+      const pending = registrationsInFlight(registry);
+      if (registry.get(id) || pending.has(id)) { sendJsonError(res, 409, 'vault already registered'); return; }
+      pending.add(id);
       try {
         const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
         // Register synchronously so the vault appears in GET /api/vaults immediately,
@@ -303,6 +319,8 @@ export function handleVaultRoutes(
       } catch (err) {
         getLoggerSafe().warn('[vault] registration failed', { err });
         sendJsonError(res, 500, 'registration failed');
+      } finally {
+        pending.delete(id);
       }
     }).catch(() => sendJsonError(res, 500, 'registration failed'));
     return true;
