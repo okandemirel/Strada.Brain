@@ -1380,6 +1380,8 @@ export class StradaConformanceGuard {
   }
 
   unmetDeliveryConditions(): readonly string[] {
+    // A disabled guard claims nothing (see getPrompt).
+    if (!this.isEnabled()) return [];
     // audited 2026-09-02: only NOTHING DRAWN was mirrored here, so GAME NEVER
     // RUN and GAME NOT ASSEMBLED spent their asks, getPrompt() went quiet, and
     // the run reported the game delivered and approved.
@@ -1420,6 +1422,10 @@ export class StradaConformanceGuard {
   }
 
   getPrompt(): string | null {
+    // A disabled guard raises no gate at all. Only four of the rules below
+    // checked the switch, so a real-tree repair (see conformanceAppliesTo)
+    // still got MODULE INCOMPLETE and FILE TOO LONG on every call.
+    if (!this.isEnabled()) return null;
     const incomplete = this.incompleteModules();
     if (incomplete.length > 0) {
       return (
