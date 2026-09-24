@@ -271,6 +271,29 @@ describe("ApprovalQueue", () => {
       expect(queue.getAuditLog().map((a) => a.decision)).not.toContain("approved");
     });
 
+    // SEC-11: expiry was enforced only by expireStale() on the heartbeat tick,
+    // so a request past its deadline could still be approved when no tick had
+    // run since (heartbeat stopped or paused while the dashboard stays up).
+    it("a request past its deadline cannot be approved even before expireStale() runs", () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+      const decided: unknown[] = [];
+      eventBus.on("daemon:approval_decided", (ev) => decided.push(ev));
+
+      const entry = queue.enqueue("deployment", { proposalId: "p-2" }, "deploy-readiness");
+      vi.setSystemTime(now + TIMEOUT_MINUTES * 60 * 1000 + 1);
+      // No expireStale() in between.
+      const result = queue.approve(entry.id, "dashboard");
+
+      expect(result).toEqual({ applied: false, status: "expired" });
+      expect(queue.getById(entry.id)!.status).toBe("expired");
+      expect(decided).toHaveLength(0);
+      const decisions = queue.getAuditLog().map((a) => a.decision);
+      expect(decisions).toContain("expired");
+      expect(decisions).not.toContain("approved");
+    });
+
     it("a denied approval cannot be flipped to approved", () => {
       const entry = queue.enqueue("file_delete", { path: "/x" }, "cron");
       expect(queue.deny(entry.id, "user")).toEqual({ applied: true, status: "denied" });

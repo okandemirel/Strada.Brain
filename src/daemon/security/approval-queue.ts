@@ -115,35 +115,40 @@ export class ApprovalQueue {
     const expired = this.storage.getExpiredApprovals(now);
 
     for (const entry of expired) {
-      this.storage.updateApprovalDecision(entry.id, "expired");
-      this.storage.insertAuditEntry({
-        toolName: entry.toolName,
-        paramsSummary: this.summarizeParams(entry.params),
-        decision: "expired",
-        triggerName: entry.triggerName,
-        timestamp: now,
-      });
-      // An auto-denial on timeout is a decision nobody took: the clock did. It
-      // is recorded (it is why the tool never ran) with NO owner, so it reaches
-      // nobody until something can prove whose request it was — never widened
-      // to 'shared' just to make it visible.
-      safeRecordProjectHistory(this.projectHistory, {
-        kind: "decision",
-        summary: `Expired without a decision: ${entry.toolName}`,
-        payload: {
-          approvalId: entry.id,
-          toolName: entry.toolName,
-          decision: "expired",
-          ...(entry.triggerName ? { triggerName: entry.triggerName } : {}),
-          requestedAt: entry.createdAt,
-          expiredAt: now,
-        },
-      });
+      this.expireEntry(entry, now);
     }
 
     // Prune resolved entries older than 7 days to prevent unbounded table growth
     const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
     this.storage.pruneOldApprovals(sevenDaysAgo);
+  }
+
+  /** Record one pending entry as expired: auto-denied on timeout (SEC-04). */
+  private expireEntry(entry: ApprovalEntry, now: number): void {
+    this.storage.updateApprovalDecision(entry.id, "expired");
+    this.storage.insertAuditEntry({
+      toolName: entry.toolName,
+      paramsSummary: this.summarizeParams(entry.params),
+      decision: "expired",
+      triggerName: entry.triggerName,
+      timestamp: now,
+    });
+    // An auto-denial on timeout is a decision nobody took: the clock did. It
+    // is recorded (it is why the tool never ran) with NO owner, so it reaches
+    // nobody until something can prove whose request it was — never widened
+    // to 'shared' just to make it visible.
+    safeRecordProjectHistory(this.projectHistory, {
+      kind: "decision",
+      summary: `Expired without a decision: ${entry.toolName}`,
+      payload: {
+        approvalId: entry.id,
+        toolName: entry.toolName,
+        decision: "expired",
+        ...(entry.triggerName ? { triggerName: entry.triggerName } : {}),
+        requestedAt: entry.createdAt,
+        expiredAt: now,
+      },
+    });
   }
 
   /**
@@ -182,6 +187,14 @@ export class ApprovalQueue {
     // into executor.execute(). A decision only lands on a live request.
     if (entry.status !== "pending") {
       return { applied: false, status: entry.status };
+    }
+    // …and a request past its deadline is not live either, even when no
+    // heartbeat tick has run expireStale() yet (stopped or paused heartbeat,
+    // or a decision landing between ticks): it was denied on timeout.
+    const now = Date.now();
+    if (entry.expiresAt <= now) {
+      this.expireEntry(entry, now);
+      return { applied: false, status: "expired" };
     }
 
     this.storage.updateApprovalDecision(id, decision, decidedBy);
