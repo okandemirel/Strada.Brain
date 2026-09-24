@@ -26,4 +26,17 @@ describe("resolveDelegationBudget", () => {
     expect(r.refusal).toContain("600 s cap");
     expect(resolveDelegationBudget("code_review", 60_000, [ok, ...wall]).refusal).toBeUndefined();
   });
+
+  it("a refusal expires: cap timeouts older than the window are not evidence", () => {
+    // A refusal is decided before a new row can be written, so without a window nothing could
+    // ever end the streak — one slow afternoon refused the type forever.
+    const now = Date.UTC(2026, 8, 24, 12);
+    const at = (hoursAgo: number) => ({ status: "timeout", durationMs: 600_010, startedAt: now - hoursAgo * 3_600_000 });
+    const stale = resolveDelegationBudget("analysis", 60_000, [at(7), at(7.2), at(7.5)], now);
+    expect(stale.refusal).toBeUndefined();
+    expect(stale.timeoutMs).toBe(60_000);
+    expect(resolveDelegationBudget("analysis", 60_000, [at(1), at(1.2), at(1.5)], now).refusal).toBeDefined();
+    // The streak stops at the first stale row: two fresh cap timeouts are not a refusal.
+    expect(resolveDelegationBudget("analysis", 60_000, [at(1), at(2), at(7)], now).refusal).toBeUndefined();
+  });
 });

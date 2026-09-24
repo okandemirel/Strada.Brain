@@ -17,11 +17,20 @@
 export interface DelegationOutcomeLike {
   readonly status: string;
   readonly durationMs: number | undefined;
+  /** When the delegation started (epoch ms). Outcomes older than the window are not evidence. */
+  readonly startedAt?: number;
 }
 
 export const DELEGATION_TIMEOUT_CAP_MS = 600_000;
 /** Consecutive timeouts at the cap after which the type is refused. */
 export const DELEGATION_REFUSE_AFTER = 3;
+/**
+ * How far back an outcome still says something about the current model. A refusal is
+ * recorded before any new row can be written, so without a window nothing could ever break
+ * the streak: one slow afternoon refused the type for good, across restarts and model changes.
+ * Once the streak ages out, the next delegation runs as a probe on the configured budget.
+ */
+export const DELEGATION_HISTORY_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 export interface DelegationBudget {
   readonly timeoutMs: number;
@@ -33,16 +42,19 @@ export interface DelegationBudget {
 
 /**
  * `recent` is newest first. A completed (or failed, or cancelled) delegation
- * ends the streak: the budget resets to the configured one.
+ * ends the streak: the budget resets to the configured one. So does an outcome
+ * older than {@link DELEGATION_HISTORY_WINDOW_MS}.
  */
 export function resolveDelegationBudget(
   type: string,
   configuredTimeoutMs: number,
   recent: readonly DelegationOutcomeLike[],
+  now: number = Date.now(),
 ): DelegationBudget {
   let consecutiveTimeouts = 0;
   for (const entry of recent) {
     if (entry.status !== "timeout") break;
+    if (entry.startedAt !== undefined && now - entry.startedAt > DELEGATION_HISTORY_WINDOW_MS) break;
     consecutiveTimeouts++;
   }
   if (consecutiveTimeouts === 0) return { timeoutMs: configuredTimeoutMs, consecutiveTimeouts };
