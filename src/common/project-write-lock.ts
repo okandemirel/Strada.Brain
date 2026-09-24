@@ -182,13 +182,25 @@ function reclaim(path: string, expected: LockOwner | null, why: string, routine 
       // rename; it holds nothing but a settled lock's metadata.
       rmSync(`${path}.reclaimed`, { recursive: true, force: true });
       renameSync(path, `${path}.reclaimed`);
-    } catch {
-      return "settled"; // released under us — nothing of ours to remove
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return "settled"; // released under us — nothing of ours to remove
+      // ANYTHING ELSE LEAVES THE LOCK STANDING. On Windows an antivirus or
+      // indexer handle makes this EPERM/EBUSY routinely; calling that settled
+      // stopped the holder's heartbeat with the directory still in place, and
+      // every later writer waited out its timeout and wrote unlocked. Report it
+      // as contended so a release retries.
+      getLoggerSafe().debug("Project write lock could not be moved aside yet", { path, code });
+      return "contended";
     }
     // A release is routine; only TAKING a lock from someone is a warning.
     if (routine) getLoggerSafe().debug(why, { path });
     else getLoggerSafe().warn(why, { path, pid: current?.pid });
-    rmSync(`${path}.reclaimed`, { recursive: true, force: true });
+    try {
+      rmSync(`${path}.reclaimed`, { recursive: true, force: true });
+    } catch {
+      // The lock is already off the canonical path; the next reclaim clears this grave.
+    }
     return "settled";
   } finally {
     dropReclaimMarker(path);
@@ -282,7 +294,7 @@ export async function acquireProjectWriteLock(
               return;
             }
             if (outcome === "contended") {
-              getLoggerSafe().warn("Project write lock could not be released — another reclaimer holds the decision", { path });
+              getLoggerSafe().warn("Project write lock could not be released — another reclaimer holds the decision, or the lock directory stayed busy", { path });
             }
             released = true;
             clearInterval(beat);

@@ -9,12 +9,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * renames the canonical path away. Unset for every other test.
  */
 const afterNextRename: { run?: () => void } = {};
+/** Makes the next rename fail with this errno code (a Windows handle holder). */
+const failNextRename: { code?: string } = {};
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs")>();
   return {
     ...real,
     default: real,
     renameSync: (from: string, to: string) => {
+      const failWith = failNextRename.code;
+      failNextRename.code = undefined;
+      if (failWith) throw Object.assign(new Error(`${failWith}: operation not permitted, rename`), { code: failWith });
       const hook = afterNextRename.run;
       afterNextRename.run = undefined;
       const out = real.renameSync(from, to);
@@ -163,6 +168,28 @@ describe("the project write lock", () => {
       expect(existsSync(lockDir())).toBe(false); // the retry settled it
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("a release whose rename fails with EPERM is retried, not reported done", async () => {
+    // Any rename error used to read as "someone already released it": the
+    // heartbeat stopped, the directory stayed, and every later writer in this
+    // process waited out its timeout and wrote unlocked.
+    const held = await acquireProjectWriteLock(root, { timeoutMs: 100 });
+    expect(held.acquired).toBe(true);
+    failNextRename.code = "EPERM";
+
+    vi.useFakeTimers();
+    try {
+      held.release();
+      expect(existsSync(lockDir())).toBe(true); // the busy directory is still our lock
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(existsSync(lockDir())).toBe(false); // the retry released it
+    } finally {
+      vi.useRealTimers();
+      failNextRename.code = undefined;
     }
   });
 
