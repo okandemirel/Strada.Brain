@@ -50,6 +50,7 @@ import type {
 } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { npmCheckCwd, npmCheckInvocation } from "../npm-check-command.js";
+import { SingleFlightCache } from "../single-flight-cache.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { hasSecrets } from "../../security/secret-sanitizer.js";
 import { resolveBindHost } from "../../core/bind-host.js";
@@ -307,6 +308,8 @@ export class WebChannel
    */
   private workspaceBusEmitter: ((event: string, payload: unknown) => boolean | void) | null = null;
   private buildStatusProvider: BuildStatusProvider | null = null;
+  /** CHN-8: one delivery measurement at a time, reused for 10 s. */
+  private readonly measuredBuildStatus = new SingleFlightCache<object>(10_000);
   /**
    * Cached monitor state for replaying to reconnecting clients, keyed PER DAG ROOT (episode).
    * The frontend monitor store is multi-root (rootsById, MAX_ROOTS); a single flat snapshot
@@ -444,6 +447,7 @@ export class WebChannel
    */
   setBuildStatusProvider(provider: BuildStatusProvider | null): void {
     this.buildStatusProvider = provider;
+    this.measuredBuildStatus.clear();
   }
 
   /** Push the current build status to every connected client (no-op without a provider). */
@@ -1587,7 +1591,15 @@ export class WebChannel
       res.end(JSON.stringify({ error: "Method not allowed" }));
       return;
     }
-    if (!this.buildStatusProvider) {
+    // CHN-8: this route is answered before the proxy, so it applies the
+    // proxy's GET rule itself — a page on another origin may not drive it.
+    if (!this.isAllowedGetProxyRequest(req)) {
+      res.writeHead(403, headers);
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+    const provider = this.buildStatusProvider;
+    if (!provider) {
       res.writeHead(503, headers);
       res.end(JSON.stringify({ error: "Build status is not available: no campaign layer is registered on this channel." }));
       return;
@@ -1595,7 +1607,10 @@ export class WebChannel
     const query = url.split("?")[1] ?? "";
     const measure = /(^|&)measure=(1|true)(&|$)/.test(query);
     try {
-      const status = await this.buildStatusProvider({ measure });
+      // The measurement walks the project tree: never more than one at a time.
+      const status = measure
+        ? await this.measuredBuildStatus.run(() => provider({ measure: true }))
+        : await provider({ measure: false });
       res.writeHead(200, headers);
       res.end(JSON.stringify(status));
     } catch (err) {
