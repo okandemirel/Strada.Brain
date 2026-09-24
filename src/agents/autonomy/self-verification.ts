@@ -14,6 +14,7 @@ import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
 import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
+import { lexShell, type ShellOperator } from "../../security/shell-lexer.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
 
 /**
@@ -39,46 +40,68 @@ const VERIFICATION_COMMAND_HEAD_RE = new RegExp(
   "iu",
 );
 
-/** True when any segment of a shell chain (`cd x && npm test`) invokes a verifier. */
 /** A command that always succeeds (or always fails) whatever the tree is. */
 const ALWAYS_TRUE_RE = /^(?:true|:)\s*$/u;
 const ALWAYS_FALSE_RE = /^(?:false)\s*$/u;
 
+const isPipe = (op: ShellOperator | undefined): boolean => op === "|" || op === "|&";
+
 /**
- * Did this shell command RUN a verifier — and can we be sure?
+ * Did this shell command RUN a verifier — and does the exit status speak for it?
  *
- * "ran": a verifier sits where the shell had to execute it.
- * "maybe": the verifier is behind a `||`, so it ran only if the left side
- *   failed — the caller must see a verdict in the output before believing it.
+ * "ran": every verifier the shell reached decides the line's exit status: it
+ *   ends its pipeline, is not entered through `||`, and only `&&` (or a pipe
+ *   after a later `&&`) follows it — so exit 0 means it passed.
+ * "maybe": a verifier ran, or may have, but the exit status is another
+ *   command's: it is behind `||`, before `|`, `;`, `||` or `&`, or inside a
+ *   group. The caller must see a success verdict AND no failure verdict in
+ *   the output. `dotnet test | tail -5`, `dotnet test || true` and `dotnet
+ *   test; echo done` all exit 0 over a failing suite (audited 2026-09-24).
  * "no": no verifier, or one the shell could not have reached (`true ||
  *   dotnet build` exits 0 having built nothing, and `false && dotnet build;
  *   true` never reaches the build either — both cleared the compile debt of
  *   every edited file: Codex 2026-09-12 AE#3, 2026-09-13 AF#3).
+ *
+ * Read with the shared shell lexer, so quotes, newlines and a lone `&` split
+ * commands where the shell splits them.
  */
 export function shellVerification(command: string): "ran" | "maybe" | "no" {
-  let best: "ran" | "maybe" | "no" = "no";
-  for (const statement of command.split(/[;\n]/u)) {
-    const parts = statement.split(/\s*(&&|\|\|)\s*/u);
-    let reachable = true;
-    let behindOr = false;
-    for (let i = 0; i < parts.length; i += 2) {
-      const segment = (parts[i] ?? "").replace(/^[\s(]+/u, "").trim();
-      const operatorBefore = i === 0 ? undefined : parts[i - 1];
-      if (operatorBefore === "&&") {
-        // Reachable only if everything before it succeeded.
-        if (ALWAYS_FALSE_RE.test((parts[i - 2] ?? "").trim())) reachable = false;
-      } else if (operatorBefore === "||") {
-        // Runs only if the left side FAILED.
-        if (ALWAYS_TRUE_RE.test((parts[i - 2] ?? "").trim())) reachable = false;
-        else behindOr = true;
-      }
-      if (!reachable) continue;
-      if (!VERIFICATION_COMMAND_HEAD_RE.test(segment)) continue;
-      if (!behindOr) return "ran";
-      best = "maybe";
-    }
+  const read = lexShell(command);
+  // A line the shell cannot parse fails before anything in it runs.
+  if (read.hazards.has("unterminated")) return "no";
+  const commands = [...read.commands];
+  const operators = [...read.operators];
+  // A trailing `;` or newline ends the line; it adds no command.
+  while (
+    commands.length > 1
+    && commands[commands.length - 1]?.length === 0
+    && (operators[operators.length - 1] === ";" || operators[operators.length - 1] === "newline")
+  ) {
+    commands.pop();
+    operators.pop();
   }
-  return best;
+  const text = (i: number): string => (commands[i] ?? []).map((word) => word.value).join(" ");
+  let verdict: "ran" | "maybe" | "no" = "no";
+  for (let i = 0; i < commands.length; i += 1) {
+    if (!VERIFICATION_COMMAND_HEAD_RE.test(text(i))) continue;
+    // Whether this command runs is decided where its pipeline starts.
+    let start = i;
+    while (start > 0 && isPipe(operators[start - 1])) start -= 1;
+    const before = start > 0 ? operators[start - 1] : undefined;
+    const left = start > 0 ? text(start - 1) : "";
+    if (before === "&&" && ALWAYS_FALSE_RE.test(left)) continue;
+    if (before === "||" && ALWAYS_TRUE_RE.test(left)) continue;
+    // A failure skips every later `&&` and resumes at the next `||`, `;` or
+    // `&`, so only an all-`&&` tail keeps its non-zero status as the line's.
+    const after = operators.slice(i);
+    const decidesStatus = before !== "||"
+      && !read.hazards.has("grouping")
+      && !isPipe(after[0])
+      && after.every((op) => op === "&&" || isPipe(op));
+    if (!decidesStatus) return "maybe";
+    verdict = "ran";
+  }
+  return verdict;
 }
 
 /**
@@ -330,14 +353,13 @@ export class SelfVerification {
           ? executedTool.output
           : (typeof result.content === "string" ? result.content : "");
         const bodyReportsFailure =
-          (runsTests(executedTool.toolName, executedTool.input)
-            && /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i.test(bodyText))
+          (runsTests(executedTool.toolName, executedTool.input) && reportsTestFailure(bodyText))
           // A BODY THAT SAYS IT FAILED IS A FAILURE, whatever the flag says:
           // `{"success":false,"compileIssueCount":3}` cleared the debt of
           // every edited file (Codex 2026-09-13 AF#3).
           || /"?success"?\s*[:=]\s*false/i.test(bodyText)
           || /"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(bodyText)
-          || /\bbuild failed\b|\bcompilation failed\b/i.test(bodyText)
+          || /\bbuild failed\b|\bcompilation failed\b|\b[1-9]\d* Error\(s\)/i.test(bodyText)
           // A UNITY RUN THAT DIED IS NOT A RUN THAT PASSED. unity_playmode_verify
           // judged the results file alone and wrote "ran clean … unityExit=1"
           // with isError: false; the editor that exited 1 or was killed at its
@@ -360,7 +382,10 @@ export class SelfVerification {
         const shell = executedTool.toolName === "shell_exec";
         const needsVerdict = shell
           && shellVerification(typeof executedTool.input["command"] === "string" ? executedTool.input["command"] : "") === "maybe";
-        if (!executedTool.isError && !verificationIsConclusive(bodyText, { shell, needsVerdict })) {
+        // A masked exit status that printed a failure verdict has failed.
+        const conclusive = (needsVerdict && bodyReportsFailure)
+          || verificationIsConclusive(bodyText, { shell, needsVerdict });
+        if (!executedTool.isError && !conclusive) {
           this.lastVerificationAt = Date.now();
           this.lastBuildOk = null;
           continue;
@@ -754,6 +779,25 @@ const TEST_RUNNING_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 const TEST_RUNNING_SHELL_RE = /\b(?:vitest|jest|pytest|dotnet\s+test|npm\s+(?:run\s+)?test|yarn\s+test)\b/iu;
+
+/**
+ * A test runner's own summary saying tests failed. Only Unity's wording used
+ * to count, so `dotnet test | tail -5` over "Failed!  - Failed: 1" read as a
+ * pass once the pipe masked the exit status (audited 2026-09-24). Anchored
+ * to each runner's summary line so a passing test's NAME does not match.
+ */
+const TEST_FAILURE_VERDICTS: readonly RegExp[] = [
+  /\b\d+ of \d+ tests? failed|PlayMode verification FAILED/i, // Unity
+  /\bFailed!\s+-\s+Failed:\s*[1-9]/, // dotnet test, minimal verbosity
+  /^\s*Test Run Failed\./m, // dotnet test, normal verbosity
+  /^\s*(?:Test Files|Tests)\s+[1-9]\d* failed\b/m, // vitest
+  /^\s*(?:Test Suites|Tests):\s+[1-9]\d* failed\b/m, // jest
+  /^[=\s]*(?:\d+ \w+, )*[1-9]\d* (?:failed|errors?)\b[^\n]*\bin [\d.]+s\b/m, // pytest
+];
+
+function reportsTestFailure(text: string): boolean {
+  return TEST_FAILURE_VERDICTS.some((re) => re.test(text));
+}
 
 function runsTests(toolName: string, input: Record<string, unknown>): boolean {
   if (TEST_RUNNING_TOOLS.has(toolName)) {

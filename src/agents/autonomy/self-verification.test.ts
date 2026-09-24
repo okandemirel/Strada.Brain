@@ -466,8 +466,20 @@ describe("SelfVerification", () => {
       expect(verifier.needsVerification()).toBe(true);
       // …while a real build still settles it, silent success included.
       const ok = wrote();
-      ok.track("shell_exec", { command: "dotnet build || echo failed" }, { toolCallId: "v", content: "$ dotnet build\nExit code: 0", isError: false });
+      ok.track("shell_exec", { command: "dotnet build" }, { toolCallId: "v", content: "$ dotnet build\nExit code: 0", isError: false });
       expect(ok.needsVerification()).toBe(false);
+      // `|| echo failed` hands the exit status to echo, exactly like `|| true`
+      // (AUT-2): only a printed verdict can settle it.
+      const masked = wrote();
+      masked.track("shell_exec", { command: "dotnet build || echo failed" }, { toolCallId: "v", content: "$ dotnet build || echo failed\nExit code: 0", isError: false });
+      expect(masked.needsVerification()).toBe(true);
+      const maskedWithVerdict = wrote();
+      maskedWithVerdict.track("shell_exec", { command: "dotnet build || echo failed" }, {
+        toolCallId: "v",
+        content: "$ dotnet build || echo failed\nExit code: 0\n\n--- stdout ---\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)",
+        isError: false,
+      });
+      expect(maskedWithVerdict.needsVerification()).toBe(false);
     });
 
     it("keeps the debt for the shapes round AF found (Codex 2026-09-13 AF#3)", () => {
