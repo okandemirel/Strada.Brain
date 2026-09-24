@@ -22,6 +22,7 @@ import {
   type ProviderOfficialSource,
 } from "./provider-source-registry.js";
 import type { ProviderCatalogHealth, RefreshResult } from "./provider-types.js";
+import { releaseStreamReader } from "../../common/stream-reader.js";
 
 // Re-export RefreshResult so existing consumers of this module are unaffected
 export type { RefreshResult } from "./provider-types.js";
@@ -435,7 +436,7 @@ async function safeJsonParse<T>(response: Response, label: string): Promise<T> {
         chunks.push(value);
       }
     } finally {
-      reader.releaseLock();
+      releaseStreamReader(reader);
     }
 
     const decoder = new TextDecoder();
@@ -470,7 +471,7 @@ async function safeTextParse(response: Response, label: string): Promise<string>
         chunks.push(value);
       }
     } finally {
-      reader.releaseLock();
+      releaseStreamReader(reader);
     }
 
     const decoder = new TextDecoder();

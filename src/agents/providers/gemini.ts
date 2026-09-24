@@ -11,6 +11,7 @@ import { OpenAIProvider, OPENAI_STOP_REASON_MAP, MAX_SSE_BUFFER_BYTES } from "./
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
+import { releaseStreamReader } from "../../common/stream-reader.js";
 
 /** SSE chunk with extra_content support for thought_signature */
 interface GeminiStreamChunk {
@@ -219,7 +220,7 @@ export class GeminiProvider extends OpenAIProvider {
         }
       }
     } finally {
-      reader.releaseLock();
+      releaseStreamReader(reader);
     }
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())

@@ -30,6 +30,7 @@ import {
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { releaseStreamReader } from "../../common/stream-reader.js";
 import {
   isReasoningEffortRejection,
   recoverReasoningEffort,
@@ -469,7 +470,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         }
       }
     } finally {
-      reader.releaseLock();
+      releaseStreamReader(reader);
     }
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
@@ -731,7 +732,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
     } finally {
       if (signal) signal.removeEventListener("abort", onAbort);
-      reader.releaseLock();
+      releaseStreamReader(reader);
     }
 
     if (signal?.aborted) {
