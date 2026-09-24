@@ -1,12 +1,17 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { resolve, extname } from "node:path";
-import { glob } from "glob";
+import { resolve, extname, relative, isAbsolute, sep } from "node:path";
+import { glob, type Path } from "glob";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { nearbyNames } from "./nearby-names.js";
 
 /**
  * Reject glob patterns that could escape the project directory.
+ *
+ * A fast, readable refusal for the obvious cases only: glob expands braces
+ * AFTER this check, so an alternative can still be absolute or assemble a
+ * `..` from pieces. Containment is enforced on what glob walks and returns
+ * (see globInsideProject), not here.
  */
 function isSafeGlobPattern(pattern: string): boolean {
   // Reject patterns with path traversal
@@ -14,6 +19,32 @@ function isSafeGlobPattern(pattern: string): boolean {
   // Reject absolute paths
   if (pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern)) return false;
   return true;
+}
+
+/** Is `candidate` (absolute or relative to `root`) strictly inside `root`? */
+function isInsideRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, resolve(root, candidate));
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Glob confined to the project root: directories outside it are never
+ * walked, and a match outside it is never returned, whatever the pattern
+ * expands to.
+ */
+async function globInsideProject(pattern: string, projectPath: string): Promise<string[]> {
+  const root = resolve(projectPath);
+  const outside = (p: Path): boolean => {
+    const full = p.fullpath();
+    return full !== root && !isInsideRoot(root, full);
+  };
+  const matches = await glob(pattern, {
+    cwd: projectPath,
+    nodir: true,
+    maxDepth: 20,
+    ignore: { ignored: outside, childrenIgnored: outside },
+  });
+  return matches.filter((match) => isInsideRoot(root, match));
 }
 
 const MAX_RESULTS = 50;
@@ -61,11 +92,7 @@ export class GlobSearchTool implements ITool {
     }
 
     try {
-      const matches = await glob(pattern, {
-        cwd: context.projectPath,
-        nodir: true,
-        maxDepth: 20,
-      });
+      const matches = await globInsideProject(pattern, context.projectPath);
 
       const limited = matches.slice(0, MAX_RESULTS);
       if (limited.length === 0) {
@@ -148,11 +175,7 @@ export class GrepSearchTool implements ITool {
     }
 
     try {
-      const files = await glob(filePattern, {
-        cwd: context.projectPath,
-        nodir: true,
-        maxDepth: 20,
-      });
+      const files = await globInsideProject(filePattern, context.projectPath);
 
       const results: string[] = [];
       // Audited 2026-09-02: the cap broke out of the file loop and the result
