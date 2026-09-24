@@ -76,3 +76,38 @@ describe("an empty answer from the only live provider", () => {
     expect(only.chat).toHaveBeenCalledTimes(1);
   });
 });
+
+// PRV-13: a thinking model that spent its whole budget reasoning returns no
+// content and no tool calls — but the adapters splice the reasoning into
+// `text`, so the answer looked non-empty, the chain recorded a success, and the
+// user got nothing once the reasoning block was stripped downstream.
+describe("an answer that is only reasoning", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+  });
+
+  it.each([
+    ["a closed <reasoning> block", "<reasoning>\nlet me think about the schema {\"a\":1}\n</reasoning>\n\n"],
+    ["a closed <think> block", "<think>hmm</think>"],
+    ["an unclosed <think> block", "<think>still going when the budget ran out"],
+  ])("counts %s as empty and falls over to the sibling", async (_label, text) => {
+    const thinker = createMockProvider();
+    (thinker.chat as ReturnType<typeof vi.fn>).mockResolvedValue({ text, toolCalls: [] });
+    const second = createMockProvider({ text: "a real answer" });
+
+    const result = await new FallbackChainProvider([thinker, second]).chat("sys", [], []);
+
+    expect(result.text).toBe("a real answer");
+    expect(second.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an answer whose visible text follows the reasoning", async () => {
+    const thinker = createMockProvider({ text: "<reasoning>\nplan\n</reasoning>\n\nthe answer" });
+    const second = createMockProvider({ text: "unused" });
+
+    const result = await new FallbackChainProvider([thinker, second]).chat("sys", [], []);
+
+    expect(result.text).toContain("the answer");
+    expect(second.chat).not.toHaveBeenCalled();
+  });
+});

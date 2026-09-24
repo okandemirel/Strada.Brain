@@ -16,6 +16,7 @@ import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep, parseResetDurationMs } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
+import { stripLeakedReasoning } from "../leaked-reasoning.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -212,7 +213,11 @@ const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 const FREE_TIER_LIMIT_RE = /FreeUsageLimit|free[- ]?tier[^.]{0,20}(limit|quota)|free usage limit/i;
 
 function isEmptyProviderResponse(response: ProviderResponse): boolean {
-  const hasText = typeof response.text === "string" && response.text.trim().length > 0;
+  // Reasoning spliced into `text` is not an answer: a thinking model that spent
+  // its whole budget reasoning returns only that block, and the user sees
+  // nothing once downstream strips it.
+  const visible = typeof response.text === "string" ? stripLeakedReasoning(response.text) : undefined;
+  const hasText = visible !== undefined && !visible.reasoningOnly && visible.text.length > 0;
   const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
   return !hasText && !hasToolCalls;
 }
