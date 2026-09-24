@@ -326,6 +326,19 @@ describe("FileWatchTrigger", () => {
     expect(trigger.getState()).toBe("active");
   });
 
+  // TSK-19: the error handler swallowed everything, so a watcher that stopped
+  // delivering (inotify limit, permissions) still read "active".
+  it("surfaces a watcher error in getState until an event arrives again", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+    eventHandlers["error"]!(new Error("ENOSPC: System limit for number of file watchers reached"));
+
+    expect(trigger.getState()).toBe("backed_off");
+    expect(trigger.getLastError()).toContain("ENOSPC");
+
+    eventHandlers["change"]!("/projects/game/Assets/Player.cs");
+    expect(trigger.getState()).toBe("active");
+  });
+
   // ===========================================================================
   // dispose
   // ===========================================================================
@@ -383,8 +396,9 @@ describe("FileWatchTrigger", () => {
       eventHandlers["error"]!(new Error("ENOSPC: file table overflow"));
     }).not.toThrow();
 
-    // Trigger should still be functional
-    expect(trigger.getState()).toBe("active");
+    // Trigger should still be functional: degraded, never disabled, so the
+    // registry keeps evaluating it (TSK-19: it used to read "active").
+    expect(trigger.getState()).toBe("backed_off");
   });
 
   it("ready event is handled without error", () => {

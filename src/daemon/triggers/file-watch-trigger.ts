@@ -14,6 +14,7 @@
 
 import { basename } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
+import { getLoggerSafe } from "../../utils/logger.js";
 // @ts-ignore -- picomatch is a direct dependency (package.json) but ships no bundled types
 import picomatch from "picomatch";
 import type {
@@ -76,6 +77,8 @@ export class FileWatchTrigger implements ITrigger {
   /** Debounced events that arrived while the buffer was full — reported, not listed. */
   private overflowCount = 0;
   private disposed = false;
+  /** The watcher's last error, until an event proves it is delivering again. */
+  private lastError: string | undefined;
 
   /**
    * @param def File watch trigger definition from HEARTBEAT.md
@@ -125,9 +128,19 @@ export class FileWatchTrigger implements ITrigger {
     this.watcher.on("add", (path: string) => this.handleEvent(path, "add"));
     this.watcher.on("change", (path: string) => this.handleEvent(path, "change"));
     this.watcher.on("unlink", (path: string) => this.handleEvent(path, "unlink"));
-    this.watcher.on("error", (_error: unknown) => {
-      // Swallow errors -- trigger remains active. Errors are logged by
-      // consumers via the daemon event bus, not here.
+    this.watcher.on("error", (error: unknown) => {
+      // Recorded and logged: this handler used to swallow every error, so a
+      // watcher that stopped delivering (inotify limit, permissions) still
+      // read "active" and nothing said why the trigger never fired again.
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== this.lastError) {
+        getLoggerSafe().warn("File-watch trigger watcher error — events may no longer be delivered", {
+          trigger: def.name,
+          path: def.path,
+          error: message,
+        });
+      }
+      this.lastError = message;
     });
     this.watcher.on("ready", () => {
       // Watcher is ready. No action needed -- events will start flowing.
@@ -140,6 +153,8 @@ export class FileWatchTrigger implements ITrigger {
    */
   private handleEvent(filePath: string, eventType: FileEvent["event"]): void {
     if (this.disposed) return;
+    // An event arrived: the watcher is delivering again.
+    this.lastError = undefined;
 
     // Apply pattern filter if configured
     if (this.patternMatcher && !this.patternMatcher(filePath)) {
@@ -235,11 +250,19 @@ export class FileWatchTrigger implements ITrigger {
   }
 
   /**
-   * Always returns 'active'. Circuit breaker state is managed externally
-   * by HeartbeatLoop, not by the trigger itself.
+   * 'active', or 'backed_off' while the watcher has reported an error and
+   * delivered nothing since. Circuit breaker state is managed externally by
+   * HeartbeatLoop, not by the trigger itself.
    */
   getState(): TriggerState {
-    return "active";
+    // Degraded, not disabled: it is still evaluated (a partial watcher error
+    // leaves the rest of the tree watched), but status shows it.
+    return this.lastError === undefined ? "active" : "backed_off";
+  }
+
+  /** The watcher's last error, if it has not delivered an event since. */
+  getLastError(): string | undefined {
+    return this.lastError;
   }
 
   /**
