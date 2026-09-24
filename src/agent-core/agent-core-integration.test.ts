@@ -566,6 +566,43 @@ describe("AgentCore OODA Integration", () => {
     }
   });
 
+  it("an LLM-set negative sourceBoost expires, and the observation it demoted comes back instead of being destroyed", async () => {
+    vi.useFakeTimers();
+    try {
+      const m = createMocks({
+        chatResponse: { action: "adjust", adjustments: { sourceBoost: { source: "test", delta: -50 } }, reasoning: "quiet tests" },
+      });
+      const core = buildCore(m);
+      await core.tick(); // tick 1: the boost lands, with an expiry
+      expect(core.getRuntimeOverrides().sourceBoosts.get("test")).toBe(-50);
+
+      let fired = false;
+      (m.engine as any).observers.length = 0;
+      m.engine.register({
+        name: "one-shot-test-result",
+        collect: () => {
+          if (fired) return [];
+          fired = true;
+          return [createObservation("test", "3 tests failed in BoardTests", { priority: 55 })]; // scores 68
+        },
+      });
+      m.provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "noted" }));
+
+      await core.tick(); // tick 2: demoted under the threshold by the boost → not reasoned about
+      expect(m.provider.chat).toHaveBeenCalledTimes(1);
+      expect(m.engine.getDeferredCount(), "the demoted observation must be deferred, not destroyed").toBe(1);
+
+      vi.advanceTimersByTime(31 * 60_000); // past the boost TTL and the defer delay
+      await core.tick(); // tick 3: boost gone; the deferred observation re-surfaces at its own score
+
+      expect(core.getRuntimeOverrides().sourceBoosts.has("test")).toBe(false);
+      expect(m.provider.chat).toHaveBeenCalledTimes(2);
+      expect(String(m.provider.chat.mock.calls[1]![1][0].content)).toContain("3 tests failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /* audited 2026-09-02: outcome follow-up must not depend on an instinct having matched */
   it("a submitted goal that matched no instinct (no retriever wired) still yields a task-outcome observation when it fails", async () => {
     const m = createMocks({ chatResponse: { action: "execute", goal: "Fix build", reasoning: "broken" } });

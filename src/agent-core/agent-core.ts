@@ -72,8 +72,10 @@ export class AgentCore {
     /** When the LLM-set priorityThreshold lapses back to config.minObservationPriority. */
     priorityThresholdExpiresAt?: number;
     sourceBoosts: Map<string, number>;
+    /** When each LLM-set source boost lapses — the same TTL as the threshold override. */
+    sourceBoostExpiresAt: Map<string, number>;
     reasoningIntervalMs?: number;
-  } = { sourceBoosts: new Map() };
+  } = { sourceBoosts: new Map(), sourceBoostExpiresAt: new Map() };
 
   constructor(
     private readonly observationEngine: ObservationEngine,
@@ -138,7 +140,10 @@ export class AgentCore {
       // 2. ORIENT — score and rank
       const ranked = await this.priorityScorer.scoreAll(observations);
 
-      // Apply runtime source boosts in-place
+      // Apply runtime source boosts in-place. The pre-boost score is kept: an observation a
+      // negative boost pushed under the threshold was silenced by the override, not by its score.
+      this.expireSourceBoosts();
+      const unboosted = new Map(ranked.map((o) => [o.id, o.priority]));
       for (const obs of ranked) {
         const boost = this.runtimeOverrides.sourceBoosts.get(obs.source);
         if (boost) {
@@ -160,7 +165,12 @@ export class AgentCore {
         // The batch was drained from one-shot observers. What the LLM-raised threshold silenced
         // (would have passed the configured threshold) is kept for a look once the override lapses;
         // what falls below the configured threshold is the steady state and is not re-queued.
-        const silencedByOverride = ranked.filter((o) => o.priority >= this.config.minObservationPriority);
+        // Re-queued as COLLECTED: the ranked copy carries the scored (and boosted) priority, so a
+        // demoted observation would come back demoted — and be scored a second time.
+        const collected = new Map(observations.map((o) => [o.id, o]));
+        const silencedByOverride = ranked
+          .filter((o) => Math.max(o.priority, unboosted.get(o.id) ?? o.priority) >= this.config.minObservationPriority)
+          .map((o) => collected.get(o.id) ?? o);
         if (silencedByOverride.length > 0) {
           this.requeueUnacted(silencedByOverride, "below-llm-threshold", BELOW_THRESHOLD_RECHECK_MINUTES);
         }
@@ -380,10 +390,11 @@ export class AgentCore {
               }
             }
             if (decision.adjustments.sourceBoost) {
-              this.runtimeOverrides.sourceBoosts.set(
-                decision.adjustments.sourceBoost.source,
-                decision.adjustments.sourceBoost.delta,
-              );
+              const { source, delta } = decision.adjustments.sourceBoost;
+              this.runtimeOverrides.sourceBoosts.set(source, delta);
+              // Expires like the threshold override: one reasoning turn (steerable by observation
+              // text) must not demote a whole source for the life of the process.
+              this.runtimeOverrides.sourceBoostExpiresAt.set(source, Date.now() + PRIORITY_THRESHOLD_OVERRIDE_TTL_MS);
             }
             if (decision.adjustments.reasoningIntervalMs !== undefined) {
               this.runtimeOverrides.reasoningIntervalMs = decision.adjustments.reasoningIntervalMs;
@@ -468,6 +479,20 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /** Drop LLM-set source boosts whose TTL has passed. */
+  private expireSourceBoosts(): void {
+    const now = Date.now();
+    for (const [source, expiresAt] of this.runtimeOverrides.sourceBoostExpiresAt) {
+      if (now < expiresAt) continue;
+      this.logger.info("AgentCore: sourceBoost override expired", {
+        source,
+        was: this.runtimeOverrides.sourceBoosts.get(source),
+      });
+      this.runtimeOverrides.sourceBoosts.delete(source);
+      this.runtimeOverrides.sourceBoostExpiresAt.delete(source);
+    }
   }
 
   /** The LLM-set threshold while it lasts; config.minObservationPriority once it has expired. */
@@ -594,6 +619,7 @@ export class AgentCore {
     priorityThreshold?: number;
     priorityThresholdExpiresAt?: number;
     sourceBoosts: Map<string, number>;
+    sourceBoostExpiresAt: Map<string, number>;
     reasoningIntervalMs?: number;
   } {
     return this.runtimeOverrides;
