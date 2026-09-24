@@ -20,8 +20,9 @@ export interface RunResult {
   timedOut: boolean;
   durationMs: number;
   /**
-   * Characters of EARLIER stdout/stderr discarded by the capture cap; 0 when
-   * the text is complete. When non-zero the text opens with a marker saying so.
+   * Characters of stdout/stderr discarded by the capture cap; 0 when the text
+   * is complete. When non-zero the text keeps its first and last halves and a
+   * marker between them says how much of the middle is missing.
    */
   stdoutDropped: number;
   stderrDropped: number;
@@ -57,6 +58,59 @@ export function planTreeKill(
 }
 
 /**
+ * Bounded capture of one stream that keeps BOTH ends. The first half of the
+ * budget fills with the opening output and stays; the rest is a rolling tail.
+ *
+ * Why both (audited 2026-09-02, then again for TLS-10): a tail-only capture
+ * silently lost a 60KB `dotnet test`'s first compile errors and a large
+ * `git diff --stat --patch`'s --stat header; adding a leading marker made the
+ * loss visible but not recoverable, and a consumer that then cut the result
+ * from the head (the tool-result cap) handed the model neither end. Keeping
+ * the head and the tail means any later head- or tail-cut still sees one of
+ * the two ends of the real output.
+ */
+function createStreamCapture(maxOutput: number): {
+  push: (chunk: string) => void;
+  finish: (stream: "stdout" | "stderr") => { text: string; dropped: number };
+} {
+  const headCap = Math.ceil(maxOutput / 2);
+  const tailCap = maxOutput - headCap;
+  let head = "";
+  let tail = "";
+  let dropped = 0;
+  return {
+    push(chunk) {
+      if (head.length < headCap) {
+        const room = headCap - head.length;
+        head += chunk.slice(0, room);
+        chunk = chunk.slice(room);
+      }
+      if (!chunk) return;
+      tail += chunk;
+      // Trim in batches, not per chunk: slicing a 16K string on every 64K
+      // read would be quadratic on a chatty command.
+      if (tail.length > tailCap * 2) {
+        dropped += tail.length - tailCap;
+        tail = tailCap > 0 ? tail.slice(-tailCap) : "";
+      }
+    },
+    finish(stream) {
+      let kept = tail;
+      let total = dropped;
+      if (kept.length > tailCap) {
+        total += kept.length - tailCap;
+        kept = tailCap > 0 ? kept.slice(-tailCap) : "";
+      }
+      if (total === 0) return { text: head + kept, dropped: 0 };
+      const marker =
+        `\n[… ${total} characters of ${stream} omitted from the MIDDLE by the ${maxOutput}-character capture limit; ` +
+        `the first ${head.length} and the last ${kept.length} are kept …]\n`;
+      return { text: head + marker + kept, dropped: total };
+    },
+  };
+}
+
+/**
  * Spawn a child process, capture stdout/stderr, enforce timeout.
  * Shared by shell-exec, git-tools, and dotnet-tools.
  */
@@ -65,10 +119,8 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
 
   return new Promise((resolve) => {
     const start = Date.now();
-    let stdout = "";
-    let stderr = "";
-    let stdoutDropped = 0;
-    let stderrDropped = 0;
+    const stdout = createStreamCapture(maxOutput);
+    const stderr = createStreamCapture(maxOutput);
     let timedOut = false;
 
     const platform = process.platform;
@@ -114,47 +166,17 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       }
     };
 
-    // Past the cap only the TAIL is kept — the summary a build or test run
-    // prints last is usually the most useful part. What was wrong (audited
-    // 2026-09-02): the head was thrown away silently. shell_exec printed the
-    // remainder under `--- stdout ---` and git_diff returned it verbatim, so a
-    // 60KB `dotnet test` lost its failing-test list and first compile errors,
-    // and a >16KB `git diff --stat --patch` always lost its --stat header, with
-    // nothing in the result saying anything was missing. Now the discarded
-    // count is measured and the retained text opens with a marker naming it.
-    child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-      if (stdout.length > maxOutput * 2) {
-        stdoutDropped += stdout.length - maxOutput;
-        stdout = stdout.slice(-maxOutput);
-      }
-    });
-
-    child.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-      if (stderr.length > maxOutput * 2) {
-        stderrDropped += stderr.length - maxOutput;
-        stderr = stderr.slice(-maxOutput);
-      }
-    });
+    // Past the cap the head and the tail are kept and the middle is counted
+    // and marked (see createStreamCapture).
+    child.stdout.on("data", (data: Buffer) => stdout.push(data.toString()));
+    child.stderr.on("data", (data: Buffer) => stderr.push(data.toString()));
 
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let abandonTimer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
-    /** Apply the final cap and, if anything was ever dropped, say so up front. */
-    const cap = (s: string, dropped: number, stream: "stdout" | "stderr"): { text: string; dropped: number } => {
-      if (s.length > maxOutput) {
-        dropped += s.length - maxOutput;
-        s = s.slice(-maxOutput);
-      }
-      if (dropped > 0) {
-        s = `[… ${dropped} earlier characters of ${stream} dropped by the ${maxOutput}-character capture limit; what follows is the TAIL of the output …]\n${s}`;
-      }
-      return { text: s, dropped };
-    };
     const capped = (): Pick<RunResult, "stdout" | "stderr" | "stdoutDropped" | "stderrDropped"> => {
-      const out = cap(stdout, stdoutDropped, "stdout");
-      const err = cap(stderr, stderrDropped, "stderr");
+      const out = stdout.finish("stdout");
+      const err = stderr.finish("stderr");
       return { stdout: out.text, stderr: err.text, stdoutDropped: out.dropped, stderrDropped: err.dropped };
     };
 

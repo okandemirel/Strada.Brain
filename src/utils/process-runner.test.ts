@@ -154,17 +154,25 @@ describe("a process the kill cannot reach", () => {
 // so they were exactly what vanished, and shell_exec printed the remainder under
 // `--- stdout ---` as if it were the whole. A verdict formed on evidence that was
 // never seen must at least say so.
+// TLS-10: marking the loss was not enough. The tool-result cap downstream cuts
+// from the head, so a tail-only capture handed the model the MIDDLE of the
+// output — neither the first errors nor the summary. Both ends are kept now.
 describe("output past the capture cap", () => {
   // 1000 lines of `LINE nnnn ` + 56 x's + newline = 67 chars each, ~67KB: four
-  // times the default cap, so the head is guaranteed to fall off.
+  // times the default cap, so the middle is guaranteed to fall out.
   // One awk process, not a shell loop forking printf+tr per line: the loop
   // was 2000 forks, and under machine load (a sprite generator saturating the
   // CPU, measured 2026-09-10) it overran the 10 s timeout, was killed, and the
   // truncated output failed assertions that are about the cap, not the clock.
   const script =
     'awk \'BEGIN { x = sprintf("%56s", ""); gsub(/ /, "x", x); for (i = 1; i <= 1000; i++) printf "LINE %04d %s\\n", i, x }\'';
+  const marker = (stream: string): RegExp =>
+    new RegExp(
+      `\\n\\[… (\\d+) characters of ${stream} omitted from the MIDDLE by the (\\d+)-character capture limit; ` +
+        `the first (\\d+) and the last (\\d+) are kept …\\]\\n`,
+    );
 
-  it("marks the dropped head and counts it, instead of presenting the tail as the whole", async () => {
+  it("keeps the head and the tail, and marks and counts the dropped middle", async () => {
     const full = await runProcess({
       command: "/bin/bash",
       args: ["-c", script],
@@ -182,22 +190,25 @@ describe("output past the capture cap", () => {
       timeoutMs: 60_000,
     });
 
-    // The tail survived, the head did not — that part is by design.
+    // Both ends survive: the first errors and the closing summary.
+    expect(capped.stdout.startsWith("LINE 0001"), "the head was dropped").toBe(true);
     expect(capped.stdout).toContain("LINE 1000");
-    expect(capped.stdout).not.toContain("LINE 0001");
+    expect(capped.stdout).not.toContain("LINE 0500");
 
-    // What is NOT by design: pretending nothing happened.
+    // And the loss is said, in place, with a measured count.
     expect(capped.stdoutDropped, "the runner did not count what it threw away").toBeGreaterThan(0);
-    const marker = /^\[… (\d+) earlier characters of stdout dropped by the (\d+)-character capture limit; what follows is the TAIL of the output …\]\n/;
-    const m = marker.exec(capped.stdout);
-    expect(m, `stdout does not open with a truncation marker: ${JSON.stringify(capped.stdout.slice(0, 80))}`).not.toBeNull();
-    expect(Number(m![1])).toBe(capped.stdoutDropped);
-    expect(Number(m![2])).toBe(16_384);
+    const m = marker("stdout").exec(capped.stdout);
+    expect(m, "stdout carries no truncation marker").not.toBeNull();
+    const [dropped, cap, first, last] = m!.slice(1).map(Number) as [number, number, number, number];
+    expect(dropped).toBe(capped.stdoutDropped);
+    expect(cap).toBe(16_384);
+    expect(first + last).toBe(16_384);
 
-    // The count is a measurement, not a guess: kept + dropped == what the
-    // command actually produced.
-    const kept = capped.stdout.length - m![0].length;
-    expect(kept + capped.stdoutDropped).toBe(full.stdout.length);
+    // The kept text is the command's real first and last characters, and
+    // kept + dropped == what the command actually produced.
+    expect(capped.stdout.slice(0, m!.index)).toBe(full.stdout.slice(0, first));
+    expect(capped.stdout.slice(m!.index + m![0].length)).toBe(full.stdout.slice(-last));
+    expect(first + last + dropped).toBe(full.stdout.length);
     expect(capped.stderrDropped).toBe(0);
   });
 
@@ -209,7 +220,8 @@ describe("output past the capture cap", () => {
       timeoutMs: 60_000,
     });
     expect(result.stderrDropped).toBeGreaterThan(0);
-    expect(result.stderr).toMatch(/^\[… \d+ earlier characters of stderr dropped by the 16384-character capture limit/);
+    expect(result.stderr).toMatch(marker("stderr"));
+    expect(result.stderr.startsWith("LINE 0001")).toBe(true);
     expect(result.stderr).toContain("LINE 1000");
     expect(result.stdout).toBe("");
     expect(result.stdoutDropped).toBe(0);
