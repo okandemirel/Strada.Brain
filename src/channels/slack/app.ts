@@ -6,6 +6,7 @@
 
 import { App, type SayFn } from "@slack/bolt";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type { WebClient } from "@slack/web-api";
 import type { KnownBlock } from "@slack/types";
 import type {
@@ -25,6 +26,7 @@ import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import { MessageQueue } from "../message-queue.js";
+import { resolveBindHost } from "../../core/bind-host.js";
 
 interface SlackConfig {
   botToken: string;
@@ -33,8 +35,29 @@ interface SlackConfig {
   socketMode?: boolean;
   /** HTTP port for non-socket (HTTP receiver) mode. Defaults to 3000. */
   port?: number;
+  /** Address the HTTP receiver binds; loopback unless BIND_HOST says otherwise (CHN-13). */
+  host?: string;
   allowedWorkspaces?: string[];
   allowedUserIds?: string[];
+}
+
+/** The HTTP receiver's port when SLACK_HTTP_PORT is unset — Bolt's own default. */
+export const DEFAULT_SLACK_HTTP_PORT = 3000;
+
+/**
+ * The HTTP receiver's port (CHN-13): `SLACK_HTTP_PORT`, else 3000. Validated,
+ * and an invalid value throws — like BIND_HOST, a listener that silently falls
+ * back after the operator asked for something else is the worse failure. 3000
+ * is also the web channel's default, so a web+slack hub names another port here.
+ */
+export function resolveSlackHttpPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["SLACK_HTTP_PORT"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_SLACK_HTTP_PORT;
+  const parsed = z.coerce.number().int().min(1).max(65535).safeParse(raw.trim());
+  if (!parsed.success) {
+    throw new Error(`Invalid SLACK_HTTP_PORT ${JSON.stringify(raw)}: expected a port number 1-65535`);
+  }
+  return parsed.data;
 }
 
 interface PendingConfirmation {
@@ -229,14 +252,18 @@ export class SlackChannel implements IChannelAdapter {
    */
   async connect(): Promise<void> {
     try {
+      const socketMode = this.config.socketMode ?? true;
+      // In HTTP receiver mode the port is configurable (defaults to 3000);
+      // socket mode does not bind an HTTP port.
+      const httpListen = socketMode
+        ? undefined
+        : { port: this.config.port ?? DEFAULT_SLACK_HTTP_PORT, host: this.config.host ?? resolveBindHost() };
       this.app = new App({
         token: this.config.botToken,
         signingSecret: this.config.signingSecret,
         appToken: this.config.appToken,
-        socketMode: this.config.socketMode ?? true,
-        // In HTTP receiver mode the port is configurable (defaults to 3000);
-        // socket mode does not bind an HTTP port.
-        port: this.config.socketMode ?? true ? undefined : (this.config.port ?? 3000),
+        socketMode,
+        port: httpListen?.port,
       });
 
       this.registerEventHandlers();
@@ -249,7 +276,14 @@ export class SlackChannel implements IChannelAdapter {
         }
       });
 
-      await this.app.start();
+      // CHN-13: Bolt's HTTP receiver listens on the port alone, i.e. on every
+      // interface. Hand it the host too, so it follows the same BIND_HOST rule
+      // as every other listener.
+      if (httpListen) {
+        await this.app.start(httpListen);
+      } else {
+        await this.app.start();
+      }
 
       this.isConnected = true;
       this.logger.info("Slack channel connected", {

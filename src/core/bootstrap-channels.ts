@@ -72,11 +72,17 @@ export async function initializeChannel(
       });
 
     case "slack": {
-      const { SlackChannel } = await import("../channels/slack/app.js");
+      const { SlackChannel, resolveSlackHttpPort } = await import("../channels/slack/app.js");
       if (!config.slack.botToken) {
         throw new AppError("SLACK_BOT_TOKEN is required for Slack channel", "MISSING_SLACK_CONFIG");
       }
-      return new SlackChannel(config.slack as { botToken: string; signingSecret: string; appToken?: string; socketMode?: boolean; allowedWorkspaces?: string[]; allowedUserIds?: string[] });
+      // HTTP-receiver mode binds like every other listener (CHN-13): BIND_HOST
+      // for the address, SLACK_HTTP_PORT for the port.
+      return new SlackChannel({
+        ...(config.slack as { botToken: string; signingSecret: string; appToken?: string; socketMode?: boolean; allowedWorkspaces?: string[]; allowedUserIds?: string[] }),
+        host: config.bindHost,
+        port: resolveSlackHttpPort(),
+      });
     }
 
 

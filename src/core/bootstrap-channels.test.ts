@@ -40,6 +40,14 @@ vi.mock("../channels/web/channel.js", () => ({
   }),
 }));
 
+vi.mock("../channels/slack/app.js", () => ({
+  SlackChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "slack", _args: args };
+  }),
+  // SLACK_HTTP_PORT parsing itself is covered in channels/slack/app.listen.test.ts.
+  resolveSlackHttpPort: vi.fn(() => 3200),
+}));
+
 vi.mock("../security/auth.js", () => ({
   AuthManager: vi.fn(),
 }));
@@ -176,6 +184,21 @@ describe("initializeChannel", () => {
     const channel = await initializeChannel("telegram", config, auth);
     expect(channel).toBeDefined();
     expect((channel as any).name).toBe("telegram");
+  });
+
+  // CHN-13: Slack's HTTP receiver binds like every other listener.
+  it("wires Slack to BIND_HOST's address and SLACK_HTTP_PORT", async () => {
+    const config = makeConfig({
+      bindHost: "0.0.0.0",
+      slack: { botToken: "xoxb-token", signingSecret: "secret", socketMode: false },
+    });
+    const channel = await initializeChannel("slack", config, auth);
+    expect((channel as any)._args[0]).toMatchObject({
+      botToken: "xoxb-token",
+      socketMode: false,
+      host: "0.0.0.0",
+      port: 3200,
+    });
   });
 
   it("should default to telegram channel for unknown channelType", async () => {
