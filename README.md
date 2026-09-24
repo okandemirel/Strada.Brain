@@ -955,6 +955,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `SLACK_SIGNING_SECRET` | Signing secret from Slack app |
 | `ALLOWED_SLACK_USER_IDS` | Comma-separated user IDs (**open to all if empty**) |
 | `ALLOWED_SLACK_WORKSPACES` | Comma-separated workspace IDs (**open to all if empty**) |
+| `SLACK_HTTP_PORT` | Port for the HTTP receiver when Socket Mode is off (default `3000`; binds `BIND_HOST`) |
 
 **Teams:**
 | Variable | Description |
@@ -976,6 +977,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `WEB_CHANNEL_PORT` | `3000` | Web channel UI port |
 | `WEB_TRUSTED_ORIGINS` | (unset) | Comma-separated COMPLETE origins (scheme + host + port) the portal may also be reached through — its Vite dev proxy (`http://localhost:5173`) or an HTTPS reverse proxy (`https://portal.example`). The bound port is always trusted; an unrelated loopback port is still refused |
 | `BIND_HOST` | `127.0.0.1` | Address every HTTP listener binds to (web channel, dashboard, WebSocket dashboard, Prometheus). Loopback keeps a local run private; set `0.0.0.0` in a container so a published port is reachable |
+| `HTTP_ALLOWED_HOSTS` | (unset) | Comma-separated hostnames every HTTP listener answers for, besides `localhost` and IP literals (a bare name trusts every port, `host:port` one). Requests whose `Host` names anything else get 403, which stops DNS rebinding. Behind a reverse proxy that forwards `Host`, list the public hostname here |
 | `DASHBOARD_ENABLED` | `false` | Enable HTTP monitoring dashboard |
 | `DASHBOARD_PORT` | `3100` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |

@@ -50,9 +50,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     
-    # Ports
+    # Ports: published on the host's loopback only. Put a TLS reverse proxy in
+    # front to serve other machines (see docker-compose.yml's nginx service).
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     
     # Temporary filesystems
     tmpfs:

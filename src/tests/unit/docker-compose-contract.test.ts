@@ -93,3 +93,12 @@ describe("docker-compose.yml Host allow-list (CHN-2)", () => {
     expect(compose).toMatch(/^\s*- HTTP_ALLOWED_HOSTS=strada-brain,\$\{HTTP_ALLOWED_HOSTS:-\}\s*$/m);
   });
 });
+
+describe("docker/docker-compose.security.yml published ports", () => {
+  it("binds every published port to the host's loopback (it runs no nginx)", () => {
+    const hardened = readFileSync(path.join(repoRoot, "docker", "docker-compose.security.yml"), "utf8");
+    const ports = publishedPorts(hardened);
+    expect(ports.length).toBeGreaterThan(0);
+    expect(ports.filter((p) => !p.mapping.startsWith("127.0.0.1:")), "published on every interface").toEqual([]);
+  });
+});
