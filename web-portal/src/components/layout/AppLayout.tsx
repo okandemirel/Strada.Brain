@@ -61,8 +61,10 @@ function PrimaryContent() {
     )
   }
 
+  // Keyed by mode for the same reason as the admin boundary above: a crash in
+  // one panel must not keep showing after switching to another (WEB-17).
   return (
-    <PanelErrorBoundary panelName={mode}>
+    <PanelErrorBoundary key={mode} panelName={mode}>
       <Suspense fallback={<PanelFallback label={t(`workspace.loading.${mode}`)} />}>
         <Panel />
       </Suspense>

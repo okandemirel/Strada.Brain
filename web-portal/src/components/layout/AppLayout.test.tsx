@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 // Mock WebSocketProvider to avoid real WS connections
@@ -22,8 +22,19 @@ vi.mock('../ui/tooltip', () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <div data-testid="tooltip-provider">{children}</div>,
 }))
 
+// Workspace panels: Monitor crashes, Code renders (WEB-17).
+vi.mock('../monitor/MonitorPanel', () => ({
+  default: function MonitorBoom(): React.ReactNode {
+    throw new Error('monitor boom')
+  },
+}))
+vi.mock('../code/CodePanel', () => ({
+  default: () => <div data-testid="code-panel">Code</div>,
+}))
+
 import AppLayout from './AppLayout'
 import { useSessionStore } from '../../stores/session-store'
+import { useWorkspaceStore } from '../../stores/workspace-store'
 
 function Boom(): React.ReactNode {
   throw new Error('admin page boom')
@@ -80,6 +91,24 @@ describe('AppLayout', () => {
       expect(screen.getByTestId('sidebar')).toBeInTheDocument()
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  // WEB-17: the workspace boundary was not keyed by mode, so one panel's crash
+  // kept showing over the next panel the user switched to.
+  it('shows the next panel after a crash in another one', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      act(() => { useWorkspaceStore.getState().setMode('monitor') })
+      renderLayout()
+      expect(await screen.findByText('This panel encountered an error.')).toBeInTheDocument()
+
+      act(() => { useWorkspaceStore.getState().setMode('code') })
+      expect(await screen.findByTestId('code-panel')).toBeInTheDocument()
+      expect(screen.queryByText('This panel encountered an error.')).toBeNull()
+    } finally {
+      spy.mockRestore()
+      useWorkspaceStore.getState().reset()
     }
   })
 
