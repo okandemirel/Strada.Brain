@@ -120,6 +120,9 @@ export class DeploymentExecutor {
           if (!postResult.success) {
             this.updateLogEntry(proposal.id, "post_verify_failed", postResult.stderr, durationMs);
             this.logger.error("Post-verify script failed", { proposalId: proposal.id });
+            // The new version is live and failed its health check: this is
+            // the case a rollback exists for. It returned before reaching it.
+            await this.runRollback(proposal, durationMs);
             return { ...deployResult, success: false };
           }
         }
@@ -134,28 +137,7 @@ export class DeploymentExecutor {
         });
 
         // Automatic rollback if configured
-        if (this.config.rollbackScriptPath) {
-          try {
-            const rollbackPath = this.validateScript(this.config.rollbackScriptPath);
-            this.logger.info("Running rollback script", { proposalId: proposal.id, rollbackPath });
-            const rollbackResult = await this.runScript(rollbackPath, proposal);
-            if (rollbackResult.success) {
-              this.logger.info("Rollback completed", { proposalId: proposal.id });
-              this.updateLogEntry(proposal.id, "rollback_completed", rollbackResult.stdout, durationMs);
-            } else {
-              this.logger.error("Rollback failed", {
-                proposalId: proposal.id,
-                stderr: rollbackResult.stderr,
-              });
-              this.updateLogEntry(proposal.id, "rollback_failed", rollbackResult.stderr, durationMs);
-            }
-          } catch (rollbackErr) {
-            this.logger.error("Rollback script error", {
-              proposalId: proposal.id,
-              error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
-            });
-          }
-        }
+        await this.runRollback(proposal, durationMs);
       }
 
       return deployResult;
@@ -163,6 +145,31 @@ export class DeploymentExecutor {
       this.deploymentInProgress = false;
       this.activeProcess = null;
       this.activeProposalId = null;
+    }
+  }
+
+  /** Run the configured rollback script, if any, and record its outcome. */
+  private async runRollback(proposal: { id: string; approvedBy?: string }, durationMs: number): Promise<void> {
+    if (!this.config.rollbackScriptPath) return;
+    try {
+      const rollbackPath = this.validateScript(this.config.rollbackScriptPath);
+      this.logger.info("Running rollback script", { proposalId: proposal.id, rollbackPath });
+      const rollbackResult = await this.runScript(rollbackPath, proposal);
+      if (rollbackResult.success) {
+        this.logger.info("Rollback completed", { proposalId: proposal.id });
+        this.updateLogEntry(proposal.id, "rollback_completed", rollbackResult.stdout, durationMs);
+      } else {
+        this.logger.error("Rollback failed", {
+          proposalId: proposal.id,
+          stderr: rollbackResult.stderr,
+        });
+        this.updateLogEntry(proposal.id, "rollback_failed", rollbackResult.stderr, durationMs);
+      }
+    } catch (rollbackErr) {
+      this.logger.error("Rollback script error", {
+        proposalId: proposal.id,
+        error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+      });
     }
   }
 

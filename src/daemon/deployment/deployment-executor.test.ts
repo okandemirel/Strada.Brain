@@ -269,6 +269,32 @@ describe("DeploymentExecutor", () => {
       expect(result.success).toBe(false);
     });
 
+    // TSK-8: a failed post-verify means the new version is live and broken,
+    // the main case a rollback exists for; it returned before the rollback.
+    it("rolls back when the post-verify script fails", async () => {
+      const config = createDefaultConfig({
+        postScriptPath: "scripts/verify.sh",
+        rollbackScriptPath: "scripts/rollback.sh",
+      });
+      db = createMockDb();
+      executor = new DeploymentExecutor(config, "/project", mockLogger, db);
+
+      const proposalId = executor.logProposal();
+
+      // Deploy succeeds, post-verify fails, rollback succeeds
+      mockSpawn
+        .mockReturnValueOnce(createMockProcess(0))
+        .mockReturnValueOnce(createMockProcessWithOutput("", "Verify failed", 1))
+        .mockReturnValueOnce(createMockProcessWithOutput("rolled back", "", 0));
+
+      const result = await executor.execute({ id: proposalId });
+
+      expect(result.success).toBe(false);
+      expect(mockSpawn).toHaveBeenCalledTimes(3);
+      expect(String(mockSpawn.mock.calls[2]![0])).toContain("rollback.sh");
+      expect(executor.getHistory(1)[0]!.status).toBe("rollback_completed");
+    });
+
     it("handles spawn error gracefully", async () => {
       const config = createDefaultConfig();
       db = createMockDb();
