@@ -90,6 +90,38 @@ describe("a command that outlives its shell", () => {
   });
 });
 
+// Windows has no process groups; the timeout walks the tree with taskkill
+// instead. This one needs a real Windows host (process-runner-kill.test.ts
+// covers the wiring on every platform).
+describe.runIf(process.platform === "win32")("a timed-out command on Windows", () => {
+  const shell = process.env["COMSPEC"] ?? "cmd.exe";
+  const pingCount = async (): Promise<number> => {
+    const listed = await runProcess({
+      command: shell,
+      args: ["/d", "/s", "/c", 'tasklist /FI "IMAGENAME eq PING.EXE" /NH'],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    return (listed.stdout.match(/^PING\.EXE/gim) ?? []).length;
+  };
+
+  it("kills the grandchild, not just cmd.exe, and returns promptly", async () => {
+    const before = await pingCount();
+    const started = Date.now();
+
+    const result = await runProcess({
+      command: shell,
+      args: ["/d", "/s", "/c", "ping -n 30 127.0.0.1 >nul"],
+      cwd: process.cwd(),
+      timeoutMs: 500,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - started, "returned late — the kill did not reach the pipe").toBeLessThan(4_000);
+    expect(await pingCount(), "ping.exe outlived the timeout").toBeLessThanOrEqual(before);
+  }, 30_000);
+});
+
 describe("a process the kill cannot reach", () => {
   // The group kill covers what the shell starts. It does not cover something
   // that leaves the group on purpose — and such a process still holds the

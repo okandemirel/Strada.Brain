@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { win32 as winPath } from "node:path";
 
 const DEFAULT_MAX_OUTPUT = 16_384;
 
@@ -27,6 +28,35 @@ export interface RunResult {
 }
 
 /**
+ * How a timeout reaches the command AND everything it started.
+ *
+ * POSIX: the child leads its own process group (spawned `detached`), so one
+ * negative-pid signal covers the tree, and SIGTERM escalates to SIGKILL.
+ * Windows has no process groups: `process.kill(-pid)` either throws or
+ * terminates only `cmd.exe`, the real command (dotnet test, Unity, ping)
+ * keeps the inherited pipes and runs on as an orphan. `taskkill /T /F` walks
+ * the tree by parent pid instead. It is named by absolute path so the lookup
+ * never consults the current directory.
+ */
+export type TreeKillPlan =
+  | { kind: "group"; pid: number; signal: NodeJS.Signals }
+  | { kind: "taskkill"; command: string; args: string[] };
+
+export function planTreeKill(
+  platform: NodeJS.Platform,
+  pid: number,
+  signal: NodeJS.Signals,
+  env: Record<string, string | undefined> = process.env,
+): TreeKillPlan {
+  if (platform === "win32") {
+    const systemRoot = env["SystemRoot"] ?? env["SYSTEMROOT"] ?? env["windir"];
+    const command = systemRoot ? winPath.join(systemRoot, "System32", "taskkill.exe") : "taskkill.exe";
+    return { kind: "taskkill", command, args: ["/pid", String(pid), "/T", "/F"] };
+  }
+  return { kind: "group", pid: -pid, signal };
+}
+
+/**
  * Spawn a child process, capture stdout/stderr, enforce timeout.
  * Shared by shell-exec, git-tools, and dotnet-tools.
  */
@@ -41,21 +71,44 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     let stderrDropped = 0;
     let timedOut = false;
 
+    const platform = process.platform;
     const child = spawn(opts.command, opts.args, {
       cwd: opts.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: opts.env ?? process.env,
-      // Its own process group, so a timeout can reach what the command
+      // POSIX: its own process group, so a timeout can reach what the command
       // started. `bash -c "find / | head"` forks: signalling bash alone leaves
       // find running, holding the stdout pipe this process is reading.
-      detached: true,
+      // Windows: no groups to join, and `detached` there means a new console
+      // (visible windows for every grandchild) — taskkill /T covers the tree.
+      detached: platform !== "win32",
+      windowsHide: true,
     });
 
     /** Signal the command and everything it spawned, not just the shell. */
     const killTree = (signal: NodeJS.Signals): void => {
       try {
-        if (child.pid !== undefined) process.kill(-child.pid, signal);
-        else child.kill(signal);
+        if (child.pid === undefined) {
+          child.kill(signal);
+          return;
+        }
+        const plan = planTreeKill(platform, child.pid, signal);
+        if (plan.kind === "group") {
+          process.kill(plan.pid, plan.signal);
+          return;
+        }
+        execFile(plan.command, plan.args, { windowsHide: true, timeout: 10_000 }, (err) => {
+          // taskkill failing to START is not "already gone": fall back to the
+          // direct child so at least the shell dies. A non-zero exit (128: no
+          // such process) means the tree already exited.
+          if (err && typeof (err as NodeJS.ErrnoException).code === "string") {
+            try {
+              child.kill(signal);
+            } catch {
+              // Already gone.
+            }
+          }
+        });
       } catch {
         // Already gone, or never started: nothing to signal.
       }
