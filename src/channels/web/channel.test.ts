@@ -1606,6 +1606,25 @@ describe("WebChannel HTTP surface", () => {
   it("returns null when no stale setup query is present", () => {
     expect(getCanonicalWebRedirectTarget("/dashboard?foo=bar")).toBeNull();
   });
+
+  // CHN-12: the redirect target is a path on THIS origin, whatever the request
+  // path looks like — a leading run of slashes must not become an authority.
+  it.each([
+    "//x//other.example/page?strada-setup=1",
+    "//other.example/page?strada-setup=1",
+    "///other.example?strada-setup=1",
+    "/\\other.example/page?strada-setup=1",
+    "http://other.example/page?strada-setup=1",
+  ])("keeps the setup-link redirect for %j on this origin", (url) => {
+    const target = getCanonicalWebRedirectTarget(url);
+    expect(target).not.toBeNull();
+    expect(target!.startsWith("/")).toBe(true);
+    expect(target!.startsWith("//")).toBe(false);
+    expect(target!.startsWith("/\\")).toBe(false);
+    // Resolved the way a browser resolves Location, it stays on the origin.
+    expect(new URL(target!, "http://127.0.0.1:3000").origin).toBe("http://127.0.0.1:3000");
+    expect(target).not.toContain("strada-setup");
+  });
 });
 
 describe("WebChannel WebSocket heartbeat", () => {

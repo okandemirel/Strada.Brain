@@ -216,7 +216,17 @@ function resolveStaticDir(): string {
 }
 
 export function getCanonicalWebRedirectTarget(url: string): string | null {
-  const parsed = new URL(url, "http://127.0.0.1");
+  // CHN-12: the request target is only ever a PATH on this server. Parsing it
+  // relative to a base let a leading "//" be read as an authority, and the
+  // Location built from it could then name another host. Anchor it under a
+  // fixed origin instead, and collapse any leading run of slashes in the
+  // result so the redirect can only stay on this origin.
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://127.0.0.1${url.startsWith("/") ? "" : "/"}${url}`);
+  } catch {
+    return null;
+  }
   const hadSetupQuery = parsed.searchParams.get(SETUP_QUERY_PARAM) === "1";
 
   if (!hadSetupQuery) {
@@ -227,7 +237,8 @@ export function getCanonicalWebRedirectTarget(url: string): string | null {
   parsed.searchParams.delete(SETUP_CACHE_BUST_PARAM);
 
   const nextSearch = parsed.searchParams.toString();
-  return `${parsed.pathname}${nextSearch ? `?${nextSearch}` : ""}${parsed.hash}`;
+  const pathname = parsed.pathname.replace(/^\/+/, "/");
+  return `${pathname}${nextSearch ? `?${nextSearch}` : ""}${parsed.hash}`;
 }
 
 /** Rate limit: max messages per window. */
