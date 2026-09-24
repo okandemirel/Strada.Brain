@@ -36,7 +36,7 @@
  *       from "the data is there".
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import {
   chmodSync,
@@ -94,6 +94,27 @@ import {
   DeliveryPackageStore,
   assembleDeliveryPackage,
 } from "../campaign/delivery-package.js";
+import { kernelEnforcesPermissions, permissionDenied } from "../tests/helpers/permission-faults.js";
+
+/**
+ * The directory {@link makeReadOnly} has made read-only by injection. Root
+ * ignores permission bits (Docker CI, root dev containers) and Windows has no
+ * POSIX modes, so there `chmod 0o500` stops nothing; the same EACCES is raised
+ * instead at the writes a restore makes into a destination directory:
+ * `renameSync` moving a live file aside or into place (here) and SQLite
+ * creating the staged copy (`db.backup()`, spied in makeReadOnly).
+ */
+const readOnly = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const { dirname } = await import("node:path");
+  const inReadOnlyDir = (p: unknown): boolean => readOnly.dir !== undefined && dirname(String(p)) === readOnly.dir;
+  const renameSync: typeof actual.renameSync = (from, to) => {
+    if (inReadOnlyDir(from) || inReadOnlyDir(to)) throw permissionDenied("rename", from);
+    actual.renameSync(from, to);
+  };
+  return { ...actual, renameSync };
+});
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -118,8 +139,33 @@ function defaultInstallation(): { memoryRoot: string; stradaHome: string; userHo
 }
 
 afterEach(() => {
+  readOnly.dir = undefined;
   rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * Make `dir` read-only to this process and return the undo: `chmod 0o500`
+ * wherever the kernel enforces it, the injected EACCES (see `readOnly`) where
+ * it does not.
+ */
+function makeReadOnly(dir: string): () => void {
+  if (kernelEnforcesPermissions) {
+    chmodSync(dir, 0o500);
+    return () => chmodSync(dir, 0o700);
+  }
+  readOnly.dir = dir;
+  const realBackup = Database.prototype.backup;
+  const backup = vi
+    .spyOn(Database.prototype, "backup")
+    .mockImplementation(function (this: Database.Database, destination: string, options?: Database.BackupOptions) {
+      if (path.dirname(destination) === dir) return Promise.reject(permissionDenied("open", destination));
+      return realBackup.call(this, destination, options);
+    });
+  return () => {
+    readOnly.dir = undefined;
+    backup.mockRestore();
+  };
+}
 
 /** A WAL database with `rows` committed rows in table `t`. */
 function seedDatabase(file: string, rows: number): Database.Database {
@@ -615,7 +661,7 @@ describe("a restore whose backup is unusable (round 11 #2)", () => {
     seedDatabase(path.join(memoryRoot, "memory.db"), 30).close();
     seedDatabase(path.join(stradaHome, "hub-owners.db"), 40).close();
 
-    chmodSync(stradaHome, 0o500);
+    const restoreWritable = makeReadOnly(stradaHome);
     try {
       await expect(
         // The maintenance exclusion (round 12 #22) is taken in the Strada home,
@@ -624,7 +670,7 @@ describe("a restore whose backup is unusable (round 11 #2)", () => {
         restoreRuntimeDatabases({ backupDir: destDir, maintenanceDir: path.join(root, "maint") }),
       ).rejects.toThrow(/while staging the replacements[\s\S]*Nothing was replaced/);
     } finally {
-      chmodSync(stradaHome, 0o700);
+      restoreWritable();
     }
     // The FIRST database — the one whose destination was perfectly writable —
     // must not have been replaced either: one unusable destination aborts the
@@ -644,18 +690,19 @@ describe("a restore whose backup is unusable (round 11 #2)", () => {
     // The one window nothing outside can provoke: every replacement is staged
     // and the first one is already in place when the second destination becomes
     // unwritable. A restore that cannot finish must not be half applied.
+    let restoreWritable = (): void => {};
     try {
       await expect(
         restoreRuntimeDatabases({
           backupDir: destDir,
           maintenanceDir: path.join(root, "maint"),
           onStaged: () => {
-            chmodSync(stradaHome, 0o500);
+            restoreWritable = makeReadOnly(stradaHome);
           },
         }),
       ).rejects.toThrow(/rolled back to what it held before/);
     } finally {
-      chmodSync(stradaHome, 0o700);
+      restoreWritable();
     }
     expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(33);
     expect(countRows(path.join(stradaHome, "hub-owners.db"))).toBe(44);

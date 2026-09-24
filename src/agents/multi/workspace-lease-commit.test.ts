@@ -18,6 +18,7 @@ import { execSync } from "node:child_process";
 import { runProcess } from "../../utils/process-runner.js";
 import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
+import { isAtOrUnder, kernelEnforcesPermissions, permissionDenied } from "../../tests/helpers/permission-faults.js";
 
 let source: string;
 let leaseRoot: string;
@@ -52,6 +53,63 @@ function makeGitRepo(): void {
   execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm init", {
     cwd: source,
   });
+}
+
+/**
+ * Make `target` unreadable to the commit (a file, or a directory with all it
+ * holds) and return the undo. `chmod 000` wherever the kernel enforces it. As
+ * root, or on Windows, the same EACCES comes from the fs.promises calls the
+ * lease manager reads through: the target cannot be listed, read or copied
+ * from, and nothing below it can even be stat'ed. A mode-000 file itself still
+ * stats, exactly as it does under chmod.
+ */
+function makeUnreadable(target: string): () => void {
+  if (kernelEnforcesPermissions) {
+    const mode = statSync(target).mode & 0o777;
+    chmodSync(target, 0o000);
+    return () => chmodSync(target, mode);
+  }
+  const below = (p: unknown): boolean => isAtOrUnder(p, target) && String(p) !== target;
+  const realReaddir = fsp.readdir.bind(fsp);
+  const realReadFile = fsp.readFile.bind(fsp);
+  const realCopy = fsp.copyFile.bind(fsp);
+  const realOpen = fsp.open.bind(fsp);
+  const realStat = fsp.stat.bind(fsp);
+  const realLstat = fsp.lstat.bind(fsp);
+  const realAccess = fsp.access.bind(fsp);
+  const spies = [
+    vi.spyOn(fsp, "readdir").mockImplementation(async (p: never, options?: never) => {
+      if (isAtOrUnder(p, target)) throw permissionDenied("scandir", p);
+      return realReaddir(p, options);
+    }),
+    vi.spyOn(fsp, "readFile").mockImplementation(async (p: never, options?: never) => {
+      if (isAtOrUnder(p, target)) throw permissionDenied("open", p);
+      return realReadFile(p, options);
+    }),
+    vi.spyOn(fsp, "copyFile").mockImplementation(async (from: never, to: never, mode?: never) => {
+      if (isAtOrUnder(from, target)) throw permissionDenied("copyfile", from);
+      return realCopy(from, to, mode);
+    }),
+    vi.spyOn(fsp, "open").mockImplementation(async (p: never, flags?: never, mode?: never) => {
+      if (isAtOrUnder(p, target)) throw permissionDenied("open", p);
+      return realOpen(p, flags, mode);
+    }),
+    vi.spyOn(fsp, "stat").mockImplementation(async (p: never, options?: never) => {
+      if (below(p)) throw permissionDenied("stat", p);
+      return realStat(p, options);
+    }),
+    vi.spyOn(fsp, "lstat").mockImplementation(async (p: never, options?: never) => {
+      if (below(p)) throw permissionDenied("lstat", p);
+      return realLstat(p, options);
+    }),
+    vi.spyOn(fsp, "access").mockImplementation(async (p: never, mode?: never) => {
+      if (below(p)) throw permissionDenied("access", p);
+      return realAccess(p, mode);
+    }),
+  ];
+  return () => {
+    for (const spy of spies) spy.mockRestore();
+  };
 }
 
 describe("workspace lease commit", () => {
@@ -260,7 +318,7 @@ describe("workspace lease commit", () => {
     const asset = join(lease.path, "Assets", "Sprites", "Hero (1).png");
     writeFileSync(asset, "v2", "utf8");
     writeFileSync(join(lease.path, "Assets", "Sprites", "Hero (1).png.meta"), "meta v2", "utf8");
-    chmodSync(asset, 0o000); // sameContent() cannot read it → processFile fails
+    const restore = makeUnreadable(asset); // sameContent() cannot read it → processFile fails
     try {
       const result = await lease.commit();
       expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Hero (1).png") + " ("))).toBe(true);
@@ -268,7 +326,7 @@ describe("workspace lease commit", () => {
       expect(result.written).not.toContain(join("Assets", "Sprites", "Hero (1).png.meta"));
       expect(readFileSync(join(source, "Assets", "Sprites", "Hero (1).png.meta"), "utf8")).toBe("meta v1");
     } finally {
-      chmodSync(asset, 0o644);
+      restore();
       await lease.release();
     }
   });
@@ -282,7 +340,7 @@ describe("workspace lease commit", () => {
     const asset = join(lease.path, "Assets", "Sprites", "Boss.png");
     writeFileSync(asset, "pixels", "utf8");
     writeFileSync(join(lease.path, "Assets", "Sprites", "Boss.png.meta"), "importer", "utf8");
-    chmodSync(asset, 0o000); // a NEW file is never read before the copy → the copy itself fails
+    const restore = makeUnreadable(asset); // a NEW file is never read before the copy → the copy itself fails
     try {
       const result = await lease.commit();
       expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Boss.png") + " ("))).toBe(true);
@@ -290,7 +348,7 @@ describe("workspace lease commit", () => {
       expect(result.conflicts).toContain(join("Assets", "Sprites", "Boss.png.meta"));
       expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Boss.png.meta"), "utf8")).toBe("importer");
     } finally {
-      chmodSync(asset, 0o644);
+      restore();
       await lease.release();
     }
   });
@@ -323,7 +381,7 @@ describe("workspace lease commit", () => {
     writeFileSync(join(lease.path, "Assets", "Sprites", "Boss.png"), "pixels", "utf8");
     const meta = join(lease.path, "Assets", "Sprites", "Boss.png.meta");
     writeFileSync(meta, "importer", "utf8");
-    chmodSync(meta, 0o000); // only the .meta is unreadable: the asset's copy succeeds first
+    const restore = makeUnreadable(meta); // only the .meta is unreadable: the asset's copy succeeds first
     try {
       const result = await lease.commit();
       expect(existsSync(join(source, "Assets", "Sprites", "Boss.png"))).toBe(false);
@@ -333,7 +391,7 @@ describe("workspace lease commit", () => {
       expect(result.failed.some((f) => f.startsWith(join("Assets", "Sprites", "Boss.png.meta") + " ("))).toBe(true);
       expect(readFileSync(join(result.conflictsQuarantinedUnder!, "Assets", "Sprites", "Boss.png"), "utf8")).toBe("pixels");
     } finally {
-      chmodSync(meta, 0o644);
+      restore();
       await lease.release();
     }
   });
@@ -504,7 +562,7 @@ describe("workspace lease commit", () => {
     mkdirSync(join(lease.path, "Assets", "Locked"), { recursive: true });
     writeFileSync(join(lease.path, "Assets", "Locked", "New.cs"), "class New {}", "utf8");
     execSync("git add -A && git -c user.email=a@b -c user.name=t commit -qm 'locked work'", { cwd: lease.path });
-    chmodSync(join(lease.path, "Assets", "Locked"), 0o000);
+    const restore = makeUnreadable(join(lease.path, "Assets", "Locked"));
     try {
       const result = await lease.commit();
       expect(result.failed.some((f) => f.startsWith(join("Assets", "Locked") + " (unreadable"))).toBe(true);
@@ -512,7 +570,7 @@ describe("workspace lease commit", () => {
       expect(tree).not.toContain("Assets/Locked/New.cs");
       expect(existsSync(join(source, "Assets", "Locked", "New.cs"))).toBe(false);
     } finally {
-      chmodSync(join(lease.path, "Assets", "Locked"), 0o755);
+      restore();
       await lease.release();
     }
   });

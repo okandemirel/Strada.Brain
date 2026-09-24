@@ -11,12 +11,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isAtOrUnder, kernelEnforcesPermissions, permissionDenied } from "../../tests/helpers/permission-faults.js";
 
 /** The config the resolver locates the identity database with — never the real one. */
 let memoryDbDir: string;
 vi.mock("../../config/config.js", () => ({
   getCachedConfig: () => ({ memory: { dbPath: memoryDbDir } }),
 }));
+
+/**
+ * A directory made untraversable by injection. Root ignores permission bits
+ * (Docker CI, root dev containers) and Windows has no POSIX modes, so there
+ * `chmod 000` hides nothing; the stat the resolver makes of a path inside the
+ * directory raises the EACCES the kernel would.
+ */
+const untraversable = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const statSync = ((target: Parameters<typeof actual.statSync>[0], options?: Parameters<typeof actual.statSync>[1]) => {
+    const dir = untraversable.dir;
+    if (dir !== undefined && isAtOrUnder(target, dir) && String(target) !== dir) throw permissionDenied("stat", target);
+    return actual.statSync(target, options);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync };
+});
+
+/** Remove traversal permission on `dir` and return the undo. */
+function makeUntraversable(dir: string): () => void {
+  if (kernelEnforcesPermissions) {
+    chmodSync(dir, 0o000);
+    return () => chmodSync(dir, 0o700);
+  }
+  untraversable.dir = dir;
+  return () => {
+    untraversable.dir = undefined;
+  };
+}
 
 const { WebIdentityStore } = await import("./web-identity-store.js");
 const {
@@ -36,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setInstanceIdentityStore(null);
+  untraversable.dir = undefined;
   for (const dir of dirs.splice(0)) {
     try { chmodSync(dir, 0o700); } catch { /* already gone */ }
     rmSync(dir, { recursive: true, force: true });
@@ -140,7 +171,7 @@ describe("instance identity state is three-way (round 13 #14)", () => {
   it("reports `unavailable` when the identity directory cannot be traversed", () => {
     seedIdentities();
     setInstanceIdentityStore(null);
-    chmodSync(memoryDbDir, 0o000);
+    const restoreTraversal = makeUntraversable(memoryDbDir);
     try {
       // A readable stat would say "the file is there"; an unreadable one must not
       // say "there is no file".
@@ -149,7 +180,7 @@ describe("instance identity state is three-way (round 13 #14)", () => {
       const verdict = authorizeInstanceRequest({}, "instance:control", "POST /api/daemon/stop");
       expect(verdict.kind).toBe("unavailable");
     } finally {
-      chmodSync(memoryDbDir, 0o700);
+      restoreTraversal();
     }
 
     // …and once permission is back, the very next request is judged normally.
