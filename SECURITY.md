@@ -13,11 +13,11 @@ If you discover a security vulnerability, please report it privately via email r
 Each messaging channel enforces an allowlist of authorized users. Unauthorized requests are rejected before reaching the agent.
 
 - **Telegram**: `ALLOWED_TELEGRAM_USER_IDS` -- comma-separated numeric IDs. If empty, all users are denied.
-- **Slack**: `ALLOWED_SLACK_USER_IDS` and `ALLOWED_SLACK_WORKSPACES` -- if empty, all users are allowed (open by default).
+- **Slack**: `ALLOWED_SLACK_USER_IDS` and `ALLOWED_SLACK_WORKSPACES` -- both closed by default: an empty list denies, and a message must pass both lists, so setting only `ALLOWED_SLACK_USER_IDS` still denies everyone.
 - **Discord**: `ALLOWED_DISCORD_USER_IDS` and `ALLOWED_DISCORD_ROLE_IDS` -- if empty, all users are denied (closed by default). Supports both user-level and role-level authorization.
-- **Web**: JWT-based authentication (see below).
+- **Web**: no login, and no JWT (the module in section 13 is not used by any channel). The portal binds `127.0.0.1` by default and relies on the Host allow-list (`HTTP_ALLOWED_HOSTS`), same-origin checks on its WebSocket and on mutating requests (`WEB_TRUSTED_ORIGINS` adds a reverse proxy's public origin), and a per-browser profile identity (an id and token the channel issues). Anyone who can load the portal can use it: put an authenticating reverse proxy in front before exposing it beyond one machine.
 
-Implementation: `src/security/auth.ts`
+Implementation: `src/security/auth.ts`, `src/security/access-policy.ts`, `src/security/host-validation.ts`
 
 ### 2. Rate Limiting and Budget Caps
 
@@ -88,14 +88,15 @@ Implementation: `src/security/read-only-guard.ts`
 
 ### 6. Operation Confirmation
 
-Write operations can require explicit user approval before execution. The DM (Diff/Merge) policy supports four approval levels:
+`REQUIRE_EDIT_CONFIRMATION` (default `true`) decides whether an **interactive** run asks the user before a write operation; with `false`, writes run without asking. Autonomous and non-interactive runs (including daemon tasks) never ask: they manage write approval themselves (see section 11).
 
-- **always**: every write operation requires confirmation.
-- **destructive_only**: only high-risk operations require confirmation (file_delete, shell_exec, git_push, etc.).
-- **smart**: confirmation triggered when changes exceed thresholds (file count, line count).
-- **never**: no confirmation required.
+When a run does ask, the DM (Diff/Merge) policy decides which writes need confirmation. `dm-policy.ts` defines four levels, but only two are reachable at runtime:
 
-Controlled by `REQUIRE_EDIT_CONFIRMATION`. The confirmation flow shows a diff preview to the user and waits for approval (default timeout: 5 minutes).
+- **smart** (the default): confirmation when an operation is destructive or exceeds thresholds (file count, line count).
+- **never**: no confirmation -- what enabling autonomous mode sets for that session.
+- **always** and **destructive_only**: defined but **not enforced** -- no setting selects them and `setSessionPrefs()` has no caller, so no session ever runs at these levels.
+
+The confirmation flow shows a diff preview to the user and waits for approval (default timeout: 5 minutes).
 
 Implementation: `src/security/dm-policy.ts` (pending-confirmation state is in-memory; there is no persisted operation audit trail)
 
@@ -141,11 +142,13 @@ The deployment subsystem enforces human-in-the-loop approval and circuit breaker
 
 Implementation: `src/daemon/triggers/deploy-trigger.ts`, `src/daemon/deployment/deployment-executor.ts`
 
-### 11. Daemon Security
+### 11. Daemon Security (classification only -- not enforced)
 
-`DaemonSecurityPolicy` enforces tool-level approval requirements for daemon-triggered operations. Write tools require explicit user approval via the `ApprovalQueue` before execution.
+`DaemonSecurityPolicy` classifies tools as "allow" or "queue for approval" for daemon-triggered operations, but **nothing enforces it**: `checkPermission()` and `requestApproval()` have no production caller. Daemon trigger tasks are submitted straight to the task manager, and the write gate they pass through is the orchestrator's self-managed write review, which consults neither this policy nor `security.autoApproveTools`. Daemon write tools do **not** wait for user approval; do not deploy the daemon on the assumption that they do.
 
-Implementation: `src/daemon/security/daemon-security-policy.ts`, `src/daemon/security/approval-queue.ts`
+The `ApprovalQueue` is used for deployments (section 10), not for individual daemon tool calls.
+
+Implementation: `src/daemon/security/daemon-security-policy.ts` (unenforced), `src/daemon/security/approval-queue.ts`
 
 ### 12. WebSocket Origin Validation
 
@@ -155,18 +158,18 @@ Connections with empty or `"null"` Origin headers are rejected. Non-browser clie
 
 Implementation: `src/security/origin-validation.ts`
 
-### 13. JWT Authentication
+### 13. JWT / Session Module (not used by any channel)
 
-The web channel uses JWT (HS256) for authentication with the following protections:
+`src/security/auth-hardened.ts` contains a JWT (HS256), session, password and MFA implementation, but **no channel authenticates with it**: the web channel does not use it (see section 1), and `getAuthManager()` has no caller outside the module. Bootstrap only hands it configuration (`configureAuthManager`). Setting `JWT_SECRET` or `REQUIRE_MFA` therefore protects nothing today. What the module implements, for when it is wired in:
 
-- **Secure defaults**: 15-minute access token expiry, 7-day refresh tokens, 30-minute session timeout.
-- **Brute-force protection**: account lockout after 5 failed attempts (30-minute lockout with exponential escalation up to 32x).
-- **Token revocation**: in-memory revocation list checked on every request.
-- **Timing-safe comparison**: signature verification uses `timingSafeEqual` to prevent timing attacks.
-- **Claims validation**: issuer and audience are checked on every token.
-- **Password hashing**: scrypt with 32-byte salt (N=16384, r=8, p=1).
-- **Session management**: per-user session tracking, idle timeout, forced logout.
-- **MFA support**: TOTP framework with backup codes and rate-limited verification (5 attempts per 5-minute window). Note: TOTP verification requires installing `otplib` for production use.
+- **Defaults**: 15-minute access token expiry, 7-day refresh tokens, 30-minute session timeout.
+- **Token revocation**: in-memory revocation list.
+- **Timing-safe comparison**: signature verification uses `timingSafeEqual`.
+- **Claims validation**: issuer and audience checks.
+- **Password hashing**: scrypt with 32-byte salt (N=32768, r=8, p=1).
+- **MFA**: backup codes and TOTP verification.
+
+One piece is in use: its `BruteForceProtection` class (escalating lockouts, up to 32x) guards the WebSocket dashboard's token check, per client IP (`src/dashboard/websocket-server.ts`: 5 failed attempts, then a 5-minute base lockout).
 
 Implementation: `src/security/auth-hardened.ts`
 
@@ -215,14 +218,13 @@ Implementation: `src/utils/media-processor.ts`
 
 ### 16. Communication Security
 
-TLS and WebSocket security hardening:
+Strada.Brain's own listeners speak plain HTTP/WS; there is **no in-process TLS**. Terminate TLS in a reverse proxy (the Docker Compose stack ships an nginx config for this).
 
-- **TLS configuration**: minimum TLS 1.2, configurable cipher suites with forbidden cipher blocklist.
-- **Certificate pinning**: SHA-256 fingerprint pinning with expiration tracking.
-- **HSTS support**: configurable max-age, subdomain inclusion, and preload.
-- **Security headers**: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`.
+`src/security/communication.ts` (TLS minimum version, cipher blocklist, certificate pinning, HSTS) is **not enforced**: no runtime code imports it. It is also not ready to be wired in as-is: its certificate-chain check is a simplified placeholder (its own comment says so) and needs review first.
 
-Implementation: `src/security/communication.ts`
+What is in effect: the web channel sends its own security headers (`X-Content-Type-Options: nosniff`, frame and referrer restrictions) on its responses.
+
+Implementation: `src/channels/web/channel.ts` (headers); `src/security/communication.ts` (unused)
 
 ## Configuration
 
@@ -231,23 +233,23 @@ Security-related environment variables:
 | Variable | Description | Default |
 |---|---|---|
 | `ALLOWED_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs | (empty = deny all) |
-| `ALLOWED_SLACK_USER_IDS` | Comma-separated Slack user IDs | (empty = allow all) |
-| `ALLOWED_SLACK_WORKSPACES` | Comma-separated Slack workspace IDs | (empty = allow all) |
+| `ALLOWED_SLACK_USER_IDS` | Comma-separated Slack user IDs (a message must also pass the workspace list) | (empty = deny all) |
+| `ALLOWED_SLACK_WORKSPACES` | Comma-separated Slack workspace IDs | (empty = deny all) |
 | `ALLOWED_DISCORD_USER_IDS` | Comma-separated Discord user IDs | (empty = deny all) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Comma-separated Discord role IDs | (empty) |
-| `JWT_SECRET` | Secret for JWT signing (optional; required before enabling internal system auth / JWT-session flows) | (none) |
-| `REQUIRE_MFA` | Require MFA for authentication | `false` |
-| `REQUIRE_EDIT_CONFIRMATION` | Require user approval for write operations | `true` |
+| `JWT_SECRET` | Secret for the JWT module (section 13). **Not enforced**: no channel authenticates with it | (none) |
+| `REQUIRE_MFA` | MFA flag for the same module. **Not enforced** | `false` |
+| `REQUIRE_EDIT_CONFIRMATION` | Ask before write operations in interactive runs (section 6) | `true` |
 | `READ_ONLY_MODE` | Disable all write tools | `false` |
-| `SHELL_ENABLED` | Allow shell command execution | `false` |
-| `RATE_LIMIT_ENABLED` | Enable rate limiting | `true` |
-| `RATE_LIMIT_MESSAGES_PER_MINUTE` | Max messages per user per minute | `30` |
-| `RATE_LIMIT_MESSAGES_PER_HOUR` | Max messages per user per hour | `500` |
-| `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `1000000` |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `50` |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `1000` |
-| `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `true` |
-| `TASK_DELEGATION_ENABLED` | Enable task delegation | `true` |
+| `SHELL_ENABLED` | Allow shell command execution | `true` |
+| `RATE_LIMIT_ENABLED` | Enable rate limiting | `false` |
+| `RATE_LIMIT_MESSAGES_PER_MINUTE` | Max messages per user per minute | `0` (unlimited) |
+| `RATE_LIMIT_MESSAGES_PER_HOUR` | Max messages per user per hour | `0` (unlimited) |
+| `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `0` (unlimited) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `0` (unlimited) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `0` (unlimited) |
+| `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `false` (setup writes `true`) |
+| `TASK_DELEGATION_ENABLED` | Enable task delegation | `false` (setup writes `true`) |
 | `AGENT_MAX_DELEGATION_DEPTH` | Maximum delegation chain depth | `2` |
 | `DEPLOY_ENABLED` | Enable deployment subsystem | `false` |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | Additional allowed WebSocket origins | (localhost only) |
@@ -256,13 +258,13 @@ Fresh setup now writes both `MULTI_AGENT_ENABLED=true` and `TASK_DELEGATION_ENAB
 
 ## Deployment Recommendations
 
-1. **Set `JWT_SECRET`** to a cryptographically random value (at least 32 bytes). Never reuse across environments.
-2. **Configure channel allowlists** -- especially `ALLOWED_TELEGRAM_USER_IDS` and `ALLOWED_DISCORD_USER_IDS`, which deny all users when empty.
-3. **Keep `SHELL_ENABLED=false`** unless you specifically need shell access. Shell commands are validated against a whitelist, but the attack surface is inherently larger.
+1. **Do not expose the web portal without an authenticating reverse proxy** -- it has no login of its own (section 1), and `JWT_SECRET` does not add one (section 13).
+2. **Configure channel allowlists** -- `ALLOWED_TELEGRAM_USER_IDS`, `ALLOWED_DISCORD_USER_IDS`, and for Slack both `ALLOWED_SLACK_USER_IDS` and `ALLOWED_SLACK_WORKSPACES`; all deny everyone when empty.
+3. **Set `SHELL_ENABLED=false`** unless you specifically need shell access (it defaults to `true`). Shell commands are checked against a denylist of known-dangerous patterns (section 14), not an allowlist, so the attack surface is inherently larger.
 4. **Set budget caps** -- configure `RATE_LIMIT_DAILY_BUDGET_USD` and `RATE_LIMIT_MONTHLY_BUDGET_USD` to prevent runaway API costs.
 5. **Use read-only mode** for analysis-only deployments by setting `READ_ONLY_MODE=true`.
 6. **Bind to localhost** -- the web channel binds to `127.0.0.1` by default. Use a reverse proxy (nginx, Caddy) for external access.
-7. **Enable confirmation** -- keep `REQUIRE_EDIT_CONFIRMATION=true` in production so destructive operations require explicit user approval.
+7. **Enable confirmation** -- keep `REQUIRE_EDIT_CONFIRMATION=true` so interactive runs ask before destructive or large writes. It does not cover autonomous runs or daemon tasks (sections 6 and 11).
 8. **Never commit `.env` files** -- the path guard blocks access to `.env` files, but they should also be in `.gitignore`.
 9. **Monitor logs** -- authentication failures and brute-force lockouts are written to the application logger (`src/utils/logger.ts`). There is no dedicated security audit logger or alert rule engine; review the application logs directly.
 10. **Keep dependencies updated** -- run `npm run security:audit` (`npm audit --audit-level=high`, also run by `.github/workflows/ci.yml`). There is no in-tree dependency security scanner.

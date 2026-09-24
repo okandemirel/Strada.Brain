@@ -24,16 +24,16 @@ Agent / Tool Execution
   ├── DMPolicy (dm-policy.ts)                ← Confirmation flow for destructive/large operations
   └── SecretSanitizer (secret-patterns.ts + secret-sanitizer.ts) ← 26-pattern credential scrubbing (see reach below)
 
-Internal System Auth (auth-hardened.ts)
+Internal System Auth (auth-hardened.ts) — NOT ENFORCED: no channel authenticates through it
   ├── JwtManager         ← HS256 JWT with jti-based revocation, 15min expiry
   ├── SessionManager     ← Sliding-window sessions with 7-day refresh
-  ├── PasswordHasher     ← scrypt (N=16384, r=8, p=1) with timingSafeEqual
+  ├── PasswordHasher     ← scrypt (N=32768, r=8, p=1) with timingSafeEqual
   ├── MfaManager         ← Backup codes + RFC 6238 TOTP verification
-  ├── BruteForceProtection ← Escalating lockouts (5 attempts, 30min base, 32x max)
+  ├── BruteForceProtection ← Escalating lockouts (5 attempts, 32x max) — the one part in use (WebSocket dashboard)
   └── ROLE_PERMISSIONS   ← Static 5-role permission table (no policy engine; see below)
 
 Transport
-  ├── TlsSecurityManager (communication.ts)  ← HTTPS/WSS hardening, cert pinning
+  ├── TlsSecurityManager (communication.ts)  ← NOT ENFORCED: nothing imports it (TLS, cert pinning)
   ├── Origin validation (origin-validation.ts) ← WebSocket Origin allowlist (localhost by default)
   └── BrowserSecurity (browser-security.ts)  ← URL validation / SSRF prevention for browser tools
 ```
@@ -56,11 +56,11 @@ Auth is checked at the earliest point — inside the platform event handler — 
 
 Internal user authentication with JWT, sessions, MFA, and brute force protection.
 
-Bootstrap wires this module from the main config surface. `auth-hardened.ts` does not read `process.env` directly; `JWT_SECRET` and `REQUIRE_MFA` are loaded by `src/config/config.ts` and injected via bootstrap.
+**Not enforced.** Bootstrap hands this module its configuration (`configureAuthManager`), but no channel authenticates through it: `getAuthManager()` has no caller outside the module, and the web channel uses no JWT (it relies on loopback binding, the Host allow-list, same-origin checks and per-browser profile tokens). Only `BruteForceProtection` is used, by the WebSocket dashboard's token check. `auth-hardened.ts` does not read `process.env` directly; `JWT_SECRET` and `REQUIRE_MFA` are loaded by `src/config/config.ts` and passed in via bootstrap, where nothing consults them.
 
 - **JWT:** Hand-rolled HS256 using `createHmac("sha256")`. 15-minute expiry. `jti`-based revocation via in-memory Map. Signature comparison uses `timingSafeEqual`.
 - **Sessions:** `Map<string, Session>` with sliding window expiry. 7-day refresh token. Per-user session tracking.
-- **Password hashing:** `scryptSync` with `N=16384, r=8, p=1`. 32-byte random salt. Format: `scrypt:<saltHex>:<hashHex>`.
+- **Password hashing:** `scryptSync` with `N=32768, r=8, p=1`. 32-byte random salt. Format: `scrypt:<saltHex>:<hashHex>`.
 - **MFA:** Backup codes work (10 one-time 8-hex codes). TOTP verification is implemented with a 30-second step and ±1 step skew window.
 - **Brute force:** 5 attempts per 30-minute window. Lockout escalates exponentially (2^n, capped at 32x). Count persists across lock periods until successful login.
 
@@ -138,11 +138,13 @@ so the prose cannot drift from the set again.
 
 "DM" stands for **Diff/Merge** (not Direct Message). Implements the confirmation flow for write operations.
 
-Four approval levels:
-- `ALWAYS` — every write requires confirmation
-- `DESTRUCTIVE_ONLY` — only file_delete, shell_exec, git_push, git_reset, etc.
-- `SMART` — destructive OR exceeds thresholds (3+ files or 50+ lines changed)
-- `NEVER` — auto-approve everything
+Four approval levels, two of them reachable:
+- `SMART` — the default: destructive OR exceeds thresholds (3+ files or 50+ lines changed)
+- `NEVER` — auto-approve everything; what autonomous mode sets for its session
+- `ALWAYS` — every write requires confirmation. **Not enforced**: nothing selects it
+- `DESTRUCTIVE_ONLY` — only file_delete, shell_exec, git_push, git_reset, etc. **Not enforced**: nothing selects it
+
+No setting chooses a level and `setSessionPrefs()` has no caller, so a session is only ever `SMART` or (autonomous) `NEVER`. The policy applies only when `REQUIRE_EDIT_CONFIRMATION=true` and the run is interactive.
 
 Generates diff previews (max 50 lines), sends via channel, waits for user response (5-minute timeout). Parses yes/no/view/edit responses via regex. There is no persisted operation audit trail; the pending-confirmation state lives in memory for the duration of the prompt.
 
@@ -151,7 +153,7 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | Module | Purpose |
 |--------|---------|
 | `browser-security.ts` | URL validation, blocks `file://`/`data://`/`javascript://`, private IPs, admin paths. Per-session rate limit (60 ops/min). Max 5 concurrent browser sessions. |
-| `communication.ts` | TLS 1.2+ with secure cipher suites, HSTS, security headers (CSP, X-Frame-Options, etc.), certificate pinning, WebSocket security (origin allowlist, message size limit, connection rate limiting). |
+| `communication.ts` | **Not enforced — no runtime code imports it.** TLS 1.2+ with secure cipher suites, HSTS, security headers, certificate pinning, WebSocket limits. Its certificate-chain check is a simplified placeholder; review it before wiring it in. |
 | `origin-validation.ts` | Shared WebSocket `Origin` check for the web channel and dashboard; localhost only unless extra hostnames are configured. |
 | `user-authorized-paths.ts` | Extracts exact absolute paths from the user's own message and authorizes read-only access to them. |
 
@@ -161,7 +163,7 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 |------|---------|
 | `auth.ts` | Channel identity — platform allowlists |
 | `access-policy.ts` | Shared empty-allowlist semantics (`open` / `closed`) |
-| `auth-hardened.ts` | JWT, sessions, MFA, brute force, password hashing, static role table |
+| `auth-hardened.ts` | JWT, sessions, MFA, brute force, password hashing, static role table (only `BruteForceProtection` is used) |
 | `rate-limiter.ts` | Per-user message and budget rate limiting |
 | `path-guard.ts` | Directory traversal prevention + sensitive-file blocklist |
 | `user-authorized-paths.ts` | User-named files readable outside the project |
@@ -170,7 +172,7 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | `read-only-guard.ts` | Write tool blocking (23 tools) |
 | `dm-policy.ts` | Diff/Merge confirmation flow |
 | `browser-security.ts` | URL validation, SSRF prevention |
-| `communication.ts` | TLS hardening, WebSocket security |
+| `communication.ts` | TLS hardening, WebSocket security (unused, not enforced) |
 | `origin-validation.ts` | WebSocket Origin allowlist |
 | `no-tracked-secrets.test.ts` | Guards against `.env*` backups being committed (the 2026-08-22 leak) |
 
