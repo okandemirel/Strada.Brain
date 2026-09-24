@@ -140,6 +140,12 @@ interface BaseUnifiedMemoryEntry {
    * compose to the closed form instead of compounding.
    */
   decayedAt?: TimestampMs;
+  /**
+   * Set once auto-tiering promotes the entry out of the Persistent tier. Such
+   * an entry never gets an Ephemeral TTL, so tier moves can never make
+   * cleanupExpired delete what was stored as persistent.
+   */
+  persistentOrigin?: true;
   hnswIndex?: number;
   version: number;
 }

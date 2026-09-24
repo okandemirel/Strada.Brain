@@ -961,18 +961,15 @@ export class AgentDBMemory implements IUnifiedMemory {
         return err(new Error(`Entry not found: ${id}`));
       }
 
+      // A Persistent entry promoted into Ephemeral used to get the Ephemeral
+      // TTL, and cleanupExpired then deleted it for good if no later sweep
+      // moved it on in time (MEM-11). Remember where it came from instead.
+      if (entry.tier === MemoryTier.Persistent) entry.persistentOrigin = true;
       entry.tier = newTier;
       entry.importanceScore = Math.max(entry.importanceScore, 0.7) as NormalizedScore;
 
       // Update expiration
-      if (newTier === MemoryTier.Ephemeral) {
-        entry.expiresAt = createBrand(
-          Date.now() + this.config.ephemeralTtlMs,
-          "TimestampMs" as const,
-        );
-      } else {
-        entry.expiresAt = undefined;
-      }
+      entry.expiresAt = this.ephemeralExpiry(entry, newTier);
 
       sqlitePersistEntry(this.getSqliteCtx(), entry);
 
@@ -981,6 +978,12 @@ export class AgentDBMemory implements IUnifiedMemory {
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /** The TTL an entry gets on entering `tier`: only Ephemeral entries not of persistent origin expire. */
+  private ephemeralExpiry(entry: UnifiedMemoryEntry, tier: MemoryTier): TimestampMs | undefined {
+    if (tier !== MemoryTier.Ephemeral || entry.persistentOrigin === true) return undefined;
+    return createBrand(Date.now() + this.config.ephemeralTtlMs, "TimestampMs" as const);
   }
 
   async demoteEntry(
@@ -1001,14 +1004,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       // entries but retrieveSemantic skips any past expiresAt, so the entry
       // became a permanent ghost — stored, indexed, counted, never returned.
       // Mirrors promoteEntry (audited 2026-09-02).
-      if (newTier === MemoryTier.Ephemeral) {
-        entry.expiresAt = createBrand(
-          Date.now() + this.config.ephemeralTtlMs,
-          "TimestampMs" as const,
-        );
-      } else {
-        entry.expiresAt = undefined;
-      }
+      entry.expiresAt = this.ephemeralExpiry(entry, newTier);
 
       sqlitePersistEntry(this.getSqliteCtx(), entry);
 
@@ -1431,6 +1427,7 @@ export class AgentDBMemory implements IUnifiedMemory {
             importanceScore:
               (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
             decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
+            persistentOrigin: parsed.persistentOrigin === true ? true : undefined,
             domain: parsed.domain as string | undefined,
             chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
             // plan 0-B.9: rows written before provenance existed are classified by shape

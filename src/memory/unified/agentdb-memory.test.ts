@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createLogger } from "../../utils/logger.js";
-import { AgentDBMemory } from "./agentdb-memory.js";
+import { AgentDBMemory, _setNowFn, _resetNowFn } from "./agentdb-memory.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 
 // Initialize logger for tests
@@ -397,6 +397,41 @@ describe("AgentDBMemory", () => {
       // The cleared stamp must also reach SQLite, or a restart resurrects the ghost.
       const row = (memory as any).sqliteDb.prepare("SELECT value FROM memories WHERE id = ?").get(stored.id as string) as { value: string };
       expect(JSON.parse(row.value).expiresAt).toBeUndefined();
+    });
+  });
+
+  describe("promotion out of Persistent (MEM-11)", () => {
+    // Promotion Persistent -> Ephemeral attached the Ephemeral TTL, so a
+    // frequently used persistent note was deleted by cleanupExpired if no
+    // later sweep moved it on within the TTL (a daemon stopped overnight).
+    it("never gives a persistent-origin entry a TTL, through any tier moves", async () => {
+      const stored = await memory.storeNote("user note kept forever", ["keep"], MemoryTier.Persistent);
+      const entry = (memory as any).entries.get(stored.id);
+
+      await memory.promoteEntry(stored.id, MemoryTier.Ephemeral);
+      expect(entry.expiresAt).toBeUndefined();
+      await memory.promoteEntry(stored.id, MemoryTier.Working);
+      await memory.demoteEntry(stored.id, MemoryTier.Ephemeral);
+      expect(entry.expiresAt).toBeUndefined();
+
+      const later = Date.now() + 25 * 3_600_000;
+      _setNowFn(() => later);
+      try {
+        await memory.cleanupExpired();
+      } finally {
+        _resetNowFn();
+      }
+      expect((memory as any).entries.has(stored.id)).toBe(true);
+
+      // The marker survives a restart, or the next demotion would expire it.
+      const row = (memory as any).sqliteDb.prepare("SELECT value FROM memories WHERE id = ?").get(stored.id as string) as { value: string };
+      expect(JSON.parse(row.value).persistentOrigin).toBe(true);
+    });
+
+    it("still gives a Working entry demoted to Ephemeral its TTL", async () => {
+      const stored = await memory.storeNote("scratch working note", ["tmp"], MemoryTier.Working);
+      await memory.demoteEntry(stored.id, MemoryTier.Ephemeral);
+      expect((memory as any).entries.get(stored.id).expiresAt).toBeDefined();
     });
   });
 
