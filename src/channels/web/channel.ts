@@ -1356,7 +1356,7 @@ export class WebChannel
   private attachmentLinkSignature(token: string, profileId: string): string {
     this.linkScopeKeyCache ??= this.attachmentStore.linkScopeKey();
     return createHmac("sha256", this.linkScopeKeyCache)
-      .update(`${token} ${profileId}`)
+      .update(`${token}\u0000${profileId}`)
       .digest("base64url");
   }
 
