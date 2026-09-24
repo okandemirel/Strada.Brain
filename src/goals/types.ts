@@ -8,6 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import { validateDAG } from "./goal-validator.js";
 
 // =============================================================================
 // BRANDED TYPES
@@ -186,8 +187,9 @@ export const goalBlockSchema = z.object({
 /**
  * Parse a goal block from LLM text output.
  * Extracts triple-backtick goal fenced blocks (```goal ... ```),
- * strips fences, parses JSON, and validates with Zod.
- * Returns null on any failure (no goal block, invalid JSON, schema mismatch).
+ * strips fences, parses JSON, and validates with Zod and validateDAG.
+ * Returns null on any failure (no goal block, invalid JSON, schema mismatch,
+ * or nodes that do not form a DAG).
  */
 export function parseGoalBlock(text: string): GoalBlockOutput | null {
   try {
@@ -200,6 +202,12 @@ export function parseGoalBlock(text: string): GoalBlockOutput | null {
     const parsed = JSON.parse(cleaned);
     const result = goalBlockSchema.safeParse(parsed);
     if (!result.success) {
+      return null;
+    }
+    // The same DAG check the decomposer path applies: buildGoalTreeFromBlock
+    // collapsed duplicate ids (a planned step vanished) and silently dropped
+    // dependencies on ids that do not exist, so the step ran unconstrained.
+    if (!validateDAG(result.data.nodes).valid) {
       return null;
     }
     return result.data;

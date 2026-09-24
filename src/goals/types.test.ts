@@ -132,6 +132,30 @@ Let me know if you want changes.`;
     expect(result!.nodes[1]!.dependsOn).toEqual(["a"]);
   });
 
+  // TSK-21: the goal-block path built trees without the DAG check the
+  // decomposer applies: duplicate ids collapsed into one step and a
+  // dependency on a missing id was dropped, so the step ran unconstrained.
+  it("returns null for a goal block whose nodes do not form a DAG", () => {
+    const block = (nodes: unknown[]) =>
+      "```goal\n" + JSON.stringify({ isGoal: true, estimatedMinutes: 10, nodes }) + "\n```";
+    const duplicate = [
+      { id: "s1", task: "Scaffold", dependsOn: [] },
+      { id: "s2", task: "Write the parser", dependsOn: ["s1"] },
+      { id: "s2", task: "Write the renderer", dependsOn: ["s1"] },
+    ];
+    const dangling = [
+      { id: "s1", task: "Scaffold", dependsOn: [] },
+      { id: "s2", task: "Ship", dependsOn: ["s9"] },
+    ];
+    const cycle = [
+      { id: "a", task: "A", dependsOn: ["b"] },
+      { id: "b", task: "B", dependsOn: ["a"] },
+    ];
+    expect(parseGoalBlock(block(duplicate))).toBeNull();
+    expect(parseGoalBlock(block(dangling))).toBeNull();
+    expect(parseGoalBlock(block(cycle))).toBeNull();
+  });
+
   it("returns null for responses without goal block", () => {
     const text = "Sure, I can help you build a REST API. What framework would you like?";
     const result = parseGoalBlock(text);
