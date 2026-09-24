@@ -4191,3 +4191,68 @@ describe("BackgroundExecutor goal narrative attribution (round 10 #4)", () => {
     ).toBe("parent-scope");
   });
 });
+
+// TSK-4 / TSK-5: once the run has returned, what follows (task lease commit,
+// release, milestone integration, the one terminal) is SETTLEMENT. Neither the
+// inactivity watchdog nor the lost-workspace reaper may turn a delivered run
+// into a withheld or failed one there.
+describe("BackgroundExecutor - the settle phase is not part of the run", () => {
+  function settleExecutor(lease: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const mockOrch = createMockOrchestrator();
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({ path: "direct_worker", reason: "fallback" });
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      daemonEventBus: createMockDaemonEventBus() as any,
+      workspaceLeaseManager: { acquireLease: vi.fn().mockResolvedValue(lease) } as any,
+      ...extra,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null), listTasks: vi.fn().mockReturnValue([]),
+    };
+    executor.setTaskManager(taskManager as any);
+    return { executor, taskManager };
+  }
+
+  it("records the completion when publication outlasts the inactivity window (TSK-5)", async () => {
+    const commit = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return { written: ["Assets/A.cs"], conflicts: [] };
+    });
+    const { executor, taskManager } = settleExecutor(
+      { id: "lease-slow", path: "/tmp/lease-slow", commit, release: vi.fn().mockResolvedValue(undefined) },
+      { taskInactivityTimeoutMs: 120 },
+    );
+    const task = createTestTask(buildTestGoalTree());
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalledWith(task.id, "task done"); }, { timeout: 3000 });
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(taskManager.block).not.toHaveBeenCalled();
+    expect(taskManager.fail).not.toHaveBeenCalled();
+  });
+
+  it("the lost-workspace reaper does not reap a run whose lease it just released (TSK-4)", async () => {
+    const leaseDir = mkdtempSync(join(os.tmpdir(), "settle-lease-"));
+    let reap: () => void = () => undefined;
+    const release = vi.fn(async () => {
+      rmSync(leaseDir, { recursive: true, force: true });
+      // A reaper tick that lands after the directory is gone and before the
+      // terminal is recorded (e.g. while integration waits on the write lock).
+      reap();
+    });
+    const { executor, taskManager } = settleExecutor({
+      id: "lease-reaped", path: leaseDir, release,
+      commit: vi.fn().mockResolvedValue({ written: ["Assets/A.cs"], conflicts: [] }),
+    });
+    reap = () => (executor as unknown as { reapLostWorkspaces(): void }).reapLostWorkspaces();
+    const task = createTestTask(buildTestGoalTree());
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalledWith(task.id, "task done"); }, { timeout: 3000 });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(taskManager.fail).not.toHaveBeenCalled();
+  });
+});

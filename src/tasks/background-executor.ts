@@ -206,6 +206,14 @@ interface QueueEntry {
    * Absent for entries that have not yet been combined (queued).
    */
   externalSignal?: AbortSignal;
+  /**
+   * Called once when the run has returned and its settle phase (publish,
+   * integrate, record the one terminal) begins. processQueue disarms the
+   * inactivity watchdog here: nothing emits progress while a lease commits
+   * or a merge waits for the write lock, and a watchdog abort there withheld
+   * the terminal of work that had already succeeded.
+   */
+  onSettling?: () => void;
 }
 
 type ManagedWorkspaceLease = Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
@@ -1259,7 +1267,9 @@ export class BackgroundExecutor {
       const onExternalAbort = () => timeoutController.abort();
       entry.signal.addEventListener("abort", onExternalAbort, { once: true });
       let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+      let settling = false;
       const armInactivityTimer = (): void => {
+        if (settling) return;
         if (inactivityTimer) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(
           () => timeoutController.abort(new Error(`Task made no progress for ${inactivityTimeoutMs}ms`)),
@@ -1284,6 +1294,11 @@ export class BackgroundExecutor {
         // user /cancel (silent) apart from the inactivity-watchdog abort (must
         // still emit a terminal — BUG#7).
         externalSignal: entry.signal,
+        onSettling: () => {
+          settling = true;
+          if (inactivityTimer) clearTimeout(inactivityTimer);
+          inactivityTimer = undefined;
+        },
       };
 
       this.executeTask(timedEntry)
@@ -2032,6 +2047,17 @@ export class BackgroundExecutor {
       signal.removeEventListener("abort", releaseOnCancel);
       this.releaseRunBudget(task);
       unsubscribeLiveness();
+      // SETTLING (TSK-4/TSK-5): the run is over, so the inactivity watchdog
+      // stops, and the lost-workspace reaper forgets the lease — release()
+      // below deletes its directory on purpose, and the reaper used to read
+      // that as a lost workspace, fail a delivered task and resubmit it.
+      entry.onSettling?.();
+      this.inflightWorkspacePaths.delete(String(task.id));
+      // Only a person's stop, or a reaper that already wrote the terminal,
+      // withholds this run's own terminal. Any other abort that lands now
+      // (shutdown) must not leave the row executing with nothing recorded.
+      const stoppedDuringSettle = (): boolean =>
+        (externalSignal ?? signal).aborted || this.reapedInflight.has(String(task.id));
       // Commit BEFORE release — release() deletes the lease directory. This is
       // the task-scoped lease, the one a normal CLI request actually takes; the
       // delegated-run lease below has the same pairing. Missing it here made
@@ -2134,7 +2160,7 @@ export class BackgroundExecutor {
         // terminal outcome too: the failure branch did not check it, so a
         // cancelled task was failed over its own cancellation (Codex
         // 2026-09-12 S#3).
-        if (pendingCompletion !== undefined && !signal.aborted && externalSignal?.aborted !== true) {
+        if (pendingCompletion !== undefined && !stoppedDuringSettle()) {
           try {
             this.taskManager.fail(task.id, `PUBLICATION FAILED: ${taskPublicationLoss}. The workspace is kept for salvage.`);
           } catch { /* the task may already be terminal */ }
@@ -2155,7 +2181,7 @@ export class BackgroundExecutor {
       if (pendingCompletion !== undefined && taskPublicationLoss === undefined) {
         // A CANCEL THAT LANDED WHILE THE COMMIT RAN is still a cancel: the
         // completion used to overwrite it unconditionally (Q#8).
-        if (signal.aborted || externalSignal?.aborted === true) {
+        if (stoppedDuringSettle()) {
           getLogger().info("Task was cancelled while its workspace was publishing — no completion recorded", {
             taskId: task.id,
           });
@@ -2170,7 +2196,7 @@ export class BackgroundExecutor {
           const settle = (attempt: number): void => {
             // Every attempt re-reads the abort: a cancel that lands between
             // two retries is the last word (S#3).
-            if (signal.aborted || externalSignal?.aborted === true) {
+            if (stoppedDuringSettle()) {
               getLogger().info("Task was cancelled before its completion could be recorded", { taskId: task.id });
               return;
             }
