@@ -670,3 +670,82 @@ describe("an undo that overlaps something else", () => {
     expect(result.deleted).toEqual([]);
   }, 20_000);
 });
+
+describe("a review record found in the project is untrusted input", () => {
+  // The record lives inside the project, so a cloned or shared tree can carry one this process
+  // never wrote. Nothing in it may make an undo write, delete or read outside the project.
+  let outside: string;
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), "change-review-outside-"));
+  });
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  function plant(reviewId: string, changes: unknown[], extra: Record<string, unknown> = {}): void {
+    const dir = changeReviewDir(source, reviewId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "review.json"),
+      JSON.stringify({ version: 1, reviewId, projectRoot: source, leaseId: reviewId, createdAt: 1, status: "open", changes, ...extra }),
+      "utf8",
+    );
+  }
+  const sha = (body: string): string => createHash("sha256").update(body).digest("hex");
+
+  it("a target path that climbs out of the project is unrecoverable and nothing is written", async () => {
+    const payload = put(source, ".strada/lease-conflicts/x/deleted/evil.desktop", "payload");
+    const escape = relative(source, join(outside, "evil.desktop"));
+    plant("planted-1", [{ path: escape, action: "restore-deleted", previousPath: payload, previousHash: sha("payload") }]);
+
+    const preview = await previewUndo(source, "planted-1");
+    expect(preview?.entries[0]?.state).toBe("unrecoverable");
+    await applyUndo(source, "planted-1", { onBlocked: "skip" });
+    expect(existsSync(join(outside, "evil.desktop"))).toBe(false);
+  });
+
+  it("a previous copy outside the project's change storage is never copied in", async () => {
+    const secret = put(outside, "credentials", "secret");
+    plant("planted-2", [{ path: "leak.txt", action: "restore-deleted", previousPath: secret, previousHash: sha("secret") }]);
+
+    const preview = await previewUndo(source, "planted-2");
+    expect(preview?.entries[0]?.state).toBe("unrecoverable");
+    await applyUndo(source, "planted-2", { onBlocked: "skip" });
+    expect(existsSync(join(source, "leak.txt"))).toBe(false);
+  });
+
+  it("a symlinked directory in the tree does not carry an undo outside the project", async () => {
+    const payload = put(source, ".strada/lease-conflicts/x/deleted/evil.desktop", "payload");
+    await fsp.symlink(outside, join(source, "Linked"), "dir");
+    plant("planted-3", [{ path: join("Linked", "evil.desktop"), action: "restore-deleted", previousPath: payload, previousHash: sha("payload") }]);
+
+    const preview = await previewUndo(source, "planted-3");
+    expect(preview?.entries[0]?.state).toBe("unrecoverable");
+    await applyUndo(source, "planted-3", { onBlocked: "skip" });
+    expect(existsSync(join(outside, "evil.desktop"))).toBe(false);
+  });
+
+  it("a previous copy that is a link to a file outside the project is refused", async () => {
+    put(outside, "credentials", "secret");
+    const link = join(changeReviewDir(source, "planted-4"), "previous", "leak.txt");
+    mkdirSync(dirname(link), { recursive: true });
+    await fsp.symlink(join(outside, "credentials"), link);
+    plant("planted-4", [{ path: "leak.txt", action: "restore-deleted", previousPath: link }]);
+
+    const preview = await previewUndo(source, "planted-4");
+    expect(preview?.entries[0]?.state).toBe("unrecoverable");
+    await applyUndo(source, "planted-4", { onBlocked: "skip" });
+    expect(existsSync(join(source, "leak.txt"))).toBe(false);
+  });
+
+  it("history whose base or head is not an object id is ignored", () => {
+    plant("planted-5", [], { history: { base: "--output=/tmp/x", head: "a".repeat(40), commits: [], paths: [] } });
+    expect(readChangeReview(source, "planted-5")?.history).toBeUndefined();
+  });
+
+  it("a legitimate restore from this review's own storage is still read as recoverable", () => {
+    const prev = previousCopyPath(source, "legit-1", join("Assets", "A.cs"));
+    plant("legit-1", [{ path: join("Assets", "A.cs"), action: "restore", previousPath: prev, previousHash: sha("a") }]);
+    expect(readChangeReview(source, "legit-1")?.changes[0]?.unrecoverable).toBeUndefined();
+  });
+});

@@ -46,7 +46,7 @@
 import { promises as fsp } from "node:fs";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { runProcess } from "../../utils/process-runner.js";
@@ -272,15 +272,109 @@ export function readChangeReview(projectRoot: string, reviewId: string): ChangeR
       ...(typeof raw.label === "string" ? { label: raw.label } : {}),
       ...(typeof raw.taskId === "string" ? { taskId: raw.taskId } : {}),
       createdAt: typeof raw.createdAt === "number" ? raw.createdAt : 0,
-      changes: raw.changes.filter((c): c is ReviewedChange => typeof c?.path === "string"),
-      ...(raw.history && typeof raw.history.base === "string" && typeof raw.history.head === "string"
-        ? { history: raw.history }
-        : {}),
+      changes: raw.changes
+        .map((c: unknown) => untrustedChange(resolve(projectRoot), reviewId, c))
+        .filter((c): c is ReviewedChange => c !== undefined),
+      ...(isHistory(raw.history) ? { history: raw.history } : {}),
       status: isStatus(raw.status) ? raw.status : "open",
       ...(typeof raw.resolvedAt === "number" ? { resolvedAt: raw.resolvedAt } : {}),
     };
   } catch {
     return undefined;
+  }
+}
+
+// The record lives INSIDE the user's project, so a cloned or shared tree can carry one this
+// process never wrote. Everything in it is untrusted input: an undo writes to `path` and copies
+// from `previousPath`, and neither may reach outside the project.
+
+const UNDO_ACTIONS: readonly UndoAction[] = ["restore", "delete", "restore-deleted"];
+const COMMIT_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** `child` is strictly below `parent` (both absolute, already resolved). */
+function isStrictlyInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** A project-relative path that names something inside the project, and nothing else. */
+function isContainedRel(root: string, rel: string): boolean {
+  if (rel.length === 0 || isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return false;
+  if (rel.split(/[\\/]/).includes("..")) return false;
+  return isStrictlyInside(root, resolve(root, rel));
+}
+
+/** The two places a lease keeps pre-run bytes: this review's copies, and the deletion quarantine. */
+function previousCopyRoots(root: string, reviewId: string): string[] {
+  return [
+    join(changeReviewDir(root, reviewId), PREVIOUS_DIR),
+    join(root, ".strada", "lease-conflicts"),
+  ];
+}
+
+function untrustedChange(root: string, reviewId: string, raw: unknown): ReviewedChange | undefined {
+  if (raw === null || typeof raw !== "object") return undefined;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.path !== "string" || !UNDO_ACTIONS.includes(c.action as UndoAction)) return undefined;
+  const base = { path: c.path, action: c.action as UndoAction };
+  if (!isContainedRel(root, c.path)) {
+    return { ...base, unrecoverable: "the recorded path is not inside this project, so it is never undone" };
+  }
+  const previousPath = typeof c.previousPath === "string" ? c.previousPath : undefined;
+  if (
+    previousPath !== undefined &&
+    !(isAbsolute(previousPath) &&
+      previousCopyRoots(root, reviewId).some((dir) => isStrictlyInside(dir, resolve(previousPath))))
+  ) {
+    return { ...base, unrecoverable: "the recorded previous copy is not in this project's change storage" };
+  }
+  const stamp = c.publishedStamp as Partial<FileStamp> | undefined;
+  return {
+    ...base,
+    ...(typeof c.publishedHash === "string" ? { publishedHash: c.publishedHash } : {}),
+    ...(stamp && typeof stamp.m === "number" && typeof stamp.s === "number" && typeof stamp.c === "number"
+      ? { publishedStamp: { m: stamp.m, s: stamp.s, c: stamp.c } }
+      : {}),
+    ...(previousPath !== undefined ? { previousPath } : {}),
+    ...(typeof c.previousHash === "string" ? { previousHash: c.previousHash } : {}),
+    ...(typeof c.previousBytes === "number" ? { previousBytes: c.previousBytes } : {}),
+    ...(typeof c.unrecoverable === "string" ? { unrecoverable: c.unrecoverable } : {}),
+  };
+}
+
+function isHistory(value: unknown): value is ReviewedHistory {
+  if (value === null || typeof value !== "object") return false;
+  const h = value as Partial<ReviewedHistory>;
+  // base/head are handed to git as arguments: only a full object id is acceptable.
+  return (
+    typeof h.base === "string" && COMMIT_SHA_RE.test(h.base) &&
+    typeof h.head === "string" && COMMIT_SHA_RE.test(h.head) &&
+    Array.isArray(h.commits) && h.commits.every((x) => typeof x === "string") &&
+    Array.isArray(h.paths) && h.paths.every((x) => typeof x === "string")
+  );
+}
+
+/**
+ * The lexical check cannot see a symlinked directory planted in the tree. Resolve the nearest
+ * existing ancestor of `target` on disk and require it to be inside the project's real root.
+ */
+async function resolvesInsideOnDisk(root: string, target: string): Promise<boolean> {
+  let realRoot: string;
+  try {
+    realRoot = await fsp.realpath(root);
+  } catch {
+    return false;
+  }
+  let probe = target;
+  for (;;) {
+    try {
+      const real = await fsp.realpath(probe);
+      return real === realRoot || isStrictlyInside(realRoot, real);
+    } catch {
+      const up = dirname(probe);
+      if (up === probe) return false;
+      probe = up;
+    }
   }
 }
 
@@ -453,9 +547,25 @@ async function statOrUndefined(path: string): Promise<{ mtimeMs: number; size: n
 }
 
 /** Is the pre-run copy still there, and still the bytes the record describes? */
-async function previousUsable(change: ReviewedChange): Promise<{ ok: true; bytes: number } | { ok: false; why: string }> {
+async function previousUsable(
+  record: ChangeReviewRecord,
+  change: ReviewedChange,
+): Promise<{ ok: true; bytes: number } | { ok: false; why: string }> {
   if (change.previousPath === undefined) {
     return { ok: false, why: "the project's previous version was not preserved when the run published" };
+  }
+  // The copy is read through any symlink: its real location must be the project's own storage.
+  let realPrevious: string;
+  try {
+    realPrevious = await fsp.realpath(change.previousPath);
+  } catch {
+    return { ok: false, why: `the preserved copy is gone (${change.previousPath})` };
+  }
+  const realRoots = await Promise.all(
+    previousCopyRoots(record.projectRoot, record.reviewId).map((dir) => fsp.realpath(dir).catch(() => undefined)),
+  );
+  if (!realRoots.some((dir) => dir !== undefined && isStrictlyInside(dir, realPrevious))) {
+    return { ok: false, why: "the preserved copy resolves outside this project's change storage" };
   }
   const st = await statOrUndefined(change.previousPath);
   if (!st) return { ok: false, why: `the preserved copy is gone (${change.previousPath})` };
@@ -473,6 +583,9 @@ async function entryPreview(record: ChangeReviewRecord, change: ReviewedChange):
   const base = { path: change.path, action: change.action };
   if (change.unrecoverable !== undefined) {
     return { ...base, state: "unrecoverable", detail: change.unrecoverable };
+  }
+  if (!(await resolvesInsideOnDisk(record.projectRoot, target))) {
+    return { ...base, state: "unrecoverable", detail: "this path resolves outside the project, so it is never undone" };
   }
   const now = await statOrUndefined(target);
 
@@ -500,7 +613,7 @@ async function entryPreview(record: ChangeReviewRecord, change: ReviewedChange):
   }
 
   // restore / restore-deleted both need the preserved bytes.
-  const usable = await previousUsable(change);
+  const usable = await previousUsable(record, change);
 
   if (change.action === "restore-deleted") {
     if (now === undefined) {
@@ -819,6 +932,8 @@ async function applyUndoExclusive(
     const staged = join(stagingRoot, `${randomUUID().slice(0, 8)}.part`);
     let publishedCopy: string | undefined;
     try {
+      // Re-checked at write time: a directory can be swapped for a link after the preview.
+      if (!(await resolvesInsideOnDisk(record.projectRoot, target))) throw new Error("this path resolves outside the project");
       // Round 12 #14: what is on disk NOW decides, not what the preview saw.
       const capture = await captureTarget(change, target);
       if (!capture.ok) throw new Error(capture.why);
@@ -848,6 +963,7 @@ async function applyUndoExclusive(
   const deleteFile = async (change: ReviewedChange): Promise<boolean> => {
     const target = join(record.projectRoot, change.path);
     try {
+      if (!(await resolvesInsideOnDisk(record.projectRoot, target))) throw new Error("this path resolves outside the project");
       const capture = await captureTarget(change, target);
       if (!capture.ok) throw new Error(capture.why);
       if (capture.bytes === undefined) {
