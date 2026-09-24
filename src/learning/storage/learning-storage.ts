@@ -345,6 +345,16 @@ END;
 
 // ─── Storage Class ──────────────────────────────────────────────────────────────
 
+/**
+ * The age predicate for cross-session retrieval (one `?` = the cutoff). A rule
+ * is aged by its LAST USE OR EVIDENCE (updated_at), not by when it was created:
+ * keyed on created_at, every seed convention and every heavily used teaching
+ * silently dropped out of retrieval on day 91. Seeds (framework conventions,
+ * not learned) and permanent rules are exempt.
+ */
+const AGE_EXEMPT_OR_RECENT =
+  "(MAX(i.created_at, i.updated_at) >= ? OR i.status = 'permanent' OR COALESCE(i.seed, 0) = 1)";
+
 export class LearningStorage {
   private db: Database.Database | null = null;
   private dbPath: string;
@@ -1422,6 +1432,16 @@ export class LearningStorage {
     return rows.map(r => this.rowToInstinct(r));
   }
 
+  /**
+   * Mark an instinct as seen now: the same rule was just learned again. Its
+   * age is counted from its last use or evidence, so a rule that is re-learned
+   * becomes retrievable again instead of blocking its own re-creation.
+   */
+  touchInstinct(id: string, at: number = Date.now()): void {
+    this.ensureConnection();
+    this.db!.prepare("UPDATE instincts SET updated_at = MAX(updated_at, ?) WHERE id = ?").run(at, id);
+  }
+
   /** Delete an instinct */
   deleteInstinct(id: string): void {
     this.ensureConnection();
@@ -1478,10 +1498,10 @@ export class LearningStorage {
     if (maxAgeDays !== undefined && eventBus) {
       try {
         const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-        // Find instincts that WOULD be excluded by age (non-permanent, older than cutoff)
+        // Find instincts that WOULD be excluded by age (see AGE_EXEMPT_OR_RECENT)
         let expiredSql = `SELECT DISTINCT i.* FROM instincts i
           INNER JOIN instinct_scopes s ON i.id = s.instinct_id
-          WHERE i.status != 'permanent' AND i.created_at < ? AND ${NOT_BOOKKEEPING_S}`;
+          WHERE NOT ${AGE_EXEMPT_OR_RECENT} AND ${NOT_BOOKKEEPING_S}`;
         const expiredParams: (string | number)[] = [cutoff];
 
         // Apply scope filter to expired query too
@@ -1506,7 +1526,7 @@ export class LearningStorage {
 
         const expiredRows = this.db!.prepare(expiredSql).all(...expiredParams) as InstinctRow[];
         for (const row of expiredRows) {
-          const ageDays = Math.floor((Date.now() - row.created_at) / MS_PER_DAY);
+          const ageDays = Math.floor((Date.now() - Math.max(row.created_at, row.updated_at)) / MS_PER_DAY);
           eventBus.emit("instinct:age_expired", {
             instinctId: row.id as InstinctId,
             ageDays,
@@ -1540,10 +1560,10 @@ export class LearningStorage {
     sql += ownerSql;
     params.push(...ownerParams);
 
-    // Age filter with permanent exemption
+    // Age filter (see AGE_EXEMPT_OR_RECENT)
     if (maxAgeDays !== undefined) {
       const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-      sql += " AND (i.created_at >= ? OR i.status = 'permanent')";
+      sql += ` AND ${AGE_EXEMPT_OR_RECENT}`;
       params.push(cutoff);
     }
 

@@ -1462,7 +1462,13 @@ export class LearningPipeline {
     if (!this.isMeaningfulTrigger(params.triggerPattern)) return null;
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
-    if (this.isDuplicateOfExisting(similar, params)) return null;
+    const duplicate = this.findDuplicateOfExisting(similar, params);
+    if (duplicate) {
+      // Learned again: the existing rule is current, so it must not age out of
+      // retrieval while it keeps refusing its own re-creation (LRN-9).
+      this.storage.touchInstinct(duplicate.id);
+      return null;
+    }
 
     const initialConfidence = params.confidence ?? this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;
@@ -1520,10 +1526,10 @@ export class LearningPipeline {
    *    instinct is one deliberately held out of use for being wrong — it must
    *    not also prevent the replacement that supersedes it.
    */
-  private isDuplicateOfExisting(
+  private findDuplicateOfExisting(
     similar: PatternMatch[],
     params: { triggerPattern: string; action: string; userId?: string },
-  ): boolean {
+  ): Instinct | null {
     for (const m of similar) {
       if (!m.instinct) continue;
       // Raw similarity (relevance), not the confidence-weighted score.
@@ -1537,9 +1543,9 @@ export class LearningPipeline {
       // Only "above the bar" matters here, so the edit distance may stop there.
       const actionScore = combinedSimilarity(m.instinct.action, params.action, CONFIDENCE_THRESHOLDS.SIMILAR);
       if (actionScore <= CONFIDENCE_THRESHOLDS.SIMILAR) continue;
-      return true;
+      return m.instinct;
     }
-    return false;
+    return null;
   }
 
   createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags"> & { scopeType?: ScopeType; userId?: string }): Instinct {
