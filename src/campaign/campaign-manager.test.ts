@@ -9339,4 +9339,91 @@ describe("CampaignManager", () => {
       expect(messages.at(-1)!.text).toContain("nobody has approved");
     });
   });
+
+  describe("a recorded stop never wedges a campaign (CMP-2)", () => {
+    const incoming = (text: string, userId = "u1"): IncomingMessage =>
+      ({ channelType: "cli", chatId: "cli-local", userId, text, timestamp: new Date() }) as unknown as IncomingMessage;
+
+    /** A person cancelled the sprint and the stop was recorded, but the process died before its handler ran. */
+    const stopRecordedThenRestart = async (): Promise<string> => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.cancel("task_1", { reason: "user" });
+      const row = storage.get(campaign.id)!;
+      row.stopRequestedAt = Date.now();
+      storage.save(row);
+      return campaign.id;
+    };
+
+    it("a stop recorded before a restart lands the campaign failed and revivable on boot", async () => {
+      const id = await stopRecordedThenRestart();
+      await manager.resumeActive();
+      await waitFor(() => expect(storage.get(id)!.state).toBe("failed"));
+      const after = storage.get(id)!;
+      expect(tasks.submitted).toHaveLength(1); // nothing resubmitted
+      expect(after.lastError).toContain("NOT DELIVERED");
+      expect(storage.hasActiveForProject(projectRoot)).toBe(false);
+      expect(storage.findLatestRevivable("cli-local")?.id).toBe(id);
+      expect(messages.at(-1)!.text).toContain("was cancelled");
+
+      // …and "kampanya devam" brings it back.
+      expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(id)!.state).toBe("executing");
+    });
+
+    it("a person's cancel in the lineage is judged at boot even when no stop was stamped", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.cancel("task_1", { reason: "user" });
+      await manager.resumeActive();
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("the submission guard carries a recorded stop out instead of returning silently", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const stored = storage.get(campaign.id)!;
+      stored.stopRequestedAt = Date.now();
+      storage.save(stored);
+
+      (manager as unknown as { submitCurrentMilestone(c: unknown): void }).submitCurrentMilestone(storage.get(campaign.id)!);
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      expect(tasks.submitted).toHaveLength(1);
+      expect(tasks.cancelled).toContain("task_1"); // its live work is retired
+      expect(messages.at(-1)!.text).toContain("kampanya devam");
+    });
+
+    it("'kampanya iptal' cancels the requester's active campaign, frees the project, and can be revived", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+
+      expect(await manager.tryHandleIncoming(incoming("kampanya iptal"))).toBe(true);
+      const after = storage.get(campaign.id)!;
+      expect(after.state).toBe("cancelled");
+      expect(tasks.cancelled).toContain("task_1");
+      expect(storage.hasActiveForProject(projectRoot)).toBe(false);
+      expect(messages.at(-1)!.text).toContain("Campaign cancelled");
+
+      // A settle of the cancelled work later does not bring it back to life.
+      tasks.emit("task:completed", "task_1", "sprint A done");
+      await new Promise((r) => setTimeout(r, 100));
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+
+      expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+
+    it("another person in the chat cannot cancel the campaign", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      expect(await manager.tryHandleIncoming(incoming("campaign cancel", "someone-else"))).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("executing");
+      expect(tasks.cancelled).not.toContain("task_1");
+      expect(await manager.cancelByCommand("cli-local", "u1")).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+    });
+  });
 });

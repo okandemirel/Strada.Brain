@@ -136,6 +136,8 @@ export function chatChannelAccessFromConfig(
 export interface CampaignStatusSource {
   describeStatus(chatId?: string): CampaignStatusSnapshot | undefined;
   reviveByCommand(chatId: string): Promise<boolean>;
+  /** Stop this chat's active campaign; the caller must own it. */
+  cancelByCommand?(chatId: string, userId: string): Promise<boolean>;
 }
 
 /** The slice of RealTreeGuardian the channels' status commands need. */
@@ -438,7 +440,7 @@ export class CommandHandler {
         await this.handleVault(chatId, args);
         break;
       case "campaign":
-        await this.handleCampaign(chatId, args);
+        await this.handleCampaign(chatId, args, userId);
         break;
       case "measure":
         await this.handleMeasure(chatId);
@@ -1887,7 +1889,7 @@ export class CommandHandler {
     return `Campaign \`${snapshot.id}\`: ${snapshot.state}, ${green}/${snapshot.milestones.length} milestones green${where} — \`/campaign\` for details.`;
   }
 
-  private async handleCampaign(chatId: string, args: string[]): Promise<void> {
+  private async handleCampaign(chatId: string, args: string[], userId?: string): Promise<void> {
     const sub = (args[0] ?? "").toLowerCase();
     if (sub === "measure" || sub === "olc" || sub === "ölç") {
       await this.handleMeasure(chatId);
@@ -1895,6 +1897,12 @@ export class CommandHandler {
     }
     if (!this.campaignStatusSource) {
       await this.channel.sendText(chatId, "The campaign layer is not running in this daemon.");
+      return;
+    }
+    // The escape hatch for a campaign that will not move (CMP-2); the campaign
+    // layer answers in the chat and checks the caller owns the campaign.
+    if ((sub === "cancel" || sub === "stop" || sub === "iptal" || sub === "durdur") && this.campaignStatusSource.cancelByCommand) {
+      await this.campaignStatusSource.cancelByCommand(chatId, userId ?? "");
       return;
     }
     if (sub === "revive" || sub === "resume" || sub === "devam" || sub === "continue") {

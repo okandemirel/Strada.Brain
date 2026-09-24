@@ -737,6 +737,16 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     expect(String(sendText.mock.calls[0]?.[1])).toMatch(/Nothing to revive/);
   });
 
+  it("/campaign cancel reaches the campaign's cancel path with the caller's identity (CMP-2)", async () => {
+    const handler = makeHandler();
+    const cancelByCommand = vi.fn().mockResolvedValue(true);
+    handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand: vi.fn(), cancelByCommand });
+
+    await handler.handle("chat-1", "campaign", ["cancel"], "u7");
+    expect(cancelByCommand).toHaveBeenCalledWith("chat-1", "u7");
+    expect(sendMarkdown).not.toHaveBeenCalled(); // not the status view
+  });
+
   it("/measure runs the delivery-gate measurement on the configured project and prints its counts", async () => {
     const handler = makeHandler();
     handler.setProjectPath("/proj");

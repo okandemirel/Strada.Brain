@@ -28,6 +28,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
+import { decideInstanceAccess } from "../channels/web/instance-access.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
@@ -224,6 +225,9 @@ const AMEND_GDD_RE = /^\/?(?:campaign\s+)?(?:amend\s+(?:the\s+)?gdd|gdd\s+amend(
 
 /** "kampanya devam" / "campaign resume" — revive the newest failed/cancelled campaign on this chat. */
 const REVIVE_RE = /^(kampanya(yı)?\s+(devam( et(tir)?)?|sürdür)|campaign\s+(resume|retry|continue)|resume\s+campaign)\b/i;
+
+/** "kampanya iptal" / "campaign cancel" — stop this chat's active campaign (revivable with "kampanya devam"). */
+const CANCEL_RE = /^(?:kampanya(?:yı)?\s+(?:iptal(?:\s+et)?|durdur)|campaign\s+(?:cancel|stop)|(?:cancel|stop)\s+(?:the\s+)?campaign)[.!\s]*$/i;
 
 /**
  * How long a settled-badly milestone waits before the campaign reacts. The
@@ -1070,6 +1074,9 @@ export class CampaignManager {
    * intent. Returns true when the message was consumed by the campaign layer.
    */
   async tryHandleIncoming(msg: IncomingMessage): Promise<boolean> {
+    // The escape hatch first: a cancel must work in every active state,
+    // the approval gate included.
+    if (await this.tryHandleCancel(msg.chatId, msg.text, msg.userId)) return true;
     if (await this.tryHandleApproval(msg.chatId, msg.text)) return true;
     if (await this.tryHandleAmendment(msg.chatId, msg.text)) return true;
     if (await this.tryHandleRevive(msg.chatId, msg.text)) return true;
@@ -1289,6 +1296,71 @@ export class CampaignManager {
 
     await this.reviveAtCurrentMilestone(campaign, milestone);
     return true;
+  }
+
+  /**
+   * "kampanya iptal" / "campaign cancel": the in-product way to stop an
+   * active campaign (CMP-2). Without it a campaign wedged in an active state
+   * held the chat and the project slot with no command that could free them.
+   * The campaign lands `cancelled`, which "kampanya devam" can revive.
+   * `userId` undefined is a programmatic call; a chat caller must own the
+   * campaign (see `callerOwns`).
+   */
+  async tryHandleCancel(chatId: string, text: string, userId?: string): Promise<boolean> {
+    if (!CANCEL_RE.test(text.trim())) return false;
+    const campaign = this.storage.findActiveForChat(chatId);
+    if (!campaign) {
+      await this.tell({ chatId }, "There is no active campaign on this chat — nothing to cancel.");
+      return true;
+    }
+    if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) {
+      await this.tell({ chatId }, "Only the person who started this campaign can cancel it.");
+      return true;
+    }
+    // A NEW GENERATION: a handler still holding the old row is refused at
+    // `persist` and at submission, so nothing in flight writes it back to life.
+    campaign.stopGeneration = (campaign.stopGeneration ?? 0) + 1;
+    const milestone = campaign.milestones[campaign.currentMilestone];
+    if (milestone && milestone.status !== "green") milestone.status = "failed";
+    campaign.state = "cancelled";
+    campaign.autoReviveAt = undefined;
+    campaign.lastError = "NOT DELIVERED — cancelled on request";
+    this.persist(campaign);
+    this.cancelLiveLineages(campaign, "the campaign was cancelled");
+    if (campaign.draftTaskId) {
+      try {
+        const tip = this.taskManager.findLatestLineageTask(campaign.draftTaskId as TaskId);
+        if (tip && ACTIVE_STATUSES.has(tip.status)) this.taskManager.cancel(tip.id as TaskId);
+      } catch { /* already settled */ }
+    }
+    getLoggerSafe().info("Campaign cancelled on request", { id: campaign.id, chatId });
+    await this.tell(campaign, "🛑 Campaign cancelled — nothing more will be submitted. Reply **kampanya devam** to start it again.");
+    return true;
+  }
+
+  /** `/campaign cancel`: the command-handler's route to `tryHandleCancel`. */
+  async cancelByCommand(chatId: string, userId?: string): Promise<boolean> {
+    return this.tryHandleCancel(chatId, "campaign cancel", userId);
+  }
+
+  /**
+   * May this chat caller decide for the campaign (cancel it; answer its GDD
+   * gate)? The shared-instance model's own-identity rule for `task:control`
+   * (src/channels/web/instance-access.ts): a campaign that records its
+   * requester is that identity's — in a group chat the room is shared, the
+   * requester is not — and one that records none is its chat's.
+   */
+  private callerOwns(campaign: Campaign, chatId: string, userId: string): boolean {
+    const requester = campaign.userId?.trim();
+    const decision = decideInstanceAccess({
+      surface: "task:control",
+      actor: { role: "guest", profileId: userId.trim() || chatId, chatId },
+      resource: requester ? { profileId: requester } : { chatId: campaign.chatId },
+      instance: { shared: true },
+      what: campaign.id,
+    });
+    if (!decision.allowed) getLoggerSafe().info("Campaign decision refused", { id: campaign.id, reason: decision.reason });
+    return decision.allowed;
   }
 
   /**
@@ -1843,6 +1915,21 @@ export class CampaignManager {
     switch (campaign.state) {
       case "drafting-gdd":
       case "executing": {
+        // A STOP RECORDED BEFORE THE RESTART IS AN OUTCOME, judged before any
+        // tip (CMP-2). The handler that would have acted on it died with the
+        // settle chain; a cancelled tip then read as a retryable failure, the
+        // retry was refused by the stop guard, and the campaign sat
+        // `executing` with nothing running on every boot after.
+        if (campaign.state === "executing") {
+          const current = campaign.milestones[campaign.currentMilestone];
+          if (
+            campaign.stopRequestedAt !== undefined
+            || (current?.taskId !== undefined && this.lineageWasCancelledOnPurpose(current.taskId))
+          ) {
+            await this.landRecordedStop(campaign);
+            return;
+          }
+        }
         const rootTaskId =
           campaign.state === "drafting-gdd"
             ? campaign.draftTaskId
@@ -2246,6 +2333,29 @@ export class CampaignManager {
     this.persist(campaign);
   }
 
+  /**
+   * A person's recorded stop, carried out: the current sprint fails, the
+   * campaign lands `failed` (visible, revivable with "kampanya devam"), its
+   * live work is retired, and the chat is told — the same outcome the live
+   * stop handler produces. Nothing is announced when the save is refused (an
+   * earlier generation's copy).
+   */
+  private async landRecordedStop(campaign: Campaign): Promise<void> {
+    const milestone = campaign.milestones[campaign.currentMilestone];
+    if (milestone && milestone.status !== "green") milestone.status = "failed";
+    const title = milestone?.title ?? "The campaign's current work";
+    campaign.state = "failed";
+    campaign.autoReviveAt = undefined;
+    campaign.lastError = `NOT DELIVERED — ${title} was cancelled`;
+    if (!this.persist(campaign)) return;
+    this.cancelLiveLineages(campaign, "a sprint of this campaign was cancelled");
+    getLoggerSafe().info("Campaign stopped: a recorded stop was carried out", { id: campaign.id });
+    await this.tell(
+      campaign,
+      `🛑 **${title}** was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.`,
+    );
+  }
+
   private submitCurrentMilestone(campaign: Campaign, opts?: { countAttempt?: boolean }): void {
     // A RECORDED STOP IS A TRANSITION GUARD, not a note. It was persisted the
     // moment a person's cancellation was seen and then read by nothing at all,
@@ -2258,6 +2368,10 @@ export class CampaignManager {
         id: campaign.id,
         stoppedAt: new Date(stopped).toISOString(),
       });
+      // …AND THE REFUSAL LANDS SOMEWHERE (CMP-2). Returning left the row
+      // `executing` with no task: the project slot held, nothing revivable,
+      // and the same refusal again on every boot.
+      void this.landRecordedStop(campaign);
       return;
     }
     // AN OBSOLETE WRITER SUBMITS NOTHING. `persist` refuses a save from an
