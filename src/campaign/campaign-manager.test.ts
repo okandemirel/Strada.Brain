@@ -9499,6 +9499,60 @@ describe("CampaignManager", () => {
     });
   });
 
+  describe("the gate presents the document the draft just wrote (CMP-5)", () => {
+    /** An older document of the repo: written well before any draft began. */
+    const stale = (rel: string, text: string): void => {
+      mkdirSync(join(projectRoot, rel, ".."), { recursive: true });
+      writeFileSync(join(projectRoot, rel), text);
+      const past = new Date(Date.now() - 60 * 60_000);
+      utimesSync(join(projectRoot, rel), past, past);
+    };
+
+    it("a fresh draft in a subfolder wins over an older docs/GDD.md with a closer name", async () => {
+      rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+      stale("docs/GDD.md", "# Another game's GDD\n");
+      const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
+      mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+      writeFileSync(join(projectRoot, "docs", "design", "Ashen_GDD.md"), "# Ashen GDD\n");
+      tasks.emit("task:completed", "task_1", "The design is written."); // names no path
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/design/Ashen_GDD.md");
+    });
+
+    it("the path the draft names wins, and a revision is told which file it revises", async () => {
+      rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+      stale("docs/GDD.md", "# Another game's GDD\n");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      writeFileSync(join(projectRoot, "docs", "Pig_Draft_GDD.md"), "# Pig GDD v1\n");
+      tasks.emit("task:completed", "task_1", "Wrote the GDD.\n\ndocs/Pig_Draft_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_Draft_GDD.md");
+
+      expect(await manager.tryHandleApproval("cli-local", "add a boss level")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(tasks.submitted[1]!.prompt).toContain("`docs/Pig_Draft_GDD.md` — revise THAT file in place");
+    });
+
+    it("a revision written beside the old draft is the one presented", async () => {
+      rmSync(join(projectRoot, "docs", "Game_GDD.md"));
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      writeFileSync(join(projectRoot, "docs", "Pig_GDD.md"), "# Pig GDD v1\n");
+      tasks.emit("task:completed", "task_1", "done");
+      await waitFor(() => expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_GDD.md"));
+      // The first draft is history by the time the revision runs.
+      const past = new Date(Date.now() - 60 * 60_000);
+      utimesSync(join(projectRoot, "docs", "Pig_GDD.md"), past, past);
+
+      expect(await manager.tryHandleApproval("cli-local", "make it about cats")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      writeFileSync(join(projectRoot, "docs", "Pig_GDD_v2.md"), "# Pig GDD v2 — cats\n");
+      tasks.emit("task:completed", "task_2", "revised");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_GDD_v2.md");
+      expect(messages.at(-1)!.text).toContain("docs/Pig_GDD_v2.md");
+    });
+  });
+
   describe("a compile a dirty tree cannot bind is NOT MEASURED, never 'does not compile' (CMP-6)", () => {
     const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
     const initRepo = (): void => {

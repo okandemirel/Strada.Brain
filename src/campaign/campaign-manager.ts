@@ -251,13 +251,22 @@ const CANCEL_RE = /^(?:kampanya(?:yı)?\s+(?:iptal(?:\s+et)?|durdur)|campaign\s+
  */
 const RETRY_ADOPTION_GRACE_MS = 90_000;
 
-const GDD_DRAFT_PROMPT = (idea: string, revisionNote?: string) =>
+/** A markdown file whose name says it is a game design document. */
+const GDD_NAME_RE = /(?:gdd|game[ _-]?design[ _-]?doc)[^/\\]*\.md$/i;
+/** A project-relative markdown path in a draft's result (the prompt asks it to end with one). */
+const DRAFTED_GDD_PATH_RE = /(?:^|[\s"'`(*])((?:[\w.-]+[/\\])*[\w.-]+\.md)(?=$|[\s"'`)*,.:;])/gi;
+
+const GDD_DRAFT_PROMPT = (idea: string, revisionNote?: string, currentDraftPath?: string) =>
   `You are writing the game design document for a game that will then be built autonomously by this same system.
 
 GAME IDEA:
 ${idea}
 
-${revisionNote ? `REVISION REQUEST FROM THE DESIGNER (address it fully):\n${revisionNote}\n` : ""}
+${revisionNote ? `REVISION REQUEST FROM THE DESIGNER (address it fully):\n${revisionNote}\n` : ""}${
+  // A revision names the draft it revises (CMP-5): told nothing, a revision
+  // wrote a new file beside the old one and the gate showed the old one again.
+  revisionNote && currentDraftPath ? `The current draft is \`${currentDraftPath}\` — revise THAT file in place (same path); do not write a new one.\n` : ""
+}
 Write a complete, buildable GDD and save it as a markdown file under docs/ in this project (e.g. docs/<GameName>_GDD.md). The document is the ONLY instruction the build will receive, so it must be concrete and exhaustive:
 - Pillars and fantasy, core loop, win/lose rules
 - Mechanics and game elements as an explicit schedule/table (each element: name, behaviour, rules) — the build reads this table literally
@@ -2177,7 +2186,7 @@ export class CampaignManager {
     const task = this.taskManager.submit(
       campaign.chatId,
       campaign.channelType,
-      GDD_DRAFT_PROMPT(campaign.ideaText ?? "", revisionNote),
+      GDD_DRAFT_PROMPT(campaign.ideaText ?? "", revisionNote, campaign.gddPath),
       { userId: campaign.userId, conversationId: campaign.conversationId, campaignId: campaign.id },
     );
     campaign.draftTaskId = task.id;
@@ -2824,7 +2833,7 @@ export class CampaignManager {
       if (this.completedSettleDelayMs > 0) {
         await new Promise((r) => setTimeout(r, this.completedSettleDelayMs));
       }
-      const gddPath = this.findNewestGddPath();
+      const gddPath = this.draftedGddPath(campaign, output);
       if (!gddPath) {
         // The draft "completed" without producing the document — redo it with
         // the gap named, instead of gating on air. This round is CHARGED:
@@ -7780,7 +7789,23 @@ export class CampaignManager {
    * Walks subfolders (bounded depth): audited 2026-09-02, a flat readdir
    * made docs/design/Ashen_GDD.md invisible and the campaign redrafted.
    */
-  private findNewestGddPath(): string | undefined {
+  /**
+   * The GDD a draft just wrote (CMP-5). The path the draft NAMED (the prompt
+   * asks it to end with one) wins when it is a GDD inside the project;
+   * otherwise a file written since the draft began outranks any older
+   * document — an unrelated docs/GDD.md, or the draft this one revised.
+   */
+  private draftedGddPath(campaign: Campaign, output: string): string | undefined {
+    const named = [...output.slice(-2000).matchAll(DRAFTED_GDD_PATH_RE)].at(-1)?.[1]?.replace(/\\/g, "/");
+    if (named !== undefined && GDD_NAME_RE.test(basename(named)) && readGddFile(this.projectRoot, named) !== undefined) {
+      return named;
+    }
+    const rootId = campaign.draftTaskId !== undefined ? this.lineageRootOf(campaign.draftTaskId) : undefined;
+    const draftedSince = rootId !== undefined ? this.taskManager.getStatus(rootId as TaskId)?.createdAt : undefined;
+    return this.findNewestGddPath(draftedSince);
+  }
+
+  private findNewestGddPath(writtenSince?: number): string | undefined {
     const docsDir = join(this.projectRoot, "docs");
     if (!existsSync(docsDir)) return undefined;
     const candidates: Array<{ rel: string; mtime: number; distance: number }> = [];
@@ -7799,7 +7824,7 @@ export class CampaignManager {
           if (depth < 3 && !e.name.startsWith(".") && e.name !== "node_modules") {
             stack.push({ dir: full, depth: depth + 1 });
           }
-        } else if (/gdd|game[ _-]?design[ _-]?doc/i.test(e.name) && e.name.toLowerCase().endsWith(".md")) {
+        } else if (GDD_NAME_RE.test(e.name)) {
           try {
             const stat = statSync(full);
             const rel = relative(this.projectRoot, full).split(sep).join("/");
@@ -7815,8 +7840,13 @@ export class CampaignManager {
     // from an "Implementation Baseline" under docs/run-notes — both files the
     // system itself had written ABOUT the design (measured live 2026-09-12).
     // The closest name to a bare GDD wins; mtime only breaks ties.
-    candidates.sort((a, b) => a.distance - b.distance || b.mtime - a.mtime);
-    return candidates[0]?.rel;
+    // …AMONG THE FILES THE DRAFT WROTE, when the caller knows when it began
+    // (CMP-5): a fresh docs/design/Foo_GDD.md used to lose to an older
+    // docs/GDD.md on name distance alone. Nothing fresh: every candidate.
+    const fresh = writtenSince === undefined ? [] : candidates.filter((c) => !writtenBefore(c.mtime, writtenSince));
+    const pool = fresh.length > 0 ? fresh : candidates;
+    pool.sort((a, b) => a.distance - b.distance || b.mtime - a.mtime);
+    return pool[0]?.rel;
   }
 
   /**
