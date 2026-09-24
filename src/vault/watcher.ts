@@ -19,6 +19,11 @@ export interface VaultWatcherOptions {
    * writes (the timer keeps resetting). Defaults to max(debounceMs * 5, 5000).
    */
   maxWaitMs?: number;
+  /**
+   * Upper bound on how long start() waits for chokidar's initial scan
+   * ('ready'). Defaults to WATCH_READY_TIMEOUT_MS.
+   */
+  readyTimeoutMs?: number;
 }
 
 const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.strada|\.obsidian)(\/|$)/;
@@ -37,6 +42,15 @@ const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.stra
  * indexed, with nothing in the logs to say so.
  */
 const WATCH_SETTLE_MS = 50;
+
+/**
+ * How long start() waits for 'ready' before it stops blocking its caller.
+ *
+ * Boot awaits start(), so a scan that never reports ready must not hang it.
+ * On timeout the watcher is left running (a slow scan on a huge tree still
+ * finishes and arms itself); start() just stops waiting and says so.
+ */
+const WATCH_READY_TIMEOUT_MS = 30_000;
 
 /**
  * Poll interval when the caller does not specify one. Zero means "use native
@@ -68,6 +82,7 @@ export class VaultWatcher {
   private pendingDrain = false;
   private firstScheduledAt: number | null = null;
   private stopped = false;
+  private watchErrors = 0;
   constructor(private opts: VaultWatcherOptions) {}
 
   async start(): Promise<void> {
@@ -150,8 +165,48 @@ export class VaultWatcher {
     this.watcher.on('add', enqueueSafe);
     this.watcher.on('change', enqueueSafe);
     this.watcher.on('unlink', enqueueSafe);
-    await new Promise<void>((resolve) => {
-      this.watcher!.on('ready', () => setTimeout(resolve, WATCH_SETTLE_MS));
+    // chokidar emits 'error' on a plain EventEmitter: with no listener the
+    // emit throws inside its own async scan, 'ready' never fires (start()
+    // hangs) and every failing directory becomes an unhandled rejection.
+    // Watch-limit errors (ENOSPC, EMFILE) are expected on large trees.
+    this.watcher.on('error', (err) => this.onWatchError(err));
+    await this.waitForReady(this.watcher);
+  }
+
+  private onWatchError(err: unknown): void {
+    this.watchErrors++;
+    const detail = {
+      op: 'watcher-error',
+      root: this.opts.root,
+      code: (err as NodeJS.ErrnoException | undefined)?.code,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    if (this.watchErrors === 1) {
+      getLoggerSafe().warn(
+        '[VaultWatcher] file watching is degraded; changes under this root may not be reindexed until the next sync (raise the OS watch limit or set VAULT_WATCH_POLL_INTERVAL_MS)',
+        detail,
+      );
+    } else {
+      getLoggerSafe().debug('[VaultWatcher] further watcher error', { ...detail, count: this.watchErrors });
+    }
+  }
+
+  private waitForReady(watcher: FSWatcher): Promise<void> {
+    const timeoutMs = this.opts.readyTimeoutMs ?? WATCH_READY_TIMEOUT_MS;
+    return new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        getLoggerSafe().warn('[VaultWatcher] initial scan did not report ready in time; continuing without waiting', {
+          op: 'watcher-ready-timeout',
+          root: this.opts.root,
+          timeoutMs,
+        });
+        resolve();
+      }, timeoutMs);
+      timeout.unref?.();
+      watcher.once('ready', () => {
+        clearTimeout(timeout);
+        setTimeout(resolve, WATCH_SETTLE_MS);
+      });
     });
   }
 

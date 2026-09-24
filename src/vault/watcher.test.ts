@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VaultWatcher } from "./watcher.js";
@@ -135,4 +136,54 @@ describe("VaultWatcher when chokidar reports an error (EMFILE-shaped)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
+});
+
+// MEM-3: with no 'error' listener, a watch-limit error thrown by fs.watch
+// escaped chokidar's scan: 'ready' never fired, start() never resolved, and
+// each failing directory surfaced as an unhandled rejection.
+describe("VaultWatcher when fs.watch hits the OS watch limit (MEM-3)", () => {
+  it("start() resolves and nothing is left unhandled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-watcher-enospc-"));
+    for (const dir of ["a", "b", "c", "d"]) mkdirSync(join(root, dir));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const realWatch = fs.watch;
+    fs.watch = (() => {
+      throw Object.assign(new Error("ENOSPC: System limit for number of file watchers reached"), { code: "ENOSPC" });
+    }) as typeof fs.watch;
+    syncBuiltinESMExports();
+    const watcher = new VaultWatcher({ root, debounceMs: 10, pollIntervalMs: 0, onBatch: () => {} });
+    try {
+      const outcome = await Promise.race([
+        watcher.start().then(() => "resolved"),
+        delay(3000).then(() => "hung"),
+      ]);
+      await delay(50); // let any stray rejection surface
+      expect(outcome).toBe("resolved");
+      expect(unhandled).toEqual([]);
+    } finally {
+      fs.watch = realWatch;
+      syncBuiltinESMExports();
+      process.off("unhandledRejection", onUnhandled);
+      await watcher.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("stops waiting for 'ready' after readyTimeoutMs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vault-watcher-ready-"));
+    const watcher = new VaultWatcher({ root, debounceMs: 10, readyTimeoutMs: 100, onBatch: () => {} });
+    const inner = { on: () => inner, once: () => inner, close: async () => {} };
+    const internal = watcher as unknown as { waitForReady(w: unknown): Promise<void> };
+    try {
+      const outcome = await Promise.race([
+        internal.waitForReady(inner).then(() => "resolved"),
+        delay(2000).then(() => "hung"),
+      ]);
+      expect(outcome).toBe("resolved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
