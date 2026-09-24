@@ -2,6 +2,9 @@
 Description=Strada.Brain AI Development Assistant
 Documentation=https://github.com/okandemirel/Strada.Brain
 After=network.target
+# [Unit] keys: in [Service], systemd ignores StartLimitIntervalSec.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -15,22 +18,55 @@ ExecStop=/bin/kill -SIGTERM $MAINPID
 # Restart policy
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Resource limits
 MemoryMax=512M
 CPUQuota=200%
 LimitNOFILE=65536
 
+# Writable state under the sandbox below (OPS-15). ProtectSystem=strict makes
+# /opt read-only and ProtectHome hides /home, so the config root (.env, the
+# runtime databases, the default log files) cannot live in the checkout or in
+# ~strada/.strada: startup creates the config root before anything else and
+# crash-looped on EROFS. systemd creates these directories owned by User=:
+#   /var/lib/strada-brain  config root (STRADA_HOME, and HOME for the few
+#                          subsystems that still address ~/.strada directly)
+#   /var/log/strada-brain  LOG_FILE
+StateDirectory=strada-brain
+LogsDirectory=strada-brain
+Environment=STRADA_HOME=/var/lib/strada-brain
+Environment=HOME=/var/lib/strada-brain
+# Use STRADA_HOME even when /opt/strada-brain is a git checkout: a checkout
+# would otherwise be its own (read-only) config root.
+Environment=STRADA_SOURCE_CHECKOUT=false
+Environment=LOG_FILE=/var/log/strada-brain/strada-brain.log
+
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/strada-brain/.strada-memory /opt/strada-brain/logs
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_NETLINK: os.networkInterfaces() (the system-info skill) needs it.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# No MemoryDenyWriteExecute: V8's JIT needs writable+executable memory.
+# Data from a pre-StateDirectory install stays reachable (point MEMORY_DB_PATH
+# at it, or move it into /var/lib/strada-brain); "-" = fine if it is absent.
+ReadWritePaths=-/opt/strada-brain/.strada-memory -/opt/strada-brain/logs
 
-# Environment
+# Environment. The application also loads /var/lib/strada-brain/.env (the
+# config root, where settings changes are saved); values in the file below
+# are set first and win, so prefer keeping one .env in /var/lib/strada-brain.
 Environment=NODE_ENV=production
 EnvironmentFile=-/opt/strada-brain/.env
 
