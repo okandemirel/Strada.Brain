@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { validatePath } from "../../security/path-guard.js";
+import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 export class FileEditTool implements ITool {
@@ -73,6 +74,9 @@ export class FileEditTool implements ITool {
         content: `Error: ${pathCheck.error} (path="${relPath}")`,
         isError: true,
       };
+    }
+    if (await isGitInternalsPath(context.projectPath, pathCheck.fullPath)) {
+      return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
     try {

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { sameNameElsewhere } from "./nearby-names.js";
 import { dirname, extname, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import {
   generateUnityGuid,
   generateMetaContent,
@@ -63,6 +64,9 @@ export class FileWriteTool implements ITool {
     });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
+    }
+    if (await isGitInternalsPath(context.projectPath, pathCheck.fullPath)) {
+      return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
     // Size check

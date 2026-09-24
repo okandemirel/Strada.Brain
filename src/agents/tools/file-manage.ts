@@ -1,6 +1,7 @@
 import { unlink, rename, stat, readdir, rm, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
 import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -73,6 +74,9 @@ export class FileDeleteTool implements ITool {
     const pathCheck = await validatePath(context.projectPath, relPath);
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
+    }
+    if (await isGitInternalsPath(context.projectPath, pathCheck.fullPath)) {
+      return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
     // GUID safety check: warn if file is referenced by other assets.
@@ -203,6 +207,12 @@ export class FileRenameTool implements ITool {
     if (!newCheck.valid) {
       return { content: `Error (new_path): ${newCheck.error}`, isError: true };
     }
+    if (
+      (await isGitInternalsPath(context.projectPath, oldCheck.fullPath)) ||
+      (await isGitInternalsPath(context.projectPath, newCheck.fullPath))
+    ) {
+      return { content: GIT_INTERNALS_ERROR, isError: true };
+    }
 
     try {
       await rename(oldCheck.fullPath, newCheck.fullPath);
@@ -302,6 +312,9 @@ export class FileDeleteDirectoryTool implements ITool {
     const relTarget = await toProjectRelative(context.projectPath, pathCheck.fullPath);
     if (isAbsolute(relTarget)) {
       return { content: "Error: cannot delete the project root", isError: true };
+    }
+    if (await isGitInternalsPath(context.projectPath, pathCheck.fullPath)) {
+      return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
     try {
