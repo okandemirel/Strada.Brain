@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -55,6 +55,45 @@ describe("acquireRuntimeLock — one install gets exactly one live runtime", () 
     const result = await acquireRuntimeLock({ installRoot: root, channelType: "slack" });
     expect(result.acquired).toBe(true);
     await result.release();
+  });
+
+  it("a delayed stale-lock removal cannot delete a fresh claim (COR-6)", async () => {
+    // Both starters judge the same stale lock; the second finishes first.
+    writeFileSync(lockPath(), JSON.stringify({ pid: 134217728, startedAtIso: "2026-01-01T00:00:00Z", channel: "telegram" }));
+    let second: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
+    const first = await acquireRuntimeLock({
+      installRoot: root,
+      channelType: "web",
+      pauses: {
+        afterJudging: async () => {
+          second = await acquireRuntimeLock({ installRoot: root, channelType: "discord" });
+        },
+      },
+    });
+    expect(second?.acquired).toBe(true);
+    expect(first.acquired).toBe(false);
+    expect(JSON.parse(readFileSync(lockPath(), "utf-8"))).toMatchObject({ channel: "discord" });
+    if (second?.acquired) await second.release();
+  });
+
+  it("a claim is published whole, never as an empty file another starter could call stale (COR-6)", async () => {
+    let second: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
+    const first = await acquireRuntimeLock({
+      installRoot: root,
+      channelType: "web",
+      pauses: {
+        beforePublish: async () => {
+          // Mid-claim, the lock path shows nothing half-written.
+          expect(existsSync(lockPath())).toBe(false);
+          second = await acquireRuntimeLock({ installRoot: root, channelType: "discord" });
+        },
+      },
+    });
+    expect(second).toBeDefined();
+    expect([first.acquired, second?.acquired].filter(Boolean)).toHaveLength(1);
+    expect(readdirSync(join(root, ".strada")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    if (first.acquired) await first.release();
+    if (second?.acquired) await second.release();
   });
 
   it("release is idempotent and never clobbers a successor's claim", async () => {

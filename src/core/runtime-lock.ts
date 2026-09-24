@@ -15,12 +15,19 @@
  * next start. Known limitation: PID reuse within the staleness window can
  * false-positive as "alive"; the failure mode is a clear refusal message,
  * not silent corruption.
+ *
+ * Atomicity (COR-6): a claim is a complete file hard-linked into place, so no
+ * reader ever sees an empty lock and mistakes a starter mid-write for a stale
+ * leftover; a stale lock is removed only if it still holds the exact bytes
+ * that were judged, so a delayed removal cannot delete a fresh claim.
  */
 
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { link, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Logger } from "winston";
+import { removeLockIfUnchanged } from "./setup-env-persistence.js";
 
 const LOCK_FILE_NAME = "runtime.lock";
 
@@ -29,6 +36,17 @@ interface LockPayload {
   startedAtIso: string;
   channel: string;
 }
+
+/** Test seams: the defects live between a judgement and the action on it. Production passes nothing. */
+export interface RuntimeLockPauses {
+  /** After the existing lock was read and judged, before anything is removed. */
+  afterJudging?: () => Promise<void>;
+  /** After our claim is written to its private file, before it is published. */
+  beforePublish?: () => Promise<void>;
+}
+
+/** Hard links are the atomic publish; these codes mean the filesystem has none. */
+const NO_HARD_LINK_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"]);
 
 export type AcquireResult =
   | { acquired: true; release: () => Promise<void> }
@@ -45,13 +63,16 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function readLock(path: string): Promise<LockPayload | null> {
-  let raw: string;
+async function readLockRaw(path: string): Promise<string | null> {
   try {
-    raw = await readFile(path, "utf-8");
+    return await readFile(path, "utf-8");
   } catch {
     return null;
   }
+}
+
+function parseLock(raw: string | null): LockPayload | null {
+  if (raw === null) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
     if (typeof parsed.pid === "number") {
@@ -67,17 +88,41 @@ async function readLock(path: string): Promise<LockPayload | null> {
   }
 }
 
-async function claim(path: string, payload: LockPayload): Promise<void> {
-  // O_EXCL gives an atomic claim: two simultaneous starters cannot both win.
+async function readLock(path: string): Promise<LockPayload | null> {
+  return parseLock(await readLockRaw(path));
+}
+
+/** O_EXCL create-and-write: exclusive, but briefly shows an empty file. */
+async function claimExclusive(path: string, body: string): Promise<void> {
   const handle = await open(
     path,
     fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0),
     0o644,
   );
   try {
-    await handle.writeFile(JSON.stringify(payload), "utf-8");
+    await handle.writeFile(body, "utf-8");
   } finally {
     await handle.close();
+  }
+}
+
+/**
+ * Publish `body` at `path` only if nothing is there (EEXIST otherwise). The
+ * body is written to a private file first and hard-linked into place, so the
+ * lock appears complete or not at all. A filesystem without hard links falls
+ * back to the O_EXCL write.
+ */
+async function claim(path: string, body: string, pauses?: RuntimeLockPauses): Promise<void> {
+  const staged = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(staged, body, { encoding: "utf-8", mode: 0o644, flag: "wx" });
+  try {
+    await pauses?.beforePublish?.();
+    await link(staged, path);
+  } catch (e) {
+    if (!NO_HARD_LINK_CODES.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
+    await claimExclusive(path, body);
+  } finally {
+    await unlink(staged).catch(() => undefined);
   }
 }
 
@@ -90,50 +135,54 @@ export async function acquireRuntimeLock(opts: {
   installRoot: string;
   channelType: string;
   logger?: Logger;
+  pauses?: RuntimeLockPauses;
 }): Promise<AcquireResult> {
   const lockPath = join(opts.installRoot, ".strada", LOCK_FILE_NAME);
-  const payload: LockPayload = {
+  const payload: LockPayload & { token: string } = {
     pid: process.pid,
     startedAtIso: new Date().toISOString(),
     channel: opts.channelType,
+    // Makes every claim's bytes unique, so "is it still ours" is exact.
+    token: randomBytes(8).toString("hex"),
   };
+  const body = JSON.stringify(payload);
 
-  const existing = await readLock(lockPath);
+  const existingRaw = await readLockRaw(lockPath);
+  const existing = parseLock(existingRaw);
   if (existing && isProcessAlive(existing.pid) && existing.pid !== process.pid) {
     return { acquired: false, holder: existing };
   }
-  if (existing) {
+  await opts.pauses?.afterJudging?.();
+  if (existingRaw !== null) {
     opts.logger?.info("Removing stale runtime lock", {
-      stalePid: existing.pid,
-      startedAtIso: existing.startedAtIso,
+      stalePid: existing?.pid,
+      startedAtIso: existing?.startedAtIso,
     });
-    try {
-      await rm(lockPath, { force: true });
-    } catch {
-      // Unlink raced or failed — O_EXCL below arbitrates the real claim.
-    }
+    // Only the lock that was judged: a fresh claim that replaced it meanwhile
+    // survives, and the claim below then loses to it.
+    await removeLockIfUnchanged(lockPath, existingRaw);
   }
 
   await mkdirSafe(dirname(lockPath));
   let claimed = false;
   try {
-    await claim(lockPath, payload);
+    await claim(lockPath, body, opts.pauses);
     claimed = true;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
 
   if (!claimed) {
-    // Lost the O_EXCL race — either a fresh legitimate claim landed between our
-    // stale-check and claim, or an UNPARSEABLE (corrupt) leftover survived the
-    // stale branch above (readLock returned null so it was never removed).
-    // Re-arbitrate exactly once: clear it only when it is still not a LIVE
-    // holder's claim, then retry the atomic claim.
-    const incumbent = await readLock(lockPath);
+    // Lost the claim — either a fresh legitimate claim landed between our
+    // stale-check and claim, or an UNPARSEABLE (corrupt) leftover from an
+    // older version survived. Re-arbitrate exactly once: clear it only when it
+    // is still not a LIVE holder's claim, then retry the atomic claim.
+    const incumbentRaw = await readLockRaw(lockPath);
+    const incumbent = parseLock(incumbentRaw);
     if (!incumbent || !isProcessAlive(incumbent.pid)) {
       try {
-        await rm(lockPath, { force: true });
-        await claim(lockPath, payload);
+        if (incumbentRaw !== null) await removeLockIfUnchanged(lockPath, incumbentRaw);
+        await claim(lockPath, body);
         claimed = true;
       } catch (e2) {
         if ((e2 as NodeJS.ErrnoException).code !== "EEXIST") throw e2;
@@ -152,13 +201,8 @@ export async function acquireRuntimeLock(opts: {
     release: async () => {
       if (released) return;
       released = true;
-      const current = await readLock(lockPath);
-      if (current?.pid !== process.pid) return; // a successor took over; do not clobber
-      try {
-        await rm(lockPath, { force: true });
-      } catch {
-        // Already gone — releasing twice is fine.
-      }
+      // A successor's claim has other bytes and is left alone.
+      await removeLockIfUnchanged(lockPath, body);
     },
   };
 }

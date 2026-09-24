@@ -317,7 +317,7 @@ async function claimLockPath(lockPath: string, body: string): Promise<boolean> {
  *
  * Returns true only when the judged file was the one removed.
  */
-async function removeLockIfUnchanged(lockPath: string, expected: string): Promise<boolean> {
+export async function removeLockIfUnchanged(lockPath: string, expected: string): Promise<boolean> {
   const grave = `${lockPath}.abandoned.${process.pid}.${randomBytes(4).toString("hex")}`;
   try {
     await rename(lockPath, grave);
