@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,17 +55,54 @@ interface BackgroundExecutorLike {
 interface LockContent {
   pid: number;
   timestamp: number;
-  startTime: number;
+  startTime?: number;
+  token?: string;
 }
 
+/** Holder start times within this margin are the same process (clock and tick rounding). */
+const START_TIME_MARGIN_MS = 5000;
+/** USER_HZ: the unit of /proc/<pid>/stat starttime, fixed at 100 by the Linux user ABI. */
+const LINUX_CLOCK_TICKS_PER_SECOND = 100;
+
 /**
- * Returns the approximate process start time.
- * Note: This is calculated as Date.now() - process.uptime() and may be
- * off by a few milliseconds due to event loop timing, but is sufficient
- * for PID reuse detection where we allow a 5-second margin.
+ * When `pid` started (ms since the epoch) as the OS reports it, or null when
+ * that cannot be determined here. The update lock compares THE HOLDER's start
+ * time with the one it recorded; comparing the checker's own start time (as
+ * before) judged every live holder that started >5 s apart from the checker
+ * as "PID reuse" and broke its lock mid-update (COR-3).
  */
+export function readProcessStartTime(pid: number): number | null {
+  try {
+    if (process.platform === "linux") {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      // Fields after "(comm) ": state is field 3, starttime field 22.
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const startTicks = Number(fields[19]);
+      const btime = fs.readFileSync("/proc/stat", "utf-8").split("\n").find((line) => line.startsWith("btime "));
+      const bootSeconds = Number(btime?.slice("btime ".length));
+      if (!Number.isFinite(startTicks) || !Number.isFinite(bootSeconds) || !btime) return null;
+      return bootSeconds * 1000 + (startTicks * 1000) / LINUX_CLOCK_TICKS_PER_SECOND;
+    }
+    const probe = process.platform === "win32"
+      ? spawnSync("powershell.exe", [
+        "-NoProfile", "-NonInteractive", "-Command",
+        `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
+      ], { encoding: "utf-8", timeout: 10_000, windowsHide: true })
+      : spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf-8", timeout: 5_000 });
+    if (probe.status !== 0 || typeof probe.stdout !== "string") return null;
+    const parsed = Date.parse(probe.stdout.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+let ownStartTime: number | null = null;
+
+/** This process's start time, measured the way a checker will measure it. */
 function getProcessStartTime(): number {
-  return Date.now() - process.uptime() * 1000;
+  ownStartTime ??= readProcessStartTime(process.pid) ?? Date.now() - process.uptime() * 1000;
+  return ownStartTime;
 }
 
 interface AutoUpdaterOptions {
@@ -1177,34 +1215,43 @@ export class AutoUpdater {
   }
 
   private isLockStale(content: LockContent): boolean {
-    // Check timestamp-based staleness
-    if (Date.now() - content.timestamp > STALE_LOCK_MAX_AGE) {
-      return true;
-    }
-
     // Check if PID is still alive
     try {
       process.kill(content.pid, 0);
-    } catch {
-      // PID is dead — lock is stale
-      return true;
+    } catch (err) {
+      // PID is dead — lock is stale (EPERM: alive, owned by another user)
+      if ((err as NodeJS.ErrnoException).code !== "EPERM") return true;
     }
 
-    // PID exists — check startTime to detect PID reuse
-    if (content.startTime) {
-      const currentStartTime = getProcessStartTime();
-      if (Math.abs(currentStartTime - content.startTime) > 5000) {
-        // Different process with reused PID — lock is stale
-        return true;
-      }
+    // PID exists — compare ITS start time with the one the holder recorded to
+    // detect PID reuse. A match is a live update, however long it has run.
+    const holderStartTime = typeof content.startTime === "number" ? readProcessStartTime(content.pid) : null;
+    if (holderStartTime !== null) {
+      return Math.abs(holderStartTime - content.startTime!) > START_TIME_MARGIN_MS;
     }
 
-    // Lock is held by a valid process
-    return false;
+    // The holder cannot be identified: a live PID holds the lock until it is
+    // old enough that no update can still be running under it.
+    return Date.now() - content.timestamp > STALE_LOCK_MAX_AGE;
   }
 
   private getLockPath(): string {
     return path.join(this.installRoot, ".strada-update.lock");
+  }
+
+  /** Exactly what this updater wrote, so release only ever removes OUR lock. */
+  private heldLockBody: string | null = null;
+
+  private tryCreateLock(lockPath: string): boolean {
+    const body = JSON.stringify({
+      pid: process.pid,
+      timestamp: Date.now(),
+      startTime: getProcessStartTime(),
+      token: randomBytes(8).toString("hex"),
+    } satisfies LockContent);
+    fs.writeFileSync(lockPath, body, { encoding: "utf-8", flag: "wx" });
+    this.heldLockBody = body;
+    return true;
   }
 
   acquireLock(): boolean {
@@ -1212,12 +1259,7 @@ export class AutoUpdater {
 
     // Atomic write attempt first — eliminates TOCTOU race
     try {
-      fs.writeFileSync(
-        lockPath,
-        JSON.stringify({ pid: process.pid, timestamp: Date.now(), startTime: getProcessStartTime() }),
-        { encoding: "utf-8", flag: "wx" },
-      );
-      return true;
+      return this.tryCreateLock(lockPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
         return false;
@@ -1246,21 +1288,21 @@ export class AutoUpdater {
 
     // Retry after removing stale lock
     try {
-      fs.writeFileSync(
-        lockPath,
-        JSON.stringify({ pid: process.pid, timestamp: Date.now(), startTime: getProcessStartTime() }),
-        { encoding: "utf-8", flag: "wx" },
-      );
-      return true;
+      return this.tryCreateLock(lockPath);
     } catch {
       return false;
     }
   }
 
   releaseLock(): void {
+    const body = this.heldLockBody;
+    this.heldLockBody = null;
+    if (!body) return;
     try {
       const lockPath = this.getLockPath();
-      if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+      // A lock that is no longer ours (broken as stale and re-taken by
+      // another updater) is theirs to release, not ours.
+      if (fs.readFileSync(lockPath, "utf-8") === body) fs.unlinkSync(lockPath);
     } catch {
       // Best-effort cleanup
     }
