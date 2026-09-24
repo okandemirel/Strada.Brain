@@ -58,6 +58,9 @@ function suggestCanvasMode(): void {
   }
 }
 
+/** Stamped on every server task_update (MonitorTask.serverSeq). */
+let serverTaskUpdateSeq = 0
+
 /** Narrow an untyped payload field to a string, else `undefined`. */
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
@@ -131,6 +134,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       if (typeof src.elapsed === 'number') updates.elapsed = src.elapsed
       if (typeof src.error === 'string') updates.narrative = src.error
       if (src.progress && typeof src.progress === 'object') updates.progress = src.progress as MonitorTask['progress']
+      updates.serverSeq = ++serverTaskUpdateSeq
       useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, updates)
       break
     }

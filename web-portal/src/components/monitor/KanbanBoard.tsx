@@ -321,6 +321,7 @@ export default function KanbanBoard() {
     // Optimistic update with rollback on WS failure
     const prevStatus = task.status
     const prevReviewStatus = task.reviewStatus
+    const serverSeqAtMove = task.serverSeq
     updateTask(taskId, updates)
 
     const sent = sendRawJSON({
@@ -339,6 +340,7 @@ export default function KanbanBoard() {
     } else {
       // Rollback if no server confirmation within 5s
       const rollbackTimer = setTimeout(() => {
+        unsub()
         const current = tasksRef.current[taskId]
         if (current && current.status === newStatus && current.reviewStatus === newReviewStatus) {
           updateTask(taskId, { status: prevStatus, reviewStatus: prevReviewStatus })
@@ -348,7 +350,10 @@ export default function KanbanBoard() {
       }, 5000)
       const unsub = useMonitorStore.subscribe((state) => {
         const t = state.tasks[taskId]
-        if (t && (t.status !== prevStatus || t.reviewStatus !== prevReviewStatus)) {
+        // Only the server's own task_update for this card settles the move. The
+        // optimistic update already differs from the previous status, so "any
+        // change" let an unrelated activity entry cancel the rollback (WEB-8).
+        if (t && t.serverSeq !== serverSeqAtMove) {
           clearTimeout(rollbackTimer)
           unsub()
           // Remove from cleanup list once resolved

@@ -53,6 +53,11 @@ export interface MonitorTask {
     files?: string[]
   }>
   expandedByUser?: boolean
+  /**
+   * Changes with every server `monitor:task_update` for this card, so an
+   * optimistic edit can tell the server's answer from any other store change.
+   */
+  serverSeq?: number
 }
 
 export interface DagState {
