@@ -245,6 +245,23 @@ describe("SetupWizard path validation", () => {
     expect(explicit.filter((l) => l.startsWith("STRADA_DAEMON_ENABLED="))).toHaveLength(1);
   });
 
+  it("writes STRADA_MCP_ALLOW_PROJECT_LOCAL only when the save states it (COR-12)", () => {
+    const unstated = buildSetupEnvLines({ PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk" }, homedir(), 3000);
+    expect(unstated.some((l) => l.startsWith("STRADA_MCP_ALLOW_PROJECT_LOCAL="))).toBe(false);
+    const yes = buildSetupEnvLines(
+      { PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", STRADA_MCP_ALLOW_PROJECT_LOCAL: "true" },
+      homedir(),
+      3000,
+    );
+    expect(yes).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    const junk = buildSetupEnvLines(
+      { PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", STRADA_MCP_ALLOW_PROJECT_LOCAL: "yes please" },
+      homedir(),
+      3000,
+    );
+    expect(junk.some((l) => l.startsWith("STRADA_MCP_ALLOW_PROJECT_LOCAL="))).toBe(false);
+  });
+
   it("writes STRADA_DAEMON_ENABLED=false for an explicit opt-out (guard)", () => {
     const lines = buildSetupEnvLines({ PROVIDER_CHAIN: "kimi", KIMI_API_KEY: "sk", STRADA_DAEMON_ENABLED: "false" }, homedir(), 3000);
     expect(lines).toContain("STRADA_DAEMON_ENABLED=false");
@@ -1095,6 +1112,57 @@ describe("SetupWizard path validation", () => {
         mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
       }),
     );
+  });
+
+  it("records consent for a Strada.MCP the operator installed through the wizard (COR-12)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const unityProjectDir = fs.mkdtempSync(path.join(homedir(), "strada-setup-mcp-trust-"));
+    tmpDirs.push(unityProjectDir);
+    fs.mkdirSync(path.join(unityProjectDir, "Assets"), { recursive: true });
+    fs.mkdirSync(path.join(unityProjectDir, "ProjectSettings"), { recursive: true });
+    installStradaMcpSubmoduleMock.mockImplementation(async (projectPath: string) => {
+      const submodulePath = path.join(projectPath, "Packages", "Submodules", "Strada.MCP");
+      fs.mkdirSync(submodulePath, { recursive: true });
+      return {
+        kind: "ok" as const,
+        value: {
+          target: "packages",
+          submodulePath,
+          unityPackagePath: path.join(submodulePath, "unity-package", "com.strada.mcp"),
+          manifestPath: path.join(projectPath, "Packages", "manifest.json"),
+          manifestDependency: "file:Submodules/Strada.MCP/unity-package/com.strada.mcp",
+          npmInstallRan: false,
+        },
+      };
+    });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const internals = wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    };
+    internals.readBody = async () => JSON.stringify({ projectPath: unityProjectDir, target: "packages" });
+    const install = makeResponse();
+    await internals.handleRequest(
+      { url: "/api/setup/install-mcp", method: "POST", headers: { "x-csrf-token": internals.csrfToken } },
+      install.response,
+    );
+    expect(install.read().statusCode).toBe(200);
+
+    const saved = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: unityProjectDir,
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+    expect(saved.read().statusCode).toBe(200);
+    expect(fs.readFileSync(path.join(tempCwd, ".env"), "utf-8")).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
   });
 
   it("installs Strada Core through the setup install-dep API", async () => {
