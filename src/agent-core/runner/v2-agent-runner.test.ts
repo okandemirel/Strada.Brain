@@ -906,6 +906,32 @@ describe("V2AgentRunner — a signal already aborted when the run opens", () => 
     expect(result.status).not.toBe("blocked");
   });
 
+  it("a cancel during a provider backoff ends the run without sitting out the backoff", async () => {
+    const health = mkHealth({ backoffMs: () => 60_000 });
+    const handles = mkPlane({ healthCore: health });
+    const controller = new AbortController();
+    const gateway = new ModelGateway(scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), {
+      onClassifyFailure: () => {
+        health.recordFailure();
+        // The user cancels one second into the 60 s backoff.
+        handles.clock.setTimer(1000, () => controller.abort());
+      },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), { ...mkIO("background"), externalSignal: controller.signal }));
+
+    expect(result.cancelReason).toEqual({ kind: "user-cancel" });
+    const events = handles.events();
+    const backoff = events.find((e) => e.type === "backoff")!;
+    const ended = events.find((e) => e.type === "run.ended")!;
+    // drive() advances in 5 s strides (a few for the terminal awaits); without the wake the
+    // run sat out the full 60 s backoff.
+    expect(ended.ts - backoff.ts).toBeLessThanOrEqual(15_000);
+    expect(events.filter((e) => e.type === "model.call.started")).toHaveLength(1);
+  });
+
   it("removes its abort listener when the run ends", async () => {
     const handles = mkPlane();
     const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));

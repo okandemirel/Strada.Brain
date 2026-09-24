@@ -18,12 +18,29 @@
 
 import type { AgentRunEventBus } from "./event-bus.js";
 import type { Clock } from "../control/clock.js";
+import type { CancelToken } from "../control/cancel-token.js";
 import type { EmittableEvent } from "./agent-event.js";
 
-/** Promise-wrap a Clock timer so the run-scoped sleep is fake-able under FakeClock. */
-function sleep(clock: Clock, ms: number): Promise<void> {
+/**
+ * Promise-wrap a Clock timer so the run-scoped sleep is fake-able under FakeClock. With a
+ * `cancel` token the sleep ends the moment it aborts (a cancelled run must not sit out a
+ * provider backoff of minutes); the caller's next gate tick sees the reason and stops.
+ */
+function sleep(clock: Clock, ms: number, cancel?: CancelToken): Promise<void> {
   return new Promise<void>((resolve) => {
-    clock.setTimer(ms, resolve);
+    if (cancel?.aborted) {
+      resolve();
+      return;
+    }
+    let unsubscribe: (() => void) | undefined;
+    const handle = clock.setTimer(ms, () => {
+      unsubscribe?.();
+      resolve();
+    });
+    unsubscribe = cancel?.onAbort(() => {
+      clock.clearTimer(handle);
+      resolve();
+    });
   });
 }
 
@@ -41,10 +58,11 @@ export async function guardedSleep(
   clock: Clock,
   ms: number,
   beat: EmittableEvent, // REQUIRED: cannot sleep without an event to emit first
+  cancel?: CancelToken, // wakes the sleep early when the run's task token aborts
 ): Promise<void> {
   bus.emit(beat); // append THEN sink — heartbeat is in the log first
   if (ms <= 0) return;
-  await sleep(clock, ms);
+  await sleep(clock, ms, cancel);
 }
 
 /**

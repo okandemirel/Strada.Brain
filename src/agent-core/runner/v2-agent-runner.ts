@@ -52,6 +52,7 @@ import type { RunClock, CallLimits } from "../control/run-clock.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { FailureLedger, RunVerdict, VerdictInput } from "../control/failure-ledger.js";
 import type { CancelReason } from "../control/cancel-reason.js";
+import type { CancelToken } from "../control/cancel-token.js";
 import { describeCancelReason, isBenign } from "../control/cancel-reason.js";
 import { mapVerdictToLoopAction } from "../control/verdict-loop-action.js";
 import type { Clock } from "../control/clock.js";
@@ -433,7 +434,7 @@ export class V2AgentRunner implements AgentRunner {
           }
           if (gate.decision === "ask_user") {
             // ask_user at the gate: interactive emits + continues; background YIELDS "blocked".
-            const yielded = await this.handleYield(bus, clock, io, emit, gate);
+            const yielded = await this.handleYield(bus, clock, io, emit, gate, undefined, runClock.taskToken);
             if (yielded === "blocked") {
               terminalStatus = "blocked";
               // Same distinction as the provider-failure yield below: a gate
@@ -461,7 +462,7 @@ export class V2AgentRunner implements AgentRunner {
             // ever does: back off (emitting the beat first), then FALL THROUGH to take the step — the step's success is what clears
             // the failure run. Re-looping to the gate here would spin (the failure state is not
             // cleared until a call succeeds), so the backoff-then-step is the correct shape.
-            await this.handleYield(bus, clock, io, emit, gate);
+            await this.handleYield(bus, clock, io, emit, gate, undefined, runClock.taskToken);
           }
           // continue / (post-backoff) retry / pause fall through to the step.
 
@@ -620,7 +621,9 @@ export class V2AgentRunner implements AgentRunner {
               break epochLoop;
             }
             // retry / pause / ask_user → single owner: handleYield (emits before+after backoff).
-            const yielded = await this.handleYield(bus, clock, io, emit, failVerdict, action.backoffMs);
+            // The task token wakes the backoff early: a /cancel is seen at the next gate tick,
+            // not after minutes of provider backoff.
+            const yielded = await this.handleYield(bus, clock, io, emit, failVerdict, action.backoffMs, runClock.taskToken);
             if (yielded === "blocked") {
               terminalStatus = "blocked";
               // A provider outage is NOT a question for a human. Tagging every
@@ -1089,6 +1092,7 @@ export class V2AgentRunner implements AgentRunner {
     emit: (e: Parameters<AgentRunEventBus["emit"]>[0]) => number,
     verdict: RunVerdict,
     backoffMs?: number,
+    cancel?: CancelToken,
   ): Promise<"continue" | "blocked"> {
     switch (verdict.decision) {
       case "retry": {
@@ -1097,13 +1101,13 @@ export class V2AgentRunner implements AgentRunner {
           type: "backoff",
           ms,
           reason: verdict.guidance ?? "retry",
-        });
+        }, cancel);
         return "continue";
       }
       case "pause": {
         // Recoverable: the call was already dropped (call.leave in the finally); retry under a
         // fresh scope next iteration. Emit a heartbeat so there is no silent spin.
-        await guardedSleep(bus, clock, backoffMs ?? 0, { type: "heartbeat", source: "loop-yield" });
+        await guardedSleep(bus, clock, backoffMs ?? 0, { type: "heartbeat", source: "loop-yield" }, cancel);
         return "continue";
       }
       case "ask_user": {
@@ -1114,7 +1118,7 @@ export class V2AgentRunner implements AgentRunner {
           await guardedSleep(bus, clock, verdict.backoffMs, {
             type: "heartbeat",
             source: "loop-yield",
-          });
+          }, cancel);
           return "continue";
         }
         // BACKGROUND ask_user → YIELD "blocked".

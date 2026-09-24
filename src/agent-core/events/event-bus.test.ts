@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { FakeClock } from "../control/clock.js";
+import { createCancelToken } from "../control/cancel-token.js";
 import { createAgentRunEventBus } from "./event-bus.js";
 import { createBoundedSink } from "./bounded-sink.js";
 import { guardedSleep, assertEmittedSince } from "./heartbeat-guard.js";
@@ -135,6 +136,28 @@ describe("heartbeat invariant", () => {
     await guardedSleep(bus, clock, 0, { type: "heartbeat", source: "model-keepalive" });
     expect(bus.log).toHaveLength(1);
     expect(bus.log[0].type).toBe("heartbeat");
+  });
+
+  it("guardedSleep with a cancel token wakes when it aborts and leaves no timer behind", async () => {
+    const clock = new FakeClock();
+    const bus = createAgentRunEventBus({ runId: "r", clock });
+    const token = createCancelToken();
+    let woke = false;
+    const p = guardedSleep(bus, clock, 60_000, { type: "heartbeat", source: "loop-yield" }, token).then(() => {
+      woke = true;
+    });
+
+    clock.advance(1000);
+    await Promise.resolve();
+    expect(woke).toBe(false);
+    token.cancel({ kind: "user-cancel" });
+    await p;
+    expect(clock.now()).toBe(1000); // not the remaining 59 s
+    expect(clock.pendingTimers()).toBe(0);
+
+    // An already-cancelled token does not sleep at all.
+    await guardedSleep(bus, clock, 60_000, { type: "heartbeat", source: "loop-yield" }, token);
+    expect(clock.pendingTimers()).toBe(0);
   });
 
   it("assertEmittedSince throws when the head did NOT advance across a wait-point", () => {
