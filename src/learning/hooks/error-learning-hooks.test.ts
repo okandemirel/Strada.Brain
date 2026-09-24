@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { ErrorLearningHooks, type ErrorContext, type ResolutionContext } from "./error-learning-hooks.ts";
+import {
+  ErrorLearningHooks,
+  MAX_TRACKED_ERRORS,
+  TRACKED_ERROR_TTL_MS,
+  type ErrorContext,
+  type ResolutionContext,
+} from "./error-learning-hooks.ts";
 import { LearningPipeline } from "../pipeline/learning-pipeline.ts";
 import { PatternMatcher } from "../matching/pattern-matcher.ts";
 import { ConfidenceScorer } from "../scoring/confidence-scorer.ts";
@@ -550,5 +556,66 @@ describe("recovery evidence goes through the pipeline's lifecycle (LRN-11)", () 
     const after = storage.getInstinct("rule_retired")!;
     expect(after.confidence).toBeGreaterThan(0.7);
     expect(after.status).toBe("deprecated");
+  });
+});
+
+// LRN-6: one hooks instance serves the whole process, and an error nobody
+// resolved was never forgotten, each entry holding the whole tool output.
+describe("tracked errors are bounded (LRN-6)", () => {
+  let storage: LearningStorage;
+  let hooks: ErrorLearningHooks;
+  let tempDir: string;
+
+  function failure(i: number, at = new Date()): ErrorContext {
+    return {
+      sessionId: "s1",
+      toolName: "dotnet_build",
+      errorOutput: `error CS0246: type 'Missing${i}' not found ${"x".repeat(2_000)}`,
+      analysis: { hasErrors: true, errorCount: 1, summary: "1 missing_type", recoveryInjection: "" },
+      timestamp: at,
+    } as unknown as ErrorContext;
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "hooks-bounded-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    hooks = new ErrorLearningHooks(
+      new LearningPipeline(storage),
+      new PatternMatcher(storage),
+      new ConfidenceScorer(),
+      storage,
+    );
+    hooks.enable();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("10,000 unresolved errors keep the tracked set at the cap", () => {
+    for (let i = 0; i < 10_000; i++) hooks.onBeforeErrorAnalysis(failure(i));
+    expect(hooks.getStats().activeErrors).toBe(MAX_TRACKED_ERRORS);
+  });
+
+  it("the newest errors stay correlatable and an expired one is forgotten", async () => {
+    vi.useFakeTimers();
+    const first = hooks.onBeforeErrorAnalysis(failure(1));
+    vi.advanceTimersByTime(TRACKED_ERROR_TTL_MS + 1);
+    const second = hooks.onBeforeErrorAnalysis(failure(2));
+
+    expect(hooks.getStats().activeErrors).toBe(1);
+    // The live one still correlates: resolving it removes it from the tracked set.
+    await hooks.onAfterErrorResolution({
+      errorContext: failure(2),
+      action: "",
+      success: true,
+      correlationId: second.correlationId,
+      derivation: "observed-success",
+    });
+    expect(hooks.getStats().activeErrors).toBe(0);
+    expect(first.correlationId).not.toBe(second.correlationId);
   });
 });

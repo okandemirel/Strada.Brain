@@ -119,6 +119,21 @@ export interface ResolutionContext {
  */
 export const NON_APPLICATION_BETA = 0.25;
 
+/**
+ * Most unresolved errors tracked for correlation at once (LRN-6). One hooks
+ * instance serves every run in the process, and an error that is never resolved
+ * (a tool that never succeeds again, a resolution outside the link window) was
+ * never deleted, each entry holding the whole tool output.
+ */
+export const MAX_TRACKED_ERRORS = 256;
+
+/**
+ * How long an unresolved error stays correlatable: far past every window a
+ * resolution is reported in (120 s in the recovery engine, 5 min in the
+ * pipeline).
+ */
+export const TRACKED_ERROR_TTL_MS = 30 * 60 * 1000;
+
 /** Verdict score a successfully resolved error credits its applied rule with. */
 const RESOLVED_VERDICT_SCORE = 0.9;
 
@@ -182,8 +197,11 @@ export class ErrorLearningHooks {
   private storage: LearningStorage;
   private enabled = false;
 
-  /** Track active errors for resolution correlation */
-  private activeErrors = new Map<string, ErrorContext>();
+  /**
+   * Track active errors for resolution correlation, oldest first, bounded by
+   * MAX_TRACKED_ERRORS and TRACKED_ERROR_TTL_MS.
+   */
+  private activeErrors = new Map<string, { context: ErrorContext; trackedAt: number }>();
 
   /**
    * WHAT WAS SHOWN, per active error, and when. A run repaired some other way
@@ -279,7 +297,7 @@ export class ErrorLearningHooks {
 
     // Store error for later correlation with resolution
     const errorId = this.generateErrorId(context);
-    this.activeErrors.set(errorId, context);
+    this.trackError(errorId, context);
     // Only guidance that actually reached the prompt counts as shown.
     if (recoveryInjection.length > 0 && matches.length > 0) {
       const shown = {
@@ -707,6 +725,23 @@ export class ErrorLearningHooks {
     return hash;
   }
 
+  /** Track an error for correlation, then drop what is too old or too many. */
+  private trackError(errorId: string, context: ErrorContext): void {
+    const now = Date.now();
+    // Re-inserted, so a re-analysed error counts as the newest.
+    this.activeErrors.delete(errorId);
+    this.activeErrors.set(errorId, { context, trackedAt: now });
+    for (const [id, entry] of this.activeErrors) {
+      const overCap = this.activeErrors.size > MAX_TRACKED_ERRORS;
+      if (!overCap && now - entry.trackedAt <= TRACKED_ERROR_TTL_MS) break; // the rest are newer
+      if (id === errorId) break;
+      this.activeErrors.delete(id);
+      // Guidance shown for an error nobody resolved was never judged: counted,
+      // not silently dropped.
+      if (this.shownGuidance.delete(id)) this.unjudgedExposures += 1;
+    }
+  }
+
   // ─── Utility Methods ─────────────────────────────────────────────────────────
 
   /**
@@ -737,5 +772,6 @@ export class ErrorLearningHooks {
    */
   clearActiveErrors(): void {
     this.activeErrors.clear();
+    this.shownGuidance.clear();
   }
 }
