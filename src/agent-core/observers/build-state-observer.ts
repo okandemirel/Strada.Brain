@@ -16,7 +16,12 @@ interface BuildStateRef {
 
 export class BuildStateObserver implements Observer {
   readonly name = "build-state-observer";
-  private lastReportedState: boolean | null = null;
+  /**
+   * What was last reported: the build state AND, for a failure, whether it was actionable.
+   * Latching on the build state alone meant a failure first seen as non-actionable (nothing
+   * pending, or the guardian owning it) was never re-reported once it became actionable.
+   */
+  private lastReportedKey: string | null = null;
 
   /**
    * @param repairOwnedElsewhere True while another subsystem owns repairing
@@ -37,16 +42,23 @@ export class BuildStateObserver implements Observer {
 
   collect(): AgentObservation[] {
     const state = this.buildState.getState();
+    const ownedElsewhere = state.lastBuildOk === false && this.repairOwnedElsewhere();
+    const fileCount = state.pendingFiles.size;
+    const key =
+      state.lastBuildOk === null ? "unknown"
+      : state.lastBuildOk ? "ok"
+      : ownedElsewhere ? "failed:owned"
+      : fileCount === 0 ? "failed:nothing-pending"
+      : "failed:actionable";
 
     // Only report on state changes
-    if (state.lastBuildOk === this.lastReportedState) {
+    if (key === this.lastReportedKey) {
       return [];
     }
 
-    this.lastReportedState = state.lastBuildOk;
+    this.lastReportedKey = key;
 
     if (state.lastBuildOk === false) {
-      const fileCount = state.pendingFiles.size;
       // A FAILURE WITH NOTHING PENDING NAMES NOTHING TO FIX. Measured live
       // 2026-09-05: "Build failed with 0 pending file(s)" was raised nine
       // times at priority 85, and each one became a task telling an agent to
@@ -54,7 +66,7 @@ export class BuildStateObserver implements Observer {
       // file to look at. Those agents went looking for something to repair and
       // edited the Unity project instead. The state is still reported — it is
       // real — but it is not actionable work until something names what broke.
-      if (this.repairOwnedElsewhere()) {
+      if (ownedElsewhere) {
         return [
           createObservation(
             "build",

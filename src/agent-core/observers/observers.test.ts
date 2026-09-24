@@ -153,6 +153,28 @@ describe("BuildStateObserver", () => {
     expect(observer.collect()).toHaveLength(0);
     expect(observer.collect()).toHaveLength(0); // No change
   });
+
+  it("re-reports a still-failing build once it becomes actionable", () => {
+    // First seen with nothing pending and while the guardian owned it (non-actionable); the build
+    // stays red, then files are pending and the guardian lets go — that is new, actionable work.
+    const pending = new Set<string>();
+    let owned = true;
+    const buildState = {
+      getState: () => ({ pendingFiles: pending, hasCompilableChanges: true, lastBuildOk: false }),
+    };
+    const observer = new BuildStateObserver(buildState, () => owned);
+    expect(observer.collect()[0]!.actionable).toBe(false);
+
+    owned = false;
+    expect(observer.collect()[0]!.actionable).toBe(false); // still nothing pending
+
+    pending.add("Assets/Scripts/Board.cs");
+    const obs = observer.collect();
+    expect(obs).toHaveLength(1);
+    expect(obs[0]!.priority).toBe(85);
+    expect(obs[0]!.actionable).not.toBe(false);
+    expect(observer.collect()).toHaveLength(0); // reported once
+  });
 });
 
 describe("GitStateObserver", () => {
