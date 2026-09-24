@@ -6,6 +6,11 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "!dist/tests",
+    "!dist/test-helpers.*",
+    "!dist/**/test-support",
+    "!dist/**/__tests__",
+    "!dist/**/.*",
     "scripts/source-launcher.mjs",
     "scripts/ci/boot-smoke.mjs",
     "README.md",
