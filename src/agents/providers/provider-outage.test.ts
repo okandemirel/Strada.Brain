@@ -19,6 +19,21 @@ describe("allProvidersCoolingDownMs", () => {
     expect(allProvidersCoolingDownMs()).toBe(0);
   });
 
+  it("matches a chain declared as \"anthropic\" to the health Claude records under \"claude\" (PRV-18)", () => {
+    // ClaudeProvider.name is always "claude"; the chain token was compared
+    // raw, found no entry, and the outage read as "someone is free".
+    registry.recordQuotaExhausted("claude", "HTTP 403: quota exceeded");
+    registry.recordQuotaExhausted("p-other", "HTTP 403: quota exceeded");
+    try {
+      setLiveChainMemberNames(["anthropic", "p-other"]);
+      expect(allProvidersCoolingDownMs()).toBeGreaterThan(60 * 60 * 1000);
+      setLiveChainMemberNames(["Anthropic Claude", "p-other"]);
+      expect(allProvidersCoolingDownMs()).toBeGreaterThan(60 * 60 * 1000);
+    } finally {
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("still reports the wait when every declared member is cooling", () => {
     registry.recordOverloaded("p-cool", "quota");
     registry.recordOverloaded("p-other", "quota");

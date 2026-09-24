@@ -11,25 +11,37 @@
  * outage measured as "someone is free" and retries fired into the wall.
  */
 import { ProviderHealthRegistry } from "./provider-health.js";
+import { canonicalizeProviderName } from "./provider-identity.js";
 
 const liveChainMemberNames = new Set<string>();
+
+/**
+ * One key per provider, as health entries are keyed. Chain tokens are raw
+ * config names, and health is canonical AND keyed on what the provider calls
+ * itself: a chain configured as "anthropic" builds a ClaudeProvider that
+ * records under "claude". Compared raw, that member never matched its own
+ * entry and every outage measured as "someone is free".
+ */
+function memberKey(name: string): string {
+  const canonical = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+  return canonical === "anthropic" ? "claude" : canonical;
+}
 
 /** Called by bootstrap once the provider chain's final order is known. */
 export function setLiveChainMemberNames(names: readonly string[]): void {
   liveChainMemberNames.clear();
   for (const name of names) {
-    const n = name.trim().toLowerCase();
+    const n = name.trim() ? memberKey(name) : "";
     if (n) liveChainMemberNames.add(n);
   }
 }
 
 export function isCurrentChainMemberName(registryName: string): boolean {
-  const n = registryName.toLowerCase();
-  if (n.startsWith("chain(")) return false;
+  if (registryName.toLowerCase().startsWith("chain(")) return false;
   // Until bootstrap declares the chain, keep the permissive legacy reading —
   // a wrongly-empty set must fail toward "retry sooner", never "wait longer".
   if (liveChainMemberNames.size === 0) return true;
-  return liveChainMemberNames.has(n);
+  return liveChainMemberNames.has(memberKey(registryName));
 }
 
 /**
@@ -64,7 +76,7 @@ export function allProvidersCoolingDownMs(): number {
     // two working providers in the chain.
     if (liveChainMemberNames.size > 0) {
       const seen = new Set<string>();
-      for (const [name] of entries) seen.add(name.toLowerCase());
+      for (const [name] of entries) seen.add(memberKey(name));
       for (const member of liveChainMemberNames) {
         if (!seen.has(member)) return 0;
       }
