@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   IAIProvider,
   ConversationMessage,
@@ -155,8 +156,11 @@ export class OllamaProvider implements IAIProvider {
   private parseResponse(data: OllamaResponse): ProviderResponse {
     const message = data.message;
     const text = message.content ?? "";
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc, i) => ({
-      id: `ollama-tc-${i}`,
+    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => ({
+      // Unique across the conversation, not per turn: "ollama-tc-0" recurred
+      // every turn, which Anthropic rejects on failover ("tool_use ids must be
+      // unique") and which mapped results onto the wrong call by id.
+      id: `ollama-${randomUUID()}`,
       name: tc.function.name,
       input: tc.function.arguments as import("../../types/index.js").JsonObject,
     }));

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { createHash } from "node:crypto";
 import type {
   IAIProvider,
   IStreamingProvider,
@@ -22,6 +23,19 @@ import { repairConversationToolPairing } from "./tool-pairing.js";
  * {@link ClaudeProvider}'s offline model list.
  */
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
+
+/**
+ * An Anthropic-legal tool id (`^[a-zA-Z0-9_-]+$`). Other providers' ids can
+ * break it — Kimi emits `functions.read_file:0` — and a failover to Claude
+ * then 400'd on the whole history. Legal ids pass through; others are
+ * sanitised with a hash suffix (so two foreign ids cannot collide), applied to
+ * the tool_use and its tool_result alike so the pair stays matched.
+ */
+export function toClaudeToolId(id: string): string {
+  if (/^[a-zA-Z0-9_-]+$/u.test(id)) return id;
+  const hash = createHash("sha256").update(id).digest("hex").slice(0, 8);
+  return `${id.replace(/[^a-zA-Z0-9_-]/gu, "_")}_${hash}`;
+}
 
 /** `anthropic-beta` value for OAuth-bearer requests (SDK: OAUTH_API_BETA_HEADER). */
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
@@ -263,7 +277,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
             } else if (block.type === "tool_result") {
               content.push({
                 type: "tool_result",
-                tool_use_id: block.tool_use_id,
+                tool_use_id: toClaudeToolId(block.tool_use_id),
                 content: block.content,
                 is_error: block.is_error,
               });
@@ -284,7 +298,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
           for (const tc of msg.tool_calls) {
             content.push({
               type: "tool_use",
-              id: tc.id,
+              id: toClaudeToolId(tc.id),
               name: tc.name,
               input: tc.input,
             });
