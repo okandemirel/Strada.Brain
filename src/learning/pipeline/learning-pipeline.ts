@@ -1505,7 +1505,7 @@ export class LearningPipeline {
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
-    this.enforceMaxInstincts();
+    this.enforceMaxInstinctsSafely(instinct.id);
     // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
     this.noteHighConfidenceInstinct(instinct);
     return instinct;
@@ -1575,7 +1575,7 @@ export class LearningPipeline {
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
-    this.enforceMaxInstincts();
+    this.enforceMaxInstinctsSafely(instinct.id);
     // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
     this.noteHighConfidenceInstinct(instinct);
     return instinct;
@@ -2079,7 +2079,32 @@ export class LearningPipeline {
    * proposed-dominated store the cap deleted the few reinforced ACTIVE rows
    * first, freed nothing else, and returned without a word.
    */
-  async enforceMaxInstincts(): Promise<{ evicted: number; remainingOverCap: number }> {
+  async enforceMaxInstincts(keepId?: string): Promise<{ evicted: number; remainingOverCap: number }> {
+    return this.evictOverCap(keepId);
+  }
+
+  /**
+   * The creation paths' eviction pass (LRN-18). It used to be the async method
+   * called without await or catch, so a storage error (SQLITE_BUSY, the DB
+   * closed during shutdown) became an unhandled rejection, which the process
+   * counts towards shutting the daemon down. It also could evict the instinct
+   * that had just been created and hand its now-dangling id to the caller.
+   */
+  private enforceMaxInstinctsSafely(keepId: string): void {
+    try {
+      this.evictOverCap(keepId);
+    } catch (err) {
+      try {
+        getLoggerSafe().warn("maxInstincts eviction failed; the next creation retries", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        // Logger may not be available in test environments
+      }
+    }
+  }
+
+  private evictOverCap(keepId?: string): { evicted: number; remainingOverCap: number } {
     const maxInstincts = this.config?.maxInstincts ?? 1000;
     const count = this.storage.countInstincts();
     if (count <= maxInstincts) return { evicted: 0, remainingOverCap: 0 };
@@ -2090,7 +2115,7 @@ export class LearningPipeline {
     for (const status of ["deprecated", "proposed", "active"] as const) {
       if (remaining <= 0) break;
       const before = this.storage.countInstincts();
-      this.storage.deleteLowestConfidenceInstincts(status, remaining);
+      this.storage.deleteLowestConfidenceInstincts(status, remaining, keepId);
       const deleted = before - this.storage.countInstincts();
       if (deleted > 0) evictedByStatus[status] = deleted;
       remaining -= deleted;

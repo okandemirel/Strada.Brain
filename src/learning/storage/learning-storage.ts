@@ -3236,16 +3236,17 @@ export class LearningStorage {
   }
 
   /** Delete the lowest-confidence instincts with a given status */
-  deleteLowestConfidenceInstincts(status: string, count: number): void {
+  /** `keepId` (the instinct just created) is never among those deleted. */
+  deleteLowestConfidenceInstincts(status: string, count: number, keepId?: string): void {
     const VALID_STATUSES = ['proposed', 'active', 'permanent', 'deprecated', 'evolved'];
     if (!VALID_STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     if (count <= 0) return;
     this.ensureConnection();
     this.db!.prepare(`
       DELETE FROM instincts WHERE id IN (
-        SELECT id FROM instincts WHERE status = ? ORDER BY confidence ASC LIMIT ?
+        SELECT id FROM instincts WHERE status = ? AND id != ? ORDER BY confidence ASC LIMIT ?
       )
-    `).run(status, count);
+    `).run(status, keepId ?? "", count);
   }
 
   /** Get an instinct by its trigger pattern, optionally filtered by scope type */
