@@ -33,8 +33,26 @@ const RECOVERY_WAIT_SLACK_MS = 10;
 
 /** Regex for provider-specific reasoning protocol errors that should fall through */
 const REASONING_CONTENT_RE = /reasoning_content/i;
-/** Regex for HTTP 400 errors caused by malformed request body or schema */
-const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
+/**
+ * A 400 that names a request shape EVERY provider would reject identically: a
+ * body that is not valid JSON, or a conversation with no messages. Only these
+ * (and an invalid tool schema, below) end the chain. Matching "invalid" was
+ * far too broad — nearly every vendor 400 carries `invalid_request_error`, so
+ * a credit wall, a context overflow or a provider-specific id rule ended the
+ * whole chain while a healthy sibling received zero calls.
+ */
+const UNIVERSAL_BAD_REQUEST_RE = /malformed|could not parse[\s\S]{0,40}json|invalid json|json[\s\S]{0,20}parse error|messages?:?[\s\S]{0,20}(?:is|are) required|at least one message/i;
+/**
+ * The provider's ACCOUNT cannot pay for this request (Anthropic "credit balance
+ * is too low", OpenAI `insufficient_quota`, DeepSeek/OpenRouter 402s). Often a
+ * 400: about this seat, not the request — bench it like a quota and fail over.
+ */
+const BILLING_RE = /credit balance|insufficient[_ ](?:quota|balance|credits?|funds)|payment required|API error 402\b|^402\b|billing details/i;
+/**
+ * Tool-call id format and call/result pairing rules differ per vendor (length,
+ * charset, uniqueness). A sibling with its own rules may accept the same history.
+ */
+const TOOL_CALL_ID_RULE_RE = /tool[_ ]?(?:call|use)[_ ]?ids?\b|tool_call_id|tool_result|tool_use_id|no tool output found/i;
 /**
  * A model-availability error: an OpenAI-compatible gateway reports the configured
  * model id as unknown/unsupported (OpenCode/Zen returns this under a 401 with a
@@ -59,7 +77,7 @@ const MODEL_UNSUPPORTED_RE = /ModelError|model[\s\S]{0,80}not supported|unsuppor
  * The recogniser regex itself lives in codex-model-rejection.ts so it stays in sync
  * with the message openai.ts/preflight build (a shared cross-module contract).
  */
-/** Regex for invalid tool/schema errors */
+/** Regex for invalid tool/schema errors (about OUR tool list, which every provider receives) */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 /** Regex patterns for reasoning model timeout detection */
 const ABORT_RE = /abort/i;
@@ -116,7 +134,25 @@ function providerCannotServe(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (CODEX_MODEL_UNSUPPORTED_RE.test(msg)) return true;
   // A context window is a property of the model, and siblings have their own.
-  return /context length|context window|too many tokens|maximum context/i.test(msg);
+  // Wording differs per vendor: OpenAI "maximum context length" /
+  // `context_length_exceeded`, Anthropic "prompt is too long", Gemini "exceeds
+  // the maximum number of tokens allowed".
+  return /context length|context window|too many tokens|maximum context|context_length_exceeded|prompt is too long|exceeds the maximum number of tokens/i.test(msg);
+}
+
+/**
+ * Whether the error is an HTTP 400. SDK errors (Anthropic's APIError) carry the
+ * status as a number; fetch-with-retry and the adapters put it in the message.
+ */
+function isBadRequestStatus(error: unknown, msg: string): boolean {
+  const status = error !== null && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+  if (typeof status === "number") return status === 400;
+  return /\b400\b/.test(msg);
+}
+
+/** The provider's account cannot pay for the request: bench like a quota, fail over. */
+function isBillingRejection(msg: string): boolean {
+  return BILLING_RE.test(msg);
 }
 
 function isNonRetryableRequestError(error: unknown): boolean {
@@ -127,11 +163,14 @@ function isNonRetryableRequestError(error: unknown): boolean {
   // Model-not-supported / ModelError is a per-provider config mismatch, not a fatal
   // auth/request error — retryable so the chain fails over to a healthy sibling.
   if (MODEL_UNSUPPORTED_RE.test(msg)) return false;
-  if (/\b400\b/.test(msg) && BAD_REQUEST_RE.test(msg)) return true;
+  // About this seat's account or this vendor's id rules, not the request.
+  if (isBillingRejection(msg) || TOOL_CALL_ID_RULE_RE.test(msg)) return false;
   // 401/403 used to end the chain here. They are handled on their own path now:
   // a rejected credential is about THIS provider's key, and says nothing about
-  // the sibling that might answer perfectly well. A 400 is different — it is
-  // about the request, and the next provider would reject it identically.
+  // the sibling that might answer perfectly well. A 400 ends the chain only when
+  // it names a shape the next provider would reject identically; any other 400
+  // is about what THIS provider accepts, and a sibling gets its turn.
+  if (isBadRequestStatus(error, msg) && UNIVERSAL_BAD_REQUEST_RE.test(msg)) return true;
   if (INVALID_TOOL_RE.test(msg)) return true;
   return false;
 }
@@ -504,7 +543,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         quotaHardStop?.retryAfterMs ?? parseResetDurationMs(errorMsg) ?? Number.NaN,
         errorMsg,
       );
-    } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+    } else if ((/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) || isBillingRejection(errorMsg)) {
+      // A spent credit balance arrives as a 400/402 rather than a 403, but it is
+      // the same wall: it waits for a person or a billing cycle, not a minute.
       const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
       health[method](provider.name, errorMsg);
     } else if (FREE_TIER_LIMIT_RE.test(errorMsg)) {

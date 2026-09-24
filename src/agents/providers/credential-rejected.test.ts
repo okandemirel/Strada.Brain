@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import Anthropic from "@anthropic-ai/sdk";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import type { IAIProvider } from "./provider.interface.js";
@@ -136,5 +137,84 @@ describe("failures that are about the request, not the key", () => {
       expect.stringContaining("credential rejected"),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * PRV-1: nearly every vendor 400 carries `invalid_request_error`, so matching
+ * "400 + invalid" ended the chain for failures that are about ONE provider —
+ * its account, its context window, its id rules — while a healthy sibling
+ * received zero calls. A 400 ends the chain only when it names a request shape
+ * every provider would reject.
+ */
+describe("a 400 that is about this provider, not the request", () => {
+  function anthropic400(message: string): Error {
+    return new Anthropic.BadRequestError(
+      400,
+      { type: "error", error: { type: "invalid_request_error", message } },
+      undefined,
+      new Headers(),
+    );
+  }
+
+  function throwing(name: string, error: Error) {
+    const chat = vi.fn(() => Promise.reject(error));
+    return {
+      provider: {
+        name,
+        capabilities: {
+          maxTokens: 100, streaming: false, toolCalling: false, vision: false,
+          systemPrompt: true, contextWindow: 1000,
+        },
+        chat,
+      } as unknown as IAIProvider,
+      chat,
+    };
+  }
+
+  it("fails over on an Anthropic credit-balance 400 and benches the seat like a quota", async () => {
+    const claude = throwing("claude", anthropic400(
+      "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+    ));
+    const good = provider("openai", "ok");
+    const chain = new FallbackChainProvider([claude.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(good.chat).toHaveBeenCalledTimes(1);
+    const entry = ProviderHealthRegistry.getInstance().getEntry("claude")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(7 * 60 * 60 * 1000);
+  });
+
+  it.each([
+    ["an Anthropic context overflow", anthropic400("prompt is too long: 215000 tokens > 200000 maximum")],
+    ["a Gemini context overflow", new Error(
+      'Gemini API error 400: {"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}',
+    )],
+    ["a Mistral tool-call id rule", new Error(
+      'Mistral API error 400: {"object":"error","message":"Tool call id was functions.read_file:0 but must be a-z, A-Z, 0-9, with a length of 9.","type":"invalid_request_error"}',
+    )],
+    ["an Anthropic unpaired tool_use", anthropic400(
+      "messages.2: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01",
+    )],
+    ["a parameter this model does not accept", new Error(
+      "OpenAI API error 400: {\"error\":{\"message\":\"Unsupported parameter: 'max_tokens' is not supported with this model.\",\"type\":\"invalid_request_error\"}}",
+    )],
+  ])("fails over on %s", async (_label, error) => {
+    const bad = throwing("First", error);
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([bad.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(good.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("still ends the call on a body that is not valid JSON — every provider would reject it", async () => {
+    const bad = throwing("First", new Error("API error 400: could not parse the JSON body of your request"));
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([bad.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).rejects.toThrow(/400/u);
+    expect(good.chat).not.toHaveBeenCalled();
   });
 });
