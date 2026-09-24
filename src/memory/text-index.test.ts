@@ -151,3 +151,56 @@ describe("TextIndex", () => {
     expect(tfidf["anything"]).toBeGreaterThan(0); // IDF defaults to log(1/1)+1
   });
 });
+
+// MEM-5: terms are user text. A plain `{}` dictionary resolves inherited keys
+// such as "constructor" through Object.prototype, which turned every TF value
+// of a document containing the word into NaN.
+describe("prototype-named terms (MEM-5)", () => {
+  it("computeTF gives a finite frequency for 'constructor'", () => {
+    const tf = computeTF(["player", "constructor"]);
+    expect(tf["player"]).toBe(1);
+    expect(tf["constructor"]).toBe(1);
+  });
+
+  it("cosineSimilarity ignores inherited keys on plain records", () => {
+    // The query holds "constructor"; the document does not. The document is a
+    // plain object literal, as FileMemoryManager's cached vectors can be.
+    const score = cosineSimilarity({ constructor: 1, player: 1 }, { player: 1, health: 1, speed: 1 });
+    expect(Number.isFinite(score)).toBe(true);
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it("scores a document containing 'constructor' against a query that shares terms", () => {
+    const index = new TextIndex();
+    const doc = extractTerms("the player constructor sets health");
+    index.addDocument(doc);
+    index.addDocument(extractTerms("enemy spawner wave timer"));
+
+    const score = cosineSimilarity(
+      index.computeTFIDF(extractTerms("player health")),
+      index.computeTFIDF(doc),
+    );
+    expect(Number.isFinite(score)).toBe(true);
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it("a query of only 'constructor' matches the document that contains it", () => {
+    const index = new TextIndex();
+    const doc = extractTerms("the player constructor sets health");
+    index.addDocument(doc);
+    const score = cosineSimilarity(index.computeTFIDF(["constructor"]), index.computeTFIDF(doc));
+    expect(Number.isFinite(score)).toBe(true);
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it("document frequency for 'constructor' survives serialize/deserialize as a number", () => {
+    const index = new TextIndex();
+    index.addDocument(["constructor", "player"]);
+    index.addDocument(["constructor"]);
+    const restored = TextIndex.deserialize(JSON.parse(JSON.stringify(index.serialize())));
+    expect(restored.serialize().df["constructor"]).toBe(2);
+    const tfidf = restored.computeTFIDF(["constructor", "player"]);
+    expect(Number.isFinite(tfidf["constructor"])).toBe(true);
+    expect(Number.isFinite(tfidf["player"])).toBe(true);
+  });
+});

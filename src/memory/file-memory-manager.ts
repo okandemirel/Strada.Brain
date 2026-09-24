@@ -108,7 +108,8 @@ class OptimizedTextIndex {
    */
   computeTFIDFOptimized(terms: string[]): Record<string, number> {
     const tf = this.computeTFOptimized(terms);
-    const tfidf: Record<string, number> = {};
+    // Prototype-less: terms are user text ("constructor" is a common one).
+    const tfidf = Object.create(null) as Record<string, number>;
     
     for (const [term, tfValue] of tf) {
       tfidf[term] = tfValue * this.computeIDFOptimized(term);

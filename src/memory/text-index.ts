@@ -44,17 +44,27 @@ export function extractTerms(text: string): string[] {
  * Compute term frequency (TF) — normalized count of each term.
  */
 export function computeTF(terms: string[]): Record<string, number> {
-  const freq: Record<string, number> = {};
+  // Terms are user text: a plain `{}` resolves "constructor" to
+  // Object.prototype.constructor and the counts turn into NaN, so count in a
+  // Map and hand back a prototype-less record.
+  const freq = new Map<string, number>();
+  let maxFreq = 1;
   for (const term of terms) {
-    freq[term] = (freq[term] ?? 0) + 1;
+    const count = (freq.get(term) ?? 0) + 1;
+    freq.set(term, count);
+    if (count > maxFreq) maxFreq = count;
   }
   // Normalize by max frequency
-  const maxFreq = Math.max(...Object.values(freq), 1);
-  const tf: Record<string, number> = {};
-  for (const [term, count] of Object.entries(freq)) {
+  const tf = emptyTermRecord();
+  for (const [term, count] of freq) {
     tf[term] = count / maxFreq;
   }
   return tf;
+}
+
+/** A term -> weight record with no prototype, so no term can collide with an inherited key. */
+function emptyTermRecord(): Record<string, number> {
+  return Object.create(null) as Record<string, number>;
 }
 
 /**
@@ -73,6 +83,9 @@ export function cosineSimilarity(
     Object.keys(a).length <= Object.keys(b).length ? [a, b] : [b, a];
 
   for (const [term, weight] of Object.entries(smaller)) {
+    // Own keys only: callers may pass plain `{}` records, where an inherited
+    // key such as "constructor" would otherwise read as a (non-numeric) weight.
+    if (!Object.hasOwn(larger, term)) continue;
     const otherWeight = larger[term];
     if (otherWeight !== undefined) {
       dotProduct += weight * otherWeight;
@@ -95,8 +108,8 @@ export function cosineSimilarity(
  * Manages a TF-IDF index over a corpus of documents.
  */
 export class TextIndex {
-  /** Document frequency: how many documents contain each term */
-  private df: Record<string, number> = {};
+  /** Document frequency: how many documents contain each term (a Map: terms are user text) */
+  private df = new Map<string, number>();
   /** Total number of documents */
   private docCount = 0;
 
@@ -107,7 +120,7 @@ export class TextIndex {
   addDocument(terms: string[]): void {
     const uniqueTerms = new Set(terms);
     for (const term of uniqueTerms) {
-      this.df[term] = (this.df[term] ?? 0) + 1;
+      this.df.set(term, (this.df.get(term) ?? 0) + 1);
     }
     this.docCount++;
   }
@@ -118,12 +131,12 @@ export class TextIndex {
   removeDocument(terms: string[]): void {
     const uniqueTerms = new Set(terms);
     for (const term of uniqueTerms) {
-      const count = this.df[term];
+      const count = this.df.get(term);
       if (count !== undefined) {
         if (count <= 1) {
-          delete this.df[term];
+          this.df.delete(term);
         } else {
-          this.df[term] = count - 1;
+          this.df.set(term, count - 1);
         }
       }
     }
@@ -136,10 +149,10 @@ export class TextIndex {
    */
   computeTFIDF(terms: string[]): Record<string, number> {
     const tf = computeTF(terms);
-    const tfidf: Record<string, number> = {};
+    const tfidf = emptyTermRecord();
 
     for (const [term, tfValue] of Object.entries(tf)) {
-      const docFreq = this.df[term] ?? 0;
+      const docFreq = this.df.get(term) ?? 0;
       // IDF: log(N / (df + 1)) + 1 to avoid division by zero and boost rare terms
       const idf = Math.log((this.docCount + 1) / (docFreq + 1)) + 1;
       tfidf[term] = tfValue * idf;
@@ -153,7 +166,7 @@ export class TextIndex {
    * Useful when loading from disk.
    */
   rebuild(documents: string[][]): void {
-    this.df = {};
+    this.df = new Map();
     this.docCount = 0;
     for (const terms of documents) {
       this.addDocument(terms);
@@ -167,7 +180,7 @@ export class TextIndex {
 
   /** Serialize for persistence */
   serialize(): { df: Record<string, number>; docCount: number } {
-    return { df: { ...this.df }, docCount: this.docCount };
+    return { df: Object.fromEntries(this.df), docCount: this.docCount };
   }
 
   /** Deserialize from persisted data */
@@ -176,7 +189,11 @@ export class TextIndex {
     docCount: number;
   }): TextIndex {
     const index = new TextIndex();
-    index.df = { ...data.df };
+    // Own keys only — a persisted "constructor" entry is a real term, and
+    // nothing inherited from the parsed object may leak in as one.
+    index.df = new Map(
+      Object.keys(data.df).map((term) => [term, data.df[term]!] as [string, number]),
+    );
     index.docCount = data.docCount;
     return index;
   }
