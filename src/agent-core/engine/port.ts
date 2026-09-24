@@ -305,8 +305,10 @@ export function createAgentCorePort(
         engine.classifyAgentCoreFailure(params, ctx()),
       recordHealthSuccess: (_provider: string) => {
         // v1 success pair: the ledger half (bgFailureLedger.recordSuccess(provider,"real")) is the
-        // spine's concern; the port owns the tracker half (iterationHealth.recordSuccess()).
-        ctx().iterationHealth.recordSuccess();
+        // spine's concern; the port owns the tracker half. Through the ADAPTER (the ledger's
+        // HealthCore), not the raw tracker: only the adapter resets the backoff it replays, and
+        // the failure half (classifyAgentCoreFailure) already records through it.
+        ctx().healthAdapter.recordSuccess();
       },
 
       // ── E. reflection + end-turn (COMPOSE handler + ADAPT union→DTO) ─────────────────────────

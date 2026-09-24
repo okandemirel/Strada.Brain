@@ -1024,6 +1024,51 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     // and is never billed as a real completion (the executor's signal.aborted guard owns the surface).
     expect(result.status).not.toBe("failed"); // benign cancel ≠ provider failure
   });
+
+  it("HEALTH: a background run recovering from F,F,S,F,S is not blocked by the sliding-window rate", async () => {
+    // After F,F,S,F,S the REAL tracker's window rate is 60% (>= the 40% ask threshold), but the
+    // last call succeeded. The gate used to re-derive ask_user from that rate before the next step
+    // and yield "blocked" (provider_unavailable) on a run that was progressing.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockRejectedValueOnce(new Error("boom")) // F
+      .mockRejectedValueOnce(new Error("boom")) // F
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // S: PLANNING→EXECUTING
+      .mockRejectedValueOnce(new Error("boom")) // F
+      .mockResolvedValueOnce(
+        resp({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "file_read", input: { path: "a.cs" } }] }),
+      ) // S
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).not.toBe("blocked");
+    expect(result.reason ?? "").not.toMatch(/^blocked/);
+    expect(provider.chat.mock.calls.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("HEALTH: the port's success path resets the backoff the ledger replays", async () => {
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider);
+    const setupInput = (
+      h.runner as unknown as {
+        toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0];
+      }
+    ).toSetupInput(mkRequest(), "background");
+    // A fresh port: the health core the ledger reads is the one its setupRun threads into runCtx.
+    const fresh = h.orch.createAgentCorePort();
+    await drive(h.clock, fresh.port.setupRun(setupInput));
+    const health = fresh.createHealthCore();
+    health.recordFailure();
+    health.recordFailure();
+    expect(health.backoffMs(), "premise: the second failure backs off").toBeGreaterThan(0);
+
+    fresh.port.recordHealthSuccess("mock");
+
+    expect(health.consecutive).toBe(0);
+    expect(health.backoffMs()).toBe(0);
+  });
 });
 
 describe("V2AgentRunner — Phase 3b capability guard (flag-on; the first registry-wired integration)", () => {

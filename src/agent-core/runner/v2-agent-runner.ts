@@ -602,6 +602,7 @@ export class V2AgentRunner implements AgentRunner {
               ...this.clockBudgetVerdict(runClock, budget, state),
               taskCancelReason: taskReason ?? contrib.taskCancelReason,
               callStalled: contrib.callStalled,
+              lastStepFailed: true, // the only verdict that may ask the user / back off on health
             });
             const action = mapVerdictToLoopAction(failVerdict, "break");
             if (action.control === "break") {
@@ -1063,6 +1064,7 @@ export class V2AgentRunner implements AgentRunner {
       resourceExhausted: tokensOut ? "tokens" : costOut ? "cost" : false,
       taskInactivityExceeded: clock.silenceCeilingExceeded(),
       callStalled: false,
+      lastStepFailed: false,
       modelProposedDone: false,
       reflectionWantsExtend: false,
       loopDetectionBlocked: state.loopDetectionBlocked,
@@ -1100,8 +1102,10 @@ export class V2AgentRunner implements AgentRunner {
         return "continue";
       }
       case "ask_user": {
+        // visibleText "" → the interactive renderer shows the localized provider_ask_user notice;
+        // the ledger's reason is an English placeholder kept for the blocked-reason mapping.
         if (isInteractive(io.mode)) {
-          emit({ type: "ask_user", question: verdict.reason, visibleText: verdict.reason });
+          emit({ type: "ask_user", question: verdict.reason, visibleText: "" });
           await guardedSleep(bus, clock, verdict.backoffMs, {
             type: "heartbeat",
             source: "loop-yield",
@@ -1109,7 +1113,7 @@ export class V2AgentRunner implements AgentRunner {
           return "continue";
         }
         // BACKGROUND ask_user → YIELD "blocked".
-        emit({ type: "ask_user", question: verdict.reason, visibleText: verdict.reason });
+        emit({ type: "ask_user", question: verdict.reason, visibleText: "" });
         emit({ type: "run.ending", reason: "blocked:ask_user" });
         return "blocked";
       }

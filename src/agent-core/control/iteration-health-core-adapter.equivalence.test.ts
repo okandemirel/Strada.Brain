@@ -29,6 +29,7 @@ const INERT: VerdictInput = {
   resourceExhausted: false,
   taskInactivityExceeded: false,
   callStalled: false,
+  lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
   modelProposedDone: false,
   reflectionWantsExtend: false,
   loopDetectionBlocked: false,

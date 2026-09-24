@@ -45,6 +45,13 @@ export interface VerdictInput {
   readonly resourceExhausted: false | "tokens" | "cost";
   readonly taskInactivityExceeded: boolean; // the §2.3 silence accumulator ceiling
   readonly callStalled: boolean; // the last call ended on a provider-stall
+  /**
+   * True only on the verdict taken for a step whose provider call just FAILED (the failure
+   * site). The tracker's ask-user/backoff state is a reaction to a failure; re-deriving it on
+   * a gate tick or after a success asked the user right after a successful call (the
+   * sliding-window rate) and replayed a stale backoff.
+   */
+  readonly lastStepFailed: boolean;
   readonly modelProposedDone: boolean; // the last step's model output declared completion
   readonly reflectionWantsExtend: boolean; // from the KEPT validateReflectionDecision
   readonly loopDetectionBlocked: boolean; // the KEPT v1 runaway-bug guard
@@ -146,7 +153,9 @@ class FailureLedgerImpl implements FailureLedger {
     }
     // 7. Health ask_user / retry. (Phase 1 routes the reason/guidance text through v1's
     //    centralized, i18n-aware message formatter; the literals here are placeholders.)
-    if (this.core.shouldAskUser()) {
+    //    Evaluated only for a fresh failure — v1 computed it inside recordFailure, never
+    //    before a step whose previous call succeeded.
+    if (input.lastStepFailed && this.core.shouldAskUser()) {
       return {
         decision: "ask_user",
         backoffMs: this.core.backoffMs(),

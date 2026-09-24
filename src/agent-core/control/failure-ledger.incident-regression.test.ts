@@ -30,6 +30,7 @@ const INERT: VerdictInput = {
   resourceExhausted: false,
   taskInactivityExceeded: false,
   callStalled: false,
+  lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
   modelProposedDone: false,
   reflectionWantsExtend: false,
   loopDetectionBlocked: false,
@@ -128,5 +129,38 @@ describe("verdict→loop-action control mapping (the two helper terminal styles)
     const ask = mapVerdictToLoopAction(ledger.verdict(INERT), "return");
     expect(ask.control).toBe("continue");
     expect(ask.notice).toBe("ask_user");
+  });
+});
+
+describe("health ask_user is a reaction to a failure, never to a success", () => {
+  // The real tracker's sliding-window rate stays >= 40% for several results after a recovery.
+  // v1 evaluated the ask-user predicate only inside recordFailure; the v2 gate re-derived it on
+  // every tick, so a success could be answered with ask_user (and a background run blocked).
+  function ledgerAfter(sequence: readonly ("F" | "S")[]) {
+    const tracker = new IterationHealthTracker(0);
+    const adapter = new IterationHealthCoreAdapter(tracker, "p");
+    const ledger = createFailureLedger(adapter, { pauseRetryBudget: 0 });
+    for (const r of sequence) {
+      if (r === "F") ledger.recordFailure("p", false);
+      else ledger.recordSuccess("p", "real");
+    }
+    return { adapter, ledger };
+  }
+
+  it("the gate tick after F,F,S,F,S continues (the window rate alone must not ask)", () => {
+    const { adapter, ledger } = ledgerAfter(["F", "F", "S", "F", "S"]);
+    expect(adapter.shouldAskUser(), "premise: the window rate is still >= 40%").toBe(true);
+    expect(ledger.verdict({ ...INERT, lastStepFailed: false }).decision).toBe("continue");
+  });
+
+  it("a gate tick after three failures and a recovery neither asks nor replays the stale backoff", () => {
+    const { adapter, ledger } = ledgerAfter(["F", "F", "F", "S"]);
+    expect(adapter.backoffMs()).toBe(0);
+    expect(ledger.verdict({ ...INERT, lastStepFailed: false })).toEqual({ decision: "continue" });
+  });
+
+  it("the failure-site verdict still asks on the window rate (v1 parity)", () => {
+    const { ledger } = ledgerAfter(["F", "F", "S", "F", "S", "F"]);
+    expect(ledger.verdict({ ...INERT, lastStepFailed: true }).decision).toBe("ask_user");
   });
 });

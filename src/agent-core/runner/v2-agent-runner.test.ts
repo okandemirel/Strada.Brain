@@ -823,9 +823,12 @@ describe("V2AgentRunner — abort (verdict stop)", () => {
   });
 
   it("background ask_user (health) → run yields blocked", async () => {
-    const handles = mkPlane({ health: { shouldAskUser: () => true } });
-    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
-    const port = mkPort(mkProvider());
+    // ask_user is the verdict on a FAILED step: the health core asks only once a call has failed
+    // (a success is never answered with ask_user — the gate passes lastStepFailed:false).
+    const health = mkHealth({ shouldAskUser: () => true });
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), { onClassifyFailure: () => health.recordFailure() });
     const runner = mkRunner(handles.plane, gateway, port, handles.clock);
 
     const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
@@ -836,19 +839,35 @@ describe("V2AgentRunner — abort (verdict stop)", () => {
   });
 
   it("interactive ask_user (health) → emits ask_user, continues, does NOT block", async () => {
-    // First gate asks; the gate then TAKES the step (audited 2026-09-02 — it used to re-loop
-    // to the gate and spin). With this always-asking health every gate asks once and steps
-    // once. We only assert it did NOT yield "blocked".
-    const handles = mkPlane({ health: { shouldAskUser: () => true } });
-    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
-    const port = mkPort(mkProvider(), { iterationLimit: 2 });
+    // The failed step asks; the run then TAKES the next step (audited 2026-09-02 — it used to
+    // re-loop to the gate and spin). We assert it did NOT yield "blocked" and asked exactly once.
+    const health = mkHealth({ shouldAskUser: () => true });
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), { iterationLimit: 3, onClassifyFailure: () => health.recordFailure() });
+    port.spies.recordHealthSuccess.mockImplementation(() => health.recordSuccess());
     const runner = mkRunner(handles.plane, gateway, port, handles.clock);
 
     const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
 
     expect(result.status).not.toBe("blocked");
     const asks = handles.events().filter((e) => e.type === "ask_user");
-    expect(asks.length).toBeGreaterThanOrEqual(1);
+    expect(asks).toHaveLength(1);
+  });
+
+  it("a success is never answered with ask_user, even while the health window still asks", async () => {
+    // The real tracker's sliding-window rate keeps shouldAskUser() true for several results
+    // after a recovery. A background run whose last call SUCCEEDED must keep going, not block.
+    const health = mkHealth({ shouldAskUser: () => true });
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed");
+    expect(handles.events().some((e) => e.type === "ask_user")).toBe(false);
   });
 });
 
@@ -1242,10 +1261,10 @@ describe("V2AgentRunner — interactive gate ask_user takes the step (audited 20
     expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
     expect(result.status).toBe("completed");
     expect(result.reason).not.toBe("max-iterations");
-    // At most one ask per site (the failure site + the gate before the retried step) — not one
-    // per remaining iteration.
+    // Exactly one ask — the third failure's own verdict. The gate before the retried step
+    // used to re-derive the same verdict and render a second copy.
     const asks = handles.events().filter((e) => e.type === "ask_user");
-    expect(asks.length).toBeLessThanOrEqual(2);
+    expect(asks).toHaveLength(1);
     expect(port.spies.classifyFailureForVerdict).toHaveBeenCalledTimes(3);
   });
 });
