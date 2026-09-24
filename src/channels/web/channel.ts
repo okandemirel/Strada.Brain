@@ -291,6 +291,24 @@ function foldDagInitFrame(previous: string | undefined, next: Record<string, unk
   });
 }
 
+/**
+ * A Content-Disposition value any file name fits in (CHN-15): an ASCII-only
+ * `filename=` fallback plus the exact name as RFC 5987 `filename*=UTF-8''…`.
+ * A raw name with a character outside Latin-1 (`ş`, an emoji) made writeHead
+ * throw, so the download answered 500.
+ */
+function contentDisposition(kind: "inline" | "attachment", name: string): string {
+  // Lone surrogates would make encodeURIComponent throw.
+  const wellFormed = name.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  const fallback = wellFormed
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7e]|["\\]/g, "_") || "download";
+  const encoded = encodeURIComponent(wellFormed)
+    .replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${kind}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 /** Body cap for requests the portal proxies to the dashboard API. */
 const PROXY_BODY_LIMIT = 64 * 1024;
 /**
@@ -1540,7 +1558,7 @@ export class WebChannel
       return;
     }
     const contentType = entry.mimeType ?? MIME_TYPES[extname(entry.name).toLowerCase()] ?? "application/octet-stream";
-    const disposition = `${contentType.startsWith("image/") ? "inline" : "attachment"}; filename="${entry.name.replace(/["\\\r\n]/g, "_")}"`;
+    const disposition = contentDisposition(contentType.startsWith("image/") ? "inline" : "attachment", entry.name);
     if (entry.data) {
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType, "Content-Length": String(entry.data.length), "Content-Disposition": disposition, ...WebChannel.NO_CACHE_HEADERS });
       res.end(entry.data);

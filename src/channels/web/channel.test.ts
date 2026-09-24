@@ -4,6 +4,7 @@ import { PassThrough, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { validateHeaderValue } from "node:http";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import {
   MAX_ATTACHMENT_BYTES_PER_MESSAGE,
@@ -4028,5 +4029,59 @@ describe("WebChannel dashboard proxy body limits (CHN-11)", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(413);
+  });
+});
+
+// CHN-15: a delivered file whose name holds a character outside Latin-1 went
+// into Content-Disposition raw; a real writeHead throws ERR_INVALID_CHAR on
+// it, so the download answered 500.
+describe("WebChannel attachment downloads with non-Latin-1 names (CHN-15)", () => {
+  /** A response whose writeHead checks header values the way node:http does. */
+  function strictRes() {
+    const out: { status?: number; headers?: Record<string, string>; body: Buffer[] } = { body: [] };
+    const res = new Writable({ write(chunk, _enc, cb) { out.body.push(Buffer.from(chunk)); cb(); } }) as unknown as
+      import("node:http").ServerResponse & { headersSent: boolean };
+    Object.assign(res, {
+      headersSent: false,
+      writeHead: (status: number, headers: Record<string, string>) => {
+        for (const [name, value] of Object.entries(headers)) validateHeaderValue(name, value);
+        out.status = status;
+        out.headers = headers;
+        res.headersSent = true;
+        return res;
+      },
+    });
+    return { res, out };
+  }
+
+  async function download(name: string, mimeType: string) {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    (channel as unknown as { sendToClient: (c: string, d: Record<string, unknown>) => boolean }).sendToClient = (_c, d) => { sent.push(d); return true; };
+    const data = Buffer.from("89504e470d0a1a0a", "hex");
+    await channel.sendAttachment("chat-1", { type: "file", name, data, mimeType, size: data.length });
+    const href = String(sent[0]!.href);
+    const { res, out } = strictRes();
+    await (channel as unknown as { handleHttp: (req: unknown, res: unknown) => Promise<void> })
+      .handleHttp({ method: "GET", url: href, headers: {} }, res);
+    if (!(res as unknown as Writable).writableFinished) await new Promise((r) => (res as unknown as Writable).once("finish", r));
+    await channel.disconnect();
+    return out;
+  }
+
+  it("serves a Turkish file name with an ASCII fallback and the exact UTF-8 name", async () => {
+    const out = await download("Ekran_ş.png", "image/png");
+    expect(out.status).toBe(200);
+    expect(out.headers!["Content-Disposition"]).toBe(
+      "inline; filename=\"Ekran_s.png\"; filename*=UTF-8''Ekran_%C5%9F.png",
+    );
+  });
+
+  it("serves an emoji file name", async () => {
+    const out = await download("rapor 📊.pdf", "application/pdf");
+    expect(out.status).toBe(200);
+    const disposition = out.headers!["Content-Disposition"]!;
+    expect(disposition.startsWith("attachment; filename=\"rapor _")).toBe(true);
+    expect(disposition).toContain("filename*=UTF-8''rapor%20%F0%9F%93%8A.pdf");
   });
 });
