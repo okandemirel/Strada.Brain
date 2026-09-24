@@ -708,3 +708,41 @@ describe('useWebSocket oversized frames (WEB-3)', () => {
     expect(useSessionStore.getState().messages.at(-1)?.deliveryState).toBe('failed')
   })
 })
+
+// WEB-20: logout() closed the socket, but its close handler reconnected on its
+// own with the identity still held in memory, and the server's answer wrote
+// the logged-out profile token back into storage.
+describe('useWebSocket logout (WEB-20)', () => {
+  beforeEach(() => {
+    installTestEnvironment()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    restoreTestEnvironment()
+    vi.useRealTimers()
+  })
+
+  it('does not reconnect on its own, and a later connect presents no old identity', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-old', reconnectToken: 'r-old', profileId: 'p-old', profileToken: 'tok-old' })
+    })
+
+    act(() => { useSessionStore.getState().logout() })
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(localStorage.getItem('strada-profileToken')).toBeNull()
+
+    act(() => { result.current.sendMessage('hello again') })
+    const next = MockWebSocket.instances[1]!
+    act(() => { next.emit('open') })
+    const init = JSON.parse(next.sent[0]!)
+    expect(init).toEqual(expect.objectContaining({ type: 'session_init' }))
+    expect(init.profileId).toBeUndefined()
+    expect(init.profileToken).toBeUndefined()
+    expect(init.chatId).toBeUndefined()
+  })
+})

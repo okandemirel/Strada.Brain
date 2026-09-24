@@ -708,10 +708,18 @@ export function useWebSocket(): UseWebSocketReturn {
       pendingOutboundMessagesRef.current = []
       inflightConfirmationRef.current = null
       sessionReadyRef.current = false
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
+      clearStableConnectionTimer()
+      // Forget the identity as well: a later connect must not present the
+      // logged-out profile again and write its token back to storage (WEB-20).
+      chatIdRef.current = null
+      profileIdRef.current = null
+      profileTokenRef.current = null
+      pendingReconnectChatIdRef.current = null
+      // Detach before closing, so this socket's close event is not taken for a
+      // dropped connection to reconnect.
+      const ws = wsRef.current
+      wsRef.current = null
+      ws?.close()
     })
 
     const pendingTimers = pendingMessageTimersRef.current
