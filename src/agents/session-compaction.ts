@@ -305,6 +305,29 @@ export function dropOrphanToolMessages(messages: ConversationMessage[]): Convers
   return repaired;
 }
 
+/**
+ * An assistant turn whose tool calls were all orphaned keeps only its text — often "". Anthropic
+ * rejects a non-final message with empty content, and the compacted array is persisted.
+ */
+function dropEmptyAssistantTurns(messages: ConversationMessage[]): ConversationMessage[] {
+  return messages.filter(
+    (m) => m.role !== "assistant" || (m.tool_calls?.length ?? 0) > 0 || String(m.content ?? "").trim().length > 0,
+  );
+}
+
+/** Stands in for the turns a compaction cut away, so the conversation still opens with the user. */
+export const COMPACTED_CONVERSATION_NOTE = "[Earlier turns were compacted; the summary is in the system prompt.]";
+
+/**
+ * The conversation must open with a user turn (trimSession's head rule). Summarization and the
+ * sliding window keep the newest groups, which can start with an assistant turn; the dropped
+ * turns live on in the summary, so a note stands in for them instead of dropping kept content.
+ */
+function repairHead(messages: ConversationMessage[]): ConversationMessage[] {
+  if (messages.length === 0 || messages[0]!.role === "user") return messages;
+  return [{ role: "user", content: COMPACTED_CONVERSATION_NOTE }, ...messages];
+}
+
 // =============================================================================
 // STAGE 1: Tool Result Compaction
 // =============================================================================
@@ -382,8 +405,12 @@ function stage2Summarization(groups: MessageGroup[], preserveRecent: number): Me
   const rest = groups.filter((g) => g.kind !== "system");
   if (rest.length <= preserveRecent) return groups;
 
-  const toSummarize = rest.slice(0, rest.length - preserveRecent);
-  const toKeep = rest.slice(rest.length - preserveRecent);
+  // The newest user turn is what the run is answering: it stays verbatim even when more than
+  // `preserveRecent` groups of work followed it (the summary keeps only a 100-char preview).
+  const cut = rest.length - preserveRecent;
+  const lastUser = newestUserGroup(rest);
+  const toSummarize = rest.slice(0, cut).filter((_, i) => i !== lastUser);
+  const toKeep = [...(lastUser >= 0 && lastUser < cut ? [rest[lastUser]!] : []), ...rest.slice(cut)];
   const lines: string[] = [];
   let firstUser: string | null = null;
 
@@ -436,7 +463,14 @@ function stage3SlidingWindow(groups: MessageGroup[], maxGroups: number): Message
   const sys = groups.filter((g) => g.kind === "system");
   const rest = groups.filter((g) => g.kind !== "system");
   if (rest.length <= maxGroups) return groups;
-  return [...sys, ...rest.slice(rest.length - maxGroups)];
+  const cut = rest.length - maxGroups;
+  const lastUser = newestUserGroup(rest);
+  return [...sys, ...(lastUser >= 0 && lastUser < cut ? [rest[lastUser]!] : []), ...rest.slice(cut)];
+}
+
+/** Index of the newest group that is a user turn someone wrote (not an orphaned tool result). */
+function newestUserGroup(groups: readonly MessageGroup[]): number {
+  return findLastIndex(groups, (g) => g.kind === "user" && isRealUserTurn(g.messages[0]!));
 }
 
 // =============================================================================
@@ -448,35 +482,105 @@ function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens
   const rest: CompactableMessage[] = [];
   for (const msg of messages) { (msg.role === "system" ? sys : rest).push(msg); }
 
-  let budget = maxTokens - estimateTokens(sys);
-  if (budget <= 0) {
-    // Defensive: the (capped) summary alone overruns the budget. NEVER return an
-    // over-budget prompt — hard-truncate the summary TEXT itself to fit maxTokens.
-    // maxTokens × 4 ≈ total char budget shared ACROSS all system messages (there
-    // may be more than one: previous + freshly-appended summary). Drop the
-    // conversation entirely; allocate the whole budget to the summaries head-first.
-    // Reserve the "\n\n" join overhead that partitionSummary later adds between
-    // summaries so the merged-and-measured result stays within maxTokens.
+  // Whole groups, newest first, so a tool call is never kept without its result (or vice versa).
+  // The turn being answered — the newest user turn and the newest group — is always kept,
+  // shortened if it has to be: skipping it as "oversized" (a pasted log, a big tool result)
+  // left the model answering without the input it was given, or with no user turn at all (ORC-6).
+  const groups = groupMessages(rest);
+  const pinned = new Set<number>();
+  if (groups.length > 0) pinned.add(groups.length - 1);
+  const lastUser = newestUserGroup(groups);
+  if (lastUser >= 0) pinned.add(lastUser);
+
+  const sysTokens = estimateTokens(sys);
+  const pinnedTokens = [...pinned].reduce((sum, idx) => sum + estimateTokens(groups[idx]!.messages), 0);
+  // The pinned turns take what they need, or half the budget when the summary competes for it.
+  const pinnedCap = sysTokens + pinnedTokens <= maxTokens ? maxTokens - sysTokens : Math.floor(maxTokens / 2);
+  const keptGroups = new Map<number, CompactableMessage[]>();
+  let pinnedUsed = 0;
+  for (const idx of pinned) {
+    const shrunk = shrinkToTokens(groups[idx]!.messages, Math.max(1, Math.floor(pinnedCap / pinned.size)));
+    keptGroups.set(idx, shrunk);
+    pinnedUsed += estimateTokens(shrunk);
+  }
+
+  let budget = maxTokens - pinnedUsed - sysTokens;
+  if (budget < 0) {
+    // Defensive: the (capped) summary overruns what the pinned turns leave. NEVER return an
+    // over-budget prompt — hard-truncate the summary TEXT itself to fit. The char budget
+    // (≈ 4 per token) is shared ACROSS all system messages (there may be more than one:
+    // previous + freshly-appended summary), head-first. Reserve the "\n\n" join overhead
+    // that partitionSummary later adds between summaries so the merged-and-measured result
+    // stays within maxTokens.
     const systemCount = sys.filter((m) => m.role === "system").length;
     const joinOverhead = systemCount > 1 ? (systemCount - 1) * 2 : 0;
-    let remainingChars = Math.max(0, maxTokens * 4 - joinOverhead);
+    let remainingChars = Math.max(0, (maxTokens - pinnedUsed) * 4 - joinOverhead);
     sys = sys.map((m): CompactableMessage => {
       if (m.role !== "system" || typeof m.content !== "string") return m;
       const take = Math.min(m.content.length, remainingChars);
       remainingChars -= take;
       return { role: "system", content: m.content.slice(0, take) };
     });
-    return sys;
+    budget = 0;
   }
 
-  const kept: CompactableMessage[] = [];
-  for (let i = rest.length - 1; i >= 0; i--) {
-    const cost = estimateTokens([rest[i]!]);
-    if (cost > budget) continue; // skip oversized messages, keep smaller ones
-    kept.unshift(rest[i]!);
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (pinned.has(i)) continue;
+    const cost = estimateTokens(groups[i]!.messages);
+    if (cost > budget) continue; // skip oversized groups, keep smaller ones
+    keptGroups.set(i, groups[i]!.messages);
     budget -= cost;
   }
-  return [...sys, ...kept];
+  const kept = [...keptGroups.entries()].sort((x, y) => x[0] - y[0]).flatMap(([, msgs]) => msgs);
+  return [...sys.filter((m) => m.role !== "system" || String(m.content).length > 0), ...kept];
+}
+
+function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) if (predicate(items[i]!)) return i;
+  return -1;
+}
+
+/** A user turn a person (or the task) wrote — not a tool result whose call is gone. */
+function isRealUserTurn(msg: CompactableMessage): boolean {
+  if (msg.role !== "user") return false;
+  if (typeof msg.content === "string") return msg.content.trim().length > 0;
+  return (msg.content as readonly ContentBlock[]).some((b) => b.type !== "tool_result");
+}
+
+const TRUNCATION_MARKER = "\n[… truncated to fit the context window]";
+
+function cutText(text: string, ratio: number): string {
+  if (ratio >= 1) return text;
+  const keep = Math.max(0, Math.floor(text.length * ratio) - TRUNCATION_MARKER.length);
+  return keep >= text.length ? text : text.slice(0, keep) + TRUNCATION_MARKER;
+}
+
+/** Shorten every payload of a group by the same ratio (tool inputs to their compacted form). */
+function shrinkGroup(messages: readonly CompactableMessage[], ratio: number): CompactableMessage[] {
+  return messages.map((msg) => {
+    const calls = toolCallsOf(msg);
+    const base = calls.length > 0
+      ? ({ ...msg, tool_calls: calls.map((tc) => ({ ...tc, input: compactToolInput(tc.input) })) } as CompactableMessage)
+      : msg;
+    if (typeof base.content === "string") return { ...base, content: cutText(base.content, ratio) } as CompactableMessage;
+    const blocks = (base.content as readonly ContentBlock[]).map((b): ContentBlock => {
+      if (b.type === "text") return { ...b, text: cutText(b.text, ratio) };
+      if (b.type === "tool_result" && typeof b.content === "string") return { ...b, content: cutText(b.content, ratio) };
+      return b;
+    });
+    return { ...base, content: blocks } as CompactableMessage;
+  });
+}
+
+/** Shrink a group until it fits `maxTokens` (a few proportional passes, then a hard floor). */
+function shrinkToTokens(messages: readonly CompactableMessage[], maxTokens: number): CompactableMessage[] {
+  let current = [...messages];
+  for (let pass = 0; pass < 4; pass++) {
+    const cost = estimateTokens(current);
+    if (cost <= maxTokens) return current;
+    current = shrinkGroup(current, (maxTokens / cost) * 0.9);
+  }
+  return estimateTokens(current) <= maxTokens ? current : shrinkGroup(current, 0);
 }
 
 // =============================================================================
@@ -497,10 +601,11 @@ function partitionSummary(flat: readonly CompactableMessage[]): {
   summary: string | undefined;
 } {
   // Drop any orphaned tool_use/tool_result references before partitioning so the
-  // returned conversation can never trigger an Anthropic 400 (see dropOrphanToolMessages).
-  const repaired = dropOrphanToolMessages(
+  // returned conversation can never trigger an Anthropic 400 (see dropOrphanToolMessages),
+  // then repair what that can leave behind (ORC-6).
+  const repaired = repairHead(dropEmptyAssistantTurns(dropOrphanToolMessages(
     flat.filter((m): m is ConversationMessage => m.role !== "system"),
-  );
+  )));
   const summaries = flat
     .filter((m): m is SystemSummaryMessage => m.role === "system")
     .map((m) => m.content);

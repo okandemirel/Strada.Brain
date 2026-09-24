@@ -451,3 +451,68 @@ describe("tool-heavy sessions are measured and compacted (ORC-3)", () => {
     expect(result.messages.slice(-4)).toEqual(msgs.slice(-4));
   });
 });
+
+// ORC-6: stage 4 skipped "oversized" messages — typically the newest tool result or a pasted
+// log — and the orphan repair left `content: ""` assistant turns, so a compacted (and persisted)
+// session could open with an empty assistant turn and hold no user turn at all.
+describe("compaction keeps the turn being answered and a sendable shape (ORC-6)", () => {
+  const big = "x".repeat(40_000);
+
+  function readSession(): ConversationMessage[] {
+    const msgs: ConversationMessage[] = [{ role: "user", content: "please refactor the thing" }];
+    for (let i = 0; i < 6; i++) {
+      msgs.push({ role: "assistant", content: "", tool_calls: [{ id: `t${i}`, name: "file_read", input: { path: `f${i}.cs` } }] } as ConversationMessage);
+      msgs.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: big }] } as ConversationMessage);
+    }
+    msgs.push({ role: "assistant", content: "done reading" });
+    return msgs;
+  }
+
+  function expectSendable(messages: readonly ConversationMessage[]): void {
+    expect(messages[0]!.role).toBe("user");
+    for (const m of messages) {
+      if (m.role === "assistant" && !(m.tool_calls?.length)) expect(String(m.content).trim()).not.toBe("");
+    }
+    messages.forEach((m, i) => {
+      for (const tc of (m.role === "assistant" ? m.tool_calls : undefined) ?? []) {
+        const next = messages[i + 1]!;
+        expect(Array.isArray(next.content) && next.content.some((b) => b.type === "tool_result" && b.tool_use_id === tc.id)).toBe(true);
+      }
+    });
+  }
+
+  it("the six-big-reads probe comes out with a user head, no empty assistant turn, within budget", () => {
+    for (const maxTokens of [9_000, 30_000]) {
+      const result = compactSession(readSession(), { maxTokens });
+      expect(result.compacted).toBe(true);
+      expect(result.finalTokens).toBeLessThanOrEqual(maxTokens);
+      expectSendable(result.messages);
+      expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "done reading" });
+    }
+  });
+
+  it("an oversized newest user message is truncated, never dropped", () => {
+    const pasted = `here is the log:\n${"E".repeat(60_000)}`;
+    const msgs: ConversationMessage[] = [...buildConversation(6, 2_000), { role: "user", content: pasted }];
+    const result = compactSession(msgs, { maxTokens: 2_000 });
+    expect(result.finalTokens).toBeLessThanOrEqual(2_000);
+    const last = result.messages.at(-1)!;
+    expect(last.role).toBe("user");
+    expect(String(last.content).startsWith("here is the log:")).toBe(true);
+  });
+
+  it("the newest user request survives summarization verbatim, even behind many tool turns", () => {
+    const msgs: ConversationMessage[] = [
+      { role: "user", content: "first request" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "the CURRENT request, verbatim" },
+    ];
+    for (let i = 0; i < 8; i++) {
+      msgs.push({ role: "assistant", content: `step ${i}`, tool_calls: [{ id: `s${i}`, name: "file_read", input: { path: "a" } }] } as ConversationMessage);
+      msgs.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `s${i}`, content: "R".repeat(8_000) }] } as ConversationMessage);
+    }
+    const result = compactSession(msgs, { maxTokens: 3_000, preserveRecent: 2 });
+    expect(result.messages.some((m) => m.content === "the CURRENT request, verbatim")).toBe(true);
+    expectSendable(result.messages);
+  });
+});
