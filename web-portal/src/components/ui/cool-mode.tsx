@@ -194,11 +194,18 @@ const applyParticleEffect = (
   }
 
   let animationFrame: number | undefined
+  let disposed = false
 
   let lastParticleTimestamp = 0
   const particleGenerationDelay = 30
 
+  // The loop runs only while there is something to animate: it starts on a
+  // tap and stops itself once no particle is left and none is being added.
+  // It used to run at 60 fps for as long as the button was mounted.
   function loop() {
+    animationFrame = undefined
+    // A frame that could not be cancelled (no cancelAnimationFrame) does nothing.
+    if (disposed) return
     const currentTime = performance.now()
     if (
       autoAddParticle &&
@@ -210,10 +217,23 @@ const applyParticleEffect = (
     }
 
     refreshParticles()
-    animationFrame = requestAnimationFrame(loop)
+    if (autoAddParticle || particles.length > 0) startLoop()
   }
 
-  loop()
+  // Decorative only: an environment without animation frames (a torn-down
+  // test DOM, a headless renderer) gets no particles rather than an error.
+  function startLoop() {
+    if (!disposed && animationFrame === undefined && typeof requestAnimationFrame === "function") {
+      animationFrame = requestAnimationFrame(loop)
+    }
+  }
+
+  function stopLoop() {
+    if (animationFrame !== undefined && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(animationFrame)
+    }
+    animationFrame = undefined
+  }
 
   const isTouchInteraction = "ontouchstart" in window
 
@@ -234,6 +254,7 @@ const applyParticleEffect = (
   const tapHandler = (e: MouseEvent | TouchEvent) => {
     updateMousePosition(e)
     autoAddParticle = true
+    startLoop()
   }
 
   const disableAutoAddParticle = () => {
@@ -247,22 +268,24 @@ const applyParticleEffect = (
     passive: true,
   })
 
+  // SYNCHRONOUS: nothing of this instance outlives the unmount. The old
+  // cleanup polled every 500 ms until the particles were gone, so its timer
+  // fired after the component (and, in tests, the whole DOM) was gone.
   return () => {
     element.removeEventListener(move, updateMousePosition)
     element.removeEventListener(tap, tapHandler)
     element.removeEventListener(tapEnd, disableAutoAddParticle)
     element.removeEventListener("mouseleave", disableAutoAddParticle)
 
-    const interval = setInterval(() => {
-      if (animationFrame && particles.length === 0) {
-        cancelAnimationFrame(animationFrame)
-        clearInterval(interval)
+    disposed = true
+    autoAddParticle = false
+    stopLoop()
+    for (const p of particles) p.element.remove()
+    particles = []
 
-        if (--instanceCounter === 0) {
-          container.remove()
-        }
-      }
-    }, 500)
+    if (--instanceCounter === 0) {
+      container.remove()
+    }
   }
 }
 
@@ -273,13 +296,17 @@ interface CoolModeProps {
 
 export const CoolMode: React.FC<CoolModeProps> = ({ children, options }) => {
   const ref = useRef<HTMLSpanElement>(null)
+  // Keyed by VALUE: a caller passing an inline object literal re-created the
+  // effect (and a new animation loop) on every render of its parent. The
+  // options are plain strings and numbers, so the key round-trips exactly.
+  const optionsKey = JSON.stringify(options ?? {})
 
   useEffect(() => {
     const element = ref.current
     let cleanup: (() => void) | null = null
 
     if (element) {
-      cleanup = applyParticleEffect(element, options)
+      cleanup = applyParticleEffect(element, JSON.parse(optionsKey) as CoolParticleOptions)
     }
 
     return () => {
@@ -287,7 +314,7 @@ export const CoolMode: React.FC<CoolModeProps> = ({ children, options }) => {
         cleanup()
       }
     }
-  }, [options])
+  }, [optionsKey])
 
   return <span ref={ref}>{children}</span>
 }
