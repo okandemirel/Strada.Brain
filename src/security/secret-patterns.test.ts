@@ -148,3 +148,34 @@ describe("redaction for stored data (SEC-3)", () => {
     expect(Object.keys(out.nested as object)[0]).toContain("REDACTED");
   });
 });
+
+// SEC-9: code was redacted as secrets (so stored C# stopped compiling), while
+// partial or encrypted private keys and "@"-bearing DB passwords got through.
+describe("pattern precision (SEC-9)", () => {
+  const redact = (s: string): string =>
+    applySecretPatterns(s, DEFAULT_SECRET_PATTERNS, Number.POSITIVE_INFINITY).content;
+
+  it.each([
+    "var cacheKey = BuildCacheKeyForPlayerProfile(profile);",
+    "using MonoBehaviourExtensions.Runtime.PlayerControllerComponents;",
+    "string token = tokenProvider.GetAccessTokenForCurrentUser();",
+  ])("leaves code alone: %s", (code) => {
+    expect(redact(code)).toBe(code);
+  });
+
+  it.each([
+    ["-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAw5f0partial", "MIIEowIBAAKCAQEAw5f0partial"],
+    ["-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0BBQ0w\n-----END ENCRYPTED PRIVATE KEY-----", "MIIFHDBOBgkqhkiG9w0BBQ0w"],
+    ["postgres://admin:p@ss@db.internal:5432/app", "ss@db"],
+    ['password = "hunter2hunter2hunter2hunter2"', "hunter2hunter2"],
+    ["Bot token is NzAwMDAwMDAwMDAwMDAwMDAwN2FiY2Rl.ZZZZZZ.xxxxxxxxxxxxxxxxxxxx for app", "NzAwMDAw"],
+  ])("redacts key material: %s", (input, secretPart) => {
+    expect(redact(input)).not.toContain(secretPart);
+  });
+
+  it("keeps the host of a DB URL whose password contains '@'", () => {
+    expect(redact("postgres://admin:p@ss@db.internal:5432/app")).toBe(
+      "postgres://[REDACTED_CREDENTIALS]@db.internal:5432/app",
+    );
+  });
+});

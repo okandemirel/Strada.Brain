@@ -57,6 +57,20 @@ const buildEnvPattern = (keys: string[]): RegExp =>
     "gi",
   );
 
+/**
+ * Like buildEnvPattern, but an unquoted value that is immediately called —
+ * `cacheKey = BuildCacheKeyForPlayer(profile)` — is code, not a credential.
+ * Redacting it mangled C# kept in memory and task results (SEC-9). Quoted
+ * values and env/YAML-style values are still redacted.
+ */
+const buildAssignedSecretPattern = (keys: string[]): RegExp =>
+  new RegExp(
+    `(?:${keys.join("|")})["']?\\s*[:=]\\s*` +
+      `(?:["'][a-zA-Z0-9_\\-\\/+=]{${MIN_KEY_LENGTH},}["']?` +
+      `|[a-zA-Z0-9_\\-\\/+=]{${MIN_KEY_LENGTH},}(?![a-zA-Z0-9_\\-\\/+=(]))`,
+    "gi",
+  );
+
 // ─── Default Patterns ────────────────────────────────────────────────────────
 
 export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
@@ -84,8 +98,12 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   },
   { name: "aws_access_key", pattern: /AKIA[0-9A-Z]{16}/g, redaction: "[REDACTED_AWS_KEY]" },
   {
+    // Token shape: base64 of the numeric bot id (so it holds a digit), a
+    // 6-character timestamp, then the HMAC. Without the digit and the fixed
+    // middle length, dotted C# namespaces matched (SEC-9). The lookbehind keeps
+    // a match from starting inside a longer dotted identifier.
     name: "discord_token",
-    pattern: /[MN][A-Za-z\d]{20,}\.[\w-]{6,}\.[\w-]{20,}/g,
+    pattern: /(?<![\w.-])[MNO](?=[A-Za-z\d]{0,80}\d)[A-Za-z\d]{20,}\.[\w-]{6}\.[\w-]{20,}/g,
     redaction: "[REDACTED_DISCORD_TOKEN]",
   },
   {
@@ -155,10 +173,12 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
     redaction: "[REDACTED_SLACK_WEBHOOK]",
   },
   {
+    // The password may itself contain "@": credentials run to the LAST "@"
+    // before the host, or the tail of such a password leaked (SEC-9).
     name: "database_url",
-    pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/\s]+/gi,
+    pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^:\s/]+:\S*@[^/\s@]+/gi,
     redaction: (match: string) => {
-      const urlMatch = match.match(/^(\w+:\/\/)[^:]+:[^@]+(@.+)$/);
+      const urlMatch = match.match(/^(\w+:\/\/)[^:]+:.*(@[^@]+)$/);
       return urlMatch
         ? `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}`
         : "[REDACTED_DATABASE_URL]";
@@ -172,9 +192,12 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
     redaction: "[REDACTED_AWS_SECRET]",
   },
   {
+    // Any PRIVATE KEY armour (ENCRYPTED, PGP ... BLOCK, ...), up to its END
+    // line or, for a partial read that cut the block, the end of the input.
+    // Both used to pass through unredacted (SEC-9).
     name: "private_key",
     pattern:
-      /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
     redaction: "[REDACTED_PRIVATE_KEY]",
   },
   {
@@ -192,7 +215,7 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   { name: "env_value", pattern: /^([A-Z_][A-Z0-9_]*)=(.+)$/gm, redaction: "$1=[REDACTED]" },
   {
     name: "secret_value",
-    pattern: buildEnvPattern(["secret", "token", "password", "key"]),
+    pattern: buildAssignedSecretPattern(["secret", "token", "password", "key"]),
     redaction: "[REDACTED_SECRET]",
   },
 ];
