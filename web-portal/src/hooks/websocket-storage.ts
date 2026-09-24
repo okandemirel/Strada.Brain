@@ -44,6 +44,7 @@ function normalizeStoredMessage(value: unknown): ChatMessage | null {
   const feedback = candidate.feedback === 'thumbs_up' || candidate.feedback === 'thumbs_down'
     ? candidate.feedback
     : undefined
+  const failed = candidate.sender === 'user' && candidate.deliveryState === 'failed'
 
   return {
     id: candidate.id,
@@ -54,6 +55,7 @@ function normalizeStoredMessage(value: unknown): ChatMessage | null {
     timestamp: candidate.timestamp,
     ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     ...(feedback ? { feedback } : {}),
+    ...(failed ? { deliveryState: 'failed' as const } : {}),
   }
 }
 
@@ -95,6 +97,10 @@ export function writeSessionMessages(
       timestamp: message.timestamp,
       ...(message.instinctIds && message.instinctIds.length > 0 ? { instinctIds: message.instinctIds } : {}),
       ...(message.feedback ? { feedback: message.feedback } : {}),
+      // An undelivered message must not come back looking delivered (WEB-9).
+      // A pending one is stored as failed: its outbound queue lives only in
+      // this page, so after a reload nothing will ever send it.
+      ...(message.sender === 'user' && message.deliveryState ? { deliveryState: 'failed' } : {}),
     }))
 
   try {

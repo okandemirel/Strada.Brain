@@ -59,6 +59,27 @@ describe('websocket session storage', () => {
     ])
   })
 
+  // WEB-9: the delivery state used to be dropped on write, so after a reload
+  // a message the agent never received looked like a normally sent one.
+  it('keeps undelivered user messages marked failed across a reload', () => {
+    const storage = createStorage()
+    const messages: ChatMessage[] = [
+      { id: 'f', sender: 'user', text: 'failed', isMarkdown: false, timestamp: 1, deliveryState: 'failed' },
+      { id: 'p', sender: 'user', text: 'pending', isMarkdown: false, timestamp: 2, deliveryState: 'pending' },
+      { id: 'd', sender: 'user', text: 'delivered', isMarkdown: false, timestamp: 3 },
+    ]
+
+    writeSessionMessages('chat-1', messages, storage)
+    const restored = readSessionMessages('chat-1', storage)
+
+    // A pending message's queue lived only in the old page: nothing will send it.
+    expect(restored.map((m) => [m.id, m.deliveryState])).toEqual([
+      ['f', 'failed'],
+      ['p', 'failed'],
+      ['d', undefined],
+    ])
+  })
+
   it('returns an empty array for malformed stored data', () => {
     const storage = createStorage({
       'strada-session-messages:chat-1': '{"bad":true}',

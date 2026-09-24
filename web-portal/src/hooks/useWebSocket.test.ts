@@ -624,3 +624,39 @@ describe('useWebSocket session ownership (WEB-1)', () => {
     expect(live!.readyState).toBe(MockWebSocket.CONNECTING)
   })
 })
+
+// WEB-9: once the retry cap was hit, the fired reconnect timer's stale id made
+// every later send think a reconnect was pending, so none ever happened and
+// the message stayed "Sending..." forever.
+describe('useWebSocket after the retry cap (WEB-9)', () => {
+  beforeEach(() => {
+    installTestEnvironment()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    restoreTestEnvironment()
+    vi.useRealTimers()
+  })
+
+  it('reconnects when the user sends after the retries ran out, and delivers the message', () => {
+    const { result } = renderHook(() => useWebSocket())
+    for (let i = 0; i < 9; i++) {
+      act(() => { MockWebSocket.instances.at(-1)!.close() })
+      act(() => { vi.advanceTimersByTime(31_000) })
+    }
+    expect(useSessionStore.getState().reconnectExhausted).toBe(true)
+    const before = MockWebSocket.instances.length
+
+    act(() => { result.current.sendMessage('hello again') })
+    expect(MockWebSocket.instances).toHaveLength(before + 1)
+    expect(useSessionStore.getState().reconnectExhausted).toBe(false)
+
+    const socket = MockWebSocket.instances.at(-1)!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-9', reconnectToken: 'r', profileId: 'p' })
+    })
+    expect(socket.sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'message', text: 'hello again' }))
+  })
+})

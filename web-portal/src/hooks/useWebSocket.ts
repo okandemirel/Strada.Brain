@@ -406,6 +406,9 @@ export function useWebSocket(): UseWebSocketReturn {
 
       // Auto-reconnect with exponential backoff
       reconnectTimerRef.current = setTimeout(() => {
+        // A fired timer is no longer pending: a stale id here made every
+        // later send believe a reconnect was already scheduled (WEB-9).
+        reconnectTimerRef.current = null
         if (!mountedRef.current) return
         useSessionStore.getState().setStatus('reconnecting')
         connectRef.current?.()
@@ -743,6 +746,13 @@ export function useWebSocket(): UseWebSocketReturn {
         // Queued, not sent: only the user's "use it here" takes the chat back.
         !useSessionStore.getState().sessionTaken
       ) {
+        // After the retry cap a send is the user asking to try again: start a
+        // fresh round of attempts instead of one that is already used up.
+        if (useSessionStore.getState().reconnectExhausted) {
+          reconnectAttemptsRef.current = 0
+          reconnectDelayRef.current = INITIAL_RECONNECT_DELAY
+          useSessionStore.getState().setReconnectExhausted(false)
+        }
         useSessionStore.getState().setStatus('reconnecting')
         connectRef.current?.()
       }
