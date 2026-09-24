@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { IAIProvider } from "./provider.interface.js";
 import type { ProviderCapabilities } from "./provider.interface.js";
 import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
+import { DEFAULT_CLAUDE_MODEL } from "./claude.js";
 import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import type { ProviderSelectionMode } from "./provider-preferences.js";
@@ -353,7 +354,7 @@ export class ProviderManager {
   private getDefaultModelForProvider(name: string): string {
     const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
     if (canonicalName === "claude" || canonicalName === "anthropic") {
-      return this.modelOverrides?.[canonicalName] ?? "claude-sonnet-4-6-20250514";
+      return this.modelOverrides?.[canonicalName] ?? DEFAULT_CLAUDE_MODEL;
     }
     if (canonicalName === "ollama") {
       return this.modelOverrides?.[canonicalName] ?? "llama3.3";
@@ -956,7 +957,7 @@ export class ProviderManager {
       available.push(this.buildAvailableEntry(
         "claude",
         "Anthropic Claude",
-        this.modelOverrides?.["claude"] ?? "claude-sonnet-4-6-20250514",
+        this.modelOverrides?.["claude"] ?? DEFAULT_CLAUDE_MODEL,
       ));
     }
 

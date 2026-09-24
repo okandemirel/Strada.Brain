@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IAIProvider } from "./provider.interface.js";
+import { DEFAULT_CLAUDE_MODEL } from "./claude.js";
 
 const { preferenceState, buildProviderChainMock } = vi.hoisted(() => ({
   preferenceState: new Map<string, {
@@ -555,7 +556,9 @@ describe("ProviderManager", () => {
     );
 
     // TEETH: unfixed code returns "default" (no PROVIDER_PRESETS["claude"] entry).
-    expect(manager.getActiveInfo("chat-claude").model).toBe("claude-sonnet-4-6-20250514");
+    // PRV-5: and it must be an id that resolves — this used to be a
+    // date-suffixed alias that 404'd on every call.
+    expect(manager.getActiveInfo("chat-claude").model).toBe(DEFAULT_CLAUDE_MODEL);
   });
 
   it("throws instead of silently falling back when a hard-pinned provider cannot be built (L4)", async () => {

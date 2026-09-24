@@ -1,5 +1,6 @@
 import { vi, beforeEach } from "vitest";
-import { ClaudeProvider } from "./claude.js";
+import { readFileSync } from "node:fs";
+import { ClaudeProvider, DEFAULT_CLAUDE_MODEL } from "./claude.js";
 
 vi.mock("@anthropic-ai/sdk", () => {
   const mockCreate = vi.fn();
@@ -232,5 +233,32 @@ describe("ClaudeProvider", () => {
         },
       ],
     });
+  });
+});
+
+// PRV-5: two call sites defaulted to a date-suffixed Claude id that does not
+// resolve, so supervisor planning/verification 404'd whenever no model was set.
+describe("the default Claude model", () => {
+  async function offlineModels(): Promise<string[]> {
+    // The mocked client has no models.list, which is exactly the offline path.
+    return new ClaudeProvider("test-api-key").listModels();
+  }
+
+  it("is in the provider's own offline model list", async () => {
+    expect(await offlineModels()).toContain(DEFAULT_CLAUDE_MODEL);
+  });
+
+  it("is the only Claude id the default-model call sites hardcode", async () => {
+    const known = new Set(await offlineModels());
+    const sites = [
+      new URL("./provider-manager.ts", import.meta.url),
+      new URL("../multi/delegation/delegation-manager.ts", import.meta.url),
+    ];
+    for (const site of sites) {
+      const source = readFileSync(site, "utf8");
+      for (const [, id] of source.matchAll(/"(claude-(?:opus|sonnet|haiku)[a-z0-9.-]*)"/g)) {
+        expect(known, `${site.pathname} hardcodes ${id}`).toContain(id);
+      }
+    }
   });
 });

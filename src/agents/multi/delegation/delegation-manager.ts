@@ -35,6 +35,7 @@ import { resolveDelegationBudget } from "./delegation-budget.js";
 import type { TierRouter } from "./tier-router.js";
 import type { ProviderCredentialMap, ProviderConfig } from "../../providers/provider-registry.js";
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
+import { DEFAULT_CLAUDE_MODEL } from "../../providers/claude.js";
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
@@ -1184,7 +1185,7 @@ export class DelegationManager {
     const configuredModel = this.opts.providerModels?.[name];
     if (configuredModel) return configuredModel;
     if (name === "claude" || name === "anthropic") {
-      return "claude-sonnet-4-6-20250514";
+      return DEFAULT_CLAUDE_MODEL;
     }
     const preset = PROVIDER_PRESETS[name]?.defaultModel;
     if (preset) return preset;

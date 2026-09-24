@@ -15,6 +15,14 @@ import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 
 /**
+ * The Claude model used when nothing configures one. The single source for
+ * every hardcoded Claude default, so no call site can drift to an id that does
+ * not resolve (a date-suffixed alias 404'd on every call). It must stay in
+ * {@link ClaudeProvider}'s offline model list.
+ */
+export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
+
+/**
  * Claude AI provider using the Anthropic SDK.
  * Primary provider for Strada Brain.
  */
@@ -40,7 +48,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       | string
       | { mode: "api-key"; apiKey: string }
       | { mode: "claude-subscription"; authToken: string },
-    model = "claude-sonnet-5",
+    model = DEFAULT_CLAUDE_MODEL,
   ) {
     let normalizedAuth: { apiKey: string } | { authToken: string };
     if (typeof auth === "string") {
@@ -137,7 +145,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     // id that does not resolve, which is how the previous entries here 404'd.
     return [
       "claude-opus-5",
-      "claude-sonnet-5",
+      DEFAULT_CLAUDE_MODEL,
       "claude-haiku-4-5",
     ];
   }
