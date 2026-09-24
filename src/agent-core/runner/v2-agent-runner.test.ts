@@ -860,6 +860,30 @@ describe("V2AgentRunner — the interactive token budget does not cap non-intera
   );
 });
 
+describe("V2AgentRunner — interactive auto-continue with background auto-continue off", () => {
+  it("rolls the interactive run into a second epoch", async () => {
+    const handles = mkPlane();
+    const toolTurn = mkResponse({
+      text: "",
+      stopReason: "tool_use",
+      toolCalls: [{ id: "t1", name: "file_read", input: {} }],
+    });
+    const gateway = new ModelGateway(scriptedStream([toolTurn, mkResponse({ text: "done" })]));
+    const port = mkPort(mkProvider(), { iterationLimit: 1, planTransitionTo: AgentPhase.EXECUTING });
+    Object.assign(port, {
+      canAutoContinueInteractiveEpoch: (n: number) => n < 3,
+      canAutoContinueBackgroundEpoch: () => false,
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    expect(handles.events().some((e) => e.type === "epoch.rolled")).toBe(true);
+    expect(result.reason).not.toBe("epoch-budget-exhausted");
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("V2AgentRunner — request.maxEpochs caps background auto-continue", () => {
   it("a delegated run capped at one epoch takes exactly its iteration limit of steps", async () => {
     // A delegated sub-agent's maxIterations is the epoch iteration limit; with background

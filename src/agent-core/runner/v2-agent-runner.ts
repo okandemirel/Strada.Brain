@@ -926,7 +926,10 @@ export class V2AgentRunner implements AgentRunner {
           break;
         }
         const epochCapReached = request.maxEpochs !== undefined && epoch + 1 >= request.maxEpochs;
-        if (epochCapReached || !port.canAutoContinueBackgroundEpoch(epoch + 1)) {
+        // An interactive run that got here was allowed to continue by the interactive check
+        // above (which already applies the shared epoch cap); the background auto-continue
+        // switch is not its to consult — with it off, interactive auto-continue ended silently.
+        if (epochCapReached || (!isInteractive(mode) && !port.canAutoContinueBackgroundEpoch(epoch + 1))) {
           // GAP3 — the epoch-budget-exhausted STOP path. Fire v1's end-of-epoch side effects with
           // continued=false BEFORE the break, so the "blocked" phase-outcome telemetry + the
           // per-epoch persistExecutionMemory still run (v1 runBackgroundTask's end-of-epoch ran on the
