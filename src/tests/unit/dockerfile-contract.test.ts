@@ -173,6 +173,22 @@ function lifecyclePrerequisiteDirs(): string[] {
   return [...dirs];
 }
 
+describe(".dockerignore", () => {
+  // OPS-23. A bare pattern only matches at the context root, and the build
+  // copies web-portal/ after `npm ci --prefix web-portal`: a host
+  // web-portal/node_modules replaced the clean install, and any nested .env
+  // entered the build context.
+  it("excludes node_modules, dist and .env files at every depth", () => {
+    const patterns = readFileSync(path.join(repoRoot, ".dockerignore"), "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    for (const name of ["node_modules", "dist", ".env", ".env.*"]) {
+      expect(patterns, `**/${name}`).toContain(`**/${name}`);
+    }
+  });
+});
+
 const DOCKERFILES = ["Dockerfile", "docker/Dockerfile.hardened"] as const;
 
 describe.each(DOCKERFILES)("%s", (relPath) => {
