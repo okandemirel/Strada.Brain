@@ -1,4 +1,4 @@
-import { useEffect, Suspense, lazy } from 'react';
+import { useEffect, useState, Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   useVaultStore,
@@ -54,18 +54,42 @@ export default function VaultGraphTab() {
   const selected = useVaultStore((s) => s.selected);
   const graph = useVaultStore((s) => (selected ? s.graphCache[selected] : undefined));
   const setGraph = useVaultStore((s) => s.setGraph);
+  // The vault whose graph failed to load this visit. A failure is not cached
+  // as an empty graph, which stuck until the cache was cleared (WEB-22).
+  const [failedFor, setFailedFor] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selected || graph !== undefined) return;
+    if (!selected || graph !== undefined || failedFor === selected) return;
     setGraph(selected, null);
     apiFetch(`/api/vaults/${encodeURIComponent(selected)}/canvas`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`vault graph failed: ${r.status}`);
+        return r.json();
+      })
       .then((j) => setGraph(selected, sanitizeCanvas(j)))
-      .catch(() => setGraph(selected, { nodes: [], edges: [] }));
-  }, [selected, graph, setGraph]);
+      .catch(() => {
+        useVaultStore.setState((s) => {
+          const graphCache = { ...s.graphCache };
+          delete graphCache[selected];
+          return { graphCache };
+        });
+        setFailedFor(selected);
+      });
+  }, [selected, graph, setGraph, failedFor]);
 
   if (!selected) {
     return <div className="p-4 text-sm text-muted-foreground">{t('empty.selectVault')}</div>;
+  }
+
+  if (failedFor === selected) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground">
+        {t('empty.graphFailed')}{' '}
+        <button type="button" className="underline" onClick={() => setFailedFor(null)}>
+          {t('empty.retry')}
+        </button>
+      </div>
+    );
   }
 
   if (!graph) {

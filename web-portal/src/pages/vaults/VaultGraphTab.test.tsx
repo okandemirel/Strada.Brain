@@ -52,6 +52,23 @@ describe('VaultGraphTab', () => {
     await waitFor(() => expect(screen.getByTestId('graph-canvas')).toBeInTheDocument());
   });
 
+  // WEB-22: a failed load was cached as an empty graph ("No graph data") and
+  // never retried until the cache was cleared.
+  it('does not cache a failed load as an empty graph, and can retry it', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('offline'))
+    render(<VaultGraphTab />);
+    await waitFor(() => expect(screen.getByText('Could not load the graph.')).toBeInTheDocument());
+    expect(screen.queryByText(/no graph data/i)).toBeNull();
+    expect(useVaultStore.getState().graphCache).not.toHaveProperty('v1');
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ nodes: [{ id: 'a', type: 'text', text: 'Foo', x: 0, y: 0, width: 100, height: 60 }], edges: [] }),
+    });
+    screen.getByRole('button', { name: 'Retry' }).click();
+    await waitFor(() => expect(screen.getByTestId('graph-canvas')).toBeInTheDocument());
+  });
+
   it('shows empty-state message when canvas has no nodes', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ nodes: [], edges: [] }) });
     render(<VaultGraphTab />);

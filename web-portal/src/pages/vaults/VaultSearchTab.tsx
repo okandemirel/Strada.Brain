@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search as SearchIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,23 +21,36 @@ export default function VaultSearchTab() {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const requestSeqRef = useRef(0);
 
   const run = async () => {
     if (!selected || !text.trim()) return;
+    const seq = ++requestSeqRef.current;
+    const vaultId = selected;
+    // Only the newest query, for the vault still selected, may write results:
+    // a slow answer for vault A used to land under vault B (WEB-22).
+    const stillCurrent = () => seq === requestSeqRef.current && useVaultStore.getState().selected === vaultId;
     setLoading(true);
     setSubmitted(true);
+    setFailed(false);
     try {
-      const res = await apiFetch(`/api/vaults/${encodeURIComponent(selected)}/search`, {
+      const res = await apiFetch(`/api/vaults/${encodeURIComponent(vaultId)}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, topK: 20 }),
       });
+      // An error answer is a failure, not "no matches".
+      if (!res.ok) throw new Error(`vault search failed: ${res.status}`);
       const data = await res.json();
-      setSearchResults(data.hits ?? []);
+      if (!stillCurrent()) return;
+      setSearchResults(Array.isArray(data?.hits) ? data.hits : []);
     } catch {
+      if (!stillCurrent()) return;
       setSearchResults([]);
+      setFailed(true);
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) setLoading(false);
     }
   };
 
@@ -75,6 +88,8 @@ export default function VaultSearchTab() {
       <div className="flex-1 overflow-auto">
         {!submitted ? (
           <VaultEmptyState kind="empty" label={t('search.empty')} />
+        ) : failed ? (
+          <VaultEmptyState kind="error" label={t('search.failed')} onRetry={run} retryLabel={t('search.run')} />
         ) : searchResults.length === 0 ? (
           <VaultEmptyState kind="no-match" label={t('empty.noMatches')} />
         ) : (

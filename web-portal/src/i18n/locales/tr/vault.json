@@ -37,6 +37,8 @@
   "empty.selectVault": "Graf için bir vault seç.",
   "empty.fetching": "Yükleniyor…",
   "empty.noGraphData": "Graf verisi yok",
+  "empty.graphFailed": "Graf yüklenemedi.",
+  "empty.retry": "Tekrar dene",
   "empty.loading": "Graf yükleniyor…",
   "empty.noSymbols": "Henüz indekslenmiş sembol yok.",
   "empty.noMatches": "Mevcut filtrelerle eşleşen sembol yok.",
@@ -77,6 +79,7 @@
   "search.running": "Aranıyor…",
   "search.empty": "Sonuçları görmek için bir sorgu çalıştır.",
   "search.selectVault": "Aramak için bir vault seç.",
+  "search.failed": "Arama başarısız oldu. Tekrar dene.",
 
   "files.selectVault": "Bir vault seç",
   "files.pickFile": "Bir dosya seç",

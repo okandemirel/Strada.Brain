@@ -37,6 +37,8 @@
   "empty.selectVault": "Select a vault to view the graph.",
   "empty.fetching": "Loading…",
   "empty.noGraphData": "No graph data",
+  "empty.graphFailed": "Could not load the graph.",
+  "empty.retry": "Retry",
   "empty.loading": "Loading graph…",
   "empty.noSymbols": "No symbols indexed yet.",
   "empty.noMatches": "No symbols match the current filters.",
@@ -77,6 +79,7 @@
   "search.running": "Searching…",
   "search.empty": "Run a query to see results.",
   "search.selectVault": "Select a vault to search.",
+  "search.failed": "Search failed. Try again.",
 
   "files.selectVault": "Select a vault",
   "files.pickFile": "Pick a file",
