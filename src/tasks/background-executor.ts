@@ -23,12 +23,38 @@ import type {
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import { markSystemInterruption, SHUTDOWN_ABORT_REASON } from "./interruption.js";
 import { judgePublication, type LeaseCommitResult } from "./publication.js";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
 import { deriveTestVerdict } from "./test-verdict.js";
+
+const execFileAsync = promisify(execFile);
+
+/** Branch names a delivery may integrate — and only when a run of ours created them. */
+const INTEGRATION_BRANCH_RE = /^(milestone|feature)\//;
+
+/** git at the source root, off the event loop. Rejects on a non-zero exit (err.code = exit status). */
+async function gitAtRoot(root: string, args: readonly string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    windowsHide: true,
+  });
+  return stdout;
+}
+
+/** The local branches that match the integration pattern, by short name. */
+async function listIntegrationBranches(root: string): Promise<string[]> {
+  const out = await gitAtRoot(root, ["for-each-ref", "--format=%(refname)", "refs/heads/"]);
+  return out
+    .split("\n")
+    .map((ref) => ref.trim().replace(/^refs\/heads\//, ""))
+    .filter((branch) => INTEGRATION_BRANCH_RE.test(branch));
+}
+
 function getLoggerSafe() {
   try {
     // Lazy require-free import chain: use the shared logger.
@@ -268,6 +294,14 @@ export class BackgroundExecutor {
    * reaper sweeps this map and settles lost workspaces by name.
    */
   private readonly inflightWorkspacePaths = new Map<string, string>();
+  /**
+   * Integration branches a run of this executor created (they did not exist
+   * when the run started) and that have not been merged yet. Only these are
+   * ever merged: every other `feature/*` / `milestone/*` is the person's.
+   * One that could not be merged (conflict, lock timeout) stays here for the
+   * next delivery.
+   */
+  private readonly integrationLedger = new Set<string>();
   private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
@@ -1622,6 +1656,8 @@ export class BackgroundExecutor {
 
     let requestFailed = false;
     let integrateAfterWriteBack = false;
+    /** The integration branches that existed before this run — never merged by it. */
+    let integrationBaseline: ReadonlySet<string> | undefined;
     /**
      * A success that is not announced until its files are in the project.
      *
@@ -1675,6 +1711,8 @@ export class BackgroundExecutor {
         });
         this.inflightWorkspacePaths.set(String(task.id), taskWorkspaceLease.path);
       }
+      // Before any agent runs: what exists now is not this run's to merge.
+      if (!singleAgent) integrationBaseline = await this.snapshotIntegrationBaseline();
       const admission = await this.resolveTopLevelAdmission({
         task,
         taskOrchestrator,
@@ -2108,7 +2146,9 @@ export class BackgroundExecutor {
       }
       // Merging milestone branches on top of work that never landed would
       // publish a half-finished tree under a green branch (Q#8).
-      if (integrateAfterWriteBack && taskPublicationLoss === undefined) await this.integrateMilestoneBranches(task);
+      if (integrateAfterWriteBack && taskPublicationLoss === undefined) {
+        await this.integrateMilestoneBranches(task, integrationBaseline);
+      }
       // THE ONE TERMINAL. It is emitted here, after the lease has published
       // and after integration, so nothing downstream ever sees a completed
       // task whose work is not in the project yet.
@@ -2306,19 +2346,63 @@ export class BackgroundExecutor {
    * Returns true when a retry was scheduled (caller must NOT also fail()).
    */
   /**
+   * The integration branches that exist before a run starts. A branch in this
+   * set was not created by the run, so the run's delivery never merges it.
+   * Undefined when the source root cannot be read (not a git repo): nothing is
+   * then recorded, and nothing is merged.
+   */
+  private async snapshotIntegrationBaseline(): Promise<ReadonlySet<string> | undefined> {
+    const root = this.projectPath;
+    if (!root) return undefined;
+    try {
+      return new Set(await listIntegrationBranches(root));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Merge delivered milestone/feature branches into the current branch at the
    * source root. Best-effort: a conflicted or non-fast history is left for the
    * person, with the conflict named in the log — never silently dropped.
+   *
+   * ONLY branches a run of ours created. This used to merge every local
+   * `feature/*` and `milestone/*` into whatever the person had checked out —
+   * their own work-in-progress branches included — with blocking git calls on
+   * the event loop (TSK-3). A branch is now eligible only when it appeared
+   * during a run (absent from that run's `baseline`), and never while it is
+   * checked out in some worktree (a run still working on it, or the person).
    */
-  private async integrateMilestoneBranches(task: Task): Promise<void> {
+  private async integrateMilestoneBranches(task: Task, baseline: ReadonlySet<string> | undefined): Promise<void> {
     const root = this.projectPath;
     if (!root) return;
+    let checkedOut: Set<string>;
+    try {
+      if (baseline) {
+        for (const branch of await listIntegrationBranches(root)) {
+          if (!baseline.has(branch)) this.integrationLedger.add(branch);
+        }
+      }
+      if (this.integrationLedger.size === 0) return; // nothing of ours to integrate
+      checkedOut = new Set(
+        (await gitAtRoot(root, ["worktree", "list", "--porcelain"]))
+          .split("\n")
+          .filter((line) => line.startsWith("branch refs/heads/"))
+          .map((line) => line.slice("branch refs/heads/".length).trim()),
+      );
+    } catch (e) {
+      getLoggerSafe().warn("Milestone integration failed — delivered branches may be left unmerged", {
+        task: task.id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     // MERGING IS A BULK WRITE. It ran with no lock at all, after the lease
     // publication had released its own, so a merge could interleave with the
     // next publisher's copy-back (Codex 2026-09-12 S#4).
     const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
-    // A short wait: an unmerged branch is picked up by the next delivery,
-    // while a long wait here holds the settlement path open.
+    // A short wait: an unmerged branch stays in the ledger and is picked up by
+    // the next delivery, while a long wait here holds the settlement path open.
     const lock = await acquireProjectWriteLock(root, { timeoutMs: 15_000 });
     if (!lock.acquired) {
       getLogger().error("Milestone branch integration skipped — the project write lock could not be taken", {
@@ -2327,31 +2411,35 @@ export class BackgroundExecutor {
       return;
     }
     try {
-      const run = (args: string[]): string =>
-        execFileSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 30_000 });
-      const current = run(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-      const branches = run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
-        .split("\n")
-        .map((b) => b.trim())
-        .filter((b) => /^(milestone|feature)\//.test(b) && b !== current);
-      for (const branch of branches) {
+      const current = (await gitAtRoot(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      const existing = new Set(await listIntegrationBranches(root));
+      for (const branch of [...this.integrationLedger].sort()) {
+        if (!existing.has(branch)) {
+          this.integrationLedger.delete(branch); // deleted since: nothing left to deliver
+          continue;
+        }
+        if (branch === current || checkedOut.has(branch)) continue;
+        const ref = `refs/heads/${branch}`;
         // `merge-base --is-ancestor` answers with its EXIT CODE: 0 = already
         // integrated, 1 = not an ancestor = the branch that needs merging.
-        // execFileSync throws on any non-zero exit, and this line sat one line
-        // BEFORE the per-branch try — so every branch that needed merging threw
-        // past the loop into the outer catch, `git merge` below was unreachable,
-        // and the failure logged at DEBUG. Audited 2026-09-02: 100% of
-        // deliveries left their milestone branch unmerged.
-        const probe = spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", branch, current], {
-          encoding: "utf8",
-          timeout: 30_000,
-        });
-        if (probe.status === 0) continue;
-        if (probe.status !== 1) {
-          // Not "unmerged" but "could not tell" — say so rather than merging blind.
-          getLoggerSafe().warn("Milestone branch merge state could not be determined", {
-            branch, task: task.id, status: probe.status, error: (probe.stderr || probe.error?.message || "").slice(0, 200),
-          });
+        // Audited 2026-09-02: treating exit 1 as a thrown failure made `git
+        // merge` unreachable and left 100% of deliveries unmerged.
+        let probeStatus: unknown = 0;
+        try {
+          await gitAtRoot(root, ["merge-base", "--is-ancestor", ref, current]);
+        } catch (probeErr) {
+          probeStatus = (probeErr as { code?: unknown }).code;
+          if (probeStatus !== 1) {
+            // Not "unmerged" but "could not tell" — say so rather than merging blind.
+            getLoggerSafe().warn("Milestone branch merge state could not be determined", {
+              branch, task: task.id, status: probeStatus,
+              error: (probeErr instanceof Error ? probeErr.message : String(probeErr)).slice(0, 200),
+            });
+            continue;
+          }
+        }
+        if (probeStatus === 0) {
+          this.integrationLedger.delete(branch);
           continue;
         }
         try {
@@ -2359,7 +2447,8 @@ export class BackgroundExecutor {
           // current branch and then logged "Integrated" — a full integration
           // claimed while the milestone's side was silently discarded. A real
           // conflict now fails into the manual-integration path below.
-          run(["merge", "--no-ff", branch, "-m", `integrate ${branch} (post-delivery)`]);
+          await gitAtRoot(root, ["merge", "--no-ff", ref, "-m", `integrate ${branch} (post-delivery)`]);
+          this.integrationLedger.delete(branch);
           getLoggerSafe().info("Integrated delivered milestone branch", { branch, task: task.id });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -2367,7 +2456,7 @@ export class BackgroundExecutor {
             branch, task: task.id, error: msg.slice(0, 200),
           });
           try {
-            run(["merge", "--abort"]);
+            await gitAtRoot(root, ["merge", "--abort"]);
           } catch { /* nothing to abort */ }
         }
       }

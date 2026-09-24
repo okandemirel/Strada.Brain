@@ -3464,6 +3464,11 @@ describe("BackgroundExecutor - mission keep-alive on the direct-worker route", (
   });
 });
 
+interface IntegrationSeam {
+  integrateMilestoneBranches(t: Task, baseline: ReadonlySet<string> | undefined): Promise<void>;
+  snapshotIntegrationBaseline(): Promise<ReadonlySet<string> | undefined>;
+}
+
 describe("BackgroundExecutor - integrateMilestoneBranches", () => {
   it("does not merge without the project write lock (Codex 2026-09-12 S#4)", async () => {
     // Integration ran with no lock at all, after the lease publication had
@@ -3493,8 +3498,8 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     });
     logSpies.error.mockClear();
     try {
-      await (executor as unknown as { integrateMilestoneBranches(t: Task): Promise<void> })
-        .integrateMilestoneBranches(createTestTask());
+      // An empty baseline: the branch appeared during the run (TSK-3).
+      await (executor as unknown as IntegrationSeam).integrateMilestoneBranches(createTestTask(), new Set());
 
       expect(logSpies.error).toHaveBeenCalledWith(
         "Milestone branch integration skipped — the project write lock could not be taken",
@@ -3546,9 +3551,9 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     logSpies.debug.mockClear();
     try {
       // Merging is a bulk write and takes the project write lock now
-      // (Codex 2026-09-12 S#4), so it is awaited.
-      await (executor as unknown as { integrateMilestoneBranches(t: Task): Promise<void> })
-        .integrateMilestoneBranches(createTestTask());
+      // (Codex 2026-09-12 S#4), so it is awaited. Both branches appeared
+      // during the run: the baseline taken before it was empty (TSK-3).
+      await (executor as unknown as IntegrationSeam).integrateMilestoneBranches(createTestTask(), new Set());
 
       const isAncestor = (branch: string): boolean =>
         spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", branch, "main"]).status === 0;
@@ -3577,6 +3582,109 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // TSK-3: integration merged EVERY local feature/* and milestone/* branch into
+  // whatever the person had checked out, their own work in progress included.
+  function repoWithUnrelatedFeatureBranch(prefix: string) {
+    const root = mkdtempSync(join(os.tmpdir(), prefix));
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, "a.txt"), "main\n");
+    git("add", "-A");
+    git("commit", "-qm", "first");
+    // The person's own work in progress, cleanly mergeable and NOT ours.
+    git("checkout", "-q", "-b", "feature/foo");
+    writeFileSync(join(root, "foo.txt"), "wip\n");
+    git("add", "-A");
+    git("commit", "-qm", "person's wip");
+    git("checkout", "-q", "main");
+    const newBranch = (name: string): void => {
+      git("checkout", "-q", "-b", name);
+      writeFileSync(join(root, `${name.replace("/", "-")}.txt`), "delivered\n");
+      git("add", "-A");
+      git("commit", "-qm", name);
+      git("checkout", "-q", "main");
+    };
+    const isAncestor = (branch: string): boolean =>
+      spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", branch, "main"]).status === 0;
+    return { root, newBranch, isAncestor };
+  }
+
+  it("a pre-existing unrelated feature/foo stays unmerged; only the run's own branch is integrated", async () => {
+    const { root, newBranch, isAncestor } = repoWithUnrelatedFeatureBranch("milestone-int-own-");
+    const executor = new BackgroundExecutor({ orchestrator: createMockOrchestrator() as any, projectPath: root });
+    const seam = executor as unknown as IntegrationSeam;
+    try {
+      const baseline = await seam.snapshotIntegrationBaseline();
+      expect(baseline).toEqual(new Set(["feature/foo"]));
+      newBranch("milestone/sprint-a"); // what the run created
+      await seam.integrateMilestoneBranches(createTestTask(), baseline);
+      expect(isAncestor("milestone/sprint-a")).toBe(true);
+      expect(isAncestor("feature/foo")).toBe(false);
+      expect(existsSync(join(root, "foo.txt"))).toBe(false);
+
+      // A later delivery does not pick it up either.
+      await seam.integrateMilestoneBranches(createTestTask(), new Set(["feature/foo", "milestone/sprint-a"]));
+      expect(isAncestor("feature/foo")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("with nothing recorded, integration is skipped entirely (no lock, no merge)", async () => {
+    const { root, newBranch, isAncestor } = repoWithUnrelatedFeatureBranch("milestone-int-none-");
+    const executor = new BackgroundExecutor({ orchestrator: createMockOrchestrator() as any, projectPath: root });
+    try {
+      newBranch("milestone/sprint-b");
+      await (executor as unknown as IntegrationSeam).integrateMilestoneBranches(createTestTask(), undefined);
+      expect(isAncestor("milestone/sprint-b")).toBe(false);
+      expect(isAncestor("feature/foo")).toBe(false);
+      expect(existsSync(join(root, ".strada", "locks"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a successful supervisor run integrates the branch it created and leaves the person's alone", async () => {
+    const { root, newBranch, isAncestor } = repoWithUnrelatedFeatureBranch("milestone-int-run-");
+    const orchestrator = createMockOrchestrator();
+    orchestrator.evaluateSupervisorAdmission.mockImplementation(async () => {
+      newBranch("milestone/sprint-run"); // an agent's branch, minted during the run
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true, partial: false, output: "delivered", totalNodes: 1, succeeded: 1,
+          failed: 0, skipped: 0, blocked: 0, totalCost: 0, totalDuration: 0, nodeResults: [],
+        },
+      };
+    });
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      goalStorage: createMockGoalStorage() as any,
+      projectPath: root,
+    });
+    const taskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(taskManager as any);
+    try {
+      executor.enqueue(createTestTask(buildTestGoalTree()), new AbortController().signal, vi.fn());
+      await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 10_000 });
+      expect(isAncestor("milestone/sprint-run")).toBe(true);
+      expect(isAncestor("feature/foo")).toBe(false);
+    } finally {
+      await executor.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("integration never blocks the event loop with synchronous git", () => {
+    const source = readFileSync("src/tasks/background-executor.ts", "utf8");
+    expect(source).not.toMatch(/\bexecFileSync\(|\bspawnSync\(/);
   });
 });
 
