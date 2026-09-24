@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectScopeMatches } from "./project-scope.js";
+import { createProjectScopeFingerprint } from "./runtime-artifact-manager.js";
 
 describe("projectScopeMatches", () => {
   it("returns true when both fingerprints are identical", () => {
@@ -56,5 +57,24 @@ describe("projectScopeMatches", () => {
 
   it("trims whitespace before comparing", () => {
     expect(projectScopeMatches("  root=/home/user/project  ", "root=/home/user/project")).toBe(true);
+  });
+});
+
+// LRN-16: a raw string prefix made a project a "parent scope" of every sibling
+// whose name merely starts with its own.
+describe("projectScopeMatches respects name boundaries (LRN-16)", () => {
+  it("a sibling project whose name extends this one's is not the same scope", () => {
+    expect(projectScopeMatches("root=/a/Tower", "root=/a/TowerDefense")).toBe(false);
+    expect(projectScopeMatches("root=/a/TowerDefense", "root=/a/Tower")).toBe(false);
+    expect(projectScopeMatches("root=/a/my", "root=/a/my_game")).toBe(false);
+  });
+
+  it("normalized fingerprints keep their parent/child and exact matches", () => {
+    const tower = createProjectScopeFingerprint("/work/Tower")!;
+    const towerDefense = createProjectScopeFingerprint("/work/TowerDefense")!;
+    expect(projectScopeMatches(tower, `${towerDefense} analysis unavailable`)).toBe(false);
+    expect(projectScopeMatches(tower, `${tower} analysis unavailable`)).toBe(true);
+    expect(projectScopeMatches(tower, tower)).toBe(true);
+    expect(projectScopeMatches("root=/a/", "root=/a/b")).toBe(true);
   });
 });
