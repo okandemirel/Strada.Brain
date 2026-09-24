@@ -668,15 +668,22 @@ export class DashboardServer {
       }
 
       const isDashboardApi = url.startsWith("/api/");
+      // CHN-5: the webhook route authenticates itself (X-Webhook-Secret OR the
+      // dashboard bearer, see validateWebhookAuth), so the global bearer gate
+      // must not answer for it — that made the narrowly scoped secret unusable
+      // whenever a dashboard token was set. Matched exactly, not by prefix, so
+      // no neighbouring route inherits the exemption.
+      const isWebhookRoute =
+        method === "POST" && (url === "/api/webhook" || url.startsWith("/api/webhook?"));
       const isMutableDashboardApi =
         isDashboardApi &&
         method !== "GET" &&
         method !== "HEAD" &&
         method !== "OPTIONS" &&
-        !url.startsWith("/api/webhook");
+        !isWebhookRoute;
 
       // Token-enabled dashboard APIs always require bearer auth.
-      if (isDashboardApi && this.dashboardToken) {
+      if (isDashboardApi && this.dashboardToken && !isWebhookRoute) {
         if (!this.requireDashboardAuth(req, res)) return;
       }
 
