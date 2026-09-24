@@ -51,4 +51,28 @@ describe("claude subscription auth helpers", () => {
       }),
     );
   });
+
+  // Synchronous and on the setup server's status route: without a bound, a
+  // wedged `claude auth status` froze every other client of that server.
+  it("bounds `claude auth status` and reports a timeout as CLI-unavailable", () => {
+    spawnSyncMock.mockReturnValue({
+      status: null,
+      stdout: "",
+      error: Object.assign(new Error("spawnSync claude ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    });
+
+    const inspection = inspectClaudeSubscriptionAuth({ platform: "linux", env: {} });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "claude",
+      ["auth", "status"],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+    const { timeout } = spawnSyncMock.mock.calls[0]![2] as { timeout: number };
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(10_000);
+    expect(inspection.ok).toBe(false);
+    expect(inspection.issue).toBe("claude-cli-unavailable");
+    expect(inspection.detail).toMatch(/did not answer/);
+  });
 });

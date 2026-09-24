@@ -28,13 +28,29 @@ interface ClaudeAuthStatusPayload {
   subscriptionType?: unknown;
 }
 
+/**
+ * Bound on `claude auth status`. The call is synchronous and runs on the setup
+ * server's status route, so an unbounded wait (a network stall, a first-run
+ * migration, an update prompt) froze the whole event loop with it.
+ */
+const AUTH_STATUS_TIMEOUT_MS = 5000;
+
 function readClaudeAuthStatus(platform: NodeJS.Platform): ClaudeSubscriptionAuthInspection | null {
   const command = platform === "win32" ? "claude.cmd" : "claude";
   const result = spawnSync(command, ["auth", "status"], {
     encoding: "utf8",
     shell: platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: AUTH_STATUS_TIMEOUT_MS,
   });
+
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    return {
+      ok: false,
+      issue: "claude-cli-unavailable",
+      detail: `Claude CLI did not answer \`claude auth status\` within ${AUTH_STATUS_TIMEOUT_MS / 1000}s. Run \`claude setup-token\`, paste the generated token, or switch Claude to API-key mode.`,
+    };
+  }
 
   if (result.error) {
     return {
