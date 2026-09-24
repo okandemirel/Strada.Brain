@@ -582,3 +582,44 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 })
+
+// WEB-7: step node ids (`step-0`…) repeat in every episode. An update that
+// names its root used to land in whichever root was on screen.
+describe('dispatchWorkspaceMessage — updates for colliding node ids (WEB-7)', () => {
+  const stepNode = (status: string) => ({ id: 'step-0', task: 'step', status, reviewStatus: 'none', dependsOn: [] })
+
+  beforeEach(() => {
+    useMonitorStore.getState().clearMonitor()
+    dispatchWorkspaceMessage({ type: 'monitor:dag_init', payload: { rootId: 'ep-A', nodes: [stepNode('completed')], edges: [] } })
+    dispatchWorkspaceMessage({ type: 'monitor:dag_init', payload: { rootId: 'ep-B', nodes: [stepNode('executing')], edges: [] } })
+    // The user looks at the older board while ep-B runs.
+    useMonitorStore.getState().setActiveRootId('ep-A')
+  })
+
+  it('applies a task_update to the root it names, not the one on screen', () => {
+    dispatchWorkspaceMessage({ type: 'monitor:task_update', payload: { rootId: 'ep-B', nodeId: 'step-0', status: 'failed' } })
+    const roots = useMonitorStore.getState().rootsById
+    expect(roots['ep-A'].tasks['step-0']).toEqual(expect.objectContaining({ status: 'completed', rootId: 'ep-A' }))
+    expect(roots['ep-B'].tasks['step-0'].status).toBe('failed')
+  })
+
+  it('applies substeps and narratives to the root they name', () => {
+    dispatchWorkspaceMessage({
+      type: 'monitor:substep',
+      payload: { rootId: 'ep-B', nodeId: 'step-0', substep: { id: 's1', label: 'Edit', status: 'active', order: 0 } },
+    })
+    dispatchWorkspaceMessage({ type: 'progress:narrative', payload: { rootId: 'ep-B', nodeId: 'step-0', narrative: 'Editing files' } })
+    const roots = useMonitorStore.getState().rootsById
+    expect(roots['ep-A'].tasks['step-0'].substeps).toBeUndefined()
+    expect(roots['ep-A'].tasks['step-0'].narrative).toBeUndefined()
+    expect(roots['ep-B'].tasks['step-0'].substeps).toEqual([{ id: 's1', label: 'Edit', status: 'active', order: 0 }])
+    expect(roots['ep-B'].tasks['step-0'].narrative).toBe('Editing files')
+  })
+
+  it('still finds a node by id when the update names a root that does not hold it (guard)', () => {
+    // Goal-tree updates can carry the goal's own root id while the node lives on the episode board.
+    dispatchWorkspaceMessage({ type: 'monitor:task_update', payload: { rootId: 'goal-root', nodeId: 'step-0', status: 'failed' } })
+    expect(useMonitorStore.getState().rootsById['ep-A'].tasks['step-0'].status).toBe('failed')
+    expect(useMonitorStore.getState().rootsById['goal-root']).toBeUndefined()
+  })
+})

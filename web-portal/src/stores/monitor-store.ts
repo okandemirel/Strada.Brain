@@ -159,7 +159,12 @@ interface MonitorState {
   verification: VerificationState
 
   addTask: (task: MonitorTask) => void
-  updateTask: (id: string, updates: Partial<MonitorTask>) => void
+  /**
+   * Merge `updates` into task `id`. `rootId` (else `updates.rootId`) names the
+   * root the update is for; node ids repeat across roots, so it wins over the
+   * active root whenever that root holds the id.
+   */
+  updateTask: (id: string, updates: Partial<MonitorTask>, rootId?: string) => void
   setDAG: (dag: DagState, rootId?: string, meta?: RootMeta) => void
   addActivity: (entry: ActivityEntry) => void
   setActiveRootId: (id: string | null) => void
@@ -244,14 +249,35 @@ function commit(
   return { rootsById: capped, ...mirrorActive(capped, activeRootId) }
 }
 
-/** Find which bucket key currently owns a task id (active root first, then any). */
-function ownerKey(rootsById: Record<string, RootView>, activeRootId: string | null, id: string): string | null {
+/**
+ * Find which bucket key owns a task id: the root the caller names when it holds
+ * the id, else the active root, then any. Node ids such as `step-0` repeat in
+ * every episode, so searching the active root first sent another root's update
+ * to whichever board the user happened to be viewing (WEB-7).
+ */
+function ownerKey(
+  rootsById: Record<string, RootView>,
+  activeRootId: string | null,
+  id: string,
+  namedRootId?: string,
+): string | null {
+  if (namedRootId && rootsById[namedRootId]?.tasks[id]) return namedRootId
   const active = activeRootId ?? DEFAULT_ROOT_KEY
   if (rootsById[active]?.tasks[id]) return active
   for (const key in rootsById) {
     if (rootsById[key].tasks[id]) return key
   }
   return null
+}
+
+/** The task `id` as `updateTask` would resolve it (see ownerKey). */
+export function findTask(
+  s: Pick<MonitorState, 'rootsById' | 'activeRootId'>,
+  id: string,
+  rootId?: string,
+): MonitorTask | undefined {
+  const key = ownerKey(s.rootsById, s.activeRootId, id, rootId)
+  return key ? s.rootsById[key].tasks[id] : undefined
 }
 
 /**
@@ -281,18 +307,19 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
       return commit(rootsById, s.activeRootId)
     }),
 
-  updateTask: (id, updates) =>
+  updateTask: (id, updates, rootId) =>
     set((s) => {
       // Resolve which root bucket owns this task. Updates from background roots
       // land in their own bucket; only the active root's update reaches the mirror.
-      const owner = ownerKey(s.rootsById, s.activeRootId, id)
+      const namedRootId = rootId ?? updates.rootId
+      const owner = ownerKey(s.rootsById, s.activeRootId, id, namedRootId)
 
       if (!owner) {
         // Auto-create a placeholder task when an update arrives before dag_init
         // (e.g. WS reconnect, late-arriving nodes, or race conditions). It is
         // scoped to the active root bucket. DAG sync is intentionally skipped —
         // the DAG is not yet initialized; when dag_init arrives, setDAG populates it.
-        const key = updates.rootId ?? activeKey(s)
+        const key = namedRootId ?? activeKey(s)
         const bucket = s.rootsById[key] ?? emptyView()
         if ((updates.status || updates.title) && Object.keys(bucket.tasks).length < MAX_TASKS) {
           const created: MonitorTask = {

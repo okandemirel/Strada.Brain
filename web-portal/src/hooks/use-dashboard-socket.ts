@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { useMonitorStore } from '../stores/monitor-store'
+import { findTask, useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
 import { useCanvasStore, type CanvasLayout, type CanvasViewport } from '../stores/canvas-store'
 import { useCodeStore } from '../stores/code-store'
@@ -128,26 +128,29 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'monitor:substep': {
       const nodeId = (payload.nodeId ?? payload.taskId) as string
       const substep = payload.substep as NonNullable<MonitorTask['substeps']>[number]
+      // The node's own root, not the board on screen: node ids repeat across roots (WEB-7).
+      const rootId = asOptionalString(payload.rootId)
       if (nodeId && substep) {
         // Auto-create placeholder task if substep arrives before dag_init (race condition)
-        if (!useMonitorStore.getState().tasks[nodeId]) {
+        if (!findTask(useMonitorStore.getState(), nodeId, rootId)) {
           useMonitorStore.getState().addTask({
             id: nodeId,
             nodeId,
+            ...(rootId ? { rootId } : {}),
             title: nodeId,
             status: 'executing',
             reviewStatus: 'none',
           })
         }
         // Re-read after potential addTask to get fresh state
-        const task = useMonitorStore.getState().tasks[nodeId]
+        const task = findTask(useMonitorStore.getState(), nodeId, rootId)
         if (task) {
           const existing = task.substeps ?? []
           const idx = existing.findIndex((s) => s.id === substep.id)
           const merged = idx >= 0
             ? [...existing.slice(0, idx), { ...existing[idx], ...substep }, ...existing.slice(idx + 1)]
             : [...existing, substep]
-          useMonitorStore.getState().updateTask(nodeId, { substeps: merged })
+          useMonitorStore.getState().updateTask(nodeId, { substeps: merged }, rootId)
         }
       }
       break
@@ -164,7 +167,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         useMonitorStore.getState().updateTask(nodeId, {
           narrative,
           ...(milestone ? { milestone } : {}),
-        })
+        }, asOptionalString(payload.rootId))
       }
 
       useMonitorStore.getState().addActivity({
