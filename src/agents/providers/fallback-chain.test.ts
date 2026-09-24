@@ -1103,6 +1103,24 @@ describe("FallbackChainProvider mid-stream failure handling", () => {
     expect(chunks).toEqual([]);
   });
 
+  it("still fails over when only empty heartbeat chunks were delivered (PRV-2)", async () => {
+    // A reasoning model streams "" heartbeats while it thinks; if it then dies
+    // the consumer holds zero visible bytes, so the sibling must be asked.
+    const thinker = streamingProvider("thinker", async (onChunk) => {
+      onChunk("");
+      onChunk("");
+      throw new Error("DeepSeek API error 500: internal error");
+    });
+    const healthy = createMockProvider({ text: "from-fallback" });
+    const chain = new FallbackChainProvider([thinker, healthy]);
+
+    const chunks: string[] = [];
+    const result = await chain.chatStream("sys", [], [], (c) => { chunks.push(c); });
+    expect(result.text).toBe("from-fallback");
+    expect(chunks).toEqual(["", ""]);
+    expect(healthy.chat).toHaveBeenCalledTimes(1);
+  });
+
   it("records the failed provider's health before refusing to fail over", async () => {
     const broken = streamingProvider("broken", async (onChunk) => {
       onChunk("half");

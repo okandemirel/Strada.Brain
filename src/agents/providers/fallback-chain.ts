@@ -384,7 +384,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             systemPrompt,
             safeMessages,
             tools,
-            (chunk) => { ctl.markActivity(); emittedAny = true; return onChunk(chunk); },
+            // An empty chunk is a liveness heartbeat (reasoning, keepalive): it
+            // proves activity but hands the consumer nothing, so it must not
+            // forfeit failover.
+            (chunk) => { ctl.markActivity(); if (chunk.length > 0) emittedAny = true; return onChunk(chunk); },
             opts,
           )
         : provider.chat(systemPrompt, safeMessages, tools, opts);
