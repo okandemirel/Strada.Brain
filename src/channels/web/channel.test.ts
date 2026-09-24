@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { Writable } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -3941,5 +3941,92 @@ describe("WebChannel monitor replay: dag_init adds to a board (WEB-6)", () => {
 
     expect(replayed.map((m) => m.type)).toEqual(["monitor:dag_restructure"]);
     await channel.disconnect();
+  });
+});
+
+// CHN-11: the proxy capped every body at 64 KB, so a canvas past that could
+// never be saved again, and it destroyed the request socket BEFORE writing
+// its 413, so the browser saw a network error ("offline") instead.
+describe("WebChannel dashboard proxy body limits (CHN-11)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function streamingRequest(url: string) {
+    // autoDestroy off: `destroyed` then means someone destroyed the socket.
+    return Object.assign(new PassThrough({ autoDestroy: false }), {
+      method: "PUT",
+      url,
+      headers: { origin: "http://127.0.0.1:3000", "content-type": "application/json" } as Record<string, string>,
+    });
+  }
+
+  function recordingResponse(req: PassThrough) {
+    const res = createMockResponse();
+    const writeHead = res.writeHead.bind(res);
+    const state = { requestDestroyedWhenAnswered: false };
+    res.writeHead = (statusCode: number, headers: Record<string, string>) => {
+      state.requestDestroyedWhenAnswered = req.destroyed;
+      return writeHead(statusCode, headers);
+    };
+    return { res, state };
+  }
+
+  const proxy = (channel: WebChannel, req: unknown, res: unknown, url: string) =>
+    (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, url);
+
+  it("forwards a 200 KB canvas save", async () => {
+    const channel = new WebChannel();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const body = JSON.stringify({ shapes: [{ id: "s1", props: { text: "x".repeat(200 * 1024) } }] });
+    const req = streamingRequest("/api/canvas/profile-1");
+    const { res } = recordingResponse(req);
+
+    const done = proxy(channel, req, res, "/api/canvas/profile-1");
+    req.end(Buffer.from(body));
+    await done;
+
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).body).toBe(body);
+  });
+
+  it("answers an over-limit canvas save with a real 413 before the connection closes", async () => {
+    const channel = new WebChannel();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const req = streamingRequest("/api/canvas/profile-1");
+    const { res, state } = recordingResponse(req);
+
+    const done = proxy(channel, req, res, "/api/canvas/profile-1");
+    for (let i = 0; i < 4; i++) req.write(Buffer.alloc(512 * 1024, 0x61));
+    req.end();
+    await done;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(413);
+    expect(res.headers.Connection).toBe("close");
+    expect(JSON.parse(res.body)).toEqual({ error: "Request body too large", limitBytes: 1_048_576 });
+    expect(state.requestDestroyedWhenAnswered).toBe(false);
+  });
+
+  it("keeps the 64 KB cap for other proxied routes (guard)", async () => {
+    const channel = new WebChannel();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const req = Object.assign(streamingRequest("/api/user/autonomous"), { method: "POST" });
+    const { res } = recordingResponse(req);
+
+    const done = proxy(channel, req, res, "/api/user/autonomous");
+    req.end(Buffer.alloc(65 * 1024, 0x61));
+    await done;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(413);
   });
 });

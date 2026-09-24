@@ -291,6 +291,62 @@ function foldDagInitFrame(previous: string | undefined, next: Record<string, unk
   });
 }
 
+/** Body cap for requests the portal proxies to the dashboard API. */
+const PROXY_BODY_LIMIT = 64 * 1024;
+/**
+ * Canvas saves send the whole board, which the dashboard's canvas routes accept
+ * up to 1 MB (src/dashboard/canvas-routes.ts); the general 64 KB cap made any
+ * board past it unsaveable (CHN-11).
+ */
+const PROXY_CANVAS_BODY_LIMIT = 1_048_576;
+/** How much of an over-limit upload is read and discarded so the 413 can reach the browser. */
+const PROXY_DRAIN_LIMIT = 16 * 1024 * 1024;
+const PROXY_DRAIN_TIMEOUT_MS = 10_000;
+
+function proxyBodyLimit(pathOnly: string): number {
+  return pathOnly.startsWith("/api/canvas/") ? PROXY_CANVAS_BODY_LIMIT : PROXY_BODY_LIMIT;
+}
+
+/**
+ * Read a proxied request body into `chunks`, up to `limit` bytes. Past the limit
+ * the rest of the upload is drained (bounded in bytes and time) rather than the
+ * socket destroyed: a response written to a browser that is still sending, then a
+ * reset connection, reaches it as a network error instead of the 413.
+ */
+function readProxyBody(
+  req: HttpReq,
+  limit: number,
+  chunks: Buffer[],
+): Promise<"complete" | "too-large" | "error"> {
+  return new Promise((resolve) => {
+    let size = 0;
+    let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (outcome: "complete" | "too-large" | "error") => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) clearTimeout(drainTimer);
+      resolve(outcome);
+    };
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= limit) {
+        chunks.push(chunk);
+        return;
+      }
+      if (!drainTimer) {
+        chunks.length = 0;
+        drainTimer = setTimeout(() => settle("too-large"), PROXY_DRAIN_TIMEOUT_MS);
+      }
+      if (size > limit + PROXY_DRAIN_LIMIT) settle("too-large");
+    });
+    req.on("end", () => settle(size > limit ? "too-large" : "complete"));
+    req.on("error", () => settle(size > limit ? "too-large" : "error"));
+    // An aborted upload may never emit "end".
+    req.on("close", () => settle(size > limit ? "too-large" : "error"));
+  });
+}
+
 /** Rate limit: max messages per window. */
 const WS_RATE_LIMIT = 20;
 /** Rate limit window duration in ms (10 seconds). */
@@ -3445,28 +3501,22 @@ export class WebChannel
       if (method === "POST" || method === "DELETE" || method === "PUT") {
         fetchOpts.headers = { ...proxyHeaders, "Content-Type": "application/json" };
         const bodyChunks: Buffer[] = [];
-        let bodySize = 0;
-        const PROXY_BODY_LIMIT = 64 * 1024; // 64KB
-        let bodyReadAborted = false;
-        await new Promise<void>((resolve, reject) => {
-          req.on("data", (chunk: Buffer) => {
-            bodySize += chunk.length;
-            if (bodySize > PROXY_BODY_LIMIT) {
-              req.destroy();
-              reject(new Error("Body too large"));
-              return;
-            }
-            bodyChunks.push(chunk);
-          });
-          req.on("end", () => resolve());
-          req.on("error", reject);
-        }).catch(() => {
-          bodyReadAborted = true;
+        const bodyLimit = proxyBodyLimit(pathOnly);
+        const outcome = await readProxyBody(req, bodyLimit, bodyChunks);
+        if (outcome !== "complete") {
           clearTimeout(timeout);
-          res.writeHead(413, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Request body too large" }));
-        });
-        if (bodyReadAborted) return;
+          if (outcome === "too-large") {
+            // CHN-11: the socket used to be destroyed BEFORE this was written, so
+            // the browser saw a network error ("offline") instead of a 413.
+            // readProxyBody drained the upload first; the connection closes after.
+            res.writeHead(413, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json", "Connection": "close" });
+            res.end(JSON.stringify({ error: "Request body too large", limitBytes: bodyLimit }));
+          } else {
+            res.writeHead(400, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json", "Connection": "close" });
+            res.end(JSON.stringify({ error: "Request body could not be read" }));
+          }
+          return;
+        }
         if (bodyChunks.length > 0) {
           fetchOpts.body = Buffer.concat(bodyChunks).toString();
         }
