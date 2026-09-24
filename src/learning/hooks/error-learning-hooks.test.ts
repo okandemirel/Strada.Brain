@@ -5,6 +5,7 @@ import { PatternMatcher } from "../matching/pattern-matcher.ts";
 import { ConfidenceScorer } from "../scoring/confidence-scorer.ts";
 import { LearningStorage } from "../storage/learning-storage.ts";
 import type { ErrorAnalysis } from "../../agents/autonomy/error-recovery.ts";
+import { createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -367,5 +368,99 @@ describe("a frozen lifecycle state is not rewritten from confidence (improvement
     hooks.penalizeInstinct("instinct_permanent_hold", { errorContext, reason: "did not apply" });
 
     expect(storage.getInstinct("instinct_permanent_hold")!.status).toBe("permanent");
+  });
+});
+
+// Recovery guidance is chosen for the run's user. The error-recovery path read
+// every instinct with no ownership clause, so one user's private rule became
+// [LEARNED SOLUTIONS] in every other user's tool result for the same error.
+describe("recovery guidance respects who owns a rule", () => {
+  let storage: LearningStorage;
+  let hooks: ErrorLearningHooks;
+  let tempDir: string;
+  const PROJECT = "/projects/pixelflow";
+
+  function rule(id: string, action: string, scope: "user" | "project", owner?: string): void {
+    storage.createInstinct({
+      id: id as never,
+      name: id,
+      type: "user_teaching",
+      status: "active",
+      confidence: 0.9 as never,
+      triggerPattern: "CS0246 type or namespace could not be found",
+      action,
+      contextConditions: [],
+      stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+      createdAt: Date.now() as never,
+      updatedAt: Date.now() as never,
+      sourceTrajectoryIds: [],
+      tags: [],
+    });
+    storage.addInstinctScopeV2(id, PROJECT, scope, owner);
+  }
+
+  function context(userId?: string): ErrorContext {
+    return {
+      toolName: "dotnet_build",
+      errorOutput: "Assets/Board.cs(3,7): error CS0246: The type or namespace name 'Tile' could not be found",
+      analysis: { hasErrors: true, errorCount: 1, summary: "1 missing_type", recoveryInjection: "" },
+      sessionId: `session-${userId ?? "anon"}`,
+      timestamp: new Date(),
+      ...(userId === undefined ? {} : { userId }),
+    };
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "hooks-ownership-"));
+    storage = new LearningStorage(join(tempDir, "test.db"));
+    storage.initialize();
+    hooks = new ErrorLearningHooks(
+      new LearningPipeline(storage),
+      new PatternMatcher(storage),
+      new ConfidenceScorer(),
+      storage,
+    );
+    hooks.enable();
+    rule("instinct_alice_private", "add alice's private package feed", "user", "alice");
+    rule("instinct_project_shared", "add the missing using directive", "project");
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const ids = (userId?: string): string[] =>
+    hooks.onBeforeErrorAnalysis(context(userId)).suggestions.map((m) => String(m.instinct?.id));
+
+  it("never shows a user's private rule to another user", () => {
+    expect(ids("bob")).not.toContain("instinct_alice_private");
+    expect(hooks.onBeforeErrorAnalysis(context("bob")).recoveryInjection).not.toContain("private package feed");
+  });
+
+  it("never shows a user's private rule to an unidentified caller", () => {
+    expect(ids(undefined)).not.toContain("instinct_alice_private");
+  });
+
+  it("still shows the owner their own rule, and everyone the shared one", () => {
+    expect(ids("alice")).toContain("instinct_alice_private");
+    expect(ids("alice")).toContain("instinct_project_shared");
+    expect(ids("bob")).toContain("instinct_project_shared");
+  });
+
+  it("carries the run's user from the autonomy bundle through the recovery engine", () => {
+    const failing = {
+      content: "\n### Errors\n  Assets/Board.cs(3,7): CS0246 — The type or namespace name 'Tile' could not be found\n",
+      isError: true,
+    };
+    const forUser = (userId: string) =>
+      createAutonomyBundle({
+        errorLearning: { hooks, sessionId: `chat-${userId}`, userId },
+        prompt: "build the board",
+        iterationBudget: 10,
+      }).errorRecovery.analyze("dotnet_build", failing as never)?.learnedSolutions ?? "";
+
+    expect(forUser("bob")).not.toContain("private package feed");
+    expect(forUser("alice")).toContain("private package feed");
   });
 });

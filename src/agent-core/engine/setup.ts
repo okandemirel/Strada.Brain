@@ -438,6 +438,9 @@ export async function setupAgentCoreRun(
               hooks: errorLearningHooks,
               sessionId: chatId,
               resolveTaskRunId: () => deps.getTaskExecutionContext()?.taskRunId,
+              // Recovery guidance is chosen for this run's user, never from
+              // another user's private rules.
+              userId: request.userId,
             },
           }),
       // Step 0 / gap #8 — v1 workers use the background-epoch iteration budget (runBackgroundTask

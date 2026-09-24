@@ -1372,8 +1372,20 @@ export class LearningStorage {
     );
   }
 
-  /** Get all instincts matching a status filter (optimized with index) */
-  getInstincts(options: { status?: Instinct["status"]; type?: Instinct["type"]; minConfidence?: number } = {}): Instinct[] {
+  /**
+   * Get all instincts matching a status filter (optimized with index).
+   *
+   * `visibleTo` applies the ownership clause (round 10 #3) for the identity a
+   * retrieval is FOR: another user's private instinct is not returned. Omitted,
+   * every row is returned — for bookkeeping callers (creation-side duplicate
+   * checks), never for text that reaches a prompt.
+   */
+  getInstincts(options: {
+    status?: Instinct["status"];
+    type?: Instinct["type"];
+    minConfidence?: number;
+    visibleTo?: { readonly userId?: string };
+  } = {}): Instinct[] {
     this.ensureConnection();
     
     // Build optimized query. Round 10 #12: the scope/owner subqueries travel
@@ -1394,6 +1406,11 @@ export class LearningStorage {
     if (options.minConfidence !== undefined) {
       sql += " AND i.confidence >= ?";
       params.push(options.minConfidence);
+    }
+    if (options.visibleTo) {
+      const { sql: ownerSql, params: ownerParams } = ownershipClause(options.visibleTo.userId);
+      sql += ownerSql;
+      params.push(...ownerParams);
     }
     
     sql += " ORDER BY i.confidence DESC";

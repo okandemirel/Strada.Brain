@@ -37,6 +37,8 @@ export interface CreateAutonomyBundleParams {
     readonly hooks: import("../learning/hooks/error-learning-hooks.js").ErrorLearningHooks;
     readonly sessionId?: string;
     readonly resolveTaskRunId?: () => string | undefined;
+    /** Whose run this is, so recovery never shows another user's private rule. */
+    readonly userId?: string;
   };
   readonly prompt: string;
   readonly iterationBudget: number;
@@ -98,6 +100,7 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
       ...(params.errorLearning.resolveTaskRunId === undefined
         ? {}
         : { resolveTaskRunId: params.errorLearning.resolveTaskRunId }),
+      ...(params.errorLearning.userId === undefined ? {} : { userId: params.errorLearning.userId }),
     });
   }
   // dotnet_build only when there is something for it to build. In a Unity

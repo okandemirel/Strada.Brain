@@ -177,16 +177,25 @@ export class PatternMatcher {
       minConfidence?: number;
       maxResults?: number;
       statusFilter?: InstinctStatus[];
+      /**
+       * Whose error this is. The matches become guidance in that run's tool
+       * result, so another user's private instinct is never a candidate; with
+       * no id only shared (project/global) and unowned learning is.
+       */
+      userId?: string;
     } = {}
   ): PatternMatch[] {
     const {
       minConfidence = 0.3,
       maxResults = 10,
       statusFilter = ["active", "proposed"],
+      userId,
     } = options;
 
-    // Get candidate instincts
-    const candidates = this.storage.getInstincts()
+    // Get candidate instincts — under the same ownership clause the task-time
+    // retrieval (getInstinctsForScope) applies. This path used to read every
+    // row, so one user's private rule was recovery guidance for everybody.
+    const candidates = this.storage.getInstincts({ visibleTo: { userId } })
       .filter(i => statusFilter.includes(i.status));
 
     const matches: PatternMatch[] = [];

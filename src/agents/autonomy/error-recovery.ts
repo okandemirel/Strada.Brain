@@ -81,6 +81,8 @@ export interface ErrorRecoveryConfig {
    * filed under a different scope is an exposure the coverage query cannot find.
    */
   resolveTaskRunId?: () => string | undefined;
+  /** Whose run this engine serves: learned solutions are chosen for this identity. */
+  userId?: string;
 }
 
 interface CachedResolution {
@@ -398,6 +400,7 @@ export class ErrorRecoveryEngine {
         analysis: { hasErrors: true, errorCount: 0, summary: "", recoveryInjection: "" },
         sessionId: this.config.sessionId ?? "default",
         ...(this.currentTaskRunId() === undefined ? {} : { taskRunId: this.currentTaskRunId() }),
+        ...(this.config.userId === undefined ? {} : { userId: this.config.userId }),
         timestamp: new Date(),
         ...(observed?.filePath === undefined ? {} : { filePath: observed.filePath }),
         ...(observed === undefined ? {} : { metadata: observed.metadata }),

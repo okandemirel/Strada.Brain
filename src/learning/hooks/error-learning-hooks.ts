@@ -17,6 +17,7 @@ import type {
   ContextConditionId,
 } from "../types.js";
 import { createBrand, type JsonObject } from "../../types/index.js";
+import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 
 // ErrorAnalysis interface is defined locally (not in learning/types.ts)
 interface ErrorAnalysis {
@@ -47,6 +48,12 @@ export interface ErrorContext {
    * episode's correlation id. What must never happen is the two ends disagreeing.
    */
   taskRunId?: string;
+  /**
+   * Whose run this error happened in. Learned solutions are chosen for this
+   * identity: another user's private rule is never shown. Absent, only shared
+   * and unowned learning is.
+   */
+  userId?: string;
   /** Timestamp of error */
   timestamp: Date;
   /** File being processed (if known) */
@@ -250,6 +257,7 @@ export class ErrorLearningHooks {
       // error recovery altogether while a merely `proposed` rule was included.
       // The best guidance in the store was the guidance nobody ever saw.
       statusFilter: ["active", "proposed", "evolved", "permanent"],
+      ...(context.userId === undefined ? {} : { userId: context.userId }),
     });
 
     // Build recovery injection
@@ -654,7 +662,9 @@ export class ErrorLearningHooks {
 
       lines.push(`\n${i + 1}. ${match.instinct.name} (confidence: ${(match.confidence * 100).toFixed(0)}%)`);
       lines.push(`   Match: ${match.matchReason}`);
-      lines.push(`   Action: ${match.instinct.action.slice(0, 200)}${match.instinct.action.length > 200 ? "..." : ""}`);
+      // Stored learning entering a model's context: the same injection and
+      // secret filter as every other stored text that reaches a prompt.
+      lines.push(`   Action: ${sanitizePromptInjection(match.instinct.action.slice(0, 200))}${match.instinct.action.length > 200 ? "..." : ""}`);
     }
 
     lines.push("\n[END LEARNED SOLUTIONS]");
