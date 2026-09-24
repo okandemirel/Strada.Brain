@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -158,6 +158,28 @@ describe("IdentityStateManager", () => {
     expect(customManager.getState().agentName).toBe("MyBot");
     customManager.close();
     rmSync(customDir, { recursive: true, force: true });
+  });
+
+  // The periodic updateUptime() already counted the session, then shutdown
+  // added the whole session since boot again: a 10-minute run became 20.
+  it("counts a session's uptime once across periodic updates and shutdown", () => {
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+    try {
+      const manager = new IdentityStateManager(dbPath);
+      manager.initialize();
+      manager.recordBoot();
+
+      vi.setSystemTime(t0 + 600_000);
+      manager.updateUptime(600_000); // the 60 s interval's running total
+      vi.setSystemTime(t0 + 630_000);
+      manager.recordShutdown();
+
+      expect(manager.getState().cumulativeUptimeMs).toBe(630_000);
+      manager.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("wasCrash() returns true when clean_shutdown was false at boot, false when it was true", () => {

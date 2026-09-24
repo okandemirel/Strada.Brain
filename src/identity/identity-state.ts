@@ -76,6 +76,8 @@ const DEFAULT_KEYS: Record<string, string> = {
 export class IdentityStateManager {
   private db: Database.Database | null = null;
   private bootStartTime: number = 0;
+  /** Up to when this session's uptime has already been counted (epoch ms). */
+  private uptimeCountedUntil: number = 0;
   private crashDetected: boolean = false;
   private previousSessionActivityTs: number = 0;
   private readonly agentName: string;
@@ -144,6 +146,7 @@ export class IdentityStateManager {
    */
   recordBoot(): void {
     this.bootStartTime = Date.now();
+    this.uptimeCountedUntil = this.bootStartTime;
 
     // Check if previous session crashed (clean_shutdown was false)
     const prevClean = this.getCached(K.cleanShutdown);
@@ -179,6 +182,8 @@ export class IdentityStateManager {
    */
   updateUptime(deltaMs: number): void {
     this.incrementValue(K.uptime, deltaMs);
+    // The periodic caller passes "time since my last call", ending now.
+    if (this.bootStartTime > 0) this.uptimeCountedUntil = Date.now();
   }
 
   /**
@@ -210,14 +215,19 @@ export class IdentityStateManager {
   }
 
   /**
-   * Record a clean shutdown. Calculates final uptime delta from boot start,
-   * adds it to cumulative_uptime_ms, and sets clean_shutdown=true.
+   * Record a clean shutdown. Adds the uptime not yet counted by updateUptime()
+   * to cumulative_uptime_ms, and sets clean_shutdown=true.
+   *
+   * It used to add the whole session since boot on top of what the periodic
+   * updateUptime() calls had already added, so every clean shutdown counted
+   * the session twice.
    */
   recordShutdown(): void {
     if (this.bootStartTime > 0) {
-      const delta = Date.now() - this.bootStartTime;
+      const delta = Math.max(0, Date.now() - this.uptimeCountedUntil);
       this.incrementValue(K.uptime, delta);
       this.bootStartTime = 0;
+      this.uptimeCountedUntil = 0;
     }
     this.setCached(K.cleanShutdown, "true");
     this.flush();
