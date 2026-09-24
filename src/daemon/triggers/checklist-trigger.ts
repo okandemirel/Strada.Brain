@@ -13,6 +13,7 @@
  * Used by: TriggerRegistry, HeartbeatLoop
  */
 
+import { createHash } from "node:crypto";
 import { Cron } from "croner";
 import type {
   ITrigger,
@@ -20,6 +21,7 @@ import type {
   TriggerState,
   ChecklistTriggerDef,
   ChecklistItem,
+  TriggerStateStore,
 } from "../daemon-types.js";
 import { floorToMinute, isOccurrenceDue } from "./trigger-utils.js";
 
@@ -34,6 +36,7 @@ export class ChecklistTrigger implements ITrigger {
   /** itemLastChecked before the latest look, to give a consumed occurrence back. */
   private checkedBeforeLastLook = new Map<number, Date>();
   private lastFiredMinute: Map<number | string, number>;
+  private stateStore?: TriggerStateStore;
   private dueItems: ChecklistItem[];
 
   /**
@@ -156,9 +159,11 @@ export class ChecklistTrigger implements ITrigger {
       if (idx !== -1) {
         this.lastFiredMinute.set(idx, minuteFloor);
       }
-      // Mark unscheduled items as fired (text key) so they only fire once
+      // Mark unscheduled items as fired (text key) so they only fire once —
+      // durably: an in-memory mark fired the item again on every restart.
       if (!dueItem.schedule) {
         this.lastFiredMinute.set(dueItem.text, minuteFloor);
+        this.stateStore?.set(firedKey(dueItem.text), String(minuteFloor));
       }
     }
 
@@ -185,7 +190,10 @@ export class ChecklistTrigger implements ITrigger {
         const lookBack = this.consumedLookBack.get(idx);
         if (item.schedule && lookBack) this.itemLastChecked.set(idx, lookBack);
       }
-      if (!item.schedule) this.lastFiredMinute.delete(item.text);
+      if (!item.schedule) {
+        this.lastFiredMinute.delete(item.text);
+        this.stateStore?.delete(firedKey(item.text));
+      }
     }
   }
 
@@ -254,8 +262,24 @@ export class ChecklistTrigger implements ITrigger {
   updateItems(items: ChecklistItem[]): void {
     this.items = [...items];
     this.lastFiredMinute.clear();
+    this.restoreFiredItems();
     this.buildCronMap();
     this.dueItems = [];
+  }
+
+  /** Load which unscheduled items a previous process already fired. */
+  attachStateStore(store: TriggerStateStore): void {
+    this.stateStore = store;
+    this.restoreFiredItems();
+  }
+
+  private restoreFiredItems(): void {
+    if (!this.stateStore) return;
+    for (const item of this.items) {
+      if (item.checked || item.schedule) continue;
+      const fired = this.stateStore.get(firedKey(item.text));
+      if (fired !== undefined) this.lastFiredMinute.set(item.text, Number(fired));
+    }
   }
 
   /**
@@ -265,4 +289,9 @@ export class ChecklistTrigger implements ITrigger {
   async dispose(): Promise<void> {
     // intentional no-op
   }
+}
+
+/** State key for an unscheduled item's "fired once" mark (hashed: item text is free-form). */
+function firedKey(text: string): string {
+  return `fired:${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
 }

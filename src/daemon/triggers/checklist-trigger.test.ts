@@ -609,4 +609,30 @@ describe("ChecklistTrigger", () => {
     trigger.onFired(new Date(now.getTime() + 120_000));
     expect(trigger.shouldFire(new Date(now.getTime() + 180_000))).toBe(false);
   });
+
+  it("persists an unscheduled item's fire, and gives the mark back when the fire never became work (TSK-11)", () => {
+    const state = new Map<string, string>();
+    const store = {
+      get: (k: string) => state.get(k),
+      set: (k: string, v: string) => { state.set(k, v); },
+      delete: (k: string) => { state.delete(k); },
+    };
+    const def = makeDef([makeItem("Rotate keys")]);
+    const now = new Date();
+
+    const first = new ChecklistTrigger(def, "UTC");
+    first.attachStateStore(store);
+    expect(first.shouldFire(now)).toBe(true);
+    first.onFired(now);
+    first.onSubmitFailed(now);
+    // Not consumed: a new process still owes it.
+    const second = new ChecklistTrigger(def, "UTC");
+    second.attachStateStore(store);
+    expect(second.shouldFire(now)).toBe(true);
+    second.onFired(now);
+
+    const third = new ChecklistTrigger(def, "UTC");
+    third.attachStateStore(store);
+    expect(third.shouldFire(new Date(now.getTime() + 60_000))).toBe(false);
+  });
 });

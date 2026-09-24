@@ -17,6 +17,7 @@ import type {
   ITrigger,
   TriggerMetadata,
   TriggerState,
+  TriggerStateStore,
 } from "../daemon-types.js";
 import { floorToMinute, isOccurrenceDue } from "./trigger-utils.js";
 
@@ -38,6 +39,7 @@ export class CronTrigger implements ITrigger {
   private lastChecked: Date = new Date();
   /** lastChecked before the look that made the last fire due (see onSubmitFailed). */
   private checkedBeforeLastLook: Date = this.lastChecked;
+  private stateStore?: TriggerStateStore;
 
   constructor(
     metadata: TriggerMetadata,
@@ -70,7 +72,7 @@ export class CronTrigger implements ITrigger {
     // occurrence again and fired it twice.
     const since = this.lastChecked;
     this.checkedBeforeLastLook = since;
-    this.lastChecked = now;
+    this.setLastChecked(now);
     // Bounded (inside isOccurrenceDue): a daemon that was down for a week
     // runs the last occurrence, not every one it missed.
     return isOccurrenceDue(this.cron, since, now);
@@ -81,8 +83,28 @@ export class CronTrigger implements ITrigger {
    * look consumed is due again on the next one.
    */
   onSubmitFailed(_now: Date): void {
-    this.lastChecked = this.checkedBeforeLastLook;
+    this.setLastChecked(this.checkedBeforeLastLook);
     this.lastFired = null;
+  }
+
+  /**
+   * Resume the look-back where the previous process left it, so an
+   * occurrence that fell while the daemon was down is still due on the first
+   * look (bounded by the catch-up window). lastChecked used to start at
+   * construction, so a restart silently dropped it.
+   */
+  attachStateStore(store: TriggerStateStore): void {
+    this.stateStore = store;
+    const saved = Number(store.get("lastChecked"));
+    if (Number.isFinite(saved) && saved > 0 && saved < this.lastChecked.getTime()) {
+      this.lastChecked = new Date(saved);
+      this.checkedBeforeLastLook = this.lastChecked;
+    }
+  }
+
+  private setLastChecked(at: Date): void {
+    this.lastChecked = at;
+    this.stateStore?.set("lastChecked", String(at.getTime()));
   }
 
   /**

@@ -11,6 +11,8 @@ import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
+import { ChecklistTrigger } from "./triggers/checklist-trigger.js";
+import { CronTrigger } from "./triggers/cron-trigger.js";
 import type { ITrigger, TriggerMetadata, TriggerState, DaemonConfig } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
@@ -301,6 +303,64 @@ describe("HeartbeatLoop", () => {
 
     await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
     expect(taskManager.submit).toHaveBeenCalledTimes(1);
+  });
+
+  // TSK-11 / TSK-17: "fire once" and "since the last look" lived in memory,
+  // and daemon restarts are routine (auto-update, crash recovery).
+  describe("trigger state survives a restart", () => {
+    const restartWith = (trigger: ITrigger): HeartbeatLoop => {
+      loop.stop();
+      const nextRegistry = new TriggerRegistry();
+      nextRegistry.register(trigger);
+      loop = new HeartbeatLoop(
+        nextRegistry, taskManager as any, budgetTracker as any, securityPolicy as any, approvalQueue as any,
+        storage as any, identityManager as any, eventBus, config, logger as any,
+      );
+      loop.start();
+      return loop;
+    };
+
+    it("an unscheduled checklist item fires once, not once per process start (TSK-11)", async () => {
+      const def = {
+        type: "checklist" as const,
+        name: "audit",
+        action: "Work the checklist",
+        items: [{ text: "Audit dependencies for vulnerabilities", checked: false, priority: "medium" as const }],
+      };
+      vi.setSystemTime(new Date("2026-09-02T10:00:17Z"));
+      registry.register(new ChecklistTrigger(def, "UTC"));
+      loop.start();
+      await loop.tick();
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+      taskManager._setTaskStatus("task_1", "completed");
+
+      vi.setSystemTime(new Date("2026-09-02T11:00:17Z"));
+      await restartWith(new ChecklistTrigger(def, "UTC")).tick();
+
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("a cron occurrence that fell while the daemon was down runs on restart (TSK-17)", async () => {
+      vi.setSystemTime(new Date("2026-09-02T02:50:00Z"));
+      registry.register(new CronTrigger({ name: "nightly", description: "Nightly job", type: "cron" }, "0 3 * * *", "UTC"));
+      loop.start();
+      vi.setSystemTime(new Date("2026-09-02T02:55:17Z"));
+      await loop.tick();
+      expect(taskManager.submit).not.toHaveBeenCalled();
+
+      // Down from 02:56 to 03:10: the new process's trigger is born after 03:00.
+      vi.setSystemTime(new Date("2026-09-02T03:10:00Z"));
+      const reborn = new CronTrigger({ name: "nightly", description: "Nightly job", type: "cron" }, "0 3 * * *", "UTC");
+      vi.setSystemTime(new Date("2026-09-02T03:10:17Z"));
+      await restartWith(reborn).tick();
+
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+      // …once: the next look does not run it again.
+      taskManager._setTaskStatus("task_1", "completed");
+      vi.setSystemTime(new Date("2026-09-02T03:11:17Z"));
+      await loop.tick();
+      expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("shutdown() stops the loop and disposes every trigger (process exit path)", async () => {

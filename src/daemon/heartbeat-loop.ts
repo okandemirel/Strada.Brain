@@ -25,7 +25,7 @@ import type { BudgetTracker } from "./budget/budget-tracker.js";
 import type { DaemonSecurityPolicy } from "./security/daemon-security-policy.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
-import type { DaemonConfig, DaemonStatusSnapshot, TriggerType } from "./daemon-types.js";
+import type { DaemonConfig, DaemonStatusSnapshot, ITrigger, TriggerStateStore, TriggerType } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
@@ -71,6 +71,8 @@ export class HeartbeatLoop {
   private generation = 0;
   private readonly activeTriggerTasks = new Map<string, TaskId>();
   private readonly circuitBreakers = new Map<string, CircuitBreaker>();
+  /** Triggers that already received their durable state store. */
+  private readonly triggersWithState = new WeakSet<ITrigger>();
 
   /** Track budget exceeded/warning state to emit events only once per state change */
   private budgetExceededEmitted = false;
@@ -361,6 +363,7 @@ export class HeartbeatLoop {
     // Sequential evaluation -- prevents budget race conditions
     for (const trigger of triggers) {
       const name = trigger.metadata.name;
+      this.attachTriggerState(trigger);
 
       // 1. Get or create circuit breaker
       const cb = this.getOrCreateCircuitBreaker(name);
@@ -816,6 +819,57 @@ export class HeartbeatLoop {
         break;
       }
       // cron: no additional typed event (trigger_fired is sufficient)
+    }
+  }
+
+  /**
+   * Give a trigger its durable state before it is first evaluated: a
+   * checklist item's "fired once" and a cron's last look lived in memory, so
+   * every restart fired done items again and lost missed occurrences.
+   * Stored as one JSON object per trigger in daemon_state.
+   */
+  private attachTriggerState(trigger: ITrigger): void {
+    if (!trigger.attachStateStore || this.triggersWithState.has(trigger)) return;
+    this.triggersWithState.add(trigger);
+    const key = `trigger_state:${trigger.metadata.name}`;
+    const read = (): Record<string, string> => {
+      try {
+        const parsed: unknown = JSON.parse(this.storage.getDaemonState(key) ?? "{}");
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, string>)
+          : {};
+      } catch {
+        return {};
+      }
+    };
+    const write = (state: Record<string, string>): void => {
+      try {
+        this.storage.setDaemonState(key, JSON.stringify(state));
+      } catch (err) {
+        this.logger.warn("Failed to persist trigger state", { trigger: trigger.metadata.name, error: String(err) });
+      }
+    };
+    const store: TriggerStateStore = {
+      get: (k) => {
+        const value = read()[k];
+        return typeof value === "string" ? value : undefined;
+      },
+      set: (k, value) => {
+        const state = read();
+        state[k] = value;
+        write(state);
+      },
+      delete: (k) => {
+        const state = read();
+        if (!(k in state)) return;
+        delete state[k];
+        write(state);
+      },
+    };
+    try {
+      trigger.attachStateStore(store);
+    } catch (err) {
+      this.logger.warn("Trigger could not load its persisted state", { trigger: trigger.metadata.name, error: String(err) });
     }
   }
 

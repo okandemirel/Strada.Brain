@@ -37,6 +37,13 @@ export interface TriggerMetadata {
   readonly cooldownSeconds?: number;
 }
 
+/** Key/value state one trigger keeps across daemon restarts (backed by daemon_state). */
+export interface TriggerStateStore {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+  delete(key: string): void;
+}
+
 /** Pluggable trigger interface -- CronTrigger implements this in Plan 02 */
 export interface ITrigger {
   readonly metadata: TriggerMetadata;
@@ -59,6 +66,12 @@ export interface ITrigger {
    * never runs (Codex 2026-09-13 AG#12).
    */
   onSubmitFailed?(now: Date): void;
+  /**
+   * Durable state for "fire once" / "since the last look" semantics, which
+   * an in-memory field loses on every restart (TSK-11, TSK-17). HeartbeatLoop
+   * attaches a store scoped to this trigger before its first evaluation.
+   */
+  attachStateStore?(store: TriggerStateStore): void;
   /** Get the next scheduled fire time (for display) */
   getNextRun(): Date | null;
   /** Get current trigger state */
