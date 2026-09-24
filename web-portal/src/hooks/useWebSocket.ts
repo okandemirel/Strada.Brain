@@ -49,28 +49,52 @@ function exceedsMaxPayload(frame: string): boolean {
   return new TextEncoder().encode(frame).length > WS_MAX_PAYLOAD_BYTES
 }
 
+// Storage can be blocked (site data disabled, some embedded contexts: even
+// reading `window.localStorage` throws) or full. Neither may take the portal
+// down or leave a connected session mute, so every access goes through these
+// (WEB-16); the session then simply is not remembered across reloads.
+function storageGet(key: string): string | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Blocked or over quota: keep going without persistence.
+  }
+}
+
+function storageRemove(key: string): void {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Blocked: nothing stored to remove.
+  }
+}
+
 function readStoredChatId(): string | null {
-  if (typeof window === 'undefined') return null
-  return window.localStorage.getItem(CHAT_ID_STORAGE_KEY)
+  return storageGet(CHAT_ID_STORAGE_KEY)
 }
 
 function readStoredProfileId(): string | null {
-  if (typeof window === 'undefined') return null
   return (
-    window.localStorage.getItem(PROFILE_ID_STORAGE_KEY) ??
-    window.localStorage.getItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ??
+    storageGet(PROFILE_ID_STORAGE_KEY) ??
+    storageGet(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ??
     readStoredChatId()
   )
 }
 
 function readStoredProfileToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return window.localStorage.getItem(PROFILE_TOKEN_STORAGE_KEY)
+  return storageGet(PROFILE_TOKEN_STORAGE_KEY)
 }
 
 function readStoredReconnectToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return window.localStorage.getItem(RECONNECT_TOKEN_STORAGE_KEY)
+  return storageGet(RECONNECT_TOKEN_STORAGE_KEY)
 }
 
 export interface UseWebSocketReturn {
@@ -180,13 +204,13 @@ export function useWebSocket(): UseWebSocketReturn {
       }
     }
     useCanvasStore.getState().setSessionId(nextProfileId)
-    localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
-    localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
-    localStorage.removeItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
+    storageSet(CHAT_ID_STORAGE_KEY, chatId)
+    storageSet(PROFILE_ID_STORAGE_KEY, nextProfileId)
+    storageRemove(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
     if (profileTokenRef.current) {
-      localStorage.setItem(PROFILE_TOKEN_STORAGE_KEY, profileTokenRef.current)
+      storageSet(PROFILE_TOKEN_STORAGE_KEY, profileTokenRef.current)
     }
-    localStorage.setItem(RECONNECT_TOKEN_STORAGE_KEY, reconnectToken)
+    storageSet(RECONNECT_TOKEN_STORAGE_KEY, reconnectToken)
 
     if (previousChatId !== chatId) {
       const store = useSessionStore.getState()
@@ -363,7 +387,7 @@ export function useWebSocket(): UseWebSocketReturn {
       const savedProfileId = profileIdRef.current ?? savedChatId ?? undefined
       const savedProfileToken = profileTokenRef.current ?? undefined
       const legacyProfileChatId = !savedProfileToken
-        ? localStorage.getItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ?? undefined
+        ? storageGet(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ?? undefined
         : undefined
 
       pendingReconnectChatIdRef.current = savedChatId

@@ -9,7 +9,12 @@ type StorageWriter = Pick<Storage, 'setItem'>
 
 function getSessionStorage(): Storage | null {
   if (typeof window === 'undefined') return null
-  return window.localStorage
+  try {
+    // Reading the property itself throws where site data is blocked (WEB-16).
+    return window.localStorage
+  } catch {
+    return null
+  }
 }
 
 export function clearSessionMessages(chatId: string): void {
@@ -65,10 +70,9 @@ export function readSessionMessages(
 ): ChatMessage[] {
   if (!chatId || !storage) return []
 
-  const raw = storage.getItem(getStorageKey(chatId))
-  if (!raw) return []
-
   try {
+    const raw = storage.getItem(getStorageKey(chatId))
+    if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
     return parsed

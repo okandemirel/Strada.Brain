@@ -746,3 +746,54 @@ describe('useWebSocket logout (WEB-20)', () => {
     expect(init.chatId).toBeUndefined()
   })
 })
+
+// WEB-16: with site data blocked even reading `window.localStorage` throws;
+// the hook read it during render (taking the whole shell into the error
+// boundary), and a throwing setItem in the connected handler left the
+// session "connected" but mute.
+describe('useWebSocket with blocked storage (WEB-16)', () => {
+  beforeEach(installTestEnvironment)
+  afterEach(() => {
+    // Working storage again before teardown: other stores' resets read it.
+    const storage = createStorageMock()
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    restoreTestEnvironment()
+  })
+
+  function blockStorage() {
+    const blocked = { get: () => { throw new DOMException('The operation is insecure.', 'SecurityError') }, configurable: true }
+    Object.defineProperty(globalThis, 'localStorage', blocked)
+    Object.defineProperty(window, 'localStorage', blocked)
+  }
+
+  it('connects and delivers messages without storage', () => {
+    blockStorage()
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-nostore', reconnectToken: 'r', profileId: 'p', profileToken: 't' })
+    })
+    act(() => { result.current.sendMessage('still works') })
+    expect(socket.sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'message', text: 'still works' }))
+  })
+
+  it('stays usable when storage is full', () => {
+    const storage = {
+      getItem: () => null,
+      setItem: () => { throw new DOMException('Quota exceeded', 'QuotaExceededError') },
+      removeItem: () => {},
+    }
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-full', reconnectToken: 'r', profileId: 'p' })
+    })
+    act(() => { result.current.sendMessage('quota') })
+    expect(socket.sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'message', text: 'quota' }))
+  })
+})
