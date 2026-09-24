@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { shapesToNodes, connectionsToEdges, nodeChangeToStoreUpdate } from './use-canvas-bridge'
+import { act, renderHook } from '@testing-library/react'
+import { beforeEach, describe, it, expect } from 'vitest'
+import { shapesToNodes, connectionsToEdges, nodeChangeToStoreUpdate, useCanvasBridge } from './use-canvas-bridge'
+import { useCanvasStore } from '../stores/canvas-store'
 
 describe('use-canvas-bridge', () => {
   describe('shapesToNodes', () => {
@@ -57,5 +59,43 @@ describe('use-canvas-bridge', () => {
       const update = nodeChangeToStoreUpdate({ id: 's1', type: 'select', selected: true })
       expect(update).toBeNull()
     })
+  })
+})
+
+// WEB-10: xyflow emits a `dragging: true` position change on every pointer
+// move, and a `dimensions` change (resizing undefined) on every re-measure.
+// Each pushed an undo snapshot, so one drag filled the 50-entry stack with
+// identical snapshots and wiped the edits before it.
+describe('useCanvasBridge undo history (WEB-10)', () => {
+  beforeEach(() => {
+    useCanvasStore.getState().reset()
+    useCanvasStore.setState({
+      shapes: [{ id: 'card', type: 'note-block', x: 0, y: 0, w: 200, h: 100, props: {} }],
+      undoStack: [],
+      redoStack: [],
+    })
+  })
+
+  it('adds exactly one undo entry for a whole drag', () => {
+    const { result } = renderHook(() => useCanvasBridge())
+    act(() => {
+      for (let x = 1; x <= 60; x++) {
+        result.current.onNodesChange([{ id: 'card', type: 'position', position: { x, y: 0 }, dragging: true }])
+      }
+      result.current.onNodesChange([{ id: 'card', type: 'position', position: { x: 500, y: 0 }, dragging: false }])
+    })
+    const state = useCanvasStore.getState()
+    expect(state.undoStack).toHaveLength(1)
+    expect(state.shapes[0]!.x).toBe(500)
+  })
+
+  it('does not push an undo entry or clear redo when nodes are only re-measured', () => {
+    useCanvasStore.setState({ redoStack: [{ shapes: [], connections: [] }] })
+    const { result } = renderHook(() => useCanvasBridge())
+    act(() => {
+      result.current.onNodesChange([{ id: 'card', type: 'dimensions', dimensions: { width: 200, height: 100 } }])
+    })
+    expect(useCanvasStore.getState().undoStack).toHaveLength(0)
+    expect(useCanvasStore.getState().redoStack).toHaveLength(1)
   })
 })

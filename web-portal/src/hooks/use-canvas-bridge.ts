@@ -112,7 +112,15 @@ export function useCanvasBridge() {
           }
           continue
         }
-        // Push undo once for the entire batch
+        const mutates =
+          change.type === 'remove' ||
+          (change.type === 'position' && change.dragging === false && change.position !== undefined) ||
+          (change.type === 'dimensions' && change.resizing === false && change.dimensions !== undefined)
+        // Only a change that mutates the store gets an undo snapshot (once per
+        // batch). Every intermediate drag frame and every re-measure pushed one,
+        // so one drag filled the stack with identical snapshots, evicted the
+        // earlier edits and cleared the redo stack (WEB-10).
+        if (!mutates) continue
         if (!undoPushed) {
           pushUndo()
           undoPushed = true
@@ -122,10 +130,10 @@ export function useCanvasBridge() {
           continue
         }
         // Position/dimensions updates
-        if (change.type === 'position' && change.dragging === false && change.position) {
+        if (change.type === 'position' && change.position) {
           updateShape(change.id, { x: change.position.x, y: change.position.y })
         }
-        if (change.type === 'dimensions' && change.resizing === false && change.dimensions) {
+        if (change.type === 'dimensions' && change.dimensions) {
           updateShape(change.id, { w: change.dimensions.width, h: change.dimensions.height })
         }
       }
