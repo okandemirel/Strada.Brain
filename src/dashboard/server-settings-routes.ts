@@ -21,6 +21,30 @@ import {
 } from "../security/rate-limiter.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import type { RouteContext } from "./server-types.js";
+import { z } from "zod";
+import { NO_BUDGET_LIMIT } from "../budget/budget-types.js";
+
+/**
+ * POST /api/budget/config, validated as a whole before anything is stored
+ * (CHN-18). BudgetConfigStore checks and persists field by field, so a body
+ * with one good and one bad field stored the good one and still answered 400.
+ * The rules are the store's own; a body that passes here cannot fail there
+ * half-way through.
+ */
+const usdLimit = (field: string) =>
+  z.number().min(NO_BUDGET_LIMIT, `${field} must be -1 (no limit) or a finite number >= 0`);
+const BUDGET_CONFIG_BODY = z.object({
+  dailyLimitUsd: usdLimit("dailyLimitUsd").optional(),
+  monthlyLimitUsd: usdLimit("monthlyLimitUsd").optional(),
+  warnPct: z.number().min(0.1, "warnPct must be between 0.1 and 0.99").max(0.99, "warnPct must be between 0.1 and 0.99").optional(),
+  subLimits: z.object({
+    daemonDailyUsd: z.number().min(0).optional(),
+    agentDefaultUsd: z.number().min(0).optional(),
+    verificationPct: z.number().min(0).max(1).optional(),
+  }).optional(),
+  interactiveTokenBudget: z.number().min(-1).optional(),
+  taskReservationUsd: z.number().min(0).optional(),
+});
 
 /**
  * Boolean voice settings shared by GET and POST /api/settings/voice, as
@@ -194,8 +218,15 @@ export function handleSettingsRoutes(
     }
     void ctx.readJsonBody<Record<string, unknown>>(req, res).then((parsed) => {
       if (!parsed) return; // readJsonBody already sent the error response
+      // CHN-18: validate the WHOLE body before anything is stored (see schema).
+      const body = BUDGET_CONFIG_BODY.safeParse(parsed);
+      if (!body.success) {
+        const issue = body.error.issues[0];
+        sendJsonError(res, 400, issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "Invalid budget configuration");
+        return;
+      }
       try {
-        ctx.unifiedBudgetManager!.updateConfig(parsed as Parameters<UnifiedBudgetManager["updateConfig"]>[0]);
+        ctx.unifiedBudgetManager!.updateConfig(body.data as Parameters<UnifiedBudgetManager["updateConfig"]>[0]);
         sendJson(res, { success: true, config: ctx.unifiedBudgetManager!.getConfig() });
       } catch (err) {
         sendJsonError(res, 400, err instanceof Error ? err.message : String(err));
