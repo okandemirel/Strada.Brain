@@ -261,4 +261,23 @@ describe("tool_use / tool_result pairing (ORC-2, ORC-5)", () => {
     expectPaired(h.runSession().messages);
     for (const body of h.sent) expectPaired(body);
   });
+  it("a session poisoned by an earlier turn is repaired before the next provider call", async () => {
+    const h = harness();
+    h.chat.mockResolvedValue(resp({ text: "answer", stopReason: "end_turn" }));
+    const sm = (h.orch as unknown as { sessionManager: { getOrCreateSession(id: string): Session; appendVisibleUserMessage(s: Session, t: string): void } }).sessionManager;
+    const session = sm.getOrCreateSession("chat-1");
+    // What a throw mid-tool left behind before the fix: a dangling tool_use, then the error text.
+    session.messages.push(
+      { role: "user", content: "show me the plan" },
+      { role: "assistant", content: "", tool_calls: [{ id: "old-1", name: "show_plan", input: {} }] } as ConversationMessage,
+      { role: "assistant", content: "Something went wrong." },
+    );
+    sm.appendVisibleUserMessage(session, "try again please");
+
+    await h.run("interactive", { prompt: "try again please", interactiveSession: session } as Partial<AgentRunRequest>);
+
+    expect(h.sent.length).toBeGreaterThan(0);
+    for (const body of h.sent) expectPaired(body);
+    expectPaired(session.messages);
+  });
 });

@@ -109,6 +109,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
 import { effectiveContextWindow, recordContextCeiling } from "./context-ceilings.js";
+import { normalizeConversation } from "./conversation-normalizer.js";
 import {
   planVerifierPipeline,
   sanitizeVisibilityReviewDecision,
@@ -3962,6 +3963,21 @@ export class Orchestrator {
     return true;
   }
 
+  /**
+   * Enforce the provider-neutral conversation shape (conversation-normalizer.ts) on the session
+   * right before a provider call. In place, so a repaired session also persists repaired.
+   */
+  private normalizeSessionForCall(session: Session, chatId: string): void {
+    const normalized = normalizeConversation(session.messages);
+    if (normalized === session.messages) return;
+    getLogger().warn("Conversation repaired before the provider call (tool pairing / empty turn / head)", {
+      chatId,
+      before: session.messages.length,
+      after: normalized.length,
+    });
+    session.messages = normalized;
+  }
+
   /** System prompt with the rolling compaction summary appended (if any). */
   private withCompactionSummary(systemPrompt: string, session: Session): string {
     return session.compactionSummary
@@ -4030,6 +4046,8 @@ export class Orchestrator {
     chatId: string,
     runClock?: RunClock,
   ): Promise<ProviderResponse> {
+    // The hard-timeout retry compacts just before this call.
+    this.normalizeSessionForCall(session, chatId);
     let fbScope: CallScope | undefined;
     // Flag-ON: a fresh fallback CallScope token (composition order [externalSignal, token]
     // mirrors v1's [externalSignal, timeoutSignal]). Flag-OFF: VERBATIM v1 AbortSignal.timeout.
@@ -4112,6 +4130,7 @@ export class Orchestrator {
     const thinkingStall = provider.capabilities.thinkingSupported
       ? this.streamInitialTimeoutMs
       : undefined;
+    this.normalizeSessionForCall(session, chatId);
     const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
 
     // ── Agent Core v2 — Phase 1b: RunClock-governed streaming (flag-ON). ──────────────────
