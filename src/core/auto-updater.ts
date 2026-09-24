@@ -986,8 +986,18 @@ export class AutoUpdater {
         await rollbackTo(postPullSha, `${step} failed`);
         // Restore old dependencies after source rollback
         await this.installProjectDependencies();
-      } catch {
-        // Rollback failed — nothing we can do
+        // A failed build still writes dist/: tsc emits despite type errors,
+        // and a failed portal build leaves the new server code behind. Until
+        // the rolled-back source is built again, the next start (and every
+        // lazy import) runs the version that was just rejected (COR-4).
+        if (step === "npm run build") {
+          await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
+        }
+      } catch (rollbackErr) {
+        // Rollback failed — nothing more we can do; say so for the operator.
+        getLoggerSafe().warn("Auto-update rollback did not complete", {
+          detail: (rollbackErr as Error).message.slice(0, 600),
+        });
       }
       await popStash();
       throw buildErr;

@@ -92,6 +92,22 @@ describe("auto-update rollback", () => {
     expect(readUpdateHistory(root).at(-1)).toMatchObject({ kind: "rollback-refused", to: MINE });
   });
 
+  it("rebuilds the rolled-back source after a failed build (COR-4)", async () => {
+    const git = fakeGit({ commitDuringWindow: false });
+    const calls: string[] = [];
+    const u = updater(git, []);
+    (u as unknown as { commandRunner: (cmd: string, args: string[]) => Promise<string> }).commandRunner = async (cmd, args) => {
+      calls.push(`${cmd} ${args.join(" ")}`);
+      return git.run(cmd, args);
+    };
+    await performUpdate(u);
+
+    const reset = calls.indexOf(`git reset --hard ${PRE}`);
+    expect(reset).toBeGreaterThan(-1);
+    // dist/ holds whatever the failed build emitted until the old source is built again.
+    expect(calls.slice(reset + 1)).toContain("npm run build");
+  });
+
   it("still rolls back when nothing else committed", async () => {
     const git = fakeGit({ commitDuringWindow: false });
     const notices: string[] = [];
