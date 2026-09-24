@@ -52,12 +52,9 @@ class ConcurrencySemaphore {
   /** Update the cap at runtime; wake queued waiters if the limit grew. */
   setLimit(limit: number): void {
     this.limit = limit;
-    // Each woken waiter reclaims its slot via its own `running++` after the await
-    // in acquire(); count admissions locally so the gate advances without the waker
-    // mutating `running` (the post-await acquire() owns the increment).
-    let admitted = 0;
-    while (this.running + admitted < this.limit && this.queue.length > 0) {
-      admitted++;
+    // The waker counts each admitted waiter's slot itself (see release()).
+    while (this.running < this.limit && this.queue.length > 0) {
+      this.running++;
       this.queue.shift()!();
     }
   }
@@ -96,17 +93,19 @@ class ConcurrencySemaphore {
       this.queue.push(waiter);
       signal.addEventListener("abort", onAbort, { once: true });
     });
-    this.running++;
+    // The slot was handed over already counted (release() / setLimit()).
   }
 
   release(): void {
-    this.running--;
-    if (this.queue.length > 0) {
-      // Hand the freed permit directly to the next waiter. It reclaims the slot via
-      // its own `running++` after the await in acquire(), so the `running--` above
-      // and that increment net to zero across this release + that acquire.
+    if (this.queue.length > 0 && this.running <= this.limit) {
+      // Hand the permit straight to the next waiter: `running` stays put, the
+      // slot just changes owner. Freeing it here and letting the waiter count
+      // itself back in after its await left a gap in which a new acquire()
+      // saw a free slot and took it too, putting cap + 1 calls in flight.
       this.queue.shift()!();
+      return;
     }
+    this.running--;
   }
 }
 

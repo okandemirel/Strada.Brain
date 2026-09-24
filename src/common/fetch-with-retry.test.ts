@@ -872,3 +872,46 @@ describe("fetchWithRetry — an abort ends a retry backoff", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
+
+// release() freed the slot and the woken waiter counted itself back in only
+// after its await, so an acquire() in between saw a free slot too: cap + 1
+// calls in flight against a per-key limit meant to prevent 429s.
+describe("fetchWithRetry — a released permit goes to the queue, not to a newcomer", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    __resetProviderConcurrency();
+    configureProviderConcurrency(1);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetProviderConcurrency();
+  });
+
+  const openBody = (): Response =>
+    new Response(new ReadableStream<Uint8Array>({ start() { /* never closes on its own */ } }), { status: 200 });
+
+  it("keeps a call issued right after a release behind the waiter already queued", async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(openBody()));
+    const opts = { callerName: "ProviderHandoff" };
+    const a = await fetchWithRetry("https://example.com/a", { method: "GET" }, opts);
+    const b = fetchWithRetry("https://example.com/b", { method: "GET" }, opts);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // B waits for A
+
+    // A lets go and C arrives in the same tick.
+    void a.body!.cancel();
+    const c = fetchWithRetry("https://example.com/c", { method: "GET" }, opts);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fetchSpy, "C took the slot that was being handed to B").toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]![0]).toBe("https://example.com/b");
+
+    await (await b).body!.cancel();
+    await (await c).body!.cancel();
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+});
