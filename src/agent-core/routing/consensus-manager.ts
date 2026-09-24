@@ -98,7 +98,10 @@ function extractJsonVerdict(
         sawObject = true;
         for (const key of keys) {
           if (key in parsed) {
-            const value = Boolean((parsed as Record<string, unknown>)[key]);
+            const value = booleanVerdict((parsed as Record<string, unknown>)[key]);
+            // An uninterpretable verdict ("no", "false" as prose, null…) is not approval:
+            // Boolean("false") is true, which failed a quoted rejection OPEN.
+            if (value === undefined) return { verdict: false, sawObject: true };
             if (verdict !== undefined && verdict !== value) {
               return { verdict: false, sawObject: true }; // conflicting verdicts → fail closed
             }
@@ -113,6 +116,17 @@ function extractJsonVerdict(
     i += 1;
   }
   return { verdict, sawObject };
+}
+
+/** A JSON verdict value: a boolean, or exactly "true"/"false" (any case); anything else is undefined. */
+function booleanVerdict(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true") return true;
+    if (v === "false") return false;
+  }
+  return undefined;
 }
 
 /** One reviewer call's spend: its own usage plus any superseded attempt the chain carried. */

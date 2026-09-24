@@ -610,6 +610,30 @@ describe("ConsensusManager", () => {
     });
     expect(result.agreed).toBe(false);
   });
+
+  it.each([
+    ['{"approved": "false"}', false],
+    ['{"approved": "no"}', false],
+    ['{"approved": "FALSE", "reason": "unsafe"}', false],
+    ['{"approved": null}', false],
+    ['{"approved": "true"}', true],
+    ['{"approved": true}', true],
+  ])("parseApproval: a quoted verdict %s is read as %s, never truthy-coerced", async (text, expected) => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({ text, toolCalls: [], stopReason: "end_turn" }),
+    };
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.5,
+      reviewProvider: mockReview as never,
+      prompt: "Delete file",
+    });
+    expect(result.agreed).toBe(expected);
+  });
 });
 
 
