@@ -41,6 +41,36 @@ export interface WSClient extends WebSocket {
 
 export type CommandHandler = (command: string, payload: unknown) => Promise<unknown> | unknown;
 
+const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * CHN-20: WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS, read the way its name promises.
+ *
+ * The whole list used to be handed to the Origin check as bare HOSTS, so a
+ * complete origin (`https://dash.example.com`) never matched and was always
+ * refused, while a bare `localhost` re-trusted every loopback port (undoing
+ * 13F6 / 4.8). A complete origin is now trusted on scheme + host + port. A bare
+ * host (or `host:port`) is still honoured, with a warning — except a bare
+ * loopback name, which is ignored.
+ */
+export function splitAllowedOrigins(entries: readonly string[]): {
+  trustedOrigins: string[];
+  allowedHosts: string[];
+  ignoredLoopback: string[];
+} {
+  const trustedOrigins: string[] = [];
+  const allowedHosts: string[] = [];
+  const ignoredLoopback: string[] = [];
+  for (const raw of entries) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    if (entry.includes("://")) trustedOrigins.push(entry);
+    else if (LOOPBACK_NAMES.has(entry.toLowerCase())) ignoredLoopback.push(entry);
+    else allowedHosts.push(entry);
+  }
+  return { trustedOrigins, allowedHosts, ignoredLoopback };
+}
+
 export interface WebSocketDashboardServerOptions {
   port: number;
   /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
@@ -77,6 +107,8 @@ export class WebSocketDashboardServer {
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
   private readonly allowedOrigins: string[] | undefined;
+  /** The Origin-check reading of allowedOrigins (CHN-20, see splitAllowedOrigins). */
+  private readonly originTrust: { trustedOrigins: string[]; allowedHosts: string[] };
   private readonly allowedHosts: readonly string[];
   private readonly bruteForce: BruteForceProtection;
 
@@ -99,6 +131,18 @@ export class WebSocketDashboardServer {
     this.getMemoryStats = opts.getMemoryStats;
     this.getPluginsStats = opts.getPluginsStats;
     this.allowedOrigins = opts.allowedOrigins;
+    const split = splitAllowedOrigins(opts.allowedOrigins ?? []);
+    this.originTrust = { trustedOrigins: split.trustedOrigins, allowedHosts: split.allowedHosts };
+    if (split.ignoredLoopback.length > 0) {
+      this.logger.warn(
+        `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS: ignoring ${split.ignoredLoopback.join(", ")} — a bare loopback name would trust every local port; list the full origin (e.g. http://localhost:5173)`,
+      );
+    }
+    if (split.allowedHosts.length > 0) {
+      this.logger.warn(
+        `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS: ${split.allowedHosts.join(", ")} ${split.allowedHosts.length === 1 ? "is a bare host" : "are bare hosts"}, trusted on every scheme and port; prefer complete origins (scheme://host[:port])`,
+      );
+    }
     this.allowedHosts = opts.allowedHosts ?? resolveAllowedHosts();
     this.bruteForce = new BruteForceProtection(
       opts.maxAuthAttempts ?? DEFAULT_MAX_AUTH_ATTEMPTS,
@@ -145,7 +189,8 @@ export class WebSocketDashboardServer {
         this.acceptsHost(req) &&
         isAllowedOrigin(req.headers.origin, {
           selfPort: this.boundPort,
-          ...(this.allowedOrigins ? { allowedHosts: this.allowedOrigins } : {}),
+          trustedOrigins: this.originTrust.trustedOrigins,
+          allowedHosts: this.originTrust.allowedHosts,
         }),
     });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));

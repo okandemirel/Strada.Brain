@@ -51,7 +51,7 @@ Uses `ws` library. Serves HTTP (embedded full-featured dashboard) and WebSocket 
 **Authentication:**
 - If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, the browser must supply that token manually.
 - If it is unset, the server generates a process-scoped token and injects it into the same-origin dashboard HTML, so the feature stays usable without running unauthenticated.
-- Browser origins default to `localhost` and `127.0.0.1`; `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` extends the allowlist for browser clients. Non-browser clients without an `Origin` header are still accepted.
+- Browser origins default to `localhost` and `127.0.0.1`; `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` extends the allowlist for browser clients with complete origins (`https://dash.example.com`, matched on scheme, host and port). A bare host is still accepted with a warning; a bare loopback name (`localhost`) is ignored, because it would trust every local port. Non-browser clients without an `Origin` header are still accepted.
 
 **Protocol:**
 1. Server sends `{type:"auth", payload:{requiresAuth:bool}}` on connect
