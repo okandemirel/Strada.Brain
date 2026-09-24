@@ -26,6 +26,12 @@
 // holds any symlink (the entry point or anything else) cannot be approved at
 // all (round 6 #7): the target can change without the hash changing.
 //
+// For the same reason the module graph must stay inside the directory (SEC-4,
+// rule in skill-import-scan.ts): the hash covers nothing else, so a skill
+// whose code imports a relative path outside it, a package name (resolved
+// through parent node_modules folders), or a computed specifier cannot be
+// approved, and an approval recorded for one is not honoured.
+//
 // The scan is budgeted (round 7 #11): files are streamed into the hash
 // through one reused 64 KiB buffer (a gigabyte asset never means a gigabyte
 // allocation), and the walk FAILS CLOSED at `SKILL_SCAN_MAX_FILES`,
@@ -68,6 +74,7 @@ import { open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
+import { findOutsideImports, isSkillCodeFile } from "./skill-import-scan.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,6 +131,12 @@ interface SkillContentScanBase {
    * file is code on a case-insensitive filesystem; see skill-entry-point.ts).
    */
   readonly entryPoint: string | null;
+  /**
+   * Loading statements in the skill's code that resolve outside its directory
+   * or cannot be checked (SEC-4, see skill-import-scan.ts), as
+   * `<relpath>: <specifier>`. Non-empty → not approvable.
+   */
+  readonly outsideImports: readonly string[];
 }
 
 /** What a walk of the skill directory found. */
@@ -153,6 +166,8 @@ export const DEFAULT_SKILL_SCAN_LIMITS: SkillScanLimits = Object.freeze({
 });
 /** Size of the single reused read buffer files are streamed through. */
 const SCAN_CHUNK_BYTES = 64 * 1024;
+/** A code file larger than this is not held in memory for the import check; it is refused instead (SEC-4). */
+export const SKILL_IMPORT_CHECK_MAX_FILE_BYTES = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Record location — always under the user's home, never in the project.
@@ -488,10 +503,16 @@ export async function scanSkillContent(
   const hash = createHash("sha256");
   const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
   let byteCount = 0;
+  const outsideImports: string[] = [];
   for (const { full, rel } of rels) {
     if (exceeded) break;
     hash.update(rel);
     hash.update("\0");
+    // SEC-4: a code file's text is checked for imports that leave the skill
+    // directory — the same bytes that go into the hash.
+    const checkImports = isSkillCodeFile(rel);
+    const held: Buffer[] = [];
+    let fileBytes = 0;
     const handle = await open(full, "r");
     try {
       for (;;) {
@@ -503,13 +524,26 @@ export async function scanSkillContent(
           break;
         }
         hash.update(chunk.subarray(0, bytesRead));
+        fileBytes += bytesRead;
+        if (checkImports && fileBytes <= SKILL_IMPORT_CHECK_MAX_FILE_BYTES) {
+          held.push(Buffer.from(chunk.subarray(0, bytesRead)));
+        }
       }
     } finally {
       await handle.close();
     }
     hash.update("\0");
+    if (checkImports && !exceeded) {
+      if (fileBytes > SKILL_IMPORT_CHECK_MAX_FILE_BYTES) {
+        outsideImports.push(`${rel}: too large to check its imports (over ${SKILL_IMPORT_CHECK_MAX_FILE_BYTES} bytes)`);
+      } else {
+        for (const found of findOutsideImports(skillPath, full, Buffer.concat(held).toString("utf-8"))) {
+          outsideImports.push(`${rel}: ${found}`);
+        }
+      }
+    }
   }
-  const base = { fileCount: rels.length, byteCount, symlinks, entryPoint };
+  const base = { fileCount: rels.length, byteCount, symlinks, entryPoint, outsideImports };
   if (exceeded) return { ...base, sha256: null, exceeded };
   return { ...base, sha256: hash.digest("hex"), exceeded: null };
 }
@@ -536,9 +570,10 @@ function limitRefusal(breach: SkillScanLimitBreach): string {
  * project. A skill over the scan budget is never trusted (fail closed). A
  * skill with no entry point imports nothing (`loadSkillTools` returns before
  * any `import()`), so there is nothing to approve and it is trusted
- * trivially. A skill whose directory holds a symlink, or whose entry point
- * differs from `index.ts`/`index.js` only in letter case (SEC-1), is never
- * trusted. Otherwise a record for (project, skill) must exist AND its hash
+ * trivially. A skill whose directory holds a symlink, whose entry point
+ * differs from `index.ts`/`index.js` only in letter case (SEC-1), or whose
+ * code loads modules from outside its directory (SEC-4) is never trusted.
+ * Otherwise a record for (project, skill) must exist AND its hash
  * must equal the current hash of the skill's content.
  */
 export async function assessWorkspaceSkillTrust(
@@ -563,6 +598,9 @@ export async function assessWorkspaceSkillTrust(
 
   if (scan.symlinks.length > 0) {
     return { trusted: false, sha256, reason: symlinkRefusal(scan.symlinks) };
+  }
+  if (scan.outsideImports.length > 0) {
+    return { trusted: false, sha256, reason: outsideImportRefusal(scan.outsideImports) };
   }
   const key = await skillKey(projectId, skillPath);
   const record = readTrustedRecord(projectId, key);
@@ -591,6 +629,16 @@ function symlinkRefusal(symlinks: readonly string[]): string {
   return `Workspace skill holds symlinked code, which cannot be approved (its target can change without the hash changing): ${symlinks.join(", ")}`;
 }
 
+/** SEC-4: the approval hash covers only the skill directory, so the module graph it runs must stay inside it. */
+function outsideImportRefusal(found: readonly string[]): string {
+  const shown = found.length > 8 ? [...found.slice(0, 8), `and ${found.length - 8} more`] : found;
+  return (
+    "Workspace skill loads code from outside its directory, which the approval cannot cover " +
+    "(only node: built-ins, and relative imports that stay inside the skill directory with literal specifiers, can be approved; " +
+    `vendor or bundle dependencies into the skill): ${shown.join(", ")}`
+  );
+}
+
 /**
  * SEC-1: a differently-cased entry point is code on a case-insensitive
  * filesystem, but the loader only ever imports the exact name, so there is
@@ -615,8 +663,9 @@ export interface ApprovalResult {
 /**
  * Record the skill's CURRENT content as approved for this project. Throws
  * when the scan exceeds its budget (round 7 #11), when the directory has no
- * entry point (nothing is executed, nothing to approve) or holds a symlink
- * (round 6 #7). The scan and hash happen outside the transaction; only the
+ * entry point (nothing is executed, nothing to approve), holds a symlink
+ * (round 6 #7) or loads code from outside the skill directory (SEC-4). The
+ * scan and hash happen outside the transaction; only the
  * single-row upsert is inside it.
  */
 export async function approveWorkspaceSkill(
@@ -636,6 +685,9 @@ export async function approveWorkspaceSkill(
   }
   if (scan.symlinks.length > 0) {
     throw new Error(`Cannot approve ${skillPath}: ${symlinkRefusal(scan.symlinks)}`);
+  }
+  if (scan.outsideImports.length > 0) {
+    throw new Error(`Cannot approve ${skillPath}: ${outsideImportRefusal(scan.outsideImports)}`);
   }
   const { sha256, fileCount } = scan;
   const projectId = await projectIdentity(projectRoot);

@@ -628,6 +628,54 @@ describe("node_modules is part of the trust hash (round 7 #10)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// SEC-4: the hash covers the skill directory only, so the module graph the
+// entry point runs must not reach outside it.
+// ---------------------------------------------------------------------------
+describe("the imported module graph stays inside the skill directory (SEC-4)", () => {
+  it("a skill importing a file outside its directory is untrusted and cannot be approved, even with a matching record", async () => {
+    await writeSkill("_shared", { "run.js": "export const run = () => 1;" });
+    const dir = await writeSkill("deploy", {
+      "SKILL.md": "x",
+      "index.js": 'import { run } from "../_shared/run.js";\nexport const tools = [];',
+    });
+    const scan = (await scanSkillContent(dir))!;
+    expect(scan.outsideImports).toEqual(['index.js: "../_shared/run.js"']);
+
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/loads code from outside its directory.*index\.js: "\.\.\/_shared\/run\.js"/);
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
+
+    // A record written before this rule existed (same hash) is not honoured.
+    const projectId = await projectIdentity(projectRoot);
+    const store = openSkillTrustStore();
+    try {
+      store.approve(projectId, "skills/deploy", { sha256: scan.sha256!, fileCount: scan.fileCount, approvedAtIso: "x" });
+    } finally {
+      store.close();
+    }
+    const verdict = await assessWorkspaceSkillTrust(projectRoot, dir, "deploy");
+    expect(verdict.trusted).toBe(false);
+    if (verdict.trusted) throw new Error("unreachable");
+    expect(verdict.reason).toContain("outside its directory");
+    expect(verdict.reason).toContain('index.js: "../_shared/run.js"');
+  });
+
+  it("package imports anywhere in the skill's code are refused; built-ins and in-directory relative imports are approvable", async () => {
+    const bare = await writeSkill("bare", { "index.ts": 'import _ from "lodash";\nexport const tools = [];' });
+    await expect(approveWorkspaceSkill(projectRoot, bare)).rejects.toThrow(/index\.ts: "lodash"/);
+    const nested = await writeSkill("nested", { "index.js": 'import "./lib/a.js";', "lib/a.js": "require('../../outside.cjs');" });
+    await expect(approveWorkspaceSkill(projectRoot, nested)).rejects.toThrow(/lib\/a\.js: "\.\.\/\.\.\/outside\.cjs"/);
+
+    const ok = await writeSkill("ok", {
+      "index.js": 'import fs from "node:fs";\nimport { h } from "./lib/h.js";\nexport const tools = [];',
+      "lib/h.js": 'import path from "path";\nexport const h = 1;',
+      "README.md": 'Not code, so text like from "anything" here is not checked.',
+    });
+    await approveWorkspaceSkill(projectRoot, ok);
+    expect((await assessWorkspaceSkillTrust(projectRoot, ok, "ok")).trusted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // round 7 #11: streamed hashing, explicit budget, fail closed.
 // ---------------------------------------------------------------------------
 describe("scan limits (round 7 #11)", () => {
