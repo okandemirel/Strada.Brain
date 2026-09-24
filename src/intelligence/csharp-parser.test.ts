@@ -281,3 +281,71 @@ describe("implementsInterface", () => {
     expect(implementsInterface({ interfaces: [] }, "IComponent")).toBe(false);
   });
 });
+
+// LRN-7: the parser runs synchronously on the RAG indexing path, and its 1 MB
+// cap did not bound its work: every match re-counted newlines from offset 0,
+// and patterns that crossed lines re-scanned to the end of the file from every
+// line start.
+describe("parse time stays linear under the size cap (LRN-7)", () => {
+  function lines(make: (i: number) => string, target: number): string {
+    const out: string[] = [];
+    let length = 0;
+    for (let i = 0; length < target; i++) {
+      const line = make(i);
+      out.push(line);
+      length += line.length + 1;
+    }
+    return out.join("\n");
+  }
+
+  function timed(content: string): { ms: number; result: ReturnType<typeof parseCSharpFile> } {
+    const started = performance.now();
+    const result = parseCSharpFile(content, "Generated.cs");
+    return { ms: performance.now() - started, result };
+  }
+
+  it("a 1 MB generated class with tens of thousands of fields", () => {
+    const body = lines((i) => `    public int field${i} = ${i};`, 1_000_000 - 200);
+    const { ms, result } = timed(`namespace Gen {\npublic class Big {\n${body}\n}\n}`);
+    expect(result.fields.length).toBeGreaterThan(25_000);
+    expect(result.fields[1]!.lineNumber).toBe(4);
+    // Was about 45 s.
+    expect(ms).toBeLessThan(3_000);
+  }, 120_000);
+
+  it("malformed input: initializers with no semicolon, unclosed brackets, blank runs", () => {
+    const corpus = [
+      lines((i) => `public int x${i} = 1`, 150_000),
+      lines((i) => `public void M${i}(int a`, 150_000),
+      lines((i) => `public List<int y${i};`, 150_000),
+      "\n".repeat(150_000),
+    ].join("\n");
+    const { ms } = timed(corpus);
+    // Was tens of seconds (minutes for the blank run).
+    expect(ms).toBeLessThan(3_000);
+  }, 300_000);
+
+  it("a multi-line initializer and parameter list still parse", () => {
+    const code = [
+      "public class Holder {",
+      "",
+      "",
+      "    private readonly int[] values = new int[]",
+      "    {",
+      "        1, 2, 3",
+      "    };",
+      "    public void Configure(",
+      "        int width,",
+      "        int height)",
+      "    {",
+      "    }",
+      "}",
+    ].join("\n");
+    const result = parseCSharpFile(code, "t.cs");
+    const fields = result.fields.filter((f) => !f.isProperty);
+    expect(fields.map((f) => [f.name, f.lineNumber])).toEqual([["values", 4]]);
+    const configure = result.methods.find((m) => m.name === "Configure")!;
+    expect(configure.parameters).toEqual(["int width", "int height"]);
+    expect(configure.lineNumber).toBe(8);
+  });
+});

@@ -6,13 +6,29 @@
 
 const MAX_PARSE_FILE_SIZE = 1024 * 1024; // 1MB max per file
 
-/** Count newlines up to offset to get line number (1-based). */
-function lineNumberAt(content: string, offset: number): number {
-  let count = 1;
-  for (let i = 0; i < offset; i++) {
-    if (content[i] === "\n") count++;
+/** Maps an offset to its 1-based line number. */
+type LineNumberAt = (offset: number) => number;
+
+/**
+ * Line lookup for one file: the line-start offsets are found once, and each
+ * lookup is a binary search. Counting newlines from offset 0 for every match
+ * made a large generated file quadratic (tens of seconds under the size cap).
+ */
+function lineIndex(content: string): LineNumberAt {
+  const starts = [0];
+  for (let i = content.indexOf("\n"); i !== -1; i = content.indexOf("\n", i + 1)) {
+    starts.push(i + 1);
   }
-  return count;
+  return (offset) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid]! <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
 }
 
 /** Parse space-separated modifiers from a regex capture group. */
@@ -118,14 +134,15 @@ export function parseCSharpFile(
     };
   }
 
+  const lineAt = lineIndex(content);
   const usings = extractUsings(content);
   const namespace = extractNamespace(content);
-  const classes = extractClasses(content, filePath, namespace);
-  const structs = extractStructs(content, filePath, namespace);
-  const methods = extractMethods(content);
-  const fields = extractFields(content);
-  const attributes = extractAttributes(content);
-  const constructors = extractConstructors(content, classes);
+  const classes = extractClasses(content, filePath, namespace, lineAt);
+  const structs = extractStructs(content, filePath, namespace, lineAt);
+  const methods = extractMethods(content, lineAt);
+  const fields = extractFields(content, lineAt);
+  const attributes = extractAttributes(content, lineAt);
+  const constructors = extractConstructors(content, classes, lineAt);
 
   return {
     filePath,
@@ -142,7 +159,7 @@ export function parseCSharpFile(
 
 function extractUsings(content: string): ParsedUsing[] {
   const results: ParsedUsing[] = [];
-  const regex = /^\s*using\s+([\w.]+)\s*;/gm;
+  const regex = /^[ \t]*using\s+([\w.]+)\s*;/gm;
   let match;
   while ((match = regex.exec(content)) !== null) {
     results.push({ namespace: match[1]! });
@@ -152,10 +169,10 @@ function extractUsings(content: string): ParsedUsing[] {
 
 function extractNamespace(content: string): string {
   // Match both block and file-scoped namespace
-  const blockMatch = content.match(/^\s*namespace\s+([\w.]+)\s*\{/m);
+  const blockMatch = content.match(/^[ \t]*namespace\s+([\w.]+)\s*\{/m);
   if (blockMatch) return blockMatch[1]!;
 
-  const fileScopedMatch = content.match(/^\s*namespace\s+([\w.]+)\s*;/m);
+  const fileScopedMatch = content.match(/^[ \t]*namespace\s+([\w.]+)\s*;/m);
   if (fileScopedMatch) return fileScopedMatch[1]!;
 
   return "";
@@ -164,13 +181,14 @@ function extractNamespace(content: string): string {
 function extractClasses(
   content: string,
   filePath: string,
-  namespace: string
+  namespace: string,
+  lineAt: LineNumberAt,
 ): ParsedClass[] {
   const results: ParsedClass[] = [];
 
   // Match class declarations with various modifiers
   const classRegex =
-    /^(\s*)((?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*class\s+(\w+)(?:<([^>]+)>)?(?:\s*:\s*(.+?))?(?:\s*where\b|\s*\{)/gm;
+    /^([ \t]*)((?:public|private|protected|internal|abstract|sealed|static|partial)\s+)*class\s+(\w+)(?:<([^>]{1,200})>)?(?:\s*:\s*(.+?))?(?:\s*where\b|\s*\{)/gm;
 
   let match;
   while ((match = classRegex.exec(content)) !== null) {
@@ -192,7 +210,7 @@ function extractClasses(
       }
     }
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       name,
@@ -215,12 +233,13 @@ function extractClasses(
 function extractStructs(
   content: string,
   filePath: string,
-  namespace: string
+  namespace: string,
+  lineAt: LineNumberAt,
 ): ParsedStruct[] {
   const results: ParsedStruct[] = [];
 
   const structRegex =
-    /^(\s*)((?:public|private|protected|internal|readonly)\s+)*struct\s+(\w+)(?:\s*:\s*(.+?))?(?:\s*where\b|\s*\{)/gm;
+    /^([ \t]*)((?:public|private|protected|internal|readonly)\s+)*struct\s+(\w+)(?:\s*:\s*(.+?))?(?:\s*where\b|\s*\{)/gm;
 
   let match;
   while ((match = structRegex.exec(content)) !== null) {
@@ -230,7 +249,7 @@ function extractStructs(
       ? match[4].split(",").map((s) => s.trim())
       : [];
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       name,
@@ -245,12 +264,16 @@ function extractStructs(
   return results;
 }
 
-function extractMethods(content: string): ParsedMethod[] {
+// Bracketed spans below ([^>], [^)], [^}]) may cross lines, so each is capped:
+// an unclosed bracket used to be scanned to the end of the file from every
+// line that opened one, which made malformed input quadratic.
+
+function extractMethods(content: string, lineAt: LineNumberAt): ParsedMethod[] {
   const results: ParsedMethod[] = [];
 
   // Match method declarations (simplified)
   const methodRegex =
-    /^\s*((?:public|private|protected|internal|static|virtual|override|abstract|async|sealed)\s+)*(\w+(?:<[^>]+>)?)\s+(\w+)\s*\(([^)]*)\)/gm;
+    /^[ \t]*((?:public|private|protected|internal|static|virtual|override|abstract|async|sealed)\s+)*(\w+(?:<[^>]{1,200}>)?)\s+(\w+)\s*\(([^)]{0,1000})\)/gm;
 
   let match;
   while ((match = methodRegex.exec(content)) !== null) {
@@ -265,7 +288,7 @@ function extractMethods(content: string): ParsedMethod[] {
       continue;
     }
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       name,
@@ -279,12 +302,14 @@ function extractMethods(content: string): ParsedMethod[] {
   return results;
 }
 
-function extractFields(content: string): ParsedField[] {
+function extractFields(content: string, lineAt: LineNumberAt): ParsedField[] {
   const results: ParsedField[] = [];
 
-  // Match fields: modifiers type name (= value)?;
+  // Match fields: modifiers type name, then "=" or ";". The initializer is not
+  // consumed: scanning it to the next ";" crossed lines, and a line with no
+  // ";" after it was scanned to the end of the file from every line start.
   const fieldRegex =
-    /^\s*((?:public|private|protected|internal|static|readonly|const|volatile)\s+)+(\w+(?:<[^>]+>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*(?:=\s*[^;]+)?;/gm;
+    /^[ \t]*((?:public|private|protected|internal|static|readonly|const|volatile)\s+)+(\w+(?:<[^>]{1,200}>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*(?=[=;])/gm;
 
   let match;
   while ((match = fieldRegex.exec(content)) !== null) {
@@ -295,7 +320,7 @@ function extractFields(content: string): ParsedField[] {
     // Skip known non-field patterns
     if (["return", "throw", "yield", "var", "new"].includes(type)) continue;
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       name,
@@ -310,7 +335,7 @@ function extractFields(content: string): ParsedField[] {
 
   // Match properties: modifiers type Name { get; set; }
   const propRegex =
-    /^\s*((?:public|private|protected|internal|static|virtual|override|abstract)\s+)+(\w+(?:<[^>]+>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*\{([^}]*)\}/gm;
+    /^[ \t]*((?:public|private|protected|internal|static|virtual|override|abstract)\s+)+(\w+(?:<[^>]{1,200}>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*\{([^}]{0,1000})\}/gm;
 
   while ((match = propRegex.exec(content)) !== null) {
     const modifiers = parseModifiers(match[1]);
@@ -322,7 +347,7 @@ function extractFields(content: string): ParsedField[] {
     if (["if", "while", "for", "foreach", "switch"].includes(name)) continue;
     if (name[0] !== name[0]!.toUpperCase()) continue; // Properties are PascalCase
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       name,
@@ -338,10 +363,10 @@ function extractFields(content: string): ParsedField[] {
   return results;
 }
 
-function extractAttributes(content: string): ParsedAttribute[] {
+function extractAttributes(content: string, lineAt: LineNumberAt): ParsedAttribute[] {
   const results: ParsedAttribute[] = [];
 
-  const attrRegex = /^\s*\[(\w+)(?:\(([^)]*)\))?\]/gm;
+  const attrRegex = /^[ \t]*\[(\w+)(?:\(([^)]{0,1000})\))?\]/gm;
 
   let match;
   while ((match = attrRegex.exec(content)) !== null) {
@@ -351,7 +376,7 @@ function extractAttributes(content: string): ParsedAttribute[] {
     // Skip well-known non-attribute brackets like array indices
     if (["0", "1", "2", "i", "j", "k", "index"].includes(name)) continue;
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({ name, arguments: args, lineNumber });
   }
@@ -361,14 +386,15 @@ function extractAttributes(content: string): ParsedAttribute[] {
 
 function extractConstructors(
   content: string,
-  classes: ParsedClass[]
+  classes: ParsedClass[],
+  lineAt: LineNumberAt,
 ): ParsedConstructor[] {
   const results: ParsedConstructor[] = [];
   const classNames = new Set(classes.map((c) => c.name));
 
   // Match constructors: modifiers ClassName(params)
   const ctorRegex =
-    /^\s*(?:public|private|protected|internal)\s+(\w+)\s*\(([^)]*)\)/gm;
+    /^[ \t]*(?:public|private|protected|internal)\s+(\w+)\s*\(([^)]{0,1000})\)/gm;
 
   let match;
   while ((match = ctorRegex.exec(content)) !== null) {
@@ -392,7 +418,7 @@ function extractConstructors(
       }
     }
 
-    const lineNumber = lineNumberAt(content, match.index!);
+    const lineNumber = lineAt(match.index);
 
     results.push({
       className: name,
