@@ -545,6 +545,16 @@ const MUTATIONS: Readonly<Record<string, readonly MutationRoute[]>> = {
         probe: probeCentralGateWired,
       },
     },
+    {
+      // CHN-5: the exact webhook route is exempted from the global bearer gate
+      // so its own secret can be used; validateWebhookAuth still decides.
+      guard: `method === "POST" && (url === "/api/webhook" || url.startsWith("/api/webhook?"));`,
+      enforcement: {
+        kind: "self-guarded",
+        why: "not a route: it names the one route exempted from the central gates, which authenticates itself (see the server-daemon-routes.ts webhook row)",
+        probe: probeWebhook,
+      },
+    },
   ],
 };
 
