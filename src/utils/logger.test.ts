@@ -143,6 +143,80 @@ describe("logger", () => {
     expect(envStr).not.toContain("sk-abcdef0123456789abcdef0123");
   });
 
+  // The shared redaction format walked meta as plain JSON: a cycle overflowed
+  // the stack and threw into the caller, and Date/Error/Map values came out as
+  // {} in every transport — every `{ error }` log line lost its reason.
+  it("survives circular meta instead of throwing into the caller", async () => {
+    const { createLogger, getLogRingBuffer } = await import("./logger.js");
+    const logger = createLogger("info", "/tmp/test-strada.log");
+    const circ: Record<string, unknown> = { name: "loop" };
+    circ["self"] = circ;
+    const shared = { k: "v" };
+
+    expect(() => logger.info("circ-meta", { circ, a: shared, b: shared })).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const entry = getLogRingBuffer().find((e) => e.message === "circ-meta");
+    expect(entry).toBeDefined();
+    expect(entry!.meta!["circ"]).toEqual({ name: "loop", self: "[Circular]" });
+    // A value referenced twice is shared, not circular.
+    expect(entry!.meta!["b"]).toEqual({ k: "v" });
+  });
+
+  it("keeps Dates, Errors and Maps instead of logging {}", async () => {
+    const { createLogger, getLogRingBuffer } = await import("./logger.js");
+    const logger = createLogger("info", "/tmp/test-strada.log");
+
+    const error = Object.assign(new Error("boom"), { code: "EBOOM" });
+    logger.info("typed-meta", { at: new Date(0), error, m: new Map([["k", "v"]]) });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const meta = getLogRingBuffer().find((e) => e.message === "typed-meta")!.meta!;
+    expect(meta["at"]).toBe("1970-01-01T00:00:00.000Z");
+    expect(meta["error"]).toMatchObject({ name: "Error", message: "boom", code: "EBOOM" });
+    expect(String((meta["error"] as { stack?: string }).stack)).toContain("boom");
+    expect(meta["m"]).toEqual({ k: "v" });
+  });
+
+  it("does not silently cut long values at the tool-output cap", async () => {
+    const { mkdtempSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const logFile = join(mkdtempSync(join(tmpdir(), "strada-loglong-")), "long.log");
+    const { createLogger } = await import("./logger.js");
+    const logger = createLogger("info", logFile);
+
+    logger.info("long-meta", { body: `${"a".repeat(20_000)}END-OF-BODY` });
+    await new Promise((r) => setTimeout(r, 600));
+
+    const onDisk = readFileSync(logFile, "utf8");
+    expect(onDisk).toContain("END-OF-BODY");
+    expect(onDisk).not.toContain("(truncated)");
+  });
+
+  it("does not walk or redact meta for a level that is filtered out", async () => {
+    // Formats run before the transports' level filter: every suppressed
+    // debug() line still paid for a full regex pass over its meta.
+    const { createLogger } = await import("./logger.js");
+    const logger = createLogger("info", "/tmp/test-strada.log");
+    let reads = 0;
+    // Nested: winston copies the top level itself; only the format walks deeper.
+    const meta = (): Record<string, unknown> => ({
+      nested: {
+        get detail(): string {
+          reads++;
+          return "token=abcdefghijklmnopqrstuvwxyz";
+        },
+      },
+    });
+
+    logger.debug("suppressed", meta());
+    expect(reads, "a filtered-out line was still sanitized").toBe(0);
+
+    logger.info("kept", meta());
+    expect(reads).toBeGreaterThan(0);
+  });
+
   it("does NOT fire the sanitization metric callback from the ring-buffer path (Bug 3)", async () => {
     // Ring-buffer redaction is defense-in-depth, not a distinct exposure event,
     // so it must not inflate the user-facing "Secrets Sanitized" metric.

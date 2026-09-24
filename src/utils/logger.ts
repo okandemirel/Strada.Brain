@@ -2,7 +2,7 @@ import winston from "winston";
 import TransportStream from "winston-transport";
 // Leaf module with no dependencies of its own — safe to import here without
 // creating a logger <-> security circular dependency.
-import { sanitizeSecretsQuiet } from "../security/secret-patterns.js";
+import { applySecretPatterns, DEFAULT_SECRET_PATTERNS, sanitizeSecretsQuiet } from "../security/secret-patterns.js";
 
 // ---------------------------------------------------------------------------
 // Log ring buffer — captures recent entries for the /api/logs dashboard endpoint
@@ -26,9 +26,21 @@ export function getLogRingBuffer(): LogEntry[] {
 const MAX_META_BYTES = 2048;
 /** Maximum message length stored in the ring buffer. */
 const MAX_MESSAGE_LENGTH = 4096;
+/** Nesting a log line's meta is walked to; deeper values become "[Depth]". */
+const MAX_META_DEPTH = 10;
+/**
+ * Per-string cap for log redaction. The shared 8192 cap is sized for tool
+ * output; applied here it silently cut long values (stack traces, provider
+ * bodies) in the File and Console logs too.
+ */
+const MAX_LOG_TEXT_LENGTH = 64 * 1024;
+
+function redactLogText(text: string): string {
+  return applySecretPatterns(text, DEFAULT_SECRET_PATTERNS, MAX_LOG_TEXT_LENGTH).content;
+}
 
 /**
- * Recursively sanitize the STRING leaf values of a JSON-safe meta value,
+ * Recursively sanitize the STRING leaf values of a meta value,
  * leaving keys, structure, and non-string scalars untouched.
  *
  * Running the redaction regexes on individual values (never on the serialized
@@ -36,20 +48,47 @@ const MAX_MESSAGE_LENGTH = 4096;
  * admit JSON delimiters ('"', '}', ';'), so sanitizing the serialized string
  * could eat a closing quote/brace and make the whole blob unparseable —
  * previously collapsing every credential-bearing entry to {_sanitizeFailed}.
- * Uses the metrics-quiet variant so ring-buffer redaction (defense-in-depth)
+ * Uses the metrics-quiet path so ring-buffer redaction (defense-in-depth)
  * does not inflate the user-facing "Secrets Sanitized" counter.
+ *
+ * Meta is caller data, not JSON: a cycle recursed until the stack overflowed
+ * and threw into whatever request logged it, and Date/Error/Map values were
+ * walked as plain objects and came out as `{}` in every transport (the error
+ * text of every `{ error }` log was lost). Cycles and depth are bounded, an
+ * Error keeps its name/message/stack/code, and `toJSON` (Date, Buffer) is
+ * honoured the way JSON serialization would.
  */
-function sanitizeMetaValue(value: unknown): unknown {
-  if (typeof value === "string") return sanitizeSecretsQuiet(value);
-  if (Array.isArray(value)) return value.map(sanitizeMetaValue);
-  if (value !== null && typeof value === "object") {
+function sanitizeMetaValue(value: unknown, ancestors: WeakSet<object> = new WeakSet(), depth = 0): unknown {
+  if (typeof value === "string") return redactLogText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (ancestors.has(value)) return "[Circular]";
+  if (depth >= MAX_META_DEPTH) return "[Depth]";
+  ancestors.add(value);
+  try {
+    const next = (v: unknown): unknown => sanitizeMetaValue(v, ancestors, depth + 1);
+    if (value instanceof Error) {
+      const out: Record<string, unknown> = { name: value.name, message: redactLogText(value.message) };
+      if (value.stack) out["stack"] = redactLogText(value.stack);
+      const code: unknown = (value as { code?: unknown }).code;
+      if (code !== undefined) out["code"] = next(code);
+      if (value.cause !== undefined) out["cause"] = next(value.cause);
+      return out;
+    }
+    const toJSON: unknown = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === "function") return next((toJSON as () => unknown).call(value));
+    if (value instanceof Map) return next(Object.fromEntries(value));
+    if (value instanceof Set) return next([...value]);
+    if (Array.isArray(value)) return value.map(next);
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = sanitizeMetaValue(v);
+      out[k] = next(v);
     }
     return out;
+  } finally {
+    // Only the current path counts: the same object under two siblings is
+    // shared, not circular.
+    ancestors.delete(value);
   }
-  return value;
 }
 
 class RingBufferTransport extends TransportStream {
@@ -120,13 +159,17 @@ const NOOP_LOGGER: LoggerLike = {
  * would corrupt its structure.
  */
 const redactSecretsFormat = winston.format((info) => {
+  // Formats run before winston's per-transport level filter, so without this
+  // every suppressed debug() line still paid for the full regex pass.
+  if (logger && !logger.isLevelEnabled(info.level)) return false;
   if (typeof info.message === "string") {
-    info.message = sanitizeSecretsQuiet(info.message);
+    info.message = redactLogText(info.message);
   }
+  const ancestors = new WeakSet<object>([info]);
   for (const key of Object.keys(info)) {
     if (key === "message" || key === "level" || key === "timestamp") continue;
     const value = (info as Record<string, unknown>)[key];
-    (info as Record<string, unknown>)[key] = sanitizeMetaValue(value);
+    (info as Record<string, unknown>)[key] = sanitizeMetaValue(value, ancestors);
   }
   return info;
 });
