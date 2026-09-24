@@ -1,4 +1,5 @@
 import type { ToolExecutionResult } from "./tools/tool.interface.js";
+import { plainCommands, type ShellWord } from "../security/shell-lexer.js";
 
 export type InteractionReviewMode = "interactive" | "background";
 export type ExecutionReviewMode = InteractionReviewMode | "delegated";
@@ -44,10 +45,30 @@ const SAFE_SHELL_SEGMENT_PATTERN =
  * Codex round 15 #11: `find Assets -delete` began with `find`, so the
  * deterministic fallback approved it outright — a recursive delete admitted by
  * a pattern meant for inspection. `sed -i` and find's `-exec`/`-fprint` family
- * are the same shape: the verb reads, the flag writes.
+ * are the same shape: the verb reads, the flag writes. So are rg's `--pre` /
+ * `--hostname-bin` (they run a program) and git's `--output` (writes a file).
  */
 const MUTATING_READ_TOOL_OPTION =
-  /(?:^|\s)(?:-delete\b|-exec(?:dir)?\b|-ok(?:dir)?\b|-fprint(?:f|0)?\b|-fls\b|-i(?:\.\w+)?\b|--in-place\b|-print0\s*\|)/i;
+  /(?:^|\s)(?:-delete\b|-exec(?:dir)?\b|-ok(?:dir)?\b|-fprint(?:f|0)?\b|-fls\b|-i(?:\.\w+)?\b|--in-place\b|-print0\s*\||--pre(?:=|\s|$)|--hostname-bin\b|--out)/i;
+
+/** `git branch` that deletes, renames, copies or forces a branch. */
+const GIT_BRANCH_MUTATION =
+  /^git\s+branch\b.*\s(?:-[A-Za-z]*[dDmMcCf]\b|--(?:delete|move|copy|force|set-upstream-to|unset-upstream|edit-description)\b)/;
+
+/** sed that only prints a line range: its `w`, `e` and `r` commands write, run and read files. */
+function sedOnlyPrints(words: readonly ShellWord[]): boolean {
+  if (words[0]?.value !== "sed") return true;
+  let script: string | undefined;
+  for (const { value } of words.slice(1)) {
+    if (/^-[nEr]+$|^--(?:quiet|silent|regexp-extended)$/.test(value)) continue;
+    if (value.startsWith("-")) return false;
+    if (script === undefined) {
+      script = value;
+      if (!/^(?:\d+|\$)(?:,(?:\d+|\$))?p$/.test(script)) return false;
+    }
+  }
+  return script !== undefined;
+}
 
 export const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
 Decide whether the proposed shell command should execute automatically.
@@ -325,23 +346,20 @@ export function parseShellReviewDecision(text: string): ShellCommandReviewDecisi
 }
 
 export function isSafeShellFallback(command: string): boolean {
-  const normalized = command.replace(/\s+/g, " ").trim();
-  if (!normalized || normalized.includes("|") || normalized.includes(";") || normalized.includes("||")) {
-    return false;
-  }
-  if (/(^|[^&])&([^&]|$)/.test(normalized)) {
-    return false;
-  }
-
-  const segments = normalized
-    .split(/\s*&&\s*/u)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-
-  return (
-    segments.length > 0 &&
-    segments.every(
-      (segment) => SAFE_SHELL_SEGMENT_PATTERN.test(segment) && !MUTATING_READ_TOOL_OPTION.test(segment),
-    )
-  );
+  // This collapsed all whitespace first, so a newline read as a space and a
+  // second command line passed as arguments of the first. It now reads
+  // the command with the shared shell lexer: only `&&` lists of plain
+  // commands are judged, and a newline, a substitution, a redirection or a
+  // heredoc leaves the command unapproved.
+  const commands = plainCommands(command.trim(), ["&&"]);
+  if (!commands) return false;
+  return commands.every((words) => {
+    // An expansion's value, or a glob that can expand to an option, is not read here.
+    if (words.some((w) => w.expands.length > 0 || (w.glob && /^[-*?[]/.test(w.value)))) return false;
+    const segment = words.map((w) => w.value).join(" ");
+    return SAFE_SHELL_SEGMENT_PATTERN.test(segment)
+      && !MUTATING_READ_TOOL_OPTION.test(segment)
+      && !GIT_BRANCH_MUTATION.test(segment)
+      && sedOnlyPrints(words);
+  });
 }
