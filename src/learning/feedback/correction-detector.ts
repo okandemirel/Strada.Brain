@@ -39,6 +39,14 @@ const TR_PATTERNS = [
 
 const ALL_CORRECTION_PATTERNS = [...EN_PATTERNS, ...TR_PATTERNS];
 
+/**
+ * The longest message still read as a correction. A correction is a short
+ * reply to the agent's last turn; a long message that happens to contain
+ * "instead" or "wrong" (a pasted document, a spec) is new input, and was being
+ * stored whole as a correction and rendered into later prompts.
+ */
+export const MAX_CORRECTION_CHARS = 280;
+
 /** Extract the text of one message, joining the text blocks of a structured one. */
 function turnText(content: unknown): string {
   if (typeof content === "string") return content.trim();
@@ -56,10 +64,12 @@ function turnText(content: unknown): string {
 
 export class CorrectionDetector {
   /**
-   * Returns true if the text contains contradiction/correction patterns.
+   * Returns true if the text is short enough to be a reply to the agent and
+   * contains contradiction/correction patterns.
    */
   static isCorrection(text: string): boolean {
     if (!text) return false;
+    if (text.trim().length > MAX_CORRECTION_CHARS) return false;
     return ALL_CORRECTION_PATTERNS.some(pattern => pattern.test(text));
   }
 

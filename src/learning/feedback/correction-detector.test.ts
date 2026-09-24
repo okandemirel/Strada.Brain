@@ -25,6 +25,15 @@ describe("CorrectionDetector", () => {
       expect(CorrectionDetector.isCorrection("HAYIR, bu yanlis")).toBe(true);
     });
 
+    it("does not read a long message as a correction, whatever words it contains", () => {
+      // A pasted document or spec that happens to say "instead" is new input,
+      // not a reply to the agent's last turn — it used to be stored whole.
+      const pasted = `Here is the design doc. ${"Use the pooled loader instead of allocating per frame. ".repeat(20)}`;
+
+      expect(CorrectionDetector.isCorrection(pasted)).toBe(false);
+      expect(CorrectionDetector.isCorrection("no, use the pooled loader instead")).toBe(true);
+    });
+
     it("should return false for non-correction text", () => {
       expect(CorrectionDetector.isCorrection("please fix the bug")).toBe(false);
       expect(CorrectionDetector.isCorrection("run the tests")).toBe(false);

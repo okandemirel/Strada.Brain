@@ -80,6 +80,7 @@ import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
 import { CorrectionDetector } from "../learning/feedback/correction-detector.js";
+import { authorizedTeachingScope, mayTeachForEveryone } from "../learning/feedback/teaching-scope.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { ErrorLearningHooks } from "../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
@@ -3525,9 +3526,17 @@ export class Orchestrator {
     if (this.learningPipeline && TeachingParser.isTeachingIntent(text)) {
       try {
         const parsed = TeachingParser.parse(text);
-        const scope = parsed.scope ?? "user";
+        // A project/global rule reaches every user's prompt, so the wording
+        // alone cannot choose it: only an identity that may configure the
+        // instance sets one, and anyone else's teaching stays their own.
+        const scope = authorizedTeachingScope(parsed.scope, () => mayTeachForEveryone(userId));
         await this.learningPipeline.teachExplicit(parsed.content, scope, userId);
-        logger.debug("Teaching intent processed", { userId, scope, contentLength: parsed.content.length });
+        logger.debug("Teaching intent processed", {
+          userId,
+          scope,
+          requestedScope: parsed.scope,
+          contentLength: parsed.content.length,
+        });
       } catch (err) {
         logger.warn("Teaching intent processing failed", {
           error: err instanceof Error ? err.message : String(err),

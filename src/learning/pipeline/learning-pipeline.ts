@@ -13,6 +13,7 @@ import { PatternMatcher, embedderFromProvider, combinedSimilarity } from "../mat
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
+import { capLearnedText } from "../feedback/learned-text.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
@@ -2287,7 +2288,9 @@ export class LearningPipeline {
       status: 'active',
       confidence: 0.7,
       triggerPattern: this.sanitizePattern(content),
-      action: content,
+      // Rendered into system prompts: keep a bounded summary, not whatever
+      // length the message had.
+      action: capLearnedText(content),
       contextConditions: [],
       scopeType,
       // item 3.1 (audit 04.4 / D42): the teacher's identity used to stop here
@@ -2301,7 +2304,14 @@ export class LearningPipeline {
   /**
    * Record a user correction and consider creating an instinct from it.
    */
-  async recordCorrection(params: CorrectionRecord): Promise<void> {
+  async recordCorrection(record: CorrectionRecord): Promise<void> {
+    // The correction becomes an instinct action rendered into prompts, so it is
+    // stored as a bounded summary; a whole pasted message is not a correction.
+    const params: CorrectionRecord = {
+      ...record,
+      original: capLearnedText(record.original),
+      corrected: capLearnedText(record.corrected),
+    };
     // Source-specific confidence: direct user feedback scores higher
     const sourceBoost: Record<string, number> = {
       button: 0.15,

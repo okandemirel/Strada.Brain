@@ -12,6 +12,11 @@ import type { PatternMatcher, ScopeContext } from "../learning/matching/pattern-
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { MS_PER_DAY, type Instinct, type PatternMatch } from "../learning/types.js";
+import { capLearnedText } from "../learning/feedback/learned-text.js";
+import { sanitizePromptInjection } from "./orchestrator-text-utils.js";
+
+/** The longest learned insight rendered into a prompt. */
+export const MAX_INSIGHT_CHARS = 300;
 
 /** Options for InstinctRetriever constructor */
 export interface InstinctRetrieverOptions {
@@ -301,9 +306,15 @@ export class InstinctRetriever {
         : { description: raw.trim() };
     }
 
-    const text = action.description
+    const rawText = action.description
       ?? ('When using ' + (action.tool ?? 'unknown') + ': '
           + this.summarize(action.output ?? ''));
+    // Stored learning is rendered into the system prompt of every run it
+    // matches, possibly another user's. It was taught from message text, so it
+    // gets the same injection filter as other stored text reaching a prompt,
+    // and a fixed length whatever was stored (sanitize first, so the cut
+    // cannot split a secret the redaction would have caught).
+    const text = capLearnedText(sanitizePromptInjection(String(rawText)), MAX_INSIGHT_CHARS);
 
     const confidence = Math.round((match.confidence ?? 0) * 100);
     const stats = match.instinct?.stats;
