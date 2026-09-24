@@ -8,6 +8,8 @@
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { configureSqlitePragmas, validateAndRepairSqlite } from "./sqlite-pragmas.js";
+import { assertNoMaintenanceExclusion } from "../../core/database-backup.js";
+import { resolveStradaHome } from "../../common/runtime-paths.js";
 import type { UnifiedMemoryEntry } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type {
@@ -161,10 +163,17 @@ export function ensureConsolidationColumns(db: Database.Database): void {
 /**
  * Initialize the SQLite database, run schema creation, and prepare statements.
  * On failure, attempts an in-memory fallback.
+ *
+ * @throws when a restore holds the maintenance exclusion: nothing is opened
+ *   (not even the in-memory fallback), so AgentDB init fails instead (MEM-10).
  */
 export function initSqlite(ctx: AgentDBSqliteContext): void {
+  const sqlitePath = join(ctx.dbPath, "memory.db");
+  // Ask BEFORE opening, as LearningStorage does. The check inside
+  // configureSqlitePragmas runs only after validateAndRepairSqlite has already
+  // checkpointed and possibly REINDEXed the file a restore is swapping.
+  assertNoMaintenanceExclusion(resolveStradaHome(), `open ${sqlitePath}`);
   try {
-    const sqlitePath = join(ctx.dbPath, "memory.db");
     ctx.sqliteDb = new Database(sqlitePath);
 
     // Validate and auto-repair on corruption. The verdict used to be
@@ -199,6 +208,9 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
       "[AgentDBMemory] File-based SQLite failed, attempting in-memory fallback",
       { error: String(error) },
     );
+    // The fallback replaces ctx.sqliteDb; close the file handle first, or it
+    // stays attached for the life of the process (and restores refuse).
+    closeSqlite(ctx);
     // Attempt in-memory fallback so UserProfileStore and persistence still work
     try {
       ctx.sqliteDb = new Database(":memory:");
@@ -213,7 +225,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
         "[AgentDBMemory] In-memory SQLite fallback also failed",
         { error: String(fallbackError) },
       );
-      ctx.sqliteDb = null;
+      closeSqlite(ctx);
       ctx.sqliteInitFailed = true;
     }
   }
