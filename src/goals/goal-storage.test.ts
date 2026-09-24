@@ -248,6 +248,23 @@ describe("GoalStorage", () => {
       expect(retrieved!.taskDescription).toBe("Updated description");
       expect(retrieved!.nodes.size).toBe(tree.nodes.size);
     });
+
+    // TSK-15: INSERT OR REPLACE deleted the tree row, and ON DELETE CASCADE
+    // took every node row with it; only the nodes in the passed tree came back.
+    it("does not delete stored nodes the upserted tree does not carry", () => {
+      const tree = buildTestTree();
+      storage.upsertTree(tree);
+      const partial: GoalTree = {
+        ...tree,
+        nodes: new Map([...tree.nodes].filter(([id]) => id === tree.rootId)),
+      };
+
+      storage.upsertTree(partial, "executing");
+
+      const retrieved = storage.getTree(tree.rootId);
+      expect(retrieved!.nodes.size).toBe(tree.nodes.size);
+      expect(storage.getTreeStatus(tree.rootId)).toBe("executing");
+    });
   });
 
   describe("getInterruptedTrees()", () => {

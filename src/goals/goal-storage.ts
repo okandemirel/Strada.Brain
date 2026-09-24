@@ -177,9 +177,19 @@ export class GoalStorage {
       `,
       getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
+      // ON CONFLICT … DO UPDATE, not INSERT OR REPLACE: REPLACE deletes the
+      // old tree row, and ON DELETE CASCADE then deleted every one of its
+      // nodes, including any the tree passed in does not carry (TSK-15).
       upsertTree: `
-        INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at, plan_summary)
+        INSERT INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at, plan_summary)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(root_id) DO UPDATE SET
+          session_id = excluded.session_id,
+          task_description = excluded.task_description,
+          status = excluded.status,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          plan_summary = excluded.plan_summary
       `,
       upsertNode: `
         INSERT OR REPLACE INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count, redecomposition_count, review_status, review_iterations)
@@ -374,7 +384,7 @@ export class GoalStorage {
 
   // --- Phase 8: New Methods ---
 
-  /** Upsert a complete GoalTree (INSERT OR REPLACE for tree and per-node) */
+  /** Upsert a complete GoalTree (tree row updated in place, nodes upserted one by one) */
   upsertTree(tree: GoalTree, treeStatus: string = "pending"): void {
     this.ensureConnection();
     const transaction = this.db!.transaction(() => {
