@@ -10,6 +10,7 @@ function createMockStorage() {
     }),
     updateInstinctFactor: vi.fn(),
     storeFeedback: vi.fn(),
+    hasReactionFrom: vi.fn().mockReturnValue(false),
   };
 }
 
@@ -26,6 +27,7 @@ describe("FeedbackHandler", () => {
     it("should boost factorUserValidation by +0.1", () => {
       handler.handleThumbsUp({
         instinctIds: ["instinct_test_1"],
+        userId: "user1",
         source: "button",
       });
 
@@ -44,6 +46,7 @@ describe("FeedbackHandler", () => {
 
       handler.handleThumbsUp({
         instinctIds: ["instinct_test_1"],
+        userId: "user1",
         source: "button",
       });
 
@@ -73,6 +76,7 @@ describe("FeedbackHandler", () => {
     it("should handle multiple instinct IDs", () => {
       handler.handleThumbsUp({
         instinctIds: ["instinct_test_1", "instinct_test_2"],
+        userId: "user1",
         source: "button",
       });
 
@@ -87,6 +91,7 @@ describe("FeedbackHandler", () => {
 
       handler.handleThumbsUp({
         instinctIds: ["instinct_test_1"],
+        userId: "user1",
         source: "button",
       });
 
@@ -102,6 +107,7 @@ describe("FeedbackHandler", () => {
 
       handler.handleThumbsUp({
         instinctIds: ["instinct_nonexistent"],
+        userId: "user1",
         source: "button",
       });
 
@@ -113,6 +119,7 @@ describe("FeedbackHandler", () => {
     it("should reduce factorUserValidation by -0.2", () => {
       handler.handleThumbsDown({
         instinctIds: ["instinct_test_1"],
+        userId: "user1",
         source: "button",
       });
 
@@ -131,6 +138,7 @@ describe("FeedbackHandler", () => {
 
       handler.handleThumbsDown({
         instinctIds: ["instinct_test_1"],
+        userId: "user1",
         source: "button",
       });
 
@@ -160,6 +168,7 @@ describe("FeedbackHandler", () => {
 
       handler.handleThumbsDown({
         instinctIds: ["instinct_nonexistent"],
+        userId: "user1",
         source: "button",
       });
 

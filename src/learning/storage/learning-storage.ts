@@ -2982,6 +2982,26 @@ export class LearningStorage {
     );
   }
 
+  /**
+   * Whether `userId` has already reacted `type` to `instinctId`: a person's
+   * reaction is evidence once per rule and direction, across restarts.
+   */
+  hasReactionFrom(userId: string, instinctId: string, type: 'thumbs_up' | 'thumbs_down'): boolean {
+    this.ensureConnection();
+    const escaped = instinctId.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const rows = this.db!.prepare(
+      "SELECT instinct_ids FROM feedback WHERE user_id = ? AND type = ? AND instinct_ids LIKE ? ESCAPE '\\'"
+    ).all(userId, type, `%${escaped}%`) as Array<{ instinct_ids: string | null }>;
+    return rows.some((row) => {
+      try {
+        const ids: unknown = JSON.parse(row.instinct_ids ?? "[]");
+        return Array.isArray(ids) && ids.includes(instinctId);
+      } catch {
+        return false;
+      }
+    });
+  }
+
   /** Get feedback records that reference a given instinct ID */
   getFeedbackByInstinct(instinctId: string): Array<{
     id: string;

@@ -7,7 +7,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { LearningStorage } from "../storage/learning-storage.js";
-import type { FeedbackSource, FeedbackType, ScopeType, CorrectionRecord, Instinct } from "../types.js";
+import type { FeedbackSource, ScopeType, CorrectionRecord, Instinct } from "../types.js";
 
 /**
  * Called once per reacted-to instinct, after the factor column moved, with the
@@ -57,11 +57,17 @@ export class FeedbackHandler {
   private applyValidationDelta(
     params: { instinctIds: string[]; userId?: string; source: FeedbackSource },
     delta: number,
-    feedbackType: FeedbackType,
+    feedbackType: 'thumbs_up' | 'thumbs_down',
   ): void {
-    for (const instinctId of params.instinctIds) {
+    // A reaction is evidence once per person, rule and direction (LRN-10).
+    // Every event applied full evidence, so one member toggling an emoji moved
+    // every rule the channel had applied, as far as they liked. A reaction
+    // nobody can be named for moves nothing. Every event is still recorded.
+    const userId = params.userId?.trim();
+    for (const instinctId of new Set(params.instinctIds)) {
       const instinct = this.storage.getInstinct(instinctId);
       if (!instinct) continue;
+      if (!userId || this.storage.hasReactionFrom(userId, instinctId, feedbackType)) continue;
 
       this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', delta);
 

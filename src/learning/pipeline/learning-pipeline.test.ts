@@ -1733,6 +1733,7 @@ describe("learning pipeline v2 integration", () => {
 
     feedbackHandler.handleThumbsDown({
       instinctIds: [instinct.id],
+      userId: "user-1",
       source: "natural_language",
     });
 
@@ -1789,6 +1790,7 @@ describe("learning pipeline v2 integration", () => {
       eventBus.emit("feedback:reaction", {
         type: "thumbs_down",
         instinctIds: [instinct.id],
+        userId: "user-1",
         source: "button",
         channel: "test",
         timestamp: Date.now(),
@@ -1816,6 +1818,7 @@ describe("learning pipeline v2 integration", () => {
       eventBus.emit("feedback:reaction", {
         type: "thumbs_up",
         instinctIds: [instinct.id],
+        userId: "user-1",
         source: "button",
         channel: "test",
         timestamp: Date.now(),
@@ -1840,6 +1843,8 @@ describe("learning pipeline v2 integration", () => {
         eventBus.emit("feedback:reaction", {
           type: "thumbs_down",
           instinctIds: [bad.id],
+          // Twenty people: one person's reaction is evidence once (LRN-10).
+          userId: `user-${i}`,
           source: "button",
           channel: "test",
           timestamp: Date.now(),
@@ -1866,6 +1871,7 @@ describe("learning pipeline v2 integration", () => {
       eventBus.emit("feedback:reaction", {
         type: "thumbs_down",
         instinctIds: [frozen.id],
+        userId: "user-1",
         source: "button",
         channel: "test",
         timestamp: Date.now(),
@@ -3077,7 +3083,8 @@ describe("a permanent instinct can be quarantined (improvement on audit 04.6)", 
       eventBus.emit("feedback:reaction", {
         type: "thumbs_down",
         instinctIds: [instinct.id],
-        userId: "u1",
+        // Three people: one person's reaction is evidence once (LRN-10).
+        userId: `u${i}`,
         source: "reaction",
       } as any);
     }
