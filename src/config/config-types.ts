@@ -89,6 +89,7 @@ export type EnvVarName =
   | "STRADA_MODULES_REPO_URL"
   | "STRADA_MCP_REPO_URL"
   | "STRADA_MCP_PATH"
+  | "STRADA_MCP_ALLOW_PROJECT_LOCAL"
   | "OBSIDIAN_ENABLED"
   | "OBSIDIAN_API_URL"
   | "OBSIDIAN_API_KEY"
@@ -619,6 +620,12 @@ export interface StradaDependencyConfig {
   readonly modulesRepoUrl: string;
   readonly mcpRepoUrl: string;
   readonly mcpPath?: string;
+  /**
+   * STRADA_MCP_ALLOW_PROJECT_LOCAL: load a Strada.MCP copy that lives inside
+   * the Unity project into the Brain process. Off by default because the
+   * project tree is agent-writable and arrives with cloned projects.
+   */
+  readonly mcpAllowProjectLocal?: boolean;
   readonly unityBridgePort: number;
   readonly unityBridgeAutoConnect: boolean;
   readonly unityBridgeTimeout: number;

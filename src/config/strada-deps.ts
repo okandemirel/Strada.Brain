@@ -6,8 +6,8 @@
  * the Orchestrator to decide how to handle.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { join, dirname, isAbsolute, relative as relativePath, resolve as resolvePath } from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ok, err } from "../types/index.js";
@@ -129,7 +129,62 @@ function resolveStradaDependencyConfig(
     reflectionInvokeEnabled: config?.reflectionInvokeEnabled ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.reflectionInvokeEnabled,
     mcpRepoUrl: config?.mcpRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.mcpRepoUrl,
     ...(mcpPath ? { mcpPath } : {}),
+    ...(config?.mcpAllowProjectLocal === true ? { mcpAllowProjectLocal: true } : {}),
   };
+}
+
+export interface StradaMcpLoadTrust {
+  readonly trusted: boolean;
+  /** Why it was refused and how the operator opts in; set when not trusted. */
+  readonly reason?: string;
+}
+
+/**
+ * Whether Brain may import this Strada.MCP install into its own process.
+ *
+ * The loader runs the package's bootstrap in-process, where every credential
+ * in process.env is reachable. A copy inside the Unity project is writable by
+ * the agent's own tools and arrives with any cloned project, and a matching
+ * package.json name says nothing about its contents. So a copy inside the
+ * project tree — however it was found, STRADA_MCP_PATH included — loads only
+ * when the operator set STRADA_MCP_ALLOW_PROJECT_LOCAL=true. A copy outside
+ * the project (sibling checkout, global install) loads as before.
+ */
+export function assessStradaMcpLoadTrust(
+  installPath: string,
+  unityProjectPath: string | undefined,
+  config?: Partial<StradaDependencyConfig>,
+): StradaMcpLoadTrust {
+  if (config?.mcpAllowProjectLocal === true || !unityProjectPath?.trim()) {
+    return { trusted: true };
+  }
+  if (!isWithinDirectory(canonicalPath(unityProjectPath), canonicalPath(installPath))) {
+    return { trusted: true };
+  }
+  return {
+    trusted: false,
+    reason:
+      `Strada.MCP at ${installPath} is inside the Unity project, which the agent can modify, so it was not ` +
+      "loaded into the Brain process. Set STRADA_MCP_ALLOW_PROJECT_LOCAL=true to trust this copy, or point " +
+      "STRADA_MCP_PATH at a Strada.MCP checkout outside the project.",
+  };
+}
+
+/** Where a path really lives, so a symlink is judged by its target. */
+function canonicalPath(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return resolvePath(target);
+  }
+}
+
+/** Is `candidate` the directory `root` or anywhere under it? */
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const step = relativePath(root, candidate);
+  if (step === "") return true;
+  if (isAbsolute(step)) return false;
+  return step.split(/[\\/]+/)[0] !== "..";
 }
 
 /**
@@ -388,7 +443,7 @@ export function buildMcpRecommendation(
     reason: "Strada.MCP is not installed. Installing it unlocks the live Unity runtime surface inside Strada.Brain.",
     featureList: [...MCP_FEATURE_LIST],
     discoveryHint,
-    installHint: "Install Strada.MCP as a git submodule, wire com.strada.mcp into Packages/manifest.json, and bootstrap the checkout with npm install so Brain can load the runtime.",
+    installHint: "Install Strada.MCP as a git submodule, wire com.strada.mcp into Packages/manifest.json, and bootstrap the checkout with npm install. A copy inside the project is loaded into Brain only with STRADA_MCP_ALLOW_PROJECT_LOCAL=true.",
   };
 }
 
@@ -865,7 +920,7 @@ function evaluatePackageRow(
       detail: `${spec.label} was not found. Without it, ${spec.withoutIt}.`,
       fix:
         spec.id === "strada-mcp"
-          ? "Install Strada.MCP (submodule under Packages/Submodules or Assets/, or STRADA_MCP_PATH), wire com.strada.mcp into Packages/manifest.json and run npm install in it."
+          ? "Install Strada.MCP (submodule under Packages/Submodules or Assets/, or STRADA_MCP_PATH), wire com.strada.mcp into Packages/manifest.json and run npm install in it; a copy inside the project also needs STRADA_MCP_ALLOW_PROJECT_LOCAL=true."
           : `Add ${spec.label} to the Unity project (git submodule under Packages/Submodules + a Packages/manifest.json dependency).`,
     };
   }
@@ -920,6 +975,44 @@ function evaluateMcpRuntimeRow(mcpInstalled: boolean, mcpPath: string | null): P
     ...base,
     status: "ok",
     detail: `${mcpPath} has node_modules and a loadable src/ or dist/.`,
+  };
+}
+
+/** Whether the tool loader will import the detected Strada.MCP at all. */
+function evaluateMcpTrustRow(
+  mcpInstalled: boolean,
+  mcpPath: string | null,
+  projectPath: string,
+  config: Partial<StradaDependencyConfig> | undefined,
+): ProjectMatrixRow {
+  const base = {
+    id: "strada-mcp-trusted",
+    label: "Strada.MCP trusted for in-process loading",
+    requirement: "recommended" as const,
+  };
+  if (!mcpInstalled || !mcpPath) {
+    return { ...base, status: "not-measured", detail: "Strada.MCP is not installed, so there is nothing to trust." };
+  }
+  if (!projectPath) {
+    return { ...base, status: "not-measured", detail: "No Unity project is configured to compare its location against." };
+  }
+  const trust = assessStradaMcpLoadTrust(mcpPath, projectPath, config);
+  if (!trust.trusted) {
+    return {
+      ...base,
+      status: "missing",
+      detail: `${trust.reason} None of its Unity tools will be registered.`,
+      fix:
+        "Set STRADA_MCP_ALLOW_PROJECT_LOCAL=true if you trust the copy in the project, or set STRADA_MCP_PATH " +
+        "to a Strada.MCP checkout outside it.",
+    };
+  }
+  return {
+    ...base,
+    status: "ok",
+    detail: config?.mcpAllowProjectLocal === true
+      ? `${mcpPath} is loaded in-process; STRADA_MCP_ALLOW_PROJECT_LOCAL=true trusts copies inside the project.`
+      : `${mcpPath} is outside the Unity project, so the agent's project writes cannot change it.`,
   };
 }
 
@@ -1035,7 +1128,12 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
     evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned),
     evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned),
     evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource, scanned),
-    ...(scanned ? [evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath)] : []),
+    ...(scanned
+      ? [
+          evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath),
+          evaluateMcpTrustRow(deps.mcpInstalled, deps.mcpPath, projectPath, opts.config),
+        ]
+      : []),
     evaluateEditorBinaryRow(opts.unityEditorPath),
     ...(projectPath ? [secondMachineRow(projectPath)] : []),
   ];

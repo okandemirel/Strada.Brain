@@ -3,8 +3,10 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  assessStradaMcpLoadTrust,
   checkStradaDeps,
   compareUnityVersions,
+  detectStradaMcp,
   evaluateProjectSupport,
   formatProjectMatrix,
   installStradaDep,
@@ -437,6 +439,31 @@ describe("evaluateProjectSupport", () => {
     expect(formatProjectMatrix(verdict).join("\n")).toContain("[NOT MEASURED] Another machine");
   });
 
+  it("reports a project-local Strada.MCP as untrusted until the operator opts in", () => {
+    writeUnityProject(SUPPORTED_UNITY_VERSIONS.tested[0]!);
+    const mcpDir = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+    mkdirSync(join(mcpDir, "node_modules"), { recursive: true });
+    mkdirSync(join(mcpDir, "src"), { recursive: true });
+    writeFileSync(join(mcpDir, "package.json"), JSON.stringify({ name: "strada-mcp", version: "1.0.0" }));
+
+    const refused = row(
+      evaluateProjectSupport({ unityProjectPath: projectDir, config: TEST_STRADA_CONFIG }),
+      "strada-mcp-trusted",
+    );
+    expect(refused.status).toBe("missing");
+    expect(refused.detail).toContain(mcpDir);
+    expect(refused.fix).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+
+    const optedIn = row(
+      evaluateProjectSupport({
+        unityProjectPath: projectDir,
+        config: { ...TEST_STRADA_CONFIG, mcpAllowProjectLocal: true },
+      }),
+      "strada-mcp-trusted",
+    );
+    expect(optedIn.status).toBe("ok");
+  });
+
   it("summarizes with the counts and every non-ok row", () => {
     writeUnityProject("2022.3.1f1");
     const verdict = evaluateProjectSupport({ unityProjectPath: projectDir, deps: noDeps });
@@ -445,6 +472,55 @@ describe("evaluateProjectSupport", () => {
     expect(verdict.summary).toContain("unsupported: Unity Editor version (project)");
     expect(verdict.summary).toContain("missing: Strada.Core");
     expect(verdict.summary).toContain("not measured:");
+  });
+});
+
+describe("assessStradaMcpLoadTrust", () => {
+  let root: string;
+  let projectDir: string;
+
+  beforeEach(() => {
+    root = join(tmpdir(), `strada-mcp-trust-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    projectDir = join(root, "Game");
+    mkdirSync(projectDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses every copy inside the project tree, however it was found", () => {
+    for (const relative of ["Packages/Submodules/Strada.MCP", "Assets/Strada.MCP", "Packages/Strada.MCP", "mcp"]) {
+      const installPath = join(projectDir, ...relative.split("/"));
+      mkdirSync(installPath, { recursive: true });
+      const trust = assessStradaMcpLoadTrust(installPath, projectDir, { mcpPath: installPath });
+      expect(trust.trusted, relative).toBe(false);
+      expect(trust.reason).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    }
+  });
+
+  it("loads a project-local copy once the operator opts in", () => {
+    const installPath = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+    mkdirSync(installPath, { recursive: true });
+    expect(assessStradaMcpLoadTrust(installPath, projectDir, { mcpAllowProjectLocal: true }).trusted).toBe(true);
+  });
+
+  it("trusts a copy outside the project, including one whose name merely starts like it", () => {
+    const sibling = join(root, "Strada.MCP");
+    const lookalike = join(root, "Game-tools", "Strada.MCP");
+    mkdirSync(sibling, { recursive: true });
+    mkdirSync(lookalike, { recursive: true });
+    expect(assessStradaMcpLoadTrust(sibling, projectDir).trusted).toBe(true);
+    expect(assessStradaMcpLoadTrust(lookalike, projectDir).trusted).toBe(true);
+  });
+
+  it("detects the project-local copy the loader would pick and refuses it by default", () => {
+    const installPath = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+    mkdirSync(installPath, { recursive: true });
+    writeFileSync(join(installPath, "package.json"), JSON.stringify({ name: "strada-mcp", version: "1.0.0" }));
+    const install = detectStradaMcp(TEST_STRADA_CONFIG, projectDir);
+    expect(install.path).toBe(installPath);
+    expect(assessStradaMcpLoadTrust(install.path!, projectDir, TEST_STRADA_CONFIG).trusted).toBe(false);
   });
 });
 

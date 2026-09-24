@@ -197,6 +197,7 @@ export const configSchema = z
     stradaModulesRepoUrl: z.string().url().default(DEFAULT_STRADA_MODULES_REPO_URL),
     stradaMcpRepoUrl: z.string().url().default(DEFAULT_STRADA_MCP_REPO_URL),
     stradaMcpPath: z.string().min(1).optional(),
+    stradaMcpAllowProjectLocal: boolFromString(false),
     scriptExecuteEnabled: boolFromString(false),
     reflectionInvokeEnabled: boolFromString(false),
 

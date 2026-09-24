@@ -68,6 +68,7 @@ describe("loadConfig", () => {
     delete process.env["STRADA_CORE_REPO_URL"];
     delete process.env["STRADA_MODULES_REPO_URL"];
     delete process.env["STRADA_MCP_PATH"];
+    delete process.env["STRADA_MCP_ALLOW_PROJECT_LOCAL"];
     delete process.env["LOG_LEVEL"];
     delete process.env["LOG_FILE"];
     // Clear unified memory env vars
@@ -681,6 +682,15 @@ describe("loadConfig", () => {
     resetConfigCache();
     setEnv({ READ_ONLY_MODE: undefined, REQUIRE_EDIT_CONFIRMATION: "enabled" });
     expect(() => loadConfig()).toThrow(/Invalid configuration[\s\S]*requireEditConfirmation/);
+  });
+
+  it("leaves project-local Strada.MCP loading off unless STRADA_MCP_ALLOW_PROJECT_LOCAL opts in", () => {
+    setEnv({ STRADA_MCP_ALLOW_PROJECT_LOCAL: undefined });
+    expect(loadConfig().strada.mcpAllowProjectLocal).toBe(false);
+    resetConfigCache();
+    setEnv({ STRADA_MCP_ALLOW_PROJECT_LOCAL: "true" });
+    expect(loadConfig().strada.mcpAllowProjectLocal).toBe(true);
+    delete process.env["STRADA_MCP_ALLOW_PROJECT_LOCAL"];
   });
 
   it("caches config on subsequent calls", () => {

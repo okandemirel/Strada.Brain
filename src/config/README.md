@@ -74,6 +74,7 @@ The `Config` type groups settings into nested sub-configs:
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages
 - `STRADA_MCP_PATH` - optional absolute/local path that pins Strada.MCP discovery to a specific checkout before sibling/global detection
+- `STRADA_MCP_ALLOW_PROJECT_LOCAL` - default `false`; a Strada.MCP copy inside the Unity project is imported into the Brain process only when this is `true`
 - `LLM_STREAM_INITIAL_TIMEOUT_MS` / `LLM_STREAM_STALL_TIMEOUT_MS` - progress-aware stream watchdog thresholds used by interactive and background streaming paths
 - `PROVIDER_MAX_CONCURRENT_REQUESTS` - caps simultaneous in-flight HTTP calls **per provider key** (keyed by provider name in `fetchWithRetry`). Strada fans out many parallel LLM calls per task (supervisor nodes, goal/agent delegations, per-node verification, goal decomposition); with no per-key limit these stack into a burst that trips a single key's concurrency/RPM ceiling (HTTP 429). The default 3 bounds the burst while preserving cross-provider parallelism — different providers never block each other, and calls at or under the cap acquire instantly (zero added latency); only the excess queues
 - `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` - path to the JSON registry of official provider docs/changelog URLs used to mine dynamic feature signals

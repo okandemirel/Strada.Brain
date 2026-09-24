@@ -109,4 +109,29 @@ describe("the notice a broken toolchain produces", () => {
     expect(notice).toContain("npm install");
     expect(notice).toContain("Packages/Submodules/Strada.MCP");
   });
+
+  it("offers the opt-in, not npm install, when the location was refused", async () => {
+    vi.resetModules();
+    vi.doMock("./strada-mcp-tool-loader.js", () => {
+      const refusal = new Error("Strada.MCP at /p/Packages/Submodules/Strada.MCP is inside the Unity project. Set STRADA_MCP_ALLOW_PROJECT_LOCAL=true to trust this copy.");
+      refusal.name = "StradaMcpUntrustedError";
+      return {
+        loadInstalledStradaMcpRuntime: () => Promise.reject(refusal),
+        registerStradaMcpTools: () => ({ registered: 0, skipped: 0, shadowed: [] }),
+      };
+    });
+    const freshLogger = await import("../utils/logger.js");
+    try {
+      freshLogger.createLogger("error", "/tmp/strada-tool-registry-degraded.log");
+    } catch {
+      // Already initialized in this graph.
+    }
+    const { ToolRegistry: Fresh } = await import("./tool-registry.js");
+    const notices: string[] = [];
+    await new Fresh().initialize(configWithBrokenMcp(), { onDegraded: (n: string) => notices.push(n) });
+
+    expect(notices[0]).toContain("was not loaded");
+    expect(notices[0]).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    expect(notices[0]).not.toContain("npm install");
+  });
 });

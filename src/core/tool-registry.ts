@@ -249,12 +249,21 @@ export class ToolRegistry {
       // among 847 info lines. A run that cannot touch Unity at all must say so
       // where the user reads, not where the log rotates.
       const detail = error instanceof Error ? error.message : String(error);
-      logger.error("Failed to load Strada.MCP tools", { error: detail });
+      // A refused location is an operator decision to make, not a broken
+      // install: say which, so the fix offered is the right one.
+      const untrusted = error instanceof Error && error.name === "StradaMcpUntrustedError";
+      logger.error(
+        untrusted ? "Refused to load Strada.MCP from inside the Unity project" : "Failed to load Strada.MCP tools",
+        { error: detail },
+      );
       options.onDegraded?.(
-        "Unity toolchain unavailable: Strada.MCP failed to load, so this session has none of " +
-          "its Unity tools — no scene building, no play-mode verification, no Asset Store " +
-          `lookup. Cause: ${detail}. A vendored Strada.MCP needs its dependencies installed ` +
-          "(`npm install` in Packages/Submodules/Strada.MCP) before any of them exist.",
+        `Unity toolchain unavailable: Strada.MCP ${untrusted ? "was not loaded" : "failed to load"}, so this ` +
+          "session has none of its Unity tools — no scene building, no play-mode verification, no Asset " +
+          `Store lookup. Cause: ${detail}` +
+          (untrusted
+            ? ""
+            : ". A vendored Strada.MCP needs its dependencies installed " +
+              "(`npm install` in Packages/Submodules/Strada.MCP) before any of them exist."),
       );
     }
 

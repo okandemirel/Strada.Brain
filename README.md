@@ -808,7 +808,7 @@ With 2+ providers configured, Strada.Brain automatically routes tasks to the opt
 
 ### Strada.MCP Integration
 
-Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads only MCP action tools that are executable in the current Brain runtime into the main toolchain. Detection can be pinned with `STRADA_MCP_PATH`, while missing Strada.Core / Strada.Modules installs use the explicit `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` config values instead of hidden env fallbacks. Installed Strada.Core and Strada.MCP docs/sources remain authoritative knowledge even when bridge or runtime constraints keep some MCP prompts/resources/tools out of the live worker tool surface.
+Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads only MCP action tools that are executable in the current Brain runtime into the main toolchain. Detection can be pinned with `STRADA_MCP_PATH`. Because Strada.MCP runs inside the Brain process, a copy inside the Unity project (which the agent can write to) is loaded only when `STRADA_MCP_ALLOW_PROJECT_LOCAL=true`; otherwise the boot report and `strada doctor` say it was refused. Missing Strada.Core / Strada.Modules installs use the explicit `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` config values instead of hidden env fallbacks. Installed Strada.Core and Strada.MCP docs/sources remain authoritative knowledge even when bridge or runtime constraints keep some MCP prompts/resources/tools out of the live worker tool surface.
 
 ---
 

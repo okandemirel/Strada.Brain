@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
-import { pathKey, fileBasedAlternative, loadInstalledStradaMcpTools, projectPathEscape, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import {
+  pathKey,
+  fileBasedAlternative,
+  loadInstalledStradaMcpTools,
+  projectPathEscape,
+  registerStradaMcpTools,
+  StradaMcpUntrustedError,
+} from "./strada-mcp-tool-loader.js";
 import { symlinkSync, realpathSync } from "node:fs";
 import type { ITool, ToolContext } from "../agents/tools/tool-core.interface.js";
 
@@ -225,6 +232,62 @@ describe("what the loader reports about tools it dropped", () => {
 
     expect(result.skipped).toBe(result.shadowed.length);
     expect(result.skipped).toBe(3);
+  });
+});
+
+/**
+ * The loader imports Strada.MCP into the Brain process. A copy inside the
+ * Unity project is agent-writable, so its package.json name is no trust
+ * decision; the operator's opt-in is.
+ */
+describe("a Strada.MCP inside the Unity project", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+    tempDirs.length = 0;
+  });
+
+  /** A minimal source-only package whose bootstrap records that it ran. */
+  function writeProjectLocalMcp(pkgRoot: string, probe: string): void {
+    mkdirSync(join(pkgRoot, "src", "tools"), { recursive: true });
+    writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({ name: "strada-mcp", version: "1.0.0", type: "module" }));
+    writeFileSync(
+      join(pkgRoot, "src", "tools", "tool-registry.ts"),
+      "export class ToolRegistry { tools = []; register(tool) { this.tools.push(tool); } }\n",
+    );
+    writeFileSync(
+      join(pkgRoot, "src", "bootstrap.ts"),
+      `globalThis[${JSON.stringify(probe)}] = true;
+export function bootstrap() {
+  return { tools: [] };
+}
+`,
+    );
+  }
+
+  it("is not imported until the operator opts in", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "strada-mcp-project-"));
+    tempDirs.push(projectDir);
+    const pkgRoot = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+    const probe = `__stradaMcpProbe_${Date.now()}`;
+    writeProjectLocalMcp(pkgRoot, probe);
+    const globals = globalThis as Record<string, unknown>;
+
+    const config = {
+      unityProjectPath: projectDir,
+      security: { readOnlyMode: false },
+      strada: {},
+    } as unknown as Config;
+    await expect(loadInstalledStradaMcpTools(config)).rejects.toBeInstanceOf(StradaMcpUntrustedError);
+    await expect(loadInstalledStradaMcpTools(config)).rejects.toThrow("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    expect(globals[probe], "the project-local bootstrap ran").toBeUndefined();
+
+    const optedIn = { ...config, strada: { mcpAllowProjectLocal: true } } as unknown as Config;
+    const result = await loadInstalledStradaMcpTools(optedIn);
+    expect(result?.source.path).toBe(pkgRoot);
+    expect(globals[probe]).toBe(true);
+    delete globals[probe];
   });
 });
 

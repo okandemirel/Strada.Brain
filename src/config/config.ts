@@ -207,6 +207,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       modulesRepoUrl: rawConfig.stradaModulesRepoUrl,
       mcpRepoUrl: rawConfig.stradaMcpRepoUrl,
       mcpPath: rawConfig.stradaMcpPath,
+      mcpAllowProjectLocal: rawConfig.stradaMcpAllowProjectLocal,
       unityBridgePort: rawConfig.unityBridgePort,
       unityBridgeAutoConnect: rawConfig.unityBridgeAutoConnect,
       unityBridgeTimeout: rawConfig.unityBridgeTimeout,
@@ -836,6 +837,7 @@ interface EnvVars {
   stradaModulesRepoUrl: string | undefined;
   stradaMcpRepoUrl: string | undefined;
   stradaMcpPath: string | undefined;
+  stradaMcpAllowProjectLocal: string | undefined;
   scriptExecuteEnabled: string | undefined;
   reflectionInvokeEnabled: string | undefined;
   dashboardEnabled: string | undefined;
@@ -1238,6 +1240,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     stradaModulesRepoUrl: env["STRADA_MODULES_REPO_URL"],
     stradaMcpRepoUrl: env["STRADA_MCP_REPO_URL"],
     stradaMcpPath: env["STRADA_MCP_PATH"],
+    stradaMcpAllowProjectLocal: env["STRADA_MCP_ALLOW_PROJECT_LOCAL"],
     scriptExecuteEnabled: env["SCRIPT_EXECUTE_ENABLED"],
     reflectionInvokeEnabled: env["REFLECTION_INVOKE_ENABLED"],
     dashboardEnabled: env["DASHBOARD_ENABLED"],

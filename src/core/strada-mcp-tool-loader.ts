@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
-import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
+import { assessStradaMcpLoadTrust, detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import type { ToolCategory as BrainToolCategory, ToolMetadata as BrainToolMetadata } from "./tool-registry-types.js";
 import { getLogger } from "../utils/logger.js";
@@ -954,6 +954,11 @@ export class StradaMcpRuntime {
   }
 }
 
+/** The install was found but the operator has not trusted its location. */
+export class StradaMcpUntrustedError extends Error {
+  override readonly name = "StradaMcpUntrustedError";
+}
+
 export async function loadInstalledStradaMcpRuntime(config: Config): Promise<StradaMcpRuntime | null> {
   const install = detectStradaMcp(config.strada, config.unityProjectPath);
   if (!install.installed || !install.path) {
@@ -962,6 +967,12 @@ export async function loadInstalledStradaMcpRuntime(config: Config): Promise<Str
 
   if (!isTrustedStradaMcpPackageRoot(install.path)) {
     throw new Error(`Refusing to load Strada.MCP from untrusted path: ${install.path}`);
+  }
+  // A package.json name is no trust decision: a copy inside the agent-writable
+  // project tree loads only when the operator opted in (see strada-deps).
+  const trust = assessStradaMcpLoadTrust(install.path, config.unityProjectPath, config.strada);
+  if (!trust.trusted) {
+    throw new StradaMcpUntrustedError(trust.reason ?? `Refusing to load Strada.MCP from ${install.path}`);
   }
 
   const [{ bootstrap }, { ToolRegistry }, bridgeModule, unityEditorRouterModule] = await Promise.all([
