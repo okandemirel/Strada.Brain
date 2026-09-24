@@ -22,6 +22,7 @@ import { registerSlashCommands } from "./commands.js";
 import { createConfirmationBlocks, createStreamingBlock, splitLongText } from "./blocks.js";
 import { formatToSlackMrkdwn, truncateForSlack, escapeSlackText } from "./formatters.js";
 import { chunkText } from "../chunk-text.js";
+import { confirmationOptionAt } from "../confirmation-payload.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
@@ -842,7 +843,6 @@ export class SlackChannel implements IChannelAdapter {
 
       try {
         const actionId = (action as { action_id: string }).action_id;
-        const value = (action as { value: string }).value;
 
         // action_id is `${prefix}_opt<index>`; strip the suffix to recover the
         // shared prefix (option labels may contain underscores, so the index
@@ -870,14 +870,19 @@ export class SlackChannel implements IChannelAdapter {
             return;
           }
 
+          // Resolve with the option the clicked button stands for, looked up by
+          // the index in its action_id (CHN-7). This used to fall back to the
+          // FIRST option for an unexpected value — turning a malformed payload
+          // into e.g. "Approve". A button that names no option answers nothing.
+          const indexMatch = /_opt(\d+)$/.exec(actionId);
+          const selected = indexMatch ? confirmationOptionAt(pending.options, Number(indexMatch[1])) : undefined;
+          if (selected === undefined) {
+            this.logger.warn("Slack confirmation click named no option; ignored", { actionId });
+            return;
+          }
+
           this.pendingConfirmations.delete(prefix);
           if (pending.timeout) clearTimeout(pending.timeout);
-
-          // Resolve with the exact option string the user selected (honoring the
-          // requestConfirmation contract). Fall back to the first option if Slack
-          // ever delivers an unexpected value.
-          const selected =
-            pending.options.includes(value) ? value : (pending.options[0] ?? value);
           pending.resolve(selected);
 
           if (this.app?.client && "channel" in body && "message" in body) {

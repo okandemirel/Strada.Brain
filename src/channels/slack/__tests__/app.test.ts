@@ -491,6 +491,37 @@ describe("SlackChannel", () => {
       await expect(promise).resolves.toBe("Reject");
     });
 
+    it("CHN-7: a click naming no option is ignored, never read as the first option", async () => {
+      await channel.connect();
+
+      const promise = channel.requestConfirmation({
+        chatId: "C123",
+        userId: "U123",
+        question: "Approve the write?",
+        options: ["Approve", "Deny"],
+      });
+      const guarded = promise.catch((error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const internal = channel as unknown as {
+        app: { action: ReturnType<typeof vi.fn> };
+        pendingConfirmations: Map<string, unknown>;
+      };
+      const actionHandler = internal.app.action.mock.calls[0]?.[1] as (payload: unknown) => Promise<void>;
+      const [confirmId] = Array.from(internal.pendingConfirmations.keys());
+
+      await actionHandler({
+        ack: vi.fn().mockResolvedValue(undefined),
+        body: { channel: { id: "C123" }, user: { id: "U123" }, message: { ts: "1.1" } },
+        action: { action_id: `${confirmId}_opt7`, value: "something else" },
+      });
+
+      // Still pending: the malformed click answered nothing.
+      expect(internal.pendingConfirmations.has(confirmId!)).toBe(true);
+      await channel.disconnect();
+      await expect(guarded).resolves.toBeInstanceOf(Error);
+    });
+
     it("clears the timeout timer when the confirmation is answered (no leak)", async () => {
       await channel.connect();
 

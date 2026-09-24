@@ -29,6 +29,14 @@ import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
 import { chunkText } from "../chunk-text.js";
+import {
+  CONFIRMATION_NOT_ANSWERED,
+  confirmationOptionAt,
+  decodeConfirmationChoice,
+  encodeConfirmationChoice,
+  fitText,
+  shortConfirmationId,
+} from "../confirmation-payload.js";
 import type { SlashCommand } from "./commands.js";
 import { MessageQueue } from "../message-queue.js";
 import { StreamingBuffer } from "../streaming-buffer.js";
@@ -73,6 +81,12 @@ const MESSAGE_TIMEOUT_MS = 30_000;
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 /** Answers a slash command whose reply was not produced while it was handled (CHN-6). */
 const SLASH_COMMAND_ACCEPTED_REPLY = "Request received — the reply is posted in this channel.";
+/** Discord component/embed limits a confirmation prompt must respect (CHN-7). */
+const DISCORD_BUTTON_LABEL_MAX = 80;
+const DISCORD_BUTTONS_PER_ROW = 5;
+const DISCORD_MAX_ACTION_ROWS = 5;
+const DISCORD_EMBED_DESCRIPTION_MAX = 4096;
+const DISCORD_EMBED_FIELD_MAX = 1024;
 
 /**
  * Discord channel adapter using discord.js.
@@ -98,6 +112,8 @@ export class DiscordChannel implements IChannelAdapter {
       timeout: ReturnType<typeof setTimeout>;
       chatId: string;
       userId?: string;
+      /** The prompt's options; a button carries only an index into these. */
+      options: readonly string[];
     }
   >();
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
@@ -252,10 +268,11 @@ export class DiscordChannel implements IChannelAdapter {
     this.queue.rejectRetryTimers("Discord channel disconnected");
     this.queue.rejectAll("Discord channel disconnected");
 
-    // Clean up pending confirmations
+    // Clean up pending confirmations. Nobody answered them, so they settle as
+    // the non-answer sentinel — "cancelled" was read by callers as a reply.
     for (const [, pending] of this.pendingConfirmations) {
       clearTimeout(pending.timeout);
-      pending.resolve("cancelled");
+      pending.resolve(CONFIRMATION_NOT_ANSWERED);
     }
     this.pendingConfirmations.clear();
 
@@ -531,7 +548,8 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
-    const confirmId = `confirm_${randomUUID()}`;
+    const confirmId = shortConfirmationId(randomUUID());
+    const options = [...req.options];
 
     // The long-lived response promise resolves on a button click or the 120s
     // timeout — it is independent of the send queue, so a pending confirmation
@@ -540,7 +558,7 @@ export class DiscordChannel implements IChannelAdapter {
     const responsePromise = new Promise<string>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingConfirmations.delete(confirmId);
-        resolve("timeout");
+        resolve(CONFIRMATION_NOT_ANSWERED);
       }, 120_000);
 
       this.pendingConfirmations.set(confirmId, {
@@ -548,14 +566,17 @@ export class DiscordChannel implements IChannelAdapter {
         timeout,
         chatId: req.chatId,
         userId: req.userId,
+        options,
       });
     });
 
     // Dispatch only the embed+buttons through the rate-limited queue. If the
     // send itself fails (e.g. invalid channel, or the queue is drained on
-    // disconnect), settle the response promise as "cancelled" so it never hangs
-    // for the full 120s timeout. (disconnect() may have already resolved the
-    // pending entry, in which case it is gone and there is nothing to clean up.)
+    // disconnect), settle the response promise at once so it never hangs for
+    // the full 120s timeout — as NOT ANSWERED (CHN-7): it used to resolve
+    // "cancelled", which callers reported as the user's own answer.
+    // (disconnect() may have already resolved the pending entry, in which case
+    // it is gone and there is nothing to clean up.)
     try {
       await this.enqueueMessage({
         type: 'confirmation',
@@ -568,7 +589,7 @@ export class DiscordChannel implements IChannelAdapter {
       if (pending) {
         clearTimeout(pending.timeout);
         this.pendingConfirmations.delete(confirmId);
-        pending.resolve("cancelled");
+        pending.resolve(CONFIRMATION_NOT_ANSWERED);
         getLogger().warn("Discord confirmation prompt could not be sent", {
           chatId: req.chatId,
           error: error instanceof Error ? error.message : String(error),
@@ -587,28 +608,35 @@ export class DiscordChannel implements IChannelAdapter {
       throw new Error(`Invalid channel: ${req.chatId}`);
     }
 
-    const buttons = req.options.map((option) =>
+    // CHN-7: Discord caps a customId at 100 characters, a label at 80, an embed
+    // description at 4096, a field at 1024 and a row at 5 buttons. The customId
+    // carries the option's index (the text is looked up server-side), and the
+    // visible text is fitted, so a long option or plan cannot fail the send.
+    const buttons = req.options.map((option, index) =>
       new ButtonBuilder()
-        .setCustomId(`${confirmId}:${option}`)
-        .setLabel(option)
+        .setCustomId(encodeConfirmationChoice(confirmId, index))
+        .setLabel(fitText(option, DISCORD_BUTTON_LABEL_MAX))
         .setStyle(ButtonStyle.Primary)
     );
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(buttons);
+    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    for (let i = 0; i < buttons.length && rows.length < DISCORD_MAX_ACTION_ROWS; i += DISCORD_BUTTONS_PER_ROW) {
+      rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + DISCORD_BUTTONS_PER_ROW)));
+    }
 
     const embed = new EmbedBuilder()
       .setTitle("Confirmation Required")
-      .setDescription(req.question)
+      .setDescription(fitText(req.question, DISCORD_EMBED_DESCRIPTION_MAX))
       .setColor(0xffa500);
 
     if (req.details) {
-      embed.addFields({ name: "Details", value: req.details });
+      embed.addFields({ name: "Details", value: fitText(req.details, DISCORD_EMBED_FIELD_MAX) });
     }
 
     await this.rateLimiter.acquire();
     await (channel as TextChannel).send({
       embeds: [embed],
-      components: [row],
+      components: rows,
     });
   }
 
@@ -926,15 +954,18 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
-    const data = interaction.customId;
-    const separatorIndex = data.indexOf(":");
-    if (separatorIndex === -1) return;
-
-    const confirmId = data.substring(0, separatorIndex);
-    const selectedOption = data.substring(separatorIndex + 1);
+    const choice = decodeConfirmationChoice(interaction.customId);
+    if (!choice) return;
+    const confirmId = choice.confirmId;
 
     const pending = this.pendingConfirmations.get(confirmId);
     if (pending) {
+      const selectedOption = confirmationOptionAt(pending.options, choice.index);
+      if (selectedOption === undefined) {
+        await interaction.reply({ content: "This confirmation is no longer valid.", ephemeral: true });
+        return;
+      }
+
       if (interaction.channelId !== pending.chatId) {
         await interaction.reply({
           content: "This confirmation belongs to a different channel.",

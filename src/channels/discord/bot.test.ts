@@ -266,7 +266,8 @@ describe("DiscordChannel", () => {
       const interaction = {
         user: { id: "allowed456" },
         channelId: "channel123",
-        customId: `${confirmId}:Yes`,
+        // CHN-7: a button carries the option's index, not its text.
+        customId: `${confirmId}:0`,
         reply: vi.fn().mockResolvedValue(undefined),
         update: vi.fn().mockResolvedValue(undefined),
       };
@@ -286,7 +287,8 @@ describe("DiscordChannel", () => {
       ).toBe(true);
 
       await boundChannel.disconnect();
-      await expect(promise).resolves.toBe("cancelled");
+      // CHN-7: an unanswered prompt is "timeout" (not answered), never "cancelled".
+      await expect(promise).resolves.toBe("timeout");
     });
   });
 

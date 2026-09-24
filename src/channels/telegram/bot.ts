@@ -14,6 +14,13 @@ import { RateLimiter } from "../../security/rate-limiter.js";
 import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { chunkText } from "../chunk-text.js";
+import {
+  CONFIRMATION_NOT_ANSWERED,
+  confirmationOptionAt,
+  decodeConfirmationChoice,
+  encodeConfirmationChoice,
+  shortConfirmationId,
+} from "../confirmation-payload.js";
 
 /**
  * The Telegram command menu. Every entry must be a command the daemon really
@@ -91,6 +98,8 @@ export class TelegramChannel implements IChannelAdapter {
       timeout: ReturnType<typeof setTimeout>;
       chatId: string;
       userId?: string;
+      /** The prompt's options; a button carries only an index into these. */
+      options: readonly string[];
     }
   >();
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
@@ -214,10 +223,11 @@ export class TelegramChannel implements IChannelAdapter {
     this.pollingAlive = false;
     this.bot.stop();
 
-    // Clean up pending confirmations
+    // Clean up pending confirmations. Nobody answered them, so they settle as
+    // the non-answer sentinel — "cancelled" was read by callers as a reply.
     for (const [, pending] of this.pendingConfirmations) {
       clearTimeout(pending.timeout);
-      pending.resolve("cancelled");
+      pending.resolve(CONFIRMATION_NOT_ANSWERED);
     }
     this.pendingConfirmations.clear();
 
@@ -323,26 +333,44 @@ export class TelegramChannel implements IChannelAdapter {
 
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
     const chatIdNum = parseInt(req.chatId, 10);
-    const confirmId = `confirm_${randomUUID()}`;
+    const confirmId = shortConfirmationId(randomUUID());
+    const options = [...req.options];
 
+    // CHN-7: the button carries the option's index, not its text — callback_data
+    // is capped at 64 bytes, which a real option label easily exceeds.
     const keyboard = new InlineKeyboard();
-    for (const option of req.options) {
-      keyboard.text(option, `${confirmId}:${option}`);
-    }
+    options.forEach((option, index) => {
+      keyboard.text(option, encodeConfirmationChoice(confirmId, index));
+    });
 
     let message = req.question;
     if (req.details) {
       message += `\n\n${req.details}`;
     }
 
-    await this.bot.api.sendMessage(chatIdNum, message, {
-      reply_markup: keyboard,
-    });
+    // A long question (a whole plan) is sent in chunks, the keyboard on the last.
+    const chunks = chunkTelegramMessage(message);
+    try {
+      for (const [i, chunk] of chunks.entries()) {
+        await this.bot.api.sendMessage(
+          chatIdNum,
+          chunk,
+          i === chunks.length - 1 ? { reply_markup: keyboard } : undefined,
+        );
+      }
+    } catch (error) {
+      // Nobody saw the prompt: that is "not answered", never an answer.
+      getLogger().warn("Telegram confirmation prompt could not be sent", {
+        chatId: req.chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return CONFIRMATION_NOT_ANSWERED;
+    }
 
     return new Promise<string>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingConfirmations.delete(confirmId);
-        resolve("timeout");
+        resolve(CONFIRMATION_NOT_ANSWERED);
       }, 120_000); // 2 minute timeout
 
       this.pendingConfirmations.set(confirmId, {
@@ -350,6 +378,7 @@ export class TelegramChannel implements IChannelAdapter {
         timeout,
         chatId: req.chatId,
         userId: req.userId,
+        options,
       });
     });
   }
@@ -463,16 +492,17 @@ export class TelegramChannel implements IChannelAdapter {
           return;
         }
 
-        const data = ctx.callbackQuery.data;
-        const separatorIndex = data.indexOf(":");
-        if (separatorIndex === -1) return;
-
-        const confirmId = data.substring(0, separatorIndex);
-        const selectedOption = data.substring(separatorIndex + 1);
+        const choice = decodeConfirmationChoice(ctx.callbackQuery.data);
+        if (!choice) return;
 
         // Handle regular confirmations
-        const pending = this.pendingConfirmations.get(confirmId);
+        const pending = this.pendingConfirmations.get(choice.confirmId);
         if (pending) {
+          const selectedOption = confirmationOptionAt(pending.options, choice.index);
+          if (selectedOption === undefined) {
+            await ctx.answerCallbackQuery({ text: "Confirmation is no longer valid." });
+            return;
+          }
           if (String(ctx.chat?.id ?? "") !== pending.chatId) {
             await ctx.answerCallbackQuery({ text: "Confirmation is no longer valid." });
             return;
@@ -484,7 +514,7 @@ export class TelegramChannel implements IChannelAdapter {
           }
 
           clearTimeout(pending.timeout);
-          this.pendingConfirmations.delete(confirmId);
+          this.pendingConfirmations.delete(choice.confirmId);
           pending.resolve(selectedOption);
           await ctx.answerCallbackQuery({ text: `Selected: ${selectedOption}` });
           return;

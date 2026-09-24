@@ -322,7 +322,8 @@ describe("TelegramChannel", () => {
     await callbackHandler!({
       chat: { id: 42 },
       from: { id: 456 },
-      callbackQuery: { data: "confirm_test-uuid-1234:Yes" },
+      // CHN-7: short id (12 hex chars of the mocked UUID) + the option's index.
+      callbackQuery: { data: "confirm_testuuid1234:0" },
       answerCallbackQuery,
     });
 
@@ -332,11 +333,12 @@ describe("TelegramChannel", () => {
     expect(
       (channel as unknown as {
         pendingConfirmations: Map<string, unknown>;
-      }).pendingConfirmations.has("confirm_test-uuid-1234"),
+      }).pendingConfirmations.has("confirm_testuuid1234"),
     ).toBe(true);
 
     await channel.disconnect();
-    await expect(promise).resolves.toBe("cancelled");
+    // CHN-7: an unanswered prompt is "timeout" (not answered), never "cancelled".
+    await expect(promise).resolves.toBe("timeout");
   });
 
   it("isHealthy reflects polling liveness, not just init state", async () => {

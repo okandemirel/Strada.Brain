@@ -6,6 +6,8 @@
 import type { KnownBlock, Button, ActionsBlock, SectionBlock, ContextBlock, DividerBlock, HeaderBlock, InputBlock } from "@slack/types";
 
 const MAX_BLOCKS_PER_MESSAGE = 50;
+/** Slack's limit on a section block's text. */
+const SLACK_SECTION_TEXT_MAX = 3000;
 
 
 /**
@@ -91,12 +93,15 @@ export function createConfirmationBlocks(
   actionIdPrefix: string,
   options: string[] = ["Approve", "Deny"]
 ): KnownBlock[] {
+  // CHN-7: a section's text is capped at 3000 characters AFTER escaping; a
+  // longer question (a whole plan) made Slack refuse the prompt with
+  // `invalid_blocks`. Both sections are fitted to the escaped length.
   const blocks: KnownBlock[] = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${escapeMarkdown(question)}*`,
+        text: `*${fitEscapedMarkdown(question, SLACK_SECTION_TEXT_MAX - 2)}*`,
       },
     } as SectionBlock,
   ];
@@ -107,7 +112,7 @@ export function createConfirmationBlocks(
       text: {
         type: "mrkdwn",
         text: `
-${escapeMarkdown(details.substring(0, 2900))}${details.length > 2900 ? "..." : ""}
+${fitEscapedMarkdown(details, SLACK_SECTION_TEXT_MAX - 2)}
 `,
       },
     } as SectionBlock);
@@ -443,6 +448,20 @@ function escapeMarkdown(text: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/**
+ * Escape `text` and cut it so the ESCAPED form is at most `max` characters,
+ * ending in an ellipsis when cut. Never leaves half an entity or half a
+ * surrogate pair at the cut.
+ */
+function fitEscapedMarkdown(text: string, max: number): string {
+  const escaped = escapeMarkdown(text);
+  if (escaped.length <= max) return escaped;
+  let cut = escaped.slice(0, max - 1).replace(/&[a-z]*$/, "");
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
 }
 
 /**
