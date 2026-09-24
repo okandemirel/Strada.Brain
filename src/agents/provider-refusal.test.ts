@@ -99,8 +99,9 @@ describe("a zero-output hard-timeout retries with a smaller prompt (2026-09-09)"
     const source = readFileSync("src/agents/orchestrator.ts", "utf8");
     const at = source.indexOf("private compactSessionAfterHardTimeout(");
     const body = source.slice(at, source.indexOf("compactForRetry(", at));
-    expect(body).toContain("recordContextCeiling(providerName, observed)");
+    // Recorded and read per provider AND model, under the planner's key (ORC-10).
+    expect(body).toContain("recordContextCeiling(plan?.providerName ?? providerName, observed,");
     const plan = source.slice(source.indexOf("private maybeCompactSession("), source.indexOf("decideCompaction({", source.indexOf("private maybeCompactSession(")));
-    expect(plan).toContain("effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW)");
+    expect(plan).toContain("effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW, { model: modelId })");
   });
 });

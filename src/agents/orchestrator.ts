@@ -108,7 +108,7 @@ import {
   estimateTokens,
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
-import { effectiveContextWindow, recordContextCeiling } from "./context-ceilings.js";
+import { effectiveContextWindow, noteContextAnswered, recordContextCeiling } from "./context-ceilings.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import {
   planVerifierPipeline,
@@ -982,6 +982,8 @@ export class Orchestrator {
   private unifiedBudgetManager?: UnifiedBudgetManager;
   /** Unsubscribe handle for the active budget-config listener (prevents leaks on re-wire). */
   private budgetConfigUnsubscribe?: () => void;
+  /** The provider, model and declared window each session's next call was planned for. */
+  private readonly contextCallPlans = new WeakMap<Session, { providerName: string; modelId?: string; declaredWindow: number }>();
   /** Optional checkpoint persistence for budget/provider aborts. */
   private checkpointStore?: TaskCheckpointStore;
   /**
@@ -3879,9 +3881,16 @@ export class Orchestrator {
         defaultContextWindow: DEFAULT_CONTEXT_WINDOW,
       });
     }
+    // The previous call on this session answered `lastInputTokens`: a learned ceiling below
+    // that no longer holds for the model it was planned for.
+    const previousPlan = this.contextCallPlans.get(session);
+    if (previousPlan && session.lastInputTokens) {
+      noteContextAnswered(previousPlan.providerName, session.lastInputTokens, { model: previousPlan.modelId });
+    }
+    this.contextCallPlans.set(session, { providerName, modelId, declaredWindow: declared ?? DEFAULT_CONTEXT_WINDOW });
     // min(declared, learned): a hard-timeout at N tokens taught the planner
-    // that this provider answers below N (context-ceilings.ts, report #37).
-    const { window: ctxWindow, learned } = effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW);
+    // that this provider and model answer below N (context-ceilings.ts, report #37).
+    const { window: ctxWindow, learned } = effectiveContextWindow(providerName, declared ?? DEFAULT_CONTEXT_WINDOW, { model: modelId });
     const estimatedTokens = estimateTokens(
       session.messages,
       (systemPrompt?.length ?? 0) + (session.compactionSummary?.length ?? 0),
@@ -3950,7 +3959,13 @@ export class Orchestrator {
         session.lastInputTokens ?? 0,
         estimateTokens(session.messages, requestOverheadChars + (session.compactionSummary?.length ?? 0)),
       );
-      const ceiling = recordContextCeiling(providerName, observed);
+      // Learned under the key the planner reads — the assignment's provider and model, not the
+      // chain's display name — and only from a prompt large for the declared window.
+      const plan = this.contextCallPlans.get(session);
+      const ceiling = recordContextCeiling(plan?.providerName ?? providerName, observed, Date.now(), {
+        model: plan?.modelId,
+        declaredWindow: plan?.declaredWindow,
+      });
       if (ceiling !== undefined) {
         getLogger().warn("Context ceiling learned from a hard-timeout — compaction now plans against it", {
           chatId,

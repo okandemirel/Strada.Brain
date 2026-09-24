@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   configureContextCeilingStore, recordContextCeiling, effectiveContextWindow, readContextCeilings,
-  CONTEXT_CEILING_MIN_TOKENS, CONTEXT_CEILING_SHRINK,
+  CONTEXT_CEILING_MIN_TOKENS, CONTEXT_CEILING_SHRINK, CONTEXT_CEILING_TTL_MS, noteContextAnswered,
 } from "./context-ceilings.js";
 
 describe("learned context ceilings (#37)", () => {
@@ -16,7 +16,9 @@ describe("learned context ceilings (#37)", () => {
 
   it("a hung 57k turn lowers the planning window below the declared 128k, and only ever downwards", () => {
     expect(effectiveContextWindow("opencode (zen/go)", 128_000)).toEqual({ window: 128_000 });
-    expect(recordContextCeiling("opencode (zen/go)", 57_000, 1_000)).toBe(Math.floor(57_000 * CONTEXT_CEILING_SHRINK));
+    // `now` is a real recent time: a ceiling lapses after CONTEXT_CEILING_TTL_MS (ORC-10), so
+    // the 1970 timestamp this used to pass reads as long expired.
+    expect(recordContextCeiling("opencode (zen/go)", 57_000, Date.now())).toBe(Math.floor(57_000 * CONTEXT_CEILING_SHRINK));
     expect(effectiveContextWindow("OpenCode (zen/go)", 128_000)).toEqual({ window: 45_600, learned: 45_600 });
     // a later, larger hang does not raise the ceiling back up
     expect(recordContextCeiling("opencode (zen/go)", 70_000)).toBeUndefined();
@@ -28,9 +30,10 @@ describe("learned context ceilings (#37)", () => {
   });
 
   it("persists beside provider health and is read back after a restart (store re-configured)", () => {
-    recordContextCeiling("opencode", 50_000, 5);
+    const learnedAt = Date.now();
+    recordContextCeiling("opencode", 50_000, learnedAt);
     expect(existsSync(store)).toBe(true);
-    expect(JSON.parse(readFileSync(store, "utf8"))["opencode"]).toMatchObject({ ceiling: 40_000, observedTokens: 50_000, learnedAt: 5 });
+    expect(JSON.parse(readFileSync(store, "utf8"))["opencode"]).toMatchObject({ ceiling: 40_000, observedTokens: 50_000, learnedAt });
     configureContextCeilingStore(store); // simulates a fresh process
     expect(effectiveContextWindow("opencode", 128_000)).toEqual({ window: 40_000, learned: 40_000 });
     expect(readContextCeilings(store)["opencode"]?.ceiling).toBe(40_000);
@@ -49,5 +52,40 @@ describe("learned context ceilings (#37)", () => {
     expect(recordContextCeiling("x", 0)).toBeUndefined();
     expect(recordContextCeiling("x", Number.NaN)).toBeUndefined();
     expect(effectiveContextWindow("x", 100)).toEqual({ window: 100 });
+  });
+});
+
+// ORC-10: a ceiling was keyed by provider only, never expired, only ever shrank, and was learned
+// from any hard-timeout — one stalled 12k call shredded every session on every model of that
+// provider to ~8k tokens until the file was deleted.
+describe("learned context ceilings are scoped, earned and temporary (ORC-10)", () => {
+  beforeEach(() => {
+    configureContextCeilingStore(join(mkdtempSync(join(tmpdir(), "ceilings-")), "context-ceilings.json"));
+  });
+
+  it("a hang on model A does not shrink model B of the same provider", () => {
+    expect(recordContextCeiling("openai", 60_000, Date.now(), { model: "gpt-small", declaredWindow: 128_000 })).toBe(48_000);
+    expect(effectiveContextWindow("openai", 128_000, { model: "gpt-small" })).toEqual({ window: 48_000, learned: 48_000 });
+    expect(effectiveContextWindow("openai", 1_000_000, { model: "gpt-huge" })).toEqual({ window: 1_000_000 });
+  });
+
+  it("a hang on a prompt small for the declared window teaches nothing", () => {
+    expect(recordContextCeiling("openai", 12_000, Date.now(), { model: "gpt-x", declaredWindow: 128_000 })).toBeUndefined();
+    expect(effectiveContextWindow("openai", 128_000, { model: "gpt-x" })).toEqual({ window: 128_000 });
+  });
+
+  it("a ceiling lapses after its time-to-live", () => {
+    const t0 = Date.now();
+    recordContextCeiling("opencode", 57_000, t0, { model: "m", declaredWindow: 128_000 });
+    expect(effectiveContextWindow("opencode", 128_000, { model: "m" }, t0 + 60_000).window).toBe(45_600);
+    expect(effectiveContextWindow("opencode", 128_000, { model: "m" }, t0 + CONTEXT_CEILING_TTL_MS + 1)).toEqual({ window: 128_000 });
+  });
+
+  it("a successful call larger than the ceiling lifts it", () => {
+    recordContextCeiling("opencode", 57_000, Date.now(), { model: "m", declaredWindow: 128_000 });
+    noteContextAnswered("opencode", 40_000, { model: "m" });
+    expect(effectiveContextWindow("opencode", 128_000, { model: "m" }).window).toBe(45_600);
+    noteContextAnswered("opencode", 70_000, { model: "m" });
+    expect(effectiveContextWindow("opencode", 128_000, { model: "m" })).toEqual({ window: 128_000 });
   });
 });

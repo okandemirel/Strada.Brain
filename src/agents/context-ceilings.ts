@@ -19,6 +19,18 @@ import { canonicalizeProviderName } from "./providers/provider-identity.js";
 export const CONTEXT_CEILING_MIN_TOKENS = 8_192;
 export const CONTEXT_CEILING_SHRINK = 0.8;
 export const CONTEXT_CEILINGS_FILE = "context-ceilings.json";
+/**
+ * A learned ceiling is evidence about one model on one day, not a permanent fact: it lapses
+ * after a week. A ceiling that never expired, learned from one stalled call, shredded every
+ * session on that provider to ~8k tokens until an operator deleted the file.
+ */
+export const CONTEXT_CEILING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A hang on a prompt that is small for the declared window says more about the network or
+ * the provider's day than about the window, so it teaches nothing. (The measured case this
+ * module exists for, 57k of 128k, is 45%.)
+ */
+export const CONTEXT_CEILING_MIN_PROMPT_SHARE = 0.25;
 
 interface CeilingRecord {
   ceiling: number;
@@ -44,15 +56,33 @@ const CEILING_ALIASES: ReadonlyMap<string, string> = new Map([
   ["codex", "openai"],
 ]);
 
-export function ceilingKey(provider: string): string {
+/**
+ * Ceilings are per provider AND model: one provider serves models with windows from 8k to 1M,
+ * and a ceiling learned on one applied to all of them. A call site without a model reads and
+ * writes the provider-level key.
+ */
+export function ceilingKey(provider: string, model?: string): string {
   const canonical = canonicalizeProviderName(provider) ?? provider.trim().toLowerCase();
   // canonicalizeProviderName treats "claude" and "anthropic" as two canonical
   // names, so a ceiling recorded under one was never read under the other
   // (Codex 2026-09-11 C#35).
-  return CEILING_ALIASES.get(canonical) ?? canonical;
+  const providerKey = CEILING_ALIASES.get(canonical) ?? canonical;
+  const modelKey = model?.trim().toLowerCase();
+  return modelKey ? `${providerKey}/${modelKey}` : providerKey;
 }
-function norm(provider: string): string {
-  return ceilingKey(provider);
+function norm(stored: string): string {
+  const slash = stored.indexOf("/");
+  return slash < 0 ? ceilingKey(stored) : ceilingKey(stored.slice(0, slash), stored.slice(slash + 1));
+}
+
+/** The record in force for `key`, dropping it once it has lapsed. */
+function live(key: string, now: number): CeilingRecord | undefined {
+  const rec = ceilings.get(key);
+  if (!rec) return undefined;
+  if (now - rec.learnedAt <= CONTEXT_CEILING_TTL_MS) return rec;
+  ceilings.delete(key);
+  save();
+  return undefined;
 }
 
 function loadOnce(): void {
@@ -108,27 +138,65 @@ export function readContextCeilings(path: string): Record<string, CeilingRecord>
   }
 }
 
+export interface CeilingScope {
+  /** The model the call was planned for; ceilings are kept per provider and model. */
+  readonly model?: string;
+  /** The window the provider declares; a hang on a prompt small for it teaches nothing. */
+  readonly declaredWindow?: number;
+}
+
 /**
  * A turn of `observedTokens` hung past the hard ceiling: the provider's
  * usable window is below that. Returns the ceiling now in force, or undefined
- * when the observation was empty or an earlier ceiling is already lower.
+ * when the observation was empty, too small for the declared window to mean
+ * anything, or an earlier ceiling is already lower.
  */
-export function recordContextCeiling(provider: string, observedTokens: number, now = Date.now()): number | undefined {
+export function recordContextCeiling(
+  provider: string,
+  observedTokens: number,
+  now = Date.now(),
+  scope: CeilingScope = {},
+): number | undefined {
   loadOnce();
   if (!Number.isFinite(observedTokens) || observedTokens <= 0) return undefined;
+  if (scope.declaredWindow && observedTokens < scope.declaredWindow * CONTEXT_CEILING_MIN_PROMPT_SHARE) return undefined;
   const next = Math.max(CONTEXT_CEILING_MIN_TOKENS, Math.floor(observedTokens * CONTEXT_CEILING_SHRINK));
-  const key = norm(provider);
-  const prev = ceilings.get(key);
+  const key = ceilingKey(provider, scope.model);
+  const prev = live(key, now);
   if (prev && prev.ceiling <= next) return undefined;
   ceilings.set(key, { ceiling: next, observedTokens: Math.floor(observedTokens), learnedAt: now });
   save();
   return next;
 }
 
-/** min(declared, learned) with the learned value named when it is the one in force. */
-export function effectiveContextWindow(provider: string, declared: number): { window: number; learned?: number } {
+/**
+ * The provider just answered a prompt of `answeredTokens`. A ceiling below that was wrong, or
+ * the provider has recovered; either way it no longer holds, so it is dropped rather than
+ * left to shrink every later session.
+ */
+export function noteContextAnswered(
+  provider: string,
+  answeredTokens: number,
+  scope: CeilingScope = {},
+  now = Date.now(),
+): void {
   loadOnce();
-  const rec = ceilings.get(norm(provider));
+  const key = ceilingKey(provider, scope.model);
+  const rec = live(key, now);
+  if (!rec || !Number.isFinite(answeredTokens) || answeredTokens <= rec.ceiling) return;
+  ceilings.delete(key);
+  save();
+}
+
+/** min(declared, learned) with the learned value named when it is the one in force. */
+export function effectiveContextWindow(
+  provider: string,
+  declared: number,
+  scope: CeilingScope = {},
+  now = Date.now(),
+): { window: number; learned?: number } {
+  loadOnce();
+  const rec = live(ceilingKey(provider, scope.model), now);
   if (!rec || rec.ceiling >= declared) return { window: declared };
   return { window: rec.ceiling, learned: rec.ceiling };
 }
