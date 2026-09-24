@@ -35,7 +35,7 @@ import { GoalDecomposer, GoalStorage } from "../../goals/index.js";
 import type { IEventBus, LearningEventMap } from "../event-bus.js";
 import { TypedEventBus } from "../event-bus.js";
 import type { DaemonEventMap } from "../../daemon/daemon-events.js";
-import type { ChannelActivityRegistry } from "../channel-activity-registry.js";
+import type { ChannelActivityRegistry, ChatActivity } from "../channel-activity-registry.js";
 import { AutoUpdater } from "../auto-updater.js";
 import { createProjectScopeFingerprint } from "../../learning/index.js";
 import {
@@ -329,10 +329,8 @@ export async function initializeTaskRuntimeStage(
     ) ?? new AutoUpdater(params.config, params.activityRegistry, backgroundExecutor);
     autoUpdater.setNotifyFn((msg: string) => {
       const safe = sanitizeSecrets(msg);
-      // Only notify chats active within the idle window — avoids broadcasting
-      // update notices to long-dead conversations.
       const idleWindowMs = params.config.autoUpdate.idleTimeoutMin * 60 * 1000;
-      const chats = params.activityRegistry.getActiveChatIds(idleWindowMs);
+      const chats = selectUpdateNoticeChats(params.activityRegistry, idleWindowMs);
       for (const { chatId } of chats) {
         const send = params.channel.sendSystemMessage
           ? params.channel.sendSystemMessage.bind(params.channel)
@@ -613,6 +611,27 @@ export async function initializeTaskRuntimeStage(
     campaignManager,
     realTreeGuardian,
   };
+}
+
+/**
+ * Who hears an update notice: the chats active within the idle window — not
+ * every conversation that ever spoke — or, when there are none, the most
+ * recent chat. An update only runs once every chat has been idle for that
+ * window, so the window alone reached nobody and every "Updated…/Update
+ * failed…" notice was dropped (COR-15).
+ */
+export function selectUpdateNoticeChats(
+  registry: Pick<ChannelActivityRegistry, "getActiveChatIds">,
+  idleWindowMs: number,
+): ChatActivity[] {
+  const recent = registry.getActiveChatIds(idleWindowMs);
+  if (recent.length > 0) return recent;
+  const everyone = registry.getActiveChatIds(Number.POSITIVE_INFINITY);
+  const latest = everyone.reduce<ChatActivity | undefined>(
+    (best, chat) => (best === undefined || chat.lastActivity > best.lastActivity ? chat : best),
+    undefined,
+  );
+  return latest ? [latest] : [];
 }
 
 /**

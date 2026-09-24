@@ -1399,21 +1399,23 @@ export class AutoUpdater {
           this.startIdleMonitoring();
           return;
         }
-        if (success && this.config.notify && this.notifyFn) {
-          if (this.config.autoRestart && this.isDaemonProcess()) {
-            this.notifyFn(
-              `Updated to ${this.pendingVersion}. Restarting...`,
-            );
-            // Send SIGTERM to self so setupShutdownHandlers triggers graceful
-            // shutdown (DB flush, connection close, etc.) before exit.
-            // The daemon wrapper will detect the clean exit and restart.
-            const restartDelay = this.config.autoRestartDelayMs ?? 2000;
-            setTimeout(() => process.kill(process.pid, "SIGTERM"), restartDelay);
-          } else {
-            this.notifyFn(
-              `Updated to ${this.pendingVersion}. Please restart with \`strada start\`${!this.isDaemonProcess() ? " (auto-restart requires `strada daemon`)" : ""}.`,
-            );
-          }
+        // The restart does not depend on notices being on: with notify off it
+        // never happened, and the running process kept its old modules while
+        // later lazy imports loaded the new dist/ (COR-15).
+        const restart = this.config.autoRestart && this.isDaemonProcess();
+        if (this.config.notify && this.notifyFn) {
+          this.notifyFn(
+            restart
+              ? `Updated to ${this.pendingVersion}. Restarting...`
+              : `Updated to ${this.pendingVersion}. Please restart with \`strada start\`${!this.isDaemonProcess() ? " (auto-restart requires `strada daemon`)" : ""}.`,
+          );
+        }
+        if (restart) {
+          // Send SIGTERM to self so setupShutdownHandlers triggers graceful
+          // shutdown (DB flush, connection close, etc.) before exit.
+          // The daemon wrapper will detect the clean exit and restart.
+          const restartDelay = this.config.autoRestartDelayMs ?? 2000;
+          setTimeout(() => process.kill(process.pid, "SIGTERM"), restartDelay);
         }
         this.clearPendingVersion();
       } catch (err) {
