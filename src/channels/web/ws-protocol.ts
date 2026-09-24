@@ -6,6 +6,13 @@
  */
 
 /**
+ * Path the portal opens its chat socket on. The server accepts the upgrade on
+ * any path, but `vite dev` proxies only this one to the daemon: the portal used
+ * to connect to `/`, so chat never connected under `vite dev` (WEB-14).
+ */
+export const WS_CHAT_PATH = "/ws";
+
+/**
  * Close code for a socket whose chat was reclaimed by another socket holding
  * the same reconnect token (another tab of the same browser profile). The
  * portal must NOT auto-reconnect on it: two tabs that both did would take the

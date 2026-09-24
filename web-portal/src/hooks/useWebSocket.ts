@@ -12,6 +12,7 @@ import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from 
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
 import {
   WS_CLOSE_POLICY_VIOLATION,
+  WS_CHAT_PATH,
   WS_CLOSE_SESSION_TAKEN,
   WS_MAX_PAYLOAD_BYTES,
   applyStreamUpdate,
@@ -360,7 +361,7 @@ export function useWebSocket(): UseWebSocketReturn {
     if (!mountedRef.current) return
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}`)
+    const ws = new WebSocket(`${protocol}//${window.location.host}${WS_CHAT_PATH}`)
     wsRef.current = ws
     sessionReadyRef.current = false
     // Every handler acts on shared refs, so a socket this hook has already

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { WS_CHAT_PATH } from '../src/channels/web/ws-protocol.ts'
 
 export default defineConfig({
   resolve: {
@@ -55,7 +56,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/ws': {
+      // The path the portal's chat socket opens on (shared with useWebSocket).
+      [WS_CHAT_PATH]: {
         target: 'ws://127.0.0.1:3000',
         ws: true,
       },

@@ -24,7 +24,7 @@ class MockWebSocket {
   readyState = MockWebSocket.CONNECTING
   private readonly listeners = new Map<string, Array<(event?: MessageEvent) => void>>()
 
-  constructor(_url: string) {
+  constructor(readonly url: string) {
     MockWebSocket.instances.push(this)
   }
 
@@ -838,5 +838,17 @@ describe('useWebSocket concurrent confirmations (WEB-18)', () => {
       socket.emit('message', { type: 'confirmation_ack', confirmId: 'first', status: 'accepted' })
     })
     expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+})
+
+// WEB-14: `vite dev` proxies only /ws to the daemon, and the hook connected
+// to `/`, so chat never connected under the dev server.
+describe('useWebSocket chat socket URL (WEB-14)', () => {
+  beforeEach(installTestEnvironment)
+  afterEach(restoreTestEnvironment)
+
+  it('opens the chat socket on the path the dev proxy forwards', () => {
+    renderHook(() => useWebSocket())
+    expect(MockWebSocket.instances[0]!.url).toBe(`ws://${window.location.host}/ws`)
   })
 })
