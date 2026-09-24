@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CLOCK_SKEW_TOLERANCE_MS, PLAYMODE_RUN_RECORD_REL, readPlaymodeRun } from "./playmode-run.js";
+import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "playmode-run-")); });
@@ -49,6 +50,21 @@ describe("readPlaymodeRun", () => {
     expect(readPlaymodeRun(root, 0)).toEqual({ found: false });
     write({ total: 10, passed: 10, failed: 0, unfiltered: true }, 3_600_000);
     expect(readPlaymodeRun(root, Date.now() - 60_000)).toMatchObject({ found: false, stale: true });
+  });
+
+  it("a record whose mtime reads one kernel tick before the attempt is fresh; one older than the allowance is stale (X-7)", () => {
+    // The kernel stamps mtimes from its coarse clock, which lags Date.now() by
+    // up to a tick: a record written right after the attempt began reads a few
+    // ms OLDER than it, and the 2 ms allowance called ~10% of fresh runs stale.
+    write({ total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true });
+    const p = join(root, PLAYMODE_RUN_RECORD_REL);
+    const attemptStart = Date.now();
+    const oneTickEarlier = new Date(attemptStart - 10);
+    utimesSync(p, oneTickEarlier, oneTickEarlier);
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: true, green: true });
+    const beforeTheAttempt = new Date(attemptStart - FILE_MTIME_TOLERANCE_MS - 20);
+    utimesSync(p, beforeTheAttempt, beforeTheAttempt);
+    expect(readPlaymodeRun(root, attemptStart)).toMatchObject({ found: false, stale: true });
   });
 
   it("green, unfiltered — the sentence the gate prints comes from the counts and the arguments", () => {

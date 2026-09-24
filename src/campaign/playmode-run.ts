@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { writtenBefore } from "./file-freshness.js";
 
 export const PLAYMODE_RUN_RECORD_REL = join("Recordings", "tests", "playmode-last.json");
 
@@ -63,8 +64,6 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   } catch {
     return { found: false };
   }
-  // Two milliseconds of tolerance, as the play-through verdict has: a file
-  // touched in the same millisecond is not older than the attempt.
   // ONE READ, ONE OBJECT. The stamp check and the counts used to come from
   // two separate reads of the file, so a writer that replaced the record
   // between them had its counts accepted under the other record's stamp
@@ -78,11 +77,11 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   // The mtime gate takes the SAME clock-skew allowance as the stamp: a real
   // remote run whose file mtime is a minute behind the coordinator was
   // rejected before the allowance was ever consulted (Codex 2026-09-11 H#10).
-  // THE FILE CLOCK IS THIS MACHINE'S, so it is exact: the record is written
+  // THE FILE CLOCK IS THIS MACHINE'S, so it has no skew: the record is written
   // here, by the verification tool this attempt ran, and a file written before
-  // the attempt began is a previous attempt's result. Two milliseconds of
-  // tolerance, as the play-through verdict has, for a file touched in the same
-  // millisecond.
+  // the attempt began is a previous attempt's result. The only allowance is
+  // the file clock's own coarseness: a mtime lags `Date.now()` by up to one
+  // kernel tick (FILE_MTIME_TOLERANCE_MS, shared with every evidence reader).
   //
   // The five-minute allowance below is for the RECORD'S OWN stamp, which the
   // runner writes from its own clock and may be minutes behind ours. Applying
@@ -92,7 +91,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   // preserved is therefore still refused (Codex 2026-09-11 H#10); that needs a
   // run identity the tool does not yet issue, and accepting stale proof is the
   // worse of the two failures.
-  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
+  if (writtenBefore(mtimeMs, sinceMs)) return { found: false, stale: true };
   let raw: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(text);

@@ -28,6 +28,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { writtenBefore } from "./file-freshness.js";
 
 /** Headings whose body describes how the game should look. */
 const LOOK_HEADINGS = /^\s*(?:#{1,6}\s+)?(?:\d+[.\s]*)*\s*(art direction|visual (?:style|direction|identity)|look and feel|art style)\b/i;
@@ -271,7 +272,9 @@ export function selectGameplayFrame(projectRoot: string, sinceMs: number): Frame
       if (!/\.(png|jpg|jpeg)$/i.test(entry.name)) continue;
       try {
         const stat = statSync(full);
-        if (stat.mtimeMs < sinceMs) continue;
+        // The same coarse-clock allowance as every evidence reader: a frame
+        // written just after the sprint began can read a tick older than it.
+        if (writtenBefore(stat.mtimeMs, sinceMs)) continue;
         if (!best || stat.mtimeMs > best.mtime) best = { path: full, mtime: stat.mtimeMs };
       } catch {
         /* unreadable entry */

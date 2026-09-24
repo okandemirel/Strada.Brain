@@ -7,6 +7,7 @@ import {
   judgeVisualConformance,
   renderVisualConformance,
   selectGameplayFrame, artDirectionText } from "./visual-conformance.js";
+import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 
 const dirs: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), "vc-")); dirs.push(d); return d; }
@@ -69,6 +70,22 @@ describe("frame selection", () => {
     const picked = selectGameplayFrame(root, sprintStart);
     expect(picked.path).toBe(fresh);
     expect(picked.path).not.toContain("Prerendered");
+  });
+
+  it("a frame whose mtime reads one kernel tick before the sprint start is this sprint's (X-7)", () => {
+    // Zero tolerance dropped a frame written right after the sprint began: its
+    // coarse-clock mtime reads a few ms older than Date.now() on Linux.
+    const root = tmp();
+    mkdirSync(join(root, "Recordings"), { recursive: true });
+    const frame = join(root, "Recordings", "frame.png");
+    writeFileSync(frame, "x".repeat(2048));
+    const sprintStart = Date.now();
+    const oneTickEarlier = new Date(sprintStart - 10);
+    utimesSync(frame, oneTickEarlier, oneTickEarlier);
+    expect(selectGameplayFrame(root, sprintStart).path).toBe(frame);
+    const earlier = new Date(sprintStart - FILE_MTIME_TOLERANCE_MS - 20);
+    utimesSync(frame, earlier, earlier);
+    expect(selectGameplayFrame(root, sprintStart).reason).toContain("captured during this sprint");
   });
 
   it("says so when this sprint captured nothing", () => {

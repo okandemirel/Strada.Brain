@@ -47,6 +47,7 @@ import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { readPlaymodeRun } from "./playmode-run.js";
+import { writtenBefore } from "./file-freshness.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
 import { planSessionBatch } from "./batch-plan.js";
 import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnOutcome, extractActionBudget, extractNumericClaims, extractSessionAllowanceSeconds, finishedSessionIndices } from "./gdd-claims.js";
@@ -5997,7 +5998,8 @@ export class CampaignManager {
         } else if (/\.(png|jpg|mp4)$/i.test(e.name)) {
           try {
             const st = statSync(full);
-            if (st.mtimeMs >= sinceMs) freshFiles.push({ path: full, size: st.size });
+            // One mtime rule for all evidence (a frame can read a tick older than the sprint).
+            if (!writtenBefore(st.mtimeMs, sinceMs)) freshFiles.push({ path: full, size: st.size });
           } catch {
             /* skip */
           }

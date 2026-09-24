@@ -23,6 +23,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { join } from "node:path";
 import type { PlaythroughEvidence, PlaythroughPerf, RuntimeSceneDump } from "./types.js";
 import { describePlaythroughScenarios, parsePlaythroughScenarios, type ScenarioPlaythroughEvidence } from "./playthrough-scenarios.js";
+import { writtenBefore } from "./file-freshness.js";
 import * as posixAndWin32 from "node:path";
 import { basename, dirname } from "node:path";
 export { parsePlaythroughScenarios, scenariosForRequirement, isRequirementShownByPlaythrough, describePlaythroughScenarios } from "./playthrough-scenarios.js";
@@ -83,11 +84,11 @@ export function readPlaythroughVerdict(
   } catch {
     return { found: false };
   }
-  // Two milliseconds of tolerance: Node's utimes path truncates the fractional
-  // second to microseconds, so a file touched in the SAME millisecond the sprint
-  // started reads 0.001 ms older than it and was called stale (Codex 2026-09-11
-  // B#25 — CI coverage job, ~2 of 5 runs).
-  if (mtimeMs + 2 < sinceMs) return { found: false, stale: true };
+  // A fresh file's mtime can read OLDER than the sprint start: it is stamped
+  // from the kernel's coarse clock, which lags `Date.now()` by up to one tick
+  // (Codex 2026-09-11 B#25 — CI coverage job, ~2 of 5 runs, first blamed on
+  // utimes rounding). The shared allowance covers a tick, not a real earlier run.
+  if (writtenBefore(mtimeMs, sinceMs)) return { found: false, stale: true };
   let parsed: VerdictFile;
   // ONE READ. The bytes parsed here are the bytes the receipt is held
   // against: hashing a second read left a window in which the file judged

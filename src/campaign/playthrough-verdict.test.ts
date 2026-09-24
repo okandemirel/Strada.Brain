@@ -4,6 +4,7 @@ import { join, posix, win32 } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYTHROUGH_VERDICT_REL, PLAYER_PLAYTHROUGH_VERDICT_REL, isInsideRoot, isProjectScopedRelativePath } from "./playthrough-verdict.js";
+import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "playthrough-verdict-")); });
@@ -150,8 +151,19 @@ describe("a verdict is evidence, not a claim (Codex 2026-09-11 B#3, B#25)", () =
     const justBefore = new Date(t - 1);
     utimesSync(path, justBefore, justBefore);
     expect(readPlaythroughVerdict(root, t)).toMatchObject({ found: true, ok: true });
-    // Ten milliseconds is not truncation: that verdict predates the sprint.
-    expect(readPlaythroughVerdict(root, t + 10)).toMatchObject({ found: false, stale: true });
+    // Past the coarse-clock allowance is not clock lag: that verdict predates the sprint.
+    expect(readPlaythroughVerdict(root, t + FILE_MTIME_TOLERANCE_MS + 10)).toMatchObject({ found: false, stale: true });
+  });
+
+  it("a verdict whose mtime reads one kernel tick before the sprint start is fresh (X-7: Linux coarse mtime)", () => {
+    // The real cause behind B#25: the kernel stamps mtimes from its coarse
+    // clock, a tick behind Date.now(), so a verdict written right after the
+    // sprint began read 0.2-6.2 ms older than it on Linux ext4.
+    const path = write(ok);
+    const t = Date.now();
+    const oneTickEarlier = new Date(t - 10);
+    utimesSync(path, oneTickEarlier, oneTickEarlier);
+    expect(readPlaythroughVerdict(root, t)).toMatchObject({ found: true, ok: true });
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
+import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -1583,6 +1584,11 @@ describe("CampaignManager", () => {
     const verdictPath = writePlaythroughVerdict(true);
     const earned = new Date(firstAttemptStart + 1);
     utimesSync(verdictPath, earned, earned);
+    // A real bounce comes minutes after the verdict (a player build and run);
+    // here it can come within the file-clock allowance, which would read the
+    // old verdict as a tick-late fresh one. Let the clock pass the allowance.
+    const pastAllowance = earned.getTime() + FILE_MTIME_TOLERANCE_MS + 10 - Date.now();
+    if (pastAllowance > 0) await new Promise((r) => setTimeout(r, pastAllowance));
     const green = { testsGreen: true, detail: "PlayMode verification passed: 42 of 42 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     // The player run fails, so the sprint bounces with the verdict still on disk.
@@ -9096,6 +9102,12 @@ describe("CampaignManager", () => {
       const campaign = await runLadderToDelivery();
       // Bounce 1: no verdict at all (compiles) — the sprint ran no suite.
       runRecordOnSettle = undefined;
+      // Sprint B's record is still on disk, written milliseconds before this
+      // sprint began: inside the file-clock allowance, where it would pass as
+      // this sprint's. A real previous sprint's record is minutes old; say so.
+      const sprintBRecord = join(projectRoot, "Recordings", "tests", "playmode-last.json");
+      const sprintBTime = new Date(Date.now() - 60_000);
+      if (existsSync(sprintBRecord)) utimesSync(sprintBRecord, sprintBTime, sprintBTime);
       tasks.emit("task:completed", "task_3", "done, trust me");
       await waitFor(() => expect(tasks.submitted).toHaveLength(4));
       expect(tasks.submitted[3]!.prompt).toContain("no test run was observed");
