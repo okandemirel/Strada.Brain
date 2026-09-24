@@ -7,7 +7,7 @@ import { sanitizeToolResult } from "./orchestrator-runtime-utils.js";
 
 /** Minimal interface for TaskPlanner methods used by tracking. */
 interface TaskPlannerLike {
-  trackToolCall(name: string, isError: boolean): void;
+  trackToolCall(name: string, isError: boolean, input?: Record<string, unknown>, output?: string): void;
   recordError(summary: string): void;
 }
 
@@ -174,7 +174,8 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       });
     }
 
-    taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+    // Input and output let the planner expand a batch into the writes it made.
+    taskPlanner.trackToolCall(tc.name, tr.isError ?? false, tc.input, tr.content);
     selfVerification.track(tc.name, tc.input, tr);
     if (delegatedWorkerResult) {
       selfVerification.ingestWorkerResult(delegatedWorkerResult);

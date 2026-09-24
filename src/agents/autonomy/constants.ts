@@ -18,12 +18,17 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   // hasCompilableChanges=false, so the build gate never armed and the run
   // approved with zero build evidence.
   "file_create",
+  // Deleting a folder of scripts changes what compiles as surely as editing
+  // one; it was missing, so the build gate never armed (audited 2026-09-24).
+  "file_delete_directory",
   "shell_exec",
   "strada_create_module", "strada_create_component",
   "strada_create_mediator", "strada_create_system",
   // The deterministic writers of 2026-09-07: each changes the project.
   "unity_bind_sprite", "unity_place_prefab",
   "unity_generate_sprite", "unity_generate_mesh", "unity_generate_audio",
+  // Writes a scene and the assets its spec names.
+  "unity_scene_build",
 ]);
 
 /**
@@ -67,6 +72,17 @@ export const COMPILABLE_EXT: ReadonlySet<string> = new Set([
  */
 export function extractFilePath(input: Record<string, unknown>): string {
   return String(input["path"] ?? input["file"] ?? input["name"] ?? "");
+}
+
+/**
+ * Every file path a tool's input names: both ends of a rename as well as the
+ * usual single path. file_rename takes old_path/new_path, so a renamed
+ * script (a MonoBehaviour whose file no longer matches its class) was
+ * invisible to the compile gate (audited 2026-09-24).
+ */
+export function extractFilePaths(input: Record<string, unknown>): string[] {
+  const paths = [extractFilePath(input), input["old_path"], input["new_path"]];
+  return paths.filter((p): p is string => typeof p === "string" && p !== "");
 }
 
 export function isVerificationToolName(toolName: string): boolean {

@@ -2,6 +2,7 @@ import type { AgentState } from "../agent-state.js";
 import type { VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
+import { PROGRESS_MUTATION_TOOLS } from "./constants.js";
 
 export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
@@ -60,15 +61,14 @@ const INSPECTION_TOOL_NAMES = new Set([
   "strada_analyze_project",
 ]);
 
-export const MUTATION_TOOL_NAMES = new Set([
-  "file_write",
-  "file_edit",
-  "file_manage",
-  "strada_create_system",
-  "strada_create_component",
-  "strada_create_mediator",
-  "strada_create_module",
-]);
+/**
+ * Steps that count as work done. Derived from the shared mutation set (minus
+ * shell_exec, whose `git status` is not work): a private copy listed seven
+ * tools, so a run whose work landed through file_create, unity_bind_sprite or
+ * unity_scene_build was accused of NO WORK EVIDENCE and then told to replan
+ * (audited 2026-09-24).
+ */
+export const MUTATION_TOOL_NAMES: ReadonlySet<string> = new Set([...PROGRESS_MUTATION_TOOLS, "file_manage"]);
 
 const USER_DEFLECTION_RE =
   /\b(?:what should i do|what do you want me to do|do you want me to|would you like me to|should i\b|which direction|which path|want me to start on|next steps? available|ready for whichever direction|ready for whatever direction|ister misin|ne yapmalıyım|ne yapayım|ekran görüntüsü|screenshot)\b/iu;

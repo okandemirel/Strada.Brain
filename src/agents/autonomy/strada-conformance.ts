@@ -135,7 +135,7 @@ function moduleDir(projectPath: string, moduleRoot: string): string {
 }
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { assessFrameworkBypass, assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
-import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
+import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePaths } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
 
@@ -639,8 +639,10 @@ export class StradaConformanceGuard {
         continue;
       }
 
-      if (!executedTool.isError && MUTATION_TOOLS.has(executedTool.toolName)) {
-        const filePath = extractFilePath(executedTool.input);
+      // Both ends of a rename are this run's work.
+      for (const filePath of !executedTool.isError && MUTATION_TOOLS.has(executedTool.toolName)
+        ? extractFilePaths(executedTool.input)
+        : []) {
         if (filePath && isInsideAssets(filePath) && isArtSourceFile(filePath)) {
           this.authoredArtFiles.add(filePath.replace(/\\/g, "/"));
           logGuardWrite(executedTool.toolName, filePath);

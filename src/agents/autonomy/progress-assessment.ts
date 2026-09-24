@@ -1,6 +1,6 @@
 import type { AgentState } from "../agent-state.js";
 import { extractPromptTargets as extractPromptTargetsHelper } from "../prompt-targets.js";
-import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
+import { PROGRESS_MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 // ---------------------------------------------------------------------------
@@ -61,8 +61,11 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
   let inspectionStepCount = 0;
   let verificationStepCount = 0;
 
+  // PROGRESS mutations: shell_exec may write, but a loop of `ls`/`grep`/`cat`
+  // through it counted as edits, so the stuck rule could never fire and the
+  // veto below always found a "recent mutation" (audited 2026-09-24).
   for (const step of state.stepResults) {
-    if (MUTATION_TOOLS.has(step.toolName)) {
+    if (PROGRESS_MUTATION_TOOLS.has(step.toolName)) {
       mutationStepCount++;
     } else if (isVerificationToolName(step.toolName)) {
       verificationStepCount++;
@@ -76,7 +79,7 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
   let lastMutationTs: number | null = null;
   for (let i = state.stepResults.length - 1; i >= 0; i--) {
     const step = state.stepResults[i];
-    if (step && MUTATION_TOOLS.has(step.toolName)) {
+    if (step && PROGRESS_MUTATION_TOOLS.has(step.toolName)) {
       lastMutationTs = step.timestamp;
       break;
     }
@@ -174,7 +177,7 @@ export function stuckVerdictContradictedBy(
   stepResults: ReadonlyArray<{ toolName: string; success: boolean }>,
 ): string | undefined {
   const recent = stepResults.slice(-RECENT_MUTATION_STEPS);
-  const edited = recent.filter((s) => s.success && MUTATION_TOOLS.has(s.toolName));
+  const edited = recent.filter((s) => s.success && PROGRESS_MUTATION_TOOLS.has(s.toolName));
   if (edited.length > 0) {
     return `${edited.length} successful mutation(s) in the last ${recent.length} steps (${edited.map((s) => s.toolName).join(", ")})`;
   }

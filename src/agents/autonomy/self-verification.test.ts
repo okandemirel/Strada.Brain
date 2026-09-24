@@ -228,7 +228,11 @@ describe("SelfVerification", () => {
 
       expect(verifier.needsVerification()).toBe(true);
       expect(verifier.getState().lastBuildOk).toBeNull();
-      expect(verifier.getState().pendingFiles.size).toBe(5);
+      // Every written file is still pending. (A `cp` of a script is itself a
+      // change and adds its own paths, so the count is not pinned at five.)
+      for (let i = 0; i < 5; i++) {
+        expect(verifier.getState().pendingFiles.has(`Assets/Scripts/Thing${i}.cs`)).toBe(true);
+      }
     });
 
     it.each([

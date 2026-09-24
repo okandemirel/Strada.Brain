@@ -12,7 +12,7 @@
 
 import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
-import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath, isVerificationToolName } from "./constants.js";
+import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePaths, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { lexShell, type ShellOperator } from "../../security/shell-lexer.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
@@ -319,12 +319,10 @@ export class SelfVerification {
     for (const executedTool of expandExecutedToolCalls(toolName, input, result)) {
       // Track mutations — O(1) set add + extension check
       if (MUTATION_TOOLS.has(executedTool.toolName)) {
-        const file = extractFilePath(executedTool.input);
-        if (file) {
+        for (const file of mutatedFiles(executedTool.toolName, executedTool.input)) {
           this.pendingFiles.add(file);
           this.touchedFiles.add(file);
-          const dotIdx = file.lastIndexOf(".");
-          if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
+          if (affectsCompilation(executedTool.toolName, file)) {
             this.hasCompilableChanges = true;
             // A clean compile describes the tree it compiled, not this one.
             // Audited 2026-09-02: lastBuildOk stayed `true` across later edits,
@@ -720,6 +718,47 @@ function isVerificationTool(toolName: string, input: Record<string, unknown>): b
 
   const command = typeof input["command"] === "string" ? input["command"].trim() : "";
   return command.length > 0 && shellCommandVerifies(command);
+}
+
+const hasCompilableExt = (file: string): boolean => {
+  const dotIdx = file.lastIndexOf(".");
+  return dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx));
+};
+
+/** Programs that write the files named on their command line. */
+const SHELL_WRITERS = new Set(["mv", "cp", "rm", "touch", "tee", "sed", "perl", "truncate", "install", "ln"]);
+
+/**
+ * The files a mutation touched. For shell_exec, the compilable files a
+ * writing command names (`sed -i … Player.cs`, `mv A.cs B.cs`, `> X.cs`):
+ * the command has no path field, so a shell edit of a script left the build
+ * gate unarmed (audited 2026-09-24). A read (`cat X.cs`) names none.
+ */
+function mutatedFiles(toolName: string, input: Record<string, unknown>): string[] {
+  if (toolName !== "shell_exec") return extractFilePaths(input);
+  const command = typeof input["command"] === "string" ? input["command"] : "";
+  const read = lexShell(command);
+  const named = new Set(read.redirectTargets.filter(hasCompilableExt));
+  for (const words of read.commands) {
+    let at = 0;
+    while (at < words.length && /^[A-Za-z_]\w*=/u.test(words[at]!.value)) at += 1;
+    const program = (words[at]?.value ?? "").split(/[/\\]/u).pop() ?? "";
+    if (!SHELL_WRITERS.has(program)) continue;
+    const args = words.slice(at + 1).map((word) => word.value);
+    // sed and perl only write in place.
+    if ((program === "sed" || program === "perl") && !args.some((a) => /^-[A-Za-z]*i|^--in-place/u.test(a))) continue;
+    for (const arg of args) if (hasCompilableExt(arg)) named.add(arg);
+  }
+  return [...named];
+}
+
+/**
+ * Does this change reach the compiler? A deleted directory under Assets/ or
+ * Packages/ took its scripts with it, extension or not.
+ */
+function affectsCompilation(toolName: string, file: string): boolean {
+  if (hasCompilableExt(file)) return true;
+  return toolName === "file_delete_directory" && /(^|[/\\])(?:Assets|Packages)(?:[/\\]|$)/u.test(file);
 }
 
 /** A path that holds tests rather than the code under test. */
