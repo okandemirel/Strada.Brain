@@ -62,18 +62,40 @@ class ConcurrencySemaphore {
     }
   }
 
-  async acquire(): Promise<void> {
+  /**
+   * Wait for a permit. An abort while queued leaves the queue and rejects with
+   * the signal's reason: a cancelled task must not sit in line behind a stuck
+   * permit until some other call happens to release one.
+   */
+  async acquire(signal?: AbortSignal): Promise<void> {
     if (this.running < this.limit) {
       this.running++;
       return;
     }
+    if (signal?.aborted) throw abortReason(signal);
     // Observability only: pacing kicked in for THIS provider. <= cap = instant acquire
     // above (zero added latency); this logs only when the excess is being queued.
     getLogger().debug(`${this.name} HTTP call queued (per-provider concurrency cap reached)`, {
       provider: this.name,
       cap: this.limit,
     });
-    await new Promise<void>((resolve) => this.queue.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      if (!signal) {
+        this.queue.push(resolve);
+        return;
+      }
+      const onAbort = (): void => {
+        const index = this.queue.indexOf(waiter);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(abortReason(signal));
+      };
+      const waiter = (): void => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      this.queue.push(waiter);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
     this.running++;
   }
 
@@ -86,6 +108,11 @@ class ConcurrencySemaphore {
       this.queue.shift()!();
     }
   }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new DOMException("This operation was aborted", "AbortError");
 }
 
 function getProviderSemaphore(name: string): ConcurrencySemaphore {
@@ -432,7 +459,8 @@ export async function fetchWithRetry(
   const semaphore = getProviderSemaphore(callerName);
 
   const queuedAt = Date.now();
-  await semaphore.acquire();
+  // Callers pass their signal in either place (see runFetchLoop's abort check).
+  await semaphore.acquire(opts.signal ?? init.signal ?? undefined);
   const queuedMs = Date.now() - queuedAt;
   if (queuedMs > 1_000) {
     // Time spent waiting for a per-provider permit is OUR pacing, not the
@@ -472,17 +500,45 @@ export async function fetchWithRetry(
 }
 
 /**
- * Wrap response.body so the per-provider permit is released exactly once, when the
- * stream is fully read, cancelled, or errors. Lets a streaming caller hold the permit
- * for the connection's whole lifetime without leaking it.
+ * Safety net for a body its caller walked away from. A stream consumer that
+ * exits early through `finally { reader.releaseLock() }` (a throwing chunk
+ * handler, say) neither reads to the end nor cancels, so none of the release
+ * paths below ever ran and the provider's permit was gone for the life of the
+ * process: at the default cap of 3, three such exits and every later call to
+ * that provider queued forever. Once the wrapped body is unreachable, give the
+ * permit back and cancel the upstream body so its connection is freed too.
  */
-function attachReleaseOnBodyClose(response: Response, release: () => void): Response {
+interface AbandonedBody {
+  release: () => void;
+  upstream: ReadableStreamDefaultReader<Uint8Array>;
+}
+const abandonedBodies = new FinalizationRegistry<AbandonedBody>((held) => {
+  held.release();
+  held.upstream.cancel().catch(() => {
+    // Already closed or errored upstream: nothing is left to free.
+  });
+});
+
+/**
+ * Wrap response.body so the per-provider permit is released exactly once, when the
+ * stream is fully read, cancelled, errors, or is abandoned (collected unread). Lets
+ * a streaming caller hold the permit for the connection's whole lifetime without
+ * leaking it.
+ */
+function attachReleaseOnBodyClose(response: Response, releasePermit: () => void): Response {
   const original = response.body;
   if (!original) {
-    release();
+    releasePermit();
     return response;
   }
   const reader = original.getReader();
+  // The registry's held value must not reach the wrapped stream, or the stream
+  // could never be collected: it carries only the permit release and upstream.
+  const unregisterToken = {};
+  const release = (): void => {
+    abandonedBodies.unregister(unregisterToken);
+    releasePermit();
+  };
   // A ReadableStream that proxies the original body and releases the permit exactly
   // once — when the stream ends (close), errors, or is cancelled by the caller. This
   // covers BOTH the non-streaming path (.json() reads to close) and the streaming path
@@ -507,6 +563,7 @@ function attachReleaseOnBodyClose(response: Response, release: () => void): Resp
       return reader.cancel(reason);
     },
   });
+  abandonedBodies.register(monitored, { release: releasePermit, upstream: reader }, unregisterToken);
   // Re-wrap so downstream sees a normal Response whose body releases the permit on
   // completion. Headers/status/statusText are preserved.
   return new Response(monitored, {

@@ -726,3 +726,99 @@ describe("fetchWithRetry — a short Retry-After does not hide a long body-carri
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+// A stream consumer that leaves early through `finally { reader.releaseLock() }`
+// neither reads to EOF nor cancels. The permit was released only on those two
+// events, so it never came back and, at the cap, every later call to the
+// provider queued forever — and a queued call could not even be cancelled.
+describe("fetchWithRetry — a permit is not lost to an abandoned stream", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    __resetProviderConcurrency();
+    configureProviderConcurrency(1);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetProviderConcurrency();
+  });
+
+  /** An endless SSE-like body: every pull yields another chunk. */
+  function endlessResponse(): Response {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("data: {}\n\n"));
+      },
+    });
+    return new Response(body, { status: 200 });
+  }
+
+  /** Read one chunk, then leave the way a throwing frame handler does. */
+  async function readOneChunkThenBail(): Promise<void> {
+    const response = await fetchWithRetry("https://example.com/stream", { method: "POST" }, { callerName: "ProviderLeak" });
+    const reader = response.body!.getReader();
+    try {
+      await reader.read();
+      throw new Error("frame handler threw");
+    } catch {
+      // swallowed by the consumer
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  it("gives the permit back once the abandoned body is collected", async () => {
+    const { setFlagsFromString } = await import("node:v8");
+    const { runInNewContext } = await import("node:vm");
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+
+    fetchSpy.mockImplementation(() => Promise.resolve(endlessResponse()));
+    await readOneChunkThenBail();
+
+    let admitted = false;
+    const second = fetchWithRetry("https://example.com/stream", { method: "POST" }, { callerName: "ProviderLeak" }).then(
+      (r) => {
+        admitted = true;
+        return r;
+      },
+    );
+    for (let i = 0; i < 100 && !admitted; i++) {
+      gc();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(admitted, "the second call is still queued behind the abandoned stream's permit").toBe(true);
+    await (await second).body?.cancel();
+  });
+
+  it("lets a queued call leave the queue when its signal aborts", async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(endlessResponse()));
+    const holder = await fetchWithRetry("https://example.com/stream", { method: "POST" }, { callerName: "ProviderQueue" });
+
+    const controller = new AbortController();
+    const queued = fetchWithRetry(
+      "https://example.com/stream",
+      { method: "POST", signal: controller.signal },
+      { callerName: "ProviderQueue" },
+    );
+    const outcome = queued.then(
+      () => "admitted",
+      (e: unknown) => (e instanceof Error ? e.name : String(e)),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    const settled = await Promise.race([outcome, new Promise((r) => setTimeout(() => r("still queued"), 500))]);
+    expect(settled).toBe("AbortError");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // The aborted waiter left no phantom claim: the next call gets the permit
+    // as soon as the holder lets go.
+    await holder.body?.cancel();
+    const next = await fetchWithRetry("https://example.com/stream", { method: "POST" }, { callerName: "ProviderQueue" });
+    expect(next.ok).toBe(true);
+    await next.body?.cancel();
+  });
+});
