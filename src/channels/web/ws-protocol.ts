@@ -17,6 +17,47 @@ export const WS_CLOSE_SESSION_TAKEN_REASON = "session_taken";
 /** Close code the server uses for a rate-limited (policy-violating) socket. */
 export const WS_CLOSE_POLICY_VIOLATION = 1008;
 
+const MIB = 1024 * 1024;
+
+/**
+ * Largest frame the server accepts (the `ws` server's `maxPayload`). A bigger
+ * frame is not refused politely: the socket is closed with 1009.
+ */
+export const WS_MAX_PAYLOAD_BYTES = 25 * MIB;
+
+/** Room kept in a chat frame for the text, the file names and the JSON around them. */
+const CHAT_FRAME_RESERVE_BYTES = 1 * MIB;
+
+/**
+ * Raw bytes all attachments of one message may add up to. They travel base64
+ * encoded (4 bytes per 3) inside ONE frame, so this, not the per-type caps
+ * below, is what bounds a large photo or video (18 MiB).
+ */
+export const MAX_ATTACHMENT_BYTES_PER_MESSAGE =
+  Math.floor((WS_MAX_PAYLOAD_BYTES - CHAT_FRAME_RESERVE_BYTES) / 4) * 3;
+
+export const MAX_ATTACHMENTS_PER_MESSAGE = 5;
+
+/**
+ * The per-type caps of the server's media gate (src/utils/media-processor.ts
+ * MAX_*_SIZE; a web channel test keeps the two equal).
+ */
+export const MEDIA_SIZE_LIMITS = {
+  image: 20 * MIB,
+  video: 50 * MIB,
+  audio: 25 * MIB,
+  document: 10 * MIB,
+} as const;
+
+/** The largest single attachment of this MIME type the web chat can deliver. */
+export function maxAttachmentBytes(mimeType: string): number {
+  const cap = mimeType.startsWith("image/") ? MEDIA_SIZE_LIMITS.image
+    : mimeType.startsWith("video/") ? MEDIA_SIZE_LIMITS.video
+    : mimeType.startsWith("audio/") ? MEDIA_SIZE_LIMITS.audio
+    : MEDIA_SIZE_LIMITS.document;
+  return Math.min(cap, MAX_ATTACHMENT_BYTES_PER_MESSAGE);
+}
+
 /**
  * A `stream_update` frame carries EITHER `delta` (append to what the client
  * shows) OR `text` (replace it). Streams are not always append-only: a live

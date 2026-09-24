@@ -31,6 +31,7 @@ import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CLOSE_SESSION_TAKEN,
   WS_CLOSE_SESSION_TAKEN_REASON,
+  WS_MAX_PAYLOAD_BYTES,
   nextStreamUpdate,
 } from "./ws-protocol.js";
 import { detectCommand } from "../../tasks/command-detector.js";
@@ -494,15 +495,16 @@ export class WebChannel
       });
     });
 
-    // maxPayload: 25 MiB accommodates the 20 MB media validation limit with
-    // room for base64 overhead (~33% inflation).
+    // maxPayload: shared with the portal (ws-protocol.ts), which keeps a
+    // message's base64 attachments inside it instead of having the socket
+    // closed with 1009 (WEB-3).
     // verifyClient: reject WebSocket connections whose Origin header is not
     // THIS portal's own origin, blocking cross-origin WebSocket hijacking from a
     // malicious page open in the same browser — including one served by another
     // process on another loopback port (audit 13F6 / plan 4.8).
     this.wss = new WebSocketServer({
       server: this.server,
-      maxPayload: 25 * 1024 * 1024,
+      maxPayload: WS_MAX_PAYLOAD_BYTES,
       verifyClient: ({ req }: { req: HttpReq }) => this.acceptsHost(req) && this.acceptsWsOrigin(req),
     });
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
@@ -2092,9 +2094,11 @@ export class WebChannel
               : mimeType.startsWith("audio/") ? "audio" : "file";
             const validation = validateMediaAttachment({ mimeType, size, type: attachType });
             if (!validation.valid) {
+              // Say which limit it hit ("... exceeds 10MB limit"): the generic
+              // "unsupported format" was wrong for a file that is only too big.
               this.sendToClient(chatId, {
                 type: "text",
-                text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
+                text: `File "${raw.name || 'attachment'}" was rejected: ${validation.reason ?? "unsupported format or invalid content"}.`,
                 messageId: randomUUID(),
               });
               continue;

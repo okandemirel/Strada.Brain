@@ -53,6 +53,7 @@
   "chat.fileRejected.docx": "{{name}}: Word belgeleri (.docx) web sohbetinde henüz kabul edilmiyor — önce PDF veya TXT olarak dışa aktarın.",
   "chat.fileRejected.type": "{{name}}: desteklenmeyen dosya türü ({{type}}). Kabul edilenler: görsel, video, ses, PDF, TXT, CSV.",
   "chat.fileRejected.size": "{{name}}: {{max}} MB sınırından büyük.",
+  "chat.fileRejected.total": "{{name}}: bir mesajdaki dosyaların toplamı en fazla {{max}} MB olabilir.",
   "chat.fileRejected.limit": "{{name}}: mesaj başına en fazla {{max}} dosya.",
   "chat.fileRejectedDismiss": "Kapat",
   "chat.voiceMessage": "(sesli mesaj)",

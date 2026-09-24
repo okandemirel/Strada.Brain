@@ -6,6 +6,11 @@ import VoiceRecorder from './VoiceRecorder'
 import { ShimmerButton } from './ui/shimmer-button'
 import { CoolMode } from './ui/cool-mode'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BYTES_PER_MESSAGE,
+  maxAttachmentBytes,
+} from '../../../src/channels/web/ws-protocol.ts'
 
 const SLASH_COMMANDS = [
   // Core task commands
@@ -60,8 +65,8 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024
-const MAX_FILES = 5
+const MAX_FILES = MAX_ATTACHMENTS_PER_MESSAGE
+const toMegabytes = (bytes: number) => Math.floor(bytes / (1024 * 1024))
 // Mirrors the server's ingest gate (src/utils/media-processor.ts
 // ALLOWED_*_TYPES): anything else is refused there with no reply to the chat,
 // so it is refused HERE with a reason the user can read (D37).
@@ -79,16 +84,21 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
 type FileRejection =
   | { kind: 'docx'; name: string }
   | { kind: 'type'; name: string; type: string }
-  | { kind: 'size'; name: string }
+  | { kind: 'size'; name: string; maxBytes: number }
+  | { kind: 'total'; name: string }
   | { kind: 'limit'; name: string }
 
 /** Why each file in `incoming` may not be attached; accepted files are returned in order. */
 function partitionIncomingFiles(
   incoming: File[],
-  alreadyAttached: number,
+  alreadyAttached: File[],
 ): { accepted: File[]; rejected: FileRejection[] } {
   const accepted: File[] = []
   const rejected: FileRejection[] = []
+  // All attachments travel base64 encoded in ONE WebSocket frame: past the
+  // server's maxPayload the socket is closed and the message is lost, so the
+  // per-type caps are not enough on their own (WEB-3).
+  let totalBytes = alreadyAttached.reduce((sum, f) => sum + f.size, 0)
   for (const f of incoming) {
     if (f.type === DOCX_MIME || /\.docx$/i.test(f.name)) {
       rejected.push({ kind: 'docx', name: f.name })
@@ -96,11 +106,14 @@ function partitionIncomingFiles(
       // An empty MIME used to be admitted here and then dropped by the server
       // ("Missing MIME type") without a word.
       rejected.push({ kind: 'type', name: f.name, type: f.type || 'unknown' })
-    } else if (f.size > MAX_FILE_SIZE) {
-      rejected.push({ kind: 'size', name: f.name })
-    } else if (alreadyAttached + accepted.length >= MAX_FILES) {
+    } else if (f.size > maxAttachmentBytes(f.type)) {
+      rejected.push({ kind: 'size', name: f.name, maxBytes: maxAttachmentBytes(f.type) })
+    } else if (alreadyAttached.length + accepted.length >= MAX_FILES) {
       rejected.push({ kind: 'limit', name: f.name })
+    } else if (totalBytes + f.size > MAX_ATTACHMENT_BYTES_PER_MESSAGE) {
+      rejected.push({ kind: 'total', name: f.name })
     } else {
+      totalBytes += f.size
       accepted.push(f)
     }
   }
@@ -149,7 +162,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, [])
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
-    const { accepted, rejected } = partitionIncomingFiles(Array.from(newFiles), filesRef.current.length)
+    const { accepted, rejected } = partitionIncomingFiles(Array.from(newFiles), filesRef.current.map((f) => f.file))
     setRejections(rejected)
     if (accepted.length === 0) return
     const previews: FilePreview[] = accepted.map((file) => ({
@@ -164,7 +177,8 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     switch (r.kind) {
       case 'docx': return t('chat.fileRejected.docx', { name: r.name })
       case 'type': return t('chat.fileRejected.type', { name: r.name, type: r.type })
-      case 'size': return t('chat.fileRejected.size', { name: r.name, max: MAX_FILE_SIZE / (1024 * 1024) })
+      case 'size': return t('chat.fileRejected.size', { name: r.name, max: toMegabytes(r.maxBytes) })
+      case 'total': return t('chat.fileRejected.total', { name: r.name, max: toMegabytes(MAX_ATTACHMENT_BYTES_PER_MESSAGE) })
       case 'limit': return t('chat.fileRejected.limit', { name: r.name, max: MAX_FILES })
     }
   }, [t])

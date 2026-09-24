@@ -79,15 +79,44 @@ describe('ChatInput', () => {
     const noMime = new File(['x'], 'notes.md', { type: '' })
     const huge = new File(['x'], 'capture.mp4', { type: 'video/mp4' })
     Object.defineProperty(huge, 'size', { value: 21 * 1024 * 1024 })
+    // WEB-3: a video's own cap is 50 MB, but one message's base64 frame can
+    // only carry 18 MB of files (this said "20 MB", which the frame could not).
     fireEvent.drop(dropZone, { dataTransfer: { files: [docx, noMime, huge] } })
 
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('GDD.docx: Word documents (.docx) are not accepted')
     expect(alert).toHaveTextContent('notes.md: unsupported file type (unknown)')
-    expect(alert).toHaveTextContent('capture.mp4: larger than the 20 MB limit')
+    expect(alert).toHaveTextContent('capture.mp4: larger than the 18 MB limit')
     // None of them became an attachment.
     expect(screen.queryByText('GDD.docx')).toBeNull()
     expect(screen.queryByText('capture.mp4')).toBeNull()
+  })
+
+  // WEB-3: two 10 MB photos are about 26.7 MB of base64 in one frame, past the
+  // server's 25 MiB maxPayload: the socket was closed and the message lost.
+  it('refuses a file that would push one message past what its frame can carry', () => {
+    render(<ChatInput onSend={onSend} disabled={false} />)
+    const dropZone = screen.getByPlaceholderText(/Send a message/).closest('div[class*="flex flex-col"]')!
+    const photos = ['a.png', 'b.png'].map((name) => {
+      const file = new File(['x'], name, { type: 'image/png' })
+      Object.defineProperty(file, 'size', { value: 10 * 1024 * 1024 })
+      return file
+    })
+    fireEvent.drop(dropZone, { dataTransfer: { files: [photos[0]] } })
+    fireEvent.drop(dropZone, { dataTransfer: { files: [photos[1]] } })
+    expect(screen.getByRole('alert')).toHaveTextContent('b.png: the files of one message may add up to 18 MB at most')
+    expect(screen.getByText('a.png')).toBeInTheDocument()
+    expect(screen.queryByText('b.png')).toBeNull()
+  })
+
+  it('refuses a document over the server\'s 10 MB document cap with that limit', () => {
+    render(<ChatInput onSend={onSend} disabled={false} />)
+    const dropZone = screen.getByPlaceholderText(/Send a message/).closest('div[class*="flex flex-col"]')!
+    const pdf = new File(['%PDF'], 'spec.pdf', { type: 'application/pdf' })
+    Object.defineProperty(pdf, 'size', { value: 12 * 1024 * 1024 })
+    fireEvent.drop(dropZone, { dataTransfer: { files: [pdf] } })
+    expect(screen.getByRole('alert')).toHaveTextContent('spec.pdf: larger than the 10 MB limit')
+    expect(screen.queryByText('spec.pdf')).toBeNull()
   })
 
   it('names the file that exceeded the per-message limit (D37)', () => {

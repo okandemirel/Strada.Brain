@@ -53,6 +53,7 @@
   "chat.fileRejected.docx": "{{name}}: Word documents (.docx) are not accepted by the web chat yet — export it as PDF or TXT first.",
   "chat.fileRejected.type": "{{name}}: unsupported file type ({{type}}). Accepted: images, video, audio, PDF, TXT, CSV.",
   "chat.fileRejected.size": "{{name}}: larger than the {{max}} MB limit.",
+  "chat.fileRejected.total": "{{name}}: the files of one message may add up to {{max}} MB at most.",
   "chat.fileRejected.limit": "{{name}}: at most {{max}} files per message.",
   "chat.fileRejectedDismiss": "Dismiss",
   "chat.voiceMessage": "(voice message)",

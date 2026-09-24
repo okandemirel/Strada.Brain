@@ -5,7 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
-import { applyStreamUpdate } from "./ws-protocol.js";
+import {
+  MAX_ATTACHMENT_BYTES_PER_MESSAGE,
+  MEDIA_SIZE_LIMITS,
+  WS_MAX_PAYLOAD_BYTES,
+  applyStreamUpdate,
+} from "./ws-protocol.js";
+import {
+  MAX_AUDIO_SIZE,
+  MAX_DOCUMENT_SIZE,
+  MAX_IMAGE_SIZE,
+  MAX_VIDEO_SIZE,
+} from "../../utils/media-processor.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 import { TypedEventBus } from "../../core/event-bus.js";
 import { createMonitorBridge } from "../../dashboard/monitor-bridge.js";
@@ -1476,9 +1487,11 @@ describe("WebChannel inbound message limits", () => {
           type: "message_received",
           clientMessageId: "client-msg-voice",
         }),
+        // WEB-3: the gate's own reason, not the generic "unsupported format
+        // or invalid content" every media-gate refusal used to get.
         expect.objectContaining({
           type: "text",
-          text: 'File "voice.wma" was rejected: unsupported format or invalid content.',
+          text: 'File "voice.wma" was rejected: Unsupported media type: audio/x-ms-wma.',
         }),
       ]),
     );
@@ -3818,5 +3831,49 @@ describe("WebChannel streamed updates: replace vs append (WEB-2)", () => {
     // The reconnected client kept "Step 1" from before; the update replaces it.
     const update = second.getSentMessages().find((m) => m.type === "stream_update");
     expect(applyStreamUpdate("Step 1", update!)).toBe("Step 1, step 2, step 3");
+  });
+});
+
+// WEB-3: the portal admitted files the WebSocket frame cannot carry (the
+// socket was closed with 1009 and the message silently became "Not
+// delivered"), and a file refused only for its size was reported as an
+// "unsupported format".
+describe("WebChannel attachment limits shared with the portal (WEB-3)", () => {
+  it("keeps the portal's per-type caps equal to the server's media gate (drift guard)", () => {
+    expect(MEDIA_SIZE_LIMITS).toEqual({
+      image: MAX_IMAGE_SIZE,
+      video: MAX_VIDEO_SIZE,
+      audio: MAX_AUDIO_SIZE,
+      document: MAX_DOCUMENT_SIZE,
+    });
+  });
+
+  it("fits a message's whole attachment budget, base64 encoded, in one frame", () => {
+    const encoded = Math.ceil(MAX_ATTACHMENT_BYTES_PER_MESSAGE / 3) * 4;
+    expect(encoded).toBeLessThan(WS_MAX_PAYLOAD_BYTES);
+    // Leaves at least a megabyte for the text and the JSON around it.
+    expect(WS_MAX_PAYLOAD_BYTES - encoded).toBeGreaterThanOrEqual(1024 * 1024);
+  });
+
+  it("names the size limit a too-large document hit", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    channel.onMessage(vi.fn().mockResolvedValue(undefined));
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    const pdf = Buffer.alloc(12 * 1024 * 1024, 0x20);
+    pdf.write("%PDF-1.7", 0, "latin1");
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "message",
+      clientMessageId: "client-msg-big-pdf",
+      text: "spec",
+      attachments: [{ name: "spec.pdf", type: "application/pdf", data: pdf.toString("base64") }],
+    })));
+    await Promise.resolve();
+
+    expect(socket.getSentMessages()).toContainEqual(expect.objectContaining({
+      type: "text",
+      text: 'File "spec.pdf" was rejected: File size 12MB exceeds 10MB limit.',
+    }));
   });
 });

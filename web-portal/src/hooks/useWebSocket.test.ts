@@ -686,3 +686,25 @@ describe('useWebSocket stream updates (WEB-2)', () => {
     expect(streamText()).toBe('Phase: editing. Running tests.')
   })
 })
+
+// WEB-3: a frame over the server's maxPayload gets the socket closed (1009);
+// the message was then counted as sent and silently became "Not delivered".
+describe('useWebSocket oversized frames (WEB-3)', () => {
+  beforeEach(installTestEnvironment)
+  afterEach(restoreTestEnvironment)
+
+  it('marks a message whose frame the server would refuse as failed instead of sending it', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-big', reconnectToken: 'r', profileId: 'p' })
+    })
+    const data = 'A'.repeat(26 * 1024 * 1024)
+    act(() => {
+      result.current.sendMessage('two photos', [{ name: 'a.png', type: 'image/png', data, size: 19 * 1024 * 1024 }])
+    })
+    expect(socket.sent.map((s) => JSON.parse(s).type)).not.toContain('message')
+    expect(useSessionStore.getState().messages.at(-1)?.deliveryState).toBe('failed')
+  })
+})

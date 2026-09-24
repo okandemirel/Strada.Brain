@@ -13,6 +13,7 @@ import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-so
 import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CLOSE_SESSION_TAKEN,
+  WS_MAX_PAYLOAD_BYTES,
   applyStreamUpdate,
 } from '../../../src/channels/web/ws-protocol.ts'
 
@@ -37,6 +38,15 @@ const SESSION_RECLAIM_GRACE_MS = 1500
 
 function generateId(): string {
   return crypto.randomUUID()
+}
+
+/**
+ * Would the server close the socket (1009) instead of reading this frame?
+ * UTF-8 takes at most 3 bytes per UTF-16 unit, so small frames skip the encode.
+ */
+function exceedsMaxPayload(frame: string): boolean {
+  if (frame.length * 3 <= WS_MAX_PAYLOAD_BYTES) return false
+  return new TextEncoder().encode(frame).length > WS_MAX_PAYLOAD_BYTES
 }
 
 function readStoredChatId(): string | null {
@@ -231,7 +241,11 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     try {
-      ws.send(JSON.stringify(entry.payload))
+      const frame = JSON.stringify(entry.payload)
+      // Refuse it here: sent, it would get the socket closed and the message
+      // lost behind an automatic reconnect (WEB-3).
+      if (exceedsMaxPayload(frame)) throw new RangeError('frame exceeds the server maxPayload')
+      ws.send(frame)
       if (entry.clientMessageId) {
         armPendingMessageTimer(entry.clientMessageId)
       }
