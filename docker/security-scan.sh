@@ -39,6 +39,11 @@ check_dependency() {
 
 echo "Checking dependencies..."
 check_dependency docker
+# The vulnerability scan IS this script's verdict: without trivy (and jq to read
+# its report) nothing was scanned, and the script used to say PASSED anyway
+# (OPS-20). Refuse up front instead.
+check_dependency trivy
+check_dependency jq
 
 # =============================================================================
 # BUILD IMAGE
@@ -79,24 +84,20 @@ fi
 
 echo ""
 echo "Running Trivy vulnerability scan..."
-if command -v trivy &> /dev/null; then
-    trivy image \
-        --severity HIGH,CRITICAL \
-        --format table \
-        --output "$OUTPUT_DIR/trivy-$TIMESTAMP.txt" \
-        "$IMAGE_TAG"
-    
-    # JSON output for further processing
-    trivy image \
-        --severity HIGH,CRITICAL \
-        --format json \
-        --output "$OUTPUT_DIR/trivy-$TIMESTAMP.json" \
-        "$IMAGE_TAG"
-    
-    echo -e "${GREEN}Trivy scan completed${NC}"
-else
-    echo -e "${YELLOW}Trivy not installed, skipping vulnerability scan${NC}"
-fi
+trivy image \
+    --severity HIGH,CRITICAL \
+    --format table \
+    --output "$OUTPUT_DIR/trivy-$TIMESTAMP.txt" \
+    "$IMAGE_TAG"
+
+# JSON output for further processing
+trivy image \
+    --severity HIGH,CRITICAL \
+    --format json \
+    --output "$OUTPUT_DIR/trivy-$TIMESTAMP.json" \
+    "$IMAGE_TAG"
+
+echo -e "${GREEN}Trivy scan completed${NC}"
 
 # =============================================================================
 # DOCKERFILE LINTING (HADOLINT)
@@ -171,15 +172,26 @@ CIS Docker Benchmark Checks
 4.10 - Do not store secrets in environment variables
 EOF
 
+# Posture checks, read structurally: the image's configured user (by name or
+# id) and the hardened compose file's settings. The old greps looked for
+# '"User": "1001"' in an image whose USER is `nodejs`, and for "cap_drop: ALL"
+# in a file that writes it as a YAML list, so they could never pass.
+image_user="$(docker inspect -f '{{.Config.User}}' "$IMAGE_TAG" 2>/dev/null || true)"
+runs_non_root() { [[ -n "$image_user" && "$image_user" != "root" && "${image_user%%:*}" != "0" ]]; }
+compose_has() { grep -Eq "^[[:space:]]*$1[[:space:]]*$" docker-compose.security.yml; }
+drops_all_caps() { grep -A3 -E '^[[:space:]]*cap_drop:' docker-compose.security.yml | grep -Eq '^[[:space:]]*-[[:space:]]*ALL[[:space:]]*$'; }
+has_healthcheck() { [[ "$(docker inspect -f '{{if .Config.Healthcheck}}yes{{end}}' "$IMAGE_TAG" 2>/dev/null || true)" == "yes" ]]; }
+pass_fail() { if "$@"; then echo "✅ PASS"; else echo "❌ FAIL"; fi; }
+
 # Verify non-root user
-if docker inspect "$IMAGE_TAG" | grep -q '"User": "1001"'; then
+if runs_non_root; then
     echo "✓ PASS: Container runs as non-root user" >> "$OUTPUT_DIR/cis-checks-$TIMESTAMP.txt"
 else
     echo "✗ FAIL: Container does not run as non-root user" >> "$OUTPUT_DIR/cis-checks-$TIMESTAMP.txt"
 fi
 
 # Verify read-only filesystem capability
-if grep -q "read_only" docker-compose.security.yml; then
+if compose_has 'read_only:[[:space:]]*true'; then
     echo "✓ PASS: Read-only filesystem configured" >> "$OUTPUT_DIR/cis-checks-$TIMESTAMP.txt"
 else
     echo "✗ FAIL: Read-only filesystem not configured" >> "$OUTPUT_DIR/cis-checks-$TIMESTAMP.txt"
@@ -197,10 +209,13 @@ echo "Generating summary report..."
 CRITICAL_VULNS=0
 HIGH_VULNS=0
 
-# Parse Trivy results if available
-if [ -f "$OUTPUT_DIR/trivy-$TIMESTAMP.json" ]; then
-    CRITICAL_VULNS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$OUTPUT_DIR/trivy-$TIMESTAMP.json" 2>/dev/null || echo 0)
-    HIGH_VULNS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$OUTPUT_DIR/trivy-$TIMESTAMP.json" 2>/dev/null || echo 0)
+# Parse Trivy results. A report that is missing or unreadable is a failed scan,
+# never "0 vulnerabilities" (`|| echo 0` used to turn it into a PASS).
+TRIVY_JSON="$OUTPUT_DIR/trivy-$TIMESTAMP.json"
+if ! CRITICAL_VULNS=$(jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$TRIVY_JSON") ||
+   ! HIGH_VULNS=$(jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$TRIVY_JSON"); then
+    echo -e "${RED}❌ Security scan FAILED - could not read the Trivy report ($TRIVY_JSON)${NC}"
+    exit 2
 fi
 
 cat > "$OUTPUT_DIR/summary-$TIMESTAMP.md" << EOF
@@ -221,11 +236,11 @@ cat > "$OUTPUT_DIR/summary-$TIMESTAMP.md" << EOF
 
 | Check | Status |
 |-------|--------|
-| Non-root user | $(docker inspect "$IMAGE_TAG" | grep -q '"User": "1001"' && echo "✅ PASS" || echo "❌ FAIL") |
-| Read-only rootfs | $(grep -q "read_only: true" docker-compose.security.yml && echo "✅ PASS" || echo "❌ FAIL") |
-| No new privileges | $(grep -q "no-new-privileges:true" docker-compose.security.yml && echo "✅ PASS" || echo "❌ FAIL") |
-| Dropped capabilities | $(grep -q "cap_drop: ALL" docker-compose.security.yml && echo "✅ PASS" || echo "❌ FAIL") |
-| Health check | $(docker inspect "$IMAGE_TAG" | grep -q "Healthcheck" && echo "✅ PASS" || echo "❌ FAIL") |
+| Non-root user | $(pass_fail runs_non_root) |
+| Read-only rootfs | $(pass_fail compose_has 'read_only:[[:space:]]*true') |
+| No new privileges | $(pass_fail compose_has '-[[:space:]]*no-new-privileges:true') |
+| Dropped capabilities | $(pass_fail drops_all_caps) |
+| Health check | $(pass_fail has_healthcheck) |
 
 ## Recommendations
 

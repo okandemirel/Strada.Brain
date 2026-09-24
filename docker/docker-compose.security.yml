@@ -98,9 +98,10 @@ services:
   security-scanner:
     image: aquasec/trivy:latest
     container_name: strada-security-scanner
+    # --exit-code 1: a scan that finds HIGH/CRITICAL issues must fail (OPS-20).
     command: [
       "image",
-      "--exit-code", "0",
+      "--exit-code", "1",
       "--severity", "HIGH,CRITICAL",
       "strada-brain:hardened"
     ]
