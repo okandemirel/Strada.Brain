@@ -9,6 +9,8 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.j
 import { getLogger } from "../../utils/logger.js";
 import { fetchWithRetry } from "../../common/fetch-with-retry.js";
 import { isUrlSafeToFetch } from "../../utils/media-processor.js";
+import { fetchWithPolicy } from "../../security/browser-security.js";
+import { releaseStreamReader } from "../../common/stream-reader.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 /** Strip tokens from Telegram-style bot URLs for safe logging. */
@@ -17,6 +19,38 @@ function sanitizeUrlForLog(url: string): string {
 }
 
 const MAX_AUDIO_SIZE_MB = 25; // Whisper API limit
+const AUDIO_DOWNLOAD_TIMEOUT_MS = 60_000;
+
+/**
+ * Read a response body into memory, refusing it once it passes `maxBytes`.
+ * Content-Length is optional, so the cap is enforced on the bytes themselves.
+ */
+async function readBodyWithin(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+  if (!response.body) return new ArrayBuffer(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(`Audio file exceeds ${MAX_AUDIO_SIZE_MB}MB limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    releaseStreamReader(reader);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
 
 export class SpeechToTextTool implements ITool {
   readonly name = "speech_to_text";
@@ -111,12 +145,25 @@ export class SpeechToTextTool implements ITool {
       if (!isUrlSafeToFetch(url)) {
         throw new Error("Audio URL blocked by SSRF protection");
       }
-      const response = await fetchWithRetry(url, { redirect: "error" }, { maxRetries: 2, callerName: "AudioFetch" });
-      const contentLength = parseInt(response.headers.get("content-length") ?? "", 10);
-      if (contentLength > maxBytes) {
-        throw new Error(`Audio file exceeds ${MAX_AUDIO_SIZE_MB}MB limit (${contentLength} bytes)`);
+      // The text check above cannot see where a DNS name resolves. The pinned
+      // transport resolves it, refuses private/internal addresses and connects
+      // only to the vetted ones; redirects stay refused, as before.
+      const { response, dispose } = await fetchWithPolicy(url, {
+        maxRedirects: 0,
+        signal: AbortSignal.timeout(AUDIO_DOWNLOAD_TIMEOUT_MS),
+      });
+      try {
+        if (!response.ok) {
+          throw new Error(`Audio download failed: HTTP ${response.status}`);
+        }
+        const contentLength = parseInt(response.headers.get("content-length") ?? "", 10);
+        if (contentLength > maxBytes) {
+          throw new Error(`Audio file exceeds ${MAX_AUDIO_SIZE_MB}MB limit (${contentLength} bytes)`);
+        }
+        return await readBodyWithin(response, maxBytes);
+      } finally {
+        await dispose();
       }
-      return response.arrayBuffer();
     }
 
     // Local file — validate path stays within project directory
