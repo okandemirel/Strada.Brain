@@ -1,5 +1,5 @@
 import type { Node as SyntaxNode } from 'web-tree-sitter';
-import { loadLanguageParser } from './tree-sitter-loader.js';
+import { withParsedTree } from './tree-sitter-loader.js';
 import type { ExtractInput, ExtractOutput, ISymbolExtractor } from './symbol-extractor.interface.js';
 import type { VaultEdge, VaultSymbol } from '../vault.interface.js';
 
@@ -117,9 +117,10 @@ export class CSharpSymbolExtractor implements ISymbolExtractor {
   readonly lang = 'csharp' as const;
 
   async extract(input: ExtractInput): Promise<ExtractOutput> {
-    const parser = await loadLanguageParser('csharp');
-    const tree = parser.parse(input.content);
-    const root = tree?.rootNode;
+    return withParsedTree('csharp', input.content, (root) => this.extractFromRoot(root, input));
+  }
+
+  private extractFromRoot(root: SyntaxNode | null, input: ExtractInput): ExtractOutput {
     if (!root) return { symbols: [], edges: [], wikilinks: [] };
 
     const symbols: VaultSymbol[] = [];

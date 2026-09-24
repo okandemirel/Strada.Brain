@@ -1,5 +1,5 @@
 import type { Node as SyntaxNode } from 'web-tree-sitter';
-import { loadLanguageParser } from './tree-sitter-loader.js';
+import { withParsedTree } from './tree-sitter-loader.js';
 import type { ExtractInput, ExtractOutput, ISymbolExtractor } from './symbol-extractor.interface.js';
 import type { VaultEdge, VaultSymbol, SymbolKind } from '../vault.interface.js';
 
@@ -109,9 +109,10 @@ export class TypeScriptSymbolExtractor implements ISymbolExtractor {
   readonly lang = 'typescript' as const;
 
   async extract(input: ExtractInput): Promise<ExtractOutput> {
-    const parser = await loadLanguageParser('typescript');
-    const tree = parser.parse(input.content);
-    const root = tree?.rootNode;
+    return withParsedTree('typescript', input.content, (root) => this.extractFromRoot(root, input));
+  }
+
+  private extractFromRoot(root: SyntaxNode | null, input: ExtractInput): ExtractOutput {
     if (!root) return { symbols: [], edges: [], wikilinks: [] };
     const symbols: VaultSymbol[] = [];
     const edges: VaultEdge[] = [];

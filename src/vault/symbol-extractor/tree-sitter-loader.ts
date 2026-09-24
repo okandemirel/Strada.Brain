@@ -2,7 +2,7 @@
 // Runs in Node (web-tree-sitter ships a Node-compatible build).
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import type { Parser as TSParser, Language as TSLanguage } from 'web-tree-sitter';
+import type { Parser as TSParser, Language as TSLanguage, Node as TSNode, Tree as TSTree } from 'web-tree-sitter';
 
 const require = createRequire(import.meta.url);
 
@@ -47,6 +47,32 @@ export async function loadLanguageParser(lang: TreeSitterLang): Promise<TSParser
   const language = await getLang(lang);
   parser.setLanguage(language);
   return parser;
+}
+
+/**
+ * Parse `content` with a fresh parser, hand the root node to `visit`, then free
+ * the tree and the parser.
+ *
+ * Both live in the WASM heap and web-tree-sitter registers no finalizer, so
+ * only delete() releases them. Without it every extraction leaked its parser
+ * and tree (measured: ~1.3 MB per parse of a 62 KB file), and WASM memory
+ * never shrinks. `visit` must copy out what it needs: nodes are invalid once
+ * it returns.
+ */
+export async function withParsedTree<T>(
+  lang: TreeSitterLang,
+  content: string,
+  visit: (root: TSNode | null) => T,
+): Promise<T> {
+  const parser = await loadLanguageParser(lang);
+  let tree: TSTree | null = null;
+  try {
+    tree = parser.parse(content);
+    return visit(tree?.rootNode ?? null);
+  } finally {
+    tree?.delete();
+    parser.delete();
+  }
 }
 
 export function resetForTests(): void {
