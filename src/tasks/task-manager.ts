@@ -267,16 +267,30 @@ export class TaskManager extends EventEmitter {
     this.emit("task:paused", taskId);
 
     if (this.checkpointStore) {
+      // MERGED with the rolling checkpoint under the same task_id (the save
+      // upserts): `touchedFiles: []` clobbered its real list, so the resume
+      // replay lost "files the previous run already changed" — the fix the
+      // orchestrator's own checkpoint writer got (TSK-14).
+      let existing: PendingTaskCheckpoint | null = null;
+      try {
+        existing = this.checkpointStore.loadByTaskIdSync(taskId);
+      } catch { /* no rolling checkpoint to keep */ }
       const cp: PendingTaskCheckpoint = {
+        ...(existing ?? {}),
         taskId,
         chatId: task.chatId,
         timestamp: Date.now(),
         stage: "manual_pause",
         lastUserMessage: task.prompt,
-        touchedFiles: [],
+        touchedFiles: existing?.touchedFiles ?? [],
         userId: task.userId,
       };
-      void this.checkpointStore.save(cp);
+      void this.checkpointStore.save(cp).catch((err: unknown) => {
+        getLogger().warn("Pause checkpoint could not be saved", {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     getLogger().info("Task paused", { taskId });

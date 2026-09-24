@@ -930,3 +930,35 @@ describe("a resumed paused task is retired, so a restart does not replay it (TSK
     });
   });
 });
+
+// TSK-14: pauseTask wrote `touchedFiles: []` over the rolling checkpoint
+// (same task_id, upserted), so the resume replay lost the files the run had
+// already changed; and the save's rejection was never caught.
+describe("pauseTask keeps the rolling checkpoint's files (TSK-14)", () => {
+  beforeAll(() => {
+    try { createLogger("error", "/tmp/strada-task-manager-test.log"); } catch { /* already initialized */ }
+  });
+
+  it("merges with the existing checkpoint instead of clobbering its touched files", async () => {
+    const running = buildTask({ id: "task_pause1" as Task["id"], status: TaskStatus.executing });
+    const storage = { load: vi.fn().mockReturnValue(running), updateStatus: vi.fn() } as any;
+    const executor = { pauseConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+    const save = vi.fn().mockRejectedValue(new Error("disk full"));
+    manager.setCheckpointStore({
+      loadByTaskIdSync: vi.fn().mockReturnValue({
+        taskId: "task_pause1", chatId: "chat-1", timestamp: 1, stage: "tool_error",
+        lastUserMessage: "test prompt", touchedFiles: ["Assets/Scripts/Board.cs"],
+      }),
+      save,
+    } as any);
+
+    expect(manager.pauseTask(running.id)).toBe(true);
+    await Promise.resolve();
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      stage: "manual_pause",
+      touchedFiles: ["Assets/Scripts/Board.cs"],
+    }));
+  });
+});
