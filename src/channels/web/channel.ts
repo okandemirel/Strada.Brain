@@ -49,6 +49,7 @@ import type {
   Attachment,
 } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
+import { npmCheckCwd, npmCheckInvocation } from "../npm-check-command.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { hasSecrets } from "../../security/secret-sanitizer.js";
 import { resolveBindHost } from "../../core/bind-host.js";
@@ -2501,10 +2502,10 @@ export class WebChannel
         this.inflightVerifyByChat.set(chatId, { checkType, startedAt: Date.now() });
 
         // Spawn npm with a constrained allowlist (build/test), 30s timeout.
-        // Resolve cwd once up-front and verify package.json exists — refuses
-        // to spawn if the process was launched from an unexpected directory,
-        // which would otherwise execute an unrelated project's npm scripts.
-        const spawnCwd = process.cwd();
+        // Resolve cwd once up-front and verify package.json exists. CHN-9: the
+        // cwd is the configured project (not the daemon's launch directory)
+        // and the invocation is Windows-safe — see npm-check-command.ts.
+        const spawnCwd = npmCheckCwd();
         Promise.all([
           import("node:child_process"),
           import("node:fs/promises"),
@@ -2519,11 +2520,11 @@ export class WebChannel
               taskId: safeTaskId,
               criterionId: safeCriterionId,
               status: "fail",
-              error: "No package.json at server cwd — cannot run build/test.",
+              error: "No package.json in the project directory — cannot run build/test.",
             });
             return;
           }
-          const args = checkType === "build" ? ["run", "build"] : ["run", "test"];
+          const invocation = npmCheckInvocation(checkType === "build" ? "build" : "test");
           let stdoutBuf = "";
           let stderrBuf = "";
           const MAX_OUTPUT = 32 * 1024;
@@ -2547,8 +2548,9 @@ export class WebChannel
           };
 
           try {
-            const child = cp.spawn("npm", args, {
-              shell: false,
+            const child = cp.spawn(invocation.command, [...invocation.args], {
+              shell: invocation.shell,
+              windowsHide: true,
               cwd: spawnCwd,
               timeout: 30_000,
               killSignal: "SIGTERM",
