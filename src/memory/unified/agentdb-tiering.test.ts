@@ -584,6 +584,34 @@ describe("autoTieringSweep", () => {
       expect(entries.get("ancient")!.importanceScore).toBeGreaterThanOrEqual(0.01);
     });
 
+    it("repeated sweeps compose to the closed form instead of compounding (MEM-6)", async () => {
+      // 1 day of 5-minute sweeps at lambda 0.01/day: the score must end at
+      // 0.8 * e^(-0.01), not at 0.8 * e^(-0.01 * sum(k/288)) ~ 0.19.
+      const start = Date.now();
+      const entries = new Map<string, UnifiedMemoryEntry>();
+      entries.set("p1", makeEntry("p1", "persistent note", {
+        tier: MemoryTier.Persistent,
+        importanceScore: 0.8 as NormalizedScore,
+        lastAccessedAt: start as any,
+      }));
+      const ctx = makeTieringCtx(entries, {
+        decayConfig: {
+          enabled: true,
+          lambdas: { working: 0.1, ephemeral: 0.05, persistent: 0.01 },
+          exemptDomains: [],
+          timeoutMs: 30000,
+        },
+      });
+
+      const step = 5 * 60_000;
+      for (let k = 1; k <= 288; k++) {
+        vi.mocked(getNow).mockReturnValue((start + k * step) as any);
+        await autoTieringSweep(ctx, 1_000, 7);
+      }
+
+      expect(entries.get("p1")!.importanceScore).toBeCloseTo(0.8 * Math.exp(-0.01), 6);
+    });
+
     it("should batch-persist all decayed entries", async () => {
       const now = Date.now();
       vi.mocked(getNow).mockReturnValue(now as any);

@@ -8,7 +8,7 @@
 import type { UnifiedMemoryConfig } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
-import type { MemoryId, NormalizedScore } from "../../types/index.js";
+import type { MemoryId, NormalizedScore, TimestampMs } from "../../types/index.js";
 import { getLogger } from "../../utils/logger.js";
 import { type TextIndex, extractTerms } from "../text-index.js";
 
@@ -145,12 +145,18 @@ export async function autoTieringSweep(
       // Skip exempt domains
       if (entry.domain && exemptDomains.includes(entry.domain)) continue;
 
-      const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / MS_PER_DAY;
-      if (daysSinceAccess <= 0) continue; // just accessed, no decay
+      // Decay only the time not yet decayed. The score is already decayed up
+      // to the last sweep; multiplying by exp(-lambda * daysSinceAccess) on
+      // every sweep compounded, collapsing importance within days at a
+      // 5-minute interval and evicting memories that should have lasted (MEM-6).
+      const decayFrom = Math.max(entry.lastAccessedAt as number, (entry.decayedAt as number | undefined) ?? 0);
+      const daysUndecayed = (now - decayFrom) / MS_PER_DAY;
+      if (daysUndecayed <= 0) continue; // just accessed or just decayed
 
       const lambda = lambdas[entry.tier];
-      const decayed = entry.importanceScore * Math.exp(-daysSinceAccess * lambda);
+      const decayed = entry.importanceScore * Math.exp(-daysUndecayed * lambda);
       const newScore = Math.max(decayed, 0.01) as NormalizedScore;
+      entry.decayedAt = now as TimestampMs;
 
       if (newScore !== entry.importanceScore) {
         entry.importanceScore = newScore;

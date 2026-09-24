@@ -324,6 +324,7 @@ export function upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEnt
     hnswIndex: entry.hnswIndex,
     version: "version" in entry ? entry.version : 1,
     importanceScore: entry.importanceScore,
+    decayedAt: entry.decayedAt,
     domain: entry.domain,
     chatId: entry.chatId,
     // plan 0-B.9: which embedder produced `embedding`; plan 3.9: identity scope
@@ -451,6 +452,7 @@ export async function loadEntriesWithoutHnsw(ctx: AgentDBSqliteContext): Promise
           version: (parsed.version as number) ?? 1,
           importanceScore:
             (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
+          decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
           domain: parsed.domain as string | undefined,
           chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
           embeddingProvenance: parsed.embeddingProvenance as string | undefined,

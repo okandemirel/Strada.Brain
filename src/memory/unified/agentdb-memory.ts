@@ -1430,6 +1430,7 @@ export class AgentDBMemory implements IUnifiedMemory {
             version: (parsed.version as number) ?? 1,
             importanceScore:
               (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
+            decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
             domain: parsed.domain as string | undefined,
             chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
             // plan 0-B.9: rows written before provenance existed are classified by shape

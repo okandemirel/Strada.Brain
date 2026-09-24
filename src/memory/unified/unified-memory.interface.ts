@@ -134,6 +134,12 @@ interface BaseUnifiedMemoryEntry {
   lastAccessedAt: TimestampMs;
   expiresAt?: TimestampMs;
   importanceScore: NormalizedScore;
+  /**
+   * When the decay sweep last applied decay to importanceScore. Decay covers
+   * only the time since max(lastAccessedAt, decayedAt), so repeated sweeps
+   * compose to the closed form instead of compounding.
+   */
+  decayedAt?: TimestampMs;
   hnswIndex?: number;
   version: number;
 }
