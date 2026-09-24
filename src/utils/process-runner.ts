@@ -167,9 +167,13 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     };
 
     // Past the cap the head and the tail are kept and the middle is counted
-    // and marked (see createStreamCapture).
-    child.stdout.on("data", (data: Buffer) => stdout.push(data.toString()));
-    child.stderr.on("data", (data: Buffer) => stderr.push(data.toString()));
+    // and marked (see createStreamCapture). Decoded by the stream, not per
+    // chunk: a multi-byte character split across two reads would otherwise
+    // become two U+FFFD in compiler output and file names.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (data: string) => stdout.push(data));
+    child.stderr.on("data", (data: string) => stderr.push(data));
 
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let abandonTimer: ReturnType<typeof setTimeout> | undefined;

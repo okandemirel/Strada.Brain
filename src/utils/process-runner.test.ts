@@ -227,6 +227,21 @@ describe("output past the capture cap", () => {
     expect(result.stdoutDropped).toBe(0);
   });
 
+  it("decodes a multi-byte character split across two reads", async () => {
+    // The two bytes of "ş" arrive as separate pipe reads; per-chunk decoding
+    // turned each half into U+FFFD.
+    const script =
+      "process.stdout.write(Buffer.from([0xc5])); setTimeout(() => process.stdout.write(Buffer.from([0x9f])), 150);";
+    const result = await runProcess({
+      command: process.execPath,
+      args: ["-e", script],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("ş");
+  });
+
   it("leaves output within the cap untouched and unmarked", async () => {
     const result = await runProcess({
       command: "/bin/bash",
