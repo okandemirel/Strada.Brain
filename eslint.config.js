@@ -8,6 +8,8 @@ const cliFiles = [
   "src/**/*-cli.ts",
   "src/channels/cli/**/*.ts",
   "src/intelligence/strada-api-sync.ts",
+  // `strada assets-local-setup`: an interactive terminal menu; stdout is its UI.
+  "src/core/assets-local-setup.ts",
 ];
 const operationalConsoleFiles = [
   "src/alerting/**/*.ts",
