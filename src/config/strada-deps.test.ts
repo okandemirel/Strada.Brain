@@ -11,6 +11,7 @@ import {
   formatProjectMatrix,
   installStradaDep,
   installStradaMcpSubmodule,
+  installerInvocation,
   parseUnityVersion,
   readUnityProjectVersion,
   SUPPORTED_UNITY_VERSIONS,
@@ -202,6 +203,19 @@ describe("installStradaDep", () => {
     const result = await installStradaMcpSubmodule(testDir, "packages", TEST_STRADA_CONFIG);
     expect(result.kind).toBe("err");
     expect(result.kind === "err" && result.error).toContain("not a git repository");
+  });
+
+  // On Windows npm is npm.cmd: without a shell execFile never found it, and
+  // neither command had a timeout, so a stall held the setup request forever.
+  it("runs npm.cmd through a shell on Windows, and bounds both commands", () => {
+    expect(installerInvocation("npm", "win32")).toMatchObject({ file: "npm.cmd", shell: true });
+    expect(installerInvocation("npm", "linux")).toMatchObject({ file: "npm", shell: false });
+    const git = installerInvocation("git", "win32");
+    expect(git).toMatchObject({ file: "git", shell: false });
+    expect(git.env["GIT_TERMINAL_PROMPT"]).toBe("0");
+    for (const inv of [git, installerInvocation("npm", "win32")]) {
+      expect(inv.timeout).toBeGreaterThan(0);
+    }
   });
 });
 

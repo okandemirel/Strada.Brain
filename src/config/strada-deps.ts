@@ -547,9 +547,30 @@ function updateUnityManifestDependency(
   writeFileSync(manifestPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
 }
 
-function runExecFile(command: string, args: string[], cwd: string): Promise<void> {
+/**
+ * How the installer runs `git` / `npm` on this platform. On Windows `npm` is
+ * `npm.cmd`, which execFile cannot find without a shell and Node refuses to
+ * run without one (CVE-2024-27980): the wizard reported a failed npm install
+ * after the submodule and manifest were already changed. Both commands are
+ * also bounded, and git may not stop for a credential prompt nobody sees,
+ * since a hang here held the setup request open forever. Arguments are fixed
+ * by the callers, never user text, so the Windows shell sees no user input.
+ */
+export function installerInvocation(
+  command: "git" | "npm",
+  platform: NodeJS.Platform = process.platform,
+): { file: string; shell: boolean; timeout: number; env: NodeJS.ProcessEnv } {
+  if (command === "npm") {
+    const onWindows = platform === "win32";
+    return { file: onWindows ? "npm.cmd" : "npm", shell: onWindows, timeout: 10 * 60_000, env: process.env };
+  }
+  return { file: "git", shell: false, timeout: 2 * 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } };
+}
+
+function runExecFile(command: "git" | "npm", args: string[], cwd: string): Promise<void> {
+  const { file, ...options } = installerInvocation(command);
   return new Promise((resolve, reject) => {
-    execFile(command, args, { cwd }, (error, stdout, stderr) => {
+    execFile(file, args, { cwd, ...options }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr || stdout || error.message));
         return;
