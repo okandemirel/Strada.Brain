@@ -96,8 +96,7 @@ export class ConfidenceScorer {
    * @returns Overall confidence score (0.0 - 1.0)
    */
   calculate(instinct: Instinct, _contextFactors?: Record<string, number>): number {
-    const alpha = instinct.bayesianAlpha ?? this.priorAlpha;
-    const beta = instinct.bayesianBeta ?? this.priorBeta;
+    const { alpha, beta } = this.startingEvidence(instinct);
     const rawBayesian = alpha / (alpha + beta);
 
     const factors = [
@@ -148,14 +147,7 @@ export class ConfidenceScorer {
     const total = newTimesApplied + newTimesFailed;
     const newSuccessRate = total > 0 ? newTimesApplied / total : 0;
 
-    // Get current alpha/beta (use stored values, or derive from stats)
-    let currentAlpha = instinct.bayesianAlpha;
-    let currentBeta = instinct.bayesianBeta;
-    if (currentAlpha === undefined || currentBeta === undefined) {
-      // Migration case: derive from stats
-      currentAlpha = instinct.stats.timesApplied + this.priorAlpha;
-      currentBeta = instinct.stats.timesFailed + this.priorBeta;
-    }
+    const { alpha: currentAlpha, beta: currentBeta } = this.startingEvidence(instinct);
 
     // Apply verdict-weighted evidence
     // When verdictScore is provided, it acts as a fractional observation weight:
@@ -219,12 +211,7 @@ export class ConfidenceScorer {
     if (instinct.status === "permanent") {
       return instinct;
     }
-    let currentAlpha = instinct.bayesianAlpha;
-    let currentBeta = instinct.bayesianBeta;
-    if (currentAlpha === undefined || currentBeta === undefined) {
-      currentAlpha = instinct.stats.timesApplied + this.priorAlpha;
-      currentBeta = instinct.stats.timesFailed + this.priorBeta;
-    }
+    const { alpha: currentAlpha, beta: currentBeta } = this.startingEvidence(instinct);
     const newAlpha = currentAlpha + Math.max(0, evidence.alphaDelta);
     const newBeta = currentBeta + Math.max(0, evidence.betaDelta);
     return {
@@ -261,9 +248,7 @@ export class ConfidenceScorer {
     instinct: Instinct,
     confidenceLevel: number = 0.95
   ): [number, number] {
-    // Use stored alpha/beta if available, otherwise derive from stats
-    const successes = instinct.bayesianAlpha ?? (instinct.stats.timesApplied + this.priorAlpha);
-    const failures = instinct.bayesianBeta ?? (instinct.stats.timesFailed + this.priorBeta);
+    const { alpha: successes, beta: failures } = this.startingEvidence(instinct);
     const total = successes + failures;
 
     // Mean of Beta distribution
@@ -318,6 +303,32 @@ export class ConfidenceScorer {
   }
 
   // ─── Private Methods ─────────────────────────────────────────────────────────
+
+  /**
+   * The evidence counts an update starts from: the stored alpha/beta, or, for a
+   * row that has none yet, the counts its stored confidence stands for.
+   *
+   * Rules are created with an explicit confidence (a teaching at 0.7, a seed at
+   * 0.65) and no alpha/beta. Starting those from the flat prior threw the
+   * confidence away on the first piece of evidence, so a thumbs-up LOWERED a
+   * teaching from 0.7 to 0.6 and one success demoted it. The stored confidence
+   * is kept as the prior mean at the prior's strength (priorAlpha + priorBeta
+   * pseudo-observations), plus whatever application counts the row carries.
+   * A 0.5 row gets exactly the old flat prior.
+   */
+  private startingEvidence(instinct: Instinct): { alpha: number; beta: number } {
+    if (instinct.bayesianAlpha !== undefined && instinct.bayesianBeta !== undefined) {
+      return { alpha: instinct.bayesianAlpha, beta: instinct.bayesianBeta };
+    }
+    const strength = this.priorAlpha + this.priorBeta;
+    const mean = Number.isFinite(instinct.confidence)
+      ? Math.min(1, Math.max(0, instinct.confidence))
+      : this.priorAlpha / strength;
+    return {
+      alpha: mean * strength + instinct.stats.timesApplied,
+      beta: (1 - mean) * strength + instinct.stats.timesFailed,
+    };
+  }
 
   private computeFactors(
     instinct: Instinct,
