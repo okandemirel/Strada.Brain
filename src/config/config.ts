@@ -1032,6 +1032,18 @@ interface EnvVars {
   interactionHeartbeatAfterMs: string | undefined;
   interactionHeartbeatIntervalMs: string | undefined;
   interactionEscalationPolicy: string | undefined;
+  // Deployment
+  deployEnabled: string | undefined;
+  deployScriptPath: string | undefined;
+  deployTestCommand: string | undefined;
+  deployTargetBranch: string | undefined;
+  deployRequireCleanGit: string | undefined;
+  deployTestTimeoutMs: string | undefined;
+  deployExecutionTimeoutMs: string | undefined;
+  deployCooldownMinutes: string | undefined;
+  deployNotificationUrgency: string | undefined;
+  deployPostScriptPath: string | undefined;
+  deployRollbackScriptPath: string | undefined;
   // Autonomous Mode
   autonomousDefaultEnabled: string | undefined;
   autonomousDefaultHours: string | undefined;
