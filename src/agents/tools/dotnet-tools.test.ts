@@ -150,6 +150,94 @@ Skipped:   2
   });
 });
 
+/**
+ * TLS-9 (audited 2026-09-24): the fixtures above were written to fit the
+ * parser. These follow what `dotnet test` prints: vstest's console logger
+ * (src/vstest.console/Internal/ConsoleLogger.cs and its Resources.resx —
+ * TestRunSummary, TestRunSummaryTotalTests/PassedTests/FailedTests,
+ * "  Failed <name> [<duration>]", "  Error Message:", "  Stack Trace:").
+ * No SDK was available to capture a live run, so each line reproduces those
+ * format strings exactly, padding included.
+ */
+describe("parseTestOutput on the SDK's own output", () => {
+  const NORMAL_FAILING = [
+    "  Determining projects to restore...",
+    "  All projects are up-to-date for restore.",
+    "  Game.Tests -> /work/Game.Tests/bin/Debug/net8.0/Game.Tests.dll",
+    "Test run for /work/Game.Tests/bin/Debug/net8.0/Game.Tests.dll (.NETCoreApp,Version=v8.0)",
+    "Microsoft (R) Test Execution Command Line Tool Version 17.8.0 (x64)",
+    "Copyright (c) Microsoft Corporation.  All rights reserved.",
+    "",
+    "Starting test execution, please wait...",
+    "A total of 1 test files matched the specified pattern.",
+    "  Passed Game.Tests.BoardTests.ClearsRow [3 ms]",
+    "  Failed Game.Tests.BoardTests.DropsPiece [12 ms]",
+    "  Error Message:",
+    "   Expected: 4",
+    "  But was:  3",
+    "  Stack Trace:",
+    "     at Game.Tests.BoardTests.DropsPiece() in /work/Game.Tests/BoardTests.cs:line 27",
+    "",
+    "  Failed Game.Tests.BoardTests.ScoresCombo [< 1 ms]",
+    "  Error Message:",
+    "   System.NullReferenceException : Object reference not set to an instance of an object.",
+    "  Stack Trace:",
+    "     at Game.Tests.BoardTests.ScoresCombo() in /work/Game.Tests/BoardTests.cs:line 41",
+    "",
+    "Test Run Failed.",
+    "Total tests: 3",
+    "     Passed: 1",
+    "     Failed: 2",
+    " Total time: 0.8421 Seconds",
+  ].join("\n");
+
+  it("attaches each failure's message to its test (the header carries a duration)", () => {
+    const { tests } = parseTestOutput(NORMAL_FAILING);
+    const failed = tests.filter((t) => t.outcome === "failed");
+    expect(failed.map((t) => t.name)).toEqual(["Game.Tests.BoardTests.DropsPiece", "Game.Tests.BoardTests.ScoresCombo"]);
+    expect(failed[0]!.errorMessage).toContain("Expected: 4");
+    expect(failed[1]!.errorMessage).toContain("NullReferenceException");
+  });
+
+  it("reads the run's totals, not the per-test lines that survived a tail cut", () => {
+    // process-runner keeps the TAIL: the first failed test fell off the front.
+    const tail = NORMAL_FAILING.slice(NORMAL_FAILING.indexOf("  Failed Game.Tests.BoardTests.ScoresCombo"));
+    expect(parseTestOutput(tail).summary).toEqual({ total: 3, passed: 1, failed: 2, skipped: 0 });
+  });
+
+  it("sums the minimal-verbosity line of every test assembly", () => {
+    const minimal = [
+      "Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration: 20 ms - Game.Tests.dll (net8.0)",
+      "Passed!  - Failed:     0, Passed:     5, Skipped:     1, Total:     6, Duration: 8 ms - Game.Editor.Tests.dll (net8.0)",
+    ].join("\n");
+    expect(parseTestOutput(minimal).summary).toEqual({ total: 9, passed: 6, failed: 2, skipped: 1 });
+  });
+
+  it("sums the normal-verbosity blocks of several test projects", () => {
+    const twoRuns = [
+      "Test Run Failed.", "Total tests: 3", "     Passed: 1", "     Failed: 2", " Total time: 0.8 Seconds",
+      "Test Run Successful.", "Total tests: 4", "     Passed: 3", "    Skipped: 1", " Total time: 0.2 Seconds",
+    ].join("\n");
+    expect(parseTestOutput(twoRuns).summary).toEqual({ total: 7, passed: 4, failed: 2, skipped: 1 });
+  });
+});
+
+describe("dotnet_test's verdict line follows the exit code (TLS-9)", () => {
+  it("a run that exited non-zero is not reported as PASSED", async () => {
+    vi.mocked(runProcess).mockResolvedValueOnce({
+      stdout: "  Game.Tests -> /work/bin/Game.Tests.dll\nTest run for /work/bin/Game.Tests.dll (.NETCoreApp,Version=v8.0)\n",
+      stderr: "The active test run was aborted. Reason: Test host process crashed",
+      exitCode: 1,
+      timedOut: false,
+      durationMs: 5,
+    });
+    const result = await new DotnetTestTool().execute({}, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.content).not.toContain("Result: PASSED");
+  });
+});
+
 describe("DotnetBuildTool", () => {
   const tool = new DotnetBuildTool();
 

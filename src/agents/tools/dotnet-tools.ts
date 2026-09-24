@@ -186,14 +186,69 @@ interface TestResult {
   errorMessage?: string;
 }
 
+type TestSummary = { total: number; passed: number; failed: number; skipped: number };
+
+/** " [12 ms]" after a test name is its duration, not part of the name. */
+const stripDuration = (name: string): string => name.replace(/\s+\[[^\]]*\]\s*$/u, "").trim();
+
+/**
+ * The run's own totals, in the shapes vstest's console logger writes (its
+ * TestRunSummary* resources):
+ *   minimal, one line per test assembly:
+ *     "Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration: 20 ms - X.dll (net8.0)"
+ *   normal (what `-v normal` gives), one block per run:
+ *     "Total tests: 3" then "     Passed: 1", "     Failed: 2", "    Skipped: 1" (each only when non-zero)
+ * Summed across assemblies and runs, since a solution runs several. The old
+ * pattern expected a one-line "Total … Passed … Failed … Skipped" order no
+ * SDK prints, so counts came from whichever per-test lines survived the
+ * output's tail cut (audited 2026-09-24).
+ */
+function parseRunTotals(output: string): TestSummary | null {
+  const perAssembly = [...output.matchAll(
+    /^(?:Passed|Failed|Skipped)!\s+-\s+Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)/gmu,
+  )];
+  if (perAssembly.length > 0) {
+    const sum = (i: number): number => perAssembly.reduce((n, m) => n + parseInt(m[i]!, 10), 0);
+    return { failed: sum(1), passed: sum(2), skipped: sum(3), total: sum(4) };
+  }
+
+  const lines = output.split(/\r?\n/u);
+  let found = false;
+  const totals: TestSummary = { total: 0, passed: 0, failed: 0, skipped: 0 };
+  for (let i = 0; i < lines.length; i++) {
+    const total = /^Total tests:\s*(\d+)\s*$/u.exec(lines[i]!);
+    if (!total) continue;
+    found = true;
+    totals.total += parseInt(total[1]!, 10);
+    for (let j = i + 1; j < lines.length; j++) {
+      const count = /^\s+(Passed|Failed|Skipped):\s*(\d+)\s*$/u.exec(lines[j]!);
+      if (!count) break;
+      const key = count[1]!.toLowerCase() as "passed" | "failed" | "skipped";
+      totals[key] += parseInt(count[2]!, 10);
+    }
+  }
+  if (found) return totals;
+
+  // A one-line "Total: X, Passed: Y, Failed: Z, Skipped: W".
+  const oneLine = /Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+).*?Skipped:\s*(\d+)/iu.exec(output);
+  return oneLine
+    ? {
+        total: parseInt(oneLine[1]!, 10),
+        passed: parseInt(oneLine[2]!, 10),
+        failed: parseInt(oneLine[3]!, 10),
+        skipped: parseInt(oneLine[4]!, 10),
+      }
+    : null;
+}
+
 function parseTestOutput(output: string): {
   tests: TestResult[];
-  summary: { total: number; passed: number; failed: number; skipped: number };
+  summary: TestSummary;
 } {
   const tests: TestResult[] = [];
 
   // Parse individual test results
-  // Format: "  Passed TestName [1ms]" or "  Failed TestName [5ms]"
+  // Format: "  Passed TestName [1 ms]" or "  Failed TestName [5 ms]"
   const testPattern = /^\s+(Passed|Failed|Skipped)\s+(.+?)(?:\s+\[([^\]]+)\])?\s*$/gm;
   let match: RegExpExecArray | null;
 
@@ -205,33 +260,24 @@ function parseTestOutput(output: string): {
     });
   }
 
-  // Parse error messages for failed tests
+  // Parse error messages for failed tests. The header line carries the
+  // duration ("Failed Name [3 ms]") and the stored name does not, so this
+  // lookup used to miss every time.
   const failPattern = /Failed\s+(.+?)\n\s+Error Message:\s*\n\s+(.+?)(?:\n\s+Stack Trace:|\n\s*\n)/gs;
   while ((match = failPattern.exec(output)) !== null) {
-    const failedTest = tests.find((t) => t.name === match![1]!.trim());
+    const name = stripDuration(match[1]!);
+    const failedTest = tests.find((t) => t.outcome === "failed" && t.name === name);
     if (failedTest) {
       failedTest.errorMessage = match[2]!.trim();
     }
   }
 
-  // Parse summary line: "Total: X, Passed: Y, Failed: Z, Skipped: W"
-  const summaryMatch = output.match(
-    /Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+).*?Skipped:\s*(\d+)/i,
-  );
-
-  const summary = summaryMatch
-    ? {
-        total: parseInt(summaryMatch[1]!, 10),
-        passed: parseInt(summaryMatch[2]!, 10),
-        failed: parseInt(summaryMatch[3]!, 10),
-        skipped: parseInt(summaryMatch[4]!, 10),
-      }
-    : {
-        total: tests.length,
-        passed: tests.filter((t) => t.outcome === "passed").length,
-        failed: tests.filter((t) => t.outcome === "failed").length,
-        skipped: tests.filter((t) => t.outcome === "skipped").length,
-      };
+  const summary = parseRunTotals(output) ?? {
+    total: tests.length,
+    passed: tests.filter((t) => t.outcome === "passed").length,
+    failed: tests.filter((t) => t.outcome === "failed").length,
+    skipped: tests.filter((t) => t.outcome === "skipped").length,
+  };
 
   return { tests, summary };
 }
@@ -317,7 +363,9 @@ export class DotnetTestTool implements ITool {
 
     // Summary
     const s = parsed.summary;
-    const statusIcon = s.failed > 0 ? "FAILED" : "PASSED";
+    // The exit code has the last word: counts read from a tail-cut log can
+    // say "Failed: 0" for a run that failed.
+    const statusIcon = s.failed > 0 || result.exitCode !== 0 || result.timedOut ? "FAILED" : "PASSED";
     parts.push(`\nResult: ${statusIcon}`);
     parts.push(`Total: ${s.total} | Passed: ${s.passed} | Failed: ${s.failed} | Skipped: ${s.skipped}`);
 
