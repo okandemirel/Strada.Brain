@@ -177,6 +177,21 @@ export function repairToolCallPairing(messages: OpenAIMessage[]): OpenAIMessage[
   return out;
 }
 
+/**
+ * The reasoning a thinking model produced on a tool-call turn, as the
+ * conversation retained it: the first tool call's providerMetadata (attached by
+ * the streaming path and some parsers), else the `<reasoning>` block embedded in
+ * the assistant text. Undefined when nothing was retained.
+ */
+export function retainedReasoningContent(msg: AssistantMessage): string | undefined {
+  const fromMetadata = msg.tool_calls
+    ?.find((tc) => typeof tc.providerMetadata?.["reasoning_content"] === "string" && tc.providerMetadata["reasoning_content"] !== "")
+    ?.providerMetadata?.["reasoning_content"];
+  if (typeof fromMetadata === "string" && fromMetadata) return fromMetadata;
+  const content = typeof msg.content === "string" ? msg.content : "";
+  return /<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>/.exec(content)?.[1]?.trim() || undefined;
+}
+
 export function stripReasoningBlocks(messages: OpenAIMessage[]): void {
   for (const msg of messages) {
     if (msg.role === "assistant" && typeof msg.content === "string") {

@@ -146,4 +146,37 @@ describe("DeepSeekProvider", () => {
       expect(assistantMsg!.content).toBe("Plain answer.");
     });
   });
+
+  // PRV-16: thinking mode rejects a replayed tool-call turn without its
+  // reasoning_content (400 "must be passed back to the API"); the adapter
+  // stripped the reasoning and never set the field.
+  describe("buildMessages - reasoning_content echo on tool-call turns", () => {
+    type Built = Array<{ role: string; content: string | null; reasoning_content?: string }>;
+    const toolTurn = (content: string): ConversationMessage[] => [
+      { role: "user", content: "read it" },
+      { role: "assistant", content, tool_calls: [{ id: "call_1", name: "file_read", input: { path: "a.cs" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "ok" }] },
+    ];
+
+    it("echoes the retained reasoning and keeps it out of the visible content", () => {
+      const reasoner = new DeepSeekProvider("k", "deepseek-reasoner");
+      const result = (reasoner as unknown as { buildMessages: typeof build }).buildMessages(
+        "system", toolTurn("<reasoning>\nI should read the file first.\n</reasoning>\n\n"),
+      ) as Built;
+      const assistant = result.find((m) => m.role === "assistant")!;
+      expect(assistant.reasoning_content).toBe("I should read the file first.");
+      expect(assistant.content ?? "").not.toContain("<reasoning>");
+    });
+
+    it("sends a placeholder for a thinking model whose reasoning was not retained", () => {
+      const reasoner = new DeepSeekProvider("k", "deepseek-reasoner");
+      const result = (reasoner as unknown as { buildMessages: typeof build }).buildMessages("system", toolTurn("")) as Built;
+      expect(result.find((m) => m.role === "assistant")!.reasoning_content).toBeTruthy();
+    });
+
+    it("leaves a non-thinking tool-call turn without the field", () => {
+      const result = build("system", toolTurn("Reading it.")) as Built;
+      expect(result.find((m) => m.role === "assistant")).not.toHaveProperty("reasoning_content");
+    });
+  });
 });

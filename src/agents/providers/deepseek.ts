@@ -4,8 +4,9 @@ import type {
   ToolCall,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import { OpenAIProvider, OPENAI_STOP_REASON_MAP, stripReasoningBlocks } from "./openai.js";
+import { OpenAIProvider, OPENAI_STOP_REASON_MAP, retainedReasoningContent, stripReasoningBlocks } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
+import type { AssistantMessage } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -46,8 +47,9 @@ interface DeepSeekResponse {
  * Handles DeepSeek-specific API features:
  * - reasoning_content extraction from deepseek-reasoner models (R1 CoT)
  * - Prompt cache hit/miss token statistics
- * - Strips reasoning blocks from outgoing messages (DeepSeek requires
- *   reasoning_content NOT be fed back in subsequent requests)
+ * - Strips reasoning blocks from the visible text of replayed assistant turns,
+ *   but echoes `reasoning_content` on assistant TOOL-CALL turns: thinking mode
+ *   rejects a tool-call replay without it (see buildAssistantToolCallMessage)
  *
  * @see https://api-docs.deepseek.com/api/create-chat-completion
  */
@@ -125,9 +127,29 @@ export class DeepSeekProvider extends OpenAIProvider {
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
     const result = super.buildMessages(systemPrompt, messages);
 
-    // DeepSeek requires reasoning_content NOT be fed back in subsequent requests.
+    // Old chain-of-thought is not replayed as visible assistant text; a
+    // tool-call turn carries it in `reasoning_content` instead.
     stripReasoningBlocks(result);
 
     return result;
+  }
+
+  /**
+   * Echo the reasoning on tool-call turns.
+   *
+   * In thinking mode DeepSeek rejects a replayed assistant tool-call message
+   * without it — 400 "The `reasoning_content` in the thinking mode must be
+   * passed back to the API", the error OpencodeProvider measured relaying
+   * DeepSeek (2026-09-10). This adapter stripped the reasoning and never set
+   * the field, so every tool loop on deepseek-reasoner failed over. The field
+   * is added only when reasoning was retained, or with a placeholder when the
+   * model is a thinking one: a non-thinking session stays byte-identical.
+   */
+  protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
+    const built = super.buildAssistantToolCallMessage(msg);
+    const reasoning = retainedReasoningContent(msg)
+      ?? (/reasoner/iu.test(this.model) ? "(reasoning not retained)" : undefined);
+    if (reasoning) (built as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
+    return built;
   }
 }

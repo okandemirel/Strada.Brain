@@ -1,6 +1,6 @@
 import type { ProviderCapabilities } from "./provider.interface.js";
 import { randomUUID } from "node:crypto";
-import { OpenAIProvider } from "./openai.js";
+import { OpenAIProvider, retainedReasoningContent } from "./openai.js";
 import type { OpenAIMessage } from "./openai.js";
 import type { AssistantMessage } from "./provider-core.interface.js";
 
@@ -185,12 +185,7 @@ export class OpencodeProvider extends OpenAIProvider {
    */
   protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
     const built = super.buildAssistantToolCallMessage(msg);
-    const fromMetadata = msg.tool_calls
-      ?.find((tc) => typeof tc.providerMetadata?.["reasoning_content"] === "string" && tc.providerMetadata["reasoning_content"] !== "")
-      ?.providerMetadata?.["reasoning_content"];
-    const content = typeof msg.content === "string" ? msg.content : "";
-    const fromText = /<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>/.exec(content)?.[1]?.trim();
-    const reasoning = (typeof fromMetadata === "string" && fromMetadata) || fromText || "(reasoning not retained)";
+    const reasoning = retainedReasoningContent(msg) ?? "(reasoning not retained)";
     (built as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
     return built;
   }
