@@ -13,6 +13,7 @@ import type {
 } from "./provider.interface.js";
 import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
+import { repairConversationToolPairing } from "./tool-pairing.js";
 
 /**
  * The Claude model used when nothing configures one. The single source for
@@ -229,7 +230,8 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   private buildMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
     const result: Anthropic.MessageParam[] = [];
 
-    for (const msg of messages) {
+    // Paired history only: Anthropic rejects a tool_use without its tool_result.
+    for (const msg of repairConversationToolPairing(messages)) {
       if (msg.role === "user") {
         // Handle both simple string content and MessageContent[] format
         if (typeof msg.content === "string") {

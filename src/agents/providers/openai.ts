@@ -13,6 +13,7 @@ import type {
 } from "./provider.interface.js";
 import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
+import { repairConversationToolPairing } from "./tool-pairing.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
@@ -1422,7 +1423,8 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   private buildChatGptInput(messages: ConversationMessage[]): ChatGptInputItem[] {
     const items: ChatGptInputItem[] = [];
 
-    for (const msg of messages) {
+    // Paired history only: the Responses API rejects a function_call without its output.
+    for (const msg of repairConversationToolPairing(messages)) {
       if (msg.role === "assistant") {
         if (msg.content) {
           items.push({

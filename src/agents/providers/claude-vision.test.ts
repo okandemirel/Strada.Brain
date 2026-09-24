@@ -94,7 +94,10 @@ describe("ClaudeProvider vision support", () => {
   });
 
   it("handles mixed text, image, and tool_result blocks", () => {
+    // A tool_result answers the tool_use right before it (Anthropic rejects an
+    // orphaned one), and results come first in their turn (PRV-8 repair).
     const messages: ConversationMessage[] = [
+      { role: "assistant", content: "", tool_calls: [{ id: "tool-1", name: "screenshot", input: {} }] },
       {
         role: "user",
         content: [
@@ -106,11 +109,11 @@ describe("ClaudeProvider vision support", () => {
     ];
 
     const built = (provider as any).buildMessages(messages);
-    expect(built).toHaveLength(1);
-    const content = built[0].content;
+    expect(built).toHaveLength(2);
+    const content = built[1].content;
     expect(content.length).toBe(3);
-    expect(content[0].type).toBe("text");
-    expect(content[1].type).toBe("image");
-    expect(content[2].type).toBe("tool_result");
+    expect(content[0].type).toBe("tool_result");
+    expect(content[1].type).toBe("text");
+    expect(content[2].type).toBe("image");
   });
 });

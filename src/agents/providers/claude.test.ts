@@ -175,6 +175,9 @@ describe("ClaudeProvider", () => {
     await provider.chat(
       "system",
       [
+        // The result answers the call before it; an orphaned tool_result is
+        // rejected by the API and is folded into text by the PRV-8 repair.
+        { role: "assistant", content: "", tool_calls: [{ id: "tc_1", name: "file_read", input: { path: "a.cs" } }] },
         {
           role: "user",
           content: [
@@ -186,7 +189,7 @@ describe("ClaudeProvider", () => {
     );
 
     const callArgs = mockCreate.mock.calls[0]![0];
-    expect(callArgs.messages[0]).toEqual({
+    expect(callArgs.messages[1]).toEqual({
       role: "user",
       content: [
         {

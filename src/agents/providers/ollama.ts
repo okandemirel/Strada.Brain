@@ -9,6 +9,7 @@ import type {
 import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
+import { repairConversationToolPairing } from "./tool-pairing.js";
 
 /**
  * Ollama provider for local LLM inference.
@@ -115,7 +116,7 @@ export class OllamaProvider implements IAIProvider {
   private buildMessages(systemPrompt: string, messages: ConversationMessage[]): OllamaMessage[] {
     const result: OllamaMessage[] = [{ role: "system", content: systemPrompt }];
 
-    for (const msg of messages) {
+    for (const msg of repairConversationToolPairing(messages)) {
       if (msg.role === "user") {
         // Handle both simple string content and MessageContent[] format
         if (typeof msg.content === "string") {

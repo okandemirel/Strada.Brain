@@ -569,7 +569,9 @@ describe("OpenAIProvider", () => {
       "system",
       [
         { role: "user", content: "start" },
-        { role: "assistant", content: "previous answer" },
+        // The output answers the call before it: the Responses API rejects an
+        // output with no call, and the PRV-8 repair folds such an orphan into text.
+        { role: "assistant", content: "previous answer", tool_calls: [{ id: "call_1", name: "probe", input: {} }] },
         {
           role: "user",
           content: [{
@@ -591,6 +593,12 @@ describe("OpenAIProvider", () => {
       {
         role: "assistant",
         content: [{ type: "output_text", text: "previous answer" }],
+      },
+      {
+        type: "function_call",
+        call_id: "call_1",
+        name: "probe",
+        arguments: "{}",
       },
       {
         type: "function_call_output",
