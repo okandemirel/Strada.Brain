@@ -2479,13 +2479,23 @@ export class Orchestrator {
    */
   async resubmitBlockedTask(
     taskIdRaw: string,
-    _options?: { userId?: string },
+    options?: { userId?: string },
   ): Promise<{ status: "submitted" | "not_found" | "error"; reason?: string }> {
     try {
       const taskId = taskIdRaw as TaskId;
       const blocked = this.taskManager?.getStatus(taskId);
       if (!blocked || blocked.status !== "blocked") {
         return { status: "not_found", reason: `task ${taskIdRaw} is not blocked` };
+      }
+      // Ownership, as continueFromCheckpoint enforces for checkpoints (CWE-639): in a shared
+      // channel another member's /retry would otherwise fail this task and rerun its prompt
+      // under the owner's identity. The owner is stored raw (router) or as the resolved
+      // identity key (goal hand-off), so both forms of the caller count as a match.
+      if (options?.userId && blocked.userId) {
+        const callerKey = resolveIdentityKey(blocked.chatId, options.userId, undefined, this.userProfileStore, blocked.channelType);
+        if (blocked.userId !== options.userId && blocked.userId !== callerKey) {
+          return { status: "error", reason: "user_mismatch" };
+        }
       }
       const prompt = blocked.prompt?.trim();
       if (!prompt) {
