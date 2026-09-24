@@ -4,6 +4,7 @@ import { glob, type Path } from "glob";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { nearbyNames } from "./nearby-names.js";
+import { RegexTimeoutError, WorkerLineMatcher, type LineMatchResult } from "./regex-line-matcher.js";
 
 /**
  * Reject glob patterns that could escape the project directory.
@@ -51,6 +52,11 @@ const MAX_RESULTS = 50;
 const MAX_CONTENT_RESULTS = 20;
 const MAX_REGEX_LENGTH = 500;
 const MAX_GREP_FILE_SIZE = 1024 * 1024; // 1MB per file for grep
+/**
+ * Time one file's matching may take. An ordinary pattern needs milliseconds
+ * for a whole 1MB file; only a backtracking blow-up comes near this.
+ */
+const GREP_FILE_MATCH_TIMEOUT_MS = 2_000;
 const SEARCHABLE_EXTENSIONS = new Set([
   ".cs", ".shader", ".compute", ".hlsl", ".cginc",
   ".json", ".xml", ".yaml", ".yml", ".txt", ".md",
@@ -118,6 +124,12 @@ export class GlobSearchTool implements ITool {
  * Content search (grep-like) tool.
  */
 export class GrepSearchTool implements ITool {
+  private readonly matchTimeoutMs: number;
+
+  constructor(options: { readonly matchTimeoutMs?: number } = {}) {
+    this.matchTimeoutMs = options.matchTimeoutMs ?? GREP_FILE_MATCH_TIMEOUT_MS;
+  }
+
   readonly name = "grep_search";
   readonly description =
     "Search for text or regex patterns within files in the Unity project. " +
@@ -174,6 +186,10 @@ export class GrepSearchTool implements ITool {
       return { content: "Error: invalid regex pattern", isError: true };
     }
 
+    // Matching runs off the main thread under a per-file time limit (see
+    // regex-line-matcher.ts): a pathological pattern used to freeze the
+    // whole process, not just this call.
+    const matcher = new WorkerLineMatcher(regex.source, regex.flags, this.matchTimeoutMs);
     try {
       const files = await globInsideProject(filePattern, context.projectPath);
 
@@ -205,33 +221,42 @@ export class GrepSearchTool implements ITool {
         if (!pathCheck.valid) continue;
 
         const fullPath = pathCheck.fullPath;
+        let content: string;
         try {
           const fileStat = await stat(fullPath);
           if (fileStat.size > MAX_GREP_FILE_SIZE) continue;
 
-          const content = await readFile(fullPath, "utf-8");
-          filesScanned += 1;
-          const lines = content.split("\n");
-
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i]!;
-            if (regex.test(line)) {
-              results.push(`${file}:${i + 1}: ${line.trim()}`);
-              regex.lastIndex = 0;
-            }
-            if (results.length >= MAX_CONTENT_RESULTS) {
-              // The cap only makes the count non-exhaustive when something
-              // was left unscanned: lines below this one, or files after it.
-              stoppedMidFile = i < lines.length - 1;
-              capReached = stoppedMidFile || fileIndex < files.length - 1;
-              break;
-            }
-          }
+          content = await readFile(fullPath, "utf-8");
         } catch {
           // Skip unreadable files
+          continue;
         }
+        filesScanned += 1;
 
-        if (results.length >= MAX_CONTENT_RESULTS) break;
+        let matched: LineMatchResult;
+        try {
+          matched = await matcher.match(content, MAX_CONTENT_RESULTS - results.length);
+        } catch (error) {
+          if (!(error instanceof RegexTimeoutError)) throw error;
+          return {
+            content:
+              `Error: the regex was stopped after running ${this.matchTimeoutMs / 1000}s on ${file} without finishing ` +
+              `(${results.length} match(es) found before it). Nested or overlapping quantifiers such as (a+)+ or ` +
+              "(\\w+\\s?)* can take exponential time on long lines; simplify the pattern and retry.",
+            isError: true,
+          };
+        }
+        for (const [i, line] of matched.hits) {
+          results.push(`${file}:${i + 1}: ${line.trim()}`);
+        }
+        if (results.length >= MAX_CONTENT_RESULTS) {
+          // The cap only makes the count non-exhaustive when something
+          // was left unscanned: lines below the last hit, or files after it.
+          const lastHit = matched.hits[matched.hits.length - 1]![0];
+          stoppedMidFile = lastHit < matched.lineCount - 1;
+          capReached = stoppedMidFile || fileIndex < files.length - 1;
+          break;
+        }
       }
 
       const skippedNote = skippedByExtension > 0
@@ -262,6 +287,8 @@ export class GrepSearchTool implements ITool {
       };
     } catch {
       return { content: "Error: search failed", isError: true };
+    } finally {
+      await matcher.close();
     }
   }
 }
