@@ -61,7 +61,8 @@ services:
       
       # Listeners. 127.0.0.1 is the CONTAINER's loopback, so a published port
       # would reach nothing; the container binds all interfaces and the port
-      # mapping below is what limits exposure (14F2/D71).
+      # mapping below — host loopback only (OPS-4) — is what limits exposure
+      # (14F2/D71).
       - BIND_HOST=${BIND_HOST:-0.0.0.0}
 
       # Dashboard & Monitoring
@@ -108,9 +109,13 @@ services:
         bind:
           create_host_path: true
     
+    # Published on the HOST's loopback only (OPS-4): nginx is the public entry
+    # point and reaches this container over strada-network. Docker's published
+    # ports bypass host firewalls such as ufw, so a mapping without a host IP
+    # would expose the dashboard and metrics on every interface.
     ports:
-      - "${DASHBOARD_PORT:-3100}:3100"  # Dashboard UI
-      - "${METRICS_PORT:-9090}:9090"    # Prometheus metrics
+      - "127.0.0.1:${DASHBOARD_PORT:-3100}:3100"  # Dashboard UI
+      - "127.0.0.1:${METRICS_PORT:-9090}:9090"    # Prometheus metrics
     
     # Resource limits
     deploy:
@@ -322,7 +327,8 @@ services:
       - '--storage.tsdb.retention.size=10GB'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--web.enable-lifecycle'
+      # No --web.enable-lifecycle (OPS-4): it adds unauthenticated
+      # reload/shutdown endpoints. Restart the container to reload the config.
     
     volumes:
       - type: bind
@@ -333,8 +339,9 @@ services:
         source: prometheus-data
         target: /prometheus
     
+    # Host loopback only (OPS-4); Grafana reaches it over strada-network.
     ports:
-      - "${PROMETHEUS_PORT:-9091}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
     
     networks:
       - strada-network
@@ -372,8 +379,9 @@ services:
         target: /etc/grafana/provisioning/datasources/prometheus.yml
         read_only: true
     
+    # Host loopback only (OPS-4); put it behind the TLS proxy to publish it.
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     
     networks:
       - strada-network
