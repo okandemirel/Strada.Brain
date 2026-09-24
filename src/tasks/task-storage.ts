@@ -182,6 +182,18 @@ export class TaskStorage {
     this.getStmt("updateCancelled").run(TaskStatus.cancelled, reason ?? null, Date.now(), id);
   }
 
+  /**
+   * Retire a PAUSED row a continuation has taken over: cancelled, reason
+   * "superseded" (descendants do not read it as a stop order). updated_at is
+   * left alone so the continuation stays the newest row of its goal root
+   * (findLatestByGoalRoot orders by it). Returns false when the row is no
+   * longer paused.
+   */
+  markSuperseded(id: TaskId): boolean {
+    this.ensureConnection();
+    return this.getStmt("markSuperseded").run(TaskStatus.cancelled, "superseded", id, TaskStatus.paused).changes > 0;
+  }
+
   load(id: TaskId): Task | null {
     this.ensureConnection();
     const row = this.getStmt("getTask").get(id) as TaskRow | undefined;
@@ -507,6 +519,7 @@ export class TaskStorage {
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
       updateCancelled: `UPDATE tasks SET status = ?, cancel_reason = ?, updated_at = ? WHERE id = ?`,
+      markSuperseded: `UPDATE tasks SET status = ?, cancel_reason = ? WHERE id = ? AND status = ?`,
       updateResult: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateError: `UPDATE tasks SET error = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,

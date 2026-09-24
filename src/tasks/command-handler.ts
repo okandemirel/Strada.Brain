@@ -861,6 +861,14 @@ export class CommandHandler {
       );
       return;
     }
+    // Retired on this very call: its lineage already continues under a newer task.
+    if (task.cancelReason === "superseded") {
+      await this.channel.sendText(
+        chatId,
+        `Task ${taskId} was already continued by a newer task in its lineage; nothing to resume.`,
+      );
+      return;
+    }
     const hint =
       task.status === TaskStatus.blocked || task.status === TaskStatus.failed
         ? " Use /retry to run it again."

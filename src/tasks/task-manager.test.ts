@@ -791,3 +791,126 @@ describe("settlement is a conditional transition (Codex 2026-09-12 S#3)", () => 
     expect(settled).toEqual(["result", "emitted"]);
   });
 });
+
+describe("a resumed paused task is retired, so a restart does not replay it (TSK-2)", () => {
+  beforeAll(() => {
+    try { createLogger("error", "/tmp/strada-task-manager-test.log"); } catch { /* already initialized */ }
+  });
+
+  // Each step a second apart, as a real lineage is: a continuation is always
+  // newer than the row it continues.
+  function withStorage(run: (storage: TaskStorage, step: () => void) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "task-manager-resume-retire-"));
+    const storage = new TaskStorage(join(dir, "tasks.db"));
+    storage.initialize();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-01T10:00:00Z"));
+    const step = (): void => { vi.setSystemTime(Date.now() + 1_000); };
+    try {
+      run(storage, step);
+    } finally {
+      vi.useRealTimers();
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const makeExecutor = () => ({ enqueue: vi.fn(), resumeConversation: vi.fn(), pauseConversation: vi.fn() }) as any;
+
+  it("crash, resume on boot 2, child completes: boot 3 submits nothing", () => {
+    withStorage((storage, step) => {
+      // Boot 1: the mission is executing when the process dies.
+      const boot1 = new TaskManager(storage, makeExecutor(), undefined, Date.now() - 60_000);
+      const a = boot1.submit("chat-1", "cli", "ship the feature");
+      boot1.updateStatus(a.id, TaskStatus.executing);
+
+      // Boot 2: recovery pauses it, the restart re-arm resumes it, the child finishes.
+      step();
+      const boot2 = new TaskManager(storage, makeExecutor(), undefined, Date.now());
+      boot2.recoverOnStartup();
+      step();
+      expect(boot2.listPausedByRestart().map((t) => t.id)).toEqual([a.id]);
+      const b = boot2.resumeTask(a.id);
+      expect(b).not.toBeNull();
+      expect(storage.load(a.id)?.status).toBe(TaskStatus.cancelled);
+      expect(storage.load(a.id)?.cancelReason).toBe("superseded");
+      boot2.updateStatus(b!.id, TaskStatus.executing);
+      boot2.complete(b!.id, "done");
+
+      // Boot 3: nothing is paused, nothing is resubmitted.
+      step();
+      const exec3 = makeExecutor();
+      const boot3 = new TaskManager(storage, exec3, undefined, Date.now());
+      boot3.recoverOnStartup();
+      expect(boot3.listPausedByRestart()).toEqual([]);
+      expect(boot3.resumeTask(a.id)).toBeNull();
+      expect(exec3.enqueue).not.toHaveBeenCalled();
+      expect(storage.listActiveByChatId("chat-1")).toEqual([]);
+    });
+  });
+
+  it("heals a paused row an older version left behind after its continuation completed", () => {
+    withStorage((storage, step) => {
+      const manager = new TaskManager(storage, makeExecutor(), undefined, Date.now() - 60_000);
+      const a = manager.submit("chat-1", "cli", "ship the feature");
+      step();
+      // What the old resumeTask left: a child that completed, a parent still paused.
+      const b = manager.submit("chat-1", "cli", "resume: ship the feature", { parentId: a.id });
+      manager.updateStatus(b.id, TaskStatus.executing);
+      manager.complete(b.id, "done");
+      storage.updateError(a.id, "Task interrupted by system restart.");
+      storage.updateStatus(a.id, TaskStatus.paused);
+
+      step();
+      const exec = makeExecutor();
+      const nextBoot = new TaskManager(storage, exec, undefined, Date.now());
+      nextBoot.recoverOnStartup();
+      expect(storage.load(a.id)?.status).toBe(TaskStatus.cancelled);
+      expect(nextBoot.listPausedByRestart()).toEqual([]);
+      expect(nextBoot.resumeTask(a.id)).toBeNull();
+      expect(exec.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  it("/pause then resume leaves only the continuation active", () => {
+    withStorage((storage, step) => {
+      const manager = new TaskManager(storage, makeExecutor());
+      const a = manager.submit("chat-1", "cli", "ship the feature");
+      manager.updateStatus(a.id, TaskStatus.executing);
+      expect(manager.pauseTask(a.id)).toBe(true);
+      step();
+      const b = manager.resumeTask(a.id);
+      expect(b).not.toBeNull();
+      expect(storage.listActiveByChatId("chat-1").map((t) => t.id)).toEqual([b!.id]);
+    });
+  });
+
+  it("a goal-backed resume retires the parent and keeps the continuation the goal root's latest task", () => {
+    withStorage((storage, step) => {
+      const goalStorage = { getTree: () => makeGoalTree(), updateTreeStatus: vi.fn() } as any;
+      const manager = new TaskManager(storage, makeExecutor(), goalStorage);
+      const a = manager.submit("chat-1", "cli", "Repair the pipeline", { goalRootId: "goal_root" });
+      manager.updateStatus(a.id, TaskStatus.paused);
+      step();
+      const b = manager.resumeTask(a.id);
+      expect(b).not.toBeNull();
+      expect(storage.load(a.id)?.status).toBe(TaskStatus.cancelled);
+      expect(storage.findLatestByGoalRoot("goal_root")?.id).toBe(b!.id);
+    });
+  });
+
+  it("leaves the parent resumable when the queue refused the continuation", () => {
+    withStorage((storage) => {
+      const executor = makeExecutor();
+      const manager = new TaskManager(storage, executor);
+      const a = manager.submit("chat-1", "cli", "ship the feature");
+      manager.updateStatus(a.id, TaskStatus.paused);
+      executor.enqueue.mockImplementation((task: Task) => {
+        storage.updateError(task.id, "Task queue full");
+        throw new Error("Task queue full");
+      });
+      manager.resumeTask(a.id);
+      expect(storage.load(a.id)?.status).toBe(TaskStatus.paused);
+    });
+  });
+});

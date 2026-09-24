@@ -294,15 +294,71 @@ export class TaskManager extends EventEmitter {
     );
     this.executor.resumeConversation(conversationKey);
 
+    // A paused row whose lineage already continues (or finished) under a
+    // newer task is history: resuming it replayed a delivered mission.
+    if (this.retireIfSuperseded(task)) {
+      return null;
+    }
+
     if (task.goalRootId) {
       return this.resumeGoalRoot(task.goalRootId);
     }
 
-    return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
+    return this.retireResumedParent(task, this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
       ...this.continuationOptions(task),
       // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
       forceSharedPlanning: this.replayForcesSharedPlanning(task),
-    });
+    }));
+  }
+
+  /**
+   * A resume submits the work as a child and the paused parent used to stay
+   * `paused` for good: every later boot re-paused it, listPausedByRestart
+   * returned it, and the restart re-arm resumed the finished mission again.
+   * Once the continuation is queued the parent is retired as "superseded".
+   * A child the queue refused (failed at submit) leaves the parent resumable.
+   */
+  private retireResumedParent(parent: Task, child: Task): Task {
+    try {
+      if (parent.status !== TaskStatus.paused) return child;
+      if (this.storage.load(child.id)?.status === TaskStatus.failed) return child;
+      if (this.storage.markSuperseded(parent.id)) {
+        getLogger().info("Paused task retired — its resume continues as a new task", {
+          taskId: parent.id,
+          continuedAs: child.id,
+        });
+      }
+    } catch (err) {
+      // Bookkeeping only: the continuation is already queued.
+      getLogger().warn("Could not retire a resumed task", {
+        taskId: parent.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return child;
+  }
+
+  /**
+   * Retire a paused row when a newer task of its lineage is live or completed.
+   * Also heals rows left paused by versions that never retired a resumed
+   * parent. True when the row was retired.
+   */
+  private retireIfSuperseded(task: Task): boolean {
+    if (task.status !== TaskStatus.paused) return false;
+    try {
+      const latest = this.storage.findLatestDescendant(task.id);
+      if (!latest || latest.id === task.id) return false;
+      if (latest.status !== TaskStatus.completed && !ACTIVE_STATUSES.has(latest.status)) return false;
+      if (!this.storage.markSuperseded(task.id)) return false;
+      getLogger().info("Paused task retired — a newer task in its lineage continues or finished it", {
+        taskId: task.id,
+        latestTaskId: latest.id,
+        latestStatus: latest.status,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -513,22 +569,22 @@ export class TaskManager extends EventEmitter {
     }
     const tree = this.goalStorage?.getTree(goalRootId as GoalNodeId);
     if (!tree) {
-      return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
+      return this.retireResumedParent(task, this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
         ...this.continuationOptions(task),
         // audited 2026-09-02: persisted but never forwarded — see replayForcesSharedPlanning.
         forceSharedPlanning: this.replayForcesSharedPlanning(task),
-      });
+      }));
     }
 
     const replayTree = task.status === TaskStatus.blocked
       ? prepareTreeForRetry(tree)
       : prepareTreeForResume(tree);
-    return this.submit(task.chatId, task.channelType, task.prompt, {
+    return this.retireResumedParent(task, this.submit(task.chatId, task.channelType, task.prompt, {
       ...this.continuationOptions(task),
       goalTree: replayTree,
       goalRootId,
       forceSharedPlanning: true,
-    });
+    }));
   }
 
   /**
@@ -841,6 +897,12 @@ export class TaskManager extends EventEmitter {
           this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "failed");
         }
         logger.warn("Task marked as failed on recovery", { taskId: task.id, previousStatus: task.status });
+        continue;
+      }
+      // A paused row a newer task already continued is retired, not
+      // re-paused: re-pausing re-stamped it "interrupted by system restart"
+      // and the restart re-arm then resumed a mission already delivered.
+      if (this.retireIfSuperseded(task)) {
         continue;
       }
 
