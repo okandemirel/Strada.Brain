@@ -8,7 +8,7 @@
  * Features:
  * - Readiness-based proposal (not scheduled)
  * - Approval queue integration for human gate
- * - Cooldown after rejection
+ * - Cooldown after a proposal settles (denied, expired or deployed)
  * - Circuit breaker auto-disable after consecutive failures
  *
  * Requirements: DEPLOY-01 (detection + proposal), DEPLOY-02 (human approval)
@@ -45,7 +45,8 @@ export class DeployTrigger implements ITrigger {
   private readonly config: DeploymentConfig;
   private readonly logger: DeployTriggerLogger;
   private proposalPending = false;
-  private lastRejectionTime = 0;
+  /** When the last proposal settled (denied, expired, deployed); starts the cooldown. */
+  private cooldownStartedAt = 0;
   private cachedReadiness: ReadinessResult | null = null;
 
   /** Cooldown duration in ms, derived from config */
@@ -75,7 +76,7 @@ export class DeployTrigger implements ITrigger {
    * Returns true when:
    * - Cached readiness shows ready=true
    * - No proposal currently pending
-   * - Cooldown period has elapsed since last rejection
+   * - Cooldown period has elapsed since the last proposal settled
    * - Circuit breaker is not open
    * - Executor is not running a deployment
    */
@@ -99,12 +100,17 @@ export class DeployTrigger implements ITrigger {
       if (stillPending) {
         return false;
       }
-      // Proposal expired or was decided without callback -- clean up
+      // Proposal expired or was decided without callback. An expiry is a
+      // proposal nobody wanted now: re-proposing the same readiness on this
+      // very tick produced an endless stream of approval requests. Cool down
+      // and wait for a fresh readiness check, as after a denial.
       this.proposalPending = false;
+      this.settleProposal(now.getTime());
+      return false;
     }
 
-    // Cooldown after rejection
-    if (this.lastRejectionTime > 0 && now.getTime() < this.lastRejectionTime + this.cooldownMs) {
+    // Cooldown after the last proposal settled
+    if (this.cooldownStartedAt > 0 && now.getTime() < this.cooldownStartedAt + this.cooldownMs) {
       return false;
     }
 
@@ -148,7 +154,7 @@ export class DeployTrigger implements ITrigger {
     if (this.circuitBreaker.isOpen()) {
       return "disabled";
     }
-    if (this.lastRejectionTime > 0 && Date.now() < this.lastRejectionTime + this.cooldownMs) {
+    if (this.cooldownStartedAt > 0 && Date.now() < this.cooldownStartedAt + this.cooldownMs) {
       return "paused";
     }
     return "active";
@@ -159,6 +165,12 @@ export class DeployTrigger implements ITrigger {
    *
    * - Approved: execute deployment, record result on circuit breaker
    * - Denied: set cooldown, clear pending, invalidate readiness cache
+   *
+   * Either way the readiness this proposal was built on is spent: the next
+   * proposal needs a fresh readiness check (and, after a denial or a
+   * successful deploy, the cooldown). Only the checker's cache was
+   * invalidated before, so the next tick re-proposed the deployment that had
+   * just run.
    */
   async onApprovalDecided(
     decision: "approved" | "denied",
@@ -168,8 +180,7 @@ export class DeployTrigger implements ITrigger {
     this.proposalPending = false;
 
     if (decision === "denied") {
-      this.lastRejectionTime = Date.now();
-      this.readinessChecker.invalidateCache();
+      this.settleProposal(Date.now());
       this.logger.info("Deployment denied", { proposalId, decidedBy });
       return null;
     }
@@ -185,20 +196,30 @@ export class DeployTrigger implements ITrigger {
 
       if (result.success) {
         this.circuitBreaker.recordSuccess();
+        this.settleProposal(Date.now());
       } else {
         this.circuitBreaker.recordFailure();
       }
 
-      // Invalidate readiness cache after deployment attempt
+      // Invalidate readiness after the deployment attempt
+      this.cachedReadiness = null;
       this.readinessChecker.invalidateCache();
 
       return result;
     } catch (err) {
       this.circuitBreaker.recordFailure();
+      this.cachedReadiness = null;
       this.readinessChecker.invalidateCache();
       this.logger.error("Deployment execution error", { proposalId, error: String(err) });
       return null;
     }
+  }
+
+  /** A proposal settled: cool down and forget the readiness it was built on. */
+  private settleProposal(nowMs: number): void {
+    this.cooldownStartedAt = nowMs;
+    this.cachedReadiness = null;
+    this.readinessChecker.invalidateCache();
   }
 
   /**

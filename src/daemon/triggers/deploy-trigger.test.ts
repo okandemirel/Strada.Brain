@@ -195,6 +195,9 @@ describe("DeployTrigger", () => {
       trigger.setCachedReadiness(createReadyResult());
 
       await trigger.onApprovalDecided("denied", "proposal-1");
+      // A decision spends the readiness it was proposed on (TSK-7); the next
+      // proposal rides on a fresh readiness check.
+      trigger.setCachedReadiness(createReadyResult());
 
       // Cooldown is 0 minutes, so it should fire immediately at a future time
       const futureDate = new Date(Date.now() + 1000);
@@ -316,9 +319,34 @@ describe("DeployTrigger", () => {
 
       await trigger.onApprovalDecided("approved", "proposal-1");
 
-      // After approval + execution, should be able to fire again
+      // After approval + execution, a fresh readiness can be proposed again
+      // once the post-deploy cooldown has passed (TSK-7: not on the next tick).
       trigger.setCachedReadiness(createReadyResult());
-      expect(trigger.shouldFire(new Date())).toBe(true);
+      expect(trigger.shouldFire(new Date(Date.now() + 31 * 60_000))).toBe(true);
+    });
+
+    // TSK-7: onApprovalDecided invalidated only the checker's cache; the
+    // trigger's own cached readiness still said ready, so the next heartbeat
+    // tick proposed the deployment that had just run.
+    it("does not re-propose on the next tick after a successful deploy", async () => {
+      trigger.setCachedReadiness(createReadyResult());
+      trigger.onFired(new Date());
+      await trigger.onApprovalDecided("approved", "proposal-1", "admin");
+
+      expect(trigger.shouldFire(new Date())).toBe(false);
+      // Past the cooldown it still needs a fresh readiness check.
+      expect(trigger.shouldFire(new Date(Date.now() + 31 * 60_000))).toBe(false);
+    });
+
+    it("needs a fresh readiness check after a failed deploy", async () => {
+      vi.mocked(executor.execute).mockResolvedValueOnce({
+        success: false, exitCode: 1, signal: null, stdout: "", stderr: "boom", durationMs: 10,
+      });
+      trigger.setCachedReadiness(createReadyResult());
+      trigger.onFired(new Date());
+      await trigger.onApprovalDecided("approved", "proposal-1");
+
+      expect(trigger.shouldFire(new Date())).toBe(false);
     });
 
     it("invalidates readiness cache after deployment", async () => {
@@ -374,7 +402,10 @@ describe("DeployTrigger", () => {
   });
 
   describe("shouldFire — proposal expiry cleanup", () => {
-    it("clears pending flag and allows fire when approval expired from queue", () => {
+    // TSK-7: an expired proposal used to be re-proposed on the same tick,
+    // forever, until someone denied one. It now cools down like a denial and
+    // waits for a fresh readiness check.
+    it("clears the pending flag, cools down and waits for fresh readiness when the approval expired", () => {
       trigger.setCachedReadiness(createReadyResult());
 
       // Fire to set proposalPending
@@ -383,7 +414,12 @@ describe("DeployTrigger", () => {
       // Empty queue = proposal expired
       vi.mocked(approvalQueue.getPending).mockReturnValue([]);
 
-      expect(trigger.shouldFire(new Date())).toBe(true);
+      expect(trigger.shouldFire(new Date())).toBe(false);
+      expect(trigger.getState()).toBe("paused");
+      expect(trigger.shouldFire(new Date(Date.now() + 31 * 60_000))).toBe(false);
+
+      trigger.setCachedReadiness(createReadyResult());
+      expect(trigger.shouldFire(new Date(Date.now() + 31 * 60_000))).toBe(true);
     });
   });
 
