@@ -132,7 +132,9 @@ describe("Feature: max_tokens from capabilities", () => {
       await provider.chat("system", [{ role: "user", content: "test" }], []);
 
       const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
-      expect(body.max_tokens).toBe(expected);
+      // The official OpenAI endpoint takes the same cap as max_completion_tokens
+      // (it rejects max_tokens for reasoning models — PRV-6).
+      expect(body.max_tokens ?? body.max_completion_tokens).toBe(expected);
     });
   }
 

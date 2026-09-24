@@ -214,12 +214,72 @@ describe("OpenAIProvider", () => {
     });
     const provider = new OpenAIProvider("sk-test");
     const configured = provider.capabilities.maxTokens;
+    // The official endpoint takes the cap as max_completion_tokens (PRV-6).
     await provider.chat("system", [{ role: "user", content: "Hello" }], [], { maxTokens: Math.floor(configured / 2) });
-    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).max_tokens).toBe(Math.floor(configured / 2));
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).max_completion_tokens).toBe(Math.floor(configured / 2));
     await provider.chat("system", [{ role: "user", content: "Hello" }], [], { maxTokens: configured * 10 });
-    expect(JSON.parse(mockFetch.mock.calls[1]![1].body).max_tokens).toBe(configured);
+    expect(JSON.parse(mockFetch.mock.calls[1]![1].body).max_completion_tokens).toBe(configured);
     await provider.chat("system", [{ role: "user", content: "Hello" }], []);
-    expect(JSON.parse(mockFetch.mock.calls[2]![1].body).max_tokens).toBe(configured);
+    expect(JSON.parse(mockFetch.mock.calls[2]![1].body).max_completion_tokens).toBe(configured);
+  });
+
+  // PRV-6: OpenAI rejects `max_tokens` on reasoning models (o-series, GPT-5.x,
+  // the default here) and accepts max_completion_tokens for every model.
+  describe("output-token cap parameter name", () => {
+    const okResponse = {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "Hi", tool_calls: [] }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+      text: async () => "",
+      headers: new Headers(),
+    };
+    const sentBody = (call: number): Record<string, unknown> =>
+      JSON.parse(mockFetch.mock.calls[call]![1].body) as Record<string, unknown>;
+
+    it("sends max_completion_tokens, never max_tokens, to the official endpoint's default GPT-5 model", async () => {
+      mockFetch.mockResolvedValue(okResponse);
+      const provider = new OpenAIProvider("sk-test");
+      await provider.chat("system", [{ role: "user", content: "Hi" }], []);
+      await provider.chatStream("system", [{ role: "user", content: "Hi" }], [], () => {}).catch(() => undefined);
+      for (const call of [0, 1]) {
+        expect(sentBody(call)).toHaveProperty("max_completion_tokens", provider.capabilities.maxTokens);
+        expect(sentBody(call)).not.toHaveProperty("max_tokens");
+      }
+    });
+
+    it("keeps max_tokens for an OpenAI-compatible endpoint", async () => {
+      mockFetch.mockResolvedValue(okResponse);
+      const provider = new OpenAIProvider("sk-test", "some-model", "https://compat.example.test/v1");
+      await provider.chat("system", [{ role: "user", content: "Hi" }], []);
+      expect(sentBody(0)).toHaveProperty("max_tokens");
+      expect(sentBody(0)).not.toHaveProperty("max_completion_tokens");
+    });
+
+    it("switches once when a compatible endpoint names max_completion_tokens as the replacement", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ error: {
+            message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+            type: "invalid_request_error", param: "max_tokens", code: "unsupported_parameter",
+          } }),
+          headers: new Headers(),
+        })
+        .mockResolvedValue(okResponse);
+      const provider = new OpenAIProvider("sk-test", "o4-mini", "https://my-resource.openai.azure.example/openai/v1");
+
+      await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).resolves.toMatchObject({ text: "Hi" });
+      expect(sentBody(0)).toHaveProperty("max_tokens");
+      expect(sentBody(1)).toHaveProperty("max_completion_tokens");
+      expect(sentBody(1)).not.toHaveProperty("max_tokens");
+      // Remembered: the next call goes straight to the accepted name.
+      await provider.chat("system", [{ role: "user", content: "Hi" }], []);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(sentBody(2)).toHaveProperty("max_completion_tokens");
+    });
   });
 
   it("does not include tools in the request body when tools array is empty", async () => {

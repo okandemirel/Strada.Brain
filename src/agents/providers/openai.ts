@@ -65,6 +65,20 @@ export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason
   content_filter: "end_turn",
 };
 
+/** The first-party OpenAI API host (not a compatible endpoint that reuses the wire format). */
+function isOfficialOpenAiEndpoint(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+/** An endpoint refusing `max_tokens` and naming `max_completion_tokens` as the replacement. */
+function isMaxTokensParamRejection(message: string): boolean {
+  return /\bmax_tokens\b/u.test(message) && /\bmax_completion_tokens\b/u.test(message);
+}
+
 /** Regex to match <reasoning> blocks injected by providers like DeepSeek/MiniMax */
 const REASONING_BLOCK_RE = /<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g;
 
@@ -834,6 +848,24 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
    */
   private reasoningEffortOverride?: ProviderCapabilities["reasoningEffort"] | null;
 
+  /** Set once an endpoint has told us it rejects `max_tokens` (see postChatCompletion). */
+  private maxTokensParamOverride?: "max_completion_tokens";
+
+  /**
+   * The name the output-token cap is sent under.
+   *
+   * OpenAI's own API deprecated `max_tokens` for chat completions and rejects it
+   * outright for reasoning models (o-series, GPT-5.x — the default model here):
+   * "Unsupported parameter: 'max_tokens' … Use 'max_completion_tokens' instead".
+   * It accepts `max_completion_tokens` for every model, so the official host
+   * always gets that. OpenAI-compatible endpoints keep `max_tokens`, which is
+   * the name most of them understand, unless they have said otherwise.
+   */
+  protected maxTokensParam(): "max_tokens" | "max_completion_tokens" {
+    if (this.maxTokensParamOverride) return this.maxTokensParamOverride;
+    return isOfficialOpenAiEndpoint(this.baseUrl) ? "max_completion_tokens" : "max_tokens";
+  }
+
   /** The reasoning_effort in force: the endpoint's correction if we have one. */
   protected effectiveReasoningEffort(): ProviderCapabilities["reasoningEffort"] | undefined {
     if (this.reasoningEffortOverride !== undefined) {
@@ -871,6 +903,17 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     } catch (error) {
       const asked = this.effectiveReasoningEffort();
       const message = error instanceof Error ? error.message : String(error);
+      // An endpoint that tells us it wants the newer output-cap name (Azure and
+      // other OpenAI-hosted reasoning deployments) is believed once, like the
+      // reasoning_effort correction below.
+      if (this.maxTokensParamOverride === undefined && isMaxTokensParamRejection(message)) {
+        this.maxTokensParamOverride = "max_completion_tokens";
+        getLogger().warn(`${this.name} switched its output cap to max_completion_tokens`, {
+          model: this.model,
+          endpointSaid: message.slice(0, 200),
+        });
+        return send();
+      }
       if (
         this.reasoningEffortOverride !== undefined ||
         asked === undefined ||
@@ -898,7 +941,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
-      max_tokens: maxTokens !== undefined && maxTokens > 0 ? Math.min(maxTokens, this.capabilities.maxTokens) : this.capabilities.maxTokens,
+      [this.maxTokensParam()]: maxTokens !== undefined && maxTokens > 0 ? Math.min(maxTokens, this.capabilities.maxTokens) : this.capabilities.maxTokens,
       messages,
     };
     if (tools) {
