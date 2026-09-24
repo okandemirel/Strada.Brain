@@ -112,6 +112,20 @@ describe("orchestrator-runtime-utils", () => {
     ).toContain("[REDACTED]");
   });
 
+  it("keeps the end of a long tool result, where build and test verdicts are printed", () => {
+    const long = "compiling line\n".repeat(2000) + "Build FAILED.\n  3 Error(s)";
+    const out = sanitizeToolResult(long, 8192);
+    expect(out.length).toBeLessThanOrEqual(8192 + 64);
+    expect(out.startsWith("compiling line")).toBe(true);
+    expect(out).toContain("Build FAILED.");
+    expect(out).toMatch(/\.\.\. \(\d+ characters truncated\) \.\.\./);
+  });
+
+  it("never splits a surrogate pair at a cut", () => {
+    const out = sanitizeToolResult("😀".repeat(5000), 2048);
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
   it("ignores incidental inspection failures when reflection declares DONE", () => {
     const result = validateReflectionDecision("DONE", createState({
       stepResults: [

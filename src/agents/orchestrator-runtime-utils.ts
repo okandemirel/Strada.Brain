@@ -389,9 +389,39 @@ export function sanitizeToolResult(content: string, maxLength = MAX_TOOL_RESULT_
   let result = sanitizePromptInjection(content);
   result = redactSensitiveText(result);
   if (result.length > maxLength) {
-    result = result.substring(0, maxLength) + "\n... (truncated)";
+    result = truncateHeadAndTail(result, maxLength);
   }
   return result;
+}
+
+/** Below this cap there is no room for both ends; the head alone is kept. */
+const HEAD_AND_TAIL_MIN_LENGTH = 1024;
+
+/**
+ * Keep the start AND the end of an over-long tool result. Build and test
+ * tools print their verdict last (MSBuild's error summary, "Tests: 3 failed"),
+ * so a head-only cut handed the model a result with the answer removed; the
+ * process runner already keeps both ends of each stream (TLS-10). Cuts never
+ * split a surrogate pair.
+ */
+function truncateHeadAndTail(text: string, maxLength: number): string {
+  if (maxLength < HEAD_AND_TAIL_MIN_LENGTH) {
+    return text.substring(0, avoidSplitPair(text, maxLength)) + "\n... (truncated)";
+  }
+  const headEnd = avoidSplitPair(text, Math.floor(maxLength * 0.6));
+  let tailStart = text.length - (maxLength - headEnd);
+  if (tailStart < text.length && isLowSurrogate(text.charCodeAt(tailStart))) tailStart += 1;
+  const dropped = tailStart - headEnd;
+  return `${text.substring(0, headEnd)}\n... (${dropped} characters truncated) ...\n${text.substring(tailStart)}`;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** An end index that does not cut between a high and a low surrogate. */
+function avoidSplitPair(text: string, end: number): number {
+  return end > 0 && end < text.length && isLowSurrogate(text.charCodeAt(end)) ? end - 1 : end;
 }
 
 /** A health entry as this decision needs to see it. */
