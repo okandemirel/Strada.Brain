@@ -42,11 +42,19 @@ import { fireDevKnowledgeCompletionNote } from "../vault/dev-knowledge-writer.js
 import type { DevKnowledgeNoteWriter } from "../vault/dev-knowledge-writer.js";
 import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
+/**
+ * A route-level TaskPlanner is ONE message's state machine: startTask() resets
+ * it, so a planner shared by every inbound message let chat B's message wipe
+ * chat A's task mid-route, and A's trajectory and dev-knowledge note were then
+ * recorded with B's state (COR-10). Each message gets its own.
+ */
+export type RouteTaskPlannerFactory = () => TaskPlanner;
+
 export function wireMessageHandler(
   channel: IChannelAdapter,
   messageRouter: MessageRouter,
   orchestrator: Orchestrator,
-  taskPlanner: TaskPlanner,
+  createTaskPlanner: RouteTaskPlannerFactory,
   learningPipeline: LearningPipeline | undefined,
   projectPath: string,
   identityManager?: IdentityStateManager,
@@ -88,6 +96,7 @@ export function wireMessageHandler(
     }
 
     // Start task tracking for learning system
+    const taskPlanner = createTaskPlanner();
     let taskRunId: string | undefined;
     if (taskPlanner) {
       taskPlanner.startTask({

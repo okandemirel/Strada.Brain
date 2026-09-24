@@ -2170,16 +2170,15 @@ async function bootstrapImpl(
       if (await messageRouter.preRoute(normalizedMsg)) {
         return;
       }
-      let taskRunId: string | undefined;
-      if (learningResult.taskPlanner) {
-        learningResult.taskPlanner.startTask({
-          sessionId: normalizedMsg.chatId ?? generateSessionId(),
-          chatId: normalizedMsg.chatId,
-          taskDescription: normalizedMsg.text.slice(0, 200),
-          learningPipeline: learningResult.pipeline,
-        });
-        taskRunId = learningResult.taskPlanner.getTaskRunId() ?? undefined;
-      }
+      // One planner per message: a shared one is reset by every startTask (COR-10).
+      const taskPlanner = new TaskPlanner();
+      taskPlanner.startTask({
+        sessionId: normalizedMsg.chatId ?? generateSessionId(),
+        chatId: normalizedMsg.chatId,
+        taskDescription: normalizedMsg.text.slice(0, 200),
+        learningPipeline: learningResult.pipeline,
+      });
+      const taskRunId = taskPlanner.getTaskRunId() ?? undefined;
 
       let routeError: unknown;
       await orchestrator.withTaskExecutionContext(
@@ -2196,14 +2195,14 @@ async function bootstrapImpl(
             routeError = error;
             throw error;
           } finally {
-            if (learningResult.taskPlanner?.isActive()) {
-              learningResult.taskPlanner.attachReplayContext(
+            if (taskPlanner.isActive()) {
+              taskPlanner.attachReplayContext(
                 await orchestrator.buildTrajectoryReplayContext({
                   chatId: normalizedMsg.chatId,
                   userId: normalizedMsg.userId,
                   conversationId: normalizedMsg.conversationId,
                   channelType: normalizedMsg.channelType,
-                  sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
+                  sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
                   taskRunId,
                 }),
               );
@@ -2216,14 +2215,14 @@ async function bootstrapImpl(
                 success: routeError === undefined,
                 reason: routeError instanceof Error ? routeError.message : undefined,
                 taskRunId,
-                state: learningResult.taskPlanner.getState(),
-                steps: learningResult.taskPlanner.getTrajectorySteps().map((s) => ({
+                state: taskPlanner.getState(),
+                steps: taskPlanner.getTrajectorySteps().map((s) => ({
                   toolName: String(s.toolName),
                   input: s.input as Record<string, unknown> | undefined,
                 })),
                 errorCount: routeError === undefined ? 0 : 1,
               });
-              learningResult.taskPlanner.endTask({
+              taskPlanner.endTask({
                 success: routeError === undefined,
                 finalOutput: routeError instanceof Error ? routeError.message : undefined,
                 hadErrors: routeError !== undefined,
@@ -2245,7 +2244,7 @@ async function bootstrapImpl(
       channel,
       messageRouter,
       orchestrator,
-      learningResult.taskPlanner,
+      () => new TaskPlanner(),
       learningResult.pipeline,
       config.unityProjectPath,
       identityManager,

@@ -7,6 +7,7 @@ import {
   wireMessageHandler,
 } from "./bootstrap-wiring.js";
 import { createLogger } from "../utils/logger.js";
+import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { TaskStatus, type Task } from "../tasks/types.js";
 
 // ---------------------------------------------------------------------------
@@ -469,14 +470,14 @@ describe("BootstrapDisposables", () => {
 describe("wireMessageHandler", () => {
   it("registers a message handler on the channel", () => {
     const channel = makeChannel();
-    wireMessageHandler(channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(), undefined, "/tmp");
+    wireMessageHandler(channel, makeMessageRouter(), makeOrchestrator(), () => makeTaskPlanner(), undefined, "/tmp");
     expect(channel.onMessage).toHaveBeenCalledTimes(1);
   });
 
   it("routes incoming messages through the message router", async () => {
     const channel = makeChannel();
     const router = makeMessageRouter();
-    wireMessageHandler(channel, router, makeOrchestrator(), makeTaskPlanner(), undefined, "/tmp");
+    wireMessageHandler(channel, router, makeOrchestrator(), () => makeTaskPlanner(), undefined, "/tmp");
 
     await channel._emit({ chatId: "c1", text: "hi", userId: "u1" });
 
@@ -488,7 +489,7 @@ describe("wireMessageHandler", () => {
   it("starts and ends task tracking", async () => {
     const channel = makeChannel();
     const tp = makeTaskPlanner();
-    wireMessageHandler(channel, makeMessageRouter(), makeOrchestrator(), tp, undefined, "/tmp");
+    wireMessageHandler(channel, makeMessageRouter(), makeOrchestrator(), () => tp, undefined, "/tmp");
 
     await channel._emit({ chatId: "c1", text: "hi", userId: "u1" });
 
@@ -500,7 +501,7 @@ describe("wireMessageHandler", () => {
     const channel = makeChannel();
     const registry = { recordActivity: vi.fn() } as any;
     wireMessageHandler(
-      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      channel, makeMessageRouter(), makeOrchestrator(), () => makeTaskPlanner(),
       undefined, "/tmp", undefined, undefined, registry, "web",
     );
 
@@ -513,7 +514,7 @@ describe("wireMessageHandler", () => {
     const channel = makeChannel();
     const hb = { onUserActivity: vi.fn() } as any;
     wireMessageHandler(
-      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      channel, makeMessageRouter(), makeOrchestrator(), () => makeTaskPlanner(),
       undefined, "/tmp", undefined, hb,
     );
 
@@ -528,7 +529,7 @@ describe("wireMessageHandler", () => {
     router.route.mockRejectedValueOnce(new Error("boom"));
     const tp = makeTaskPlanner();
 
-    wireMessageHandler(channel, router, makeOrchestrator(), tp, undefined, "/tmp");
+    wireMessageHandler(channel, router, makeOrchestrator(), () => tp, undefined, "/tmp");
 
     await expect(channel._emit({ chatId: "c1", text: "hi", userId: "u1" })).rejects.toThrow("boom");
 
@@ -537,12 +538,45 @@ describe("wireMessageHandler", () => {
     );
   });
 
+  it("gives every message its own route-level planner, so overlapping chats keep their own record (COR-10)", async () => {
+    const channel = makeChannel();
+    let releaseA!: () => void;
+    const aRouted = new Promise<void>((resolve) => { releaseA = resolve; });
+    const router = {
+      route: vi.fn(async (msg: { chatId: string }) => {
+        if (msg.chatId === "chat-A") await aRouted;
+      }),
+    } as any;
+    const recorded: Array<{ chatId?: string; taskDescription: string }> = [];
+    const learningPipeline = {
+      recordTrajectory: vi.fn((t: { chatId?: string; taskDescription: string }) => {
+        recorded.push({ chatId: t.chatId, taskDescription: t.taskDescription });
+      }),
+      isTrajectoryLevelCreditEnabled: () => false,
+    } as any;
+    wireMessageHandler(channel, router, makeOrchestrator(), () => new TaskPlanner(), learningPipeline, "/tmp");
+
+    const handler = channel._handlers[0];
+    // A is still routing when B arrives and finishes.
+    const a = handler({ chatId: "chat-A", text: "build the level", userId: "u1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handler({ chatId: "chat-B", text: "fix the menu", userId: "u2" });
+    releaseA();
+    await a;
+
+    expect(recorded).toEqual(expect.arrayContaining([
+      { chatId: "chat-A", taskDescription: "build the level" },
+      { chatId: "chat-B", taskDescription: "fix the menu" },
+    ]));
+    expect(recorded).toHaveLength(2);
+  });
+
   it("binds notification + digest delivery to the first inbound chat", async () => {
     const channel = makeChannel();
     const notificationRouter = { setChatId: vi.fn() } as any;
     const digestReporter = { setChatId: vi.fn() } as any;
     wireMessageHandler(
-      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      channel, makeMessageRouter(), makeOrchestrator(), () => makeTaskPlanner(),
       undefined, "/tmp", undefined, undefined, undefined, undefined,
       notificationRouter, digestReporter,
     );
@@ -558,7 +592,7 @@ describe("wireMessageHandler", () => {
     const notificationRouter = { setChatId: vi.fn() } as any;
     const digestReporter = { setChatId: vi.fn() } as any;
     wireMessageHandler(
-      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      channel, makeMessageRouter(), makeOrchestrator(), () => makeTaskPlanner(),
       undefined, "/tmp", undefined, undefined, undefined, undefined,
       notificationRouter, digestReporter,
     );
