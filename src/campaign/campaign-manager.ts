@@ -8410,6 +8410,10 @@ function sha256Of(text: string): string {
 }
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
+  // A GDD path can come from a chat message, and what is read goes to the
+  // planner and every sprint prompt: the read side is held inside the project
+  // exactly as the write side is (CMP-12), links resolved.
+  if (!pathIsInsideProject(projectRoot, gddPath)) return undefined;
   try {
     return readFileSync(join(projectRoot, gddPath), "utf8");
   } catch {

@@ -9478,4 +9478,24 @@ describe("CampaignManager", () => {
       await waitFor(() => expect(storage.get(id)!.state).toBe("executing"));
     });
   });
+
+  describe("a GDD is read only from inside the project (CMP-12)", () => {
+    it("a named path that leaves the project is refused, not read", async () => {
+      writeFileSync(join(dir, "outside.md"), "# Somebody else's notes\n");
+      expect(manager.startFromGddFromDocs(ctx, "../outside.md")).toBeUndefined();
+
+      const say = (text: string): Promise<boolean> =>
+        manager.tryHandleIncoming({ channelType: "cli", chatId: "cli-local", userId: "u1", text, timestamp: new Date() } as unknown as IncomingMessage);
+      await say("build the game from the GDD at ../outside.md");
+      expect(storage.listActive()).toHaveLength(0);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    it("a GDD link that points outside the project is not followed", () => {
+      writeFileSync(join(dir, "outside.md"), "# Somebody else's notes\n");
+      symlinkSync(join(dir, "outside.md"), join(projectRoot, "docs", "Linked_GDD.md"));
+      expect(manager.startFromGddFromDocs(ctx, "docs/Linked_GDD.md")).toBeUndefined();
+      expect(tasks.submitted).toHaveLength(0);
+    });
+  });
 });
