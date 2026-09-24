@@ -537,6 +537,16 @@ interface ToolExecutionOptions {
   projectPath?: string;
 }
 
+/** What one call's gate chain reads from its batch (see executeSingleToolCall). */
+interface ToolCallGateContext {
+  chatId: string;
+  mode: ToolExecutionMode;
+  options: ToolExecutionOptions;
+  toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore };
+  goalCtx?: import("../tasks/types.js").GoalContext;
+  logger: ReturnType<typeof getLogger>;
+}
+
 interface SelfManagedWriteReview {
   approved: boolean;
   reason?: string;
@@ -4948,19 +4958,36 @@ export class Orchestrator {
    * runs whether a call is dispatched serially or as part of the parallel leading group — only the
    * idle wait between independent read-only calls is removed, never a gate or a reasoning step.
    * `order` is the pre-assigned substep order index (so concurrent calls keep stable, monotonic
-   * substep labels). Returns exactly one result for every input call (every branch produces one).
+   * substep labels). Returns exactly one result for every input call, also when a gate throws.
    */
   private async executeSingleToolCall(
     tc: ToolCall,
     order: number,
-    ctx: {
-      chatId: string;
-      mode: ToolExecutionMode;
-      options: ToolExecutionOptions;
-      toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore };
-      goalCtx?: import("../tasks/types.js").GoalContext;
-      logger: ReturnType<typeof getLogger>;
-    },
+    ctx: ToolCallGateContext,
+  ): Promise<ToolResult> {
+    try {
+      return await this.runToolCallGateChain(tc, order, ctx);
+    } catch (error) {
+      // The gates before the tool's own try (plan confirmation, write review
+      // and confirmation, path validation, clarification review) can throw —
+      // a channel rejecting an over-long confirmation is enough. The call's
+      // tool_use is already in the session, so a throw here left it with no
+      // tool_result and every later request on the chat was rejected. The
+      // model gets the failure as this call's result instead.
+      const errMsg = error instanceof Error ? error.message : String(error);
+      ctx.logger.error("Tool call gate failed", { chatId: ctx.chatId, tool: tc.name, error: errMsg });
+      return {
+        toolCallId: tc.id,
+        content: `Tool execution failed: ${classifyErrorMessage(error)}`,
+        isError: true,
+      };
+    }
+  }
+
+  private async runToolCallGateChain(
+    tc: ToolCall,
+    order: number,
+    ctx: ToolCallGateContext,
   ): Promise<ToolResult> {
     const { chatId, mode, options, toolContext, goalCtx, logger } = ctx;
 

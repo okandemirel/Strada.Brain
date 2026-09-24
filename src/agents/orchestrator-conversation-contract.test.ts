@@ -5,6 +5,9 @@
  *  - Delivery (ORC-1): only an interactive run posts to the chat from inside the run. Background,
  *    worker and supervisor-node answers are returned as finalText and delivered by the task
  *    system, and the answer is recorded in the run's transcript exactly once.
+ *  - Pairing (ORC-2): every assistant tool_use is answered by the very next user message,
+ *    whose leading blocks are the tool_result blocks for all of its call ids — also when a gate
+ *    throws.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -12,7 +15,7 @@ import { FakeClock } from "../agent-core/control/clock.js";
 import { createControlPlane } from "../agent-core/control/control-plane.js";
 import { V2AgentRunner, type V2RunnerDeps } from "../agent-core/runner/v2-agent-runner.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "../agent-core/runner/agent-runner.js";
-import type { ConversationMessage, ProviderResponse } from "./providers/provider-core.interface.js";
+import type { ConversationMessage, ProviderResponse, ToolCall } from "./providers/provider-core.interface.js";
 import type { Session } from "./orchestrator-session-manager.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -149,6 +152,22 @@ function shape(messages: readonly ConversationMessage[]): string {
     .join(" | ");
 }
 
+/** Every assistant tool_use is answered, first thing, by the next user message. */
+function expectPaired(messages: readonly ConversationMessage[]): void {
+  messages.forEach((m, i) => {
+    if (m.role !== "assistant" || !m.tool_calls?.length) return;
+    const next = messages[i + 1];
+    expect(next?.role, `tool_use at ${i} not followed by a user turn: ${shape(messages)}`).toBe("user");
+    expect(Array.isArray(next!.content), `tool_use at ${i} answered by plain text: ${shape(messages)}`).toBe(true);
+    const blocks = next!.content as Exclude<ConversationMessage["content"], string>;
+    const leading = blocks.slice(0, m.tool_calls.length);
+    expect(
+      leading.map((b) => (b.type === "tool_result" ? b.tool_use_id : `<${b.type}>`)),
+      `tool_result blocks must lead the answer to ${i}: ${shape(messages)}`,
+    ).toEqual(m.tool_calls.map((c) => c.id));
+  });
+}
+
 describe("background, worker and node runs do not post to the chat (ORC-1)", () => {
   it.each(["worker", "background", "supervisor-node"] as const)(
     "%s: the answer is returned, never sent, and recorded once",
@@ -186,5 +205,38 @@ describe("background, worker and node runs do not post to the chat (ORC-1)", () 
     await h.run("interactive");
     const sent = h.channel.sendMarkdown.mock.calls.filter((c) => String(c[1]).includes("final visible answer"));
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("tool_use / tool_result pairing (ORC-2)", () => {
+  it("a gate that throws while running a tool still leaves a tool_result for the call (ORC-2)", async () => {
+    const h = harness();
+    h.chat.mockResolvedValueOnce(
+      resp({
+        text: "",
+        stopReason: "tool_use",
+        toolCalls: [
+          {
+            id: "sp1",
+            name: "show_plan",
+            input: { summary: "Refactor the player controller module", steps: ["Inspect PlayerController.cs file", "Implement the refactor changes"] },
+          },
+        ] as ToolCall[],
+      }),
+    );
+    h.chat.mockResolvedValue(resp({ text: "ok", stopReason: "end_turn" }));
+    // Telegram's requestConfirmation rejects when the plan is longer than one message.
+    h.channel.requestConfirmation.mockRejectedValue(new Error("Bad Request: message is too long"));
+    const sm = (h.orch as unknown as { sessionManager: { getOrCreateSession(id: string): Session; appendVisibleUserMessage(s: Session, t: string): void } }).sessionManager;
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "Show me your plan first before you change anything: refactor the player controller");
+
+    await h.run("interactive", { prompt: String(session.messages[0]!.content), interactiveSession: session } as Partial<AgentRunRequest>).catch(() => undefined);
+
+    const answered = session.messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result" && b.tool_use_id === "sp1"),
+    );
+    expect(answered, shape(session.messages)).toBe(true);
+    expectPaired(session.messages);
   });
 });

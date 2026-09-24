@@ -104,6 +104,57 @@ describe("executeAndTrackTools", () => {
     // taskPlanner.trackToolCall should have been invoked by trackAndRecordToolResults
     expect(tracking.taskPlanner.trackToolCall).toHaveBeenCalled();
   });
+
+  // ORC-2: the tool_use turn is pushed before execution; a throw must not
+  // leave it unanswered in a session that persists.
+  it("answers every call id with a failed tool_result when execution throws, then rethrows", async () => {
+    const session = { messages: [] as unknown[] };
+    const calls = [toolCall, { id: "tc-2", name: "show_plan", input: {} }];
+    await expect(
+      executeAndTrackTools({
+        chatId: "c4",
+        responseText: "",
+        toolCalls: calls,
+        session: session as any,
+        executeToolCalls: vi.fn().mockRejectedValue(new Error("Bad Request: message is too long")),
+        executeOptions: {},
+        trackingParams: makeTrackingParams() as any,
+      }),
+    ).rejects.toThrow("message is too long");
+
+    expect(session.messages).toHaveLength(2);
+    expect(session.messages[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tc-1", content: expect.stringContaining("message is too long"), is_error: true },
+        { type: "tool_result", tool_use_id: "tc-2", content: expect.stringContaining("message is too long"), is_error: true },
+      ],
+    });
+  });
+
+  it("keeps the real results when tracking throws after the tools ran", async () => {
+    const session = { messages: [] as unknown[] };
+    const tracking = makeTrackingParams();
+    tracking.taskPlanner.trackToolCall.mockImplementation(() => {
+      throw new Error("tracker broke");
+    });
+    await expect(
+      executeAndTrackTools({
+        chatId: "c5",
+        responseText: "",
+        toolCalls: [toolCall],
+        session: session as any,
+        executeToolCalls: vi.fn().mockResolvedValue([{ toolCallId: "tc-1", content: "file contents" }]),
+        executeOptions: {},
+        trackingParams: tracking as any,
+      }),
+    ).rejects.toThrow("tracker broke");
+
+    expect(session.messages[1]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tc-1", content: "file contents", is_error: undefined }],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

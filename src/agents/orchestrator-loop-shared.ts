@@ -6,7 +6,7 @@
  * pattern that appeared in both loops.
  */
 
-import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
+import type { MessageContent, ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 import type { AgentState } from "./agent-state.js";
 import type { ToolTrackingParams } from "./orchestrator-tool-execution.js";
@@ -89,18 +89,43 @@ export async function executeAndTrackTools(
     tool_calls: toolCalls,
   });
 
-  // Execute all tool calls
-  const toolResults = await executeToolCalls(chatId, toolCalls, executeOptions);
+  let toolResults: ToolResult[] | undefined;
+  try {
+    // Execute all tool calls
+    toolResults = await executeToolCalls(chatId, toolCalls, executeOptions);
 
-  // Autonomy tracking
-  trackAndRecordToolResults({
-    chatId,
-    toolCalls,
-    toolResults,
-    ...trackingParams,
-  });
+    // Autonomy tracking
+    trackAndRecordToolResults({
+      chatId,
+      toolCalls,
+      toolResults,
+      ...trackingParams,
+    });
+  } catch (error) {
+    // The tool_use turn is already in the session, and sessions persist: left
+    // without its tool_result, every later request on the chat is rejected.
+    // Answer every call id — with the real result where one exists — then let
+    // the caller see the failure.
+    session.messages.push({ role: "user", content: toolResultsOrFailure(toolCalls, toolResults, error) });
+    throw error;
+  }
 
   return { toolResults };
+}
+
+/** One tool_result block per call: its real result when there is one, else the failure. */
+function toolResultsOrFailure(
+  toolCalls: readonly ToolCall[],
+  toolResults: readonly ToolResult[] | undefined,
+  error: unknown,
+): MessageContent[] {
+  const reason = error instanceof Error ? error.message : String(error);
+  return toolCalls.map((tc): MessageContent => {
+    const result = toolResults?.find((r) => r.toolCallId === tc.id);
+    return result
+      ? { type: "tool_result", tool_use_id: tc.id, content: result.content, is_error: result.isError }
+      : { type: "tool_result", tool_use_id: tc.id, content: `Tool execution failed: ${reason}`, is_error: true };
+  });
 }
 
 // =============================================================================
