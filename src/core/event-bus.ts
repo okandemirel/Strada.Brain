@@ -288,6 +288,9 @@ export interface IEventBus<
 
 type AnyListener = (...args: unknown[]) => void;
 
+/** A failing listener is reported at warn at most this often per event. */
+const LISTENER_ERROR_WARN_INTERVAL_MS = 60_000;
+
 export class TypedEventBus<
   TMap extends Record<string, unknown> = LearningEventMap,
 > implements IEventBus<TMap>
@@ -323,6 +326,9 @@ export class TypedEventBus<
     event: K,
     listener: (payload: TMap[K]) => void | Promise<void>,
   ): void {
+    // One subscription per listener: a second on() used to add a second
+    // wrapper that off() could never reach, so it stayed live forever (COR-23).
+    if (this.listenerMap.get(event)?.has(listener)) return;
     const wrapped: AnyListener = (payload: unknown) => {
       this.inflight++;
       try {
@@ -331,7 +337,7 @@ export class TypedEventBus<
           // Async listener -- track the promise
           (result as Promise<void>)
             .catch((error: unknown) => {
-              this.logError(error);
+              this.logError(event, error);
             })
             .finally(() => {
               this.inflight--;
@@ -344,7 +350,7 @@ export class TypedEventBus<
       } catch (error: unknown) {
         // Sync listener threw -- catch and log
         this.inflight--;
-        this.logError(error);
+        this.logError(event, error);
         this.checkDrain();
       }
     };
@@ -394,13 +400,22 @@ export class TypedEventBus<
     }
   }
 
-  private logError(error: unknown): void {
+  /** When each event last reported a listener error at warn level. */
+  private readonly lastListenerErrorWarnAt = new Map<string, number>();
+
+  private logError(event: string, error: unknown): void {
+    // A subscriber that throws on every event was invisible at LOG_LEVEL=info
+    // (COR-23): warn, at most once a minute per event, the rest at debug.
+    const now = Date.now();
+    const lastWarn = this.lastListenerErrorWarnAt.get(event);
+    const warn = lastWarn === undefined || now - lastWarn >= LISTENER_ERROR_WARN_INTERVAL_MS;
+    if (warn) this.lastListenerErrorWarnAt.set(event, now);
     try {
       // Dynamic import to avoid issues in test environments
       void import("../utils/logger.js").then(({ getLogger }) => {
-        getLogger().debug("TypedEventBus: listener error", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const meta = { event, error: error instanceof Error ? error.message : String(error) };
+        if (warn) getLogger().warn("TypedEventBus: listener error", meta);
+        else getLogger().debug("TypedEventBus: listener error", meta);
       }).catch(() => {
         // Logger unavailable -- silently ignore
       });
