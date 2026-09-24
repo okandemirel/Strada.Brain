@@ -22,10 +22,10 @@ function isSafeGlobPattern(pattern: string): boolean {
   return true;
 }
 
-/** Is `candidate` (absolute or relative to `root`) strictly inside `root`? */
-function isInsideRoot(root: string, candidate: string): boolean {
+/** Does `candidate` (absolute or relative to `root`) resolve outside `root`? The root itself is not outside. */
+function isOutsideRoot(root: string, candidate: string): boolean {
   const rel = relative(root, resolve(root, candidate));
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 /**
@@ -35,17 +35,14 @@ function isInsideRoot(root: string, candidate: string): boolean {
  */
 async function globInsideProject(pattern: string, projectPath: string): Promise<string[]> {
   const root = resolve(projectPath);
-  const outside = (p: Path): boolean => {
-    const full = p.fullpath();
-    return full !== root && !isInsideRoot(root, full);
-  };
+  const outside = (p: Path): boolean => isOutsideRoot(root, p.fullpath());
   const matches = await glob(pattern, {
     cwd: projectPath,
     nodir: true,
     maxDepth: 20,
     ignore: { ignored: outside, childrenIgnored: outside },
   });
-  return matches.filter((match) => isInsideRoot(root, match));
+  return matches.filter((match) => !isOutsideRoot(root, match));
 }
 
 const MAX_RESULTS = 50;
