@@ -281,6 +281,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The suite includes a test that drives the compiled helper in dist/ (X-5),
+      # so this job builds first, as verify does. The portal is not needed here.
+      - name: Build backend (the backup test runs dist/)
+        run: npm run build
+        env:
+          STRADA_ALLOW_PORTAL_BUILD_FAILURE: "1"
+
       - name: Run tests with coverage
         env:
           CI: "1"

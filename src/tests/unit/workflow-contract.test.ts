@@ -68,6 +68,13 @@ describe("ci.yml", () => {
     expect(build).toBeLessThan(verify.indexOf("run: npm test"));
   });
 
+  it("coverage builds before it tests, for the same dist/ helper (X-5)", () => {
+    const coverage = jobBlock(ci, "coverage");
+    const build = coverage.indexOf("run: npm run build");
+    expect(build, "coverage has no Build step").toBeGreaterThan(-1);
+    expect(build).toBeLessThan(coverage.indexOf("run: npm run test:coverage"));
+  });
+
   it("the smoke job boots the build before running release acceptance, and never boots a registry package", () => {
     const smoke = jobBlock(ci, "smoke");
     const build = smoke.indexOf("run: npm run build");
