@@ -9,7 +9,12 @@ export interface ExecFileResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** True when the timeout killed the process (exitCode is then 124). */
+  timedOut?: boolean;
 }
+
+/** Exit code reported for a process the timeout killed (as `timeout(1)` does). */
+const TIMEOUT_EXIT_CODE = 124;
 
 /**
  * Run a command and return its result without throwing on non-zero exit.
@@ -30,12 +35,18 @@ export function execFileNoThrow(
         resolve({ exitCode: 127, stdout: "", stderr: error.message });
         return;
       }
+      // Node puts the numeric exit code in `error.code` (a string there means
+      // an OS-level error); there is no `exitCode` property, so every failure
+      // used to read as exit 1. A killed process has no exit code at all.
+      const code: unknown = (error as { code?: unknown } | null)?.code;
+      // Killed with no code of its own: the timeout did it (a maxBuffer
+      // overflow also kills, but carries a string code).
+      const timedOut = (error as { killed?: boolean } | null)?.killed === true && typeof code !== "string";
       resolve({
-        // `error.exitCode` holds the numeric process exit code; `.code` is a
-        // string like "ENOENT" for OS-level errors, not the exit code.
-        exitCode: error ? ((error as NodeJS.ErrnoException & { exitCode?: number }).exitCode ?? 1) : 0,
+        exitCode: !error ? 0 : typeof code === "number" ? code : timedOut ? TIMEOUT_EXIT_CODE : 1,
         stdout: typeof stdout === "string" ? stdout : "",
         stderr: typeof stderr === "string" ? stderr : "",
+        timedOut,
       });
     });
   });
