@@ -19,6 +19,7 @@ import { randomBytes, timingSafeEqual, randomUUID, createHmac } from "node:crypt
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin, normalizeOrigin } from "../../security/origin-validation.js";
+import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "../../security/host-validation.js";
 import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
@@ -146,6 +147,12 @@ interface WebChannelOptions {
    * exactly as before.
    */
   trustedOrigins?: readonly string[];
+  /**
+   * Hostnames besides loopback and IP literals whose `Host` header this portal
+   * answers (CHN-2). Defaults to `HTTP_ALLOWED_HOSTS`; the hostnames of
+   * `trustedOrigins` are always served too.
+   */
+  allowedHosts?: readonly string[];
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -381,11 +388,15 @@ export class WebChannel
   /** Address this channel binds to (14F2/D71). */
   private readonly bindHost: string;
 
+  /** Extra Host names this portal answers for (CHN-2). */
+  private readonly allowedHosts: readonly string[];
+
   constructor(
     private readonly port: number = 3000,
     private readonly dashboardPort: number = 3100,
     private readonly options: WebChannelOptions = {},
   ) {
+    this.allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
     this.identityStore = new WebIdentityStore(options.identityDbPath ?? ":memory:");
     this.attachmentStore = new WebAttachmentStore(
       options.attachmentDbPath ?? ":memory:",
@@ -470,7 +481,7 @@ export class WebChannel
     this.wss = new WebSocketServer({
       server: this.server,
       maxPayload: 25 * 1024 * 1024,
-      verifyClient: ({ req }: { req: HttpReq }) => this.acceptsWsOrigin(req),
+      verifyClient: ({ req }: { req: HttpReq }) => this.acceptsHost(req) && this.acceptsWsOrigin(req),
     });
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
 
@@ -1584,6 +1595,14 @@ export class WebChannel
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
     getLoggerSafe().debug("[WebChannel] handleHttp", { url, method: req.method });
+
+    // CHN-2: a Host this portal does not answer for is refused before any
+    // route — loopback binding alone does not stop a rebound page, and the
+    // proxy below adds the dashboard token to what it forwards.
+    if (!this.acceptsHost(req)) {
+      rejectDisallowedHost(res, WebChannel.SECURITY_HEADERS);
+      return;
+    }
     const canonicalRedirectTarget = getCanonicalWebRedirectTarget(url);
 
     if (req.method === "GET" && canonicalRedirectTarget) {
@@ -3092,6 +3111,17 @@ export class WebChannel
   }
 
   /**
+   * Whether the request's Host names this portal (CHN-2): loopback, an IP
+   * literal, `allowedHosts`, or the hostname of a configured trusted origin.
+   */
+  private acceptsHost(req: HttpReq): boolean {
+    return isAllowedHostHeader(req.headers.host, {
+      allowedHosts: this.allowedHosts,
+      trustedOrigins: this.trustedOrigins,
+    });
+  }
+
+  /**
    * The chat WebSocket handshake gate. An absent Origin is a non-browser client
    * (allowed, as before); a present one must be this portal's own origin, port
    * included.
@@ -3275,7 +3305,10 @@ export class WebChannel
       const refererHeader = this.getSingleHeader(req.headers.referer);
       if (authHeader) {
         proxyHeaders["Authorization"] = authHeader;
-      } else if (this.options.dashboardAuthToken) {
+      } else if (this.options.dashboardAuthToken && this.acceptsHost(req)) {
+        // The token is this server's credential, so it is only ever added on
+        // behalf of a request whose Host is verified (CHN-2) — never for a
+        // page that merely reached the port.
         proxyHeaders["Authorization"] = `Bearer ${this.options.dashboardAuthToken}`;
       }
       // Only this portal's own origin is forwarded, so the dashboard's own

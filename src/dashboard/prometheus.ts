@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from "prom-client";
 import { getLogger } from "../utils/logger.js";
 import { resolveBindHost } from "../core/bind-host.js";
+import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "../security/host-validation.js";
 import type { MetricsCollector } from "./metrics.js";
 
 /**
@@ -18,6 +19,8 @@ export class PrometheusMetrics {
   private readonly port: number;
   /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
   private readonly bindHost: string;
+  /** Hostnames besides loopback/IP literals this server answers for (CHN-2). */
+  private readonly allowedHosts: readonly string[];
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: () => { loaded: number; directories: string[] } | undefined;
@@ -49,9 +52,12 @@ export class PrometheusMetrics {
     getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
     getPluginsStats?: () => { loaded: number; directories: string[] } | undefined,
     bindHost: string = resolveBindHost(),
+    /** Extra Host names to serve (CHN-2); defaults to HTTP_ALLOWED_HOSTS. */
+    allowedHosts: readonly string[] = resolveAllowedHosts(),
   ) {
     this.port = port;
     this.bindHost = bindHost;
+    this.allowedHosts = allowedHosts;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
     this.getPluginsStats = getPluginsStats as () => { loaded: number; directories: string[] } | undefined;
@@ -206,9 +212,14 @@ export class PrometheusMetrics {
     });
   }
 
-  /** One scrape/probe request. */
+  /** One scrape/probe request. CHN-2: a Host this deployment does not serve is refused first. */
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
+
+    if (!isAllowedHostHeader(req.headers.host, { allowedHosts: this.allowedHosts })) {
+      rejectDisallowedHost(res);
+      return;
+    }
 
     if (url === "/metrics") {
       // Update dynamic metrics before serving

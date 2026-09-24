@@ -19,6 +19,8 @@ Pure Node.js `http` module — no Express. Binds to `127.0.0.1` only (localhost)
 
 **Security headers:** CSP (with SHA-256 hash of inline script), X-Content-Type-Options, X-Frame-Options: DENY, X-XSS-Protection, Referrer-Policy: no-referrer.
 
+**Host validation:** every listener here (dashboard, WebSocket dashboard, Prometheus exporter — and the web portal and setup wizard) answers only requests whose `Host` is `localhost`, an IP literal, or a name in `HTTP_ALLOWED_HOSTS` (a `BIND_HOST` hostname counts too); anything else gets 403. This is the DNS-rebinding guard for the loopback-bound surfaces. Behind a reverse proxy that forwards `Host`, add the public hostname to `HTTP_ALLOWED_HOSTS`.
+
 **API authentication defaults:**
 - If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, all `/api/*` dashboard endpoints require `Authorization: Bearer <token>`.
 - If it is unset, read-only local access still works, but mutating `/api/*` requests are accepted only from trusted same-origin browser requests. This keeps local CSRF closed even without a static token.

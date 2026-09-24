@@ -83,3 +83,13 @@ describe("docker-compose.yml published ports", () => {
     expect(commandLines.some((line) => line.includes("--web.enable-lifecycle"))).toBe(false);
   });
 });
+
+describe("docker-compose.yml Host allow-list (CHN-2)", () => {
+  it("lets Prometheus scrape the exporter by its compose hostname", () => {
+    // monitoring/prometheus.yml scrapes `strada-brain:9090`, and every listener
+    // refuses a Host it is not told about.
+    const scrape = readFileSync(path.join(repoRoot, "monitoring", "prometheus.yml"), "utf8");
+    expect(scrape).toContain("strada-brain:9090");
+    expect(compose).toMatch(/^\s*- HTTP_ALLOWED_HOSTS=strada-brain,\$\{HTTP_ALLOWED_HOSTS:-\}\s*$/m);
+  });
+});

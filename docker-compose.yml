@@ -64,6 +64,10 @@ services:
       # mapping below — host loopback only (OPS-4) — is what limits exposure
       # (14F2/D71).
       - BIND_HOST=${BIND_HOST:-0.0.0.0}
+      # Host names the listeners answer for besides localhost and IP literals
+      # (CHN-2). Prometheus scrapes this container as `strada-brain`; add the
+      # public hostname nginx serves, since nginx forwards the client's Host.
+      - HTTP_ALLOWED_HOSTS=strada-brain,${HTTP_ALLOWED_HOSTS:-}
 
       # Dashboard & Monitoring
       - DASHBOARD_ENABLED=${DASHBOARD_ENABLED:-true}

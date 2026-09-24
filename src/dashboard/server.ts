@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "../security/host-validation.js";
 import { ownerOnlyProxySurface } from "../channels/web/instance-access.js";
 import { authorizeInstanceRequest } from "../channels/web/instance-authorization.js";
 import { resolveBindHost } from "../core/bind-host.js";
@@ -116,6 +117,8 @@ export class DashboardServer {
   private readonly bindHost: string;
   /** Loopback ports besides `port` whose pages the same-origin gate trusts. */
   private readonly trustedBrowserPorts: readonly number[];
+  /** Hostnames besides loopback/IP literals this server answers for (CHN-2). */
+  private readonly allowedHosts: readonly string[];
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () =>
     | { totalEntries: number; hasAnalysisCache: boolean }
@@ -241,9 +244,12 @@ export class DashboardServer {
     trustedBrowserPorts: readonly number[] = [],
     /** Address to bind; loopback unless BIND_HOST says otherwise (14F2/D71). */
     bindHost: string = resolveBindHost(),
+    /** Extra Host names to serve (CHN-2); defaults to HTTP_ALLOWED_HOSTS. */
+    allowedHosts: readonly string[] = resolveAllowedHosts(),
   ) {
     this.port = port;
     this.bindHost = bindHost;
+    this.allowedHosts = allowedHosts;
     this.trustedBrowserPorts = trustedBrowserPorts;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
@@ -638,6 +644,13 @@ export class DashboardServer {
     const dispatch = (req: IncomingMessage, res: ServerResponse): void => {
       const url = req.url ?? "/";
       const method = req.method ?? "GET";
+
+      // CHN-2: a Host this deployment does not answer for is refused before
+      // anything else — loopback binding alone does not stop a rebound page.
+      if (!isAllowedHostHeader(req.headers.host, { allowedHosts: this.allowedHosts })) {
+        rejectDisallowedHost(res);
+        return;
+      }
 
       // Security headers for XSS protection (defense-in-depth)
       res.setHeader(

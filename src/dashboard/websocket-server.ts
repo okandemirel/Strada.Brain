@@ -12,6 +12,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "../security/host-validation.js";
 import { resolveBindHost } from "../core/bind-host.js";
 import type { MetricsCollector } from "./metrics.js";
 
@@ -49,6 +50,8 @@ export interface WebSocketDashboardServerOptions {
   getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   getPluginsStats?: () => { loaded: number; directories: string[] } | undefined;
   allowedOrigins?: string[];
+  /** Extra Host names to serve (CHN-2); defaults to HTTP_ALLOWED_HOSTS. */
+  allowedHosts?: readonly string[];
   maxAuthAttempts?: number;
   authLockoutMs?: number;
 }
@@ -74,6 +77,7 @@ export class WebSocketDashboardServer {
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
   private readonly allowedOrigins: string[] | undefined;
+  private readonly allowedHosts: readonly string[];
   private readonly bruteForce: BruteForceProtection;
 
   private httpServer: Server | null = null;
@@ -95,6 +99,7 @@ export class WebSocketDashboardServer {
     this.getMemoryStats = opts.getMemoryStats;
     this.getPluginsStats = opts.getPluginsStats;
     this.allowedOrigins = opts.allowedOrigins;
+    this.allowedHosts = opts.allowedHosts ?? resolveAllowedHosts();
     this.bruteForce = new BruteForceProtection(
       opts.maxAuthAttempts ?? DEFAULT_MAX_AUTH_ATTEMPTS,
       opts.authLockoutMs ?? DEFAULT_AUTH_LOCKOUT_MS,
@@ -113,6 +118,16 @@ export class WebSocketDashboardServer {
     return typeof address === "object" && address !== null ? address.port : this.port;
   }
 
+  /**
+   * CHN-2: whether the request's Host names this deployment — loopback, an IP
+   * literal, HTTP_ALLOWED_HOSTS, or a host the operator's allowedOrigins name.
+   */
+  private acceptsHost(req: import("http").IncomingMessage): boolean {
+    return isAllowedHostHeader(req.headers.host, {
+      allowedHosts: [...this.allowedHosts, ...(this.allowedOrigins ?? [])],
+    });
+  }
+
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
@@ -127,6 +142,7 @@ export class WebSocketDashboardServer {
       // that — and only that — is the loopback origin its WebSocket accepts.
       // Configured allowedOrigins stay an explicit operator decision.
       verifyClient: ({ req }: { req: import("http").IncomingMessage }) =>
+        this.acceptsHost(req) &&
         isAllowedOrigin(req.headers.origin, {
           selfPort: this.boundPort,
           ...(this.allowedOrigins ? { allowedHosts: this.allowedOrigins } : {}),
@@ -237,6 +253,11 @@ export class WebSocketDashboardServer {
 
   private handleHttpRequest(req: import("http").IncomingMessage, res: import("http").ServerResponse): void {
     const url = req.url ?? "/";
+
+    if (!this.acceptsHost(req)) {
+      rejectDisallowedHost(res);
+      return;
+    }
 
     if (url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });

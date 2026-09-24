@@ -55,6 +55,7 @@ import { ensureOpenAiSubscriptionAuth } from "../common/openai-subscription-auth
 import { isCodexCliAvailable, getCodexInstallHint, startCodexLogin } from "../common/openai-codex-login.js";
 import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
 import { isClaudeCliAvailable, getClaudeInstallHint, startClaudeLogin } from "../common/claude-cli-login.js";
+import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "../security/host-validation.js";
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 // In a published package the line above resolves to dist/channels/web/static,
@@ -710,8 +711,12 @@ export class SetupWizard {
   private resolveCompletion!: () => void;
   private completionSignaled = false;
 
-  constructor(opts?: { port?: number }) {
+  /** Hostnames besides loopback/IP literals the wizard answers for (COR-11). */
+  private readonly allowedHosts: readonly string[];
+
+  constructor(opts?: { port?: number; allowedHosts?: readonly string[] }) {
     this.port = opts?.port ?? 3000;
+    this.allowedHosts = opts?.allowedHosts ?? resolveAllowedHosts();
     this.readyUrl = buildSetupReadyUrl(this.port);
     this.completionPromise = new Promise<void>((resolve) => {
       this.resolveCompletion = () => {
@@ -786,7 +791,16 @@ export class SetupWizard {
       return;
     }
 
-    this.server = createServer((req, res) => this.handleRequest(req, res));
+    this.server = createServer((req, res) => {
+      // COR-11: the CSRF token is handed to any same-origin caller, so that
+      // origin has to be THIS machine's — a Host the wizard does not answer
+      // for is refused before any route, the token route included.
+      if (!isAllowedHostHeader(req.headers.host, { allowedHosts: this.allowedHosts })) {
+        rejectDisallowedHost(res, SECURITY_HEADERS);
+        return;
+      }
+      void this.handleRequest(req, res);
+    });
 
     await new Promise<void>((resolve, reject) => {
       this.server!.listen(this.port, SETUP_HOST, () => resolve());
