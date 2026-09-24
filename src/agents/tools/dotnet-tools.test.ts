@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTestOutput } from "./dotnet-tools.js";
 import type { ToolContext } from "./tool.interface.js";
 import { checkReadOnlyBlock, getReadOnlySystemPrompt } from "../../security/read-only-guard.js";
+import { runProcess } from "../../utils/process-runner.js";
 
 // The "handles dotnet not installed gracefully" tests previously ran the REAL `dotnet` binary:
 // on a runner WITH dotnet installed (GitHub ubuntu-latest) that meant an actual `dotnet build`
@@ -221,6 +222,31 @@ describe("read-only contract for dotnet_build and dotnet_test", () => {
       const result = await tool.execute({}, { ...ctx, readOnly: true });
       expect(result.isError).toBe(true);
       expect(result.content).toContain("read-only");
+    }
+  });
+});
+
+/**
+ * `dotnet build` / `dotnet test` run the project's own MSBuild targets and
+ * test code. They used to inherit the full process.env — every provider key
+ * and bot token — instead of shell_exec's default-deny environment.
+ */
+describe("dotnet tools spawn with the default-deny environment", () => {
+  it.each([
+    ["dotnet_build", () => new DotnetBuildTool()],
+    ["dotnet_test", () => new DotnetTestTool()],
+  ] as const)("%s withholds secrets and keeps what dotnet needs", async (_name, make) => {
+    process.env["STRADA_TEST_PROVIDER_API_KEY"] = "sk-must-not-leak";
+    try {
+      await make().execute({}, ctx);
+      const call = vi.mocked(runProcess).mock.calls.at(-1)![0];
+      expect(call.env).toBeDefined();
+      expect(Object.values(call.env!)).not.toContain("sk-must-not-leak");
+      expect(call.env!["PATH"]).toBe(process.env["PATH"]);
+      expect(call.env!["DOTNET_NOLOGO"]).toBe("1");
+      expect(call.env!["DOTNET_CLI_TELEMETRY_OPTOUT"]).toBe("1");
+    } finally {
+      delete process.env["STRADA_TEST_PROVIDER_API_KEY"];
     }
   });
 });

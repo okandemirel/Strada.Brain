@@ -90,6 +90,16 @@ export const PROXY_NAMES = [
   "no_proxy",
 ] as const;
 
+/**
+ * Extra names the git tools forward, on top of the shell set. git_push to an
+ * SSH remote cannot authenticate without the agent socket, and git reads its
+ * global config from XDG_CONFIG_HOME when that is set. Both come from THIS
+ * process's environment, never from the model. Anything else a deployment's
+ * git setup needs (GIT_SSH_COMMAND, an askpass program) goes through the
+ * operator passthrough like any other name.
+ */
+export const GIT_ENV_NAMES: readonly string[] = ["SSH_AUTH_SOCK", "XDG_CONFIG_HOME"];
+
 /** Every exactly-matched name that may cross into the child process. */
 export const SHELL_ENV_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   ...POSIX_NAMES,
@@ -133,8 +143,16 @@ export interface BuildShellEnvResult {
  *
  * Pure: no `process.env` access, no I/O — so the policy is fully testable and
  * a caller can dry-run it against any environment shape.
+ *
+ * Not only for shell_exec: every tool that spawns a process whose behaviour
+ * the model can shape — git (repository hooks), dotnet (project-defined
+ * MSBuild targets, test code) — builds its environment here. `alsoAllow`
+ * names a tool's own extra needs (e.g. GIT_ENV_NAMES).
  */
-export function buildShellEnv(source: NodeJS.ProcessEnv): BuildShellEnvResult {
+export function buildShellEnv(
+  source: NodeJS.ProcessEnv,
+  alsoAllow: readonly string[] = [],
+): BuildShellEnvResult {
   const extra = new Set(parsePassthroughNames(source[PASSTHROUGH_VAR]));
   const env: Record<string, string> = {};
   const withheld: string[] = [];
@@ -147,6 +165,7 @@ export function buildShellEnv(source: NodeJS.ProcessEnv): BuildShellEnvResult {
 
     const allowed =
       SHELL_ENV_ALLOWLIST.has(key) ||
+      alsoAllow.includes(key) ||
       SHELL_ENV_ALLOWED_PREFIXES.some((p) => key.startsWith(p));
 
     if (allowed) {

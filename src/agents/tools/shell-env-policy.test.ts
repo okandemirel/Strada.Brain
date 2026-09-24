@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildShellEnv,
+  GIT_ENV_NAMES,
   parsePassthroughNames,
   SHELL_ENV_ALLOWLIST,
   SHELL_ENV_ALLOWED_PREFIXES,
@@ -169,9 +170,18 @@ describe("buildShellEnv — policy shape", () => {
   });
 
   it("does not allowlist any obviously secret-shaped name", () => {
-    const suspicious = [...SHELL_ENV_ALLOWLIST].filter((n) =>
+    const suspicious = [...SHELL_ENV_ALLOWLIST, ...GIT_ENV_NAMES].filter((n) =>
       /(_KEY|_TOKEN|_SECRET|_PASSWORD|PASSWD|CREDENTIAL)$/i.test(n),
     );
     expect(suspicious).toEqual([]);
+  });
+
+  it("forwards a tool's own extra names, and nothing else, when asked", () => {
+    const source = { ...PARENT, SSH_AUTH_SOCK: "/tmp/ssh-agent.sock" };
+    expect(buildShellEnv(source).env["SSH_AUTH_SOCK"]).toBeUndefined();
+    const { env } = buildShellEnv(source, GIT_ENV_NAMES);
+    expect(env["SSH_AUTH_SOCK"]).toBe("/tmp/ssh-agent.sock");
+    expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
+    expect(env["OPENAI_API_KEY"]).toBeUndefined();
   });
 });

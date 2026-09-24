@@ -1,4 +1,5 @@
 import { runProcess } from "../../utils/process-runner.js";
+import { buildShellEnv, GIT_ENV_NAMES } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const GIT_TIMEOUT_MS = 30_000;
@@ -40,7 +41,10 @@ async function runGit(args: string[], cwd: string): Promise<{ stdout: string; st
     args,
     cwd,
     timeoutMs: GIT_TIMEOUT_MS,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    // Default-deny environment, as for shell_exec: git runs the repository's
+    // hooks (and filters), which must not inherit this process's provider
+    // keys and bot tokens. See shell-env-policy.ts.
+    env: { ...buildShellEnv(process.env, GIT_ENV_NAMES).env, GIT_TERMINAL_PROMPT: "0" },
   });
   // Scrub credentials from output
   return {

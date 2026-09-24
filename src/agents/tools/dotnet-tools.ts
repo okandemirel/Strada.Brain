@@ -1,5 +1,6 @@
 import { runProcess } from "../../utils/process-runner.js";
 import { validatePath, normalizeToolPathInput } from "../../security/path-guard.js";
+import { buildShellEnv } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const BUILD_TIMEOUT_MS = 120_000; // 2 minutes
@@ -16,7 +17,10 @@ function run(
     args,
     cwd,
     timeoutMs,
-    env: { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" },
+    // Default-deny environment, as for shell_exec: build and test run the
+    // project's own MSBuild targets and test code, which must not inherit
+    // this process's provider keys and bot tokens. See shell-env-policy.ts.
+    env: { ...buildShellEnv(process.env).env, DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" },
   });
 }
 

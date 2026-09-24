@@ -195,6 +195,28 @@ describe("GitCommitTool", () => {
     const result = await tool.execute({ message: "add padded", files: ["  padded.txt  "] }, ctx);
     expect(result.isError).toBeUndefined();
   });
+
+  // git runs the repository's hooks with the environment it was given, and
+  // that was the full process.env — provider keys and bot tokens included.
+  it("runs repository hooks without this process's secrets", async () => {
+    const dump = join(tempDir, ".git", "hook-env.txt");
+    await writeFile(
+      join(tempDir, ".git", "hooks", "pre-commit"),
+      `#!/bin/sh\nenv > "${dump.replace(/\\/g, "/")}"\n`,
+      { mode: 0o755 },
+    );
+    process.env["STRADA_TEST_PROVIDER_API_KEY"] = "sk-must-not-leak";
+    try {
+      await writeFile(join(tempDir, "hooked.txt"), "content\n");
+      const result = await tool.execute({ message: "hooked", files: ["hooked.txt"] }, ctx);
+      expect(result.isError).toBeUndefined();
+      const env = await readFile(dump, "utf-8");
+      expect(env).not.toContain("sk-must-not-leak");
+      expect(env).toMatch(/^PATH=/m);
+    } finally {
+      delete process.env["STRADA_TEST_PROVIDER_API_KEY"];
+    }
+  });
 });
 
 /**
