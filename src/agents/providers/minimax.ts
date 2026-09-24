@@ -3,11 +3,9 @@ import type {
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
-  ToolDefinition,
-  StreamCallback,
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
-import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
+import type { OpenAIMessage, OpenAIResponse, StreamParseState } from "./openai.js";
 import { stripReasoningBlocks, OPENAI_STOP_REASON_MAP } from "./openai.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
@@ -56,7 +54,6 @@ const DEFAULT_SPEC = MODEL_SPECS["MiniMax-M2.7"]!;
 
 export class MiniMaxProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities;
-  private inThinkBlock = false;
 
   /**
    * When true, suppresses reasoning/thinking by capping max_tokens to 4096
@@ -83,22 +80,6 @@ export class MiniMaxProvider extends OpenAIProvider {
       thinkingSupported: true,
       specialFeatures: ["reasoning_details"],
     };
-  }
-
-  override async chatStream(
-    systemPrompt: string,
-    messages: ConversationMessage[],
-    tools: ToolDefinition[],
-    onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
-  ): Promise<ProviderResponse> {
-    // Reset per-stream think-block parse state. `inThinkBlock` is an instance
-    // field reused across requests; if a previous stream aborted or ended inside
-    // a <think> block (no closing </think>), a stale `true` would make
-    // extractStreamText suppress EVERY visible delta of this request — a blank
-    // response that persists until a stray </think> appears.
-    this.inThinkBlock = false;
-    return super.chatStream(systemPrompt, messages, tools, onChunk, options);
   }
 
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
@@ -136,21 +117,26 @@ export class MiniMaxProvider extends OpenAIProvider {
    * Suppress them from the user-visible stream; route to reasoning instead.
    */
   /**
-   * Compute think-block state transition for the current delta without
-   * mutating `inThinkBlock` yet. Both extract methods read the pre-transition
-   * state; mutation happens once at the end of extractStreamText.
+   * The think-block state lives in the per-stream `state` the base loop hands
+   * in, never on the provider: chains share one provider across concurrent
+   * streams, and an instance flag let one stream's `<think>` suppress another
+   * stream's visible text (or leak its reasoning). A fresh stream starts with
+   * fresh state, so an aborted stream cannot poison the next one either.
    */
-  protected override extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
+  protected override extractStreamText(
+    delta: Record<string, unknown> | undefined,
+    state: StreamParseState = {},
+  ): string | undefined {
     const text = (delta?.content as string) || undefined;
     if (!text) return undefined;
 
-    const wasInThink = this.inThinkBlock;
+    const wasInThink = state.inThinkBlock === true;
     const opensThink = text.includes("<think>");
     const closesThink = text.includes("</think>");
 
     // Update state for next delta
-    if (opensThink) this.inThinkBlock = true;
-    if (closesThink) this.inThinkBlock = false;
+    if (opensThink) state.inThinkBlock = true;
+    if (closesThink) state.inThinkBlock = false;
 
     // Strictly inside a think block with no close in this chunk → suppress.
     if (wasInThink && !closesThink) return undefined;
@@ -174,7 +160,10 @@ export class MiniMaxProvider extends OpenAIProvider {
    * MiniMax M2.x streams reasoning via `reasoning_details` delta field
    * AND via `<think>` blocks in content. Both reset the stall guard.
    */
-  protected override extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
+  protected override extractStreamReasoning(
+    delta: Record<string, unknown> | undefined,
+    state: StreamParseState = {},
+  ): string | undefined {
     // reasoning_details field (older path)
     const details = (delta?.reasoning_details as string) || undefined;
     if (details) return details;
@@ -184,7 +173,7 @@ export class MiniMaxProvider extends OpenAIProvider {
     // so check both current state and content for think markers
     const text = (delta?.content as string) || undefined;
     if (!text) return undefined;
-    if (this.inThinkBlock || text.includes("<think>")) {
+    if (state.inThinkBlock === true || text.includes("<think>")) {
       // If the think block closes in this same chunk, only the part up to and
       // including </think> is reasoning; trailing text is visible content and
       // is already surfaced by extractStreamText — don't double-emit it here.

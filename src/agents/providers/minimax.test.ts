@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MiniMaxProvider } from "./minimax.js";
-import { OpenAIProvider } from "./openai.js";
+import type { StreamParseState } from "./openai.js";
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({
@@ -113,10 +113,14 @@ describe("MiniMaxProvider", () => {
   });
 
   describe("extractStreamReasoning + extractStreamText (<think> handling)", () => {
+    type Hook = (d: Record<string, unknown> | undefined, state: StreamParseState) => string | undefined;
+    // One parse state per test, as the base stream loop keeps one per stream.
+    let state: StreamParseState;
+    beforeEach(() => { state = {}; });
     const extractText = (delta: Record<string, unknown> | undefined) =>
-      (provider as unknown as { extractStreamText: (d: Record<string, unknown> | undefined) => string | undefined }).extractStreamText(delta);
+      (provider as unknown as { extractStreamText: Hook }).extractStreamText(delta, state);
     const extractReasoning = (delta: Record<string, unknown> | undefined) =>
-      (provider as unknown as { extractStreamReasoning: (d: Record<string, unknown> | undefined) => string | undefined }).extractStreamReasoning(delta);
+      (provider as unknown as { extractStreamReasoning: Hook }).extractStreamReasoning(delta, state);
 
     it("returns reasoning_details from delta", () => {
       expect(extractReasoning({ reasoning_details: "thinking..." })).toBe("thinking...");
@@ -157,12 +161,10 @@ describe("MiniMaxProvider", () => {
     // Regression (M3): a whole <think>…</think> block plus trailing text in ONE
     // delta must surface the trailing visible text, not drop it.
     it("surfaces trailing visible text when a whole think block arrives in one chunk", () => {
-      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = false;
       expect(extractText({ content: "<think>reasoning</think>Hello" })).toBe("Hello");
     });
 
     it("does not double-emit single-chunk trailing visible text into reasoning", () => {
-      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = false;
       const delta = { content: "<think>reasoning</think>Hello" };
       expect(extractText(delta)).toBe("Hello");
       // extractStreamReasoning runs after extractStreamText; reasoning must be
@@ -170,27 +172,66 @@ describe("MiniMaxProvider", () => {
       expect(extractReasoning(delta)).toBe("<think>reasoning</think>");
     });
 
-    // Regression (H3): inThinkBlock is an instance field reused across requests;
-    // a stream that ends inside a <think> block leaves it true and blanks the
-    // NEXT request. chatStream must reset it at the start of each stream.
-    it("resets a stale inThinkBlock at the start of a new stream", async () => {
-      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = true;
-      // Intercept the base stream so we test the reset without any network I/O.
-      const superSpy = vi
-        .spyOn(OpenAIProvider.prototype, "chatStream")
-        .mockResolvedValue({ content: "", toolCalls: [], stopReason: "stop" } as never);
-      try {
-        await (provider.chatStream as (
-          s: string,
-          m: unknown[],
-          t: unknown[],
-          cb: () => void,
-        ) => Promise<unknown>)("sys", [{ role: "user", content: "hi" }], [], () => {});
-        expect((provider as unknown as { inThinkBlock: boolean }).inThinkBlock).toBe(false);
-        expect(superSpy).toHaveBeenCalled();
-      } finally {
-        superSpy.mockRestore();
-      }
+    // Regression (H3): a stream that ended inside a <think> block must not blank
+    // the NEXT stream. The state is per stream now, so there is nothing to reset.
+    it("a new parse state starts outside any think block", () => {
+      extractText({ content: "<think>" });
+      expect(state.inThinkBlock).toBe(true);
+      const fresh: StreamParseState = {};
+      expect((provider as unknown as { extractStreamText: Hook }).extractStreamText({ content: "visible" }, fresh))
+        .toBe("visible");
+    });
+  });
+
+  // PRV-11: one provider object serves concurrent streams (chains are shared
+  // across chats and parallel goal nodes). The <think> flag lived on the
+  // provider, so stream A opening a think block suppressed stream B's answer.
+  describe("concurrent streams on one provider", () => {
+    const encoder = new TextEncoder();
+    function controlledBody() {
+      let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(c) { ctrl = c; } });
+      return {
+        response: { ok: true, status: 200, body, headers: new Headers(), text: async () => "" },
+        send: (content: string) => ctrl.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+        )),
+        end: () => { ctrl.enqueue(encoder.encode("data: [DONE]\n\n")); ctrl.close(); },
+      };
+    }
+    const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); };
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it("keeps each stream's think-block state to itself", async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal("fetch", mockFetch);
+      const a = controlledBody();
+      const b = controlledBody();
+      mockFetch.mockResolvedValueOnce(a.response).mockResolvedValueOnce(b.response);
+      const shared = new MiniMaxProvider("test-key");
+      const seenA: string[] = [];
+      const seenB: string[] = [];
+
+      const streamA = shared.chatStream("sys", [{ role: "user", content: "a" }], [], (c) => { seenA.push(c); });
+      await settle();
+      const streamB = shared.chatStream("sys", [{ role: "user", content: "b" }], [], (c) => { seenB.push(c); });
+      await settle();
+
+      a.send("<think>");
+      await settle();
+      b.send("Answer B");
+      await settle();
+      a.send("still thinking");
+      await settle();
+      a.send("</think>Answer A");
+      a.end();
+      b.end();
+
+      const [resultA, resultB] = await Promise.all([streamA, streamB]);
+      expect(resultB.text).toBe("Answer B");
+      expect(seenB).toContain("Answer B");
+      expect(resultA.text).toMatch(/Answer A$/u);
+      expect(seenA.join("")).not.toContain("still thinking");
     });
   });
 

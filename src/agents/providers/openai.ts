@@ -368,6 +368,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    // Parse state for the extract hooks, owned by THIS stream: one provider
+    // object serves concurrent streams, so a field on it would leak parse state
+    // from one stream into another.
+    const streamState: StreamParseState = {};
 
     try {
       while (true) {
@@ -406,13 +410,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           try {
             const delta = chunk.choices?.[0]?.delta;
 
-            const streamText = this.extractStreamText(delta);
+            const streamText = this.extractStreamText(delta, streamState);
             if (streamText) {
               text += streamText;
               onChunk(streamText);
             }
 
-            const streamReasoning = this.extractStreamReasoning(delta as Record<string, unknown>);
+            const streamReasoning = this.extractStreamReasoning(delta as Record<string, unknown>, streamState);
             if (streamReasoning) {
               reasoning += streamReasoning;
               // Reasoning activity counts as progress — prevents stall timeouts
@@ -861,7 +865,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
    * Extract text from a streaming SSE delta object.
    * Subclasses can override to handle provider-specific fields.
    */
-  protected extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
+  protected extractStreamText(
+    delta: Record<string, unknown> | undefined,
+    _state?: StreamParseState,
+  ): string | undefined {
     return (delta?.content as string) || undefined;
   }
 
@@ -881,7 +888,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
    *
    * Subclasses still override for fields of their own.
    */
-  protected extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
+  protected extractStreamReasoning(
+    delta: Record<string, unknown> | undefined,
+    _state?: StreamParseState,
+  ): string | undefined {
     const reasoning = delta?.["reasoning_content"] ?? delta?.["reasoning"];
     return typeof reasoning === "string" && reasoning !== "" ? reasoning : undefined;
   }
@@ -1548,6 +1558,12 @@ export interface OpenAIResponse {
 }
 
 /** SSE streaming chunk format */
+/** Per-stream state a subclass's extract hooks may keep across deltas. */
+export interface StreamParseState {
+  /** MiniMax: inside a `<think>` block that has not closed yet. */
+  inThinkBlock?: boolean;
+}
+
 interface StreamSSEChunk {
   error?: { code?: string | number; message?: string };
   choices?: Array<{
