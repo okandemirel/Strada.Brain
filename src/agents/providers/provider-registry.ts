@@ -16,6 +16,7 @@ import { FireworksProvider } from "./fireworks.js";
 import { OpencodeProvider } from "./opencode.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { getLogger } from "../../utils/logger.js";
+import { hasAnthropicSubscriptionCredential, hasOpenAISubscriptionCredential } from "./subscription-credential.js";
 
 /**
  * Maps provider names to their dedicated class constructors.
@@ -165,17 +166,6 @@ export interface ProviderCredential {
 
 export type ProviderCredentialMap = Record<string, ProviderCredential | undefined>;
 
-function hasOpenAISubscriptionCredential(config: ProviderConfig): boolean {
-  return config.openaiAuthMode === "chatgpt-subscription"
-    || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
-    || Boolean(config.openaiChatgptAuthFile);
-}
-
-function hasAnthropicSubscriptionCredential(config: ProviderConfig): boolean {
-  return config.anthropicAuthMode === "claude-subscription"
-    && Boolean(config.anthropicAuthToken);
-}
-
 /**
  * Build a provider from configuration.
  */
@@ -312,14 +302,12 @@ export function buildProviderChain(
       const preset = PROVIDER_PRESETS[trimmed];
       const keyPrefix = credential.apiKey?.slice(0, 6)
         ?? (hasAnthropicSubscriptionCredential({
-          name: trimmed,
           anthropicAuthMode: credential.anthropicAuthMode,
           anthropicAuthToken: credential.anthropicAuthToken,
         })
           ? "(subscription)"
           : undefined)
         ?? (hasOpenAISubscriptionCredential({
-          name: trimmed,
           openaiAuthMode: credential.openaiAuthMode,
           openaiChatgptAuthFile: credential.openaiChatgptAuthFile,
           openaiSubscriptionAccessToken: credential.openaiSubscriptionAccessToken,

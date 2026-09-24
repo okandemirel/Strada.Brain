@@ -74,6 +74,12 @@ function isOfficialOpenAiEndpoint(baseUrl: string): boolean {
   }
 }
 
+/** A fetchWithRetry error for an HTTP 401/403 (its message is "<name> API error <status>: …"). */
+function isAuthStatusError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\bAPI error 40[13]\b/u.test(message);
+}
+
 /** An endpoint refusing `max_tokens` and naming `max_completion_tokens` as the replacement. */
 function isMaxTokensParamRejection(message: string): boolean {
   return /\bmax_tokens\b/u.test(message) && /\bmax_completion_tokens\b/u.test(message);
@@ -473,14 +479,28 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     responseSchema?: ResponseSchema,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
+    // Headers are rebuilt per send so a retry after a token refresh carries the
+    // new token.
+    const send = async (): Promise<Response> => this.fetchWithRetry(`${this.baseUrl}/responses`, {
+      method: "POST",
+      headers: await this.buildHeaders(),
+      body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
+      signal,
+    });
     let response: Response;
     try {
-      response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
-        method: "POST",
-        headers: await this.buildHeaders(),
-        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
-        signal,
-      });
+      try {
+        response = await send();
+      } catch (err) {
+        // Refresh-on-401: a server-invalidated/rotated subscription token (whose
+        // local JWT is not yet expired, so ensureOpenAiSubscriptionAuth won't have
+        // refreshed it) is rejected with 401/403. fetchWithRetry THROWS on that
+        // status rather than returning the response, so the refresh has to happen
+        // here — checking response.status afterwards never saw it, and the chain
+        // benched the whole seat for a token one refresh would have renewed.
+        if (!isAuthStatusError(err) || !(await this.tryRefreshChatGptToken())) throw err;
+        response = await send();
+      }
     } catch (err) {
       // fetchWithRetry throws on a non-retryable non-ok status (e.g. a 400 whose body
       // is the Codex "model is not supported when using Codex with a ChatGPT account").
@@ -493,26 +513,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       throw this.rewriteChatGptModelRejection(err);
     }
 
-    // Refresh-on-401: a server-invalidated/rotated subscription token (whose local
-    // JWT is not yet expired, so ensureOpenAiSubscriptionAuth won't have refreshed
-    // it) returns 401/403 here. Force a refresh via the stored refresh_token and
-    // retry once before surfacing an auth error.
-    if ((response.status === 401 || response.status === 403) && await this.tryRefreshChatGptToken()) {
-      await response.body?.cancel().catch(() => {});
-      response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
-        method: "POST",
-        headers: await this.buildHeaders(),
-        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
-        signal,
-      });
-    }
     if (!response.ok) {
       // Defensive net: in practice fetchWithRetry already THROWS on every non-ok,
       // non-retryable status (401/403/400/404), so this branch is not reached on the
       // live chat path — a 400/404 model rejection is surfaced by the catch above via
-      // rewriteChatGptModelRejection, and an auth 401/403 propagates as the thrown
-      // transport error. (describeChatGptHealthFailure's 400/404 model-rejection
-      // branch is exercised by healthCheck(), which uses a raw fetch, not this path.)
+      // rewriteChatGptModelRejection, and an auth 401/403 is refreshed once there and
+      // otherwise propagates as the thrown transport error. (describeChatGptHealthFailure's
+      // 400/404 model-rejection branch is exercised by healthCheck(), which uses a raw fetch.)
       const detail = await this.describeChatGptHealthFailure(response);
       throw new Error(`${this.name} ${detail}`);
     }

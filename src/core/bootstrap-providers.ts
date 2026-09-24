@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { Config } from "../config/config.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
+import { seatCredentialSecret } from "../agents/providers/subscription-credential.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { ProviderModelCatalog } from "../agents/providers/provider-model-catalog.js";
 import { createProviderModelCatalogStore } from "../agents/providers/provider-model-catalog-store.js";
@@ -305,7 +306,9 @@ export async function initializeAIProvider(
       if (typeof name !== "string" || name.trim() === "") continue;
       identities.set(
         name,
-        ProviderHealthRegistry.seatIdentity(baseUrlOverrides[name], config.providerModels?.[name], apiKeys[name]),
+        ProviderHealthRegistry.seatIdentity(
+          baseUrlOverrides[name], config.providerModels?.[name], seatCredentialSecret(name, providerCredentials[name], apiKeys[name]),
+        ),
       );
     }
     const cleared = ProviderHealthRegistry.getInstance().reconcileSeatIdentities(identities);
