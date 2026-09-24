@@ -684,6 +684,17 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(/Invalid configuration[\s\S]*requireEditConfirmation/);
   });
 
+  it("reads the DEPLOY_* variables into the deployment config", () => {
+    setEnv({ DEPLOY_ENABLED: "true", DEPLOY_TARGET_BRANCH: "release", DEPLOY_COOLDOWN_MINUTES: "45" });
+    const config = loadConfig();
+    expect(config.deployment.enabled).toBe(true);
+    expect(config.deployment.targetBranch).toBe("release");
+    expect(config.deployment.cooldownMinutes).toBe(45);
+    resetConfigCache();
+    setEnv({ DEPLOY_ENABLED: undefined, DEPLOY_TARGET_BRANCH: undefined, DEPLOY_COOLDOWN_MINUTES: undefined });
+    expect(loadConfig().deployment.enabled).toBe(false);
+  });
+
   it("leaves project-local Strada.MCP loading off unless STRADA_MCP_ALLOW_PROJECT_LOCAL opts in", () => {
     setEnv({ STRADA_MCP_ALLOW_PROJECT_LOCAL: undefined });
     expect(loadConfig().strada.mcpAllowProjectLocal).toBe(false);

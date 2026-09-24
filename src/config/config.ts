@@ -1441,6 +1441,19 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     interactionHeartbeatAfterMs: env["INTERACTION_HEARTBEAT_AFTER_MS"],
     interactionHeartbeatIntervalMs: env["INTERACTION_HEARTBEAT_INTERVAL_MS"],
     interactionEscalationPolicy: env["INTERACTION_ESCALATION_POLICY"],
+    // Deployment: the schema and the deployment config block have always
+    // carried these, but nothing read them, so DEPLOY_ENABLED=true stayed off.
+    deployEnabled: env["DEPLOY_ENABLED"],
+    deployScriptPath: env["DEPLOY_SCRIPT_PATH"],
+    deployTestCommand: env["DEPLOY_TEST_COMMAND"],
+    deployTargetBranch: env["DEPLOY_TARGET_BRANCH"],
+    deployRequireCleanGit: env["DEPLOY_REQUIRE_CLEAN_GIT"],
+    deployTestTimeoutMs: env["DEPLOY_TEST_TIMEOUT_MS"],
+    deployExecutionTimeoutMs: env["DEPLOY_EXECUTION_TIMEOUT_MS"],
+    deployCooldownMinutes: env["DEPLOY_COOLDOWN_MINUTES"],
+    deployNotificationUrgency: env["DEPLOY_NOTIFICATION_URGENCY"],
+    deployPostScriptPath: env["DEPLOY_POST_SCRIPT_PATH"],
+    deployRollbackScriptPath: env["DEPLOY_ROLLBACK_SCRIPT_PATH"],
     // Autonomous Mode
     autonomousDefaultEnabled: env["AUTONOMOUS_DEFAULT_ENABLED"],
     autonomousDefaultHours: env["AUTONOMOUS_DEFAULT_HOURS"],
