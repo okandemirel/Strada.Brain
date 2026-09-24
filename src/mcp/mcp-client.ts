@@ -19,6 +19,7 @@
  * you would be willing to run yourself.
  */
 
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
@@ -62,7 +63,34 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
  * providers accept for function names.
  */
 export function namespacedToolName(server: string, tool: string): string {
-  return `mcp__${sanitize(server)}__${sanitize(tool)}`;
+  const name = `mcp__${sanitize(server)}__${sanitize(tool)}`;
+  // Providers also cap function names at 64 characters, and one tool over
+  // it made EVERY request that carried the tool list fail with a 400. Keep
+  // what fits and make the cut unique with a hash of the full name.
+  return name.length <= MAX_TOOL_NAME_LENGTH ? name : withNameHash(name, server, tool);
+}
+
+/**
+ * The namespaced names for one server's tools, unique within the server.
+ * Sanitizing maps `a.b` and `a_b` to the same name; the second registration
+ * then failed and that tool silently disappeared. A clash gets a hash suffix.
+ */
+export function namespacedToolNames(server: string, tools: readonly string[]): string[] {
+  const used = new Set<string>();
+  return tools.map((tool) => {
+    let name = namespacedToolName(server, tool);
+    if (used.has(name)) name = withNameHash(name, server, tool);
+    used.add(name);
+    return name;
+  });
+}
+
+/** Providers reject function names longer than this (OpenAI, Anthropic). */
+const MAX_TOOL_NAME_LENGTH = 64;
+
+function withNameHash(name: string, server: string, tool: string): string {
+  const suffix = `_${createHash("sha256").update(`${server}\u0000${tool}`).digest("hex").slice(0, 8)}`;
+  return name.slice(0, MAX_TOOL_NAME_LENGTH - suffix.length) + suffix;
 }
 
 function sanitize(part: string): string {
@@ -173,10 +201,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
     await Promise.race([client.connect(transport), timeout]);
     const listed = await Promise.race([client.listTools(), timeout]);
 
+    const names = namespacedToolNames(config.name, listed.tools.map((t) => t.name));
     const tools = listed.tools.map(
-      (t) =>
+      (t, i) =>
         new McpTool(
-          namespacedToolName(config.name, t.name),
+          names[i]!,
           t.description ?? `MCP tool ${t.name} from ${config.name}`,
           (t.inputSchema as Record<string, unknown>) ?? { type: "object", properties: {} },
           t.name,

@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { resolve } from "node:path";
 import { createLogger } from "../utils/logger.js";
-import { connectMcpServer, connectMcpServers, namespacedToolName } from "./mcp-client.js";
+import { connectMcpServer, connectMcpServers, namespacedToolName, namespacedToolNames } from "./mcp-client.js";
 import type { ToolContext } from "../agents/tools/tool.interface.js";
 
 beforeAll(() => {
@@ -40,6 +40,28 @@ describe("namespacedToolName", () => {
     // Providers reject function names outside [a-zA-Z0-9_-], so a server named
     // with a path or an @scope must not produce an unusable tool.
     expect(namespacedToolName("@scope/my server", "do.thing")).toMatch(/^[a-zA-Z0-9_-]+$/);
+  });
+
+  // Providers also cap function names at 64 characters: one long MCP tool
+  // name made every request carrying the tool list fail with a 400.
+  it("stays within the 64-character provider limit, and unique", () => {
+    const server = "company-internal-tools";
+    const a = namespacedToolName(server, "synchronize_repository_metadata_now");
+    const b = namespacedToolName(server, "synchronize_repository_metadata_later");
+    expect(a).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(b).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(a).not.toBe(b);
+    expect(a.startsWith("mcp__company-internal-tools__synchronize")).toBe(true);
+    // Short names are unchanged.
+    expect(namespacedToolName("files", "search")).toBe("mcp__files__search");
+  });
+
+  it("keeps two tools whose names sanitize alike apart", () => {
+    const names = namespacedToolNames("srv", ["a.b", "a_b", "c"]);
+    expect(names[0]).toBe("mcp__srv__a_b");
+    expect(names[1]).not.toBe(names[0]);
+    expect(names[1]).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(names[2]).toBe("mcp__srv__c");
   });
 });
 
