@@ -181,6 +181,22 @@ describe("TaskManager", () => {
     expect(manager.hasActiveForegroundTasks()).toBe(false);
   });
 
+  // TSK-12: this count runs on every heartbeat tick (per trigger) and every
+  // scheduling pass; it loaded every incomplete row's whole progress history.
+  it("counts foreground work without loading progress history, and prunes history at boot", () => {
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([]),
+      pruneHistory: vi.fn().mockReturnValue({ tasks: 0, progress: 0 }),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    manager.countActiveForegroundTasks();
+    expect(storage.loadIncomplete).toHaveBeenCalledWith({ withProgress: false });
+
+    manager.recoverOnStartup();
+    expect(storage.pruneHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("stores the user-facing summary when structured progress is provided", () => {
     const storage = {
       addProgress: vi.fn(),

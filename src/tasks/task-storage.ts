@@ -276,10 +276,43 @@ export class TaskStorage {
     return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
   }
 
-  loadIncomplete(): Task[] {
+  /**
+   * Every unfinished task. `withProgress: false` skips loading each row's
+   * whole progress history: the foreground count runs this on every heartbeat
+   * tick and every scheduling pass, and needs none of it (TSK-12).
+   */
+  loadIncomplete(opts: { withProgress?: boolean } = {}): Task[] {
     this.ensureConnection();
     const rows = this.getStmt("loadIncomplete").all() as TaskRow[];
-    return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
+    const withProgress = opts.withProgress !== false;
+    return rows.map((r) => this.rowToTask(r, withProgress ? this.getProgress(r.id) : []));
+  }
+
+  /**
+   * Retention (TSK-12): nothing ever deleted a task or a progress row.
+   *
+   * - A lineage tree (a root and every retry/resume under it) is deleted with
+   *   its progress once EVERY row in it is completed, failed or cancelled and
+   *   the newest was last updated before `olderThanMs`. Whole trees only, so
+   *   a retained task never loses an ancestor its lineage walks need; trees
+   *   that carry campaign work are kept (the campaign layer tracks them).
+   * - Each task keeps at most `maxProgressPerTask` progress rows (newest).
+   */
+  pruneHistory(opts: { olderThanMs: number; maxProgressPerTask: number; now?: number }): { tasks: number; progress: number } {
+    this.ensureConnection();
+    const cutoff = (opts.now ?? Date.now()) - opts.olderThanMs;
+    const db = this.db!;
+    return db.transaction(() => {
+      const staleIds = (this.getStmt("staleLineageTaskIds").all(cutoff) as Array<{ id: string }>).map((r) => r.id);
+      let progress = 0;
+      let tasks = 0;
+      for (const id of staleIds) {
+        progress += this.getStmt("deleteProgressForTask").run(id).changes;
+        tasks += this.getStmt("deleteTask").run(id).changes;
+      }
+      progress += this.getStmt("trimProgress").run(opts.maxProgressPerTask).changes;
+      return { tasks, progress };
+    })();
   }
 
   findLatestByGoalRoot(goalRootId: string): Task | null {
@@ -585,6 +618,32 @@ export class TaskStorage {
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
       touchTask: `UPDATE tasks SET updated_at = ? WHERE id = ?`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,
+      staleLineageTaskIds: `
+        WITH RECURSIVE tree(root, id) AS (
+          SELECT id, id FROM tasks
+          WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM tasks)
+          UNION
+          SELECT tree.root, t.id FROM tasks t JOIN tree ON t.parent_id = tree.id
+        ),
+        stale(root) AS (
+          SELECT tree.root FROM tree JOIN tasks t ON t.id = tree.id
+          GROUP BY tree.root
+          HAVING MAX(t.updated_at) < ?
+            AND SUM(CASE WHEN t.status IN ('completed', 'failed', 'cancelled') THEN 0 ELSE 1 END) = 0
+            AND SUM(CASE WHEN t.campaign_id IS NULL THEN 0 ELSE 1 END) = 0
+        )
+        SELECT id FROM tree WHERE root IN (SELECT root FROM stale)
+      `,
+      deleteProgressForTask: `DELETE FROM task_progress WHERE task_id = ?`,
+      deleteTask: `DELETE FROM tasks WHERE id = ?`,
+      trimProgress: `
+        DELETE FROM task_progress WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY timestamp DESC, id DESC) AS rn
+            FROM task_progress
+          ) WHERE rn > ?
+        )
+      `,
     };
 
     for (const [name, sql] of Object.entries(stmts)) {

@@ -33,6 +33,11 @@ export function isReplayPrompt(prompt: string): boolean {
   return REPLAY_PREFACE_RE.test(prompt.trimStart());
 }
 
+/** Finished lineages untouched for this long are pruned at boot (TSK-12). */
+const TASK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Progress rows kept per task (the newest). */
+const MAX_PROGRESS_ROWS_PER_TASK = 500;
+
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
   private checkpointStore?: TaskCheckpointStore;
@@ -660,7 +665,7 @@ export class TaskManager extends EventEmitter {
       TaskStatus.planning,
       TaskStatus.executing,
     ]);
-    return this.storage.loadIncomplete().filter((task) =>
+    return this.storage.loadIncomplete({ withProgress: false }).filter((task) =>
       task.channelType !== "daemon" &&
       !excluded.has(task.chatId) &&
       progressing.has(task.status)
@@ -867,6 +872,7 @@ export class TaskManager extends EventEmitter {
    */
   recoverOnStartup(): void {
     const logger = getLogger();
+    this.pruneHistory();
     const incomplete = this.storage.loadIncomplete();
 
     if (incomplete.length === 0) return;
@@ -924,6 +930,25 @@ export class TaskManager extends EventEmitter {
         previousStatus: task.status,
         recoverable: true,
       });
+    }
+  }
+
+  /**
+   * Boot-time retention for the task tables (TSK-12): finished lineages older
+   * than TASK_RETENTION_MS go, and no task keeps more than
+   * MAX_PROGRESS_ROWS_PER_TASK progress rows. Best-effort.
+   */
+  private pruneHistory(): void {
+    try {
+      const pruned = this.storage.pruneHistory({
+        olderThanMs: TASK_RETENTION_MS,
+        maxProgressPerTask: MAX_PROGRESS_ROWS_PER_TASK,
+      });
+      if (pruned.tasks > 0 || pruned.progress > 0) {
+        getLogger().info("Pruned finished task history", pruned);
+      }
+    } catch (err) {
+      getLogger().warn("Task history pruning failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

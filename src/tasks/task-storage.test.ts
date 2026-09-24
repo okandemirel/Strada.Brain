@@ -270,3 +270,66 @@ describe("listLiveInLineage — a campaign retires ALL of its work (Codex 2026-0
     }
   });
 });
+
+// TSK-12: no code ever deleted a task or progress row, and the foreground
+// count loaded every incomplete row's whole progress history on each tick.
+describe("task history retention and light listings (TSK-12)", () => {
+  let tmpDir: string;
+  let storage: TaskStorage;
+  const DAY = 24 * 60 * 60 * 1000;
+  // Rows are written at real time; pruning is judged forty days later.
+  const old = Date.now();
+  const now = old + 40 * DAY;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "task-storage-retention-"));
+    storage = new TaskStorage(join(tmpDir, "tasks.db"));
+    storage.initialize();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("prunes only whole finished lineages past the cutoff, keeping campaign work", () => {
+    const doneRoot = makeTask(TaskStatus.failed, { createdAt: old, updatedAt: old });
+    const doneTip = makeTask(TaskStatus.completed, { parentId: doneRoot.id, createdAt: old + 1, updatedAt: old + 1 });
+    // An old root whose lineage is still live, and one whose tip is recent.
+    const liveRoot = makeTask(TaskStatus.cancelled, { createdAt: old, updatedAt: old });
+    const liveTip = makeTask(TaskStatus.blocked, { parentId: liveRoot.id, createdAt: old + 1, updatedAt: old + 1 });
+    const recentRoot = makeTask(TaskStatus.failed, { createdAt: old, updatedAt: old });
+    const recentTip = makeTask(TaskStatus.completed, { parentId: recentRoot.id, createdAt: now - DAY, updatedAt: now - DAY });
+    const campaignTask = makeTask(TaskStatus.completed, { createdAt: old, updatedAt: old, campaignId: "camp_1" });
+    for (const t of [doneRoot, doneTip, liveRoot, liveTip, recentRoot, recentTip, campaignTask]) storage.save(t);
+    storage.addProgress(doneTip.id, "step");
+
+    const pruned = storage.pruneHistory({ olderThanMs: 30 * DAY, maxProgressPerTask: 500, now });
+
+    expect(pruned).toEqual({ tasks: 2, progress: 1 });
+    expect(storage.load(doneRoot.id)).toBeNull();
+    expect(storage.load(doneTip.id)).toBeNull();
+    for (const kept of [liveRoot, liveTip, recentRoot, recentTip, campaignTask]) {
+      expect(storage.load(kept.id)).not.toBeNull();
+    }
+    expect(storage.findLineageRootId(recentTip.id)).toBe(recentRoot.id);
+  });
+
+  it("keeps only the newest progress rows of a task", () => {
+    const task = makeTask(TaskStatus.executing);
+    storage.save(task);
+    for (let i = 0; i < 8; i++) storage.addProgress(task.id, `step ${i}`);
+
+    storage.pruneHistory({ olderThanMs: 30 * DAY, maxProgressPerTask: 3 });
+
+    expect(storage.load(task.id)!.progress.map((p) => p.message)).toEqual(["step 5", "step 6", "step 7"]);
+  });
+
+  it("lists incomplete tasks without their progress when asked", () => {
+    const task = makeTask(TaskStatus.executing);
+    storage.save(task);
+    storage.addProgress(task.id, "step");
+    expect(storage.loadIncomplete()[0]!.progress).toHaveLength(1);
+    expect(storage.loadIncomplete({ withProgress: false })[0]!.progress).toHaveLength(0);
+  });
+});
