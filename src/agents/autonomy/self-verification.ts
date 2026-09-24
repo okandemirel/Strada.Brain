@@ -336,6 +336,19 @@ export class SelfVerification {
         }
       }
 
+      // Parse Unity console errors first. The verification block below ends
+      // with `continue` for an inspection or an inconclusive result, and this
+      // sat after it — so the errors unity_console_read and
+      // unity_console_analyze returned were never recorded (audited
+      // 2026-09-24).
+      if (CONSOLE_REPORTING_TOOLS.has(executedTool.toolName)) {
+        this.parseUnityConsoleErrors(
+          executedTool.output !== undefined && executedTool.output !== ""
+            ? executedTool.output
+            : (typeof result.content === "string" ? result.content : ""),
+        );
+      }
+
       // Track build results — O(1)
       if (isVerificationTool(executedTool.toolName, executedTool.input)) {
         // (published below once ok is settled)
@@ -437,18 +450,6 @@ export class SelfVerification {
             this.failingTestRun = true;
           }
         }
-      }
-
-      // Parse Unity console errors from verification results
-      if (
-        executedTool.toolName === "unity_verify_change" ||
-        executedTool.toolName === "unity_compile_status" ||
-        executedTool.toolName === "unity_compile_wait" ||
-        executedTool.toolName === "unity_console_read" ||
-        executedTool.toolName === "unity_console_analyze"
-      ) {
-        const content = typeof result.content === "string" ? result.content : "";
-        this.parseUnityConsoleErrors(content);
       }
     }
   }
@@ -773,6 +774,12 @@ export function looksLikeTestFile(path: string): boolean {
   return /Tests?\.(?:cs|ts|tsx|js)$/u.test(normalized)
     || /\.(?:test|spec)\.(?:ts|tsx|js)$/u.test(normalized);
 }
+
+/** Tools whose output carries the Unity console's errors. */
+const CONSOLE_REPORTING_TOOLS: ReadonlySet<string> = new Set([
+  "unity_verify_change", "unity_compile_status", "unity_compile_wait",
+  "unity_console_read", "unity_console_analyze",
+]);
 
 /**
  * Tools that answer a QUESTION about the tree rather than building it. Their
