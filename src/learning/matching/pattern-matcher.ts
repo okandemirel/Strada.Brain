@@ -20,68 +20,123 @@ import type { IEventBus } from "../../core/event-bus.js";
 // ─── Similarity Algorithms ──────────────────────────────────────────────────────
 
 /**
- * Calculate Levenshtein edit distance between two strings
+ * Longest prefix of either string an edit distance is computed over.
+ *
+ * Lexical matching runs on every message (the whole prompt) and every tool
+ * error (the whole output). A full edit-distance matrix over those blocked the
+ * event loop for seconds per retrieval. Past this length the prefix decides,
+ * and the result is still capped by what the FULL lengths allow (see
+ * stringSimilarity), so a short pattern that merely opens a long text is not
+ * scored as a copy of it.
  */
-function levenshteinDistance(a: string, b: string): number {
-  const matrix: number[][] = [];
+export const MAX_EDIT_DISTANCE_CHARS = 512;
 
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
+/** Slack for floating-point thresholds, so a score exactly on a bar is kept. */
+const THRESHOLD_EPSILON = 1e-9;
 
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0]![j] = j;
-  }
+/**
+ * Levenshtein edit distance between two strings, or `maxDistance + 1` as soon
+ * as it is known to exceed `maxDistance`.
+ *
+ * Two rows over the shorter string, and only the diagonal band a distance of at
+ * most `maxDistance` can pass through: O(min(n,m)) memory and
+ * O(maxDistance · max(n,m)) time, where the full matrix was O(n·m) of both.
+ */
+export function boundedLevenshtein(a: string, b: string, maxDistance: number = Number.POSITIVE_INFINITY): number {
+  // Rows run over `b`, columns over the shorter `a`.
+  if (a.length > b.length) [a, b] = [b, a];
+  const n = a.length;
+  const m = b.length;
+  // A distance never exceeds the longer length, so that is the widest band needed.
+  const limit = Math.max(0, Math.min(Math.floor(maxDistance), m));
+  const over = limit + 1;
+  if (m - n > limit) return over;
+  if (n === 0) return m;
 
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i]![j] = matrix[i - 1]![j - 1]!;
-      } else {
-        matrix[i]![j] = Math.min(
-          matrix[i - 1]![j - 1]! + 1, // substitution
-          matrix[i]![j - 1]! + 1,     // insertion
-          matrix[i - 1]![j]! + 1      // deletion
-        );
-      }
+  let prev = new Int32Array(n + 1);
+  let curr = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j <= limit ? j : over;
+
+  for (let i = 1; i <= m; i++) {
+    const lo = Math.max(1, i - limit);
+    const hi = Math.min(n, i + limit);
+    // Cells left of the band can only hold distances above the limit.
+    curr[lo - 1] = lo === 1 && i <= limit ? i : over;
+    let rowMin = curr[lo - 1]!;
+    const code = b.charCodeAt(i - 1);
+    for (let j = lo; j <= hi; j++) {
+      const substitution = prev[j - 1]! + (a.charCodeAt(j - 1) === code ? 0 : 1);
+      const v = Math.min(substitution, prev[j]! + 1, curr[j - 1]! + 1);
+      curr[j] = v > over ? over : v;
+      if (v < rowMin) rowMin = v;
     }
+    if (hi < n) curr[hi + 1] = over;
+    // Every later row is at least this row's minimum: nothing can come back under.
+    if (rowMin > limit) return over;
+    [prev, curr] = [curr, prev];
   }
-
-  return matrix[b.length]![a.length]!;
+  return prev[n]! > limit ? over : prev[n]!;
 }
 
 /**
- * Calculate normalized similarity score (0.0 - 1.0)
+ * Normalized edit-distance similarity (0.0 - 1.0).
+ *
+ * Exact whenever the result is at least `minSimilarity`; below it the caller
+ * only learns "below" (0 is returned), which lets the distance stop early.
  */
-function stringSimilarity(a: string, b: string): number {
+export function stringSimilarity(a: string, b: string, minSimilarity: number = 0): number {
   if (a === b) return 1.0;
   if (a.length === 0 || b.length === 0) return 0.0;
 
-  const distance = levenshteinDistance(a, b);
-  const maxLength = Math.max(a.length, b.length);
-  
-  return 1 - distance / maxLength;
+  // A distance is at least the length difference, so the full lengths bound
+  // the similarity before any matrix work (a 200-char trigger against a 20 KB
+  // prompt is decided here).
+  const ceiling = Math.min(a.length, b.length) / Math.max(a.length, b.length);
+  if (ceiling + THRESHOLD_EPSILON < minSimilarity) return 0;
+
+  const x = a.length > MAX_EDIT_DISTANCE_CHARS ? a.slice(0, MAX_EDIT_DISTANCE_CHARS) : a;
+  const y = b.length > MAX_EDIT_DISTANCE_CHARS ? b.slice(0, MAX_EDIT_DISTANCE_CHARS) : b;
+  const maxLength = Math.max(x.length, y.length);
+  const maxDistance = Math.floor(Math.max(0, 1 - minSimilarity) * maxLength + THRESHOLD_EPSILON);
+  const distance = boundedLevenshtein(x, y, maxDistance);
+  if (distance > maxDistance) return 0;
+
+  return Math.min(ceiling, 1 - distance / maxLength);
+}
+
+/** The token set cosine similarity compares (lower-cased, whitespace-split). */
+function tokenSet(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/\s+/));
+}
+
+/** Cosine similarity between two token sets. */
+function tokenCosine(tokensA: Set<string>, tokensB: Set<string>): number {
+  const [small, large] = tokensA.size <= tokensB.size ? [tokensA, tokensB] : [tokensB, tokensA];
+  let shared = 0;
+  for (const token of small) if (large.has(token)) shared++;
+  return shared / Math.sqrt(tokensA.size * tokensB.size) || 0;
+}
+
+/**
+ * The fuzzy score a 0.6·fuzzy + 0.4·cosine blend needs to reach `minScore`,
+ * given its cosine part. Below it the blend misses the bar whatever the exact
+ * edit distance is, so the distance is only computed down to here.
+ */
+function fuzzyFloorFor(minScore: number, cosine: number): number {
+  return Math.max(0, (minScore - cosine * 0.4) / 0.6 - THRESHOLD_EPSILON);
 }
 
 /**
  * The lexical similarity the dedup decision uses: the same blend
  * findSimilarInstincts scores trigger patterns with (exact match wins outright).
+ * Exact whenever it is at least `minScore`; below that only "below" is certain.
  */
-export function combinedSimilarity(a: string, b: string): number {
+export function combinedSimilarity(a: string, b: string, minScore: number = 0): number {
   if (a === b) return 1.0;
-  return stringSimilarity(a, b) * 0.6 + cosineSimilarity(a, b) * 0.4;
-}
-
-/**
- * Calculate cosine similarity between two token sets
- */
-function cosineSimilarity(a: string, b: string): number {
-  const tokensA = new Set(a.toLowerCase().split(/\s+/));
-  const tokensB = new Set(b.toLowerCase().split(/\s+/));
-
-  const intersection = new Set([...tokensA].filter(x => tokensB.has(x)));
-
-  return intersection.size / Math.sqrt(tokensA.size * tokensB.size) || 0;
+  const cosine = tokenCosine(tokenSet(a), tokenSet(b));
+  const fuzzyFloor = fuzzyFloorFor(minScore, cosine);
+  const fuzzy = fuzzyFloor > 1 ? 0 : stringSimilarity(a, b, fuzzyFloor);
+  return fuzzy * 0.6 + cosine * 0.4;
 }
 
 // Re-export for backward compat (tests import from here)
@@ -199,9 +254,11 @@ export class PatternMatcher {
       .filter(i => statusFilter.includes(i.status));
 
     const matches: PatternMatch[] = [];
+    // The message is the whole tool output: normalize it once, not per candidate.
+    const normalizedMessage = input.errorMessage ? this.normalize(input.errorMessage) : undefined;
 
     for (const instinct of candidates) {
-      const match = this.matchInstinct(instinct, input);
+      const match = this.matchInstinct(instinct, input, normalizedMessage);
       
       if (match.confidence >= minConfidence) {
         matches.push(match);
@@ -266,11 +323,20 @@ export class PatternMatcher {
     // Track instinct pairs for eager dedup (scope mode only)
     const dedupCandidates: Array<{ higher: Instinct; lower: Instinct; similarity: number }> = [];
 
+    // The query is the whole prompt: tokenize it once, not per candidate.
+    const queryTokens = tokenSet(triggerPattern);
+    // The lowest score anything below is discarded at: the admission bar, or in
+    // scope mode the eager-dedup bar when that is lower.
+    const scoreFloor = scope ? Math.min(minSimilarity, CONFIDENCE_THRESHOLDS.SIMILAR) : minSimilarity;
+
     for (const instinct of candidates) {
       // Calculate multiple similarity metrics
       const exactMatch = instinct.triggerPattern === triggerPattern;
-      const fuzzySim = stringSimilarity(instinct.triggerPattern, triggerPattern);
-      const cosineSim = cosineSimilarity(instinct.triggerPattern, triggerPattern);
+      const cosineSim = tokenCosine(tokenSet(instinct.triggerPattern), queryTokens);
+      const fuzzyFloor = fuzzyFloorFor(scoreFloor, cosineSim);
+      const fuzzySim = exactMatch
+        ? 1.0
+        : fuzzyFloor > 1 ? 0 : stringSimilarity(instinct.triggerPattern, triggerPattern, fuzzyFloor);
 
       // Combined similarity score
       let similarity = exactMatch ? 1.0 : (fuzzySim * 0.6 + cosineSim * 0.4);
@@ -307,13 +373,17 @@ export class PatternMatcher {
         // Check for existing matches that are also high-similarity
         for (const existing of matches) {
           if (existing.instinct && existing.instinct.id !== instinct.id) {
-            const pairScore = combinedSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
+            const pairScore = combinedSimilarity(
+              existing.instinct.triggerPattern,
+              instinct.triggerPattern,
+              CONFIDENCE_THRESHOLDS.SIMILAR,
+            );
             // D43 (audit 04.5): the trigger alone decided this, so two instincts
             // that fire on the same error with DIFFERENT solutions were "the same
             // instinct" and one of them was destroyed. A duplicate is the same
             // trigger AND the same action; a rival solution for a shared trigger
             // is knowledge, not noise, and stays.
-            const actionScore = combinedSimilarity(existing.instinct.action, instinct.action);
+            const actionScore = combinedSimilarity(existing.instinct.action, instinct.action, CONFIDENCE_THRESHOLDS.SIMILAR);
             // Round 10 #12: and the same OWNER. Two people can hold the same rule
             // privately; merging them destroys one person's learning and hands the
             // survivor to somebody who never taught it.
@@ -494,7 +564,6 @@ export class PatternMatcher {
 
       // Match error message
       if (input.errorMessage) {
-        const similarity = stringSimilarity(input.errorMessage, pattern.messagePattern);
         let regexMatched = false;
         try {
           const messageRegex = new RegExp(pattern.messagePattern, "i");
@@ -502,6 +571,13 @@ export class PatternMatcher {
         } catch {
           // Malformed regex — rely on similarity only
         }
+        // A regex match scores by the similarity whatever it is; otherwise only
+        // a similarity above the fuzzy bar counts, so none below it is computed.
+        const similarity = stringSimilarity(
+          input.errorMessage,
+          pattern.messagePattern,
+          regexMatched ? 0 : this.FUZZY_THRESHOLD,
+        );
 
         if (regexMatched || similarity > this.FUZZY_THRESHOLD) {
           score += 0.5 * similarity;
@@ -578,7 +654,8 @@ export class PatternMatcher {
 
   private matchInstinct(
     instinct: Instinct,
-    input: PatternMatchInput
+    input: PatternMatchInput,
+    normalizedMessage?: string,
   ): PatternMatch {
     const scores: { type: PatternMatch["type"]; confidence: number; relevance: number; fields: string[] }[] = [];
 
@@ -593,7 +670,7 @@ export class PatternMatcher {
     }
 
     // Exact message match
-    if (input.errorMessage && this.matchesMessage(instinct, input.errorMessage)) {
+    if (normalizedMessage !== undefined && this.matchesMessage(instinct, normalizedMessage)) {
       scores.push({
         type: "exact",
         confidence: 0.9 * instinct.confidence,
@@ -604,7 +681,7 @@ export class PatternMatcher {
 
     // Fuzzy message match
     if (input.errorMessage) {
-      const similarity = stringSimilarity(instinct.triggerPattern, input.errorMessage);
+      const similarity = stringSimilarity(instinct.triggerPattern, input.errorMessage, this.FUZZY_THRESHOLD);
       if (similarity >= this.FUZZY_THRESHOLD) {
         scores.push({
           type: "fuzzy",
@@ -651,11 +728,10 @@ export class PatternMatcher {
            );
   }
 
-  private matchesMessage(instinct: Instinct, message: string): boolean {
-    // Normalize and compare
+  private matchesMessage(instinct: Instinct, normalizedMessage: string): boolean {
+    // Normalize and compare (the message arrives normalized)
     const normalizedPattern = this.normalize(instinct.triggerPattern);
-    const normalizedMessage = this.normalize(message);
-    
+
     return normalizedMessage.includes(normalizedPattern) ||
            normalizedPattern.includes(normalizedMessage);
   }
