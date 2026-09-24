@@ -31,6 +31,14 @@ describe("reloadEnvAfterSetup (setup handoff)", () => {
     expect(env.UNITY_PROJECT_PATH).toBe("/tmp/x");
   });
 
+  it("drops the keys the save removed from the file (COR-14)", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "sk-removed", KEEP: "yes" };
+    reloadEnvAfterSetup({ path: envFile("KIMI_API_KEY=sk-kimi\n"), env, removedKeys: ["OPENAI_API_KEY"] });
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.KIMI_API_KEY).toBe("sk-kimi");
+    expect(env.KEEP).toBe("yes");
+  });
+
   it("applies an explicit true written by the wizard over a stale false", () => {
     const env: NodeJS.ProcessEnv = { STRADA_DAEMON_ENABLED: "false" };
     reloadEnvAfterSetup({ path: envFile("STRADA_DAEMON_ENABLED=true\n"), env });

@@ -463,7 +463,10 @@ async function startApp(
   let activeWizard: SetupWizard | null = initialWizard;
 
   if (activeWizard) {
-    reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
+    reloadEnvAfterSetup({
+      path: resolveDotenvPath({ moduleUrl: import.meta.url }),
+      removedKeys: activeWizard.getRemovedEnvKeys(),
+    });
     resetConfigCache();
   }
 
@@ -489,7 +492,10 @@ async function startApp(
         await wizard.start();
         console.log("Setup complete! Validating configuration...");
         // Reload .env into process.env and reset config cache
-        reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
+        reloadEnvAfterSetup({
+          path: resolveDotenvPath({ moduleUrl: import.meta.url }),
+          removedKeys: wizard.getRemovedEnvKeys(),
+        });
         resetConfigCache();
         configResult = loadConfigSafe();
         if (configResult.kind === "ok") {
@@ -513,7 +519,10 @@ async function startApp(
       await wizard.start();
       console.log("Setup complete! Validating configuration...");
       await wizard.shutdown();
-      reloadEnvAfterSetup({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
+      reloadEnvAfterSetup({
+        path: resolveDotenvPath({ moduleUrl: import.meta.url }),
+        removedKeys: wizard.getRemovedEnvKeys(),
+      });
       resetConfigCache();
       configResult = loadConfigSafe();
       if (configResult.kind === "err") {

@@ -704,6 +704,8 @@ export class SetupWizard {
    */
   private readonly mcpInstalledInProject = new Set<string>();
   private status: SetupStatusResponse = createSetupStatus();
+  /** Keys the saves of this wizard removed from .env, for the env reload (COR-14). */
+  private readonly removedEnvKeys = new Set<string>();
   private completionPromise!: Promise<void>;
   private resolveCompletion!: () => void;
   private completionSignaled = false;
@@ -772,6 +774,11 @@ export class SetupWizard {
       readyUrl: this.readyUrl,
       detail,
     });
+  }
+
+  /** Keys a save removed from .env: the handoff drops them from process.env too. */
+  getRemovedEnvKeys(): readonly string[] {
+    return [...this.removedEnvKeys];
   }
 
   getPendingPostSetupBootstrap(): PostSetupBootstrap | undefined {
@@ -1750,6 +1757,9 @@ export class SetupWizard {
       effectiveConfig = redactEffectiveConfig(persisted.effective, new Set([...SETUP_OWNED_ENV_KEYS, ...SETUP_DEFAULT_ENV_KEYS]));
       effectiveBudget = describeEffectiveBudget(persisted.effective);
       preservedKeys = persisted.preserved;
+      for (const key of persisted.removed) this.removedEnvKeys.add(key);
+      // A key written again by a later save is no longer removed.
+      for (const key of Object.keys(persisted.effective)) this.removedEnvKeys.delete(key);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.json(res, 500, { success: false, error: `Failed to write .env: ${msg}` });

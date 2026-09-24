@@ -59,6 +59,7 @@ import {
   injectSetupModeMarker,
 } from "./setup-wizard.js";
 import { describeEffectiveBudget, persistSetup } from "./setup-env-persistence.js";
+import { reloadEnvAfterSetup } from "./setup-env-reload.js";
 
 describe("SetupWizard path validation", () => {
   const originalCwd = process.cwd();
@@ -787,6 +788,27 @@ describe("SetupWizard path validation", () => {
   // Plan 2.1 (audit 10.1b / D24, D29, D30): typed setup persistence merges
   // into the existing .env; every submitted field is written and read back.
   // ---------------------------------------------------------------------------
+
+  it("a credential the save removed is gone from the handed-off runtime's env too (COR-14)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    const envPath = path.join(tempCwd, ".env");
+    fs.writeFileSync(envPath, "UNITY_PROJECT_PATH=/tmp/old\nOPENAI_API_KEY=sk-removed\nTELEGRAM_BOT_TOKEN=1:old\n");
+    // What the process loaded at startup, before setup ran.
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "sk-removed", TELEGRAM_BOT_TOKEN: "1:old", SHELL_ONLY: "kept" };
+
+    const wizard = new SetupWizard({ port: 0 });
+    expect((await saveWizard(wizard)).read().statusCode).toBe(200);
+    reloadEnvAfterSetup({ path: envPath, env, removedKeys: wizard.getRemovedEnvKeys() });
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(env.KIMI_API_KEY).toBe("sk-kimi");
+    expect(env.SHELL_ONLY).toBe("kept");
+  });
 
   it("keeps a key a person added by hand when Save merges into the existing .env (2.1 / D29)", async () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
