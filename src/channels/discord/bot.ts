@@ -71,6 +71,8 @@ const RATE_LIMIT_BACKOFF_MS = 5000;
 const MESSAGE_TIMEOUT_MS = 30_000;
 /** Discord per-message hard limit is 2000 chars; split long content into chunks. */
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
+/** Answers a slash command whose reply was not produced while it was handled (CHN-6). */
+const SLASH_COMMAND_ACCEPTED_REPLY = "Request received — the reply is posted in this channel.";
 
 /**
  * Discord channel adapter using discord.js.
@@ -1308,13 +1310,24 @@ export class DiscordChannel implements IChannelAdapter {
       this.registerReplyCallback(msg.chatId, replyKey, replyCallback);
     }
 
+    // CHN-6: the daemon's handler only queues a task and returns; the answer is
+    // sent later, as an ordinary channel message. A callback still pending when
+    // the handler returns therefore answers the deferred interaction NOW — it
+    // used to be dropped silently, leaving Discord's "thinking…" to expire as
+    // "The application did not respond". It is not kept for the later answer:
+    // the send path matches callbacks by channel, so a kept one would capture
+    // whatever reached that channel next, and the interaction token expires
+    // after 15 minutes anyway.
     try {
       await this.handler(msg);
-    } finally {
-      // Clean up if the callback was never consumed (e.g. handler error or no response)
-      if (replyCallback) {
-        this.removeReplyCallback(msg.chatId, replyKey);
+    } catch (error) {
+      if (replyCallback && this.removeReplyCallback(msg.chatId, replyKey)) {
+        await replyCallback(classifyErrorMessage(error)).catch(() => undefined);
       }
+      throw error;
+    }
+    if (replyCallback && this.removeReplyCallback(msg.chatId, replyKey)) {
+      await replyCallback(SLASH_COMMAND_ACCEPTED_REPLY);
     }
   }
 
@@ -1351,14 +1364,15 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   /** Remove a still-pending reply callback by its key (e.g. handler error or no
-   * response), keeping the chatId index in sync. */
-  private removeReplyCallback(chatId: string, key: string): void {
-    if (!this.pendingReplyCallbacks.delete(key)) return;
+   * response), keeping the chatId index in sync. True when one was pending. */
+  private removeReplyCallback(chatId: string, key: string): boolean {
+    if (!this.pendingReplyCallbacks.delete(key)) return false;
     const tokens = this.replyTokensByChatId.get(chatId);
-    if (!tokens) return;
+    if (!tokens) return true;
     const idx = tokens.indexOf(key);
     if (idx !== -1) tokens.splice(idx, 1);
     if (tokens.length === 0) this.replyTokensByChatId.delete(chatId);
+    return true;
   }
 
   private async registerSlashCommands(): Promise<void> {
