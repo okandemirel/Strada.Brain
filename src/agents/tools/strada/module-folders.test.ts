@@ -18,10 +18,11 @@ import {
   declarationPathFor,
 } from "./module-folders.js";
 
+// STRADA_CORE_PATH names the checkout explicitly (CI clones it elsewhere, so
+// the sibling path never existed there and these tests always skipped, OPS-11).
+const CORE_PATH_FROM_ENV = process.env["STRADA_CORE_PATH"]?.trim() || undefined;
 const SIBLING_DECLARATION = join(
-  process.cwd(),
-  "..",
-  "Strada.Core",
+  CORE_PATH_FROM_ENV ?? join(process.cwd(), "..", "Strada.Core"),
   "Editor/ModuleGenerator/Config/DirectoryStructureConfig.cs",
 );
 
@@ -137,6 +138,12 @@ describe("choosing a module's folders", () => {
 
 describe("the real Strada.Core declaration", () => {
   const available = existsSync(SIBLING_DECLARATION);
+
+  // Skipping is for machines without a checkout. A run that named one and does
+  // not have it is misconfigured, and must say so instead of passing silently.
+  it.runIf(CORE_PATH_FROM_ENV !== undefined)("finds the checkout STRADA_CORE_PATH names", () => {
+    expect(available, `${SIBLING_DECLARATION} does not exist`).toBe(true);
+  });
 
   it.skipIf(!available)("parses, and declares Scripts mandatory", () => {
     const folders = parseDeclaredFolders(readFileSync(SIBLING_DECLARATION, "utf-8"));
