@@ -1493,6 +1493,22 @@ function loadConfig(): BrowserSecurityConfig {
   };
 }
 
+/**
+ * Which browser a call drives. Keyed by the project directory alone, every
+ * chat and every user on a project shared one browser — its cookies, the
+ * origin credentials a `navigate` stored, its page, and its rate limit — so
+ * one member of a group channel could read a page another had signed in to
+ * (audited 2026-09-24). A session, or else a chat and its user, gets its own;
+ * a call with neither (a CLI or internal caller) keeps the directory key.
+ */
+export function browserSessionKey(
+  context: Pick<ToolContext, "sessionId" | "chatId" | "userId" | "workingDirectory">,
+): string {
+  if (context.sessionId) return `session:${JSON.stringify([context.sessionId, context.userId ?? null])}`;
+  if (context.chatId) return `chat:${JSON.stringify([context.chatId, context.userId ?? null])}`;
+  return context.workingDirectory;
+}
+
 // ─── BrowserAutomationTool Class ─────────────────────────────────────────────
 
 export class BrowserAutomationTool implements ITool {
@@ -1564,7 +1580,7 @@ export class BrowserAutomationTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
-    const sessionId = context.workingDirectory;
+    const sessionId = browserSessionKey(context);
     const typedInput = input as unknown as BrowserInput;
 
     const rateLimitCheck = this.rateLimiter.checkLimit(sessionId);

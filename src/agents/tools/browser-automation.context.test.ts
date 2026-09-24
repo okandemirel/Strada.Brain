@@ -120,3 +120,49 @@ describe("BrowserAutomationTool session context — plan 4.6 (a) service workers
     expect(newContextCalls[0]).toMatchObject(POLICY_CONTEXT_OPTIONS);
   });
 });
+
+/**
+ * TLS-11 (audited 2026-09-24): sessions were keyed by the working directory,
+ * so every chat and user on one project drove the same browser — cookies,
+ * stored origin credentials and the open page included.
+ */
+describe("BrowserAutomationTool keeps one browser per chat participant (TLS-11)", () => {
+  let tool: BrowserAutomationTool;
+  const base: ToolContext = { projectPath: "/tmp/test", workingDirectory: "/tmp/test-shared", readOnly: false };
+
+  beforeEach(() => {
+    newContextCalls.length = 0;
+    mockLookup.mockReset();
+    mockLookup.mockImplementation(async () => [{ address: "93.184.216.34", family: 4 }]);
+    tool = new BrowserAutomationTool();
+  });
+
+  afterEach(async () => {
+    await tool?.dispose();
+  });
+
+  it("two chats on one project get separate browser contexts", async () => {
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "a", userId: "u1" });
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "b", userId: "u2" });
+    expect(newContextCalls).toHaveLength(2);
+  });
+
+  it("two users in one group chat get separate browser contexts", async () => {
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "g", userId: "u1" });
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "g", userId: "u2" });
+    expect(newContextCalls).toHaveLength(2);
+  });
+
+  it("guard: one user's later call in the same chat reuses their browser", async () => {
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "g", userId: "u1" });
+    const content = await tool.execute({ action: "get_content" }, { ...base, chatId: "g", userId: "u1" });
+    expect(content.content).not.toContain("No active browser session");
+    expect(newContextCalls).toHaveLength(1);
+  });
+
+  it("another user cannot read a page they never opened", async () => {
+    await tool.execute({ action: "navigate", url: "https://public.example/" }, { ...base, chatId: "g", userId: "u1" });
+    const other = await tool.execute({ action: "get_content" }, { ...base, chatId: "g", userId: "u2" });
+    expect(other.content).toContain("No active browser session");
+  });
+});
