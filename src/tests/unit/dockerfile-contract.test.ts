@@ -252,6 +252,18 @@ describe.each(DOCKERFILES)("%s", (relPath) => {
     }
   });
 
+  it("does not create an account with a uid/gid the node base image already uses", () => {
+    // node:*-alpine ships the `node` account as 1000:1000, and busybox
+    // addgroup/adduser refuse an id that is taken ("gid '1000' in use"), so
+    // creating another 1000 account fails the build (OPS-3).
+    const production = stages.find((s) => s.name === "production");
+    expect(production, "no production stage").toBeDefined();
+    if (!/^node:/.test(production!.base)) return;
+    for (const line of production!.lines) {
+      expect(line).not.toMatch(/\b(?:addgroup|adduser|groupadd|useradd)\b[^&;|]*\s(?:-g|-u|--gid|--uid)[\s=]+1000\b/);
+    }
+  });
+
   it("never uses the removed `npm ci --only=production` form", () => {
     expect(source).not.toMatch(/--only=production/);
   });

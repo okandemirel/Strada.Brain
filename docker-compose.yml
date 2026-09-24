@@ -95,6 +95,14 @@ services:
         target: /app/project
         read_only: true
       
+      # Config root (STRADA_HOME=/app/.strada, set by the image): .env, the
+      # trust/owner databases and runtime state. The root filesystem is
+      # read-only, so without this volume the startup mkdir fails and the
+      # container restart-loops (OPS-3).
+      - type: volume
+        source: strada-home
+        target: /app/.strada
+
       # Persistent memory storage
       - type: volume
         source: strada-memory
@@ -397,6 +405,8 @@ services:
 # Volumes
 # =============================================================================
 volumes:
+  strada-home:
+    driver: local
   strada-memory:
     driver: local
   strada-logs:

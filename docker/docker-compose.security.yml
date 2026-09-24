@@ -62,6 +62,12 @@ services:
     
     # Read-write volumes (for persistent data)
     volumes:
+      # Config root (STRADA_HOME=/app/.strada, set by the image). The root
+      # filesystem is read-only, so without it startup cannot create its
+      # config root and the container restart-loops (OPS-3).
+      - type: volume
+        source: strada-home
+        target: /app/.strada
       - type: volume
         source: strada-data
         target: /app/data
@@ -109,6 +115,8 @@ services:
       - scan
 
 volumes:
+  strada-home:
+    driver: local
   strada-data:
     driver: local
   strada-logs:

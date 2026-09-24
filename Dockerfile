@@ -12,6 +12,7 @@
 #   docker run -d --name strada-brain \
 #     -p 3100:3100 -p 9090:9090 \
 #     -v $(pwd)/project:/app/project:ro \
+#     -v strada-home:/app/.strada \
 #     -v strada-memory:/app/.strada-memory \
 #     strada-brain:latest
 # =============================================================================
@@ -98,44 +99,54 @@ RUN apk add --no-cache \
     ca-certificates \
     && rm -rf /var/cache/apk/*
 
-# Create non-root user
-RUN addgroup -g 1000 -S strata && \
-    adduser -u 1000 -S strata -G strata
+# Runtime user: the base image's own `node` account (uid/gid 1000). Creating a
+# second uid/gid-1000 account here fails the build ("gid '1000' in use").
 
 # Set working directory
 WORKDIR /app
 
-# Create required directories with proper permissions
+# Create required directories with proper permissions. /app/.strada is the
+# config root (STRADA_HOME below); it must exist and belong to the runtime user
+# so a named volume mounted there starts out writable (OPS-3).
 RUN mkdir -p \
+    /app/.strada \
     /app/.strada-memory \
     /app/logs \
     /app/plugins \
     /app/project \
     /tmp && \
-    chown -R strata:strata /app && \
+    chown -R node:node /app && \
     chmod 755 /app
 
 # Copy production dependencies from builder
-COPY --from=builder --chown=strata:strata /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 
 # Copy built application from builder
-COPY --from=builder --chown=strata:strata /app/dist ./dist
+COPY --from=builder --chown=node:node /app/dist ./dist
 
 # Ops and runtime scripts (backup, launcher, boot smoke). `npm run <script>`
 # inside the container resolves to these; without them every package script is
 # a "file not found". The portal's SOURCES are not copied — its built bundle
 # already lives in dist/channels/web/static.
-COPY --from=builder --chown=strata:strata /app/scripts ./scripts
+COPY --from=builder --chown=node:node /app/scripts ./scripts
 
 # Copy package files
-COPY --from=builder --chown=strata:strata /app/package*.json ./
+COPY --from=builder --chown=node:node /app/package*.json ./
 
 # Switch to non-root user
-USER strata
+USER node
 
 # Environment variables
+#
+# STRADA_HOME is where an install without a .git checkout keeps its config root:
+# .env, the trust/owner databases and runtime state; startup creates it
+# before anything else runs. The compose files run with a read-only root
+# filesystem and mount a volume here; with plain `docker run`, mount one too
+# (-v strada-home:/app/.strada) or it is lost when the container is re-created.
+# It is also $HOME/.strada, which some subsystems still address directly.
 ENV NODE_ENV=production \
     HOME=/app \
+    STRADA_HOME=/app/.strada \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_AUDIT=false \
