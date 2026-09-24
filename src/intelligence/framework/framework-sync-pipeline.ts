@@ -5,9 +5,9 @@
  * and git fallback for packages not installed locally.
  */
 
-import { existsSync, statSync, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, rmSync, realpathSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { FSWatcher } from "chokidar";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type {
@@ -98,6 +98,19 @@ export function createFrameworkSourceBinding(
 const WATCH_IGNORED_SEGMENT = /(^|[\\/])(node_modules|\.git|bin|obj)([\\/]|$)/;
 export function isFrameworkWatchIgnored(path: string): boolean {
   return WATCH_IGNORED_SEGMENT.test(path);
+}
+
+/** Run git without blocking the event loop; rejects on a non-zero exit or the timeout. */
+function runGit(
+  args: string[],
+  options: { timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean },
+): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    execFile("git", args, options, (error) => {
+      if (error) reject(error);
+      else resolvePromise();
+    });
+  });
 }
 
 export class FrameworkSyncPipeline {
@@ -216,7 +229,7 @@ export class FrameworkSyncPipeline {
       let sourceOrigin: SourceOrigin = "local";
 
       if (!sourcePath && this.config.gitFallbackEnabled) {
-        const fallback = this.gitFallbackClone(pkgId, pkgConfig);
+        const fallback = await this.gitFallbackClone(pkgId, pkgConfig);
         sourcePath = fallback?.path ?? null;
         sourceOrigin = fallback?.origin ?? "local";
       }
@@ -481,16 +494,23 @@ export class FrameworkSyncPipeline {
   /**
    * Git fallback: shallow clone to cache directory.
    * Uses HTTPS-only protocol restriction (same pattern as skill-installer.ts).
+   *
+   * The clone is asynchronous and lands in a temporary directory that replaces
+   * the cache only once it succeeded. A synchronous clone blocked the daemon's
+   * event loop for up to a minute per package at boot, and deleting the cache
+   * first meant a failed re-clone (offline, a hanging proxy) left no source at
+   * all; a stale cache is served until a clone succeeds.
    */
-  private gitFallbackClone(
+  private async gitFallbackClone(
     pkgId: FrameworkPackageId,
     config: FrameworkPackageConfig,
-  ): { path: string; origin: SourceOrigin } | null {
+  ): Promise<{ path: string; origin: SourceOrigin } | null> {
     const logger = getLoggerSafe();
     const cacheDir = join(this.config.gitCacheDir, pkgId);
 
     // Check if cache exists and is fresh enough
-    if (existsSync(cacheDir)) {
+    const hasCache = existsSync(cacheDir);
+    if (hasCache) {
       try {
         const stats = statSync(cacheDir);
         const ageMs = Date.now() - stats.mtimeMs;
@@ -502,30 +522,33 @@ export class FrameworkSyncPipeline {
       }
     }
 
+    const cloneDir = `${cacheDir}.clone-${process.pid}-${Date.now()}`;
     try {
       mkdirSync(this.config.gitCacheDir, { recursive: true });
 
-      // Remove stale cache if exists
-      if (existsSync(cacheDir)) {
-        rmSync(cacheDir, { recursive: true, force: true });
-      }
-
       // Shallow clone with HTTPS-only protocol (security)
-      execFileSync(
-        "git",
-        ["clone", "--depth", "1", "--", config.repoUrl, cacheDir],
-        {
-          timeout: 60_000,
-          env: { ...process.env, GIT_ALLOW_PROTOCOL: "https" },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      await runGit(["clone", "--depth", "1", "--", config.repoUrl, cloneDir], {
+        timeout: 60_000,
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: "https" },
+        windowsHide: true,
+      });
+
+      // Only now is the old cache replaced.
+      rmSync(cacheDir, { recursive: true, force: true });
+      renameSync(cloneDir, cacheDir);
 
       logger.debug(
         `Git fallback: cloned ${config.displayName} to ${cacheDir}`,
       );
       return { path: cacheDir, origin: "git-clone" };
     } catch (err) {
+      rmSync(cloneDir, { recursive: true, force: true });
+      if (hasCache && existsSync(cacheDir)) {
+        logger.warn(
+          `Git fallback clone failed for ${config.displayName}; using the stale cache at ${cacheDir}: ${(err as Error).message}`,
+        );
+        return { path: cacheDir, origin: "cached" };
+      }
       logger.warn(
         `Git fallback clone failed for ${config.displayName}: ${(err as Error).message}`,
       );
