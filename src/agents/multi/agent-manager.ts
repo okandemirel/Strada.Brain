@@ -287,7 +287,7 @@ export class AgentManager {
     if (this.commandHandler && msg.text.trim()) {
       const classification = detectCommand(msg.text);
       if (classification.type === "command") {
-        await this.commandHandler.handle(msg.chatId, classification.command, classification.args, msg.userId);
+        await this.commandHandler.handle(msg.chatId, classification.command, classification.args, msg.userId, msg.channelType);
         return;
       }
     }

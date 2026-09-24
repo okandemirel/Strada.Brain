@@ -46,6 +46,7 @@ import {
   TaskManager,
   TaskStorage,
 } from "../../tasks/index.js";
+import { chatChannelAccessFromConfig, chatInstanceAuthority } from "../../tasks/command-handler.js";
 import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
 
 export function initializeRuntimeStateStage(
@@ -370,6 +371,9 @@ export async function initializeTaskRuntimeStage(
     {
       autonomousDefaultEnabled: params.config.autonomousDefaultEnabled,
       autonomousDefaultHours: params.config.autonomousDefaultHours,
+      // Chat channels that dispatch commands without the portal's gate learn
+      // who may control the instance from their own allowlists (TSK-6).
+      instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig(params.config)),
     },
   );
   if (params.providerRouter) {

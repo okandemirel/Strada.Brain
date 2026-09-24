@@ -28,6 +28,109 @@ import type { CampaignStatusSnapshot } from "../campaign/campaign-status.js";
 import { formatCampaignStatus, formatGuardianStatus, formatMeasurement } from "../campaign/campaign-status.js";
 import type { RealTreeGuardianSnapshot } from "../daemon/real-tree-guardian.js";
 import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
+import { decideInstanceAccess } from "../channels/web/instance-access.js";
+import type {
+  AccessDecision,
+  InstanceFacts,
+  InstanceResource,
+  InstanceRole,
+  InstanceSurface,
+} from "../channels/web/instance-access.js";
+import type { Config } from "../config/config-types.js";
+import { getLoggerSafe } from "../utils/logger.js";
+
+// ── Who may act on what, from chat (TSK-6) ───────────────────────────────────
+//
+// The web portal gates typed commands with the shared-instance model
+// (src/channels/web/instance-access.ts) before they reach this handler, but
+// Telegram, Discord, Slack and Teams dispatch straight here. The handler
+// therefore applies the same model itself: a command that names a task acts
+// only on the caller's own task, and daemon control is the instance owner's.
+
+/** Who typed the command. */
+export interface ChatCaller {
+  readonly chatId: string;
+  readonly userId?: string;
+  readonly channelType?: string;
+}
+
+/**
+ * How one chat channel's callers stand in the shared-instance model.
+ *
+ *   gated  — the channel applies the model to every typed line before
+ *            dispatch (web: `allowChatCommand`), or only the operator at this
+ *            machine can type into it (cli). An instance power the channel let
+ *            through is not second-guessed here.
+ *   roster — the channel admits callers by id. Exactly one listed id and no
+ *            other way in is a single-identity instance owned by that id;
+ *            anything else is shared, and since no owner is recorded for a chat
+ *            channel its instance powers are refused (the portal, the dashboard
+ *            and the CLI remain the owner's controls).
+ */
+export type ChatChannelAccess =
+  | { readonly kind: "gated" }
+  | { readonly kind: "roster"; readonly userIds: readonly string[]; readonly openMembership?: boolean };
+
+/** The model's facts about this instance as one caller's channel sees it, and the caller's role. */
+export interface ChatInstanceStanding {
+  readonly facts: InstanceFacts;
+  readonly role: InstanceRole;
+}
+
+export interface ChatInstanceAuthority {
+  standingOf(caller: ChatCaller): ChatInstanceStanding;
+}
+
+/**
+ * With nothing wired (embedded use, unit tests) the handler keeps the
+ * single-user behaviour it always had for instance powers: the caller is the
+ * owner of an unshared instance. Another identity's task is refused either way.
+ */
+const SOLE_OWNER: ChatInstanceStanding = { facts: { shared: false }, role: "owner" };
+
+export function chatInstanceAuthority(
+  channels: Readonly<Partial<Record<string, ChatChannelAccess>>>,
+): ChatInstanceAuthority {
+  return {
+    standingOf(caller) {
+      const access = caller.channelType ? channels[caller.channelType] : undefined;
+      // A route nobody described vouches for nobody.
+      if (!access) return { facts: { shared: true }, role: "unidentified" };
+      if (access.kind === "gated") return SOLE_OWNER;
+      const ids = [...new Set(access.userIds.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 1 && access.openMembership !== true) {
+        const owner = ids[0]!;
+        return {
+          facts: { shared: false, ownerProfileId: owner },
+          role: caller.userId?.trim() === owner ? "owner" : "guest",
+        };
+      }
+      return { facts: { shared: true }, role: "guest" };
+    },
+  };
+}
+
+/** Each chat channel's standing, from the allowlists the channels themselves enforce. */
+export function chatChannelAccessFromConfig(
+  config: Pick<Config, "telegram" | "discord" | "slack" | "teams">,
+): Record<string, ChatChannelAccess> {
+  return {
+    web: { kind: "gated" },
+    cli: { kind: "gated" },
+    telegram: { kind: "roster", userIds: (config.telegram?.allowedUserIds ?? []).map(String) },
+    discord: {
+      kind: "roster",
+      userIds: config.discord?.allowedUserIds ?? [],
+      openMembership: (config.discord?.allowedRoleIds ?? []).length > 0,
+    },
+    slack: { kind: "roster", userIds: config.slack?.allowedUserIds ?? [] },
+    teams: {
+      kind: "roster",
+      userIds: config.teams?.allowedUserIds ?? [],
+      openMembership: config.teams?.allowOpenAccess === true,
+    },
+  };
+}
 
 /** The slice of CampaignManager the channels' status commands need. */
 export interface CampaignStatusSource {
@@ -102,6 +205,8 @@ function hasStartWatch(vault: IVault): vault is WatchableVault {
 interface CommandHandlerOptions {
   autonomousDefaultEnabled?: boolean;
   autonomousDefaultHours?: number;
+  /** Who may control the instance and its unowned tasks from chat (TSK-6). */
+  instanceAuthority?: ChatInstanceAuthority;
 }
 
 export class CommandHandler {
@@ -113,6 +218,7 @@ export class CommandHandler {
   private projectPath?: string;
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
+  private readonly instanceAuthority?: ChatInstanceAuthority;
 
   constructor(
     private readonly taskManager: TaskManager,
@@ -128,6 +234,7 @@ export class CommandHandler {
   ) {
     this.autonomousDefaultEnabled = options.autonomousDefaultEnabled ?? false;
     this.autonomousDefaultHours = options.autonomousDefaultHours ?? 24;
+    this.instanceAuthority = options.instanceAuthority;
   }
 
   /** Set HeartbeatLoop reference for daemon control (set after construction due to init order) */
@@ -196,34 +303,112 @@ export class CommandHandler {
     return normalizedUserId ? normalizedUserId : chatId;
   }
 
-  async handle(chatId: string, command: TaskCommand, args: string[], userId?: string): Promise<void> {
+  private standingOf(caller: ChatCaller): ChatInstanceStanding {
+    return this.instanceAuthority?.standingOf(caller) ?? SOLE_OWNER;
+  }
+
+  /**
+   * Ask the shared-instance model on behalf of a chat caller. A chat caller is
+   * always identified: the platform authenticated its user id, and without one
+   * the chat itself is the identity — so the model's "nobody identified,
+   * nobody to separate" grant never applies to another identity's work.
+   */
+  private decideForCaller(
+    caller: ChatCaller,
+    surface: InstanceSurface,
+    what: string,
+    resource?: InstanceResource,
+    quiet = false,
+  ): AccessDecision {
+    const { facts, role } = this.standingOf(caller);
+    const decision = decideInstanceAccess({
+      surface,
+      actor: { role, profileId: this.getIdentityKey(caller.chatId, caller.userId), chatId: caller.chatId },
+      instance: facts,
+      what,
+      ...(resource ? { resource } : {}),
+    });
+    if (!decision.allowed && !quiet) {
+      getLoggerSafe().warn("[CommandHandler] instance access refused", {
+        surface,
+        code: decision.code,
+        chatId: caller.chatId,
+        channelType: caller.channelType ?? null,
+        reason: decision.reason,
+      });
+    }
+    return decision;
+  }
+
+  /**
+   * Whom a task belongs to, as the model sees it. A task that records its
+   * requester is that identity's — in a group chat the room is shared, the
+   * requester is not. One that records no requester is its chat's, unless the
+   * instance itself started it (a daemon trigger, the guardian): that is the
+   * instance's own work, which its owner controls.
+   */
+  private taskResource(task: Task): InstanceResource {
+    const requester = task.userId?.trim();
+    if (requester) return { profileId: requester };
+    if (task.origin === "daemon" || !task.chatId) return {};
+    return { chatId: task.chatId };
+  }
+
+  /** `quiet` when filtering a chat's list: skipping a neighbour's task is not a refusal worth logging. */
+  private mayActOnTask(task: Task, caller: ChatCaller, quiet = false): boolean {
+    return this.decideForCaller(caller, "task:control", task.id, this.taskResource(task), quiet).allowed;
+  }
+
+  /**
+   * The task a command names, or null when there is none the caller may act
+   * on. Another identity's task is answered exactly like a missing one, so an
+   * id seen in a shared room or a notification reveals nothing.
+   */
+  private callerTask(taskId: TaskId, caller: ChatCaller): Task | null {
+    const task = this.taskManager.getStatus(taskId);
+    if (!task) return null;
+    return this.mayActOnTask(task, caller) ? task : null;
+  }
+
+  async handle(
+    chatId: string,
+    command: TaskCommand,
+    args: string[],
+    userId?: string,
+    channelType?: string,
+  ): Promise<void> {
+    const caller: ChatCaller = {
+      chatId,
+      ...(userId !== undefined ? { userId } : {}),
+      ...(channelType ? { channelType } : {}),
+    };
     switch (command) {
       case "status":
-        await this.handleStatus(chatId, args[0] as TaskId | undefined);
+        await this.handleStatus(caller, args[0] as TaskId | undefined);
         break;
       case "cancel":
-        await this.handleCancel(chatId, args[0] as TaskId | undefined);
+        await this.handleCancel(caller, args[0] as TaskId | undefined);
         break;
       case "tasks":
         await this.handleTasks(chatId);
         break;
       case "detail":
-        await this.handleDetail(chatId, args[0] as TaskId | undefined);
+        await this.handleDetail(caller, args[0] as TaskId | undefined);
         break;
       case "help":
         await this.handleHelp(chatId);
         break;
       case "pause":
-        await this.handlePause(chatId, args[0] as TaskId | undefined);
+        await this.handlePause(caller, args[0] as TaskId | undefined);
         break;
       case "resume":
-        await this.handleResume(chatId, args[0] as TaskId | undefined);
+        await this.handleResume(caller, args[0] as TaskId | undefined);
         break;
       case "model":
         await this.handleModel(chatId, args, userId);
         break;
       case "goal":
-        await this.handleGoal(chatId, args, userId);
+        await this.handleGoal(caller, args);
         break;
       case "autonomous":
         await this.handleAutonomous(chatId, args, userId);
@@ -232,7 +417,7 @@ export class CommandHandler {
         await this.handlePersona(chatId, args, userId);
         break;
       case "daemon":
-        await this.handleDaemon(chatId, args);
+        await this.handleDaemon(caller, args);
         break;
       case "agent":
         await this.handleAgent(chatId, args);
@@ -267,9 +452,10 @@ export class CommandHandler {
     }
   }
 
-  private async handleStatus(chatId: string, taskId?: TaskId): Promise<void> {
+  private async handleStatus(caller: ChatCaller, taskId?: TaskId): Promise<void> {
+    const { chatId } = caller;
     if (taskId) {
-      const task = this.taskManager.getStatus(taskId);
+      const task = this.callerTask(taskId, caller);
       if (!task) {
         await this.channel.sendText(chatId, `Task ${taskId} not found.`);
         return;
@@ -295,16 +481,21 @@ export class CommandHandler {
     await this.channel.sendMarkdown(chatId, `*Active Tasks*\n\n${lines.join("\n")}`);
   }
 
-  private async handleCancel(chatId: string, taskId?: TaskId): Promise<void> {
+  private async handleCancel(caller: ChatCaller, taskId?: TaskId): Promise<void> {
+    const { chatId } = caller;
     if (!taskId) {
-      // Cancel the most recent active task
+      // Cancel the caller's most recent active task — in a shared room that is
+      // not necessarily the room's most recent one.
       const tasks = this.taskManager.listTasks(chatId);
-      const active = tasks.find((t) => ACTIVE_STATUSES.has(t.status));
+      const active = tasks.find((t) => ACTIVE_STATUSES.has(t.status) && this.mayActOnTask(t, caller, true));
       if (!active) {
         await this.channel.sendText(chatId, "No active tasks to cancel.");
         return;
       }
       taskId = active.id;
+    } else if (!this.callerTask(taskId, caller)) {
+      await this.channel.sendText(chatId, `Task ${taskId} not found.`);
+      return;
     }
 
     // A PERSON typed this (Codex 2026-09-11 K#6).
@@ -327,13 +518,14 @@ export class CommandHandler {
     await this.channel.sendMarkdown(chatId, `*Recent Tasks*\n\n${lines.join("\n")}`);
   }
 
-  private async handleDetail(chatId: string, taskId?: TaskId): Promise<void> {
+  private async handleDetail(caller: ChatCaller, taskId?: TaskId): Promise<void> {
+    const { chatId } = caller;
     if (!taskId) {
       await this.channel.sendText(chatId, "Usage: /detail <task_id>");
       return;
     }
 
-    const task = this.taskManager.getStatus(taskId);
+    const task = this.callerTask(taskId, caller);
     if (!task) {
       await this.channel.sendText(chatId, `Task ${taskId} not found.`);
       return;
@@ -342,7 +534,8 @@ export class CommandHandler {
     await this.channel.sendMarkdown(chatId, this.formatTaskDetail(task));
   }
 
-  private async handleGoal(chatId: string, args: string[], userId?: string): Promise<void> {
+  private async handleGoal(caller: ChatCaller, args: string[]): Promise<void> {
+    const { chatId, userId } = caller;
     if (args.length === 0) {
       await this.channel.sendText(
         chatId,
@@ -359,7 +552,7 @@ export class CommandHandler {
     }
 
     if (subcommand === "cancel") {
-      await this.handleCancel(chatId, args[1] as TaskId | undefined);
+      await this.handleCancel(caller, args[1] as TaskId | undefined);
       return;
     }
 
@@ -604,15 +797,19 @@ export class CommandHandler {
     }
   }
 
-  private async handlePause(chatId: string, taskId?: TaskId): Promise<void> {
+  private async handlePause(caller: ChatCaller, taskId?: TaskId): Promise<void> {
+    const { chatId } = caller;
     if (!taskId) {
       const tasks = this.taskManager.listTasks(chatId);
-      const running = tasks.find((t) => t.status === TaskStatus.executing);
+      const running = tasks.find((t) => t.status === TaskStatus.executing && this.mayActOnTask(t, caller, true));
       if (!running) {
         await this.channel.sendText(chatId, "No running tasks to pause.");
         return;
       }
       taskId = running.id;
+    } else if (!this.callerTask(taskId, caller)) {
+      await this.channel.sendText(chatId, `Task ${taskId} not found.`);
+      return;
     }
 
     const success = this.taskManager.pauseTask(taskId);
@@ -626,15 +823,19 @@ export class CommandHandler {
     }
   }
 
-  private async handleResume(chatId: string, taskId?: TaskId): Promise<void> {
+  private async handleResume(caller: ChatCaller, taskId?: TaskId): Promise<void> {
+    const { chatId } = caller;
     if (!taskId) {
       const tasks = this.taskManager.listTasks(chatId);
-      const paused = tasks.find((t) => t.status === TaskStatus.paused);
+      const paused = tasks.find((t) => t.status === TaskStatus.paused && this.mayActOnTask(t, caller, true));
       if (!paused) {
         await this.channel.sendText(chatId, "No paused tasks to resume.");
         return;
       }
       taskId = paused.id;
+    } else if (!this.callerTask(taskId, caller)) {
+      await this.channel.sendText(chatId, `Could not resume task ${taskId}: no such task.`);
+      return;
     }
 
     const result = this.taskManager.resumeTask(taskId);
@@ -1136,8 +1337,19 @@ export class CommandHandler {
     );
   }
 
-  private async handleDaemon(chatId: string, args: string[]): Promise<void> {
+  private async handleDaemon(caller: ChatCaller, args: string[]): Promise<void> {
+    const { chatId } = caller;
     const subcommand = args[0]?.toLowerCase();
+
+    // One daemon serves every identity: starting or stopping it is the
+    // instance owner's (the model's instance:control surface).
+    if (subcommand === "start" || subcommand === "stop") {
+      const decision = this.decideForCaller(caller, "instance:control", `/daemon ${subcommand}`);
+      if (!decision.allowed) {
+        await this.channel.sendText(chatId, `Refused: ${decision.reason}.`);
+        return;
+      }
+    }
 
     // status / no args → show current state
     if (!subcommand || subcommand === "status") {

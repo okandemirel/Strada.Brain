@@ -181,7 +181,7 @@ describe("MessageRouter", () => {
     await router.route(createMessage("/help"));
 
     expect(sendMarkdown).toHaveBeenCalledTimes(1);
-    expect(handle).toHaveBeenCalledWith("chat-1", "help", [], "user-1");
+    expect(handle).toHaveBeenCalledWith("chat-1", "help", [], "user-1", "cli");
     expect(submit).not.toHaveBeenCalled();
   });
 
@@ -203,7 +203,7 @@ describe("MessageRouter", () => {
       conversationId: undefined,
       userId: "user-1",
     });
-    expect(handle).toHaveBeenCalledWith("chat-1", "status", [], "user-1");
+    expect(handle).toHaveBeenCalledWith("chat-1", "status", [], "user-1", "cli");
   });
 
   it("keeps different channel conversations isolated even when chat IDs match", async () => {

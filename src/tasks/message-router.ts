@@ -178,7 +178,7 @@ export class MessageRouter {
         args: classification.args,
       });
 
-      await this.commandHandler.handle(chatId, classification.command, classification.args, msg.userId);
+      await this.commandHandler.handle(chatId, classification.command, classification.args, msg.userId, msg.channelType);
       return;
     }
 

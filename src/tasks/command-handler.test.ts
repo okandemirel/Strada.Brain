@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
-import { CommandHandler } from "./command-handler.js";
+import { CommandHandler, chatChannelAccessFromConfig, chatInstanceAuthority } from "./command-handler.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -864,5 +864,175 @@ describe("/cancel says WHO stopped the work (Codex 2026-09-11 K#6)", () => {
     // and that difference is what keeps an executor cancellation from
     // stranding an autonomous campaign.
     expect(source.slice(at, at + 80)).toContain('{ reason: "user" }');
+  });
+});
+
+describe("Chat task and daemon commands act only for their owner (TSK-6)", () => {
+  interface FakeTask {
+    id: string;
+    chatId: string;
+    userId?: string;
+    origin?: "user" | "daemon";
+    status: string;
+    title: string;
+    prompt: string;
+    result?: string;
+    progress: never[];
+    createdAt: number;
+    updatedAt: number;
+  }
+  const sendText = vi.fn();
+  const sendMarkdown = vi.fn();
+  let tasks: Map<string, FakeTask>;
+  let taskManager: {
+    getStatus: ReturnType<typeof vi.fn>;
+    listTasks: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
+    pauseTask: ReturnType<typeof vi.fn>;
+    resumeTask: ReturnType<typeof vi.fn>;
+  };
+  const task = (id: string, chatId: string, extra: Partial<FakeTask> = {}): FakeTask => ({
+    id, chatId, status: "executing", title: `title of ${id}`, prompt: `secret prompt of ${id}`,
+    result: `secret result of ${id}`, progress: [], createdAt: 1, updatedAt: 1, ...extra,
+  });
+
+  beforeEach(() => {
+    sendText.mockReset().mockResolvedValue(undefined);
+    sendMarkdown.mockReset().mockResolvedValue(undefined);
+    tasks = new Map([
+      ["task_a1", task("task_a1", "chat-A", { userId: "alice" })],
+      ["task_g1", task("task_g1", "group", { userId: "alice" })],
+      ["task_d1", task("task_d1", "daemon", { origin: "daemon" })],
+      ["task_l1", task("task_l1", "chat-A")],
+    ]);
+    taskManager = {
+      getStatus: vi.fn((id: string) => tasks.get(id) ?? null),
+      listTasks: vi.fn((chatId: string) => [...tasks.values()].filter((t) => t.chatId === chatId)),
+      cancel: vi.fn(() => true),
+      pauseTask: vi.fn(() => true),
+      resumeTask: vi.fn(() => ({ id: "x" })),
+    };
+  });
+
+  const handlerWith = (opts: {
+    authority?: ReturnType<typeof chatInstanceAuthority>;
+    daemon?: { stop: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> };
+  } = {}) => {
+    const handler = new CommandHandler(
+      taskManager as never,
+      { sendText, sendMarkdown } as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      opts.authority ? { instanceAuthority: opts.authority } : {},
+    );
+    if (opts.daemon) {
+      handler.setHeartbeatLoop({
+        start: opts.daemon.start,
+        stop: opts.daemon.stop,
+        isRunning: () => true,
+        getDaemonStatus: () => ({ running: true, intervalMs: 1000, triggerCount: 0, lastTick: null }),
+      });
+    }
+    return handler;
+  };
+  const allOutput = () =>
+    [...sendText.mock.calls, ...sendMarkdown.mock.calls].map((c) => String(c[1])).join("\n");
+
+  it("another chat's /cancel, /pause, /resume <id> is answered 'not found' and leaves the task alone", async () => {
+    const handler = handlerWith();
+    await handler.handle("chat-B", "cancel", ["task_a1"], "bob", "discord");
+    await handler.handle("chat-B", "goal", ["cancel", "task_a1"], "bob", "discord");
+    await handler.handle("chat-B", "pause", ["task_a1"], "bob", "discord");
+    await handler.handle("chat-B", "resume", ["task_a1"], "bob", "discord");
+    expect(taskManager.cancel).not.toHaveBeenCalled();
+    expect(taskManager.pauseTask).not.toHaveBeenCalled();
+    expect(taskManager.resumeTask).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith("chat-B", "Task task_a1 not found.");
+    expect(sendText).toHaveBeenCalledWith("chat-B", "Could not resume task task_a1: no such task.");
+  });
+
+  it("another chat's /detail and /status <id> reveal nothing of the task", async () => {
+    const handler = handlerWith();
+    await handler.handle("chat-B", "detail", ["task_a1"], "bob", "discord");
+    await handler.handle("chat-B", "status", ["task_a1"], "bob", "discord");
+    expect(allOutput()).not.toContain("secret");
+    expect(allOutput()).not.toContain("title of task_a1");
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(sendText).toHaveBeenLastCalledWith("chat-B", "Task task_a1 not found.");
+  });
+
+  it("in a shared room the requester, not the room, owns the task", async () => {
+    const handler = handlerWith();
+    await handler.handle("group", "cancel", ["task_g1"], "bob", "slack");
+    expect(taskManager.cancel).not.toHaveBeenCalled();
+    // The bare form picks the caller's own newest task, not the room's.
+    await handler.handle("group", "cancel", [], "bob", "slack");
+    expect(taskManager.cancel).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenLastCalledWith("group", "No active tasks to cancel.");
+
+    await handler.handle("group", "cancel", ["task_g1"], "alice", "slack");
+    expect(taskManager.cancel).toHaveBeenCalledWith("task_g1", { reason: "user" });
+  });
+
+  it("the owner keeps every control over their own task, and a legacy row stays its chat's", async () => {
+    const handler = handlerWith();
+    await handler.handle("chat-A", "detail", ["task_a1"], "alice", "telegram");
+    expect(sendMarkdown).toHaveBeenCalledWith("chat-A", expect.stringContaining("secret prompt of task_a1"));
+    await handler.handle("chat-A", "pause", ["task_a1"], "alice", "telegram");
+    expect(taskManager.pauseTask).toHaveBeenCalledWith("task_a1");
+    await handler.handle("chat-A", "cancel", ["task_l1"], "alice", "telegram");
+    expect(taskManager.cancel).toHaveBeenCalledWith("task_l1", { reason: "user" });
+  });
+
+  it("on a shared chat channel nobody but the owner stops the daemon or touches its tasks", async () => {
+    const stop = vi.fn();
+    const start = vi.fn();
+    const authority = chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111", "222"] } });
+    const handler = handlerWith({ authority, daemon: { stop, start } });
+    await handler.handle("chat-222", "daemon", ["stop"], "222", "telegram");
+    await handler.handle("chat-222", "daemon", ["start"], "222", "telegram");
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith("chat-222", expect.stringMatching(/^Refused: .*may not control this instance/));
+    await handler.handle("chat-222", "cancel", ["task_d1"], "222", "telegram");
+    expect(taskManager.cancel).not.toHaveBeenCalled();
+    // Reads stay open.
+    await handler.handle("chat-222", "daemon", [], "222", "telegram");
+    expect(sendMarkdown).toHaveBeenCalledWith("chat-222", expect.stringContaining("Daemon Status"));
+  });
+
+  it("a single-user setup keeps its daemon control and its daemon tasks", async () => {
+    const stop = vi.fn();
+    const authority = chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111"] } });
+    const handler = handlerWith({ authority, daemon: { stop, start: vi.fn() } });
+    await handler.handle("chat-111", "daemon", ["stop"], "111", "telegram");
+    expect(stop).toHaveBeenCalledTimes(1);
+    await handler.handle("chat-111", "cancel", ["task_d1"], "111", "telegram");
+    expect(taskManager.cancel).toHaveBeenCalledWith("task_d1", { reason: "user" });
+
+    // With nothing wired (embedded use) the caller is the sole owner, as before.
+    const unwiredStop = vi.fn();
+    await handlerWith({ daemon: { stop: unwiredStop, start: vi.fn() } })
+      .handle("cli-local", "daemon", ["stop"], "cli-user");
+    expect(unwiredStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("the channels' standing comes from their own allowlists", () => {
+    const channels = chatChannelAccessFromConfig({
+      telegram: { allowedUserIds: [111] },
+      discord: { allowedUserIds: ["d1"], allowedRoleIds: ["role"] },
+      slack: { socketMode: false, allowedUserIds: ["U1"] },
+      teams: { allowedUserIds: ["t1", "t2"], allowOpenAccess: false },
+    } as never);
+    const authority = chatInstanceAuthority(channels);
+    expect(authority.standingOf({ chatId: "c", userId: "111", channelType: "telegram" }).role).toBe("owner");
+    expect(authority.standingOf({ chatId: "c", userId: "U1", channelType: "slack" }).role).toBe("owner");
+    // A role opens Discord to people nobody listed: shared, no owner.
+    expect(authority.standingOf({ chatId: "c", userId: "d1", channelType: "discord" }))
+      .toEqual({ facts: { shared: true }, role: "guest" });
+    expect(authority.standingOf({ chatId: "c", userId: "t1", channelType: "teams" }).facts.shared).toBe(true);
+    // The portal gates typed commands itself; the local CLI is the operator.
+    expect(authority.standingOf({ chatId: "c", userId: "p", channelType: "web" }).role).toBe("owner");
+    expect(authority.standingOf({ chatId: "c", userId: "cli-user", channelType: "cli" }).role).toBe("owner");
+    expect(authority.standingOf({ chatId: "c", userId: "x" }).role).toBe("unidentified");
   });
 });
