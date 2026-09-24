@@ -449,8 +449,14 @@ describe("scripts/backup.sh", () => {
   it("backs up into a BACKUP_DIR that does not exist yet", () => {
     const cli = path.join(process.cwd(), "dist", "core", "database-backup.js");
     // The script shells out to the compiled helper; without it there is nothing
-    // to measure, and saying so beats a green test that checked nothing.
-    expect(fs.existsSync(cli), `${cli} must be built (npm run build) for this test to measure anything`).toBe(true);
+    // to measure, and saying so beats a green test that checked nothing. It
+    // FAILS rather than skips: CI's verify job runs `npm run build` before
+    // `npm test` so this can hold, and a skip would hide a reordered workflow.
+    expect(
+      fs.existsSync(cli),
+      `${cli} is missing: run \`npm run build\` before this test (scripts/backup.sh runs the compiled ` +
+        "helper from dist/; in CI the verify job's Build step must come before Test)",
+    ).toBe(true);
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "strada-backup-sh-"));
     dirs.push(root);
