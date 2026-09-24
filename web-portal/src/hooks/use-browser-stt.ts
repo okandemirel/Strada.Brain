@@ -17,6 +17,8 @@ interface PendingTranscription {
 }
 
 const TRANSCRIBE_TIMEOUT_MS = 30_000
+/** The model download (~40 MB) can be slow, but a load must not wait forever. */
+const LOAD_TIMEOUT_MS = 5 * 60_000
 
 /** Decode an audio Blob to 16 kHz mono Float32Array using AudioContext. */
 async function decodeAudioBlob(blob: Blob): Promise<Float32Array> {
@@ -46,13 +48,22 @@ export function useBrowserStt() {
   const enabled = voice.browserSttEnabled && typeof Worker !== 'undefined'
 
   // Initialize worker on first use (lazy)
-  const ensureWorker = useCallback(() => {
+  const ensureWorker = useCallback((): Worker | null => {
     if (workerRef.current) return workerRef.current
 
-    const worker = new Worker(
-      new URL('../lib/whisper-worker.ts', import.meta.url),
-      { type: 'module' },
-    )
+    let worker: Worker
+    try {
+      worker = new Worker(
+        new URL('../lib/whisper-worker.ts', import.meta.url),
+        { type: 'module' },
+      )
+    } catch {
+      // A browser may refuse the worker synchronously (e.g. a CSP block):
+      // report the failure so the caller falls back to sending the audio.
+      setStatus('error')
+      statusRef.current = 'error'
+      return null
+    }
 
     worker.onmessage = (e: MessageEvent) => {
       const { type } = e.data
@@ -112,16 +123,24 @@ export function useBrowserStt() {
   const waitForReady = useCallback((worker: Worker): Promise<void> => {
     return new Promise<void>((resolve, reject) => {
       if (statusRef.current === 'ready') { resolve(); return }
-      const onMsg = (e: MessageEvent) => {
-        if (e.data.type === 'ready') {
-          worker.removeEventListener('message', onMsg)
-          resolve()
-        } else if (e.data.type === 'error' && e.data.id === undefined) {
-          worker.removeEventListener('message', onMsg)
-          reject(new Error(e.data.message))
-        }
+      // A worker that fails to load (blocked, or a stale chunk after a
+      // redeploy) fires `error`, not a message: without listening for it the
+      // recording hung in "transcribing" and was never sent (WEB-4).
+      const settle = (error?: Error) => {
+        clearTimeout(timer)
+        worker.removeEventListener('message', onMsg)
+        worker.removeEventListener('error', onError)
+        if (error) reject(error)
+        else resolve()
       }
+      const onMsg = (e: MessageEvent) => {
+        if (e.data.type === 'ready') settle()
+        else if (e.data.type === 'error' && e.data.id === undefined) settle(new Error(e.data.message))
+      }
+      const onError = () => settle(new Error('speech-to-text worker failed to load'))
+      const timer = setTimeout(() => settle(new Error('speech-to-text model load timed out')), LOAD_TIMEOUT_MS)
       worker.addEventListener('message', onMsg)
+      worker.addEventListener('error', onError)
     })
   }, [])
 
@@ -135,7 +154,7 @@ export function useBrowserStt() {
     statusRef.current = 'loading'
     setLoadProgress(0)
     const worker = ensureWorker()
-    worker.postMessage({ type: 'load' })
+    worker?.postMessage({ type: 'load' })
   }, [enabled, ensureWorker])
 
   // Transcribe an audio blob (Fix #1: wait when loading, Fix #4: use statusRef)
@@ -143,11 +162,13 @@ export function useBrowserStt() {
     if (!enabled) return null
 
     const worker = ensureWorker()
+    if (!worker) return null
     const s = statusRef.current
 
-    // Ensure model is loaded — wait if idle or still loading
-    if (s === 'idle' || s === 'loading') {
-      if (s === 'idle') {
+    // Ensure model is loaded — wait if idle or still loading (or load again
+    // after a failed attempt, on the fresh worker ensureWorker made).
+    if (s === 'idle' || s === 'loading' || s === 'error') {
+      if (s !== 'loading') {
         setStatus('loading')
         statusRef.current = 'loading'
         worker.postMessage({ type: 'load' })
@@ -155,6 +176,14 @@ export function useBrowserStt() {
       try {
         await waitForReady(worker)
       } catch {
+        // Drop a worker that never became ready so the next attempt starts
+        // clean, and let the caller fall back to sending the audio.
+        if (workerRef.current === worker) {
+          worker.terminate()
+          workerRef.current = null
+        }
+        setStatus('error')
+        statusRef.current = 'error'
         return null
       }
     }

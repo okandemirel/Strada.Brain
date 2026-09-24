@@ -182,10 +182,19 @@ export function useForceSimulation(
     if (workerRef.current) return workerRef.current;
     if (typeof Worker === 'undefined') return null;
 
-    const worker = new Worker(
-      new URL('./force-simulation.worker.ts', import.meta.url),
-      { type: 'module' },
-    );
+    let worker: Worker;
+    try {
+      worker = new Worker(
+        new URL('./force-simulation.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+    } catch (err) {
+      // A browser may refuse the worker synchronously (e.g. a CSP block).
+      // Thrown from the lifecycle effect, that took the whole graph panel into
+      // its error boundary; without a worker the minimap just stays still.
+      console.error('[force-simulation worker:create]', err);
+      return null;
+    }
 
     worker.addEventListener('message', (event: MessageEvent<OutMsg>) => {
       const msg = event.data;

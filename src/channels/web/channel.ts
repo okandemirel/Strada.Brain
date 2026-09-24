@@ -1588,7 +1588,9 @@ export class WebChannel
       "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; " +
       "img-src 'self' data: blob:; " +
       "font-src 'self' data: https://cdn.jsdelivr.net; " +
-      "worker-src blob:; " +
+      // 'self': the bundler emits the portal's module workers (speech-to-text,
+      // graph layout) as same-origin asset URLs, not blob: ones (WEB-4).
+      "worker-src 'self' blob:; " +
       "object-src 'none'; " +
       "base-uri 'none'; " +
       "frame-ancestors 'none';",

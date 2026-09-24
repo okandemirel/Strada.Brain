@@ -2404,6 +2404,18 @@ describe("WebChannel CSP drift guard", () => {
     expect(scriptSrc).toContain(expectedDirective);
     expect(scriptSrc).not.toContain("'unsafe-inline'");
   });
+
+  // WEB-4: the portal's module workers are same-origin asset URLs (Vite's
+  // `new Worker(new URL(..., import.meta.url))`), which `worker-src blob:`
+  // alone blocked.
+  it("worker-src admits the portal's same-origin module workers", () => {
+    const csp = (WebChannel as unknown as {
+      SECURITY_HEADERS: Record<string, string>;
+    }).SECURITY_HEADERS["Content-Security-Policy"];
+    const workerSrc = /worker-src ([^;]+)/.exec(csp)?.[1]?.split(/\s+/) ?? [];
+    expect(workerSrc).toContain("'self'");
+    expect(workerSrc).toContain("blob:");
+  });
 });
 
 describe("GET /api/campaign — measured build status served in-daemon", () => {
