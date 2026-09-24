@@ -6,19 +6,6 @@ import type * as winston from "winston";
 // Mocks — must be declared before the module under test is imported
 // ---------------------------------------------------------------------------
 
-vi.mock("node:fs", () => ({
-  existsSync: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("better-sqlite3", () => {
-  const mockDb = {
-    pragma: vi.fn(),
-    prepare: vi.fn().mockReturnValue({ get: vi.fn() }),
-    close: vi.fn(),
-  };
-  return { default: vi.fn(function () { return mockDb; }) };
-});
-
 const mockAgentDBInitialize = vi.fn();
 const mockStartAutoTiering = vi.fn();
 const mockSetDecayConfig = vi.fn();
@@ -60,15 +47,12 @@ vi.mock("../memory/file-memory-manager.js", () => ({
 
 import {
   initializeMemory,
-  attemptSchemaRepair,
   triggerLegacyMigration,
   initializeFileMemory,
   embeddingProviderIdentity,
   embeddingModelId,
   _resetWeakIdentityLog,
 } from "./bootstrap-memory.js";
-import { existsSync } from "node:fs";
-import Database from "better-sqlite3";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import type { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 
@@ -263,7 +247,7 @@ describe("bootstrap-memory", () => {
       });
     });
 
-    it("falls back to FileMemoryManager after AgentDB init failure and repair failure", async () => {
+    it("falls back to FileMemoryManager after AgentDB init failure", async () => {
       mockAgentDBInitialize.mockRejectedValue(new Error("corrupt database"));
 
       const config = makeConfig();
@@ -272,13 +256,14 @@ describe("bootstrap-memory", () => {
       expect(result).toBeDefined();
       expect((result as any)._tag).toBe("file-memory-manager");
       expect(logger.warn).toHaveBeenCalledWith(
-        "AgentDB initialization failed, attempting schema repair",
+        "AgentDB initialization failed, falling back to FileMemoryManager",
         expect.any(Object),
       );
     });
 
-    it("recovers AgentDB after successful schema repair", async () => {
-      // First attempt fails, second succeeds
+    it("does not re-run an identical AgentDB init after a failure (X-3)", async () => {
+      // The old "schema repair" only counted rows, so the retry re-ran the
+      // same init (and leaked another SQLite handle) before falling back.
       let callCount = 0;
       mockAgentDBInitialize.mockImplementation(async () => {
         callCount++;
@@ -286,15 +271,30 @@ describe("bootstrap-memory", () => {
         return { kind: "ok" };
       });
 
-      const config = makeConfig();
+      const result = await initializeMemory(makeConfig(), logger);
+
+      expect(AgentDBMemory).toHaveBeenCalledTimes(1);
+      expect((result as any)._tag).toBe("file-memory-manager");
+    });
+
+    it("shuts down an AgentDB instance whose post-init setup failed (X-3)", async () => {
+      const shutdown = vi.fn(async () => ({ kind: "ok" }));
+      vi.mocked(AgentDBMemory).mockImplementationOnce(function () {
+        return {
+          initialize: mockAgentDBInitialize,
+          startAutoTiering: () => { throw new Error("timer setup failed"); },
+          setDecayConfig: mockSetDecayConfig,
+          shutdown,
+        } as unknown as AgentDBMemory;
+      });
+      const config = makeConfig({
+        memory: makeMemoryConfig({ unified: { ...makeMemoryConfig().unified, autoTiering: true } }),
+      });
+
       const result = await initializeMemory(config, logger);
 
-      expect(result).toBeDefined();
-      expect((result as any)._tag).toBe("agentdb-adapter");
-      expect(logger.info).toHaveBeenCalledWith(
-        "AgentDB recovered after schema repair",
-        expect.any(Object),
-      );
+      expect(shutdown).toHaveBeenCalledTimes(1);
+      expect((result as any)._tag).toBe("file-memory-manager");
     });
 
     it("handles AgentDB returning err result", async () => {
@@ -306,61 +306,11 @@ describe("bootstrap-memory", () => {
       const config = makeConfig();
       const result = await initializeMemory(config, logger);
 
-      // Should attempt repair and ultimately fall back
       expect(result).toBeDefined();
+      expect((result as any)._tag).toBe("file-memory-manager");
       expect(logger.warn).toHaveBeenCalledWith(
-        "AgentDB initialization failed, attempting schema repair",
+        "AgentDB initialization failed, falling back to FileMemoryManager",
         expect.any(Object),
-      );
-    });
-  });
-
-  // ========================================================================
-  // attemptSchemaRepair
-  // ========================================================================
-
-  describe("attemptSchemaRepair", () => {
-    it("returns true when DB file does not exist (fresh DB)", async () => {
-      vi.mocked(existsSync).mockReturnValue(false);
-      const result = await attemptSchemaRepair("/tmp/test-db", logger);
-      expect(result).toBe(true);
-    });
-
-    it("returns true when DB file exists and SELECT succeeds", async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      const result = await attemptSchemaRepair("/tmp/test-db", logger);
-      expect(result).toBe(true);
-    });
-
-    it("returns true and logs info when memories table is missing", async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      const mockDb = {
-        pragma: vi.fn(),
-        prepare: vi.fn().mockImplementation(() => {
-          throw new Error("no such table: memories");
-        }),
-        close: vi.fn(),
-      };
-      vi.mocked(Database).mockImplementationOnce(function () { return mockDb as any; });
-
-      const result = await attemptSchemaRepair("/tmp/test-db", logger);
-      expect(result).toBe(true);
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining("memories table will be recreated"),
-      );
-    });
-
-    it("returns false when Database constructor throws", async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(Database).mockImplementationOnce(function () {
-        throw new Error("database is locked");
-      });
-
-      const result = await attemptSchemaRepair("/tmp/test-db", logger);
-      expect(result).toBe(false);
-      expect(logger.error).toHaveBeenCalledWith(
-        "AgentDB schema repair failed",
-        expect.objectContaining({ error: "database is locked" }),
       );
     });
   });

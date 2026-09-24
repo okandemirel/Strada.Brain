@@ -287,7 +287,10 @@ describe("initializeMemory", () => {
     expect((result as Record<string, unknown>)._isFileManager).toBe(true);
   });
 
-  it("should attempt schema repair and retry when AgentDB init fails", async () => {
+  // X-3: the "schema repair" before the retry was a no-op, so the retry re-ran
+  // the identical init (leaking another SQLite handle). A failed init now
+  // falls back directly; AgentDB heals a stale HNSW index itself.
+  it("should not re-run an identical AgentDB init after a failure", async () => {
     let callCount = 0;
     vi.mocked(AgentDBMemory).mockImplementation(function () {
       return {
@@ -306,19 +309,12 @@ describe("initializeMemory", () => {
     const config = createTestConfig({ backend: "agentdb" });
     const result = await initializeMemory(config, logger);
 
-    // Should have created AgentDBMemory twice (initial + retry)
-    expect(AgentDBMemory).toHaveBeenCalledTimes(2);
-    // Should have succeeded on retry
+    expect(AgentDBMemory).toHaveBeenCalledTimes(1);
     expect(result).toBeDefined();
-    expect((result as Record<string, unknown>)._isAdapter).toBe(true);
-    // Should have logged about recovery
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("recovered"),
-      expect.any(Object),
-    );
+    expect((result as Record<string, unknown>)._isFileManager).toBe(true);
   });
 
-  it("should fall back to FileMemoryManager when AgentDB init fails and repair fails", async () => {
+  it("should fall back to FileMemoryManager when AgentDB init fails", async () => {
     vi.mocked(AgentDBMemory).mockImplementation(function () {
       return {
         initialize: vi.fn().mockResolvedValue({ kind: "err", error: new Error("init failed") }),
@@ -330,8 +326,8 @@ describe("initializeMemory", () => {
     const config = createTestConfig({ backend: "agentdb" });
     const result = await initializeMemory(config, logger);
 
-    // Should have tried AgentDB twice (initial + retry after repair)
-    expect(AgentDBMemory).toHaveBeenCalledTimes(2);
+    // One attempt: a second identical init cannot succeed where the first failed
+    expect(AgentDBMemory).toHaveBeenCalledTimes(1);
     // Should have fallen back to FileMemoryManager
     expect(FileMemoryManager).toHaveBeenCalledTimes(1);
     expect(result).toBeDefined();
@@ -515,7 +511,7 @@ describe("initializeMemory", () => {
       expect(runAutomaticMigration).not.toHaveBeenCalled();
     });
 
-    it("should call migration after AgentDB init in repair path", async () => {
+    it("should not run migration when AgentDB init fails and memory falls back", async () => {
       let callCount = 0;
       vi.mocked(AgentDBMemory).mockImplementation(function () {
         return {
@@ -534,8 +530,8 @@ describe("initializeMemory", () => {
       const config = createTestConfig({ backend: "agentdb" });
       await initializeMemory(config, logger);
 
-      // Migration should still be called after recovery
-      expect(runAutomaticMigration).toHaveBeenCalledTimes(1);
+      // No AgentDB target to migrate into once the file backend took over
+      expect(runAutomaticMigration).not.toHaveBeenCalled();
     });
   });
 });

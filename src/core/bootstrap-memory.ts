@@ -2,12 +2,10 @@
  * Bootstrap — Memory initialization helpers
  *
  * Extracted from bootstrap.ts to reduce file size.
- * Contains memory system initialization, schema repair, and migration logic.
+ * Contains memory system initialization and migration logic.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
@@ -105,13 +103,20 @@ export function embeddingProviderIdentity(
 }
 
 /**
- * Initialize memory backend with self-healing.
+ * Initialize memory backend.
  *
  * Flow:
  *   1. If memory disabled -> undefined
  *   2. If backend == "file" -> FileMemoryManager directly
  *   3. Otherwise (agentdb, default):
- *      try AgentDB -> on fail: repair schema -> retry -> on fail: fallback to FileMemoryManager
+ *      try AgentDB -> on fail: fallback to FileMemoryManager
+ *
+ * There is no second AgentDB attempt. The old "schema repair" before it only
+ * counted rows, so the retry re-ran the identical init and failed the same
+ * way, leaking another SQLite handle. AgentDB heals the failure a retry could
+ * have helped with itself: it discards a persisted HNSW index that no longer
+ * fits and rebuilds it from SQLite, and it closes what it opened when init
+ * fails (MEM-2 / X-3).
  *
  * Exported for testing.
  */
@@ -229,61 +234,32 @@ export async function initializeMemory(
     return new AgentDBAdapter(agentdb);
   }
 
-  // First attempt
+  let agentdb: AgentDBMemory | undefined;
   try {
-    const agentdb = new AgentDBMemory(agentdbConfig);
+    agentdb = new AgentDBMemory(agentdbConfig);
     const initResult = await agentdb.initialize();
-    if (initResult.kind === "ok") {
-      logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
-      return await finalizeAgentDB(agentdb);
-    }
-    // Init returned err — throw to enter recovery
-    throw initResult.error;
-  } catch (firstError) {
-    logger.warn("AgentDB initialization failed, attempting schema repair", {
-      error: firstError instanceof Error ? firstError.message : String(firstError),
+    if (initResult.kind === "err") throw initResult.error;
+    logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
+    return await finalizeAgentDB(agentdb);
+  } catch (error) {
+    // A failed initialize() already released its handles; a failure after it
+    // succeeded (finalize) must shut the instance down before the fallback
+    // opens the same directory, or its timers and SQLite handle leak.
+    await closeQuietly(agentdb);
+    logger.warn("AgentDB initialization failed, falling back to FileMemoryManager", {
+      error: error instanceof Error ? error.message : String(error),
     });
-
-    // Attempt schema repair
-    const repairOk = await attemptSchemaRepair(agentdbPath, logger);
-
-    // Retry AgentDB after repair
-    try {
-      const agentdb2 = new AgentDBMemory(agentdbConfig);
-      const retryResult = await agentdb2.initialize();
-      if (retryResult.kind === "ok") {
-        logger.info("AgentDB recovered after schema repair", { dbPath: agentdbPath });
-        return await finalizeAgentDB(agentdb2);
-      }
-      throw retryResult.error;
-    } catch (retryError) {
-      logger.warn("AgentDB retry failed after repair, falling back to FileMemoryManager", {
-        repairAttempted: repairOk,
-        error: retryError instanceof Error ? retryError.message : String(retryError),
-      });
-      return initializeFileMemory(config, logger);
-    }
+    return initializeFileMemory(config, logger);
   }
 }
 
-export async function attemptSchemaRepair(dbPath: string, logger: winston.Logger): Promise<boolean> {
+/** Best-effort shutdown of an AgentDB instance that is being abandoned. */
+async function closeQuietly(agentdb: AgentDBMemory | undefined): Promise<void> {
+  if (!agentdb || typeof agentdb.shutdown !== "function") return;
   try {
-    const sqlitePath = join(dbPath, "memory.db");
-    if (!existsSync(sqlitePath)) return true; // Fresh DB, no repair needed
-    const db = new Database(sqlitePath);
-    db.pragma("journal_mode = WAL");
-    try {
-      db.prepare("SELECT COUNT(*) FROM memories").get();
-    } catch {
-      logger.info("AgentDB schema repair: memories table will be recreated on next init");
-    }
-    db.close();
-    return true;
-  } catch (e) {
-    logger.error("AgentDB schema repair failed", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return false;
+    await agentdb.shutdown();
+  } catch {
+    // Abandoning it anyway; the fallback must still run.
   }
 }
 
