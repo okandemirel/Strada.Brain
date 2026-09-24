@@ -567,6 +567,7 @@ export class DelegationManager {
   ): Promise<DelegationResult> {
     const { delegationLog, eventBus, budgetTracker } = this.opts;
     const subAgentId = randomUUID();
+    const delegateChatId = `delegation-${subAgentId}`;
     const startTime = Date.now();
 
     // Resolve provider for this tier
@@ -758,11 +759,12 @@ export class DelegationManager {
         onUsage,
       });
       // Carry the user's authorization across the instance boundary, keyed to
-      // the delegate's own chat id — a worker cannot authorize itself, so this
-      // only ever hands down what the parent already holds.
-      // The parent's tool context already carries what the user authorized.
+      // the delegate's own chat id. The parent's tool context is the only
+      // source: the delegate's brief below is parent-model text, and the
+      // orchestrator never derives authorization from a run's prompt, so the
+      // child holds at most what the parent holds.
       const inherited = request.toolContext?.userAuthorizedPaths ?? [];
-      orchestrator.seedUserAuthorizedPaths(`delegation-${subAgentId}`, inherited);
+      orchestrator.seedUserAuthorizedPaths(delegateChatId, inherited);
 
       // A delegated agent that cannot see the installed framework writes code
       // that only looks like it belongs to it. Without this it runs on the
@@ -777,7 +779,7 @@ export class DelegationManager {
 
       const message: IncomingMessage = {
         channelType: "cli",
-        chatId: `delegation-${subAgentId}`,
+        chatId: delegateChatId,
         userId: "sub-agent",
         text: request.context
           ? `${systemPrompt}\n\nTask: ${request.task}\n\nContext: ${request.context}`
@@ -982,6 +984,9 @@ export class DelegationManager {
       // lease lifecycle. A no-op when the success path already committed.
       await commitWorkspace();
       await workspaceLease?.release().catch(() => {});
+      // The delegate's entry in the shared store is per-run: drop it with the
+      // run, or every delegation leaves one behind for the daemon's lifetime.
+      this.opts.authorizedPathsStore?.delete(delegateChatId);
       this.cleanup(subAgentId);
       markSettled();
     }

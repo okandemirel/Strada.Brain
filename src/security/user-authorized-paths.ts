@@ -15,7 +15,10 @@ import { resolve } from "node:path";
  *
  * The authorization comes from the user's own message. A path they typed is a
  * path they asked to be read, which is a narrower and more honest permission
- * than widening confinement for everything.
+ * than widening confinement for everything. "The user's own message" means text
+ * a person sent through a channel, recorded where that message arrives — never
+ * a task prompt, sub-goal or delegation brief a model wrote, and never a
+ * user-role turn the agent synthesized inside a run.
  *
  * Read-only, exact paths only. This never authorizes a write, never authorizes a
  * directory, and never authorizes anything derived from an authorized path.
@@ -44,6 +47,35 @@ export function extractUserAuthorizedPaths(message: string): string[] {
     found.add(resolve(candidate));
   }
   return [...found];
+}
+
+/** How many chats' authorizations one store keeps; the least recently written go first. */
+export const MAX_AUTHORIZED_CHATS = 256;
+
+/** How many paths one chat keeps; the oldest go first. */
+export const MAX_AUTHORIZED_PATHS_PER_CHAT = 64;
+
+/**
+ * Add `paths` to what `key` may read, keeping the store bounded.
+ *
+ * The store is process-wide and keyed by chat, and every chat used to keep its
+ * entry for the life of the daemon. Map order doubles as recency: a written key
+ * is moved to the end, and the front is evicted past the cap.
+ */
+export function rememberUserAuthorizedPaths(
+  store: Map<string, readonly string[]>,
+  key: string,
+  paths: readonly string[],
+): void {
+  if (paths.length === 0) return;
+  const merged = [...new Set([...(store.get(key) ?? []), ...paths])];
+  store.delete(key);
+  store.set(key, merged.slice(-MAX_AUTHORIZED_PATHS_PER_CHAT));
+  while (store.size > MAX_AUTHORIZED_CHATS) {
+    const oldest = store.keys().next().value;
+    if (oldest === undefined) break;
+    store.delete(oldest);
+  }
 }
 
 /**

@@ -60,6 +60,8 @@ vi.mock("../../orchestrator.js", () => {
       // instance boundary; the mock has to offer the same seam.
       this.seedUserAuthorizedPaths = vi.fn((chatId: string, paths: readonly string[]) => {
         seededAuthorizations.push([chatId, [...paths]]);
+        // Like the real one: the entry lands in the store the manager shared.
+        (opts.authorizedPathsStore as Map<string, readonly string[]> | undefined)?.set(chatId, [...paths]);
       });
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
@@ -307,6 +309,30 @@ describe("DelegationManager", () => {
       });
 
       expect(seededAuthorizations[0]?.[1] ?? []).toEqual([]);
+    });
+
+    it("drops the delegate's entry from the shared store when the run ends", async () => {
+      const store = new Map<string, readonly string[]>([["chat-parent", ["/a/gdd.docx"]]]);
+      const shared = new DelegationManager(buildManagerOpts({ delegationLog, authorizedPathsStore: store }));
+      let duringRun: readonly string[] | undefined;
+      orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+        duringRun = store.get(msg.chatId as string);
+        const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+        await channel.sendText(msg.chatId as string, "done");
+      });
+
+      await shared.delegate({
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: { ...TEST_TOOL_CONTEXT, userAuthorizedPaths: ["/a/gdd.docx"] },
+      });
+
+      expect(duringRun, "the delegate ran without its parent's authorization").toEqual(["/a/gdd.docx"]);
+      // Per-run entries must not accumulate for the daemon's lifetime.
+      expect([...store.keys()]).toEqual(["chat-parent"]);
     });
 
     it("spawns a sub-agent and returns captured result", async () => {

@@ -42,4 +42,18 @@ describe("what the wiring must remember before routing", () => {
     expect(seedAt, "the wiring never seeds the authorization").toBeGreaterThan(-1);
     expect(seedAt, "the authorization is seeded after routing has already run").toBeLessThan(routeAt);
   });
+
+  it("the multi-agent channel handler seeds it before routing too", async () => {
+    // Runs no longer derive the authorization from their own prompt, so a
+    // channel handler that skips this leaves the user's named file unreadable.
+    const { readFileSync } = await import("node:fs");
+    const bootstrap = readFileSync("src/core/bootstrap.ts", "utf8");
+    const routeAt = bootstrap.indexOf("agentManager!.routeMessage(normalizedMsg)");
+    const handlerAt = bootstrap.lastIndexOf("channel.onMessage(", routeAt);
+    const seedAt = bootstrap.indexOf("seedUserAuthorizedPaths", handlerAt);
+
+    expect(routeAt, "the multi-agent handler moved").toBeGreaterThan(-1);
+    expect(seedAt, "the multi-agent handler never seeds the authorization").toBeGreaterThan(handlerAt);
+    expect(seedAt, "the authorization is seeded after routing has already run").toBeLessThan(routeAt);
+  });
 });

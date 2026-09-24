@@ -150,6 +150,7 @@ import {
   generateSessionId as _generateSessionId,
 } from "./bootstrap-wiring.js";
 import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
+import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { fireDevKnowledgeCompletionNote } from "../vault/dev-knowledge-writer.js";
 
 // Re-export for backward compatibility (tests and other modules import these from bootstrap.js)
@@ -2137,6 +2138,13 @@ async function bootstrapImpl(
       }
 
       activityRegistry.recordActivity(channelType, normalizedMsg.chatId);
+      // Remember what the user named BEFORE routing, as the single-agent wiring
+      // does (bootstrap-wiring.ts). Runs never derive this from their own prompt,
+      // so this channel message is the only place the authorization can come from.
+      orchestrator.seedUserAuthorizedPaths(
+        normalizedMsg.chatId,
+        extractUserAuthorizedPaths(typeof normalizedMsg.text === "string" ? normalizedMsg.text : ""),
+      );
       // Interrupt consolidation on user activity (MEM-13)
       heartbeatLoop?.onUserActivity();
       if (identityManager) {

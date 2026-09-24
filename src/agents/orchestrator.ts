@@ -17,7 +17,7 @@ import { streamOrChatText } from "./providers/provider.interface.js";
 import { BATCH_DISPATCH_TOOLS, parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
-import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
+import { rememberUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { isQuotaStop, QUOTA_LIMIT_RE } from "./orchestrator-runtime-utils.js";
@@ -2939,82 +2939,46 @@ export class Orchestrator {
   }
 
   /**
-   * Absolute paths the user typed in their latest message for this chat.
+   * Absolute paths the user named in a channel message for this chat.
    *
-   * Read from the session each time rather than cached: the authorization is a
-   * property of what the user just asked for, not of the run.
+   * Read from the store, which only the channel boundary and delegation write:
+   * the wiring records what a person typed as the message arrives, and a
+   * delegate is handed its parent's set. Nothing inside a run widens it — not the
+   * task prompt, not a sub-goal or delegation brief a model wrote, and not a
+   * user-role turn the run synthesized (gate text, tool-failure evidence), all of
+   * which used to be parsed here as if the user had typed them.
    */
-  private userAuthorizedPathsFor(chatId: string, taskPrompt?: string): readonly string[] {
-    // The run works from a task record, not from the chat session: measured, the
-    // session under this chatId holds no user turn at all by the time a tool
-    // runs (lastUserLength 0), so a session lookup can never see the request
-    // that started the run. The task prompt is that request.
-    const fromTask = extractUserAuthorizedPaths(taskPrompt ?? "");
-    if (fromTask.length > 0) {
-      const existing = this.authorizedPathsByChat.get(chatId) ?? [];
-      this.authorizedPathsByChat.set(chatId, [...new Set([...existing, ...fromTask])]);
-      return this.authorizedPathsByChat.get(chatId)!;
-    }
-
-    const remembered = this.authorizedPathsByChat.get(chatId);
-    if (remembered && remembered.length > 0) return remembered;
-
-    try {
-      const session = this.sessionManager.getOrCreateSession(chatId);
-      return extractUserAuthorizedPaths(this.sessionManager.extractLastUserMessage(session));
-    } catch {
-      // No session, no authorization — the restrictive answer.
-      return [];
-    }
+  private userAuthorizedPathsFor(chatId: string): readonly string[] {
+    return this.authorizedPathsByChat.get(chatId) ?? [];
   }
 
   /**
-   * Record the paths this message names, before anything else runs.
-   *
-   * The authorization is still the user's: it comes from text they wrote, and
-   * only ever grows from real incoming messages.
-   */
-  /**
-   * Carry paths the user authorized into a run that did not receive their
-   * message.
-   *
-   * The authorization is evidence of what the user typed, and it lived in
-   * per-instance memory. Delegation builds a NEW Orchestrator (delegation
-   * manager, agent manager), so a delegated worker started with an empty map
-   * and refused the very file the request named. Measured 2026-08-20: the run
-   * decomposed into multi-agent work and the first read of
-   * /Users/okan/Downloads/PixelFlow_GDD.docx came back "Path resolves outside
-   * the project directory" — the document the task was about.
-   *
-   * Only ever widens, and only with paths the parent already holds: a worker
-   * cannot authorize itself.
-   */
-  /**
-   * The store itself, so sub-agent orchestrators can share it rather than each
-   * trying to re-derive authorization from a prompt that no longer carries it.
+   * The store itself, so sub-agent orchestrators share one instead of each
+   * starting empty. Supervisor-decomposed workers run under the root's chat id
+   * and read the user's authorization from it; they never add to it.
    */
   authorizationStore(): Map<string, readonly string[]> {
     return this.authorizedPathsByChat;
   }
 
+  /**
+   * Record paths the user authorized for `chatId`.
+   *
+   * Two callers: the channel wiring, with the paths a person typed in the
+   * message that just arrived, and delegation, which carries the parent's set
+   * into a run that did not receive that message. Measured 2026-08-20: a
+   * delegated worker started with an empty map and refused
+   * /Users/okan/Downloads/PixelFlow_GDD.docx, the document the task was about.
+   * Delegation only ever hands down what the parent already holds, so a worker
+   * cannot authorize itself.
+   */
   seedUserAuthorizedPaths(chatId: string, paths: readonly string[]): void {
-    if (paths.length === 0) return;
-    const existing = this.authorizedPathsByChat.get(chatId) ?? [];
-    this.authorizedPathsByChat.set(chatId, [...new Set([...existing, ...paths])]);
+    rememberUserAuthorizedPaths(this.authorizedPathsByChat, chatId, paths);
   }
 
   /** Paths this run may read on the user's authority, for handing to a delegate. */
   userAuthorizedPathsSnapshot(chatId: string): readonly string[] {
     return this.authorizedPathsByChat.get(chatId) ?? [];
-  }
-
-  private rememberAuthorizedPaths(msg: IncomingMessage): void {
-    const text = typeof msg.text === "string" ? msg.text : "";
-    const named = extractUserAuthorizedPaths(text);
-    if (named.length === 0) return;
-
-    const existing = this.authorizedPathsByChat.get(msg.chatId) ?? [];
-    this.authorizedPathsByChat.set(msg.chatId, [...new Set([...existing, ...named])]);
   }
 
   private getClarificationContext(): ClarificationContext {
@@ -3222,7 +3186,10 @@ export class Orchestrator {
    * Uses a per-session lock to prevent concurrent processing.
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
-    this.rememberAuthorizedPaths(msg);
+    // No path authorization is recorded here: every real channel message is
+    // recorded by the channel wiring before it is routed, and the other callers
+    // (delegation, /retry resubmission, checkpoint resume) pass text that is a
+    // model's brief or a replay, not something the user just typed.
     const { chatId } = msg;
     // Remember the most recent routing metadata so that checkpoint-driven
     // resumes (continueFromCheckpoint) can reissue a message via the same
@@ -4852,11 +4819,10 @@ export class Orchestrator {
       // Survives the lease swap above, so vault lookups still resolve to the
       // project the vault is registered against.
       sourceProjectPath: this.projectPath,
-      // Files the user named in their own message, readable on that authority
-      // even when they sit outside the project. Derived per call from the
-      // session, so it is always this chat's most recent request and never
-      // accumulates across conversations.
-      userAuthorizedPaths: this.userAuthorizedPathsFor(chatId, options.taskPrompt),
+      // Files the user named in a channel message for this chat, readable on
+      // that authority even when they sit outside the project. Never derived
+      // from the task prompt: for a worker or delegate that is model-written.
+      userAuthorizedPaths: this.userAuthorizedPathsFor(chatId),
       workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,

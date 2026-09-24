@@ -4,7 +4,13 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { extractUserAuthorizedPaths, isUserAuthorizedPath } from "./user-authorized-paths.js";
+import {
+  extractUserAuthorizedPaths,
+  isUserAuthorizedPath,
+  MAX_AUTHORIZED_CHATS,
+  MAX_AUTHORIZED_PATHS_PER_CHAT,
+  rememberUserAuthorizedPaths,
+} from "./user-authorized-paths.js";
 
 describe("what the user asked to be read", () => {
   it("takes the path out of an ordinary sentence", () => {
@@ -70,5 +76,46 @@ describe("what the authorization does not extend to", () => {
   it("matches an equivalent spelling of the same file", () => {
     // Same file, written with a redundant segment: still the file they named.
     expect(isUserAuthorizedPath("/Users/o/Desktop/./gdd.md", authorized)).toBe(true);
+  });
+});
+
+describe("the store the authorization is kept in stays bounded", () => {
+  it("adds to a chat's paths without duplicating them", () => {
+    const store = new Map<string, readonly string[]>();
+    rememberUserAuthorizedPaths(store, "chat", ["/a.md"]);
+    rememberUserAuthorizedPaths(store, "chat", ["/a.md", "/b.md"]);
+
+    expect(store.get("chat")).toEqual(["/a.md", "/b.md"]);
+  });
+
+  it("writes nothing for a message that named nothing", () => {
+    const store = new Map<string, readonly string[]>();
+    rememberUserAuthorizedPaths(store, "chat", []);
+
+    expect(store.has("chat")).toBe(false);
+  });
+
+  it("keeps a bounded number of chats, dropping the least recently written", () => {
+    const store = new Map<string, readonly string[]>();
+    for (let i = 0; i <= MAX_AUTHORIZED_CHATS + 10; i++) {
+      rememberUserAuthorizedPaths(store, `chat-${i}`, [`/f${i}.md`]);
+      if (i === MAX_AUTHORIZED_CHATS - 6) rememberUserAuthorizedPaths(store, "chat-0", ["/again.md"]);
+    }
+
+    expect(store.size).toBe(MAX_AUTHORIZED_CHATS);
+    expect(store.has("chat-1")).toBe(false);
+    // Written again late, so it outlived the chats written after it first was.
+    expect(store.has("chat-0")).toBe(true);
+    expect(store.has(`chat-${MAX_AUTHORIZED_CHATS + 10}`)).toBe(true);
+  });
+
+  it("keeps a bounded number of paths per chat, dropping the oldest", () => {
+    const store = new Map<string, readonly string[]>();
+    const many = Array.from({ length: MAX_AUTHORIZED_PATHS_PER_CHAT + 5 }, (_, i) => `/p${i}.md`);
+    rememberUserAuthorizedPaths(store, "chat", many);
+
+    expect(store.get("chat")).toHaveLength(MAX_AUTHORIZED_PATHS_PER_CHAT);
+    expect(store.get("chat")).not.toContain("/p0.md");
+    expect(store.get("chat")).toContain(`/p${MAX_AUTHORIZED_PATHS_PER_CHAT + 4}.md`);
   });
 });
