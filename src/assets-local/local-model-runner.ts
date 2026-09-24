@@ -662,8 +662,10 @@ export class LocalModelRunner {
       join(SCRIPTS(), "txt2img.py"),
       "--model", spec.weightsRef,
       "--family", family,
-      "--prompt", prompt,
-      "--negative", opts.negative ?? "",
+      // ONE TOKEN each (CMP-19): argparse reads a separate value that begins
+      // with "-" ("-grumpy") as an option, and the draw failed as inference.
+      `--prompt=${prompt}`,
+      `--negative=${opts.negative ?? ""}`,
       "--out", outPath,
       "--steps", String(opts.steps ?? 0),
       "--size", String(opts.size ?? 512),

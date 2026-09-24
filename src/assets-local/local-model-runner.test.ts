@@ -334,6 +334,24 @@ describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () =
   });
 });
 
+describe("prompts reach the driver as one argument (CMP-19)", () => {
+  it("a prompt that begins with '-' is passed as --prompt=<value>, not as a separate token", async () => {
+    let seen: readonly string[] = [];
+    const spawn: SpawnImpl = async (_cmd, args) => {
+      seen = args;
+      return { code: 1, stdout: "", stderr: "stub" };
+    };
+    const runner = new LocalModelRunner(spawn);
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    (runner as unknown as { writeScripts: () => void }).writeScripts = () => {};
+    const spec = { id: "sd15", label: "sd15", kind: "text-to-image", weightsRef: "w", installMethod: "hub" } as never;
+    await runner.textToImage(spec, "-grumpy", "/tmp/grumpy.png", { negative: "-blurry" });
+    expect(seen).toContain("--prompt=-grumpy");
+    expect(seen).toContain("--negative=-blurry");
+    expect(seen).not.toContain("-grumpy");
+  });
+});
+
 describe("inference runs one at a time", () => {
   // Measured 2026-09-07 15:38: two sprite calls in the same second, two
   // SD1.5 processes on one GPU.
