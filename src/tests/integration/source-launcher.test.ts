@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -93,7 +93,8 @@ describe("source launcher install-command", () => {
 
   afterEach(() => {
     for (const dir of tempDirs) {
-      rmSync(dir, { recursive: true, force: true });
+      // Retries: Windows can hold a just-exited node.exe copy open for a moment.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     }
     tempDirs.length = 0;
   });
@@ -205,28 +206,62 @@ describe("source launcher install-command", () => {
       updated: false,
       path: `${installDir};C:\\Tools`,
     });
-
-    if (process.platform === "win32" && existsSync(path.join(process.cwd(), "node_modules"))) {
-      const wrapperEnv = {
-        ...process.env,
-        LOCALAPPDATA: localAppData,
-        STRADA_NODE_PATH: process.execPath,
-      };
-      try {
-        const cmdHelp = execFileSync(path.join(installDir, "strada.cmd"), ["--help"], {
-          cwd: process.cwd(),
-          env: wrapperEnv,
-          encoding: "utf8",
-          timeout: 15000,
-        });
-        expect(cmdHelp).toContain("Usage: strada");
-      } catch {
-        // Wrapper execution may fail on CI when source-launcher
-        // triggers a full prepare cycle; static assertions above
-        // already validate the generated wrapper content.
-      }
-    }
   });
+
+  // OPS-13. The wrappers used to be executed inside the test above behind a bare
+  // `catch {}`, and `execFileSync` of a `.cmd` without a shell always throws
+  // EINVAL on Node 22+ (CVE-2024-27980), so the Windows job never ran a launcher
+  // and OPS-2 shipped. Both wrappers now run for real, and any failure fails the
+  // test, with STRADA_NODE_PATH in a directory containing a space (the shape of
+  // the default C:\Program Files\nodejs install).
+  it.runIf(process.platform === "win32")("runs the generated Windows wrappers with a Node path containing a space", async () => {
+    expect(existsSync(path.join(process.cwd(), "node_modules")), "run `npm ci` before this test").toBe(true);
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada windows run "));
+    tempDirs.push(tempHome);
+    const localAppData = path.join(tempHome, "AppData", "Local");
+    const installDir = path.join(localAppData, "Strada", "bin");
+
+    const { installCommand } = await loadSourceLauncherModule();
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      installCommand({
+        platform: "win32",
+        env: { LOCALAPPDATA: localAppData, PATH: "" },
+        homeDir: tempHome,
+        launcherPath: path.join(process.cwd(), "strada.ps1"),
+        windowsPathSync: vi.fn().mockReturnValue({ updated: false, path: installDir }),
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    // A Node install laid out like the official one (node.exe, npm.cmd and
+    // node_modules/npm side by side), under a directory with a space.
+    const realNodeDir = path.dirname(process.execPath);
+    const realNpm = path.join(realNodeDir, "node_modules", "npm");
+    expect(existsSync(realNpm), `no npm next to ${process.execPath}`).toBe(true);
+    const spacedNodeDir = path.join(tempHome, "Program Files", "nodejs");
+    mkdirSync(spacedNodeDir, { recursive: true });
+    copyFileSync(process.execPath, path.join(spacedNodeDir, "node.exe"));
+    copyFileSync(path.join(realNodeDir, "npm.cmd"), path.join(spacedNodeDir, "npm.cmd"));
+    cpSync(realNpm, path.join(spacedNodeDir, "node_modules", "npm"), { recursive: true });
+
+    const run = {
+      cwd: process.cwd(),
+      env: { ...process.env, LOCALAPPDATA: localAppData, STRADA_NODE_PATH: path.join(spacedNodeDir, "node.exe") },
+      encoding: "utf8" as const,
+      timeout: 120_000,
+    };
+    // A .cmd needs cmd.exe, and this path has spaces, so it is quoted for cmd.
+    const cmdHelp = execFileSync(`"${path.join(installDir, "strada.cmd")}"`, ["--help"], { ...run, shell: true });
+    expect(cmdHelp).toContain("Usage: strada");
+    const psHelp = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(installDir, "strada.ps1"), "--help"],
+      run,
+    );
+    expect(psHelp).toContain("Usage: strada");
+  }, 300_000);
 
   it("refreshes existing POSIX user-local wrappers without reinstalling shell profile state", async () => {
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada launcher refresh "));
