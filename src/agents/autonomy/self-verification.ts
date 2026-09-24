@@ -297,6 +297,9 @@ export class SelfVerification {
     this.unityErrorResolutionAttempts = 0;
     this.pendingTestFiles = new Set();
     this.testRunAttempts = 0;
+    // Reset with the attempt count it is capped by: left set, the next task
+    // inherited an open failing-test gate (audited 2026-09-24).
+    this.failingTestRun = false;
     this.buildGateEmissions = 0;
     // The published state described the task that just ended, not the next.
     this.dispose();
@@ -561,7 +564,8 @@ export class SelfVerification {
       }
       this.unityConsoleErrors = newErrors;
     } else if (
-      content.includes("0 errors") ||
+      // "0 errors" as a count of its own: "10 errors" contains it.
+      /(?<!\d)0 errors\b/u.test(content) ||
       content.includes("Build succeeded") ||
       content.includes("Compilation successful") ||
       content.includes("Compile succeeded") ||
