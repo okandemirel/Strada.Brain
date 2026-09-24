@@ -5,6 +5,9 @@
  * All errors extend AppError for structured error information.
  */
 
+// Leaf module (no imports of its own), so this adds no cycle.
+import { sanitizeSecretsQuiet } from "../security/secret-patterns.js";
+
 // ============================================================================
 // Base Error
 // ============================================================================
@@ -523,7 +526,11 @@ export function setupGlobalErrorHandlers(
 
   process.on("unhandledRejection", (reason: unknown) => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
-    logger.error("Unhandled Rejection:", error);
+    // Straight to stderr, past the logger's redaction format: a rejection
+    // carrying a key in its message or stack printed it in clear text into
+    // container and CI logs. Redact what is printed; `onError` keeps the
+    // original error object.
+    logger.error("Unhandled Rejection:", sanitizeSecretsQuiet(error.stack ?? `${error.name}: ${error.message}`));
     onError?.(error);
   });
 
