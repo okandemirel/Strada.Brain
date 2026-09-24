@@ -822,3 +822,53 @@ describe("fetchWithRetry — a permit is not lost to an abandoned stream", () =>
     await next.body?.cancel();
   });
 });
+
+// A cancel that landed in a retry backoff was ignored until the sleep ended
+// (up to a minute), and the provider permit stayed held the whole time.
+describe("fetchWithRetry — an abort ends a retry backoff", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    __resetProviderConcurrency();
+    configureProviderConcurrency(1);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetProviderConcurrency();
+  });
+
+  it("rejects promptly on abort during a status backoff and frees the permit", async () => {
+    fetchSpy.mockResolvedValueOnce(new Response("busy", { status: 503, headers: { "retry-after": "30" } }));
+    const controller = new AbortController();
+    const started = Date.now();
+    const call = fetchWithRetry("https://example.com/api", { method: "GET" }, { callerName: "ProviderBackoff", signal: controller.signal });
+    setTimeout(() => controller.abort(), 100);
+
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // The permit (cap 1) came back with the rejection.
+    fetchSpy.mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const next = await fetchWithRetry("https://example.com/api", { method: "GET" }, { callerName: "ProviderBackoff" });
+    expect(next.ok).toBe(true);
+  });
+
+  it("rejects promptly on abort during a network backoff", async () => {
+    fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
+    const controller = new AbortController();
+    const started = Date.now();
+    const call = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET", signal: controller.signal },
+      { callerName: "ProviderNetBackoff", baseDelayMs: 10_000 },
+    );
+    setTimeout(() => controller.abort(), 100);
+
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

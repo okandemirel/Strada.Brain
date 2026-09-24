@@ -589,6 +589,10 @@ async function runFetchLoop(
   const shouldSanitize = opts.sanitizeErrors ?? DEFAULTS.sanitizeErrors;
 
   const logger = getLogger();
+  // Backoff sleeps end on abort. They used to ignore it, so a task cancel or
+  // stall watchdog landing in a backoff waited up to a minute, holding the
+  // provider's permit, before the next fetch noticed.
+  const abortSignal = opts.signal ?? init.signal ?? undefined;
 
   // Transport failures get their own budget, so a network blip cannot spend the
   // status-retry allowance and a status storm cannot spend the network one.
@@ -640,8 +644,7 @@ async function runFetchLoop(
       // A transport failure is not a turn against the status budget: the server
       // never answered, so nothing was learned about whether it would.
       attempt--;
-      // Don't pass signal to sleep — it may be expired from the fetch timeout
-      await sleep(networkDelay);
+      await sleep(networkDelay, abortSignal);
       continue;
     }
 
@@ -763,7 +766,7 @@ async function runFetchLoop(
       });
     }
 
-    await sleep(delay);
+    await sleep(delay, abortSignal);
   }
 
   throw new Error(`${callerName} max retries exceeded`);
