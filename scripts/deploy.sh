@@ -13,6 +13,7 @@
 #   -c, --check          Run pre-deployment checks only
 #   -f, --force          Skip confirmation prompts
 #   -h, --help           Show this help message
+#       --rollback       Restore the newest backup (volumes and env file)
 #
 # Examples:
 #   ./scripts/deploy.sh                    # Standard deployment
@@ -78,6 +79,71 @@ check_command() {
     fi
 }
 
+# Read KEY from the env file WITHOUT executing it. `source` ran the file as
+# bash, so an unquoted value with a space (or a command substitution) ran as a
+# command. Takes the last assignment and strips one level of matching quotes.
+env_file_value() {
+    local key="$1" file="$2" line value
+    line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" 2>/dev/null | tail -n 1)" || true
+    [[ -n "$line" ]] || return 0
+    value="${line#*=}"
+    value="${value%$'\r'}"
+    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+    fi
+    printf '%s' "$value"
+}
+
+detect_compose() {
+    if docker compose version &> /dev/null; then
+        COMPOSE_CMD=(docker compose)
+    elif docker-compose version &> /dev/null; then
+        COMPOSE_CMD=(docker-compose)
+    else
+        error_exit "Docker Compose is not installed"
+    fi
+}
+
+# Every compose call reads the same env file the checks read (-e/--env).
+compose() {
+    "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+compose_project_name() {
+    local name
+    name="$(compose config --no-interpolate 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n 1)" || true
+    if [[ -z "$name" ]]; then
+        # Compose's own default: the directory name, lower-cased, [a-z0-9_-] only.
+        name="$(basename "$PROJECT_ROOT" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+    fi
+    printf '%s' "$name"
+}
+
+# Compose prefixes volume names with the project (`<project>_strada-memory`),
+# so the bare name from docker-compose.yml never exists. Ask Docker for the
+# volume compose labelled; fall back to compose's naming rule.
+compose_volume_name() {
+    local logical="$1" project found
+    project="$(compose_project_name)"
+    found="$(docker volume ls -q \
+        --filter "label=com.docker.compose.project=${project}" \
+        --filter "label=com.docker.compose.volume=${logical}" 2>/dev/null | head -n 1)" || true
+    printf '%s' "${found:-${project}_${logical}}"
+}
+
+# Exactly "healthy": `grep healthy` also matched "unhealthy".
+container_healthy() {
+    [[ "$(docker inspect --format='{{.State.Health.Status}}' "$1" 2>/dev/null)" == "healthy" ]]
+}
+
+# Container names as docker-compose.yml's container_name declares them.
+services_healthy() {
+    container_healthy strada-brain && container_healthy strada-nginx
+}
+
+# Volumes that hold state: the config root (STRADA_HOME) and the memory store.
+STATE_VOLUMES=(strada-home strada-memory)
+
 confirm() {
     if [[ "$FORCE" == "true" ]]; then
         return 0
@@ -107,41 +173,36 @@ run_pre_checks() {
     docker info > /dev/null 2>&1 || error_exit "Docker daemon is not running"
     
     # Check Docker Compose
-    if docker compose version &> /dev/null; then
-        COMPOSE_CMD="docker compose"
-    elif docker-compose version &> /dev/null; then
-        COMPOSE_CMD="docker-compose"
-    else
-        error_exit "Docker Compose is not installed"
-    fi
-    
+    detect_compose
+
     # Check required files
     [[ -f "$COMPOSE_FILE" ]] || error_exit "docker-compose.yml not found"
     [[ -f "$ENV_FILE" ]] || error_exit ".env file not found at $ENV_FILE"
-    
-    # Check environment variables
+
+    # Check environment variables (read, never executed)
     log INFO "Checking required environment variables..."
-    source "$ENV_FILE"
-    
+
     local required_vars=(
         "ANTHROPIC_API_KEY"
         "TELEGRAM_BOT_TOKEN"
     )
-    
+
     local missing_vars=()
     for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
+        if [[ -z "$(env_file_value "$var" "$ENV_FILE")" ]]; then
             missing_vars+=("$var")
         fi
     done
-    
+
     if [[ ${#missing_vars[@]} -gt 0 ]]; then
         log WARN "Missing optional/required variables: ${missing_vars[*]}"
     fi
-    
+
     # Validate Unity project path
-    if [[ -n "${UNITY_PROJECT_PATH:-}" && ! -d "$UNITY_PROJECT_PATH" ]]; then
-        log WARN "UNITY_PROJECT_PATH does not exist: $UNITY_PROJECT_PATH"
+    local unity_project_path
+    unity_project_path="$(env_file_value UNITY_PROJECT_PATH "$ENV_FILE")"
+    if [[ -n "$unity_project_path" && ! -d "$unity_project_path" ]]; then
+        log WARN "UNITY_PROJECT_PATH does not exist: $unity_project_path"
     fi
     
     # Check disk space
@@ -180,18 +241,25 @@ create_backup() {
     mkdir -p "$BACKUP_DIR"
     local backup_name="backup_$(date +%Y%m%d_%H%M%S)"
     local backup_path="$BACKUP_DIR/$backup_name"
-    
-    # Backup memory data
-    local memory_volume="strada-memory"
+    # Created here, not implicitly by the volume copy below: without a volume to
+    # copy, every later `cp` into it failed and `set -e` aborted the deploy.
+    mkdir -p "$backup_path"
 
-    if docker volume inspect "$memory_volume" &> /dev/null; then
-        log INFO "Backing up ${memory_volume} volume..."
-        docker run --rm \
-            -v "${memory_volume}:/data:ro" \
-            -v "$backup_path:/backup" \
-            alpine:latest \
-            tar czf /backup/memory.tar.gz -C /data .
-    fi
+    # Backup the state volumes under their real (project-prefixed) names
+    local logical volume
+    for logical in "${STATE_VOLUMES[@]}"; do
+        volume="$(compose_volume_name "$logical")"
+        if docker volume inspect "$volume" &> /dev/null; then
+            log INFO "Backing up ${volume} volume..."
+            docker run --rm \
+                -v "${volume}:/data:ro" \
+                -v "$backup_path:/backup" \
+                alpine:latest \
+                tar czf "/backup/${logical}.tar.gz" -C /data .
+        else
+            log WARN "Volume ${volume} not found; nothing to back up for ${logical}"
+        fi
+    done
     
     # Backup environment file
     cp "$ENV_FILE" "$backup_path/"
@@ -224,49 +292,40 @@ deploy() {
     cd "$PROJECT_ROOT"
     
     # Pull latest images (if using pre-built)
-    # $COMPOSE_CMD -f "$COMPOSE_FILE" pull
+    # compose pull
     
     # Build new images
     log INFO "Building Docker images..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" build --no-cache --parallel
-    
+    compose build --no-cache --parallel
+
     # Stop and remove old containers gracefully
     log INFO "Stopping current containers..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" down --timeout 30
-    
+    compose down --timeout 30
+
     # Start new containers
     log INFO "Starting new containers..."
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d --remove-orphans
-    
+    compose up -d --remove-orphans
+
     # Wait for services to be healthy
     log INFO "Waiting for services to be healthy..."
-    local timeout=120
+    local timeout="${DEPLOY_HEALTH_TIMEOUT:-120}"
+    local interval="${DEPLOY_HEALTH_INTERVAL:-5}"
     local elapsed=0
-    
+    local healthy=false
+
     while [[ $elapsed -lt $timeout ]]; do
-        local healthy=true
-        
-        # Check strada-brain health
-        if ! docker inspect --format='{{.State.Health.Status}}' strada-brain 2>/dev/null | grep -q "healthy"; then
-            healthy=false
-        fi
-        
-        # Check nginx health
-        if ! docker inspect --format='{{.State.Health.Status}}' strata-nginx 2>/dev/null | grep -q "healthy"; then
-            healthy=false
-        fi
-        
-        if [[ "$healthy" == "true" ]]; then
+        if services_healthy; then
+            healthy=true
             log SUCCESS "All services are healthy!"
             break
         fi
-        
-        sleep 5
-        elapsed=$((elapsed + 5))
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
         log INFO "Waiting for services... (${elapsed}s/${timeout}s)"
     done
-    
-    if [[ $elapsed -ge $timeout ]]; then
+
+    if [[ "$healthy" != "true" ]]; then
         log ERROR "Services failed to become healthy within ${timeout}s"
         show_logs
         error_exit "Deployment failed"
@@ -288,11 +347,11 @@ show_status() {
     echo ""
     log INFO "Service Status:"
     echo "================================================================================"
-    $COMPOSE_CMD -f "$COMPOSE_FILE" ps
+    compose ps
     echo "================================================================================"
     echo ""
-    log INFO "Dashboard: http://localhost:3100"
-    log INFO "Metrics: http://localhost:9090/metrics"
+    log INFO "Web portal (host loopback): http://127.0.0.1:3000"
+    log INFO "Metrics (host loopback): http://127.0.0.1:9090/metrics"
     log INFO "Nginx: http://localhost (redirects to HTTPS)"
     echo ""
     log INFO "Useful commands:"
@@ -306,7 +365,7 @@ show_logs() {
     echo ""
     log INFO "Recent logs:"
     echo "================================================================================"
-    $COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail=50
+    compose logs --tail=50
     echo "================================================================================"
 }
 
@@ -321,17 +380,26 @@ rollback() {
     log INFO "Restoring from backup: $latest_backup"
     
     # Stop current containers
-    $COMPOSE_CMD -f "$COMPOSE_FILE" down
-    
-    # Restore memory volume
-    if [[ -f "$BACKUP_DIR/$latest_backup/memory.tar.gz" ]]; then
-        local memory_volume="strada-memory"
+    compose down
+
+    # Restore the state volumes into the volumes the stack actually mounts
+    # (a bare `strada-memory` was a fresh orphan volume nothing mounted).
+    # memory.tar.gz is the archive name older backups used.
+    local logical archive volume
+    for logical in "${STATE_VOLUMES[@]}"; do
+        archive="${logical}.tar.gz"
+        if [[ "$logical" == "strada-memory" && ! -f "$BACKUP_DIR/$latest_backup/$archive" ]]; then
+            archive="memory.tar.gz"
+        fi
+        [[ -f "$BACKUP_DIR/$latest_backup/$archive" ]] || continue
+        volume="$(compose_volume_name "$logical")"
+        log INFO "Restoring ${archive} into ${volume}..."
         docker run --rm \
-            -v "${memory_volume}:/data" \
+            -v "${volume}:/data" \
             -v "$BACKUP_DIR/$latest_backup:/backup:ro" \
             alpine:latest \
-            tar xzf /backup/memory.tar.gz -C /data
-    fi
+            tar xzf "/backup/${archive}" -C /data
+    done
     
     # Restore environment file
     if [[ -f "$BACKUP_DIR/$latest_backup/.env" ]]; then
@@ -339,8 +407,8 @@ rollback() {
     fi
     
     # Start services
-    $COMPOSE_CMD -f "$COMPOSE_FILE" up -d
-    
+    compose up -d
+
     log SUCCESS "Rollback completed"
 }
 
@@ -353,6 +421,7 @@ main() {
     BACKUP=false
     FORCE=false
     CHECK_ONLY=false
+    ROLLBACK=false
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -377,8 +446,10 @@ main() {
                 show_help
                 ;;
             --rollback)
-                rollback
-                exit 0
+                # Deferred until every option (e.g. -e) is parsed and compose
+                # is detected; it used to run with COMPOSE_CMD unset.
+                ROLLBACK=true
+                shift
                 ;;
             *)
                 error_exit "Unknown option: $1"
@@ -401,7 +472,14 @@ EOF
     log INFO "Project root: $PROJECT_ROOT"
     log INFO "Environment file: $ENV_FILE"
     echo ""
-    
+
+    if [[ "$ROLLBACK" == "true" ]]; then
+        check_command docker
+        detect_compose
+        rollback
+        exit 0
+    fi
+
     # Run checks
     run_pre_checks
     
