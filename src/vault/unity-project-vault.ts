@@ -23,6 +23,7 @@ import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
+import { compilePathGlob } from './glob-match.js';
 
 /**
  * How many extra candidates to retrieve per requested result when a
@@ -47,12 +48,6 @@ export interface UnityVaultDeps {
 interface IVaultWatcher {
   start(): Promise<void>;
   stop(): Promise<void>;
-}
-
-function globToRegex(glob: string): RegExp {
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const pattern = escaped.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '.');
-  return new RegExp(`^${pattern}$`);
 }
 
 function payloadChunkId(hit: { payload?: unknown }): string | null {
@@ -222,8 +217,9 @@ export class UnityProjectVault implements IVault {
 
     // Fix I1: apply pathGlob
     if (q.pathGlob) {
-      const re = globToRegex(q.pathGlob);
-      chunks = chunks.filter((c) => re.test(c.path));
+      // Linear matcher: the old glob-to-RegExp backtracked exponentially (MEM-8).
+      const matches = compilePathGlob(q.pathGlob);
+      chunks = chunks.filter((c) => matches(c.path));
     }
 
     // Cut to topK only now that filtering has run, so the caller gets topK

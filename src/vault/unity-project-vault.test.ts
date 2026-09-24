@@ -504,6 +504,38 @@ describe("UnityProjectVault filters constrain candidates, not results", () => {
   });
 });
 
+// MEM-8: pathGlob was compiled to a RegExp whose `[^/]*` runs backtracked
+// exponentially on a glob with many stars, blocking the event loop for
+// seconds per candidate path.
+describe("UnityProjectVault pathGlob on a many-star glob (MEM-8)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "vault-glob-"));
+    await writeFile(join(dir, `${"a".repeat(60)}.md`), "inventory damping notes\n", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("filters in bounded time", async () => {
+    const vault = new UnityProjectVault({
+      id: "glob-redos", rootPath: dir,
+      embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    try {
+      await vault.init();
+      const started = performance.now();
+      const result = await vault.query({ text: "inventory damping", topK: 5, pathGlob: "*a*a*a*a*a*a*b" });
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(result.hits).toEqual([]);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  }, 60_000);
+});
+
 describe("UnityProjectVault FTS query escaping (multi-word + injection)", () => {
   let dir: string;
 

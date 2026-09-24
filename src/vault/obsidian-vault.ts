@@ -35,6 +35,7 @@ import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
+import { compilePathGlob } from './glob-match.js';
 
 export interface ObsidianVaultDeps {
   id: VaultId;
@@ -56,12 +57,6 @@ function canonicalizePath(path: string): string {
   if (p.startsWith('./')) p = p.slice(2);
   if (p.startsWith('/')) p = p.slice(1);
   return p;
-}
-
-function globToRegex(glob: string): RegExp {
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const pattern = escaped.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '.');
-  return new RegExp(`^${pattern}$`);
 }
 
 function payloadChunkId(hit: { payload?: unknown }): string | null {
@@ -251,8 +246,9 @@ export class ObsidianVault implements IVault {
     }
 
     if (q.pathGlob) {
-      const re = globToRegex(q.pathGlob);
-      chunks = chunks.filter((c) => re.test(c.path));
+      // Linear matcher: the old glob-to-RegExp backtracked exponentially (MEM-8).
+      const matches = compilePathGlob(q.pathGlob);
+      chunks = chunks.filter((c) => matches(c.path));
     }
 
     const budget = q.budgetTokens ?? Number.POSITIVE_INFINITY;
