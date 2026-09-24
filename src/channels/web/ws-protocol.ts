@@ -79,6 +79,42 @@ export function nextStreamUpdate(sent: string | undefined, accumulated: string):
   return { text: accumulated };
 }
 
+/** A monitor board's topology, as `monitor:dag_init` / `monitor:dag_restructure` carry it. */
+export interface DagTopology<N extends { id: string } = { id: string }> {
+  nodes: N[];
+  edges: Array<{ source: string; target: string }>;
+}
+
+/**
+ * `monitor:dag_init` ADDS to a root's board: the server sends a single new
+ * card (a joined worker, a continued episode) or the full step list under the
+ * same root, never a shrunken board meant to drop nodes; only
+ * `monitor:dag_restructure` replaces a board. Nodes are matched by id (the
+ * newer fields win) and edges are deduplicated.
+ */
+export function mergeDagTopology<N extends { id: string }>(prev: DagTopology<N>, next: DagTopology<N>): DagTopology<N> {
+  const nodes = prev.nodes.slice();
+  const indexById = new Map(nodes.map((node, index) => [node.id, index] as const));
+  for (const node of next.nodes) {
+    const at = indexById.get(node.id);
+    if (at === undefined) {
+      indexById.set(node.id, nodes.length);
+      nodes.push(node);
+    } else {
+      nodes[at] = { ...nodes[at]!, ...node };
+    }
+  }
+  const edgeKey = (edge: { source: string; target: string }) => `${edge.source}\u0000${edge.target}`;
+  const seen = new Set(prev.edges.map(edgeKey));
+  const edges = prev.edges.slice();
+  for (const edge of next.edges) {
+    if (seen.has(edgeKey(edge))) continue;
+    seen.add(edgeKey(edge));
+    edges.push(edge);
+  }
+  return { nodes, edges };
+}
+
 /** The text a client shows after applying a `stream_update` frame to `current`. */
 export function applyStreamUpdate(current: string, frame: { delta?: unknown; text?: unknown }): string {
   if (typeof frame.text === "string") return frame.text;

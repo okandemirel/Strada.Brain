@@ -88,17 +88,32 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const rootNode = nodes.find((n) => (n.id as string) === rootId) ?? nodes[0]
       const label = (rootNode?.title ?? rootNode?.task) as string | undefined
       const conversationId = asOptionalString(payload.conversationId)
-      monitor.setDAG(dag as unknown as DagState, rootId, { conversationId, label })
+      // A dag_init ADDS to the root's board (a joined worker sends only its own
+      // card); only dag_restructure replaces it (WEB-6).
+      const edges = Array.isArray(dag.edges) ? (dag.edges as DagState['edges']) : []
+      monitor.mergeDAG({ nodes: nodes as DagState['nodes'], edges }, rootId, { conversationId, label })
       for (const node of nodes) {
-        monitor.addTask({
-          id: node.id as string,
-          nodeId: node.id as string,
-          rootId,
+        const id = node.id as string
+        const fields = {
           title: (node.title ?? node.task ?? node.id) as string,
-          status: node.status as string,
-          reviewStatus: node.reviewStatus as string,
+          ...(typeof node.status === 'string' ? { status: node.status } : {}),
+          ...(typeof node.reviewStatus === 'string' ? { reviewStatus: node.reviewStatus } : {}),
           ...((node.dependencies || node.dependsOn) ? { dependencies: (node.dependencies ?? node.dependsOn) as string[] } : {}),
-        })
+        }
+        if (useMonitorStore.getState().rootsById[rootId]?.tasks[id]) {
+          // A re-emitted card keeps what arrived since (substeps, startedAt,
+          // narrative, the user's expansion): a fresh object wiped all of it.
+          monitor.updateTask(id, fields, rootId)
+        } else {
+          monitor.addTask({
+            id,
+            nodeId: id,
+            rootId,
+            status: node.status as string,
+            reviewStatus: node.reviewStatus as string,
+            ...fields,
+          })
+        }
       }
       break
     }

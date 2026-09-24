@@ -623,3 +623,57 @@ describe('dispatchWorkspaceMessage — updates for colliding node ids (WEB-7)', 
     expect(useMonitorStore.getState().rootsById['goal-root']).toBeUndefined()
   })
 })
+
+// WEB-6: the server sends a single-card dag_init for a joined worker and
+// expects it to be ADDED to the board; the portal replaced the whole DAG with
+// it, and every re-emitted card lost its substeps, timing and narrative.
+describe('dispatchWorkspaceMessage — dag_init adds to a board (WEB-6)', () => {
+  const node = (id: string, status = 'pending') => ({ id, task: id, status, reviewStatus: 'none', dependsOn: [] })
+
+  beforeEach(() => {
+    useMonitorStore.getState().clearMonitor()
+  })
+
+  it('keeps a decomposed tree when a joined worker adds its own card', () => {
+    dispatchWorkspaceMessage({
+      type: 'monitor:dag_init',
+      payload: { rootId: 'ep-1', nodes: [node('g1'), node('g2'), node('g3')], edges: [{ source: 'g1', target: 'g2' }] },
+    })
+    dispatchWorkspaceMessage({
+      type: 'monitor:substep',
+      payload: { rootId: 'ep-1', nodeId: 'g1', substep: { id: 's1', label: 'Read', status: 'active', order: 0 } },
+    })
+    dispatchWorkspaceMessage({ type: 'monitor:dag_init', payload: { rootId: 'ep-1', nodes: [node('req-worker', 'executing')], edges: [] } })
+
+    const state = useMonitorStore.getState()
+    expect(state.dag!.nodes.map((n) => n.id)).toEqual(['g1', 'g2', 'g3', 'req-worker'])
+    expect(state.dag!.edges).toEqual([{ source: 'g1', target: 'g2' }])
+    expect(Object.keys(state.tasks).sort()).toEqual(['g1', 'g2', 'g3', 'req-worker'])
+    expect(state.tasks.g1.substeps).toHaveLength(1)
+  })
+
+  it('keeps what a card gathered when the step list is re-sent, and takes its new status', () => {
+    dispatchWorkspaceMessage({ type: 'monitor:dag_init', payload: { rootId: 'ep-2', nodes: [node('step-0', 'executing')], edges: [] } })
+    dispatchWorkspaceMessage({
+      type: 'monitor:substep',
+      payload: { rootId: 'ep-2', nodeId: 'step-0', substep: { id: 's1', label: 'Edit', status: 'done', order: 0 } },
+    })
+    dispatchWorkspaceMessage({ type: 'monitor:task_update', payload: { rootId: 'ep-2', nodeId: 'step-0', status: 'executing', startedAt: 123 } })
+    dispatchWorkspaceMessage({
+      type: 'monitor:dag_init',
+      payload: { rootId: 'ep-2', nodes: [node('step-0', 'completed'), node('step-1', 'executing')], edges: [{ source: 'step-0', target: 'step-1' }] },
+    })
+
+    const { tasks, dag } = useMonitorStore.getState()
+    expect(tasks['step-0']).toEqual(expect.objectContaining({ status: 'completed', startedAt: 123 }))
+    expect(tasks['step-0'].substeps).toHaveLength(1)
+    expect(dag!.nodes.find((n) => n.id === 'step-0')?.status).toBe('completed')
+    expect(dag!.nodes.map((n) => n.id)).toEqual(['step-0', 'step-1'])
+  })
+
+  it('still lets dag_restructure replace a board (guard)', () => {
+    dispatchWorkspaceMessage({ type: 'monitor:dag_init', payload: { rootId: 'ep-3', nodes: [node('a'), node('b')], edges: [] } })
+    dispatchWorkspaceMessage({ type: 'monitor:dag_restructure', payload: { rootId: 'ep-3', nodes: [node('a')], edges: [] } })
+    expect(useMonitorStore.getState().dag!.nodes.map((n) => n.id)).toEqual(['a'])
+  })
+})

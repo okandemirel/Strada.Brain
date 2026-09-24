@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { mergeDagTopology } from '../../../src/channels/web/ws-protocol.ts'
 
 export type MonitorTaskStatus =
   | 'pending'
@@ -166,6 +167,8 @@ interface MonitorState {
    */
   updateTask: (id: string, updates: Partial<MonitorTask>, rootId?: string) => void
   setDAG: (dag: DagState, rootId?: string, meta?: RootMeta) => void
+  /** Add `dag`'s nodes and edges to a root's board (dag_init); setDAG replaces it (dag_restructure). */
+  mergeDAG: (dag: DagState, rootId?: string, meta?: RootMeta) => void
   addActivity: (entry: ActivityEntry) => void
   setActiveRootId: (id: string | null) => void
   setSelectedTask: (id: string | null) => void
@@ -280,6 +283,32 @@ export function findTask(
   return key ? s.rootsById[key].tasks[id] : undefined
 }
 
+/** Store a root's new topology, computed from its current one. */
+function putDag(
+  s: Pick<MonitorState, 'rootsById' | 'activeRootId'>,
+  nextDag: (prev: DagState | null) => DagState,
+  rootId: string | undefined,
+  meta: RootMeta | undefined,
+): ReturnType<typeof commit> {
+  const key = rootId ?? activeKey(s)
+  const bucket = s.rootsById[key] ?? emptyView()
+  // Persist conversation/label metadata FIRST-WINS: a decomposition's later
+  // dag_init drops the root node (so it carries no label) — keeping the
+  // original prevents it from blanking the switcher entry.
+  const conversationId = bucket.conversationId ?? meta?.conversationId
+  const label = bucket.label ?? meta?.label
+  const rootsById = {
+    ...s.rootsById,
+    [key]: {
+      ...bucket,
+      dag: nextDag(bucket.dag),
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(label !== undefined ? { label } : {}),
+    },
+  }
+  return commit(rootsById, s.activeRootId)
+}
+
 /**
  * Re-derive the mirrored top-level `tasks`/`dag` from the active root's bucket.
  * Components read these directly, so a single-root session is byte-identical
@@ -358,28 +387,14 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
       return commit(rootsById, s.activeRootId)
     }),
 
-  setDAG: (dag, rootId, meta) =>
-    set((s) => {
-      // dag_init / dag_restructure replace ONE root's topology. Other roots'
-      // buckets are preserved (no cross-request clobber).
-      const key = rootId ?? activeKey(s)
-      const bucket = s.rootsById[key] ?? emptyView()
-      // Persist conversation/label metadata FIRST-WINS: a decomposition's later
-      // dag_init drops the root node (so it carries no label) — keeping the
-      // original prevents it from blanking the switcher entry.
-      const conversationId = bucket.conversationId ?? meta?.conversationId
-      const label = bucket.label ?? meta?.label
-      const rootsById = {
-        ...s.rootsById,
-        [key]: {
-          ...bucket,
-          dag,
-          ...(conversationId !== undefined ? { conversationId } : {}),
-          ...(label !== undefined ? { label } : {}),
-        },
-      }
-      return commit(rootsById, s.activeRootId)
-    }),
+  // dag_restructure replaces ONE root's topology. Other roots' buckets are
+  // preserved (no cross-request clobber).
+  setDAG: (dag, rootId, meta) => set((s) => putDag(s, () => dag, rootId, meta)),
+
+  // dag_init grows ONE root's board: a joined worker's single card used to
+  // replace a whole decomposed tree mid-run (WEB-6).
+  mergeDAG: (dag, rootId, meta) =>
+    set((s) => putDag(s, (prev) => (prev ? mergeDagTopology(prev, dag) : dag), rootId, meta)),
 
   addActivity: (entry) =>
     set((s) => ({

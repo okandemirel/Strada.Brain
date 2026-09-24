@@ -3889,3 +3889,57 @@ describe("WebChannel attachment limits shared with the portal (WEB-3)", () => {
     }));
   });
 });
+
+// WEB-6: a dag_init ADDS to its root's board (a joined worker sends only its
+// own card). The replay cache reset the root to that last frame, so a
+// reconnecting portal got a board holding only the newest card and lost the
+// status updates of the earlier ones.
+describe("WebChannel monitor replay: dag_init adds to a board (WEB-6)", () => {
+  const frame = (type: string, payload: Record<string, unknown>): string =>
+    JSON.stringify({ type, payload, timestamp: 1 });
+
+  async function replayAfterReconnect(channel: WebChannel, feed: () => void) {
+    const first = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(first);
+    const connected = first.getSentMessages()[0]!;
+    feed();
+    first.close();
+    const second = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(second);
+    second.emit("message", Buffer.from(JSON.stringify({
+      type: "session_init",
+      chatId: connected.chatId,
+      reconnectToken: connected.reconnectToken,
+    })));
+    return second.getSentMessages().filter((m) => String(m.type).startsWith("monitor:"));
+  }
+
+  it("replays every card of a root and the updates of the earlier ones", async () => {
+    const channel = new WebChannel();
+    const replayed = await replayAfterReconnect(channel, () => {
+      channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-1", nodes: [{ id: "g1" }, { id: "g2" }], edges: [{ source: "g1", target: "g2" }] }));
+      channel.broadcastRaw(frame("monitor:task_update", { rootId: "ep-1", nodeId: "g1", status: "completed" }));
+      channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-1", nodes: [{ id: "req-worker", status: "executing" }], edges: [] }));
+    });
+
+    const dagInits = replayed.filter((m) => m.type === "monitor:dag_init");
+    expect(dagInits).toHaveLength(1);
+    const payload = dagInits[0]!.payload as { nodes: Array<{ id: string }>; edges: unknown[] };
+    expect(payload.nodes.map((n) => n.id)).toEqual(["g1", "g2", "req-worker"]);
+    expect(payload.edges).toEqual([{ source: "g1", target: "g2" }]);
+    expect(replayed.map((m) => m.type)).toEqual(["monitor:dag_init", "monitor:task_update"]);
+    await channel.disconnect();
+  });
+
+  it("still lets a restructure reset the root's board (guard)", async () => {
+    const channel = new WebChannel();
+    const replayed = await replayAfterReconnect(channel, () => {
+      channel.broadcastRaw(frame("monitor:dag_init", { rootId: "ep-2", nodes: [{ id: "a" }, { id: "b" }], edges: [] }));
+      channel.broadcastRaw(frame("monitor:task_update", { rootId: "ep-2", nodeId: "a", status: "completed" }));
+      channel.broadcastRaw(frame("monitor:dag_restructure", { rootId: "ep-2", nodes: [{ id: "a" }], edges: [] }));
+    });
+
+    expect(replayed.map((m) => m.type)).toEqual(["monitor:dag_restructure"]);
+    await channel.disconnect();
+  });
+});

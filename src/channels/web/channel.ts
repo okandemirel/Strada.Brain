@@ -32,7 +32,9 @@ import {
   WS_CLOSE_SESSION_TAKEN,
   WS_CLOSE_SESSION_TAKEN_REASON,
   WS_MAX_PAYLOAD_BYTES,
+  mergeDagTopology,
   nextStreamUpdate,
+  type DagTopology,
 } from "./ws-protocol.js";
 import { detectCommand } from "../../tasks/command-detector.js";
 import {
@@ -248,6 +250,45 @@ export function getCanonicalWebRedirectTarget(url: string): string | null {
   const nextSearch = parsed.searchParams.toString();
   const pathname = parsed.pathname.replace(/^\/+/, "/");
   return `${pathname}${nextSearch ? `?${nextSearch}` : ""}${parsed.hash}`;
+}
+
+/** The topology a cached monitor dag frame carries, when it is well-formed. */
+function dagTopologyOf(payload: unknown): DagTopology | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const { nodes, edges = [] } = payload as { nodes?: unknown; edges?: unknown };
+  if (!Array.isArray(nodes) || !Array.isArray(edges)) return undefined;
+  const nodeOk = (n: unknown) => !!n && typeof (n as { id?: unknown }).id === "string";
+  const edgeOk = (e: unknown) =>
+    !!e && typeof (e as { source?: unknown }).source === "string" && typeof (e as { target?: unknown }).target === "string";
+  return nodes.every(nodeOk) && edges.every(edgeOk) ? { nodes, edges } : undefined;
+}
+
+/**
+ * The cached dag frame (`previous`) with a new dag_init's nodes and edges added, as one
+ * dag_init frame; undefined when the two cannot be folded (not both dag frames, a
+ * malformed topology, or a different origin — the replay filters frames per origin).
+ */
+function foldDagInitFrame(previous: string | undefined, next: Record<string, unknown>): string | undefined {
+  if (previous === undefined) return undefined;
+  let prev: Record<string, unknown>;
+  try {
+    prev = JSON.parse(previous) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (prev.type !== "monitor:dag_init" && prev.type !== "monitor:dag_restructure") return undefined;
+  if (prev.origin !== next.origin) return undefined;
+  const prevTopology = dagTopologyOf(prev.payload);
+  const nextTopology = dagTopologyOf(next.payload);
+  if (!prevTopology || !nextTopology) return undefined;
+  return JSON.stringify({
+    ...next,
+    payload: {
+      ...(prev.payload as Record<string, unknown>),
+      ...(next.payload as Record<string, unknown>),
+      ...mergeDagTopology(prevTopology, nextTopology),
+    },
+  });
 }
 
 /** Rate limit: max messages per window. */
@@ -876,10 +917,19 @@ export class WebChannel
       const rootId =
         typeof parsed?.payload?.rootId === "string" ? (parsed.payload.rootId as string) : undefined;
       if (type === "monitor:dag_init" || type === "monitor:dag_restructure") {
-        // A DAG init/restructure resets ONLY this root's board (index 0 = the dag frame); the
-        // LRUCache evicts the oldest OTHER root past the cap (never this just-touched one).
+        // A restructure resets ONLY this root's board (index 0 = the dag frame); the LRUCache
+        // evicts the oldest OTHER root past the cap (never this just-touched one). A dag_init
+        // ADDS to the board, as the portal applies it (WEB-6): it is folded into index 0 and the
+        // root's incrementals are kept, so a replay rebuilds the same board as the live stream.
         const key = rootId ?? WebChannel.DEFAULT_MONITOR_ROOT;
-        this.lastMonitorSnapshotByRoot.set(key, [message]);
+        const cached = this.lastMonitorSnapshotByRoot.get(key);
+        const folded = type === "monitor:dag_init" && cached ? foldDagInitFrame(cached[0], parsed) : undefined;
+        if (cached && folded) {
+          cached[0] = folded;
+          this.lastMonitorSnapshotByRoot.set(key, cached);
+        } else {
+          this.lastMonitorSnapshotByRoot.set(key, [message]);
+        }
         this.lastMonitorRootKey = key;
       } else if (type === "monitor:clear") {
         this.lastMonitorSnapshotByRoot.clear();
