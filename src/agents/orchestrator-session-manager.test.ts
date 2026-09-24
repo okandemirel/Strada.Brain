@@ -48,6 +48,44 @@ describe("SessionManager", () => {
     expect(keys).toEqual(["chat-2", "chat-1"]);
   });
 
+  // ORC-13: eviction dropped a running chat's lock and goal tree, and the restore path
+  // bypassed the cap.
+  it("LRU eviction never evicts a chat that holds a live lock", () => {
+    const deps = createMockDeps();
+    const sm = new SessionManager(deps);
+    const running = sm.getOrCreateSession("chat-running");
+    running.conversationScope = "scope-running";
+    const lock = new Promise<void>(() => {});
+    sm.sessionLocks.set("chat-running", lock);
+    deps.activeGoalTrees.set("scope-running", {} as never);
+
+    for (let i = 0; i < 150; i++) sm.getOrCreateSession(`chat-${i}`);
+
+    expect(sm.sessions.get("chat-running")).toBe(running);
+    expect(sm.sessionLocks.get("chat-running")).toBe(lock);
+    expect(deps.activeGoalTrees.has("scope-running")).toBe(true);
+    expect(sm.sessions.size).toBe(100);
+  });
+
+  it("a session restored from disk takes a slot under the cap", () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-session-cap-"));
+    try {
+      writeFileSync(
+        join(dir, "restored-chat.json"),
+        SessionManager.serializeSession({ messages: [{ role: "user", content: "hi" }], lastActivity: new Date(), visibleMessages: [] }),
+        "utf-8",
+      );
+      const sm = new SessionManager(createMockDeps({ sessionsDir: dir }));
+      for (let i = 0; i < 100; i++) sm.getOrCreateSession(`chat-${i}`);
+      const restored = sm.getOrCreateSession("restored-chat");
+      expect(restored.messages).toHaveLength(1);
+      expect(sm.sessions.size).toBe(100);
+      sm.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("appendVisibleAssistantMessage adds to both messages and visibleMessages", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

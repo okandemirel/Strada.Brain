@@ -878,19 +878,14 @@ export class SessionManager {
     if (this.deps.sessionsDir) {
       const restored = this.restoreSessionFromDisk(chatId);
       if (restored) {
+        // A restored session takes a slot like any other (it bypassed the cap).
+        this.evictForCapacity();
         this.sessions.set(chatId, restored);
         return restored;
       }
     }
 
-    // Evict oldest session if at capacity
-    if (this.sessions.size >= MAX_SESSIONS) {
-      const oldestKey = this.sessions.keys().next().value as string;
-      const oldestSession = this.sessions.get(oldestKey);
-      this.sessions.delete(oldestKey);
-      this.sessionLocks.delete(oldestKey);
-      this.deps.activeGoalTrees.delete(oldestSession?.conversationScope ?? oldestKey);
-    }
+    this.evictForCapacity();
 
     session = {
       messages: [],
@@ -900,6 +895,23 @@ export class SessionManager {
     };
     this.sessions.set(chatId, session);
     return session;
+  }
+
+  /**
+   * Evict the least recently used session when at capacity. A chat holding a live lock is
+   * mid-run: evicting it dropped the lock and goal tree under the running turn, and the chat's
+   * next message restored an older snapshot as a SECOND session that ran concurrently with the
+   * first, whose output was then lost from history. Locked chats are skipped (as cleanupSessions
+   * already does); if every chat is locked the map briefly exceeds the cap instead.
+   */
+  private evictForCapacity(): void {
+    if (this.sessions.size < MAX_SESSIONS) return;
+    for (const [key, candidate] of this.sessions) {
+      if (this.sessionLocks.has(key)) continue;
+      this.sessions.delete(key);
+      this.deps.activeGoalTrees.delete(candidate.conversationScope ?? key);
+      return;
+    }
   }
 
   /**
