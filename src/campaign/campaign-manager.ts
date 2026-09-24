@@ -24,7 +24,7 @@ import {
 } from "./producer-evidence.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -939,6 +939,16 @@ export class CampaignManager {
   private readonly taskManager: TaskManager;
   private readonly messenger: CampaignMessenger;
   private readonly projectRoot: string;
+  /**
+   * Whether a stored campaign is THIS project's (CMP-7). The database lives
+   * under the memory path, not the project, so one database can hold another
+   * project's campaigns — and every action here (GDD reads, commits, task
+   * submission) runs against `this.projectRoot`.
+   */
+  private readonly isOurs = (campaign: Campaign): boolean => sameProjectRoot(campaign.projectRoot, this.projectRoot);
+  private hasActiveHere(): boolean {
+    return this.storage.listActive().some(this.isOurs);
+  }
   private readonly verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
   private readonly receiptsExpected: boolean;
   private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
@@ -1094,8 +1104,8 @@ export class CampaignManager {
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
-    if (this.storage.hasActiveForChat(msg.chatId)) return false; // one build per chat
-    if (this.storage.hasActiveForProject(this.projectRoot)) {
+    if (this.storage.hasActiveForChat(msg.chatId, this.isOurs)) return false; // one build per chat
+    if (this.hasActiveHere()) {
       // Another chat is already building this project — a second concurrent
       // ladder against the same repo is never what anyone wants.
       await this.tell(
@@ -1159,7 +1169,7 @@ export class CampaignManager {
    */
   async tryHandleAmendment(chatId: string, text: string): Promise<boolean> {
     if (!AMEND_GDD_RE.test(text.trim())) return false;
-    const campaign = this.storage.findActiveForChat(chatId);
+    const campaign = this.storage.findActiveForChat(chatId, this.isOurs);
     if (!campaign) return false;
     const hash = this.amendGdd(campaign.id);
     await this.tell(
@@ -1183,7 +1193,7 @@ export class CampaignManager {
    * whole text is the decision (approval words, or else the revision note).
    */
   async tryHandleApproval(chatId: string, text: string, userId?: string): Promise<boolean> {
-    const campaign = this.storage.findAwaitingApproval(chatId);
+    const campaign = this.storage.findAwaitingApproval(chatId, this.isOurs);
     if (!campaign) return false;
     if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) return false;
 
@@ -1285,9 +1295,9 @@ export class CampaignManager {
    */
   async tryHandleRevive(chatId: string, text: string): Promise<boolean> {
     if (!REVIVE_RE.test(text.trim())) return false;
-    const campaign = this.storage.findLatestRevivable(chatId);
+    const campaign = this.storage.findLatestRevivable(chatId, this.isOurs);
     if (!campaign) return false;
-    if (this.storage.hasActiveForChat(chatId) || this.storage.hasActiveForProject(this.projectRoot)) {
+    if (this.storage.hasActiveForChat(chatId, this.isOurs) || this.hasActiveHere()) {
       await this.tell({ chatId }, "A campaign is already active for this project — the failed one stays parked.");
       return true;
     }
@@ -1331,7 +1341,7 @@ export class CampaignManager {
    */
   async tryHandleCancel(chatId: string, text: string, userId?: string): Promise<boolean> {
     if (!CANCEL_RE.test(text.trim())) return false;
-    const campaign = this.storage.findActiveForChat(chatId);
+    const campaign = this.storage.findActiveForChat(chatId, this.isOurs);
     if (!campaign) {
       await this.tell({ chatId }, "There is no active campaign on this chat — nothing to cancel.");
       return true;
@@ -1811,8 +1821,8 @@ export class CampaignManager {
             return;
           }
           if (
-            this.storage.hasActiveForChat(fresh.chatId) ||
-            this.storage.hasActiveForProject(this.projectRoot)
+            this.storage.hasActiveForChat(fresh.chatId, this.isOurs) ||
+            this.hasActiveHere()
           ) {
             // SOMEONE ELSE HOLDS THE PROJECT — and this appointment is not
             // cancelled by that, it is postponed. Returning left the row with
@@ -1872,7 +1882,7 @@ export class CampaignManager {
 
   /** Boot: re-attach campaigns that were active when the process stopped. */
   async resumeActive(): Promise<void> {
-    for (const campaign of this.storage.listActive()) {
+    for (const campaign of this.storage.listActive().filter(this.isOurs)) {
       try {
         await this.resumeOne(campaign);
       } catch (err) {
@@ -1888,7 +1898,7 @@ export class CampaignManager {
     // revives its blocked tasks every restart — measured live 2026-09-03
     // 09:19 and again 09:37, both minutes after delivery, both resubmitting a
     // sprint against a game that had already shipped.
-    for (const campaign of this.storage.listRecentTerminal()) {
+    for (const campaign of this.storage.listRecentTerminal(50).filter(this.isOurs).slice(0, 10)) {
       // A FAILED campaign can be revived (by its own budget or by a person);
       // a delivered one cannot (Codex 2026-09-11 F#6).
       this.cancelLiveLineages(campaign, `campaign already ${campaign.state}`, { recoverable: campaign.state === "failed" });
@@ -1898,7 +1908,7 @@ export class CampaignManager {
     // live path uses), and the flag is set only when it actually lands, so a
     // still-broken messenger leaves it queued for the next boot instead of
     // marking a report that nobody received (audited 2026-09-02).
-    for (const campaign of this.storage.listUnreportedDeliveries()) {
+    for (const campaign of this.storage.listUnreportedDeliveries().filter(this.isOurs)) {
       getLoggerSafe().warn("Delivery report was never sent — re-sending after restart", {
         id: campaign.id,
         deliveredAt: campaign.updatedAt,
@@ -1914,7 +1924,7 @@ export class CampaignManager {
     // Self-revival appointments are setTimeout-backed and die with the
     // process — re-arm them from the persisted timestamps (overdue ones fire
     // on a short delay so boot recovery settles first).
-    for (const campaign of this.storage.listAwaitingAutoRevive()) {
+    for (const campaign of this.storage.listAwaitingAutoRevive().filter(this.isOurs)) {
       // The persisted appointment can be stale: measured 2026-09-08 03:12, it
       // read Sep 11 (the next member's horizon, see provider-outage.ts) while
       // the registry said a member was probe-worthy now. The registry's
@@ -2658,7 +2668,7 @@ export class CampaignManager {
     // storage when they actually run: the milestone commit awaits a write
     // lock, so two settlement events processed concurrently could both read
     // the same currentMilestone and advance the ladder twice.
-    for (const campaign of this.storage.listActive()) {
+    for (const campaign of this.storage.listActive().filter(this.isOurs)) {
       if (
         campaign.state === "drafting-gdd" &&
         campaign.draftTaskId &&
@@ -8185,13 +8195,13 @@ export class CampaignManager {
    * terminal one. Undefined when this project never had a campaign.
    */
   findForStatus(chatId?: string): Campaign | undefined {
-    const active = this.storage.listActive().filter((c) => c.projectRoot === this.projectRoot);
+    const active = this.storage.listActive().filter(this.isOurs);
     const onChat = chatId ? active.find((c) => c.chatId === chatId) : undefined;
     if (onChat) return onChat;
     if (active.length > 0) {
       return active.reduce((newest, c) => (c.updatedAt > newest.updatedAt ? c : newest));
     }
-    const terminal = this.storage.listRecentTerminal(10).filter((c) => c.projectRoot === this.projectRoot);
+    const terminal = this.storage.listRecentTerminal(50).filter(this.isOurs);
     if (terminal.length === 0) return undefined;
     return terminal.reduce((newest, c) => (c.updatedAt > newest.updatedAt ? c : newest));
   }
@@ -8336,6 +8346,22 @@ function withWorstPerf(last: PlaythroughEvidence, rounds: readonly PlaythroughEv
 }
 
 /** Is `rel`, resolved against the project, inside the project's real path (through existing ancestors)? */
+/**
+ * Do two project roots name the same directory? Resolved and, where the
+ * directory exists, through its real path (a trailing slash or a symlinked
+ * spelling is the same project); case-insensitive on Windows.
+ */
+function sameProjectRoot(a: string, b: string): boolean {
+  const norm = (p: string): string => {
+    let out = resolve(p);
+    try {
+      out = realpathSync.native(out);
+    } catch { /* a root that no longer exists compares by its resolved spelling */ }
+    return process.platform === "win32" ? out.toLowerCase() : out;
+  };
+  return a === b || norm(a) === norm(b);
+}
+
 /** How many symlinks a GDD path may go through before we call it a loop. */
 const MAX_GDD_LINK_HOPS = 8;
 

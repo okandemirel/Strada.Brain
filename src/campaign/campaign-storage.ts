@@ -524,26 +524,24 @@ export class CampaignStorage {
    * the user was told nothing, and the only way forward was a hand edit of
    * this database. A plain `done` stays final.
    */
-  findLatestRevivable(chatId: string): Campaign | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT * FROM campaigns WHERE chat_id = ? AND (" +
-          "state IN ('failed', 'cancelled') OR " +
-          "(state = 'done' AND milestones_json LIKE '%\"structureRefused\":true%')" +
-          ") ORDER BY updated_at DESC LIMIT 1",
-      )
-      .get(chatId) as CampaignRow | undefined;
-    return row ? rowToCampaign(row) : undefined;
+  findLatestRevivable(chatId: string, belongs?: (campaign: Campaign) => boolean): Campaign | undefined {
+    return this.firstMatching(
+      "SELECT * FROM campaigns WHERE chat_id = ? AND (" +
+        "state IN ('failed', 'cancelled') OR " +
+        "(state = 'done' AND milestones_json LIKE '%\"structureRefused\":true%')" +
+        ") ORDER BY updated_at DESC",
+      [chatId],
+      belongs,
+    );
   }
 
   /** The campaign awaiting an approval reply on this conversation, if any. */
-  findAwaitingApproval(chatId: string): Campaign | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT * FROM campaigns WHERE chat_id = ? AND state = 'awaiting-approval' ORDER BY created_at DESC LIMIT 1",
-      )
-      .get(chatId) as CampaignRow | undefined;
-    return row ? rowToCampaign(row) : undefined;
+  findAwaitingApproval(chatId: string, belongs?: (campaign: Campaign) => boolean): Campaign | undefined {
+    return this.firstMatching(
+      "SELECT * FROM campaigns WHERE chat_id = ? AND state = 'awaiting-approval' ORDER BY created_at DESC",
+      [chatId],
+      belongs,
+    );
   }
 
   /**
@@ -552,24 +550,35 @@ export class CampaignStorage {
    * silently forking a second build.
    */
   /** The non-terminal campaign this chat is running, when there is one — the newest. */
-  findActiveForChat(chatId: string): Campaign | undefined {
+  findActiveForChat(chatId: string, belongs?: (campaign: Campaign) => boolean): Campaign | undefined {
     const placeholders = ACTIVE_CAMPAIGN_STATES.map(() => "?").join(", ");
-    const row = this.db
-      .prepare(
-        `SELECT * FROM campaigns WHERE chat_id = ? AND state IN (${placeholders}) ORDER BY updated_at DESC LIMIT 1`,
-      )
-      .get(chatId, ...ACTIVE_CAMPAIGN_STATES) as CampaignRow | undefined;
-    return row === undefined ? undefined : rowToCampaign(row);
+    return this.firstMatching(
+      `SELECT * FROM campaigns WHERE chat_id = ? AND state IN (${placeholders}) ORDER BY updated_at DESC`,
+      [chatId, ...ACTIVE_CAMPAIGN_STATES],
+      belongs,
+    );
   }
 
-  hasActiveForChat(chatId: string): boolean {
-    const placeholders = ACTIVE_CAMPAIGN_STATES.map(() => "?").join(", ");
-    const row = this.db
-      .prepare(
-        `SELECT 1 FROM campaigns WHERE chat_id = ? AND state IN (${placeholders}) LIMIT 1`,
-      )
-      .get(chatId, ...ACTIVE_CAMPAIGN_STATES);
-    return row !== undefined;
+  hasActiveForChat(chatId: string, belongs?: (campaign: Campaign) => boolean): boolean {
+    return this.findActiveForChat(chatId, belongs) !== undefined;
+  }
+
+  /**
+   * The first row, in the query's order, that `belongs` accepts (every row
+   * when it is omitted). One database can hold several projects' campaigns
+   * (CMP-7), and "the same project" is a comparison of resolved paths the
+   * caller owns, not an SQL equality on however the root was spelled.
+   */
+  private firstMatching(
+    sql: string,
+    params: readonly unknown[],
+    belongs: ((campaign: Campaign) => boolean) | undefined,
+  ): Campaign | undefined {
+    for (const row of this.db.prepare(sql).all(...params) as CampaignRow[]) {
+      const campaign = rowToCampaign(row);
+      if (belongs === undefined || belongs(campaign)) return campaign;
+    }
+    return undefined;
   }
 
   /**

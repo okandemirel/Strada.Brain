@@ -4,7 +4,7 @@ import { extractLookDescription } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
@@ -9496,6 +9496,67 @@ describe("CampaignManager", () => {
       symlinkSync(join(dir, "outside.md"), join(projectRoot, "docs", "Linked_GDD.md"));
       expect(manager.startFromGddFromDocs(ctx, "docs/Linked_GDD.md")).toBeUndefined();
       expect(tasks.submitted).toHaveLength(0);
+    });
+  });
+
+  describe("a campaign is only acted on by the manager of its own project (CMP-7)", () => {
+    /** The same database and task manager, serving another project from the same working directory. */
+    const managerFor = (root: string): CampaignManager =>
+      new CampaignManager({
+        storage,
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot: root,
+        retryAdoptionGraceMs: 10,
+        completedSettleDelayMs: 0,
+        milestoneTimeBoxMs: 60 * 60_000,
+      });
+    const otherRoot = (): string => {
+      const root = join(dir, "other-game");
+      mkdirSync(join(root, "docs"), { recursive: true });
+      writeFileSync(join(root, "docs", "Other_GDD.md"), "# Other GDD\n\nA different game.");
+      return root;
+    };
+
+    it("boot resume and revival in project B never touch project A's campaign", async () => {
+      const a = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.markTerminal("task_1", TaskStatus.failed); // died with the process
+      const b = managerFor(otherRoot());
+
+      await b.resumeActive();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(tasks.submitted).toHaveLength(1); // A's sprint was not resubmitted against B
+
+      const failed = storage.get(a.id)!;
+      failed.state = "failed";
+      storage.save(failed);
+      expect(await b.tryHandleRevive("cli-local", "kampanya devam")).toBe(false);
+      expect(storage.get(a.id)!.state).toBe("failed");
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("project A's active campaign on a shared chat does not block a campaign for project B", async () => {
+      manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const root = otherRoot();
+      const b = managerFor(root);
+      const consumed = await b.tryHandleIncoming({
+        channelType: "cli", chatId: "cli-local", userId: "u1", text: "build the game from the GDD at docs/Other_GDD.md", timestamp: new Date(),
+      } as unknown as IncomingMessage);
+      expect(consumed).toBe(true);
+      await waitFor(() => expect(storage.listActive().filter((c) => c.projectRoot === root)).toHaveLength(1));
+    });
+
+    it("the same project spelled differently is still the same project", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.markTerminal("task_1", TaskStatus.failed);
+      const same = managerFor(`${projectRoot}${sep}`);
+      await same.resumeActive();
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.state).toBe("executing");
     });
   });
 });

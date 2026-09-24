@@ -280,4 +280,21 @@ describe("findLatestRevivable", () => {
     });
   });
 
+  it("chat lookups skip rows another project owns, newest first (CMP-7)", () => {
+    const ours = (c: Campaign): boolean => c.projectRoot === "/tmp/game-b";
+    const t = Date.now();
+    storage.save(makeCampaign({ id: "b_old", projectRoot: "/tmp/game-b", state: "failed", updatedAt: t - 2_000 }));
+    storage.save(makeCampaign({ id: "a_new", projectRoot: "/tmp/game-a", state: "failed", updatedAt: t - 1_000 }));
+    storage.save(makeCampaign({ id: "a_live", projectRoot: "/tmp/game-a", state: "executing", updatedAt: t }));
+
+    expect(storage.findLatestRevivable("cli-local")?.id).toBe("a_new");
+    expect(storage.findLatestRevivable("cli-local", ours)?.id).toBe("b_old");
+    expect(storage.hasActiveForChat("cli-local")).toBe(true);
+    expect(storage.hasActiveForChat("cli-local", ours)).toBe(false);
+    expect(storage.findActiveForChat("cli-local", ours)).toBeUndefined();
+    storage.save(makeCampaign({ id: "b_gate", projectRoot: "/tmp/game-b", state: "awaiting-approval" }));
+    storage.save(makeCampaign({ id: "a_gate", projectRoot: "/tmp/game-a", state: "awaiting-approval", createdAt: t + 1 }));
+    expect(storage.findAwaitingApproval("cli-local", ours)?.id).toBe("b_gate");
+  });
+
 });
