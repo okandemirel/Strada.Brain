@@ -1396,6 +1396,87 @@ describe("LearningStorage", () => {
       expect(row.tool_name).toBe("tool_a");
     });
   });
+
+  // SEC-3: sanitizeSecrets cut its output at 8192 chars and ran over the
+  // serialized JSON, so large or secret-bearing rows could not be parsed back —
+  // and the oldest such row made every later learning batch throw.
+  describe("stored JSON round-trips through redaction (SEC-3)", () => {
+    const bigOutput = "public class Player : MonoBehaviour { }\n".repeat(500); // ~20 KB
+
+    const bigTrajectory = (): Trajectory => ({
+      id: randomUUID() as any,
+      sessionId: "session-big" as any,
+      taskDescription: "Read a large file",
+      steps: [
+        { stepNumber: 1, toolName: "file_read", input: { path: "Assets/Player.cs" }, output: bigOutput, isError: false, timestamp: Date.now() } as any,
+      ],
+      outcome: { success: true, totalSteps: 1, hadErrors: false, errorCount: 0, durationMs: 10 } as any,
+      appliedInstinctIds: [],
+      createdAt: Date.now() as any,
+      processed: false,
+    });
+
+    it("reads back a trajectory whose steps serialize past 8 KB, untruncated", () => {
+      const trajectory = bigTrajectory();
+      storage.createTrajectoryImmediate(trajectory);
+
+      const unprocessed = storage.getUnprocessedTrajectories(10);
+      expect(unprocessed).toHaveLength(1);
+      expect((unprocessed[0]!.steps[0] as { output: string }).output).toBe(bigOutput);
+      expect(storage.getTrajectory(trajectory.id)?.steps).toHaveLength(1);
+    });
+
+    it("keeps an observation input valid JSON when a value is redacted", () => {
+      const obs: Observation = {
+        id: `obs_${randomUUID()}` as any,
+        type: "tool_use",
+        sessionId: "sess-sec3" as any,
+        toolName: "file_write",
+        input: { token: "abcdefghijklmnopqrstuvwxyz", content: bigOutput } as any,
+        success: true,
+        timestamp: Date.now() as any,
+        processed: false,
+      };
+      storage.recordObservationImmediate(obs);
+
+      const [read] = storage.getUnprocessedObservations(10);
+      const input = read?.input as Record<string, string>;
+      expect(input.token).not.toBe("abcdefghijklmnopqrstuvwxyz");
+      expect(input.token).toContain("REDACTED");
+      expect(input.content).toBe(bigOutput);
+    });
+
+    it("quarantines an unreadable row instead of failing the batch on it forever", () => {
+      const good = bigTrajectory();
+      storage.createTrajectoryImmediate(good);
+      // A row as older builds could leave it: JSON cut mid-string.
+      storage.getDatabase()!
+        .prepare(`INSERT INTO trajectories (id, session_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
+        .run("traj-damaged", "session-big", "damaged", '[{"output":"cut\n... (truncated)', "{}", "[]", 1);
+
+      const first = storage.getUnprocessedTrajectories(10);
+      expect(first.map((t) => t.id)).toEqual([good.id]);
+      expect(storage.getTrajectory("traj-damaged")).toBeNull();
+      expect(storage.getTrajectories().map((t) => t.id)).toEqual([good.id]);
+
+      storage.markTrajectoriesProcessed([good.id]);
+      expect(storage.getUnprocessedTrajectories(10)).toEqual([]);
+      // Kept on disk for inspection, just no longer in the batch.
+      const kept = storage.getDatabase()!.prepare("SELECT processed FROM trajectories WHERE id = ?").get("traj-damaged") as { processed: number };
+      expect(kept.processed).toBe(1);
+    });
+
+    it("quarantines an unreadable observation row", () => {
+      storage.getDatabase()!
+        .prepare(`INSERT INTO observations (id, type, session_id, tool_name, input, timestamp, processed)
+                  VALUES (?, 'tool_use', 's', 'file_write', ?, ?, 0)`)
+        .run("obs-damaged", '{"content":"cut', 1);
+      expect(storage.getUnprocessedObservations(10)).toEqual([]);
+      const kept = storage.getDatabase()!.prepare("SELECT processed FROM observations WHERE id = ?").get("obs-damaged") as { processed: number };
+      expect(kept.processed).toBe(1);
+    });
+  });
 });
 
 // improvement on audit 04.6: 'quarantined' is a new instinct status, and the

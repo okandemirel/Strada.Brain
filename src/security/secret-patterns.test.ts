@@ -3,9 +3,12 @@ import {
   DEFAULT_SECRET_PATTERNS,
   MAX_OUTPUT_LENGTH,
   applySecretPatterns,
+  redactSecrets,
+  redactSecretsDeep,
   sanitizeSecrets,
   sanitizeSecretsQuiet,
   setSanitizationCallback,
+  stringifyRedacted,
 } from "./secret-patterns.js";
 
 afterEach(() => {
@@ -102,5 +105,46 @@ describe("sanitizeSecretsQuiet vs sanitizeSecrets metric emission (Bug 3)", () =
     sanitizeSecrets("just a plain log line with no secrets");
 
     expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+// SEC-3: storage paths redact without the display cap, and structured data is
+// redacted per value so the stored JSON still parses.
+describe("redaction for stored data (SEC-3)", () => {
+  const key = "sk-proj-abc123DEF456ghi789JKL012mno345PQR678stu901VWX234";
+
+  it("redactSecrets redacts but never truncates", () => {
+    const long = `${"x".repeat(20_000)} ${key}`;
+    const out = redactSecrets(long);
+    expect(out).not.toContain(key);
+    expect(out.startsWith("x".repeat(20_000))).toBe(true);
+    expect(out).not.toContain("(truncated)");
+    // The display path keeps its cap.
+    expect(sanitizeSecrets(long).length).toBeLessThan(MAX_OUTPUT_LENGTH + 100);
+  });
+
+  it("stringifyRedacted keeps JSON valid where regexes over the serialized form broke it", () => {
+    const value = { token: "abcdefghijklmnopqrstuvwxyz", note: "keep me" };
+    // The old storage form: redaction ate the key/value quotes.
+    expect(() => JSON.parse(sanitizeSecrets(JSON.stringify(value)))).toThrow();
+    const parsed = JSON.parse(stringifyRedacted(value)) as Record<string, string>;
+    expect(parsed.token).toBe("[REDACTED_SECRET]");
+    expect(parsed.note).toBe("keep me");
+  });
+
+  it("round-trips a structure larger than the display cap", () => {
+    const steps = [{ toolName: "file_read", output: "line\n".repeat(4000), input: { path: "a.cs", auth: `Bearer ${key}` } }];
+    const parsed = JSON.parse(stringifyRedacted(steps)) as typeof steps;
+    expect(parsed[0]!.output).toBe(steps[0]!.output);
+    expect(parsed[0]!.input.auth).not.toContain(key);
+  });
+
+  it("redactSecretsDeep redacts nested leaves and secret-bearing keys, and survives cycles", () => {
+    const cyclic: Record<string, unknown> = { list: [`use ${key}`], nested: { [key]: 1 } };
+    cyclic.self = cyclic;
+    const out = redactSecretsDeep(cyclic);
+    expect(JSON.stringify(out)).not.toContain(key);
+    expect(out.self).toBe("[Circular]");
+    expect(Object.keys(out.nested as object)[0]).toContain("REDACTED");
   });
 });

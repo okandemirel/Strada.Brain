@@ -86,7 +86,8 @@ import {
 } from "./agentdb-retrieval.js";
 
 import { getNow, _setNowFn, _resetNowFn } from "./agentdb-time.js";
-import { sanitizeSecrets, sanitizeSecretsDeep } from "../../security/secret-sanitizer.js";
+import { sanitizeSecretsDeep } from "../../security/secret-sanitizer.js";
+import { redactSecrets, stringifyRedacted } from "../../security/secret-patterns.js";
 import type { ProvenancedEmbedding } from "./agentdb-vector.js";
 
 /** Spread an embedWithProvenance result into storeEntry's embedding fields (plan 0-B.9). */
@@ -639,8 +640,9 @@ export class AgentDBMemory implements IUnifiedMemory {
       // This ensures the in-memory cache, HNSW embeddings, text index, and
       // SQLite all hold redacted content. IDs, tier, and metadata keys pass through.
       // agentdb-sqlite.upsertEntryRow relies on this — it does NOT re-sanitize.
+      // Redacted without the display-length cap: this is the stored text (SEC-3).
       const sanitizedContent = typeof entry.content === "string"
-        ? sanitizeSecrets(entry.content)
+        ? redactSecrets(entry.content)
         : entry.content;
       const sanitizedMetadata = entry.metadata
         ? sanitizeSecretsDeep(entry.metadata)
@@ -1598,8 +1600,9 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       const id = createHash("sha256").update(patternKey).digest("hex").slice(0, 32);
       // Security: sanitize pattern data (may contain captured prompts / outputs) before writing.
-      // patternKey is an identifier — passthrough.
-      const sanitizedData = sanitizeSecrets(JSON.stringify(data));
+      // Redacted per value, never over the serialized JSON and never cut, so
+      // the row still parses on read (SEC-3). patternKey is an identifier.
+      const sanitizedData = stringifyRedacted(data);
       stmt.run(id, patternKey, sanitizedData, confidence, Date.now());
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to store pattern", {
@@ -1622,12 +1625,21 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!stmt) return [];
 
       const rows = stmt.all(patternKey) as PatternRow[];
-      return rows.map((row) => ({
-        id: row.id,
-        data: JSON.parse(row.data) as Record<string, unknown>,
-        confidence: row.confidence,
-        createdAt: row.created_at,
-      }));
+      // One damaged row (older builds truncated the stored JSON) must not
+      // hide every other pattern for the key.
+      return rows.flatMap((row) => {
+        try {
+          return [{
+            id: row.id,
+            data: JSON.parse(row.data) as Record<string, unknown>,
+            confidence: row.confidence,
+            createdAt: row.created_at,
+          }];
+        } catch {
+          getLoggerSafe().warn("[AgentDBMemory] Skipped an unreadable pattern row", { id: row.id, patternKey });
+          return [];
+        }
+      });
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to get patterns", {
         patternKey,

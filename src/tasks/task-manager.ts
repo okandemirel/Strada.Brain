@@ -16,6 +16,7 @@ import type { TaskStorage } from "./task-storage.js";
 import type { IBackgroundExecutor, IOrchestrator } from "./orchestrator-contract.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
+import { redactSecrets } from "../security/secret-patterns.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { GoalNodeId } from "../goals/types.js";
@@ -744,7 +745,8 @@ export class TaskManager extends EventEmitter {
       });
       return;
     }
-    const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
+    // Redact without the 8 KB display cap: this is the stored final answer (SEC-3).
+    const sanitizedResult = redactSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
     this.liveOrchestrators.delete(taskId); // a completed task is never replayed
@@ -767,7 +769,7 @@ export class TaskManager extends EventEmitter {
    * Mark a task as blocked with a checkpoint summary.
    */
   block(taskId: TaskId, result: string): void {
-    const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
+    const sanitizedResult = redactSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateBlocked(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
     this.emit("task:blocked", taskId, sanitizedResult);

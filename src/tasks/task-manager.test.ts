@@ -705,6 +705,27 @@ describe("one bad listener does not silence the others (Codex 2026-09-12 T#9)", 
     expect(heard).toEqual(["second"]);
   });
 
+  it("stores and emits a long final answer whole, with secrets redacted (SEC-3)", () => {
+    // complete() ran the answer through the 8 KB display cap before storing it.
+    const storage = {
+      load: vi.fn().mockReturnValue({ id: "task_long", status: "executing" }),
+      updateResult: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+    const key = "sk-proj-abc123DEF456ghi789JKL012mno345PQR678stu901VWX234";
+    const answer = `${"All tests pass.\n".repeat(1000)}key was ${key}`;
+    let emitted = "";
+    manager.on("task:completed", (_id: unknown, result: string) => { emitted = result; });
+
+    manager.complete("task_long" as Task["id"], answer);
+
+    const stored = storage.updateResult.mock.calls[0]![1] as string;
+    expect(stored.startsWith("All tests pass.\n".repeat(1000))).toBe(true);
+    expect(stored).not.toContain(key);
+    expect(stored).not.toContain("(truncated)");
+    expect(emitted).toBe(stored);
+  });
+
   it("calls each listener with the emitter as `this` (Codex 2026-09-12 U#F12)", () => {
     // rawListeners hands back the bare functions, and calling them bare loses
     // the binding EventEmitter gives: a normal-function subscriber saw

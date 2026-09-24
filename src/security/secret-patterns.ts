@@ -289,6 +289,80 @@ export function sanitizeSecrets(content: string): string {
   return result.content;
 }
 
+// ─── Redaction Without a Length Cap ──────────────────────────────────────────
+//
+// sanitizeSecrets() also cuts its output at MAX_OUTPUT_LENGTH, which is right
+// for logs and display and wrong for anything that is stored and read back: a
+// cut through serialized JSON makes the row unparseable, and a cut final
+// answer is simply lost text. Stored data is redacted with the functions
+// below instead (SEC-3).
+
+/** Redact secrets from `content` without truncating it. For persisted text. */
+export function redactSecrets(content: string): string {
+  const result = applySecretPatterns(content, DEFAULT_SECRET_PATTERNS, Number.POSITIVE_INFINITY);
+  emitSanitizationEvent(result.stats.totalMatches);
+  return result.content;
+}
+
+/**
+ * Redact every string inside `value`, keeping its shape, so the result still
+ * serializes to valid JSON. Regexes run over serialized JSON can eat quotes
+ * and braces; running them per string leaf cannot.
+ *
+ * A property's key is part of the evidence ("password", "api_key", ...): the
+ * serialized form used to supply it, so each property value is also checked
+ * as a `"key":"value"` pair and replaced whole when only the pair matches.
+ * Functions and symbols are dropped; cycles become "[Circular]".
+ */
+export function redactSecretsDeep<T>(value: T): T {
+  return redactNode(value, undefined, new WeakSet<object>()) as T;
+}
+
+/** `JSON.stringify(redactSecretsDeep(value))` — the storage form of structured data. */
+export function stringifyRedacted(value: unknown): string {
+  return JSON.stringify(redactSecretsDeep(value));
+}
+
+function redactNode(value: unknown, key: string | undefined, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return redactLeaf(value, key);
+  if (value === null || value === undefined) return value;
+  const t = typeof value;
+  if (t === "function" || t === "symbol") return undefined;
+  if (t !== "object") return value;
+  // Keep what JSON.stringify would do with dates and other toJSON objects.
+  const withToJson = value as { toJSON?: unknown };
+  if (typeof withToJson.toJSON === "function") {
+    return redactNode((withToJson.toJSON as () => unknown).call(value), key, seen);
+  }
+  if (seen.has(value as object)) return "[Circular]";
+  seen.add(value as object);
+  if (Array.isArray(value)) return value.map((item) => redactNode(item, undefined, seen));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    // A key can carry a secret too (a map keyed by token); the old
+    // serialized-form redaction covered keys, so this must as well.
+    const safeKey = redactSecrets(k);
+    // defineProperty, not assignment: a "__proto__" key must stay data.
+    Object.defineProperty(out, safeKey, {
+      value: redactNode(v, safeKey, seen),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
+function redactLeaf(value: string, key: string | undefined): string {
+  const redacted = redactSecrets(value);
+  if (redacted !== value || key === undefined) return redacted;
+  const pair = `${JSON.stringify(key)}:${JSON.stringify(value)}`;
+  const probe = applySecretPatterns(pair, DEFAULT_SECRET_PATTERNS, Number.POSITIVE_INFINITY);
+  if (probe.stats.totalMatches === 0) return value;
+  emitSanitizationEvent(probe.stats.totalMatches);
+  return "[REDACTED_SECRET]";
+}
+
 /**
  * Like {@link sanitizeSecrets} but does NOT fire the sanitization metric event.
  *

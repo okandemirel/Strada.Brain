@@ -47,6 +47,8 @@ import type { ChatId, SessionId, TimestampMs, JsonObject } from "../../types/ind
 import { createBrand } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+import { stringifyRedacted } from "../../security/secret-patterns.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 /**
  * item 3.1 (audit 04.4 / D42): scope_type/user_id live on instinct_scopes, not on
@@ -1222,10 +1224,10 @@ export class LearningStorage {
           item.type,
           item.sessionId,
           item.toolName ?? null,
-          item.input ? sanitizeSecrets(JSON.stringify(item.input)) : null,
+          item.input ? stringifyRedacted(item.input) : null,
           item.output ? sanitizeSecrets(item.output) : null,
           item.success !== undefined ? (item.success ? 1 : 0) : null,
-          item.errorDetails ? sanitizeSecrets(JSON.stringify(item.errorDetails)) : null,
+          item.errorDetails ? stringifyRedacted(item.errorDetails) : null,
           item.correction ? sanitizeSecrets(item.correction) : null,
           item.timestamp,
           item.processed ? 1 : 0
@@ -1254,8 +1256,8 @@ export class LearningStorage {
           item.chatId ?? null,
           item.taskRunId ?? null,
           sanitizeSecrets(item.taskDescription),
-          sanitizeSecrets(JSON.stringify(item.steps)),
-          sanitizeSecrets(JSON.stringify(item.outcome)),
+          stringifyRedacted(item.steps),
+          stringifyRedacted(item.outcome),
           JSON.stringify(item.appliedInstinctIds),
           item.createdAt,
           item.processed ? 1 : 0
@@ -1791,8 +1793,8 @@ export class LearningStorage {
       trajectory.chatId ?? null,
       trajectory.taskRunId ?? null,
       sanitizeSecrets(trajectory.taskDescription),
-      sanitizeSecrets(JSON.stringify(trajectory.steps)),
-      sanitizeSecrets(JSON.stringify(trajectory.outcome)),
+      stringifyRedacted(trajectory.steps),
+      stringifyRedacted(trajectory.outcome),
       JSON.stringify(trajectory.appliedInstinctIds),
       trajectory.createdAt,
       trajectory.processed ? 1 : 0
@@ -1807,7 +1809,7 @@ export class LearningStorage {
   getTrajectory(id: string): Trajectory | null {
     this.ensureConnection();
     const row = this.db!.prepare("SELECT * FROM trajectories WHERE id = ?").get(id) as TrajectoryRow | undefined;
-    return row ? this.rowToTrajectory(row) : null;
+    return row ? this.parseRows([row], (r) => this.rowToTrajectory(r), "trajectory").items[0] ?? null : null;
   }
 
   getLatestTrajectoryVerdictScores(trajectoryIds: readonly string[]): Map<string, {
@@ -1872,7 +1874,7 @@ export class LearningStorage {
       : this.db!.prepare(
         "SELECT * FROM trajectories WHERE task_run_id = ? ORDER BY created_at DESC LIMIT 1",
       ).get(taskRunId) as TrajectoryRow | undefined;
-    return row ? this.rowToTrajectory(row) : null;
+    return row ? this.parseRows([row], (r) => this.rowToTrajectory(r), "trajectory").items[0] ?? null : null;
   }
 
   /** Get unprocessed trajectories for batch processing (uses optimized index) */
@@ -1880,7 +1882,11 @@ export class LearningStorage {
     this.ensureConnection();
     const stmt = this.getStatement('getUnprocessedTrajectories');
     const rows = stmt.all(limit) as TrajectoryRow[];
-    return rows.map(r => this.rowToTrajectory(r));
+    const { items, badIds } = this.parseRows(rows, (r) => this.rowToTrajectory(r), "trajectory");
+    // Quarantine: an unreadable row is marked processed (and kept on disk) so
+    // the oldest-first batch moves past it instead of failing on it forever.
+    this.markTrajectoriesProcessed(badIds);
+    return items;
   }
 
   /**
@@ -1906,7 +1912,7 @@ export class LearningStorage {
     }
 
     const rows = this.db!.prepare(sql).all(...params) as TrajectoryRow[];
-    return rows.map(r => this.rowToTrajectory(r));
+    return this.parseRows(rows, (r) => this.rowToTrajectory(r), "trajectory").items;
   }
 
   /** Mark trajectories as processed (batched) */
@@ -2030,10 +2036,10 @@ export class LearningStorage {
       obs.type,
       obs.sessionId,
       obs.toolName ?? null,
-      obs.input ? sanitizeSecrets(JSON.stringify(obs.input)) : null,
+      obs.input ? stringifyRedacted(obs.input) : null,
       obs.output ? sanitizeSecrets(obs.output) : null,
       obs.success !== undefined ? (obs.success ? 1 : 0) : null,
-      obs.errorDetails ? sanitizeSecrets(JSON.stringify(obs.errorDetails)) : null,
+      obs.errorDetails ? stringifyRedacted(obs.errorDetails) : null,
       obs.correction ? sanitizeSecrets(obs.correction) : null,
       obs.timestamp,
       obs.processed ? 1 : 0
@@ -2045,7 +2051,10 @@ export class LearningStorage {
     this.ensureConnection();
     const stmt = this.getStatement('getUnprocessedObservations');
     const rows = stmt.all(limit) as ObservationRow[];
-    return rows.map(r => this.rowToObservation(r));
+    const { items, badIds } = this.parseRows(rows, (r) => this.rowToObservation(r), "observation");
+    // Quarantine, as for trajectories: never let one row stall the batch.
+    this.markObservationsProcessed(badIds);
+    return items;
   }
 
   /** Mark observations as processed (batched) */
@@ -2086,7 +2095,7 @@ export class LearningStorage {
       verdict.trajectoryId,
       verdict.judgeType,
       verdict.score,
-      sanitizeSecrets(JSON.stringify(verdict.dimensions)),
+      stringifyRedacted(verdict.dimensions),
       verdict.feedback ? sanitizeSecrets(verdict.feedback) : null,
       verdict.createdAt
     );
@@ -3268,6 +3277,36 @@ export class LearningStorage {
       scopeType: (row.scope_type as Instinct["scopeType"]) ?? undefined,
       userId: row.user_id ?? undefined,
     };
+  }
+
+  /**
+   * Map rows, skipping any whose stored JSON cannot be parsed. Rows written
+   * before storage stopped truncating serialized JSON can be damaged (SEC-3);
+   * a single one used to make the whole read throw.
+   */
+  private parseRows<R extends { id: string }, T>(
+    rows: R[],
+    parse: (row: R) => T,
+    kind: string,
+  ): { items: T[]; badIds: string[] } {
+    const items: T[] = [];
+    const badIds: string[] = [];
+    let firstError: unknown;
+    for (const row of rows) {
+      try {
+        items.push(parse(row));
+      } catch (error) {
+        badIds.push(row.id);
+        firstError ??= error;
+      }
+    }
+    if (badIds.length > 0) {
+      getLoggerSafe().warn(`[LearningStorage] Skipped ${badIds.length} unreadable ${kind} row(s)`, {
+        ids: badIds.slice(0, 10),
+        error: firstError instanceof Error ? firstError.message : String(firstError),
+      });
+    }
+    return { items, badIds };
   }
 
   private rowToTrajectory(row: TrajectoryRow): Trajectory {
