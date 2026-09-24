@@ -1089,11 +1089,14 @@ export class SlackChannel implements IChannelAdapter {
 
   private startHealthCheck(): void {
     this.healthCheckInterval = setInterval(async () => {
-      if (!this.isConnected) return;
-
+      // CHN-10: keep probing while unhealthy. This used to return early once a
+      // probe had failed, so one transient blip marked the channel unhealthy
+      // (and /ready 503) for the life of the process while Bolt kept working.
       try {
         if (this.app?.client) {
           await this.app.client.auth.test();
+          // A probe still in flight when disconnect() ran must not revive it.
+          if (this.healthCheckInterval !== null) this.isConnected = true;
         }
       } catch (error) {
         this.logger.error("Health check failed", {
