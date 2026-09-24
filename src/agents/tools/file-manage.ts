@@ -1,5 +1,5 @@
 import { unlink, rename, stat, readdir, rm, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
 import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
@@ -22,7 +22,8 @@ async function toProjectRelative(projectPath: string, fullPath: string): Promise
   }
   for (const root of roots) {
     const rel = relative(root, fullPath);
-    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+    // `..` as a whole segment, not as a prefix: `..cache/` is inside the root.
+    if (rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) return rel;
   }
   return fullPath;
 }
@@ -291,8 +292,15 @@ export class FileDeleteDirectoryTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    // Prevent deleting the project root itself
-    if (pathCheck.fullPath === context.projectPath) {
+    // Every decision below is made on the RESOLVED target, never on the raw
+    // input: `relPath` can name one directory (a `Temp/` segment, a `..`) while
+    // validatePath resolves it to another. toProjectRelative compares against
+    // the realpath'd root as well as the raw one (a symlinked or trailing-slash
+    // projectPath never equalled the realpath'd fullPath), and it only returns
+    // an absolute path when the target is not strictly below the root — i.e.
+    // when the target IS the project root.
+    const relTarget = await toProjectRelative(context.projectPath, pathCheck.fullPath);
+    if (isAbsolute(relTarget)) {
       return { content: "Error: cannot delete the project root", isError: true };
     }
 
@@ -308,12 +316,14 @@ export class FileDeleteDirectoryTool implements ITool {
       // single ten-minute window while a sprint tried to clean up after itself
       // (measured live 2026-09-12 03:50). A directory holding anything else
       // keeps the low cap: mass deletion of a person's files is the danger
-      // this guard exists for.
-      const fileCount = await countFiles(pathCheck.fullPath);
-      const limit = isSystemOutputDirectory(relPath) ? SYSTEM_OUTPUT_DELETE_LIMIT : DELETE_DIR_LIMIT;
+      // this guard exists for. The counter stops one past the limit that
+      // applies (it used to stop at 51 whatever the limit, so the higher cap
+      // let a directory of any size through and reported "51 files removed").
+      const limit = isSystemOutputDirectory(relTarget) ? SYSTEM_OUTPUT_DELETE_LIMIT : DELETE_DIR_LIMIT;
+      const fileCount = await countFiles(pathCheck.fullPath, limit + 1);
       if (fileCount > limit) {
         return {
-          content: `Error: directory contains ${fileCount} files (limit: ${limit}). ` +
+          content: `Error: directory contains more than ${limit} files (limit: ${limit}). ` +
             "Delete files individually or increase the safety limit.",
           isError: true,
         };
@@ -333,7 +343,13 @@ export class FileDeleteDirectoryTool implements ITool {
   }
 }
 
-async function countFiles(dir: string, count = 0, visited = new Set<string>()): Promise<number> {
+/** Count files under `dir`, stopping as soon as the count reaches `stopAt`. */
+async function countFiles(
+  dir: string,
+  stopAt: number,
+  count = 0,
+  visited = new Set<string>(),
+): Promise<number> {
   const resolved = resolve(dir);
   if (visited.has(resolved)) return count; // Symlink cycle guard
   visited.add(resolved);
@@ -341,9 +357,9 @@ async function countFiles(dir: string, count = 0, visited = new Set<string>()): 
   const entries = await readdir(dir, { withFileTypes: true });
   let total = count;
   for (const entry of entries) {
-    if (total > 50) return total; // Short-circuit at limit
+    if (total >= stopAt) return total;
     if (entry.isDirectory()) {
-      total = await countFiles(`${dir}/${entry.name}`, total, visited);
+      total = await countFiles(join(dir, entry.name), stopAt, total, visited);
     } else {
       total++;
     }
