@@ -19,7 +19,7 @@ Defines all application configuration types, Zod schemas, validation, secret pat
 - `configSchema` is the top-level `z.object()` that validates and transforms raw env strings
 - Custom transform schemas:
   - `portSchema` - parses string to int, enforces range 1024..65535
-  - `boolFromString(default)` - converts `"true"` string to boolean
+  - `boolFromString(default)` - accepts `true/1/yes/on` and `false/0/no/off` (case-insensitive); empty keeps the default; any other value fails validation
   - `commaSeparatedList` - splits on `,`, trims, filters empty
   - `commaSeparatedNumberList` - same as above but parses to `number[]`
 - `validateConfig(raw)` calls `configSchema.safeParse()` then restructures the flat Zod output into the nested `Config` interface

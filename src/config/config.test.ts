@@ -659,6 +659,30 @@ describe("loadConfig", () => {
     expect(config.security.readOnlyMode).toBe(true);
   });
 
+  it("keeps the schema default for an empty boolean value", () => {
+    // `FLAG=` (e.g. an uncommented .env.example line) means "unset" — it must
+    // not flip a default-true safety flag off.
+    setEnv({ REQUIRE_EDIT_CONFIRMATION: "", READ_ONLY_MODE: "  " });
+    const config = loadConfig();
+    expect(config.security.requireEditConfirmation).toBe(true);
+    expect(config.security.readOnlyMode).toBe(false);
+  });
+
+  it("accepts on/off spellings for boolean values", () => {
+    setEnv({ REQUIRE_EDIT_CONFIRMATION: "off", READ_ONLY_MODE: " On " });
+    const config = loadConfig();
+    expect(config.security.requireEditConfirmation).toBe(false);
+    expect(config.security.readOnlyMode).toBe(true);
+  });
+
+  it("rejects an unrecognised boolean value instead of reading it as false", () => {
+    setEnv({ READ_ONLY_MODE: "maybe" });
+    expect(() => loadConfig()).toThrow(/Invalid configuration[\s\S]*readOnlyMode/);
+    resetConfigCache();
+    setEnv({ READ_ONLY_MODE: undefined, REQUIRE_EDIT_CONFIRMATION: "enabled" });
+    expect(() => loadConfig()).toThrow(/Invalid configuration[\s\S]*requireEditConfirmation/);
+  });
+
   it("caches config on subsequent calls", () => {
     setEnv();
     const config1 = loadConfig();

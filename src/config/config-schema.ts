@@ -48,12 +48,31 @@ const portSchema = z
   .transform((s) => parseInt(s, 10))
   .pipe(z.number().int().min(1024).max(65535));
 
-/** Boolean from string schema */
+const TRUE_STRINGS: ReadonlySet<string> = new Set(["true", "1", "yes", "on"]);
+const FALSE_STRINGS: ReadonlySet<string> = new Set(["false", "0", "no", "off"]);
+
+/**
+ * Boolean from string schema.
+ *
+ * Strict on purpose: several of these flags are safety switches whose default
+ * is `true`, so an unreadable value must never silently become `false`. An
+ * empty value (`FLAG=`) means "unset" and keeps the default; anything outside
+ * the accepted spellings fails validation like any other bad config value.
+ */
 const boolFromString = (defaultValue: boolean) =>
   z
     .string()
-    .transform((s) => s.toLowerCase().trim())
-    .transform((s) => s === "true" || s === "1" || s === "yes")
+    .transform((s, ctx) => {
+      const normalized = s.trim().toLowerCase();
+      if (normalized === "") return defaultValue;
+      if (TRUE_STRINGS.has(normalized)) return true;
+      if (FALSE_STRINGS.has(normalized)) return false;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `expected a boolean (true/false, 1/0, yes/no, on/off), got ${JSON.stringify(s.slice(0, 40))}`,
+      });
+      return z.NEVER;
+    })
     .prefault(String(defaultValue));
 
 /** Comma-separated list schema */
