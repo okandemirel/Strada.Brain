@@ -188,15 +188,21 @@ export class MemoryRefresher {
     const retrievalNumber = this.retrievalCount + 1;
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    // The timeout does not stop doRefresh: when it wins, the late retrieval must not count a
+    // retrieval, move the cadence, or book as "injected" content nobody was shown.
+    const run = { abandoned: false };
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new Error(`Re-retrieval timed out after ${this.config.timeoutMs}ms`)),
+          () => {
+            run.abandoned = true;
+            reject(new Error(`Re-retrieval timed out after ${this.config.timeoutMs}ms`));
+          },
           this.config.timeoutMs,
         );
       });
       return await Promise.race([
-        this.doRefresh(query, sessionId, reason, iteration, cosineDistance, this.resolveChatId(chatId, sessionId)),
+        this.doRefresh(query, sessionId, reason, iteration, cosineDistance, this.resolveChatId(chatId, sessionId), run),
         timeoutPromise,
       ]);
     } catch (error) {
@@ -286,6 +292,7 @@ export class MemoryRefresher {
     iteration: number,
     cosineDistance: number | undefined,
     chatId: string | undefined,
+    run: { readonly abandoned: boolean } = { abandoned: false },
   ): Promise<RefreshResult> {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
@@ -315,6 +322,11 @@ export class MemoryRefresher {
         ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, this.deps.userId)
         : Promise.resolve(null),
     ]);
+
+    // Everything below mutates refresher state; a caller that already gave up gets nothing.
+    if (run.abandoned) {
+      return { triggered: false, reason: "skipped", durationMs: Date.now() - start, retrievalNumber };
+    }
 
     // Process memory results with dedup
     let newMemoryContext: string | undefined;

@@ -220,8 +220,61 @@ describe("refreshMemoryIfNeeded", () => {
     });
     expect(result.systemPrompt).toContain("new memory");
     expect(result.systemPrompt).toContain("new rag");
-    expect(result.systemPrompt).not.toContain("old memory");
-    expect(result.systemPrompt).not.toContain("old rag");
+    // ORC-12: a refresh adds to the sections. It used to replace them, which dropped the
+    // initial RAG block for good (its chunks stay deduped as "already injected").
+    expect(result.systemPrompt).toContain("old memory");
+    expect(result.systemPrompt).toContain("old rag");
+  });
+
+  it("keeps the initial RAG chunk when a refresh brings a new one, and accumulates insights (ORC-12)", async () => {
+    const refresher = {
+      shouldRefresh: vi.fn().mockResolvedValue({ should: true, reason: "periodic" }),
+      refresh: vi
+        .fn()
+        .mockResolvedValueOnce({ triggered: true, reason: "periodic", newRagContext: "chunk Y", newInsights: ["b"], durationMs: 1, retrievalNumber: 1 })
+        .mockResolvedValueOnce({ triggered: true, reason: "periodic", newRagContext: "chunk Z", newMemoryContext: "memory M", durationMs: 1, retrievalNumber: 2 }),
+    };
+    const initial = "base\n\n<!-- re-retrieval:rag:start -->\nchunk X\n<!-- re-retrieval:rag:end -->\n";
+    const first = await refreshMemoryIfNeeded({
+      memoryRefresher: refresher as any,
+      iteration: 5,
+      queryContext: "q",
+      chatId: "c1",
+      systemPrompt: initial,
+      agentState: { ...baseState, learnedInsights: ["a"] },
+    });
+    const second = await refreshMemoryIfNeeded({
+      memoryRefresher: refresher as any,
+      iteration: 10,
+      queryContext: "q",
+      chatId: "c1",
+      systemPrompt: first.systemPrompt,
+      agentState: first.agentState,
+    });
+    for (const chunk of ["chunk X", "chunk Y", "chunk Z", "## Relevant Memory\nmemory M"]) {
+      expect(second.systemPrompt).toContain(chunk);
+    }
+    expect(second.systemPrompt.match(/re-retrieval:rag:start/g)).toHaveLength(1);
+    expect(second.agentState.learnedInsights).toEqual(["a", "b"]);
+  });
+
+  it("bounds an accumulating section, keeping its head and its newest additions (ORC-12)", async () => {
+    const refresher = {
+      shouldRefresh: vi.fn().mockResolvedValue({ should: true, reason: "periodic" }),
+      refresh: vi.fn().mockResolvedValue({ triggered: true, reason: "periodic", newRagContext: `NEWEST ${"n".repeat(8_000)}`, durationMs: 1, retrievalNumber: 1 }),
+    };
+    const initial = `<!-- re-retrieval:rag:start -->\nINITIAL ${"i".repeat(8_000)}\n<!-- re-retrieval:rag:end -->\n`;
+    const result = await refreshMemoryIfNeeded({
+      memoryRefresher: refresher as any,
+      iteration: 5,
+      queryContext: "q",
+      chatId: "c1",
+      systemPrompt: initial,
+      agentState: baseState,
+    });
+    expect(result.systemPrompt.length).toBeLessThan(13_000);
+    expect(result.systemPrompt).toContain("INITIAL");
+    expect(result.systemPrompt).toContain("n".repeat(100) + "\n<!-- re-retrieval:rag:end -->");
   });
 
   it("updates agentState insights when refresh provides them", async () => {

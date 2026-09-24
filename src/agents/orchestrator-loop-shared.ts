@@ -149,6 +149,36 @@ export interface RefreshMemoryResult {
   agentState: AgentState;
 }
 
+/** Bound for a re-retrieval section that accumulates across refreshes (~3k tokens). */
+const REFRESHED_SECTION_MAX_CHARS = 12_000;
+/** Bound for the insights a run carries after repeated refreshes. */
+const MAX_LEARNED_INSIGHTS = 20;
+const SECTION_TRUNCATION_MARKER = "\n[… older retrieved context truncated …]\n";
+
+/** The body between a section's markers, or undefined when the prompt has no such section. */
+function readSection(prompt: string, tag: string): string | undefined {
+  const startMarker = `<!-- ${tag}:start -->`;
+  const endMarker = `<!-- ${tag}:end -->`;
+  const startIdx = prompt.indexOf(startMarker);
+  const endIdx = prompt.indexOf(endMarker);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
+  return prompt.slice(startIdx + startMarker.length, endIdx).replace(/^\n/, "").replace(/\n$/, "");
+}
+
+/**
+ * Add newly retrieved content to a section, keeping what it already holds. Over the bound, the
+ * head (the initial retrieval, the most relevant to the task) and the newest additions are kept.
+ */
+function appendToSection(prompt: string, tag: string, addition: string, header = ""): string {
+  const existing = readSection(prompt, tag)?.trim();
+  const combined = existing ? `${existing}\n---\n${addition}` : `${header}${addition}`;
+  if (combined.length <= REFRESHED_SECTION_MAX_CHARS) return replaceSection(prompt, tag, combined);
+  const budget = REFRESHED_SECTION_MAX_CHARS - SECTION_TRUNCATION_MARKER.length;
+  const head = Math.floor(budget * 0.5);
+  const capped = combined.slice(0, head) + SECTION_TRUNCATION_MARKER + combined.slice(combined.length - (budget - head));
+  return replaceSection(prompt, tag, capped);
+}
+
 /**
  * Performs memory re-retrieval if the refresher triggers.
  *
@@ -185,22 +215,24 @@ export async function refreshMemoryIfNeeded(
         check.cosineDistance,
       );
       if (refreshed.triggered) {
+        // A refresh returns only what was NOT shown before (the refresher dedups against
+        // everything it ever injected), so the sections accumulate: replacing them with the
+        // new items dropped the initial RAG block and every earlier recall for the rest of
+        // the run, and they could never come back (their hashes stay "injected").
         if (refreshed.newMemoryContext) {
-          systemPrompt = replaceSection(
+          systemPrompt = appendToSection(
             systemPrompt,
             "re-retrieval:memory",
-            `## Relevant Memory\n${refreshed.newMemoryContext}`,
+            refreshed.newMemoryContext,
+            "## Relevant Memory\n",
           );
         }
         if (refreshed.newRagContext) {
-          systemPrompt = replaceSection(
-            systemPrompt,
-            "re-retrieval:rag",
-            refreshed.newRagContext,
-          );
+          systemPrompt = appendToSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
         }
         if (refreshed.newInsights?.length) {
-          agentState = { ...agentState, learnedInsights: refreshed.newInsights };
+          const merged = [...new Set([...(agentState.learnedInsights ?? []), ...refreshed.newInsights])];
+          agentState = { ...agentState, learnedInsights: merged.slice(-MAX_LEARNED_INSIGHTS) };
         }
         if (refreshed.newInstinctIds?.length && onNewInstinctIds) {
           onNewInstinctIds(refreshed.newInstinctIds);

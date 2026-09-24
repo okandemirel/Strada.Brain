@@ -649,6 +649,38 @@ describe("MemoryRefresher", () => {
       expect(result.newInsights).toBeUndefined();
     });
 
+    it("a timed-out refresh leaves no trace when the retrieval lands late (ORC-12)", async () => {
+      vi.useFakeTimers();
+      try {
+        let land!: (v: SearchResult[]) => void;
+        const rag = {
+          search: vi.fn(() => new Promise<SearchResult[]>((resolve) => { land = resolve; })),
+          formatContext: vi.fn((r: SearchResult[]) => r.map((sr) => sr.chunk.content).join("\n---\n")),
+        };
+        const eventBus = mockEventBus();
+        const refresher = new MemoryRefresher(
+          defaultConfig({ timeoutMs: 100 }),
+          { ragPipeline: rag as unknown as IRAGPipeline, eventBus },
+        );
+
+        const pending = refresher.refresh("query", "s1", "periodic", 5);
+        await vi.advanceTimersByTimeAsync(150);
+        expect((await pending).triggered).toBe(false);
+
+        land([makeSearchResult("late chunk")]);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Nothing was counted or booked: the next refresh still offers the late chunk.
+        expect(eventBus.calls.filter((c) => c.event === "memory:re_retrieved")).toHaveLength(0);
+        rag.search.mockImplementation(async () => [makeSearchResult("late chunk")]);
+        const next = await refresher.refresh("query", "s1", "periodic", 10);
+        expect(next.retrievalNumber).toBe(1);
+        expect(next.newRagContext).toContain("late chunk");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("respects timeoutMs", async () => {
       const slowMem = {
         retrieve: vi.fn(() => new Promise((resolve) => setTimeout(resolve, 10000))),
