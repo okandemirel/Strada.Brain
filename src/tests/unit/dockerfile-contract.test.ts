@@ -280,6 +280,17 @@ describe.each(DOCKERFILES)("%s", (relPath) => {
     }
   });
 
+  it("builds on a maintained Node line, not a frozen patch tag or an end-of-life major (OPS-18)", () => {
+    const nodeImages = stages.map((s) => s.base).filter((base) => base.startsWith("node:"));
+    expect(nodeImages.length).toBeGreaterThan(0);
+    for (const image of nodeImages) {
+      const tag = image.slice("node:".length).split("@")[0]!;
+      // `22.12-alpine` is frozen; `22-alpine` follows the line (a digest pin is fine too).
+      expect(image.includes("@sha256:") || /^\d+-/.test(tag), `${image} is a frozen patch tag`).toBe(true);
+      expect(Number(/^(\d+)/.exec(tag)?.[1]), `${image} is end-of-life`).toBeGreaterThanOrEqual(22);
+    }
+  });
+
   it("never uses the removed `npm ci --only=production` form", () => {
     expect(source).not.toMatch(/--only=production/);
   });

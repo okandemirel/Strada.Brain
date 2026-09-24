@@ -21,7 +21,9 @@
 # =============================================================================
 # STAGE 1: Builder
 # =============================================================================
-FROM node:22.12-alpine AS builder
+# The maintained Node 22 LTS line, not a patch tag: a tag like 22.12 is frozen
+# and never receives security fixes, and Node 20 is end-of-life (OPS-18).
+FROM node:22-alpine AS builder
 
 # Build arguments
 ARG NODE_ENV=production
@@ -84,7 +86,7 @@ RUN npm prune --omit=dev && \
 # =============================================================================
 # STAGE 2: Production
 # =============================================================================
-FROM node:22.12-alpine AS production
+FROM node:22-alpine AS production
 
 # Labels
 LABEL org.opencontainers.image.title="Strada.Brain" \

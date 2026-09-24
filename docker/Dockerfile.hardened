@@ -21,7 +21,9 @@
 # install script is what produces the binding. Skipping it left an image whose
 # every SQLite-backed subsystem threw on first use. The build toolchain below
 # is what lets that native build succeed on Alpine.
-FROM node:20-alpine AS deps
+# The maintained Node 22 LTS line, not a patch tag: a tag like 22.12 is frozen
+# and never receives security fixes, and Node 20 is end-of-life (OPS-18).
+FROM node:22-alpine AS deps
 
 # Install security updates and the toolchain native modules need
 RUN apk update && \
@@ -87,7 +89,7 @@ RUN npm prune --omit=dev && \
 # =============================================================================
 # STAGE 3: Production
 # =============================================================================
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 # Security labels
 LABEL maintainer="Strada.Brain Team"
