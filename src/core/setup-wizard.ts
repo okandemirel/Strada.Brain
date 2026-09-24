@@ -704,7 +704,7 @@ export class SetupWizard {
    */
   private readonly mcpInstalledInProject = new Set<string>();
   private status: SetupStatusResponse = createSetupStatus();
-  private readonly completionPromise: Promise<void>;
+  private completionPromise!: Promise<void>;
   private resolveCompletion!: () => void;
   private completionSignaled = false;
 
@@ -715,6 +715,12 @@ export class SetupWizard {
     this.port = opts?.port ?? 3000;
     this.allowedHosts = opts?.allowedHosts ?? resolveAllowedHosts();
     this.readyUrl = buildSetupReadyUrl(this.port);
+    this.armCompletion();
+  }
+
+  /** A fresh one-shot completion for the next Save. */
+  private armCompletion(): void {
+    this.completionSignaled = false;
     this.completionPromise = new Promise<void>((resolve) => {
       this.resolveCompletion = () => {
         if (this.completionSignaled) {
@@ -757,6 +763,10 @@ export class SetupWizard {
       type: "bootstrap_failed",
       detail,
     });
+    // The page offers "Re-open setup"; the Save after it must start the app
+    // again, so waitForCompletion() now waits for THAT Save instead of
+    // returning the one that already failed (COR-7).
+    if (this.completionSignaled) this.armCompletion();
     logSetupLifecycle("bootstrap_failed", {
       port: this.port,
       readyUrl: this.readyUrl,
@@ -807,7 +817,10 @@ export class SetupWizard {
     console.log(`Setup wizard running at http://${SETUP_HOST}:${this.port}`);
   }
 
-  /** Resolves when the user completes the setup flow and saves config. */
+  /**
+   * Resolves when the user completes the setup flow and saves config — after a
+   * markBootstrapFailed(), when they save again.
+   */
   async waitForCompletion(): Promise<void> {
     await this.completionPromise;
 

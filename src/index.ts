@@ -465,7 +465,7 @@ async function startApp(
       activeWizard.markBootstrapFailed(
         `Configuration was saved, but validation still failed: ${configResult.error}`,
       );
-      return;
+      return retryAfterNextSetupSave(activeWizard, channelType, daemonMode);
     }
 
     if (channelType === "web") {
@@ -564,6 +564,7 @@ async function startApp(
     }
   }
 
+  let lock: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
   try {
     // Validate channel type
     if (!isValidChannelType(channelType)) {
@@ -591,7 +592,7 @@ async function startApp(
     // Single-instance gate: one install gets exactly one live runtime. Must run
     // BEFORE bootstrap touches the SQLite stores — a second runtime's writes
     // (daemon trigger firing, budget entries) would double-apply.
-    const lock = await acquireRuntimeLock({
+    lock = await acquireRuntimeLock({
       installRoot: runtimePaths.installRoot,
       channelType,
       logger,
@@ -681,11 +682,29 @@ async function startApp(
         stack: error instanceof Error ? error.stack : undefined,
       });
     }
+    // A failed start must not keep the install locked: the wizard may wait a
+    // long time for the next Save, and `strada start` elsewhere would be
+    // refused for a runtime that never came up (COR-7).
+    if (lock?.acquired) await lock.release().catch(() => undefined);
     if (activeWizard) {
-      return;
+      return retryAfterNextSetupSave(activeWizard, channelType, daemonMode);
     }
     process.exit(1);
   }
+}
+
+/**
+ * A failed start after setup keeps the wizard up with "Re-open setup". The next
+ * Save starts the app again — before, nothing ever did, and the page polled a
+ * process that would never boot (COR-7).
+ */
+async function retryAfterNextSetupSave(
+  wizard: SetupWizard,
+  channelType: string,
+  daemonMode: boolean,
+): Promise<void> {
+  await wizard.waitForCompletion();
+  await startApp(channelType, daemonMode, wizard);
 }
 
 async function startWebAppFromSetupWizard(wizard: SetupWizard | undefined): Promise<void> {

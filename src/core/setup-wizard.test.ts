@@ -1001,6 +1001,34 @@ describe("SetupWizard path validation", () => {
     ])).resolves.toEqual([undefined, undefined, undefined]);
   });
 
+  it("after a failed start, completion waits for the NEXT save (COR-7)", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const wizard = new SetupWizard({ port: 0 });
+    await saveWizard(wizard);
+    await wizard.waitForCompletion();
+    wizard.markBootstrapFailed("Provider preflight failed.");
+
+    let resaved = false;
+    const next = wizard.waitForCompletion().then(() => { resaved = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The failed save is not a new one: the app must not be started again yet.
+    expect(resaved).toBe(false);
+
+    // "Re-open setup", then Save again: that is the signal to start again.
+    const retryPage = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/?strada-setup=1&retry=1", method: "GET" }, retryPage.response);
+    expect((await saveWizard(wizard)).read().statusCode).toBe(200);
+    await next;
+    expect(resaved).toBe(true);
+  });
+
   it("preserves provider warnings across setup bootstrap status transitions", async () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
