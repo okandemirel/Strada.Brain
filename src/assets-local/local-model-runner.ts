@@ -23,6 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_REMOVAL_PACKAGES, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { PASSTHROUGH_VAR, SHELL_ENV_ALLOWLIST, buildShellEnv } from "../agents/tools/shell-env-policy.js";
 
 // =============================================================================
 // PYTHON DRIVERS (written into the venv area on demand)
@@ -372,6 +373,53 @@ export function venvIdentity(): string {
  */
 const failedRepairs = new Map<string, { identity: string; detail: string }>();
 
+/**
+ * What the model subprocesses may read from this process's environment
+ * (CMP-10).
+ *
+ * pip installs requirements from an unpinned clone, and every inference imports
+ * third-party packages: none of that code may see the provider API keys and
+ * channel tokens this process holds. The base is the shell tool's default-deny
+ * builder (PATH, HOME, temp dirs, locale, proxy, the Windows basics), minus its
+ * operator passthrough, which is for builds and not for model code. On top of
+ * it only what pip, git and the Hugging Face / torch stack read for their own
+ * configuration: HF_* (HF_TOKEN included — the weights download needs it when
+ * it is configured), PIP_*, PYTORCH_*, CA bundles and the GPU selector.
+ */
+const MODEL_ENV_PREFIXES: readonly string[] = ["HF_", "PIP_", "PYTORCH_"];
+const MODEL_ENV_NAMES: ReadonlySet<string> = new Set([
+  "HUGGING_FACE_HUB_TOKEN",
+  "XDG_CACHE_HOME",
+  "CUDA_VISIBLE_DEVICES",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "GIT_SSL_CAINFO",
+  "GIT_SSL_CAPATH",
+  "PYTHONIOENCODING",
+  "PYTHONUTF8",
+]);
+const SHELL_ALLOWLIST_LOWER: ReadonlySet<string> = new Set([...SHELL_ENV_ALLOWLIST].map((k) => k.toLowerCase()));
+
+export function modelSubprocessEnv(
+  source: NodeJS.ProcessEnv,
+  overrides: Readonly<Record<string, string>> = {},
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = { ...source };
+  delete base[PASSTHROUGH_VAR];
+  const env: NodeJS.ProcessEnv = buildShellEnv(base).env;
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || key in env) continue;
+    const modelSetting = MODEL_ENV_NAMES.has(key) || MODEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+    // Windows names are case-insensitive (`Path`, `SYSTEMROOT`): match them so.
+    const windowsBasic = platform === "win32" && SHELL_ALLOWLIST_LOWER.has(key.toLowerCase());
+    if (modelSetting || windowsBasic) env[key] = value;
+  }
+  return { ...env, ...overrides };
+}
+
 export type SpawnImpl = (
   cmd: string,
   args: string[],
@@ -380,7 +428,9 @@ export type SpawnImpl = (
 
 const defaultSpawn: SpawnImpl = (cmd, args, opts) =>
   new Promise((resolvePromise) => {
-    execFile(cmd, args, { timeout: opts.timeoutMs, env: opts.env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // No env given is never "inherit everything" (CMP-10).
+    const env = opts.env ?? modelSubprocessEnv(process.env);
+    execFile(cmd, args, { timeout: opts.timeoutMs, env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const anyErr = err as NodeJS.ErrnoException & { code?: unknown; signal?: string; killed?: boolean };
         if (typeof anyErr.code === "number") {
@@ -478,7 +528,7 @@ export class LocalModelRunner {
 
       if (!this.venvReady()) {
         onProgress?.("creating venv…");
-        const made = await this.spawn("python3", ["-m", "venv", VENV()], { timeoutMs: 120_000 });
+        const made = await this.spawn("python3", ["-m", "venv", VENV()], { timeoutMs: 120_000, env: this.envWithWeights() });
         if (made.code !== 0) return { ok: false, detail: `venv creation failed: ${made.stderr.slice(0, 300)}` };
       }
 
@@ -814,7 +864,7 @@ export class LocalModelRunner {
   }
 
   private envWithWeights(): NodeJS.ProcessEnv {
-    return { ...process.env, HF_HOME: WEIGHTS() };
+    return modelSubprocessEnv(process.env, { HF_HOME: WEIGHTS() });
   }
 
   private envForRepo(spec: LocalModelSpec): NodeJS.ProcessEnv {

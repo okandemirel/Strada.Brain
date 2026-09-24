@@ -7,6 +7,7 @@ import {
   RMBG_IMPORT_PROBE,
   RMBG_REPAIR_TIMEOUT_MS,
   hfWeightsDir,
+  modelSubprocessEnv,
   modelWeightsPresent,
   type SpawnImpl,
 } from "./local-model-runner.js";
@@ -118,6 +119,97 @@ describe("LocalModelRunner", () => {
     const result = await runner.imageToMesh(fresh, join(dir, "in.png"), join(dir, "out.obj"));
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("not installed");
+  });
+
+  it("no model subprocess (venv, pip, git clone, python) sees this process's secrets (CMP-10)", async () => {
+    const planted: Record<string, string> = {
+      ANTHROPIC_API_KEY: "sk-ant-secret",
+      OPENAI_API_KEY: "sk-secret",
+      TELEGRAM_BOT_TOKEN: "123:secret",
+      DISCORD_BOT_TOKEN: "discord-secret",
+      GITHUB_TOKEN: "ghp_secret",
+      // The shell tool's operator passthrough is for builds, not for model code.
+      SHELL_EXEC_ENV_PASSTHROUGH: "GITHUB_TOKEN",
+      HF_TOKEN: "hf_needed_for_gated_weights",
+      PIP_INDEX_URL: "https://pypi.example/simple",
+    };
+    const saved = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, planted);
+    const seen: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv | undefined }> = [];
+    const spawn: SpawnImpl = async (cmd, args, opts) => {
+      seen.push({ cmd, args, env: opts.env });
+      if (cmd === "git" && args[0] === "clone") {
+        // What a clone leaves behind, so the install carries on to pip.
+        const repoDir = args[args.length - 1]!;
+        mkdirSync(join(repoDir, "tsr"), { recursive: true });
+        writeFileSync(join(repoDir, "requirements.txt"), "numpy\n");
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    try {
+      const runner = new LocalModelRunner(spawn);
+      await runner.install(getModelSpec("sd15")!);
+      await runner.install(getModelSpec("triposr")!); // the repo path: git clone, then pip
+      expect(seen.some((c) => c.cmd === "git" && c.args[0] === "clone")).toBe(true);
+      expect(seen.some((c) => c.args.includes("venv"))).toBe(true);
+      expect(seen.some((c) => c.args.includes("-r"))).toBe(true); // the unpinned requirements
+      for (const call of seen) {
+        const what = `${call.cmd} ${call.args.slice(0, 3).join(" ")}`;
+        // An absent env is NOT safe: execFile would inherit everything.
+        expect(call.env, what).toBeDefined();
+        for (const secret of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "GITHUB_TOKEN", "SHELL_EXEC_ENV_PASSTHROUGH"]) {
+          expect(call.env?.[secret], `${what}: ${secret}`).toBeUndefined();
+        }
+        expect(call.env?.["HOME"], what).toBe(fakeHome);
+        expect(call.env?.["HF_HOME"], what).toBe(join(dir, "weights"));
+        expect(call.env?.["HF_TOKEN"], what).toBe("hf_needed_for_gated_weights");
+        expect(call.env?.["PIP_INDEX_URL"], what).toBe("https://pypi.example/simple");
+        if (process.env["PATH"] !== undefined) expect(call.env?.["PATH"], what).toBe(process.env["PATH"]);
+      }
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
+
+describe("modelSubprocessEnv (CMP-10)", () => {
+  it("keeps the basics a subprocess needs and withholds everything secret-looking", () => {
+    const env = modelSubprocessEnv(
+      {
+        PATH: "/usr/bin",
+        HOME: "/home/u",
+        TMPDIR: "/tmp",
+        LANG: "C.UTF-8",
+        HTTPS_PROXY: "http://proxy:3128",
+        SSL_CERT_FILE: "/etc/ca.pem",
+        PYTORCH_ENABLE_MPS_FALLBACK: "1",
+        OPENAI_API_KEY: "sk-secret",
+        SLACK_BOT_TOKEN: "xoxb-secret",
+        NODE_OPTIONS: "--require /tmp/x.js",
+      },
+      { HF_HOME: "/w" },
+      "linux",
+    );
+    expect(env).toMatchObject({
+      PATH: "/usr/bin", HOME: "/home/u", TMPDIR: "/tmp", LANG: "C.UTF-8", HTTPS_PROXY: "http://proxy:3128",
+      SSL_CERT_FILE: "/etc/ca.pem", PYTORCH_ENABLE_MPS_FALLBACK: "1", HF_HOME: "/w",
+    });
+    expect(env["OPENAI_API_KEY"]).toBeUndefined();
+    expect(env["SLACK_BOT_TOKEN"]).toBeUndefined();
+    expect(env["NODE_OPTIONS"]).toBeUndefined();
+  });
+
+  it("matches the Windows basics the way Windows spells them", () => {
+    const env = modelSubprocessEnv(
+      { Path: "C:\\Windows", SYSTEMROOT: "C:\\Windows", ComSpec: "cmd.exe", USERPROFILE: "C:\\Users\\u", TEMP: "C:\\t", OPENAI_API_KEY: "sk" },
+      {},
+      "win32",
+    );
+    expect(env).toMatchObject({ Path: "C:\\Windows", SYSTEMROOT: "C:\\Windows", ComSpec: "cmd.exe", USERPROFILE: "C:\\Users\\u", TEMP: "C:\\t" });
+    expect(env["OPENAI_API_KEY"]).toBeUndefined();
   });
 });
 
