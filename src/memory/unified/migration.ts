@@ -6,7 +6,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import type { IUnifiedMemory, MigrationStatus } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { 
@@ -62,6 +62,13 @@ interface LegacyAnalysisFile {
  * Written to sourcePath after successful migration to prevent duplicate runs.
  */
 export const MIGRATION_MARKER = "migration-complete.json";
+
+/**
+ * Legacy entry ids already stored by an earlier run that had failures (MEM-9).
+ * The completion marker is written only for a clean run, so the next start
+ * retries; this list keeps that retry from importing the successes twice.
+ */
+export const MIGRATION_PROGRESS = "migration-progress.json";
 
 /**
  * Default maximum entries to migrate (sum of tier limits: 100+1000+10000)
@@ -162,8 +169,17 @@ export class MemoryMigrator {
       this.status.isComplete = true;
       this.status.completedAt = Date.now();
 
-      // Write idempotency marker file
-      this.writeMarkerFile();
+      // Write the idempotency marker only for a clean run. With failures the
+      // marker stopped every later retry, so the entries that failed were
+      // never migrated (MEM-9); a rerun re-imports and is safe to repeat.
+      if (this.status.entriesFailed === 0) {
+        this.writeMarkerFile();
+        if (!this.config.dryRun) rmSync(join(this.config.sourcePath, MIGRATION_PROGRESS), { force: true });
+      } else {
+        getLoggerSafe().warn("[MemoryMigrator] Migration had failures; marker not written so the next start retries", {
+          entriesFailed: this.status.entriesFailed,
+        });
+      }
 
       getLoggerSafe().info("[MemoryMigrator] Migration complete", {
         entriesMigrated: this.status.entriesMigrated,
@@ -250,12 +266,18 @@ export class MemoryMigrator {
     // Rebuild TF-IDF index for similarity computation
     const textIndex = TextIndex.deserialize(legacyData.index);
 
-    // Migrate each entry
+    // Migrate each entry, skipping the ones a previous partial run stored
+    const alreadyMigrated = this.readMigratedIds();
     for (const legacyEntry of entriesToMigrate) {
+      if (!this.config.dryRun && alreadyMigrated.has(legacyEntry.id)) {
+        this.status.entriesMigrated++;
+        continue;
+      }
       try {
         await this.migrateSingleEntry(legacyEntry, textIndex);
         if (!this.config.dryRun) {
           this.status.entriesMigrated++;
+          alreadyMigrated.add(legacyEntry.id);
         }
       } catch (error) {
         const errorMsg = `Failed to migrate entry ${legacyEntry.id}: ${error instanceof Error ? error.message : String(error)}`;
@@ -263,6 +285,32 @@ export class MemoryMigrator {
         this.status.errors.push(errorMsg);
         this.status.entriesFailed++;
       }
+    }
+    if (!this.config.dryRun && this.status.entriesFailed > 0) {
+      this.writeMigratedIds(alreadyMigrated);
+    }
+  }
+
+  private readMigratedIds(): Set<string> {
+    try {
+      const raw = readFileSync(join(this.config.sourcePath, MIGRATION_PROGRESS), "utf-8");
+      const ids = (JSON.parse(raw) as { migratedIds?: unknown }).migratedIds;
+      return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  private writeMigratedIds(ids: Set<string>): void {
+    try {
+      const progressPath = join(this.config.sourcePath, MIGRATION_PROGRESS);
+      const tmpPath = progressPath + ".tmp";
+      writeFileSync(tmpPath, JSON.stringify({ migratedIds: [...ids] }));
+      renameSync(tmpPath, progressPath);
+    } catch (error) {
+      getLoggerSafe().warn("[MemoryMigrator] Failed to record migration progress", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -296,7 +344,9 @@ export class MemoryMigrator {
     const termVector = textIndex.computeTFIDF(terms);
     const importance = this.calculateImportanceFromTFIDF(termVector);
 
-    // Create unified memory entry
+    // Create unified memory entry. importanceScore, archived and metadata are
+    // required downstream: without a score, decay and eviction computed NaN
+    // and treated the row as the first to evict (MEM-9).
     const entry = {
       type: legacyEntry.type,
       chatId: legacyEntry.chatId,
@@ -304,11 +354,16 @@ export class MemoryMigrator {
       tags: legacyEntry.tags,
       tier,
       importance: importance > 0.7 ? "high" : importance > 0.4 ? "medium" : "low",
+      importanceScore: importance,
+      archived: false,
+      metadata: {},
       termVector, // Keep for backward compatibility
     } as unknown as Parameters<typeof this.config.targetMemory.storeEntry>[0];
 
-    // Store in target memory
-    await this.config.targetMemory.storeEntry(entry);
+    // Store in target memory. storeEntry reports failure through its Result
+    // and does not throw, so an unchecked call counted failures as migrated.
+    const stored = await this.config.targetMemory.storeEntry(entry);
+    if (stored.kind === "err") throw stored.error;
   }
 
   /**

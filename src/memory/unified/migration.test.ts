@@ -384,5 +384,51 @@ describe("MemoryMigrator", () => {
       expect(status.entriesMigrated + status.entriesFailed).toBeLessThanOrEqual(maxEntries);
       expect(status.entriesMigrated).toBeLessThanOrEqual(maxEntries);
     });
+
+    // MEM-9: storeEntry reports failure through its Result, which was ignored:
+    // failures counted as migrated and the marker stopped any retry.
+    it("counts an err Result as failed, writes no marker, and the retry imports only what failed", async () => {
+      const legacyData = createLegacyData(3);
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+      const failingContent = legacyData.entries[1]!.content;
+      const stored: Array<Record<string, unknown>> = [];
+      let failOnce = true;
+      const target = {
+        storeEntry: async (entry: Record<string, unknown>) => {
+          if (entry.content === failingContent && failOnce) {
+            return { kind: "err" as const, error: new Error("embedding provider down") };
+          }
+          stored.push(entry);
+          return targetMemory.storeEntry(entry as never);
+        },
+      } as unknown as AgentDBMemory;
+      const options = {
+        sourcePath: tempDir,
+        targetMemory: target,
+        generateEmbeddings: true,
+        tierAssignment: "age" as const,
+        persistentCutoffDays: 7,
+        dryRun: false,
+        skipExisting: true,
+      };
+
+      const first = await new MemoryMigrator(options).migrate();
+      expect(first.entriesFailed).toBe(1);
+      expect(first.entriesMigrated).toBe(2);
+      expect(existsSync(join(tempDir, MIGRATION_MARKER))).toBe(false);
+      expect(stored).toHaveLength(2);
+      for (const entry of stored) {
+        expect(typeof entry.importanceScore).toBe("number");
+        expect(entry.archived).toBe(false);
+        expect(entry.metadata).toEqual({});
+      }
+
+      failOnce = false;
+      const second = await new MemoryMigrator(options).migrate();
+      expect(second.entriesFailed).toBe(0);
+      expect(stored).toHaveLength(3); // only the failed one was stored again
+      expect(stored[2]!.content).toBe(failingContent);
+      expect(existsSync(join(tempDir, MIGRATION_MARKER))).toBe(true);
+    });
   });
 });
