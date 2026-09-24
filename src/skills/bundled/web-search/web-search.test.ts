@@ -73,8 +73,9 @@ function redirectResponse(status: number, location: string) {
   };
 }
 
+/** web_fetch_url streams the body (SEC-7), so its responses need a real body stream. */
 function okResponse(text: string) {
-  return { ok: true, status: 200, statusText: "OK", headers: new Headers(), text: () => Promise.resolve(text) };
+  return new Response(text, { status: 200, statusText: "OK" });
 }
 
 const dummyContext = {} as Parameters<(typeof tools)[0]["execute"]>[1];
@@ -107,12 +108,7 @@ describe("web_fetch_url", () => {
   const tool = findTool("web_fetch_url");
 
   it("fetches URL and returns text content", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: () => Promise.resolve("Hello, World!"),
-    });
+    mockFetch.mockResolvedValue(okResponse("Hello, World!"));
 
     const result = await tool.execute({ url: "https://example.com" }, dummyContext);
     expect(result.content).toBe("Hello, World!");
@@ -126,18 +122,43 @@ describe("web_fetch_url", () => {
 
   it("truncates content longer than 8000 characters", async () => {
     const longContent = "x".repeat(10_000);
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: () => Promise.resolve(longContent),
-    });
+    mockFetch.mockResolvedValue(okResponse(longContent));
 
     const result = await tool.execute({ url: "https://example.com/long" }, dummyContext);
     expect(result.content).toContain("[Truncated");
     expect(result.content).toContain("10000 chars total");
     // First 8000 chars should be present
     expect(result.content.startsWith("x".repeat(8000))).toBe(true);
+  });
+
+  // SEC-7: the body is decompressed transparently, so reading all of it before
+  // truncating let one URL exhaust memory. It is read up to a byte cap and the
+  // transfer is cancelled there.
+  it("stops reading a huge body at the byte cap and cancels the transfer", async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const total = 64 * 1024 * 1024;
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= total) {
+          controller.close();
+          return;
+        }
+        pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mockFetch.mockResolvedValue(new Response(body, { status: 200, statusText: "OK" }));
+
+    const result = await tool.execute({ url: "https://example.com/huge" }, dummyContext);
+    expect(result.content.startsWith("a".repeat(8000))).toBe(true);
+    expect(result.content).toContain("[Truncated — response larger than 1048576 bytes]");
+    expect(pulled).toBeLessThanOrEqual(1024 * 1024 + 2 * chunk.byteLength);
+    expect(cancelled).toBe(true);
   });
 
   it("rejects URLs without http/https scheme", async () => {
@@ -195,12 +216,7 @@ describe("web_fetch_url", () => {
   });
 
   it("accepts http:// URLs", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: () => Promise.resolve("plain http"),
-    });
+    mockFetch.mockResolvedValue(okResponse("plain http"));
 
     const result = await tool.execute({ url: "http://example.com" }, dummyContext);
     expect(result.content).toBe("plain http");

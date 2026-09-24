@@ -16,6 +16,9 @@ import {
 /** Maximum characters returned from a fetched URL. */
 const MAX_CONTENT_LENGTH = 8000;
 
+/** Most bytes of a fetched body read (after decompression); the rest is never pulled. */
+const MAX_FETCH_BYTES = 1024 * 1024;
+
 /** Fetch timeout in milliseconds. */
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -47,6 +50,35 @@ function validateUrl(url: string): { ok: true; url: string } | { ok: false; erro
     return { ok: false, error: "Invalid URL format." };
   }
   return { ok: true, url: trimmed };
+}
+
+/**
+ * Read at most `maxBytes` of a response body as UTF-8 (what `text()` decodes
+ * as), then cancel the stream. SEC-7: the transport decompresses
+ * transparently, so `text()` would buffer a compression bomb or an endless
+ * body whole before anything was truncated.
+ */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<{ text: string; complete: boolean }> {
+  if (!response.body) return { text: "", complete: true };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return { text: text + decoder.decode(), complete: true };
+      const room = maxBytes - received;
+      if (value.byteLength > room) {
+        return { text: text + decoder.decode(value.subarray(0, room)), complete: false };
+      }
+      received += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Stops the transfer when we stopped early; a no-op after a full read.
+    await reader.cancel().catch(() => undefined);
+  }
 }
 
 // The address-pinned, hop-by-hop transport (`fetchWithPolicy`) lives in
@@ -135,12 +167,12 @@ const webFetchUrl: ITool = {
         return { content: `Error: HTTP ${response.status} ${response.statusText}` };
       }
 
-      const text = await response.text();
-      const truncated = text.length > MAX_CONTENT_LENGTH
-        ? text.slice(0, MAX_CONTENT_LENGTH) + `\n\n[Truncated — ${text.length} chars total]`
-        : text;
-
-      return { content: truncated };
+      const { text, complete } = await readBodyCapped(response, MAX_FETCH_BYTES);
+      if (complete && text.length <= MAX_CONTENT_LENGTH) {
+        return { content: text };
+      }
+      const total = complete ? `${text.length} chars total` : `response larger than ${MAX_FETCH_BYTES} bytes`;
+      return { content: text.slice(0, MAX_CONTENT_LENGTH) + `\n\n[Truncated — ${total}]` };
     } catch (error) {
       if (error instanceof ForbiddenTargetError) {
         return { content: `Error: Access to internal/private network addresses is blocked. ${error.message}` };
