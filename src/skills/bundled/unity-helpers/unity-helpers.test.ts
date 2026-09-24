@@ -1,62 +1,45 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ToolContext } from "../../../agents/tools/tool.interface.js";
+import { tools } from "./index.js";
 
 // ---------------------------------------------------------------------------
-// Mock node:fs/promises before importing the module under test
+// Real files in a temporary project. SEC-2: these tools used to resolve the
+// directory against process.cwd() and enumerate any tree on disk; it is now
+// confined to `context.projectPath` through the built-in tools' path-guard.
 // ---------------------------------------------------------------------------
 
-const mockReaddir = vi.fn();
-const mockRealpath = vi.fn();
+let base: string;
+let project: string;
+let outside: string;
+let context: ToolContext;
 
-vi.mock("node:fs/promises", () => ({
-  readdir: (...args: unknown[]) => mockReaddir(...args),
-  realpath: (...args: unknown[]) => mockRealpath(...args),
-}));
+beforeEach(async () => {
+  base = await realpath(await mkdtemp(join(tmpdir(), "strada-unity-helpers-")));
+  project = join(base, "project");
+  outside = join(base, "outside");
+  await mkdir(project);
+  await mkdir(outside);
+  context = { projectPath: project, workingDirectory: project, readOnly: false };
+});
 
-// Must import *after* vi.mock so the mock is in place.
-const { tools } = await import("./index.js");
+afterEach(async () => {
+  await rm(base, { recursive: true, force: true });
+});
 
-const dummyContext = {} as Parameters<(typeof tools)[0]["execute"]>[1];
+async function touch(rel: string, root = project): Promise<void> {
+  const full = join(root, rel);
+  await mkdir(join(full, ".."), { recursive: true });
+  await writeFile(full, "");
+}
 
 function findTool(name: string) {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`Tool "${name}" not found`);
   return tool;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers for building mock directory entries
-// ---------------------------------------------------------------------------
-
-interface MockDirent {
-  name: string;
-  isDirectory: () => boolean;
-}
-
-function file(name: string): MockDirent {
-  return { name, isDirectory: () => false };
-}
-
-function dir(name: string): MockDirent {
-  return { name, isDirectory: () => true };
-}
-
-/**
- * Configure mockReaddir to return the expected entries for each directory path.
- * `tree` maps absolute directory paths to arrays of MockDirent.
- */
-function setupTree(tree: Record<string, MockDirent[]>) {
-  mockReaddir.mockImplementation((dirPath: string, _opts: unknown) => {
-    const entries = tree[dirPath];
-    if (!entries) return Promise.reject(new Error("ENOENT"));
-    return Promise.resolve(entries);
-  });
-}
-
-beforeEach(() => {
-  mockReaddir.mockReset();
-  // Default: realpath resolves to the path as-is (no symlink remapping)
-  mockRealpath.mockImplementation((p: unknown) => Promise.resolve(p as string));
-});
 
 // ---------------------------------------------------------------------------
 // unity_find_scripts
@@ -66,54 +49,42 @@ describe("unity_find_scripts", () => {
   const tool = findTool("unity_find_scripts");
 
   it("returns error when directory parameter is missing", async () => {
-    const result = await tool.execute({}, dummyContext);
+    const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("directory");
   });
 
   it("finds .cs files in a flat directory", async () => {
-    setupTree({
-      "/project": [file("Player.cs"), file("README.md"), file("Enemy.cs")],
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
+    await touch("Player.cs");
+    await touch("README.md");
+    await touch("Enemy.cs");
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("Found 2 script(s)");
     expect(result.content).toContain("Player.cs");
     expect(result.content).toContain("Enemy.cs");
   });
 
   it("finds .cs files recursively in nested directories", async () => {
-    setupTree({
-      "/project": [dir("Scripts"), file("Main.cs")],
-      "/project/Scripts": [dir("Player"), file("Utils.cs")],
-      "/project/Scripts/Player": [file("Movement.cs")],
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
+    await touch("Main.cs");
+    await touch("Scripts/Utils.cs");
+    await touch("Scripts/Player/Movement.cs");
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("Found 3 script(s)");
     expect(result.content).toContain("Main.cs");
-    expect(result.content).toContain("Scripts/Utils.cs");
-    expect(result.content).toContain("Scripts/Player/Movement.cs");
+    expect(result.content).toContain(join("Scripts", "Utils.cs"));
+    expect(result.content).toContain(join("Scripts", "Player", "Movement.cs"));
+  });
+
+  it("lists paths relative to the directory searched", async () => {
+    await touch("Assets/Scripts/Game.cs");
+    const result = await tool.execute({ directory: "Assets" }, context);
+    expect(result.content).toBe(`Found 1 script(s):\n${join("Scripts", "Game.cs")}`);
   });
 
   it("returns message when no .cs files found", async () => {
-    setupTree({
-      "/empty": [file("readme.txt")],
-    });
-
-    const result = await tool.execute({ directory: "/empty" }, dummyContext);
+    await touch("readme.txt");
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toBe("No .cs files found.");
-  });
-
-  it("handles unreadable subdirectories gracefully", async () => {
-    setupTree({
-      "/project": [dir("locked"), file("Game.cs")],
-      // "/project/locked" is not in the tree → readdir will reject
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
-    expect(result.content).toContain("Found 1 script(s)");
-    expect(result.content).toContain("Game.cs");
   });
 });
 
@@ -125,93 +96,78 @@ describe("unity_list_scenes", () => {
   const tool = findTool("unity_list_scenes");
 
   it("returns error when directory parameter is missing", async () => {
-    const result = await tool.execute({}, dummyContext);
+    const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("directory");
   });
 
-  it("finds .unity scene files in a flat directory", async () => {
-    setupTree({
-      "/project": [file("MainMenu.unity"), file("Level1.unity"), file("Player.cs")],
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
-    expect(result.content).toContain("Found 2 scene(s)");
-    expect(result.content).toContain("MainMenu.unity");
-    expect(result.content).toContain("Level1.unity");
-  });
-
-  it("finds .unity files recursively in nested directories", async () => {
-    setupTree({
-      "/project": [dir("Scenes"), dir("Scripts")],
-      "/project/Scenes": [file("Main.unity"), dir("Levels")],
-      "/project/Scenes/Levels": [file("Level1.unity"), file("Level2.unity")],
-      "/project/Scripts": [file("Player.cs")],
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
+  it("finds .unity scene files recursively", async () => {
+    await touch("Scenes/Main.unity");
+    await touch("Scenes/Levels/Level1.unity");
+    await touch("Scenes/Levels/Level2.unity");
+    await touch("Scripts/Player.cs");
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("Found 3 scene(s)");
-    expect(result.content).toContain("Scenes/Main.unity");
-    expect(result.content).toContain("Scenes/Levels/Level1.unity");
-    expect(result.content).toContain("Scenes/Levels/Level2.unity");
+    expect(result.content).toContain(join("Scenes", "Main.unity"));
+    expect(result.content).toContain(join("Scenes", "Levels", "Level1.unity"));
+    expect(result.content).toContain(join("Scenes", "Levels", "Level2.unity"));
   });
 
   it("returns message when no .unity files found", async () => {
-    setupTree({
-      "/project": [file("Player.cs"), file("readme.txt")],
-    });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
+    await touch("Player.cs");
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toBe("No .unity scene files found.");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Security: directory traversal / sensitive path rejection
+// SEC-2: confinement to the project
 // ---------------------------------------------------------------------------
 
-describe("security: sensitive path rejection", () => {
+describe("security: confined to the project", () => {
   const scriptsTool = findTool("unity_find_scripts");
   const scenesTool = findTool("unity_list_scenes");
 
-  it("rejects /etc for unity_find_scripts", async () => {
-    mockRealpath.mockResolvedValue("/etc");
-    const result = await scriptsTool.execute({ directory: "/etc" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
+  it("resolves `.` against the project root, not the process working directory", async () => {
+    await touch("OnlyInProject.cs");
+    const result = await scriptsTool.execute({ directory: "." }, context);
+    expect(result.content).toBe("Found 1 script(s):\nOnlyInProject.cs");
   });
 
-  it("rejects ~/.ssh for unity_list_scenes", async () => {
-    const sshPath = "/Users/testuser/.ssh";
-    mockRealpath.mockResolvedValue(sshPath);
-    const result = await scenesTool.execute({ directory: sshPath }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
+  it("refuses directories outside the project, including through a symlink", async () => {
+    await touch("Secret.cs", outside);
+    await symlink(outside, join(project, "linked"));
+    for (const directory of [outside, "..", "linked", "/etc"]) {
+      const result = await scriptsTool.execute({ directory }, context);
+      expect(result.content, directory).toContain("outside the project directory");
+    }
   });
 
-  it("rejects symlink pointing to sensitive dir", async () => {
-    // The input looks innocent but realpath resolves to /etc
-    mockRealpath.mockResolvedValue("/etc");
-    const result = await scriptsTool.execute({ directory: "/project/symlink-to-etc" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
+  it("never lists files reached through a symlink or under a sensitive directory", async () => {
+    await touch("Game.cs");
+    await touch("Secret.cs", outside);
+    await touch("Hidden.unity", outside);
+    await symlink(outside, join(project, "linked"));
+    await symlink(join(outside, "Secret.cs"), join(project, "Linked.cs"));
+    await touch(".ssh/Key.cs");
+    await touch("node_modules/pkg/Dep.cs");
+
+    const scripts = await scriptsTool.execute({ directory: "." }, context);
+    expect(scripts.content).toBe("Found 1 script(s):\nGame.cs");
+    const scenes = await scenesTool.execute({ directory: "." }, context);
+    expect(scenes.content).toBe("No .unity scene files found.");
+    const ssh = await scriptsTool.execute({ directory: ".ssh" }, context);
+    expect(ssh.content).toContain("sensitive files is not permitted");
   });
 
   it("rejects path with null byte", async () => {
-    const result = await scriptsTool.execute({ directory: "/project\0evil" }, dummyContext);
+    const result = await scriptsTool.execute({ directory: "Assets\0evil" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("invalid characters");
-    expect(mockRealpath).not.toHaveBeenCalled();
   });
 
-  it("allows a normal project directory", async () => {
-    mockRealpath.mockResolvedValue("/home/user/my-game");
-    setupTree({
-      "/home/user/my-game": [file("Player.cs")],
-    });
-    const result = await scriptsTool.execute({ directory: "/home/user/my-game" }, dummyContext);
-    expect(result.content).toContain("Found 1 script(s)");
+  it("refuses without a project directory", async () => {
+    const result = await scriptsTool.execute({ directory: "." }, { ...context, projectPath: "" });
+    expect(result.content).toContain("No project directory");
   });
 });

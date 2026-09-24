@@ -1,25 +1,51 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
+import { closeSync, constants as fsConstants, openSync } from "node:fs";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ToolContext } from "../../../agents/tools/tool.interface.js";
+import { tools } from "./index.js";
 
 // ---------------------------------------------------------------------------
-// Mock node:fs/promises before importing the module under test
+// Real files in a temporary project. SEC-2: these tools used to resolve paths
+// against process.cwd() and walk anything; every path is now confined to
+// `context.projectPath` through the built-in tools' path-guard.
 // ---------------------------------------------------------------------------
 
-const mockReaddir = vi.fn();
-const mockReadFile = vi.fn();
-const mockRealpath = vi.fn();
-const mockStat = vi.fn();
+let base: string;
+let project: string;
+let outside: string;
+let context: ToolContext;
+const fifos: string[] = [];
 
-vi.mock("node:fs/promises", () => ({
-  readdir: (...args: unknown[]) => mockReaddir(...args),
-  readFile: (...args: unknown[]) => mockReadFile(...args),
-  realpath: (...args: unknown[]) => mockRealpath(...args),
-  stat: (...args: unknown[]) => mockStat(...args),
-}));
+beforeEach(async () => {
+  base = await realpath(await mkdtemp(join(tmpdir(), "strada-file-utils-")));
+  project = join(base, "project");
+  outside = join(base, "outside");
+  await mkdir(project);
+  await mkdir(outside);
+  context = { projectPath: project, workingDirectory: project, readOnly: false };
+});
 
-// Must import *after* vi.mock so the mock is in place.
-const { tools } = await import("./index.js");
+afterEach(async () => {
+  // A reader blocked on a FIFO (the pre-fix walk) is released by a writer.
+  for (const fifo of fifos.splice(0)) {
+    try {
+      closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK));
+    } catch {
+      /* nobody was waiting on it */
+    }
+  }
+  await rm(base, { recursive: true, force: true });
+});
 
-const dummyContext = {} as Parameters<(typeof tools)[0]["execute"]>[1];
+async function put(rel: string, content: string | Buffer, root = project): Promise<string> {
+  const full = join(root, rel);
+  await mkdir(join(full, ".."), { recursive: true });
+  await writeFile(full, content);
+  return full;
+}
 
 function findTool(name: string) {
   const tool = tools.find((t) => t.name === name);
@@ -27,39 +53,7 @@ function findTool(name: string) {
   return tool;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers for building mock directory entries
-// ---------------------------------------------------------------------------
-
-interface MockDirent {
-  name: string;
-  isDirectory: () => boolean;
-}
-
-function file(name: string): MockDirent {
-  return { name, isDirectory: () => false };
-}
-
-function dir(name: string): MockDirent {
-  return { name, isDirectory: () => true };
-}
-
-function setupTree(tree: Record<string, MockDirent[]>) {
-  mockReaddir.mockImplementation((dirPath: string, _opts: unknown) => {
-    const entries = tree[dirPath];
-    if (!entries) return Promise.reject(new Error("ENOENT"));
-    return Promise.resolve(entries);
-  });
-}
-
-beforeEach(() => {
-  mockReaddir.mockReset();
-  mockReadFile.mockReset();
-  mockRealpath.mockReset();
-  mockStat.mockReset();
-  // Default: realpath resolves to the path as-is (no symlink remapping)
-  mockRealpath.mockImplementation((p: unknown) => Promise.resolve(p as string));
-});
+const canMkfifo = process.platform !== "win32" && spawnSync("mkfifo", ["--version"]).error === undefined;
 
 // ---------------------------------------------------------------------------
 // file_stats
@@ -68,61 +62,58 @@ beforeEach(() => {
 describe("file_stats", () => {
   const tool = findTool("file_stats");
 
-  it("returns file statistics for a valid file", async () => {
-    const content = "hello world\nfoo bar baz\n";
-    mockReadFile.mockResolvedValue(content);
-    mockStat.mockResolvedValue({
-      isFile: () => true,
-      size: content.length,
-    });
-
-    const result = await tool.execute({ path: "/project/test.txt" }, dummyContext);
+  it("returns file statistics for a file, resolved against the project root", async () => {
+    await put("test.txt", "hello world\nfoo bar baz\n");
+    const result = await tool.execute({ path: "test.txt" }, context);
+    expect(result.content).toContain(`File: ${join(project, "test.txt")}`);
     expect(result.content).toContain("Lines: 3");
     expect(result.content).toContain("Words: 5");
     expect(result.content).toContain("Characters: 24");
-    expect(result.content).toContain("Size:");
+    expect(result.content).toContain("Size: 24 B");
+    // An absolute path inside the project is accepted too.
+    expect((await tool.execute({ path: join(project, "test.txt") }, context)).content).toContain("Lines: 3");
   });
 
   it("returns error when path parameter is missing", async () => {
-    const result = await tool.execute({}, dummyContext);
+    const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("required");
   });
 
   it("returns error when path is not a file", async () => {
-    mockReadFile.mockResolvedValue("");
-    mockStat.mockResolvedValue({
-      isFile: () => false,
-      size: 0,
-    });
-
-    const result = await tool.execute({ path: "/project/somedir" }, dummyContext);
+    await mkdir(join(project, "somedir"));
+    const result = await tool.execute({ path: "somedir" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("not a file");
   });
 
   it("returns error when file does not exist", async () => {
-    mockReadFile.mockRejectedValue(new Error("ENOENT: no such file"));
-    mockStat.mockRejectedValue(new Error("ENOENT: no such file"));
-
-    const result = await tool.execute({ path: "/nonexistent/file.txt" }, dummyContext);
+    const result = await tool.execute({ path: "missing.txt" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("ENOENT");
   });
 
   it("rejects path with null byte", async () => {
-    const result = await tool.execute({ path: "/project/evil\0file.txt" }, dummyContext);
+    const result = await tool.execute({ path: "evil\0file.txt" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("invalid characters");
-    expect(mockReadFile).not.toHaveBeenCalled();
   });
 
-  it("rejects sensitive file paths", async () => {
-    mockRealpath.mockResolvedValue("/etc/passwd");
-    const result = await tool.execute({ path: "/etc/passwd" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReadFile).not.toHaveBeenCalled();
+  it("refuses paths outside the project and sensitive files inside it", async () => {
+    await put("secret.txt", "TOKEN=outside", outside);
+    await put(".env", "TOKEN=inside");
+    await symlink(join(outside, "secret.txt"), join(project, "link.txt"));
+    for (const path of [join(outside, "secret.txt"), "../outside/secret.txt", "link.txt", "/etc/passwd"]) {
+      const result = await tool.execute({ path }, context);
+      expect(result.content, path).toContain("outside the project directory");
+    }
+    const env = await tool.execute({ path: ".env" }, context);
+    expect(env.content).toContain("sensitive files is not permitted");
+  });
+
+  it("refuses without a project directory", async () => {
+    const result = await tool.execute({ path: "test.txt" }, { ...context, projectPath: "" });
+    expect(result.content).toContain("No project directory");
   });
 });
 
@@ -134,85 +125,51 @@ describe("file_find_large", () => {
   const tool = findTool("file_find_large");
 
   it("returns error when directory parameter is missing", async () => {
-    const result = await tool.execute({}, dummyContext);
+    const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("required");
   });
 
   it("finds large files sorted by size descending", async () => {
-    setupTree({
-      "/project": [file("big.bin"), file("small.txt"), file("medium.log")],
-    });
+    await put("big.bin", Buffer.alloc(3 * 1024));
+    await put("small.txt", Buffer.alloc(100));
+    await put("nested/medium.log", Buffer.alloc(2 * 1024));
 
-    mockStat.mockImplementation((filePath: string) => {
-      if (filePath.endsWith("big.bin")) return Promise.resolve({ size: 2 * 1024 * 1024 });
-      if (filePath.endsWith("medium.log")) return Promise.resolve({ size: 1.5 * 1024 * 1024 });
-      if (filePath.endsWith("small.txt")) return Promise.resolve({ size: 100 });
-      return Promise.reject(new Error("ENOENT"));
-    });
-
-    const result = await tool.execute({ directory: "/project", minSizeKb: 1024 }, dummyContext);
+    const result = await tool.execute({ directory: ".", minSizeKb: 1 }, context);
     expect(result.content).toContain("Found 2 file(s)");
     expect(result.content).toContain("big.bin");
-    expect(result.content).toContain("medium.log");
-    // big.bin should appear before medium.log (largest first)
-    const bigIdx = result.content.indexOf("big.bin");
-    const medIdx = result.content.indexOf("medium.log");
-    expect(bigIdx).toBeLessThan(medIdx);
+    expect(result.content).toContain(join("nested", "medium.log"));
+    expect(result.content).not.toContain("small.txt");
+    expect(result.content.indexOf("big.bin")).toBeLessThan(result.content.indexOf("medium.log"));
   });
 
   it("uses default minSizeKb of 1024 when not specified", async () => {
-    setupTree({
-      "/project": [file("large.bin")],
-    });
-
-    // 500KB — under default 1MB threshold
-    mockStat.mockResolvedValue({ size: 500 * 1024 });
-
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
-    expect(result.content).toContain("No files larger than");
-  });
-
-  it("returns no results message when no files exceed threshold", async () => {
-    setupTree({
-      "/project": [file("tiny.txt")],
-    });
-
-    mockStat.mockResolvedValue({ size: 10 });
-
-    const result = await tool.execute({ directory: "/project", minSizeKb: 1 }, dummyContext);
+    await put("large.bin", Buffer.alloc(500 * 1024));
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("No files larger than");
   });
 
   it("limits results to 20 files", async () => {
-    const files: MockDirent[] = [];
-    for (let i = 0; i < 25; i++) {
-      files.push(file(`file${i}.bin`));
-    }
-    setupTree({ "/project": files });
-
-    mockStat.mockResolvedValue({ size: 2 * 1024 * 1024 });
-
-    const result = await tool.execute({ directory: "/project", minSizeKb: 1 }, dummyContext);
+    for (let i = 0; i < 25; i++) await put(`file${i}.bin`, Buffer.alloc(2 * 1024));
+    const result = await tool.execute({ directory: ".", minSizeKb: 1 }, context);
     expect(result.content).toContain("Found 25 file(s)");
-    // Count the file entries in the output — should be 20 lines max
-    // Header line + 20 file entries = 21 lines total. Check that the file entries are capped at 20.
     const outputLines = result.content.split("\n").filter((l: string) => /file\d+\.bin/.test(l));
-    expect(outputLines.length).toBeLessThanOrEqual(20);
+    expect(outputLines.length).toBe(20);
   });
 
-  it("rejects sensitive directories", async () => {
-    mockRealpath.mockResolvedValue("/etc");
-    const result = await tool.execute({ directory: "/etc" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
+  it("rejects directories outside the project and null bytes", async () => {
+    const result = await tool.execute({ directory: outside }, context);
+    expect(result.content).toContain("outside the project directory");
+    const nul = await tool.execute({ directory: "sub\0evil" }, context);
+    expect(nul.content).toContain("invalid characters");
   });
 
-  it("rejects path with null byte", async () => {
-    const result = await tool.execute({ directory: "/project\0evil" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("invalid characters");
+  it("does not follow symlinks out of the project", async () => {
+    await put("huge.bin", Buffer.alloc(4 * 1024), outside);
+    await symlink(outside, join(project, "linked-dir"));
+    await symlink(join(outside, "huge.bin"), join(project, "linked.bin"));
+    const result = await tool.execute({ directory: ".", minSizeKb: 1 }, context);
+    expect(result.content).toContain("No files larger than");
   });
 });
 
@@ -224,161 +181,110 @@ describe("file_line_search", () => {
   const tool = findTool("file_line_search");
 
   it("returns error when directory parameter is missing", async () => {
-    const result = await tool.execute({ pattern: "test" }, dummyContext);
+    const result = await tool.execute({ pattern: "test" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("required");
   });
 
   it("returns error when pattern parameter is missing", async () => {
-    const result = await tool.execute({ directory: "/project" }, dummyContext);
+    const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("required");
   });
 
   it("finds matching lines in files", async () => {
-    setupTree({
-      "/project": [file("app.ts"), file("readme.md")],
-    });
-
-    mockReadFile.mockImplementation((filePath: string) => {
-      if (filePath.endsWith("app.ts")) {
-        return Promise.resolve("import express from 'express';\nconst TODO = 'fix this';\nexport default app;");
-      }
-      if (filePath.endsWith("readme.md")) {
-        return Promise.resolve("# README\nThis is a TODO item\n");
-      }
-      return Promise.reject(new Error("ENOENT"));
-    });
-
-    const result = await tool.execute({ directory: "/project", pattern: "TODO" }, dummyContext);
+    await put("app.ts", "import express from 'express';\nconst TODO = 'fix this';\nexport default app;");
+    await put("readme.md", "# README\nThis is a TODO item\n");
+    const result = await tool.execute({ directory: ".", pattern: "TODO" }, context);
     expect(result.content).toContain("Found 2 match(es)");
     expect(result.content).toContain("app.ts:2:");
     expect(result.content).toContain("readme.md:2:");
   });
 
   it("supports regex patterns", async () => {
-    setupTree({
-      "/project": [file("code.ts")],
-    });
-
-    mockReadFile.mockResolvedValue("const x = 42;\nfunction hello() {}\nconst y = 99;\n");
-
-    const result = await tool.execute({ directory: "/project", pattern: "^const\\s+\\w+\\s*=" }, dummyContext);
+    await put("code.ts", "const x = 42;\nfunction hello() {}\nconst y = 99;\n");
+    const result = await tool.execute({ directory: ".", pattern: "^const\\s+\\w+\\s*=" }, context);
     expect(result.content).toContain("Found 2 match(es)");
     expect(result.content).toContain("code.ts:1:");
     expect(result.content).toContain("code.ts:3:");
   });
 
   it("returns error for invalid regex", async () => {
-    const result = await tool.execute({ directory: "/project", pattern: "[invalid" }, dummyContext);
+    const result = await tool.execute({ directory: ".", pattern: "[invalid" }, context);
     expect(result.content).toContain("Error");
     expect(result.content).toContain("Invalid regex");
   });
 
   it("returns no matches message when nothing found", async () => {
-    setupTree({
-      "/project": [file("empty.txt")],
-    });
-
-    mockReadFile.mockResolvedValue("nothing here\n");
-
-    const result = await tool.execute({ directory: "/project", pattern: "MISSING" }, dummyContext);
+    await put("empty.txt", "nothing here\n");
+    const result = await tool.execute({ directory: ".", pattern: "MISSING" }, context);
     expect(result.content).toContain("No matches found");
   });
 
   it("limits results to 50 matches", async () => {
-    setupTree({
-      "/project": [file("big.txt")],
-    });
-
-    // Create file with 60 matching lines
-    const lines = Array.from({ length: 60 }, (_, i) => `line ${i} MATCH`).join("\n");
-    mockReadFile.mockResolvedValue(lines);
-
-    const result = await tool.execute({ directory: "/project", pattern: "MATCH" }, dummyContext);
+    await put("big.txt", Array.from({ length: 60 }, (_, i) => `line ${i} MATCH`).join("\n"));
+    const result = await tool.execute({ directory: ".", pattern: "MATCH" }, context);
     expect(result.content).toContain("Found 50 match(es)");
     expect(result.content).toContain("Results limited to 50");
   });
 
-  it("rejects sensitive directories", async () => {
-    mockRealpath.mockResolvedValue("/root");
-    const result = await tool.execute({ directory: "/root", pattern: "test" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
+  it("rejects over-long patterns", async () => {
+    const result = await tool.execute({ directory: ".", pattern: "a".repeat(501) }, context);
+    expect(result.content).toContain("pattern too long");
   });
 
-  it("rejects path with null byte", async () => {
-    const result = await tool.execute({ directory: "/project\0evil", pattern: "test" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("invalid characters");
+  it("stops a catastrophically backtracking pattern without blocking the event loop", async () => {
+    await put("uniform.txt", `${"x".repeat(40)}\n`);
+    let ticks = 0;
+    const interval = setInterval(() => ticks++, 20);
+    const started = Date.now();
+    try {
+      const result = await tool.execute({ directory: ".", pattern: "(x+x+)+y" }, context);
+      expect(result.content).toContain("took too long");
+    } finally {
+      clearInterval(interval);
+    }
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // The main thread kept running timers while the pattern ran.
+    expect(ticks).toBeGreaterThan(10);
   });
 
-  it("handles unreadable files gracefully", async () => {
-    setupTree({
-      "/project": [file("binary.dat"), file("text.txt")],
-    });
+  // ---- SEC-2 ---------------------------------------------------------------
+  it("searching `.` with a secret-looking pattern sees only the project, never sensitive files or anything outside it", async () => {
+    await put("notes.txt", "TOKEN=visible-project-line\n");
+    await put(".env", "TOKEN=project-dotenv\n");
+    await put("config/.env.production", "TOKEN=project-dotenv-prod\n");
+    await put("sub/.ssh/id_rsa", "TOKEN=project-ssh-key\n");
+    await put("sub/.ssh/config", "TOKEN=project-ssh-config\n");
+    await put(".env", "TOKEN=outside-dotenv\n", outside);
+    await put("secret.txt", "TOKEN=outside-file\n", outside);
+    await symlink(join(outside, "secret.txt"), join(project, "linked-secret.txt"));
+    await symlink(outside, join(project, "linked-dir"));
 
-    mockReadFile.mockImplementation((filePath: string) => {
-      if (filePath.endsWith("binary.dat")) return Promise.reject(new Error("Cannot read binary"));
-      if (filePath.endsWith("text.txt")) return Promise.resolve("hello FIND_ME\n");
-      return Promise.reject(new Error("ENOENT"));
-    });
+    for (const directory of [".", project]) {
+      const result = await tool.execute({ directory, pattern: "TOKEN|SECRET|PASSWORD" }, context);
+      expect(result.content).toContain("Found 1 match(es)");
+      expect(result.content).toContain("notes.txt:1: TOKEN=visible-project-line");
+      expect(result.content).not.toMatch(/project-dotenv|project-ssh|outside-/);
+    }
 
-    const result = await tool.execute({ directory: "/project", pattern: "FIND_ME" }, dummyContext);
-    expect(result.content).toContain("Found 1 match(es)");
-    expect(result.content).toContain("text.txt:1:");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Security: directory traversal / sensitive path rejection
-// ---------------------------------------------------------------------------
-
-describe("security: sensitive path rejection", () => {
-  const statsTool = findTool("file_stats");
-  const largeTool = findTool("file_find_large");
-  const searchTool = findTool("file_line_search");
-
-  it("rejects /etc for file_find_large", async () => {
-    mockRealpath.mockResolvedValue("/etc");
-    const result = await largeTool.execute({ directory: "/etc" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
+    for (const directory of ["..", outside, join(project, "linked-dir"), "/"]) {
+      const result = await tool.execute({ directory, pattern: "TOKEN" }, context);
+      expect(result.content, directory).toContain("outside the project directory");
+    }
+    const ssh = await tool.execute({ directory: "sub/.ssh", pattern: "TOKEN" }, context);
+    expect(ssh.content).toContain("sensitive files is not permitted");
   });
 
-  it("rejects ~/.ssh for file_line_search", async () => {
-    const sshPath = "/Users/testuser/.ssh";
-    mockRealpath.mockResolvedValue(sshPath);
-    const result = await searchTool.execute({ directory: sshPath, pattern: "key" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-    expect(mockReaddir).not.toHaveBeenCalled();
-  });
-
-  it("rejects symlink pointing to sensitive dir", async () => {
-    mockRealpath.mockResolvedValue("/etc");
-    const result = await largeTool.execute({ directory: "/project/symlink-to-etc" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-  });
-
-  it("rejects file_stats for sensitive file path", async () => {
-    mockRealpath.mockResolvedValue("/etc/shadow");
-    const result = await statsTool.execute({ path: "/etc/shadow" }, dummyContext);
-    expect(result.content).toContain("Error");
-    expect(result.content).toContain("not permitted");
-  });
-
-  it("allows a normal directory", async () => {
-    mockRealpath.mockResolvedValue("/home/user/project");
-    setupTree({
-      "/home/user/project": [file("readme.txt")],
-    });
-    mockReadFile.mockResolvedValue("hello\n");
-
-    const result = await searchTool.execute({ directory: "/home/user/project", pattern: "hello" }, dummyContext);
+  it.skipIf(!canMkfifo)("never opens a FIFO in the project (the walk used to block on it)", async () => {
+    await put("notes.txt", "TOKEN=visible\n");
+    const fifo = join(project, "pipe");
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    fifos.push(fifo);
+    const result = await Promise.race([
+      tool.execute({ directory: ".", pattern: "TOKEN" }, context),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("file_line_search blocked on a FIFO")), 5_000)),
+    ]);
     expect(result.content).toContain("Found 1 match(es)");
   });
 });

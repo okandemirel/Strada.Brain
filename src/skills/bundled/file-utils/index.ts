@@ -1,85 +1,32 @@
 // ---------------------------------------------------------------------------
 // File Utils bundled skill — file analysis tools for stats, large files, and search.
+//
+// SEC-2: every path is resolved inside the session's project through the
+// same path-guard as the built-in file tools, walks visit only regular files
+// and skip sensitive paths entry by entry, reads and walks are bounded, and
+// the caller's regex runs in a worker with a timeout (see ../../project-files.ts).
 // ---------------------------------------------------------------------------
 
 import type { ITool, ToolContext, ToolExecutionResult } from "../../../agents/tools/tool.interface.js";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { lstat } from "node:fs/promises";
+import {
+  MAX_SEARCH_PATTERN_LENGTH,
+  readRegularFile,
+  resolveProjectPath,
+  searchLinesInWorker,
+  walkProjectFiles,
+  type ProjectWalk,
+  type SearchableText,
+} from "../../project-files.js";
 
-// ---------------------------------------------------------------------------
-// Security
-// ---------------------------------------------------------------------------
+/** Largest file `file_stats` reads. */
+const MAX_STATS_FILE_BYTES = 16 * 1024 * 1024;
+/** Largest single file `file_line_search` reads (the built-in grep's limit). */
+const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
+/** Total bytes `file_line_search` reads in one call. */
+const MAX_SEARCH_TOTAL_BYTES = 16 * 1024 * 1024;
 
-/**
- * Sensitive path prefixes that must never be walked, regardless of the
- * directory argument supplied by the LLM or user.
- */
-const SENSITIVE_PATH_PATTERNS: RegExp[] = [
-  /[/\\]\.ssh([/\\]|$)/i,
-  /[/\\]\.gnupg([/\\]|$)/i,
-  /[/\\]\.aws([/\\]|$)/i,
-  /[/\\]\.config([/\\]|$)/i,
-  /^\/etc(\/|$)/,
-  /^\/root(\/|$)/,
-  /^\/proc(\/|$)/,
-  /^\/sys(\/|$)/,
-];
-
-/**
- * Resolve and validate the directory path. Rejects null bytes, symlink
- * escapes to non-existent ancestors, and sensitive system directories.
- */
-async function resolveAndValidateDir(directory: string): Promise<{ ok: true; resolved: string } | { ok: false; error: string }> {
-  if (directory.includes("\0")) {
-    return { ok: false, error: "Directory path contains invalid characters." };
-  }
-
-  const normalized = resolve(directory);
-
-  // Resolve symlinks so a symlink pointing to /etc cannot bypass the check
-  let resolved: string;
-  try {
-    resolved = await realpath(normalized);
-  } catch {
-    // Path does not exist yet or is unreadable — use normalize without realpath
-    resolved = normalized;
-  }
-
-  for (const pattern of SENSITIVE_PATH_PATTERNS) {
-    if (pattern.test(resolved)) {
-      return { ok: false, error: "Access to this directory is not permitted." };
-    }
-  }
-
-  return { ok: true, resolved };
-}
-
-/**
- * Validate a file path for security: no null bytes, resolve realpath,
- * reject sensitive paths.
- */
-async function resolveAndValidateFile(filePath: string): Promise<{ ok: true; resolved: string } | { ok: false; error: string }> {
-  if (filePath.includes("\0")) {
-    return { ok: false, error: "File path contains invalid characters." };
-  }
-
-  const normalized = resolve(filePath);
-
-  let resolved: string;
-  try {
-    resolved = await realpath(normalized);
-  } catch {
-    resolved = normalized;
-  }
-
-  for (const pattern of SENSITIVE_PATH_PATTERNS) {
-    if (pattern.test(resolved)) {
-      return { ok: false, error: "Access to this file is not permitted." };
-    }
-  }
-
-  return { ok: true, resolved };
-}
+const PATH_HINT = "relative to the project root (an absolute path must be inside the project)";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,91 +38,47 @@ interface FileWithSize {
 }
 
 /**
- * Recursively collect files and their sizes under `dir`.
+ * Collect regular files of at least `minSizeBytes` under `dir`.
  * Returns paths relative to `dir`.
  */
-async function findFilesWithSizes(dir: string, minSizeBytes: number): Promise<FileWithSize[]> {
+async function findFilesWithSizes(dir: string, minSizeBytes: number, walk: ProjectWalk): Promise<FileWithSize[]> {
   const results: FileWithSize[] = [];
-
-  async function walk(current: string): Promise<void> {
-    let entries;
+  for await (const file of walkProjectFiles(dir, walk)) {
     try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else {
-        try {
-          const st = await stat(fullPath);
-          if (st.size >= minSizeBytes) {
-            results.push({ path: relative(dir, fullPath), sizeBytes: st.size });
-          }
-        } catch {
-          // File unreadable — skip
-        }
+      const st = await lstat(file.fullPath);
+      if (st.isFile() && st.size >= minSizeBytes) {
+        results.push({ path: file.relPath, sizeBytes: st.size });
       }
+    } catch {
+      // File vanished or unreadable — skip
     }
   }
-
-  await walk(dir);
   return results;
 }
 
-interface LineMatch {
-  file: string;
-  line: number;
-  text: string;
-}
-
-/**
- * Search for a regex pattern in all files under `dir`.
- * Returns matching file:line pairs.
- */
-async function searchFilesForPattern(dir: string, pattern: RegExp, maxResults: number): Promise<LineMatch[]> {
-  const results: LineMatch[] = [];
-
-  async function walk(current: string): Promise<void> {
-    if (results.length >= maxResults) return;
-
-    let entries;
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      return;
+/** The text of the files under `dir`, within the per-file and total byte budgets. */
+async function collectSearchableText(
+  dir: string,
+  walk: ProjectWalk,
+): Promise<{ files: SearchableText[]; skippedLarge: number }> {
+  const files: SearchableText[] = [];
+  let totalBytes = 0;
+  let skippedLarge = 0;
+  for await (const file of walkProjectFiles(dir, walk)) {
+    const read = await readRegularFile(file.fullPath, MAX_SEARCH_FILE_BYTES);
+    if (read.kind === "too-large") {
+      skippedLarge += 1;
+      continue;
     }
-    for (const entry of entries) {
-      if (results.length >= maxResults) return;
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else {
-        try {
-          const content = await readFile(fullPath, "utf-8");
-          const lines = content.split("\n");
-          for (let i = 0; i < lines.length; i++) {
-            if (results.length >= maxResults) return;
-            const line = lines[i] ?? "";
-            if (pattern.test(line)) {
-              results.push({
-                file: relative(dir, fullPath),
-                line: i + 1,
-                text: line.trim(),
-              });
-            }
-          }
-        } catch {
-          // File unreadable (binary, permissions, etc.) — skip
-        }
-      }
+    if (read.kind !== "text") continue;
+    if (totalBytes + read.size > MAX_SEARCH_TOTAL_BYTES) {
+      walk.truncated = true;
+      break;
     }
+    totalBytes += read.size;
+    files.push({ file: file.relPath, text: read.text });
   }
-
-  await walk(dir);
-  return results;
+  return { files, skippedLarge };
 }
 
 /**
@@ -187,6 +90,8 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
+
+const TRUNCATED_NOTE = "\n\n[Scan limit reached — results may be incomplete; narrow the directory]";
 
 // ---------------------------------------------------------------------------
 // Tools
@@ -200,66 +105,62 @@ const fileStats: ITool = {
     properties: {
       path: {
         type: "string",
-        description: "Path to the file to analyze",
+        description: `Path to the file to analyze, ${PATH_HINT}`,
       },
     },
     required: ["path"],
   },
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolExecutionResult> {
     const filePath = typeof input["path"] === "string" ? input["path"] : "";
     if (!filePath) {
       return { content: "Error: path parameter is required." };
     }
 
-    const validation = await resolveAndValidateFile(filePath);
+    const validation = await resolveProjectPath(context, filePath);
     if (!validation.ok) {
       return { content: `Error: ${validation.error}` };
     }
 
-    try {
-      const [content, fileStat] = await Promise.all([
-        readFile(validation.resolved, "utf-8"),
-        stat(validation.resolved),
-      ]);
-
-      if (!fileStat.isFile()) {
-        return { content: "Error: path is not a file." };
-      }
-
-      const lines = content.split("\n");
-      const lineCount = lines.length;
-      const wordCount = content.split(/\s+/).filter((w) => w.length > 0).length;
-      const charCount = content.length;
-      const sizeBytes = fileStat.size;
-
-      return {
-        content: [
-          `File: ${validation.resolved}`,
-          `Lines: ${lineCount}`,
-          `Words: ${wordCount}`,
-          `Characters: ${charCount}`,
-          `Size: ${formatBytes(sizeBytes)}`,
-        ].join("\n"),
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { content: `Error: ${message}` };
+    const read = await readRegularFile(validation.fullPath, MAX_STATS_FILE_BYTES);
+    if (read.kind === "error") {
+      return { content: `Error: ${read.message}` };
     }
+    if (read.kind === "not-a-file") {
+      return { content: "Error: path is not a file." };
+    }
+    if (read.kind === "too-large") {
+      return { content: `Error: file is too large to analyze (${formatBytes(read.size)}; limit ${formatBytes(MAX_STATS_FILE_BYTES)}).` };
+    }
+
+    const content = read.text;
+    const lineCount = content.split("\n").length;
+    const wordCount = content.split(/\s+/).filter((w) => w.length > 0).length;
+    const charCount = content.length;
+
+    return {
+      content: [
+        `File: ${validation.fullPath}`,
+        `Lines: ${lineCount}`,
+        `Words: ${wordCount}`,
+        `Characters: ${charCount}`,
+        `Size: ${formatBytes(read.size)}`,
+      ].join("\n"),
+    };
   },
 };
 
 const fileFindLarge: ITool = {
   name: "file_find_large",
-  description: "Find files larger than a given threshold in a directory. Returns up to 20 results sorted by size (largest first).",
+  description: "Find files larger than a given threshold in a project directory. Returns up to 20 results sorted by size (largest first).",
   inputSchema: {
     type: "object" as const,
     properties: {
       directory: {
         type: "string",
-        description: "Root directory to search",
+        description: `Root directory to search, ${PATH_HINT}`,
       },
       minSizeKb: {
         type: "number",
@@ -270,14 +171,14 @@ const fileFindLarge: ITool = {
   },
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolExecutionResult> {
     const directory = typeof input["directory"] === "string" ? input["directory"] : "";
     if (!directory) {
       return { content: "Error: directory parameter is required." };
     }
 
-    const validation = await resolveAndValidateDir(directory);
+    const validation = await resolveProjectPath(context, directory);
     if (!validation.ok) {
       return { content: `Error: ${validation.error}` };
     }
@@ -286,10 +187,12 @@ const fileFindLarge: ITool = {
     const minSizeBytes = minSizeKb * 1024;
     const maxResults = 20;
 
-    const files = await findFilesWithSizes(validation.resolved, minSizeBytes);
+    const walk: ProjectWalk = { truncated: false };
+    const files = await findFilesWithSizes(validation.fullPath, minSizeBytes, walk);
+    const truncatedNote = walk.truncated ? TRUNCATED_NOTE : "";
 
     if (files.length === 0) {
-      return { content: `No files larger than ${formatBytes(minSizeBytes)} found.` };
+      return { content: `No files larger than ${formatBytes(minSizeBytes)} found.${truncatedNote}` };
     }
 
     // Sort by size descending and take top results
@@ -298,20 +201,20 @@ const fileFindLarge: ITool = {
 
     const lines = top.map((f) => `${formatBytes(f.sizeBytes).padStart(10)}  ${f.path}`);
     return {
-      content: `Found ${files.length} file(s) larger than ${formatBytes(minSizeBytes)}:\n${lines.join("\n")}`,
+      content: `Found ${files.length} file(s) larger than ${formatBytes(minSizeBytes)}:\n${lines.join("\n")}${truncatedNote}`,
     };
   },
 };
 
 const fileLineSearch: ITool = {
   name: "file_line_search",
-  description: "Search for a regex pattern in files within a directory. Returns matching file:line pairs (max 50 results).",
+  description: "Search for a regex pattern in files within a project directory. Returns matching file:line pairs (max 50 results).",
   inputSchema: {
     type: "object" as const,
     properties: {
       directory: {
         type: "string",
-        description: "Root directory to search",
+        description: `Root directory to search, ${PATH_HINT}`,
       },
       pattern: {
         type: "string",
@@ -322,7 +225,7 @@ const fileLineSearch: ITool = {
   },
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolExecutionResult> {
     const directory = typeof input["directory"] === "string" ? input["directory"] : "";
     if (!directory) {
@@ -333,34 +236,46 @@ const fileLineSearch: ITool = {
     if (!patternStr) {
       return { content: "Error: pattern parameter is required." };
     }
-
-    const validation = await resolveAndValidateDir(directory);
-    if (!validation.ok) {
-      return { content: `Error: ${validation.error}` };
+    if (patternStr.length > MAX_SEARCH_PATTERN_LENGTH) {
+      return { content: `Error: pattern too long (max ${MAX_SEARCH_PATTERN_LENGTH} characters)`, isError: true };
     }
-
-    let regex: RegExp;
     try {
-      // Reject obviously dangerous patterns that may cause catastrophic backtracking (ReDoS)
-      if (/(\+\+|\*\*|\{\d{3,}\})/.test(patternStr)) {
-        return { content: "Pattern rejected: potentially unsafe regex", isError: true };
-      }
-      regex = new RegExp(patternStr);
+      // Compiling is safe on this thread; only matching can run away.
+      new RegExp(patternStr);
     } catch (e) {
       return { content: `Error: Invalid regex: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
 
+    const validation = await resolveProjectPath(context, directory);
+    if (!validation.ok) {
+      return { content: `Error: ${validation.error}` };
+    }
+
     const maxResults = 50;
-    const matches = await searchFilesForPattern(validation.resolved, regex, maxResults);
+    const walk: ProjectWalk = { truncated: false };
+    const { files, skippedLarge } = await collectSearchableText(validation.fullPath, walk);
+    let matches;
+    try {
+      matches = await searchLinesInWorker(patternStr, files, maxResults);
+    } catch (e) {
+      return { content: `Error: search failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+    }
+    if (matches === null) {
+      return { content: "Error: the pattern took too long to evaluate and was stopped; simplify the regex.", isError: true };
+    }
+
+    const notes =
+      (skippedLarge > 0 ? `\n\n[${skippedLarge} file(s) over ${formatBytes(MAX_SEARCH_FILE_BYTES)} were not searched]` : "") +
+      (walk.truncated ? TRUNCATED_NOTE : "");
 
     if (matches.length === 0) {
-      return { content: `No matches found for pattern "${patternStr}".` };
+      return { content: `No matches found for pattern "${patternStr}".${notes}` };
     }
 
     const lines = matches.map((m) => `${m.file}:${m.line}: ${m.text}`);
     const suffix = matches.length >= maxResults ? `\n\n[Results limited to ${maxResults} matches]` : "";
     return {
-      content: `Found ${matches.length} match(es) for "${patternStr}":\n${lines.join("\n")}${suffix}`,
+      content: `Found ${matches.length} match(es) for "${patternStr}":\n${lines.join("\n")}${suffix}${notes}`,
     };
   },
 };
