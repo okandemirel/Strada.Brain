@@ -121,4 +121,19 @@ describe("FileEditTool", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
+
+  // String.prototype.replace with a string replacement expands `$` patterns,
+  // so a single (non-replace_all) edit used to write `$$` as `$`, `$&` as the
+  // matched text, and `$'` / `` $` `` as the rest of the file around it.
+  it("writes `$` replacement patterns in new_string verbatim", async () => {
+    const newString = "a $$ b $& c $' d $` e $1 f";
+    const result = await tool.execute(
+      { path: "test.txt", old_string: "foo bar baz", new_string: newString },
+      ctx
+    );
+    expect(result.isError).toBeUndefined();
+
+    const updated = readFileSync(join(tempDir, "test.txt"), "utf-8");
+    expect(updated).toBe(`hello world hello\n${newString}\nhello again\n`);
+  });
 });

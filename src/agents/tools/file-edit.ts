@@ -125,7 +125,12 @@ export class FileEditTool implements ITool {
         replacementCount = parts.length - 1;
         newContent = parts.join(newString);
       } else {
-        newContent = content.replace(oldString, newString);
+        // Spliced by index, not String.prototype.replace: a string replacement
+        // there expands `$&`, `$'`, `` $` `` and `$$`, so new_string holding
+        // any of them (shell, PowerShell, regex, C# text) was written mangled
+        // while the result still said "1 replacement made".
+        const at = content.indexOf(oldString);
+        newContent = content.slice(0, at) + newString + content.slice(at + oldString.length);
         replacementCount = 1;
       }
 
