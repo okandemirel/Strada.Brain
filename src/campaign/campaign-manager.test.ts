@@ -9426,4 +9426,56 @@ describe("CampaignManager", () => {
       expect(storage.get(campaign.id)!.state).toBe("cancelled");
     });
   });
+
+  describe("only the campaign's owner answers its GDD gate, and only on purpose (CMP-4)", () => {
+    const say = (text: string, userId = "u1"): Promise<boolean> =>
+      manager.tryHandleIncoming({ channelType: "cli", chatId: "cli-local", userId, text, timestamp: new Date() } as unknown as IncomingMessage);
+    const planMilestones = (): ReturnType<typeof vi.fn> =>
+      (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
+
+    const atTheGate = async (): Promise<string> => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(messages.at(-1)!.text).toContain("revise:");
+      return campaign.id;
+    };
+
+    it("another person's approval in the same chat is not the gate's answer", async () => {
+      const id = await atTheGate();
+      expect(await say("evet", "someone-else")).toBe(false);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(storage.get(id)!.state).toBe("awaiting-approval");
+      expect(storage.get(id)!.gddSha256).toBeUndefined();
+      expect(planMilestones()).not.toHaveBeenCalled();
+      // …nor is their revision.
+      expect(await say("revise: make it about cats", "someone-else")).toBe(false);
+      expect(storage.get(id)!.draftAttempts).toBe(0);
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("an unrelated message from the owner falls through instead of spending a revision round", async () => {
+      const id = await atTheGate();
+      expect(await say("why is the build red?")).toBe(false);
+      expect(await say("ok")).toBe(false); // bare "ok" is conversation, not an approval
+      const after = storage.get(id)!;
+      expect(after.state).toBe("awaiting-approval");
+      expect(after.draftAttempts).toBe(0);
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("the owner's explicit revision redrafts with the note, and the owner's approval builds", async () => {
+      const id = await atTheGate();
+      expect(await say("revise: make it about cats")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(tasks.submitted[1]!.prompt).toContain("make it about cats");
+      expect(tasks.submitted[1]!.prompt).not.toContain("revise:");
+      expect(storage.get(id)!.draftAttempts).toBe(1);
+
+      tasks.emit("task:completed", "task_2", "revised GDD written");
+      await waitFor(() => expect(storage.get(id)!.state).toBe("awaiting-approval"));
+      expect(await say("evet")).toBe(true);
+      await waitFor(() => expect(storage.get(id)!.state).toBe("executing"));
+    });
+  });
 });

@@ -219,7 +219,18 @@ export interface CampaignManagerOptions {
   styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
 }
 
-const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|ok|okay|approve[ds]?|lgtm|devam|go ahead|go)[.!\s]*$/i;
+/**
+ * The gate's approval words. Bare "ok", "go" and "devam" are not among them
+ * (CMP-4): they are ordinary conversation, and "devam" is also how a person
+ * resumes other work — none of them should start a multi-day paid build.
+ */
+const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|approve[ds]?|lgtm|go ahead)[.!\s]*$/i;
+/**
+ * A revision is ASKED FOR, not inferred (CMP-4): "revise: …" / "revizyon: …".
+ * Any other message while the gate waits is ordinary conversation — an
+ * unrelated question used to become a paid redraft and spend a revision round.
+ */
+const REVISE_RE = /^(?:revise|revision|change|revize|revizyon|değiştir|degistir)\s*[:\-–—]\s*(\S[\s\S]*)$/i;
 /** "amend gdd" / "/campaign amend gdd" / "gdd amendment" / "gdd değişikliğini onayla". */
 const AMEND_GDD_RE = /^\/?(?:campaign\s+)?(?:amend\s+(?:the\s+)?gdd|gdd\s+amend(?:ment)?|accept\s+(?:the\s+)?gdd\s+(?:change|amendment)|gdd\s+değişikliğini\s+onayla)[.!\s]*$/i;
 
@@ -1077,7 +1088,7 @@ export class CampaignManager {
     // The escape hatch first: a cancel must work in every active state,
     // the approval gate included.
     if (await this.tryHandleCancel(msg.chatId, msg.text, msg.userId)) return true;
-    if (await this.tryHandleApproval(msg.chatId, msg.text)) return true;
+    if (await this.tryHandleApproval(msg.chatId, msg.text, msg.userId)) return true;
     if (await this.tryHandleAmendment(msg.chatId, msg.text)) return true;
     if (await this.tryHandleRevive(msg.chatId, msg.text)) return true;
 
@@ -1162,10 +1173,19 @@ export class CampaignManager {
     return true;
   }
 
-  /** The approval gate. Returns true when the message was consumed by it. */
-  async tryHandleApproval(chatId: string, text: string): Promise<boolean> {
+  /**
+   * The approval gate. Returns true when the message was consumed by it.
+   *
+   * `userId` is the chat caller (the router passes every message's sender):
+   * only the campaign's owner answers its gate, and only an approval or an
+   * explicit "revise: …" is an answer — anything else falls through to
+   * ordinary routing (CMP-4). Undefined is a programmatic answer, where the
+   * whole text is the decision (approval words, or else the revision note).
+   */
+  async tryHandleApproval(chatId: string, text: string, userId?: string): Promise<boolean> {
     const campaign = this.storage.findAwaitingApproval(chatId);
     if (!campaign) return false;
+    if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) return false;
 
     const trimmed = text.trim();
     if (APPROVE_RE.test(trimmed)) {
@@ -1222,6 +1242,9 @@ export class CampaignManager {
       return true;
     }
 
+    const revisionNote = userId === undefined ? trimmed : REVISE_RE.exec(trimmed)?.[1]?.trim();
+    if (revisionNote === undefined || revisionNote === "") return false;
+
     // CLAIM THE GATE BEFORE YIELDING, on the revision path too. The approval
     // branch above learned this in 2026-09-02; this one still announced
     // first, and the announcement is a real await with no per-chat
@@ -1249,7 +1272,7 @@ export class CampaignManager {
       campaign,
       `Revision noted (round ${campaign.draftAttempts}/${this.maxDraftAttempts}) — rewriting the GDD.`,
     );
-    this.submitDraft(campaign, trimmed);
+    this.submitDraft(campaign, revisionNote);
     return true;
   }
 
@@ -2102,7 +2125,7 @@ export class CampaignManager {
     await this.tell(
       campaign,
       `${lead} — the GDD draft at \`${campaign.gddPath}\` was never approved, so the build does not start from it. ` +
-        `Review it — reply **evet/onay** to start the build, or write what to change (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,
+        `Review it — reply **evet/onay** to start the build, or **revise: <what to change>** (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,
     );
   }
 
@@ -2822,7 +2845,7 @@ export class CampaignManager {
       this.persist(campaign);
       await this.tell(
         campaign,
-        `GDD drafted at \`${gddPath}\`. Review it — reply **evet/onay** to start the build, or write what to change (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,
+        `GDD drafted at \`${gddPath}\`. Review it — reply **evet/onay** to start the build, or **revise: <what to change>** (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,
       );
       return;
     }
