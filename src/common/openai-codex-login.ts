@@ -14,6 +14,17 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const CODEX_BIN = "codex";
+
+/**
+ * The platform's `codex` launcher (fixed, never user-derived). The npm install
+ * the hint below recommends puts `codex.cmd` on Windows, which a shell-less
+ * spawn never finds (it only tries .com/.exe), and Node refuses to run a .cmd
+ * without a shell (CVE-2024-27980), so Windows gets both, as claudeBin does.
+ * Every argv here is a fixed literal, so the shell sees no user input.
+ */
+function codexBin(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "codex.cmd" : CODEX_BIN;
+}
 const AUTH_URL_RE = /(https?:\/\/[^\s"']+)/;
 /** A login attempt is considered "in flight" for this long before we allow a new spawn. */
 const LOGIN_DEDUP_MS = 5 * 60_000;
@@ -100,9 +111,16 @@ export interface CodexLoginStart {
 }
 
 /** Returns true when the `codex` CLI is callable on this machine. */
-export function isCodexCliAvailable(spawnSyncFn: typeof spawnSync = spawnSync): boolean {
+export function isCodexCliAvailable(
+  spawnSyncFn: typeof spawnSync = spawnSync,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   try {
-    const result = spawnSyncFn(CODEX_BIN, ["--version"], { stdio: "ignore", timeout: 5000 });
+    const result = spawnSyncFn(codexBin(platform), ["--version"], {
+      stdio: "ignore",
+      timeout: 5000,
+      shell: platform === "win32",
+    });
     return result.status === 0;
   } catch {
     return false;
@@ -127,6 +145,7 @@ interface StartCodexLoginOptions {
   /** How long to wait for the auth URL before resolving anyway. */
   readonly graceMs?: number;
   readonly nowMs?: number;
+  readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -136,12 +155,13 @@ interface StartCodexLoginOptions {
  */
 export function startCodexLogin(options: StartCodexLoginOptions = {}): Promise<CodexLoginStart> {
   const spawnFn = options.spawnFn ?? spawn;
-  const isAvailable = options.isAvailable ?? (() => isCodexCliAvailable());
+  const platform = options.platform ?? process.platform;
+  const isAvailable = options.isAvailable ?? (() => isCodexCliAvailable(spawnSync, platform));
   const graceMs = options.graceMs ?? 4000;
   const nowMs = options.nowMs ?? Date.now();
 
   if (!isAvailable()) {
-    return Promise.resolve({ started: false, error: getCodexInstallHint() });
+    return Promise.resolve({ started: false, error: getCodexInstallHint(platform) });
   }
 
   if (activeLogin && nowMs - activeLogin.startedAtMs < LOGIN_DEDUP_MS) {
@@ -151,7 +171,11 @@ export function startCodexLogin(options: StartCodexLoginOptions = {}): Promise<C
   return new Promise<CodexLoginStart>((resolve) => {
     let child: ChildProcess;
     try {
-      child = spawnFn(CODEX_BIN, ["login"], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawnFn(codexBin(platform), ["login"], {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: platform === "win32",
+      });
     } catch (error) {
       activeLogin = null;
       resolve({ started: false, error: error instanceof Error ? error.message : String(error) });

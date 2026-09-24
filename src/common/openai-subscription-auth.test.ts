@@ -4,10 +4,38 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decodeJwtExpiryMs,
+  expandHomePath,
   inspectOpenAiSubscriptionAuth,
   refreshOpenAiSubscriptionToken,
   ensureOpenAiSubscriptionAuth,
+  OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "./openai-subscription-auth.js";
+
+// HOME is normally unset on Windows: the default ~/.codex/auth.json became
+// /.codex/auth.json (the drive root) while the Codex CLI writes it under the
+// user profile, so every check reported a missing auth file.
+describe("expandHomePath", () => {
+  it("uses the Windows user profile when HOME is unset", () => {
+    const expanded = expandHomePath("~/.codex/auth.json", { USERPROFILE: "C:\\Users\\u" }, "win32");
+    expect(expanded.startsWith("C:\\Users\\u")).toBe(true);
+    expect(expanded).toContain(".codex");
+    expect(expanded).toMatch(/auth\.json$/);
+  });
+
+  it("falls back to the OS home instead of the filesystem root", () => {
+    expect(expandHomePath("~/.codex/auth.json", {}, "linux")).toBe(path.join(os.homedir(), ".codex/auth.json"));
+  });
+
+  it("accepts a backslash after the tilde", () => {
+    expect(expandHomePath("~\\auth.json", { HOME: "/home/u" }, "linux")).toBe(path.join("/home/u", "auth.json"));
+  });
+
+  it("follows CODEX_HOME for the default auth file only", () => {
+    const env = { HOME: "/home/u", CODEX_HOME: "/srv/codex" };
+    expect(expandHomePath(OPENAI_CHATGPT_AUTH_DEFAULT_FILE, env, "linux")).toBe(path.join("/srv/codex", "auth.json"));
+    expect(expandHomePath("~/elsewhere/auth.json", env, "linux")).toBe(path.join("/home/u", "elsewhere/auth.json"));
+  });
+});
 
 function createJwt(expSecondsFromNow: number, extraClaims: Record<string, unknown> = {}): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");

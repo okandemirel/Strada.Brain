@@ -32,8 +32,16 @@ afterEach(() => {
 describe("isCodexCliAvailable", () => {
   it("returns true when `codex --version` exits 0", () => {
     const spawnSync = vi.fn().mockReturnValue({ status: 0 });
-    expect(isCodexCliAvailable(spawnSync as never)).toBe(true);
-    expect(spawnSync).toHaveBeenCalledWith("codex", ["--version"], expect.anything());
+    expect(isCodexCliAvailable(spawnSync as never, "linux")).toBe(true);
+    expect(spawnSync).toHaveBeenCalledWith("codex", ["--version"], expect.objectContaining({ shell: false }));
+  });
+
+  // npm installs `codex.cmd` on Windows; a shell-less spawn of "codex" never
+  // finds it, so the CLI always read as missing there.
+  it("probes codex.cmd through a shell on Windows", () => {
+    const spawnSync = vi.fn().mockReturnValue({ status: 0 });
+    expect(isCodexCliAvailable(spawnSync as never, "win32")).toBe(true);
+    expect(spawnSync).toHaveBeenCalledWith("codex.cmd", ["--version"], expect.objectContaining({ shell: true }));
   });
 
   it("returns false when codex exits non-zero", () => {
@@ -74,6 +82,7 @@ describe("startCodexLogin", () => {
       isAvailable: () => true,
       graceMs: 10_000,
       nowMs: 1000,
+      platform: "linux",
     });
 
     child.stdout.emit(
@@ -86,6 +95,22 @@ describe("startCodexLogin", () => {
     expect(result.started).toBe(true);
     expect(result.url).toBe("https://auth.openai.com/oauth?code=abc");
     expect(child.unref).toHaveBeenCalled();
+  });
+
+  it("spawns codex.cmd through a shell on Windows", async () => {
+    const child = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValue(child);
+    const promise = startCodexLogin({
+      spawnFn: spawnFn as never,
+      isAvailable: () => true,
+      graceMs: 10_000,
+      nowMs: 1000,
+      platform: "win32",
+    });
+    child.stdout.emit("data", Buffer.from("https://auth.openai.com/oauth?code=abc\n"));
+    await promise;
+
+    expect(spawnFn).toHaveBeenCalledWith("codex.cmd", ["login"], expect.objectContaining({ shell: true }));
   });
 
   it("resolves after the grace window even when no URL is printed", async () => {

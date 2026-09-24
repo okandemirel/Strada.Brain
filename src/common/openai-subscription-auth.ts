@@ -1,4 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 export const OPENAI_CHATGPT_AUTH_DEFAULT_FILE = "~/.codex/auth.json";
 /** Fallback OAuth issuer / client when they cannot be derived from the token. */
@@ -39,13 +41,30 @@ function normalizeBase64Url(base64Url: string): string {
   return `${normalized}${"=".repeat(4 - padding)}`;
 }
 
+/**
+ * Expand a leading `~/` or `~\` to the user's home directory.
+ *
+ * `HOME` alone was wrong on Windows, where it is normally unset: the default
+ * `~/.codex/auth.json` became `/.codex/auth.json` (the drive root) while the
+ * Codex CLI writes `%USERPROFILE%\.codex\auth.json`, so every check reported
+ * a missing auth file. The Windows profile comes first there (Codex ignores
+ * HOME on Windows), and the OS answer is the last resort everywhere. The
+ * DEFAULT auth file also follows Codex's own `CODEX_HOME` override.
+ */
 export function expandHomePath(
   pathValue: string,
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): string {
-  if (pathValue.startsWith("~/")) {
-    const home = env["HOME"] ?? "";
-    return `${home}/${pathValue.slice(2)}`;
+  const codexHome = env["CODEX_HOME"]?.trim();
+  if (pathValue === OPENAI_CHATGPT_AUTH_DEFAULT_FILE && codexHome) {
+    return path.join(path.resolve(codexHome), "auth.json");
+  }
+  if (pathValue === "~" || pathValue.startsWith("~/") || pathValue.startsWith("~\\")) {
+    const home =
+      (platform === "win32" ? env["USERPROFILE"] || env["HOME"] : env["HOME"] || env["USERPROFILE"]) ||
+      os.homedir();
+    return path.join(home, pathValue.slice(2));
   }
   return pathValue;
 }
