@@ -5652,6 +5652,17 @@ export class Orchestrator {
   /**
    * Clean up expired sessions (call periodically).
    */
+  /**
+   * Release what this instance holds past its useful life: the session manager's cleanup timer
+   * and the budget-config listener. For the per-agent and per-delegation instances that are
+   * dropped long before the process exits.
+   */
+  dispose(): void {
+    this.sessionManager.dispose();
+    this.budgetConfigUnsubscribe?.();
+    this.budgetConfigUnsubscribe = undefined;
+  }
+
   cleanupSessions(maxAgeMs: number = 3_600_000): void {
     const expired = this.sessionManager.cleanupSessions(maxAgeMs);
     // Only clear block counts for expired sessions, not all active ones

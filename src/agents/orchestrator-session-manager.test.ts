@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
 import { mkdtempSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { createLogger } from "../utils/logger.js";
 import { SessionManager, type SessionManagerDeps, type Session } from "./orchestrator-session-manager.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
@@ -46,6 +48,26 @@ describe("SessionManager", () => {
 
     const keys = [...sm.sessions.keys()];
     expect(keys).toEqual(["chat-2", "chat-1"]);
+  });
+
+  // ORC-11: the 6-hourly cleanup interval closed over the manager, so every per-agent and
+  // per-delegation Orchestrator (with its transcripts) lived as long as the process.
+  it("an undisposed SessionManager can be collected: its cleanup timer holds it only weakly", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const ref = ((): WeakRef<SessionManager> => new WeakRef(new SessionManager(createMockDeps())))();
+    for (let i = 0; i < 20 && ref.deref(); i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      gc();
+    }
+    expect(ref.deref()).toBeUndefined();
+  });
+
+  it("the cleanup timer never keeps the process alive", () => {
+    const sm = new SessionManager(createMockDeps());
+    const timer = (sm as unknown as { staleSessionCleanupInterval: { hasRef(): boolean } }).staleSessionCleanupInterval;
+    expect(timer.hasRef()).toBe(false);
+    sm.dispose();
   });
 
   // ORC-13: eviction dropped a running chat's lock and goal tree, and the restore path

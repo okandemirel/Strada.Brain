@@ -694,7 +694,18 @@ export class SessionManager {
 
     // Clean up stale sessions on startup and every 6 hours
     this.cleanupStaleSessions();
-    this.staleSessionCleanupInterval = setInterval(() => this.cleanupStaleSessions(), 6 * 60 * 60 * 1000);
+    // A SessionManager is built per Orchestrator — per agent and per delegation — and nothing
+    // disposes most of them. An interval closing over `this` kept every one alive (sessions,
+    // channel, memory manager) for the life of the process. The timer holds only a weak
+    // reference, stops itself once the manager is gone, and never keeps the process alive.
+    const self = new WeakRef(this);
+    const interval: ReturnType<typeof setInterval> = setInterval(() => {
+      const manager = self.deref();
+      if (manager) manager.cleanupStaleSessions();
+      else clearInterval(interval);
+    }, 6 * 60 * 60 * 1000);
+    interval.unref?.();
+    this.staleSessionCleanupInterval = interval;
   }
 
   /** Stop the periodic stale session cleanup. */
