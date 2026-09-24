@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializeRuntimeEnvironment, resolveDotenvPath, resolveRuntimePaths } from "./runtime-paths.js";
+import { initializeRuntimeEnvironment, resolveDotenvPath, resolveInstallRoot, resolveRuntimePaths } from "./runtime-paths.js";
 
 describe("runtime paths", () => {
   afterEach(() => {
@@ -198,6 +200,48 @@ describe("STRADA_SOURCE_CHECKOUT is three-state (plan 6.8)", () => {
     for (const value of [undefined, "", "   ", "maybe"]) {
       const env = value === undefined ? {} : { STRADA_SOURCE_CHECKOUT: value };
       expect(resolveRuntimePaths({ ...inRepo, env }).sourceCheckout, String(value)).toBe(true);
+    }
+  });
+});
+
+/**
+ * The install root was "two directories above the calling module". Right for
+ * src/config/config.ts; the repository's PARENT for src/index.ts and `src/`
+ * for bootstrap-stages — so without the launcher's STRADA_INSTALL_ROOT,
+ * config.ts loaded one `.env` while index.ts chdir'd to another root.
+ */
+describe("the install root does not depend on how deep the caller sits", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const urlOf = (rel: string): string => pathToFileURL(path.join(repoRoot, rel)).href;
+
+  it("resolves the same package root from every depth", () => {
+    for (const rel of ["src/index.ts", "src/config/config.ts", "src/core/bootstrap-stages/stage-runtime.ts"]) {
+      expect(resolveInstallRoot(urlOf(rel)), rel).toBe(repoRoot);
+    }
+  });
+
+  it("gives index.ts, config.ts and the bootstrap stages one runtime root", () => {
+    const opts = { env: {}, homeDir: "/Users/tester", cwd: "/Users/tester", platform: "darwin" as const };
+    const roots = ["src/index.ts", "src/config/config.ts", "src/core/bootstrap-stages/stage-daemon.ts"].map(
+      (rel) => resolveRuntimePaths({ ...opts, moduleUrl: urlOf(rel) }),
+    );
+    for (const r of roots) {
+      expect(r.installRoot).toBe(repoRoot);
+      expect(r.configRoot).toBe(roots[0]!.configRoot);
+    }
+  });
+
+  it("finds the package root of a packaged install from a nested dist module", () => {
+    const pkg = fs.mkdtempSync(path.join(os.tmpdir(), "strada-installroot-"));
+    try {
+      fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "strada-brain" }));
+      fs.mkdirSync(path.join(pkg, "dist", "core", "bootstrap-stages"), { recursive: true });
+      const nested = pathToFileURL(path.join(pkg, "dist", "core", "bootstrap-stages", "stage-runtime.js")).href;
+      const top = pathToFileURL(path.join(pkg, "dist", "index.js")).href;
+      expect(resolveInstallRoot(nested)).toBe(pkg);
+      expect(resolveInstallRoot(top)).toBe(pkg);
+    } finally {
+      fs.rmSync(pkg, { recursive: true, force: true });
     }
   });
 });

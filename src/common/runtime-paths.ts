@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,9 +38,41 @@ export function resolveLaunchCwd(
   return getSafeCurrentWorkingDirectory(homeDir);
 }
 
+const PACKAGE_NAME = "strada-brain";
+const installRootCache = new Map<string, string>();
+
+function isStradaPackageRoot(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { name?: unknown };
+    return pkg.name === PACKAGE_NAME;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The package root that contains `moduleUrl`: the nearest ancestor whose
+ * package.json names this package. It used to be "two directories up",
+ * which is right only for a module exactly two levels deep: src/index.ts
+ * resolved to the repository's PARENT and bootstrap-stages to `src/`, so
+ * index.ts, config.ts and the daemon disagreed on where `.env` and the
+ * runtime root live whenever the launcher's STRADA_INSTALL_ROOT was absent.
+ * The old answer stays as the fallback for a layout with no package.json.
+ */
 export function resolveInstallRoot(moduleUrl: string = import.meta.url): string {
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
-  return path.resolve(moduleDir, "..", "..");
+  const cached = installRootCache.get(moduleDir);
+  if (cached !== undefined) return cached;
+  let root = path.resolve(moduleDir, "..", "..");
+  for (let dir = moduleDir; ; dir = path.dirname(dir)) {
+    if (isStradaPackageRoot(dir)) {
+      root = dir;
+      break;
+    }
+    if (path.dirname(dir) === dir) break;
+  }
+  installRootCache.set(moduleDir, root);
+  return root;
 }
 
 export function resolveStradaHome(
