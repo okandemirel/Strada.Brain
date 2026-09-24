@@ -797,3 +797,46 @@ describe('useWebSocket with blocked storage (WEB-16)', () => {
     expect(socket.sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'message', text: 'quota' }))
   })
 })
+
+// WEB-18: the server can hold several confirmations for one chat; each new
+// frame replaced the dialog, and the replaced question could only time out.
+describe('useWebSocket concurrent confirmations (WEB-18)', () => {
+  beforeEach(installTestEnvironment)
+  afterEach(restoreTestEnvironment)
+
+  it('queues a second confirmation behind the first and shows it once the first is answered', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-q', reconnectToken: 'r', profileId: 'p' })
+      socket.emit('message', { type: 'confirmation', confirmId: 'bg-ask', question: 'Overwrite?', options: ['yes', 'no'] })
+      socket.emit('message', { type: 'confirmation', confirmId: 'plan', question: 'Approve plan?', options: ['Approve', 'Reject'] })
+    })
+    expect(useSessionStore.getState().confirmation?.confirmId).toBe('bg-ask')
+
+    act(() => { result.current.sendConfirmation('bg-ask', 'yes') })
+    act(() => { socket.emit('message', { type: 'confirmation_ack', confirmId: 'bg-ask', status: 'accepted' }) })
+    expect(useSessionStore.getState().confirmation?.confirmId).toBe('plan')
+
+    act(() => { result.current.sendConfirmation('plan', 'Approve') })
+    act(() => { socket.emit('message', { type: 'confirmation_ack', confirmId: 'plan', status: 'accepted' }) })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+    const replies = socket.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'confirmation_response')
+    expect(replies.map((m) => m.confirmId)).toEqual(['bg-ask', 'plan'])
+  })
+
+  it('drops a queued confirmation the server settles before it is shown', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-q2', reconnectToken: 'r', profileId: 'p' })
+      socket.emit('message', { type: 'confirmation', confirmId: 'first', question: 'A?', options: ['yes'] })
+      socket.emit('message', { type: 'confirmation', confirmId: 'second', question: 'B?', options: ['yes'] })
+      socket.emit('message', { type: 'confirmation_ack', confirmId: 'second', status: 'unknown' })
+      socket.emit('message', { type: 'confirmation_ack', confirmId: 'first', status: 'accepted' })
+    })
+    expect(useSessionStore.getState().confirmation).toBeNull()
+  })
+})

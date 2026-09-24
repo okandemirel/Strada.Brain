@@ -172,6 +172,10 @@ export function useWebSocket(): UseWebSocketReturn {
   // `connected`, otherwise a drop between ws.send and confirmation_ack leaves
   // the dialog pending:true forever (buttons and Escape disabled).
   const inflightConfirmationRef = useRef<{ confirmId: string; option: string; chatId: string | null } | null>(null)
+  // Confirmations waiting behind the one on screen. The server can hold several
+  // per chat (a background ask_user next to a plan review); each new one used to
+  // replace the dialog, and the replaced one could only time out (WEB-18).
+  const queuedConfirmationsRef = useRef<ConfirmationState[]>([])
   const sessionReadyRef = useRef(false)
   const mountedRef = useRef(true)
   const connectRef = useRef<(() => void) | null>(null)
@@ -311,8 +315,12 @@ export function useWebSocket(): UseWebSocketReturn {
         if (inflightConfirmationRef.current?.confirmId === confirmId) {
           inflightConfirmationRef.current = null
         }
-        // The session this question belonged to is gone: nobody can answer it.
-        if (current && current.confirmId === confirmId) store.setConfirmation(null)
+        // The session this question belonged to is gone: nobody can answer it,
+        // nor the ones queued behind it.
+        if (current && current.confirmId === confirmId) {
+          queuedConfirmationsRef.current = []
+          store.setConfirmation(null)
+        }
         return
       }
       // Sent is not applied: wait for the server's confirmation_ack, and keep
@@ -534,9 +542,12 @@ export function useWebSocket(): UseWebSocketReturn {
           }
           const store = useSessionStore.getState()
           const current = store.confirmation
+          if (ackId) {
+            queuedConfirmationsRef.current = queuedConfirmationsRef.current.filter((c) => c.confirmId !== ackId)
+          }
           if (!ackId || !current || current.confirmId !== ackId) break
           if (data.status === 'accepted') {
-            store.setConfirmation(null)
+            store.setConfirmation(queuedConfirmationsRef.current.shift() ?? null)
           } else {
             store.setConfirmation({ ...current, pending: false, error: 'expired' })
           }
@@ -679,12 +690,19 @@ export function useWebSocket(): UseWebSocketReturn {
             : []
           const cfDetails = typeof data.details === 'string' ? data.details : undefined
           if (!cfConfirmId || !cfQuestion || cfOptions.length === 0) break
-          useSessionStore.getState().setConfirmation({
+          const incoming: ConfirmationState = {
             confirmId: cfConfirmId,
             question: cfQuestion,
             options: cfOptions,
             details: cfDetails,
-          })
+          }
+          const shown = useSessionStore.getState().confirmation
+          if (!shown || shown.confirmId === cfConfirmId) {
+            useSessionStore.getState().setConfirmation(incoming)
+          } else {
+            const queue = queuedConfirmationsRef.current.filter((c) => c.confirmId !== cfConfirmId)
+            queuedConfirmationsRef.current = [...queue, incoming]
+          }
           break
         }
       }
@@ -731,6 +749,7 @@ export function useWebSocket(): UseWebSocketReturn {
       pendingMessageTimersRef.current.clear()
       pendingOutboundMessagesRef.current = []
       inflightConfirmationRef.current = null
+      queuedConfirmationsRef.current = []
       sessionReadyRef.current = false
       clearStableConnectionTimer()
       // Forget the identity as well: a later connect must not present the
@@ -850,7 +869,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [buildConfirmationOutbound, enqueueOrReconnect])
 
   const dismissConfirmation = useCallback(() => {
-    useSessionStore.getState().setConfirmation(null)
+    useSessionStore.getState().setConfirmation(queuedConfirmationsRef.current.shift() ?? null)
   }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
