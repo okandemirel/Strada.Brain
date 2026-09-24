@@ -18,10 +18,10 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import * as dotenv from "dotenv";
 import {
   buildSetupAccessUrl,
   SETUP_DEFAULT_ENV_KEYS,
-  setupOwnedEnvKeysFor,
   type SetupWizard,
 } from "./setup-wizard.js";
 import {
@@ -1064,15 +1064,54 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
  * Alternatively, launches the web-based SetupWizard if the user prefers.
  */
 /**
- * What the TERMINAL wizard is the authority for.
+ * What the TERMINAL wizard is the authority for: only what it asks about.
  *
- * It never asks about the daily budget, so it states nothing about it — and a
- * key the wizard owns but does not emit is REMOVED, which is why running
- * `strada setup` used to delete an existing STRADA_BUDGET_DAILY_USD and turn
- * a deliberate freeze into no limit at all (Codex round 9 #16, through the CLI
- * entry point instead of the portal's).
+ * A key the wizard owns but does not emit is REMOVED. Ownership used to be the
+ * web wizard's list, so a re-run of `strada setup` deleted every opt-out it
+ * never asked about — the daily budget (Codex round 9 #16), background
+ * autonomy and auto-update switched off, the daemon sub-limit, the preset and
+ * the model picks (COR-2). Everything outside this list survives.
  */
-export const TERMINAL_WIZARD_OWNED_ENV_KEYS = setupOwnedEnvKeysFor({});
+export const TERMINAL_WIZARD_OWNED_ENV_KEYS: ReadonlySet<string> = new Set<string>([
+  "UNITY_PROJECT_PATH",
+  ...Object.values(PROVIDER_ENV_KEY_MAP),
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AUTH_MODE",
+  "OPENAI_AUTH_MODE",
+  "OPENCODE_BASE_URL",
+  "OPENCODE_DEFAULT_MODEL",
+  "PROVIDER_CHAIN",
+  "RAG_ENABLED",
+  "EMBEDDING_PROVIDER",
+  "DEFAULT_CHANNEL",
+  ...Object.values(CHANNEL_CREDENTIAL_FIELDS).flat().map((field) => field.envKey),
+  "LANGUAGE_PREFERENCE",
+]);
+
+/**
+ * Written only when absent. The terminal wizard never asks for ports, so an
+ * existing WEB_CHANNEL_PORT=4000 is not reset to 3000 (COR-2).
+ */
+export const TERMINAL_WIZARD_DEFAULT_ENV_KEYS: ReadonlySet<string> = new Set<string>([
+  ...SETUP_DEFAULT_ENV_KEYS,
+  "WEB_CHANNEL_PORT",
+  "DASHBOARD_PORT",
+]);
+
+/**
+ * EMBEDDING_MODEL is a pick FOR one embedding provider: kept while that choice
+ * stands, removed when this run switches it, so a model chosen for one
+ * provider is never sent to another.
+ */
+export function terminalWizardOwnedEnvKeysFor(
+  existing: Record<string, string>,
+  generated: Record<string, string>,
+): ReadonlySet<string> {
+  const embeddingChoice = (env: Record<string, string>): string =>
+    env["RAG_ENABLED"]?.trim() === "false" ? "off" : env["EMBEDDING_PROVIDER"]?.trim() || "auto";
+  if (embeddingChoice(existing) === embeddingChoice(generated)) return TERMINAL_WIZARD_OWNED_ENV_KEYS;
+  return new Set([...TERMINAL_WIZARD_OWNED_ENV_KEYS, "EMBEDDING_MODEL"]);
+}
 
 export async function runTerminalWizard(
   options?: { mode?: "terminal" | "web" },
@@ -1593,9 +1632,15 @@ export async function runTerminalWizard(
 
     // Merge, never rewrite: hand-added keys survive, and the file is read
     // back so the summary shows what the runtime will load (plan 2.1).
+    let existingEnv: Record<string, string> = {};
+    try {
+      existingEnv = dotenv.parse(fs.readFileSync(envPath, "utf-8"));
+    } catch {
+      // No .env yet (or unreadable): nothing to compare the embedding choice with.
+    }
     const persisted = await persistSetup(envPath, envContent.split("\n"), {
-      ownedKeys: TERMINAL_WIZARD_OWNED_ENV_KEYS,
-      defaultKeys: SETUP_DEFAULT_ENV_KEYS,
+      ownedKeys: terminalWizardOwnedEnvKeysFor(existingEnv, dotenv.parse(envContent)),
+      defaultKeys: TERMINAL_WIZARD_DEFAULT_ENV_KEYS,
     });
 
     console.log("\n\u2705 .env " + (persisted.replaced.length > 0 || persisted.preserved.length > 0 ? "updated" : "created") + "!");

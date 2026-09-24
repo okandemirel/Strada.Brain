@@ -19,7 +19,9 @@ import {
   validateChannelCredentials,
   hasAutoEmbeddingCandidate,
   resolveRagSetup,
+  TERMINAL_WIZARD_DEFAULT_ENV_KEYS,
   TERMINAL_WIZARD_OWNED_ENV_KEYS,
+  terminalWizardOwnedEnvKeysFor,
   projectLocalMcpAwaitingTrust,
 } from "./terminal-wizard.js";
 import { SETUP_DEFAULT_ENV_KEYS } from "./setup-wizard.js";
@@ -550,6 +552,71 @@ describe("the terminal wizard states nothing about the budget", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the terminal wizard owns only what it asks about (COR-2)", () => {
+  const answers = {
+    unityProjectPath: "/Users/test/MyGame",
+    providerChain: ["kimi"],
+    providerCredentials: { kimi: "sk-kimi-new" },
+    embeddingProvider: "ollama",
+    channel: "web",
+    language: "en",
+  };
+
+  it("keeps the opt-outs, limits, preset, model picks and port it never asked about", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-cli-owned-"));
+    try {
+      const envPath = join(dir, ".env");
+      const existing = [
+        "STRADA_DAEMON_ENABLED=false",
+        "STRADA_DAEMON_DAILY_BUDGET=2",
+        "AUTO_UPDATE_ENABLED=false",
+        "AUTONOMOUS_DEFAULT_ENABLED=true",
+        "SYSTEM_PRESET=budget",
+        "CLAUDE_MODEL=claude-sonnet-5",
+        "EMBEDDING_PROVIDER=ollama",
+        "EMBEDDING_MODEL=bge-m3",
+        "WEB_CHANNEL_PORT=4000",
+        "DEEPSEEK_API_KEY=deselected",
+        "TELEGRAM_BOT_TOKEN=deselected",
+        "",
+      ].join("\n");
+      writeFileSync(envPath, existing);
+      const content = generateEnvContent(answers);
+      const result = await persistSetup(envPath, content.split("\n"), {
+        ownedKeys: terminalWizardOwnedEnvKeysFor(dotenvParse(existing), dotenvParse(content)),
+        defaultKeys: TERMINAL_WIZARD_DEFAULT_ENV_KEYS,
+      });
+      expect(result.effective).toMatchObject({
+        STRADA_DAEMON_ENABLED: "false",
+        STRADA_DAEMON_DAILY_BUDGET: "2",
+        AUTO_UPDATE_ENABLED: "false",
+        AUTONOMOUS_DEFAULT_ENABLED: "true",
+        SYSTEM_PRESET: "budget",
+        CLAUDE_MODEL: "claude-sonnet-5",
+        EMBEDDING_MODEL: "bge-m3",
+        WEB_CHANNEL_PORT: "4000",
+        KIMI_API_KEY: "sk-kimi-new",
+      });
+      expect(result.removed.sort()).toEqual(["DEEPSEEK_API_KEY", "TELEGRAM_BOT_TOKEN"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("every key it writes is one it owns or writes only when absent (guard)", () => {
+    const content = generateEnvContent({ ...answers, channel: "telegram", channelCredentials: { TELEGRAM_BOT_TOKEN: "1:A", ALLOWED_TELEGRAM_USER_IDS: "1" } });
+    for (const key of Object.keys(dotenvParse(content))) {
+      expect(TERMINAL_WIZARD_OWNED_ENV_KEYS.has(key) || TERMINAL_WIZARD_DEFAULT_ENV_KEYS.has(key), key).toBe(true);
+    }
+  });
+
+  it("drops an embedding model only when the embedding provider changes", () => {
+    const generated = dotenvParse(generateEnvContent({ ...answers, providerChain: ["gemini"], providerCredentials: { gemini: "AIza-1" }, embeddingProvider: "gemini" }));
+    expect(terminalWizardOwnedEnvKeysFor({ EMBEDDING_PROVIDER: "ollama" }, generated).has("EMBEDDING_MODEL")).toBe(true);
+    expect(terminalWizardOwnedEnvKeysFor({ EMBEDDING_PROVIDER: "gemini" }, generated).has("EMBEDDING_MODEL")).toBe(false);
   });
 });
 
