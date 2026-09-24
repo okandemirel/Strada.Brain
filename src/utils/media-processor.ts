@@ -7,6 +7,13 @@
 
 import { getLogger } from "./logger.js";
 import type { ImageSource } from "../agents/providers/provider-core.interface.js";
+import {
+  ForbiddenTargetError,
+  discardBody,
+  fetchWithPolicy,
+  isForbiddenAddress,
+  normalizeIpLiteral,
+} from "../security/browser-security.js";
 
 // ── Size Limits ──────────────────────────────────────────────────────────────
 
@@ -179,8 +186,11 @@ const ALLOWED_HOST_PATTERNS = [
 ];
 
 /**
- * Validate a URL is safe to fetch (SSRF protection).
- * Rejects private IPs, non-HTTPS schemes (except known hosts), and suspicious targets.
+ * Validate a URL is safe to fetch (SSRF protection) — the text-only half.
+ * Rejects private/reserved IP literals, localhost names, non-HTTPS schemes
+ * (except known hosts), and cloud metadata names. It cannot see what a DNS
+ * name resolves to: `downloadMedia` also resolves the name, refuses internal
+ * addresses and pins the connection to the vetted ones.
  */
 export function isUrlSafeToFetch(url: string): boolean {
   try {
@@ -191,19 +201,20 @@ export function isUrlSafeToFetch(url: string): boolean {
       return false;
     }
 
-    const hostname = parsed.hostname.toLowerCase();
+    // A trailing dot is the same name to DNS ("localhost." is localhost), so
+    // compare without it.
+    const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
 
-    // Block private/reserved IP ranges (IPv4 + IPv6)
+    // Block private/reserved addresses and loopback names. The address
+    // classes are the shared SSRF policy's (CGNAT, benchmark, reserved and
+    // IPv4-mapped forms included), not a hand-kept prefix list.
+    const literal = normalizeIpLiteral(hostname);
     if (
+      hostname === "" ||
       hostname === "localhost" ||
-      hostname === "[::1]" ||
+      hostname.endsWith(".localhost") ||   // RFC 6761: every name under localhost is loopback
       hostname.startsWith("[") ||           // Block all IPv6 literals (CDNs never use raw IPv6)
-      /^127\./.test(hostname) ||
-      /^10\./.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-      /^192\.168\./.test(hostname) ||
-      /^169\.254\./.test(hostname) ||
-      /^0\./.test(hostname) ||
+      (literal !== null && isForbiddenAddress(literal)) ||
       hostname === "metadata.google.internal"
     ) {
       return false;
@@ -249,16 +260,23 @@ export async function downloadMedia(
     return null;
   }
 
+  let dispose: (() => Promise<void>) | undefined;
+  let response: Response | undefined;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
-    const response = await fetch(url, {
+    // Through the shared address-pinned transport: the hostname is resolved,
+    // every address it resolves to must be public, and the socket connects to
+    // exactly those addresses, so a DNS name pointing inside (or rebinding
+    // between check and connect) is refused. No redirects, as before.
+    const fetched = await fetchWithPolicy(url, {
       signal: controller.signal,
       headers: options?.headers,
-      redirect: "error",
-    });
-    clearTimeout(timeout);
+      maxRedirects: 0,
+    }).finally(() => clearTimeout(timeout));
+    dispose = fetched.dispose;
+    response = fetched.response;
 
     if (!response.ok) {
       logger.warn("Media download failed", { url: safeUrl, status: response.status });
@@ -313,11 +331,19 @@ export async function downloadMedia(
       size: data.length,
     };
   } catch (error) {
+    if (error instanceof ForbiddenTargetError) {
+      logger.warn("Media download blocked — URL resolves to an internal address", { url: safeUrl });
+      return null;
+    }
     logger.warn("Media download error", {
       url: safeUrl,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
+  } finally {
+    // An unread body keeps the pinned agent's request open; release it first.
+    await discardBody(response);
+    await dispose?.();
   }
 }
 

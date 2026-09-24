@@ -4,6 +4,7 @@ import {
   toBase64ImageSource,
   validateMagicBytes,
   downloadMedia,
+  isUrlSafeToFetch,
   isVisionCompatible,
   ALLOWED_IMAGE_TYPES,
   ALLOWED_VIDEO_TYPES,
@@ -12,6 +13,19 @@ import {
   MAX_VIDEO_SIZE,
   MAX_AUDIO_SIZE,
 } from "./media-processor.js";
+
+// downloadMedia goes through the shared address-pinned transport (undici
+// fetch + dns.lookup), so those are the seams the tests control.
+const undiciFetch = vi.hoisted(() => vi.fn());
+const dnsLookup = vi.hoisted(() => vi.fn());
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+  fetch: undiciFetch,
+}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  return { ...actual, default: { ...actual, lookup: dnsLookup }, lookup: dnsLookup };
+});
 
 vi.mock("./logger.js", () => ({
   getLogger: () => ({
@@ -215,6 +229,11 @@ describe("MediaProcessor", () => {
   describe("downloadMedia", () => {
     beforeEach(() => {
       vi.restoreAllMocks();
+      undiciFetch.mockReset();
+      dnsLookup.mockReset();
+      dnsLookup.mockImplementation(async (host: string) =>
+        host === "evil.example" ? [{ address: "10.0.0.5", family: 4 }] : [{ address: "93.184.216.34", family: 4 }],
+      );
     });
 
     it("downloads and returns buffer with metadata", async () => {
@@ -230,7 +249,7 @@ describe("MediaProcessor", () => {
           fakeData.buffer.slice(fakeData.byteOffset, fakeData.byteOffset + fakeData.byteLength),
         ),
       };
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(mockResponse as unknown as Response);
+      undiciFetch.mockResolvedValue(mockResponse as unknown as Response);
 
       const result = await downloadMedia("https://example.com/photo.jpg");
       expect(result).not.toBeNull();
@@ -240,7 +259,7 @@ describe("MediaProcessor", () => {
     });
 
     it("returns null for non-OK response", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      undiciFetch.mockResolvedValue({
         ok: false,
         status: 404,
       } as Response);
@@ -250,7 +269,7 @@ describe("MediaProcessor", () => {
     });
 
     it("returns null when content-length exceeds 50MB cap", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      undiciFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({
@@ -265,9 +284,50 @@ describe("MediaProcessor", () => {
     });
 
     it("returns null on fetch error", async () => {
-      vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network error"));
+      undiciFetch.mockRejectedValue(new Error("Network error"));
       const result = await downloadMedia("https://example.com/photo.jpg");
       expect(result).toBeNull();
+    });
+
+    // The check was hostname text only: any DNS name pointing inside passed.
+    it("refuses a DNS name that resolves to an internal address, without connecting", async () => {
+      const result = await downloadMedia("https://evil.example/photo.jpg");
+      expect(result).toBeNull();
+      expect(dnsLookup).toHaveBeenCalledWith("evil.example", expect.objectContaining({ all: true }));
+      expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it("connects through a pinned dispatcher and still refuses redirects", async () => {
+      undiciFetch.mockResolvedValue({ ok: false, status: 302, headers: new Headers({ location: "http://127.0.0.1/" }) });
+      const result = await downloadMedia("https://example.com/photo.jpg");
+      expect(result).toBeNull();
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      const init = undiciFetch.mock.calls[0]![1] as { dispatcher?: unknown; redirect?: string };
+      expect(init.dispatcher).toBeDefined();
+      expect(init.redirect).toBe("manual");
+    });
+  });
+
+  describe("isUrlSafeToFetch", () => {
+    it.each([
+      "https://localhost./x",
+      "https://foo.localhost/",
+      "https://metadata.google.internal./",
+      "https://100.100.100.100/",
+      "https://192.0.0.1/",
+      "https://198.18.0.1/",
+      "https://127.0.0.1/",
+      "https://2130706433/",
+      "https://10.1.2.3/",
+    ])("refuses %s", (url) => {
+      expect(isUrlSafeToFetch(url)).toBe(false);
+    });
+
+    it("still allows public HTTPS hosts and the known media hosts", () => {
+      expect(isUrlSafeToFetch("https://example.com/photo.jpg")).toBe(true);
+      expect(isUrlSafeToFetch("http://api.telegram.org/file/bot123/photo.jpg")).toBe(true);
+      expect(isUrlSafeToFetch("https://8.8.8.8/photo.jpg")).toBe(true);
+      expect(isUrlSafeToFetch("http://example.com/photo.jpg")).toBe(false);
     });
   });
 
