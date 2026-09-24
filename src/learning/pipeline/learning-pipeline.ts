@@ -1534,7 +1534,9 @@ export class LearningPipeline {
         m.instinct.status === "quarantined"
       ) continue;
       if ((m.instinct.userId ?? null) !== (params.userId ?? null)) continue;
-      if (combinedSimilarity(m.instinct.action, params.action) <= CONFIDENCE_THRESHOLDS.SIMILAR) continue;
+      // Only "above the bar" matters here, so the edit distance may stop there.
+      const actionScore = combinedSimilarity(m.instinct.action, params.action, CONFIDENCE_THRESHOLDS.SIMILAR);
+      if (actionScore <= CONFIDENCE_THRESHOLDS.SIMILAR) continue;
       return true;
     }
     return false;
