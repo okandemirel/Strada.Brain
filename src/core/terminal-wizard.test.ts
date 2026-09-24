@@ -19,6 +19,7 @@ import {
   hasAutoEmbeddingCandidate,
   resolveRagSetup,
   TERMINAL_WIZARD_OWNED_ENV_KEYS,
+  projectLocalMcpAwaitingTrust,
 } from "./terminal-wizard.js";
 import { SETUP_DEFAULT_ENV_KEYS } from "./setup-wizard.js";
 import { persistSetup } from "./setup-env-persistence.js";
@@ -531,6 +532,49 @@ describe("the terminal wizard states nothing about the budget", () => {
       expect(result.effective["DEEPSEEK_API_KEY"]).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the terminal wizard asks before trusting a project-local Strada.MCP (COR-12)", () => {
+  const base = {
+    unityProjectPath: "/Users/test/MyGame",
+    apiKey: "sk-proj-openai-key",
+    provider: "openai",
+    embeddingProvider: "openai",
+    channel: "web",
+    language: "en",
+  };
+
+  it("writes the operator's answer, and nothing when the question was not asked", () => {
+    expect(generateEnvContent({ ...base, stradaMcpAllowProjectLocal: true })).toContain(
+      "STRADA_MCP_ALLOW_PROJECT_LOCAL=true",
+    );
+    expect(generateEnvContent({ ...base, stradaMcpAllowProjectLocal: false })).toContain(
+      "STRADA_MCP_ALLOW_PROJECT_LOCAL=false",
+    );
+    expect(generateEnvContent(base)).not.toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL");
+  });
+
+  it("asks only for an installed copy inside the project that is not already trusted", () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-mcp-trust-"));
+    try {
+      const project = join(root, "Game");
+      const inside = join(project, "Packages", "Submodules", "Strada.MCP");
+      const outside = join(root, "Strada.MCP");
+      mkdirSync(inside, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+
+      expect(projectLocalMcpAwaitingTrust({ mcpInstalled: true, mcpPath: inside }, project, {})).toBe(inside);
+      expect(projectLocalMcpAwaitingTrust({ mcpInstalled: true, mcpPath: outside }, project, {})).toBeNull();
+      expect(projectLocalMcpAwaitingTrust({ mcpInstalled: false, mcpPath: null }, project, {})).toBeNull();
+      expect(
+        projectLocalMcpAwaitingTrust({ mcpInstalled: true, mcpPath: inside }, project, {
+          STRADA_MCP_ALLOW_PROJECT_LOCAL: "true",
+        }),
+      ).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

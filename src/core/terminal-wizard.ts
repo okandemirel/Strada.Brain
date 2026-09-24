@@ -43,10 +43,12 @@ import { evaluateChainReadiness } from "./chain-readiness.js";
 import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
 import { OPENCODE_GO_BASE_URL, OPENCODE_ZEN_BASE_URL } from "../agents/providers/opencode.js";
 import {
+  assessStradaMcpLoadTrust,
   buildMcpRecommendation,
   checkStradaDeps,
   installStradaMcpSubmodule,
   type McpInstallTarget,
+  type StradaDepsStatus,
 } from "../config/strada-deps.js";
 
 const MAX_RETRIES = 3;
@@ -133,6 +135,12 @@ export interface WizardAnswers {
   /** Optional OpenCode model id; blank leaves the provider default in place. */
   opencodeDefaultModel?: string;
   language: string;
+  /**
+   * The operator's answer on loading the Strada.MCP copy that lives inside the
+   * Unity project into Brain's process. Undefined when the question was not
+   * asked (no MCP, or a copy outside the project), so nothing is written.
+   */
+  stradaMcpAllowProjectLocal?: boolean;
 }
 
 export interface ValidationResult {
@@ -442,6 +450,24 @@ export function resolveRagSetup(input: {
 /**
  * Generate .env file content from wizard answers.
  */
+/**
+ * The Strada.MCP copy this project would load only with the operator's consent:
+ * one that is installed, lives inside the Unity project, and is not already
+ * trusted by STRADA_MCP_ALLOW_PROJECT_LOCAL. Null when there is nothing to ask.
+ */
+export function projectLocalMcpAwaitingTrust(
+  deps: Pick<StradaDepsStatus, "mcpInstalled" | "mcpPath">,
+  unityProjectPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!deps.mcpInstalled || !deps.mcpPath) return null;
+  const allowed = (env["STRADA_MCP_ALLOW_PROJECT_LOCAL"] ?? "").trim().toLowerCase();
+  const trust = assessStradaMcpLoadTrust(deps.mcpPath, unityProjectPath, {
+    mcpAllowProjectLocal: ["true", "1", "yes", "on"].includes(allowed),
+  });
+  return trust.trusted ? null : deps.mcpPath;
+}
+
 export function generateEnvContent(answers: WizardAnswers): string {
   const lines: string[] = [
     "# Strada Brain Configuration",
@@ -450,6 +476,9 @@ export function generateEnvContent(answers: WizardAnswers): string {
   ];
 
   lines.push(`UNITY_PROJECT_PATH="${sanitizeEnvValue(answers.unityProjectPath)}"`);
+  if (answers.stradaMcpAllowProjectLocal !== undefined) {
+    lines.push(`STRADA_MCP_ALLOW_PROJECT_LOCAL=${answers.stradaMcpAllowProjectLocal ? "true" : "false"}`);
+  }
   lines.push("");
 
   const providerChain = getNormalizedProviderChain(answers);
@@ -1196,6 +1225,23 @@ export async function runTerminalWizard(
       }
     }
 
+    // A Strada.MCP copy inside the project runs in Brain's own process, next to
+    // every API key, and the agent's file tools can change it — so it loads only
+    // with the operator's explicit yes (COR-12), asked here rather than left for
+    // the operator to discover as missing Unity tools.
+    let stradaMcpAllowProjectLocal: boolean | undefined;
+    const untrustedMcpPath = projectLocalMcpAwaitingTrust(
+      checkStradaDeps(unityPath, { mcpPath: process.env["STRADA_MCP_PATH"] }),
+      unityPath,
+    );
+    if (untrustedMcpPath) {
+      console.log(`  Strada.MCP at ${untrustedMcpPath} is inside this Unity project.`);
+      console.log("  Brain loads it into its own process, where your API keys live, and the agent's file tools can edit it.");
+      const trustAnswer = await rl.question("  Trust this copy and load its Unity tools? [Y/n]: ");
+      stradaMcpAllowProjectLocal = trustAnswer.trim().toLowerCase() !== "n";
+      console.log("");
+    }
+
     const providerAnswer = await askWithRetry(
       rl,
       `? Response providers — comma-separated for multi-provider chain (${RESPONSE_PROVIDER_CHOICES.join("/")})\n  [default: claude]: `,
@@ -1543,6 +1589,7 @@ export async function runTerminalWizard(
       channel,
       channelCredentials,
       language,
+      stradaMcpAllowProjectLocal,
     });
 
     // Merge, never rewrite: hand-added keys survive, and the file is read
