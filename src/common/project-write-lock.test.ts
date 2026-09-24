@@ -98,6 +98,47 @@ describe("the project write lock", () => {
     expect(holderIsAlive({ pid: process.pid, host: hostname(), token: "t", at: "" })).toBe(true);
   });
 
+  // A crashed holder's pid comes back: in a container node gets the same pid
+  // on every restart. Judged by pid alone, the dead predecessor's lock was
+  // "alive" (as this very process) forever, and every bulk write waited out
+  // its timeout and then ran unlocked.
+  it("breaks a lock left by an earlier process with this same pid", async () => {
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(
+      join(lockDir(), "owner"),
+      JSON.stringify({ pid: process.pid, host: hostname(), token: "dead", at: new Date().toISOString(), incarnation: "an-earlier-process" }),
+    );
+
+    const started = Date.now();
+    const taken = await acquireProjectWriteLock(root, { timeoutMs: 1_000, staleMs: 10 * 60_000 });
+
+    expect(taken.acquired).toBe(true);
+    expect(Date.now() - started).toBeLessThan(900);
+    taken.release();
+  });
+
+  it("still sees its own held lock as alive", async () => {
+    const held = await acquireProjectWriteLock(root, { timeoutMs: 100 });
+    const owner = JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8"));
+    expect(holderIsAlive(owner)).toBe(true);
+    held.release();
+    expect(holderIsAlive(owner)).toBe(false);
+  });
+
+  it.runIf(process.platform === "linux")("a running pid that is a DIFFERENT process than the holder is not the holder", async () => {
+    const held = await acquireProjectWriteLock(root, { timeoutMs: 100 });
+    const started: unknown = JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).started;
+    held.release();
+    expect(typeof started).toBe("string");
+
+    // The runner process is alive, but it is not the process that recorded
+    // this incarnation.
+    const reused = { pid: process.ppid, host: hostname(), token: "t", at: "", started: started as string };
+    expect(holderIsAlive(reused)).toBe(false);
+    // Without a recorded incarnation (an older holder), the pid is all there is.
+    expect(holderIsAlive({ pid: process.ppid, host: hostname(), token: "t", at: "" })).toBe(true);
+  });
+
   it("reclaiming is one step, so a lock that changed hands is left alone (Codex 2026-09-11 O#16)", async () => {
     // A reclaimer reads a dead owner, another reclaimer breaks it and a new
     // writer takes it — and the first reclaimer's delete then removed the NEW

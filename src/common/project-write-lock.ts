@@ -41,6 +41,50 @@ interface LockOwner {
   host: string;
   token: string;
   at: string;
+  /** The writing process's random id, unique per process lifetime. */
+  incarnation?: string;
+  /** Where the OS offers it, when that process started (see osStartMark). */
+  started?: string;
+}
+
+/**
+ * Per-process state on globalThis, so a second copy of this module (a test
+ * reset, a duplicated bundle) agrees with the first on who this process is
+ * and which locks it holds.
+ */
+interface ProcessLockState {
+  incarnation: string;
+  held: Set<string>;
+  started?: string | undefined;
+}
+const PROCESS_STATE_KEY = Symbol.for("strada.projectWriteLock.process");
+function processState(): ProcessLockState {
+  const registry = globalThis as unknown as Record<symbol, ProcessLockState | undefined>;
+  let state = registry[PROCESS_STATE_KEY];
+  if (!state) {
+    state = { incarnation: randomUUID(), held: new Set(), started: osStartMark(process.pid) };
+    registry[PROCESS_STATE_KEY] = state;
+  }
+  return state;
+}
+
+/**
+ * When the process now running as `pid` started, where the OS says so
+ * cheaply: the boot id plus the start time in clock ticks (Linux /proc).
+ * Undefined elsewhere, and then a foreign pid is judged by the pid alone.
+ */
+function osStartMark(pid: number): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // Fields resume after the parenthesised command name (which may contain
+    // spaces) at field 3; starttime is field 22.
+    const startTicks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+    return bootId && startTicks ? `${bootId}:${startTicks}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readOwner(path: string): LockOwner | null {
@@ -55,16 +99,36 @@ function readOwner(path: string): LockOwner | null {
   return null;
 }
 
-/** Is the process that took this lock still running on this machine? */
+/**
+ * Is the process that took this lock still running on this machine?
+ *
+ * A running PID is not proof: a crashed holder's PID gets reused, and in a
+ * container node gets the SAME pid on every restart. Judged by pid alone that
+ * dead holder's lock was alive forever (as this very process), and every bulk
+ * write waited out its timeout and then ran unlocked. The owner file records
+ * which incarnation wrote it; an owner without one (an older version) is
+ * still judged by the pid.
+ */
 export function holderIsAlive(owner: LockOwner | null): boolean | undefined {
   if (!owner || owner.host !== hostname() || !Number.isInteger(owner.pid)) return undefined;
+  if (owner.pid === process.pid && typeof owner.incarnation === "string") {
+    const self = processState();
+    // Ours: alive exactly while we still hold it. Otherwise an earlier
+    // process with this pid wrote it, and that process is gone.
+    return owner.incarnation === self.incarnation && self.held.has(owner.token);
+  }
   try {
     process.kill(owner.pid, 0);
-    return true;
   } catch (err) {
     // EPERM means a process with that id exists and is not ours.
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    if ((err as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
+  // The pid is running; is it still the process that took the lock?
+  if (owner.pid !== process.pid && typeof owner.started === "string") {
+    const now = osStartMark(owner.pid);
+    if (now !== undefined && now !== owner.started) return false;
+  }
+  return true;
 }
 
 export interface ProjectWriteLockHandle {
@@ -93,7 +157,9 @@ function tryTakeLock(path: string, token: string): boolean {
 }
 
 function writeOwner(path: string, token: string): void {
-  const owner: LockOwner = { pid: process.pid, host: hostname(), token, at: new Date().toISOString() };
+  const self = processState();
+  const owner: LockOwner = { pid: process.pid, host: hostname(), token, at: new Date().toISOString(), incarnation: self.incarnation };
+  if (self.started !== undefined) owner.started = self.started;
   writeFileSync(join(path, "owner"), JSON.stringify(owner), "utf8");
 }
 
@@ -258,6 +324,7 @@ export async function acquireProjectWriteLock(
   const token = randomUUID();
   for (;;) {
     if (tryTakeLock(path, token)) {
+      processState().held.add(token);
       let released = false;
       // The holder proves it is alive while it works, so a long write-back is
       // never mistaken for an abandoned lock.
@@ -298,6 +365,8 @@ export async function acquireProjectWriteLock(
             }
             released = true;
             clearInterval(beat);
+            // Whatever is left on disk is no longer held by anyone alive.
+            processState().held.delete(token);
           };
           settle(0);
         },
