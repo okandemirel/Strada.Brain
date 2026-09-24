@@ -42,6 +42,7 @@ import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/con
 import type { IdentityState } from "../identity/identity-state.js";
 import type { MemoryHealth } from "../memory/memory.interface.js";
 import { sendJson, sendJsonError } from "./server-types.js";
+import { monitorReadScope } from "./monitor-read-scope.js";
 import type { RouteContext } from "./server-types.js";
 
 /** Only truly running statuses count toward activeTaskCount. */
@@ -53,7 +54,7 @@ const RUNNING_STATUSES = new Set(["executing", "planning"]);
 export function handleSystemRoutes(
   url: string,
   method: string,
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   ctx: RouteContext,
   maskSensitiveConfig: (obj: Record<string, unknown>) => Record<string, unknown>,
@@ -64,6 +65,17 @@ export function handleSystemRoutes(
       sendJson(res, { trees: [] });
       return true;
     }
+    // CHN-4: another identity's trees are withheld here exactly as the
+    // WebSocket path withholds its monitor frames (see monitor-read-scope.ts).
+    const scope = monitorReadScope(req.headers);
+    if (scope.kind === "unavailable") {
+      sendJson(res, {
+        error: "Identity state unavailable",
+        reason: `whose goal trees these are cannot be established right now: ${scope.why}. Refusing rather than guessing.`,
+        code: "unavailable:identity-store",
+      }, 503);
+      return true;
+    }
     try {
       const params = new URL(url, "http://localhost").searchParams;
       const sessionFilter = params.get("session");
@@ -72,10 +84,10 @@ export function handleSystemRoutes(
       let trees: Record<string, unknown>[];
       if (rootIdFilter) {
         const tree = ctx.goalStorage.getTree(rootIdFilter as import("../goals/types.js").GoalNodeId);
-        trees = tree ? [serializeGoalTree(tree)] : [];
+        trees = tree && scope.visible(tree.sessionId) ? [serializeGoalTree(tree)] : [];
       } else if (sessionFilter) {
         const rawTrees = ctx.goalStorage.getTreesBySession(sessionFilter);
-        trees = rawTrees.map((t) => serializeGoalTree(t));
+        trees = rawTrees.filter((t) => scope.visible(t.sessionId)).map((t) => serializeGoalTree(t));
       } else {
         trees = [];
       }

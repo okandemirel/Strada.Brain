@@ -21,6 +21,7 @@ import { calculateProgress } from '../goals/goal-progress.js'
 import { authorizeInstanceRequest } from '../channels/web/instance-authorization.js'
 import { getLoggerSafe } from '../utils/logger.js'
 import { safeDecodeSegment } from './route-segment.js'
+import { monitorReadScope, taskOrigin } from './monitor-read-scope.js'
 
 // =============================================================================
 // ACTIVITY RING BUFFER
@@ -256,6 +257,31 @@ function allowGateDecision(
   return false
 }
 
+/**
+ * CHN-4: the board origins this reader may see — the rule the WebSocket path
+ * applies to the same data (see monitor-read-scope.ts). Answers 503 and
+ * returns null when the identity state cannot be read.
+ */
+function readVisibility(
+  req: IncomingMessage,
+  res: ServerResponse,
+): ((origin: string | undefined) => boolean) | null {
+  const scope = monitorReadScope(req.headers)
+  if (scope.kind === 'scope') return scope.visible
+  getLoggerSafe().error('Monitor read refused: the instance\'s identities cannot be read', { why: scope.why })
+  jsonResponse(res, 503, {
+    error: 'Identity state unavailable',
+    reason: `whose boards these are cannot be established right now: ${scope.why}. Refusing rather than guessing.`,
+    code: 'unavailable:identity-store',
+  })
+  return null
+}
+
+/** The interrupted (active) goal trees this reader may see, most recent first. */
+function visibleActiveTrees(goalStorage: GoalStorage, visible: (origin: string | undefined) => boolean): GoalTree[] {
+  return goalStorage.getInterruptedTrees().filter((tree) => visible(tree.sessionId))
+}
+
 function getActiveStandaloneTasks(taskManager: MonitorTaskManager | undefined): MonitorTaskRecord[] {
   if (!taskManager) return []
   const tasks = [
@@ -345,10 +371,12 @@ export function handleMonitorRoute(
 
   // ── GET /api/monitor/dag ──────────────────────────────────────────────
   if (method === 'GET' && (url === '/api/monitor/dag' || url.startsWith('/api/monitor/dag?'))) {
+    const visible = readVisibility(req, res)
+    if (!visible) return true
     try {
       if (goalStorage) {
-        // Find the most recent active (executing) goal tree
-        const activeTrees = goalStorage.getInterruptedTrees()
+        // Find the most recent active (executing) goal tree this reader may see
+        const activeTrees = visibleActiveTrees(goalStorage, visible)
         if (activeTrees.length > 0) {
           const tree = activeTrees[0]!
           jsonResponse(res, 200, { dag: serializeDag(tree) })
@@ -356,7 +384,7 @@ export function handleMonitorRoute(
         }
       }
 
-      const activeTasks = getActiveStandaloneTasks(taskManager)
+      const activeTasks = getActiveStandaloneTasks(taskManager).filter((task) => visible(taskOrigin(task)))
       if (activeTasks.length > 0) {
         jsonResponse(res, 200, { dag: serializeStandaloneDag(activeTasks) })
         return true
@@ -371,6 +399,8 @@ export function handleMonitorRoute(
 
   // ── GET /api/monitor/tasks ────────────────────────────────────────────
   if (method === 'GET' && (url === '/api/monitor/tasks' || url.startsWith('/api/monitor/tasks?'))) {
+    const visible = readVisibility(req, res)
+    if (!visible) return true
     try {
       const params = new URL(url, 'http://localhost').searchParams
       const rootId = params.get('rootId')
@@ -378,9 +408,11 @@ export function handleMonitorRoute(
       let tree: GoalTree | null = null
       if (goalStorage && rootId) {
         tree = goalStorage.getTree(rootId as GoalNodeId)
+        // Another identity's tree is answered exactly like an unknown root.
+        if (tree && !visible(tree.sessionId)) tree = null
       } else if (goalStorage) {
-        // Default: most recent active tree
-        const activeTrees = goalStorage.getInterruptedTrees()
+        // Default: most recent active tree this reader may see
+        const activeTrees = visibleActiveTrees(goalStorage, visible)
         tree = activeTrees.length > 0 ? activeTrees[0]! : null
       }
 
@@ -405,7 +437,7 @@ export function handleMonitorRoute(
         return true
       }
 
-      const activeTasks = getActiveStandaloneTasks(taskManager)
+      const activeTasks = getActiveStandaloneTasks(taskManager).filter((task) => visible(taskOrigin(task)))
       if (activeTasks.length === 0) {
         jsonResponse(res, 200, { tasks: [] })
         return true
@@ -430,10 +462,12 @@ export function handleMonitorRoute(
   if (method === 'GET' && taskDetailMatch) {
     const taskId = safeDecodeSegment(taskDetailMatch[1]!)
     if (taskId === undefined || taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
+    const visible = readVisibility(req, res)
+    if (!visible) return true
     try {
       if (goalStorage) {
-        // Search across active trees for the node
-        const activeTrees = goalStorage.getInterruptedTrees()
+        // Search across the active trees this reader may see for the node
+        const activeTrees = visibleActiveTrees(goalStorage, visible)
         for (const tree of activeTrees) {
           const detail = serializeTaskDetail(tree, taskId)
           if (detail) {
@@ -443,7 +477,8 @@ export function handleMonitorRoute(
         }
       }
 
-      const standaloneTask = getActiveStandaloneTasks(taskManager).find((task) => task.id === taskId)
+      const standaloneTask = getActiveStandaloneTasks(taskManager)
+        .find((task) => task.id === taskId && visible(taskOrigin(task)))
       if (standaloneTask) {
         jsonResponse(res, 200, { task: serializeStandaloneTask(standaloneTask), rootId: standaloneTask.id })
         return true
@@ -529,9 +564,11 @@ export function handleMonitorRoute(
 
   // ── POST /api/monitor/export ──────────────────────────────────────────
   if (method === 'POST' && (url === '/api/monitor/export' || url.startsWith('/api/monitor/export?'))) {
+    const visible = readVisibility(req, res)
+    if (!visible) return true
     try {
       if (goalStorage) {
-        const activeTrees = goalStorage.getInterruptedTrees()
+        const activeTrees = visibleActiveTrees(goalStorage, visible)
         if (activeTrees.length > 0) {
           const tree = activeTrees[0]!
           const progress = calculateProgress(tree)
@@ -602,7 +639,7 @@ export function handleMonitorRoute(
         }
       }
 
-      const activeTasks = getActiveStandaloneTasks(taskManager)
+      const activeTasks = getActiveStandaloneTasks(taskManager).filter((task) => visible(taskOrigin(task)))
       if (activeTasks.length === 0) {
         jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active monitor items.\n' })
         return true
