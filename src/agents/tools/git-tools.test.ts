@@ -476,6 +476,7 @@ describe("GitPushTool", () => {
       const result = await tool.execute({ remote: "origin", branch: current, set_upstream: true }, ctx);
       expect(result.isError).toBeFalsy();
       expect(remoteHead(current)).toBe(gitIn(tempDir, "rev-parse", "HEAD"));
+      expect(gitIn(tempDir, "rev-parse", "--abbrev-ref", `${current}@{upstream}`)).toBe(`origin/${current}`);
     });
 
     it("refuses a branch that is a refspec", async () => {
