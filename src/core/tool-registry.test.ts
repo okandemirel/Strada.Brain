@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { createLogger } from "../utils/logger.js";
-import { ToolRegistry, ToolCategories, type ToolCategory, type ToolMetadata } from "./tool-registry.js";
+import {
+  ToolRegistry,
+  ToolCategories,
+  classifyRuntimeToolMetadata,
+  type ToolCategory,
+  type ToolMetadata,
+} from "./tool-registry.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { ValidationError } from "../common/errors.js";
 import { WRITE_OPERATIONS } from "../common/constants.js";
+import { WRITE_TOOLS } from "../security/read-only-guard.js";
+import type { VaultRegistry } from "../vault/vault-registry.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -453,6 +461,101 @@ describe("ToolRegistry", () => {
   describe("getStradaMcpRuntimeStatus", () => {
     it("returns null when no MCP runtime is loaded", () => {
       expect(registry.getStradaMcpRuntimeStatus()).toBeNull();
+    });
+  });
+
+  // ========================================================================
+  // READ_ONLY_MODE is enforced by metadata, not only by a name list
+  // ========================================================================
+
+  describe("READ_ONLY_MODE enforced by tool metadata", () => {
+    const vaultRegistry = {
+      get: vi.fn(),
+      list: vi.fn(() => []),
+      resolveVaultForPath: vi.fn(),
+    } as unknown as VaultRegistry;
+    const readOnlyContext = {
+      projectPath: "/test/project",
+      workingDirectory: "/test/project",
+      readOnly: true,
+    } as ToolContext;
+
+    function configWith(readOnlyMode: boolean) {
+      return { shellEnabled: true, security: { readOnlyMode } } as unknown as Parameters<
+        ToolRegistry["initialize"]
+      >[0];
+    }
+
+    async function initialized(readOnlyMode: boolean): Promise<ToolRegistry> {
+      const r = new ToolRegistry();
+      await r.initialize(configWith(readOnlyMode), { vaultRegistry });
+      await r.waitForRegistrations();
+      return r;
+    }
+
+    it("withholds every tool whose metadata is not read-only and refuses it at dispatch", async () => {
+      const full = await initialized(false);
+      const readOnly = await initialized(true);
+
+      const writers = full.getToolNames().filter((name) => full.getMetadata(name)?.readOnly !== true);
+      // The writers the old name list missed are among them.
+      expect(writers).toContain("vault_write_note");
+      expect(writers).toContain("obsidian_append");
+
+      const offered = readOnly.getAllTools().map((t) => t.name);
+      for (const name of writers) {
+        expect(offered, `${name} is offered in read-only mode`).not.toContain(name);
+        const result = await readOnly.execute(name, { path: "notes/x.md", content: "x" }, readOnlyContext);
+        expect(result.isError, `${name} ran in read-only mode`).toBe(true);
+        expect(result.content).toContain("read-only mode");
+      }
+    });
+
+    it("keeps the genuinely read-only tools, and the name list still blocks what it names", async () => {
+      const full = await initialized(false);
+      const readOnly = await initialized(true);
+
+      const expected = full
+        .getToolNames()
+        .filter((name) => full.getMetadata(name)?.readOnly === true && !WRITE_TOOLS.has(name));
+      expect(readOnly.getToolNames().sort()).toEqual(expected.sort());
+      for (const name of [
+        "file_read", "glob_search", "grep_search", "list_directory",
+        "vault_search", "vault_status", "vault_graph_explore", "obsidian_search",
+        "git_status", "git_log", "git_diff", "git_branch_list",
+      ]) {
+        expect(readOnly.has(name), `${name} was withheld`).toBe(true);
+      }
+      // dotnet_build is registered read-only but writes bin/ and obj/.
+      expect(readOnly.has("dotnet_build")).toBe(false);
+    });
+
+    it("does not trust omitted or guessed read-only metadata", async () => {
+      const r = new ToolRegistry();
+      await r.initialize(configWith(true));
+
+      const guessed = createMockTool("plugin_guessed_reader");
+      const declared: ITool = {
+        ...createMockTool("plugin_declared_reader"),
+        metadata: { isReadOnly: true } as unknown as ITool["metadata"],
+      };
+      r.register(guessed, classifyRuntimeToolMetadata(guessed, "custom"));
+      r.register(declared, classifyRuntimeToolMetadata(declared, "custom"));
+      r.register(createMockTool("bare_tool"));
+      r.register(createMockTool("partial_tool"), { category: ToolCategories.CODE });
+
+      expect(r.has("plugin_guessed_reader")).toBe(false);
+      expect(r.has("plugin_declared_reader")).toBe(true);
+      expect(r.has("bare_tool")).toBe(false);
+      expect(r.has("partial_tool")).toBe(false);
+    });
+
+    it("changes nothing when read-only mode is off", async () => {
+      const r = new ToolRegistry();
+      await r.initialize(configWith(false));
+      r.register(createMockTool("bare_tool"));
+      expect(r.has("bare_tool")).toBe(true);
+      expect(r.has("file_write")).toBe(true);
     });
   });
 });

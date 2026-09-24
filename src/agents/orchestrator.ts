@@ -119,7 +119,7 @@ import { MUTATION_TOOLS, WRITE_OPERATIONS, looksLikeWriteTool, extractFilePath, 
 import { toolReportsVerdict } from "./autonomy/self-verification.js";
 import { DMPolicy, isDestructiveOperation, destructiveShellFlag, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
-  checkReadOnlyBlock,
+  checkReadOnlyToolAccess,
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
@@ -5084,7 +5084,11 @@ export class Orchestrator {
       this.askUserBlockCounts.delete(askUserScopeKey);
     }
 
-    const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
+    const readOnlyCheck = checkReadOnlyToolAccess(
+      activeToolCall.name,
+      this.readOnly,
+      this.toolMetadataByName.get(activeToolCall.name),
+    );
     if (!readOnlyCheck.allowed) {
       this.metrics?.recordToolBlocked();
       return createReadOnlyToolStub(activeToolCall.name, activeToolCall.id);
@@ -5556,29 +5560,31 @@ export class Orchestrator {
   }
 
   private registerTool(tool: ITool, metadata?: WorkerToolMetadata): void {
-    const readOnlyCheck = checkReadOnlyBlock(tool.name, this.readOnly);
-    if (!readOnlyCheck.allowed) {
+    const intrinsicMetadata = getToolMetadata(tool);
+    const existingMetadata = this.toolMetadataByName.get(tool.name);
+    const readOnly =
+      metadata?.readOnly ??
+      existingMetadata?.readOnly ??
+      intrinsicMetadata?.isReadOnly ??
+      // Last resort for a tool nobody described: the allowlist AND its shape.
+      // `!WRITE_OPERATIONS.has(name)` alone declared every runtime-registered
+      // tool read-only, which is how a shell-backed file writer came to run
+      // with no confirmation and corrupt five .asmdef files.
+      (!WRITE_OPERATIONS.has(tool.name) && !looksLikeWriteTool(tool.name, tool));
+    // Read-only mode offers only what the metadata calls read-only; the name
+    // list alone missed writers nobody had added to it.
+    if (!checkReadOnlyToolAccess(tool.name, this.readOnly, { readOnly }).allowed) {
       return;
     }
 
     this.tools.set(tool.name, tool);
-    const intrinsicMetadata = getToolMetadata(tool);
-    const existingMetadata = this.toolMetadataByName.get(tool.name);
     const intrinsicRequiresBridge =
       intrinsicMetadata && "requiresBridge" in intrinsicMetadata
         ? Boolean((intrinsicMetadata as Record<string, unknown>).requiresBridge)
         : false;
     const defaultControlPlaneOnly = tool.name === "ask_user" || tool.name === "show_plan";
     this.toolMetadataByName.set(tool.name, {
-      readOnly:
-        metadata?.readOnly ??
-        existingMetadata?.readOnly ??
-        intrinsicMetadata?.isReadOnly ??
-        // Last resort for a tool nobody described: the allowlist AND its shape.
-        // `!WRITE_OPERATIONS.has(name)` alone declared every runtime-registered
-        // tool read-only, which is how a shell-backed file writer came to run
-        // with no confirmation and corrupt five .asmdef files.
-        (!WRITE_OPERATIONS.has(tool.name) && !looksLikeWriteTool(tool.name, tool)),
+      readOnly,
       controlPlaneOnly: Boolean(
         metadata?.controlPlaneOnly ?? existingMetadata?.controlPlaneOnly ?? defaultControlPlaneOnly,
       ),

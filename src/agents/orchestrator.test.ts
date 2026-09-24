@@ -5060,6 +5060,68 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(toolResultBlock?.is_error).toBe(true);
   });
 
+  it("withholds and refuses a tool whose metadata is not read-only even when its name is on no list", async () => {
+    // Read-only mode used to consult only a name list, so a writer nobody had
+    // added to it (a vault note writer, any Strada.MCP writer) stayed offered.
+    const noteWriter = createMockTool("vault_note_writer_x");
+    const readOnlyOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, noteWriter],
+      toolMetadataByName: new Map([
+        ["file_read", { readOnly: true }],
+        ["vault_note_writer_x", { readOnly: false }],
+      ]),
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: true,
+      requireConfirmation: true,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Plan: write a note.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ id: "tc1", name: "vault_note_writer_x", input: { path: "a.md", content: "x" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 50, outputTokens: 30 },
+      })
+      .mockResolvedValueOnce({
+        text: "Blocked.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 100, outputTokens: 60 },
+      });
+
+    const promise = readOnlyOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat1",
+      userId: "user1",
+      text: "Write a note",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const firstToolDefs = mockProvider.chat.mock.calls[0]![2] as Array<{ name: string }>;
+    expect(firstToolDefs.map((tool) => tool.name)).toEqual(["file_read"]);
+    expect(noteWriter.execute).not.toHaveBeenCalled();
+
+    const messages = mockProvider.chat.mock.calls[2]![1] as any[];
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
+    expect(toolResultBlock?.content).toContain("'vault_note_writer_x' is disabled in read-only mode");
+    expect(toolResultBlock?.is_error).toBe(true);
+  });
+
   it("self-reviews and auto-approves strong plans in autonomous mode", async () => {
     const dmPolicy = new DMPolicy(mockChannel as any);
     dmPolicy.initFromProfile("auto-plan", { autonomousMode: true });

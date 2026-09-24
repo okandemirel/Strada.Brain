@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   checkReadOnlyBlock,
+  checkReadOnlyToolAccess,
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
   getReadOnlyToolSummary,
@@ -90,6 +91,47 @@ describe("checkReadOnlyBlock", () => {
     expect(result1.allowed).toBe(false);
     expect(result2.allowed).toBe(false);
     expect(result3.allowed).toBe(false);
+  });
+});
+
+describe("checkReadOnlyToolAccess", () => {
+  it("allows everything when read-only mode is off", () => {
+    expect(checkReadOnlyToolAccess("vault_write_note", false, { readOnly: false }).allowed).toBe(true);
+    expect(checkReadOnlyToolAccess("anything", false, undefined).allowed).toBe(true);
+  });
+
+  it("blocks a tool whose metadata says it writes, even when no list names it", () => {
+    for (const name of ["vault_write_note", "obsidian_append", "unity_some_mcp_writer"]) {
+      const result = checkReadOnlyToolAccess(name, true, { readOnly: false });
+      expect(result.allowed, name).toBe(false);
+      expect(result.error).toContain(name);
+      expect(result.suggestion).toBeDefined();
+    }
+  });
+
+  it("treats missing or guessed metadata as a write", () => {
+    expect(checkReadOnlyToolAccess("mystery_tool", true, undefined).allowed).toBe(false);
+    expect(checkReadOnlyToolAccess("mystery_tool", true, {}).allowed).toBe(false);
+    expect(checkReadOnlyToolAccess("plugin_reader", true, { readOnly: true, readOnlyInferred: true }).allowed).toBe(false);
+  });
+
+  it("allows a tool that declares itself read-only", () => {
+    for (const name of ["file_read", "vault_search", "git_status", "plugin_reader"]) {
+      expect(checkReadOnlyToolAccess(name, true, { readOnly: true }).allowed, name).toBe(true);
+      expect(checkReadOnlyToolAccess(name, true, { readOnly: true, readOnlyInferred: false }).allowed).toBe(true);
+    }
+  });
+
+  it("keeps the name list as a backstop for metadata that claims too much", () => {
+    const result = checkReadOnlyToolAccess("dotnet_build", true, { readOnly: true });
+    expect(result.allowed).toBe(false);
+    expect(result.suggestion).toContain("bin/");
+  });
+
+  it("gives a metadata-blocked tool a complete stub message", () => {
+    const stub = createReadOnlyToolStub("vault_write_note", "call-1");
+    expect(stub.content).toContain("Tool 'vault_write_note' is disabled in read-only mode.");
+    expect(stub.content).not.toContain("undefined");
   });
 });
 

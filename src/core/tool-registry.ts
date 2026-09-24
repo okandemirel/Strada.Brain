@@ -19,8 +19,9 @@ import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { execFileSync } from "node:child_process";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
-import { getLogger } from "../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
+import { checkReadOnlyToolAccess } from "../security/read-only-guard.js";
 // Re-export shared types from tool-registry-types.ts (extracted to break circular deps)
 export { ToolCategories, type ToolCategory, type ToolMetadata, type ToolInventoryEntry } from "./tool-registry-types.js";
 import { ToolCategories, type ToolCategory, type ToolMetadata, type ToolInventoryEntry } from "./tool-registry-types.js";
@@ -141,15 +142,16 @@ export interface ToolRegistryOptions {
  */
 export function classifyRuntimeToolMetadata(tool: ITool, category: ToolCategory): Partial<ToolMetadata> {
   const intrinsic = getToolMetadata(tool);
-  const isWrite =
-    typeof intrinsic?.isReadOnly === "boolean"
-      ? !intrinsic.isReadOnly
-      : WRITE_OPERATIONS.has(tool.name) || looksLikeWriteTool(tool.name, tool);
+  const declared = typeof intrinsic?.isReadOnly === "boolean";
+  const isWrite = declared
+    ? !intrinsic.isReadOnly
+    : WRITE_OPERATIONS.has(tool.name) || looksLikeWriteTool(tool.name, tool);
   return {
     category,
     dangerous: isWrite,
     requiresConfirmation: isWrite,
     readOnly: !isWrite,
+    readOnlyInferred: !declared,
   };
 }
 
@@ -160,6 +162,13 @@ export class ToolRegistry {
   private readonly pluginLoader?: PluginLoader;
   private stradaMcpRuntime: import("./strada-mcp-tool-loader.js").StradaMcpRuntime | null = null;
   private initialized = false;
+  /**
+   * READ_ONLY_MODE, fixed by initialize(). While set, a tool whose metadata
+   * does not declare it read-only is never registered, so no orchestrator,
+   * sub-agent or batch resolver built from this registry can offer or run it.
+   */
+  private readOnlyMode = false;
+  private readonly withheldForReadOnly = new Set<string>();
   /**
    * Pending async tool registrations (dynamic imports for heavy optional deps
    * like Playwright or OpenAI speech tools). Tracked so callers can await
@@ -184,6 +193,8 @@ export class ToolRegistry {
 
     const logger = getLogger();
     logger.info("Initializing tool registry...");
+    // Optional chaining: tests hand in partial configs.
+    this.readOnlyMode = _config.security?.readOnlyMode === true;
 
     // Register built-in tools
     this.registerBuiltinTools(options, _config);
@@ -264,6 +275,11 @@ export class ToolRegistry {
 
     this.initialized = true;
     logger.info(`Tool registry initialized with ${this.tools.size} tools`);
+    if (this.withheldForReadOnly.size > 0) {
+      logger.info("READ_ONLY_MODE: tools not declared read-only were not registered", {
+        withheld: [...this.withheldForReadOnly].sort(),
+      });
+    }
   }
 
   /**
@@ -274,6 +290,15 @@ export class ToolRegistry {
       throw new ValidationError(`Tool '${tool.name}' is already registered`);
     }
 
+    // Judged on the metadata as passed, before the `readOnly ?? true` default
+    // below: a tool that declares nothing is not a read-only tool.
+    if (!checkReadOnlyToolAccess(tool.name, this.readOnlyMode, metadata).allowed) {
+      this.withheldForReadOnly.add(tool.name);
+      getLoggerSafe().debug("Tool withheld in read-only mode", { tool: tool.name });
+      return;
+    }
+
+    this.withheldForReadOnly.delete(tool.name);
     this.tools.set(tool.name, tool);
 
     if (metadata) {
@@ -284,6 +309,7 @@ export class ToolRegistry {
         dangerous: metadata.dangerous ?? false,
         requiresConfirmation: metadata.requiresConfirmation ?? false,
         readOnly: metadata.readOnly ?? true,
+        ...(metadata.readOnlyInferred !== undefined ? { readOnlyInferred: metadata.readOnlyInferred } : {}),
         dependencies: metadata.dependencies,
         controlPlaneOnly: metadata.controlPlaneOnly ?? false,
         requiresBridge: metadata.requiresBridge ?? false,
@@ -472,6 +498,14 @@ export class ToolRegistry {
     context: ToolContext
   ): Promise<ToolExecutionResult> {
     const tool = this.tools.get(name);
+    // Dispatch re-checks what registration decided, so a tool that reached the
+    // map another way still cannot run in read-only mode.
+    if (tool || this.withheldForReadOnly.has(name)) {
+      const readOnlyCheck = checkReadOnlyToolAccess(name, this.readOnlyMode, this.metadata.get(name));
+      if (!readOnlyCheck.allowed) {
+        return { content: `${readOnlyCheck.error}\n\n${readOnlyCheck.suggestion}`, isError: true };
+      }
+    }
     if (!tool) {
       // Build context-rich error: show caller-provided name verbatim + first 10
       // registered tools (alphabetical) so the caller can diagnose typos.
@@ -535,6 +569,7 @@ export class ToolRegistry {
     this.tools.clear();
     this.metadata.clear();
     this.categories.clear();
+    this.withheldForReadOnly.clear();
     this.initialized = false;
   }
 

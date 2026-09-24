@@ -125,7 +125,7 @@ When `READ_ONLY_MODE=true`, 23 write tools are blocked:
 - Strada: `create_module`, `create_component`, `create_mediator`, `create_system`
 - .NET: `add_package`, `remove_package`, `new`, `build`, `test`
 
-`filterToolsForReadOnly()` removes these from the tool array before the LLM receives them — the agent cannot even attempt to call them. (`create_skill` writes to disk but carries its own read-only check so it can give a better error.)
+That list is the backstop, not the gate. The gate is `checkReadOnlyToolAccess()`: in read-only mode a tool is allowed only when its metadata declares it read-only. Write, missing, or guessed (inferred from name/shape) metadata counts as a write, so `ToolRegistry` does not register the tool, the orchestrator does not offer it, and dispatch refuses it — this is what covers writers no list names, such as `vault_write_note`, `obsidian_append` and Strada.MCP write tools. Those two note writers also refuse on their own under `context.readOnly`. (`create_skill` writes to disk but carries its own read-only check so it can give a better error.)
 
 Audited 2026-09-02: this section said "22" in three places (here, the
 architecture diagram and the key-files table) and omitted `dotnet_build` /

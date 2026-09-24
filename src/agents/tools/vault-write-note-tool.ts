@@ -33,6 +33,11 @@ export class VaultWriteNoteTool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // The project vault writes into the project tree, so the tool refuses on
+    // its own rather than trusting every dispatch path to have filtered it.
+    if (context.readOnly) {
+      return { content: 'Error: writing vault notes is disabled in read-only mode', isError: true };
+    }
     const registry = context.vaultRegistry;
     if (!registry) {
       return {

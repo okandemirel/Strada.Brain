@@ -72,6 +72,8 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   "rag_search",
 ]);
 
+const GENERIC_SUGGESTION = "Use read-only tools to explore the codebase.";
+
 const SUGGESTIONS: Record<string, string> = {
   file_write: "Use 'file_read' to examine existing files instead.",
   file_edit: "Use 'file_read' to view file contents instead.",
@@ -103,8 +105,20 @@ export interface ReadOnlyCheckResult {
   suggestion?: string;
 }
 
+/** What the metadata-aware read-only check needs to know about a tool. */
+export interface ReadOnlyToolTraits {
+  readonly readOnly?: boolean;
+  /** True when `readOnly` was guessed from the tool's name/shape, not declared. */
+  readonly readOnlyInferred?: boolean;
+}
+
 // ─── Core Functions ──────────────────────────────────────────────────────────
 
+/**
+ * Name-list check only: the backstop for tools whose metadata is wrong in the
+ * permissive direction. Offer and dispatch paths use checkReadOnlyToolAccess,
+ * which also requires the tool's metadata to declare it read-only.
+ */
 export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): ReadOnlyCheckResult {
   if (!readOnlyMode) {
     return { allowed: true };
@@ -118,7 +132,7 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
     return {
       allowed: false,
       error: `Tool '${toolName}' is disabled in read-only mode.`,
-      suggestion: SUGGESTIONS[baseName] ?? "Use read-only tools to explore the codebase.",
+      suggestion: SUGGESTIONS[baseName] ?? GENERIC_SUGGESTION,
     };
   }
 
@@ -130,15 +144,42 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
   return { allowed: true };
 }
 
+/**
+ * The read-only gate for offering and dispatching a tool.
+ *
+ * A name list only covers the writers someone remembered to add; the vault and
+ * Obsidian note writers and every Strada.MCP writer were not on it. So in
+ * read-only mode a tool is allowed only when its metadata explicitly declares
+ * it read-only — missing, write, or guessed metadata all count as a write —
+ * and the name list still blocks a tool whose metadata claims too much.
+ */
+export function checkReadOnlyToolAccess(
+  toolName: string,
+  readOnlyMode: boolean,
+  traits: ReadOnlyToolTraits | undefined,
+): ReadOnlyCheckResult {
+  const byName = checkReadOnlyBlock(toolName, readOnlyMode);
+  if (!readOnlyMode || !byName.allowed) return byName;
+  if (traits?.readOnly === true && traits.readOnlyInferred !== true) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    error: `Tool '${toolName}' is disabled in read-only mode.`,
+    suggestion: GENERIC_SUGGESTION,
+  };
+}
+
 export function createReadOnlyToolStub(toolName: string, toolCallId: string) {
+  // A tool blocked by its metadata rather than its name gets the generic text.
   const check = checkReadOnlyBlock(toolName, true);
 
   return {
     toolCallId,
     content: [
-      `❌ ${check.error}`,
+      `❌ ${check.error ?? `Tool '${toolName}' is disabled in read-only mode.`}`,
       "",
-      `💡 ${check.suggestion}`,
+      `💡 ${check.suggestion ?? GENERIC_SUGGESTION}`,
       "",
       "To enable write operations, set READ_ONLY_MODE=false in your environment.",
     ].join("\n"),

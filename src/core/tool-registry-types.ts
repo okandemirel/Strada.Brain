@@ -29,6 +29,11 @@ export interface ToolMetadata {
   dangerous: boolean;
   requiresConfirmation: boolean;
   readOnly: boolean;
+  /**
+   * True when `readOnly` was guessed from the tool's name and input shape
+   * because the tool declared nothing. READ_ONLY_MODE does not trust a guess.
+   */
+  readOnlyInferred?: boolean;
   dependencies?: string[];
   controlPlaneOnly?: boolean;
   requiresBridge?: boolean;

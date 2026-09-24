@@ -78,6 +78,8 @@ Implementation: `src/security/secret-patterns.ts`, `src/security/secret-sanitize
 
 When `READ_ONLY_MODE=true`, all write tools are removed from the agent's tool set entirely -- not just blocked at execution time, but filtered out before the LLM sees them. The system prompt is augmented to inform the agent that write operations are unavailable.
 
+A tool counts as a write unless its metadata explicitly declares it read-only, so tools with missing or inferred metadata (plugins, skills, MCP servers) are withheld too; the name list below is a backstop.
+
 Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_stash`, `shell_exec`, `strada_create_module`, `strada_create_component`, `dotnet_build`, `dotnet_test`, and others.
 
 Allowed tools: `file_read`, `file_search`, `file_list`, `git_status`, `git_log`, `git_diff`, `code_search`, `memory_search`, `analyze_project`, and others.

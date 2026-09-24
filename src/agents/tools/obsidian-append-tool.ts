@@ -39,8 +39,12 @@ export class ObsidianAppendTool {
 
   async execute(
     input: Record<string, unknown>,
-    _context?: ToolContext,
+    context?: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Refuse on its own rather than trusting every dispatch path to filter it.
+    if (context?.readOnly) {
+      return { content: 'Error: appending to Obsidian notes is disabled in read-only mode', isError: true };
+    }
     const path = typeof input['path'] === 'string' ? input['path'].trim() : '';
     if (!path) {
       return { content: "Error: 'path' is required", isError: true };

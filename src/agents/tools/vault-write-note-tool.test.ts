@@ -87,6 +87,18 @@ describe('VaultWriteNoteTool', () => {
     expect(v2.writeFile).toHaveBeenCalled();
   });
 
+  it('refuses to write in read-only mode', async () => {
+    // The project vault is rooted in the project tree, so this is a project write.
+    const vault = makeVault({ supportsWrite: true });
+    const result = await tool.execute(
+      { path: 'Assets/Notes/a.md', content: 'x' },
+      { ...makeContext([vault]), readOnly: true },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('read-only mode');
+    expect(vault.writeFile).not.toHaveBeenCalled();
+  });
+
   it('reports vaults that do not support writeFile', async () => {
     const v1 = makeVault({ supportsWrite: false });
     const result = await tool.execute(
