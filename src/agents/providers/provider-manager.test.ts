@@ -561,6 +561,26 @@ describe("ProviderManager", () => {
     expect(manager.getActiveInfo("chat-claude").model).toBe(DEFAULT_CLAUDE_MODEL);
   });
 
+  it("builds a subscription-only Claude seat with its subscription credential (PRV-10)", async () => {
+    const registry = await import("./provider-registry.js");
+    const manager = new ProviderManager(
+      makeProvider("chain(claude)"),
+      { claude: { anthropicAuthMode: "claude-subscription", anthropicAuthToken: "sub-token" } },
+      {},
+      "/tmp/provider-manager-test",
+      ["claude"],
+    );
+
+    expect(manager.getPrimaryProviderByName("claude", "claude-opus-5")).not.toBeNull();
+    // Without the token createProvider throws "requires an API key or Claude
+    // subscription auth token", and the seat reads as unbuildable.
+    expect(registry.createProvider).toHaveBeenLastCalledWith(expect.objectContaining({
+      name: "claude",
+      anthropicAuthMode: "claude-subscription",
+      anthropicAuthToken: "sub-token",
+    }));
+  });
+
   it("throws instead of silently falling back when a hard-pinned provider cannot be built (L4)", async () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     preferenceState.set("chat-1", {

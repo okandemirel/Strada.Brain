@@ -376,12 +376,11 @@ export class ProviderManager {
 
     try {
       const provider = createProvider({
+        // The whole credential, as buildProviderChain passes it: listing the
+        // fields by hand dropped the Anthropic subscription token, so a Claude
+        // seat running on a subscription could never be built here.
+        ...this.providerCredentials[normalizedName],
         name: normalizedName,
-        apiKey: this.providerCredentials[normalizedName]?.apiKey,
-        openaiAuthMode: this.providerCredentials[normalizedName]?.openaiAuthMode,
-        openaiChatgptAuthFile: this.providerCredentials[normalizedName]?.openaiChatgptAuthFile,
-        openaiSubscriptionAccessToken: this.providerCredentials[normalizedName]?.openaiSubscriptionAccessToken,
-        openaiSubscriptionAccountId: this.providerCredentials[normalizedName]?.openaiSubscriptionAccountId,
         model: model ?? this.modelOverrides?.[normalizedName],
         baseUrl: this.resolveBaseUrlOverrides()?.[normalizedName],
       });
