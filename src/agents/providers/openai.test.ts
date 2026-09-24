@@ -956,3 +956,65 @@ describe("OpenAIProvider", () => {
     });
   });
 });
+
+// PRV-9: failure and truncation events were ignored, so a failed or cut-off
+// stream came back as a successful end_turn with whatever partial text arrived.
+describe("OpenAIProvider stream failure and truncation events", () => {
+  function sse(text: string): { ok: true; body: ReadableStream<Uint8Array>; text: () => Promise<string>; headers: Headers } {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+        controller.close();
+      },
+    });
+    return { ok: true, body, text: async () => "", headers: new Headers() };
+  }
+  const subscription = () => new OpenAIProvider({ mode: "chatgpt-subscription", accessToken: "t", accountId: "a" });
+  const ask = (p: OpenAIProvider) => p.chatStream("system", [{ role: "user", content: "ping" }], [], () => {});
+
+  it("rejects a subscription stream that ends in response.failed", async () => {
+    mockFetch.mockResolvedValue(sse([
+      "event: response.output_text.delta",
+      'data: {"delta":"partial"}',
+      "",
+      "event: response.failed",
+      'data: {"response":{"status":"failed","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}}',
+      "",
+    ].join("\n")));
+    await expect(ask(subscription())).rejects.toThrow(/stream failed: context_length_exceeded/u);
+  });
+
+  it("rejects a subscription stream that carries a top-level error event", async () => {
+    mockFetch.mockResolvedValue(sse([
+      "event: error",
+      'data: {"type":"error","code":"server_error","message":"The server had an error"}',
+      "",
+    ].join("\n")));
+    await expect(ask(subscription())).rejects.toThrow(/stream failed: server_error/u);
+  });
+
+  it("reports response.incomplete at max_output_tokens as truncated, with its usage", async () => {
+    mockFetch.mockResolvedValue(sse([
+      "event: response.output_text.delta",
+      'data: {"delta":"half an ans"}',
+      "",
+      "event: response.incomplete",
+      'data: {"response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":7,"output_tokens":9,"total_tokens":16},"output":[]}}',
+      "",
+    ].join("\n")));
+    const result = await ask(subscription());
+    expect(result.text).toBe("half an ans");
+    expect(result.stopReason).toBe("max_tokens");
+    expect(result.usage).toMatchObject({ inputTokens: 7, outputTokens: 9, totalTokens: 16 });
+  });
+
+  it("rejects a chat-completions stream chunk that carries an upstream error", async () => {
+    mockFetch.mockResolvedValue(sse([
+      'data: {"choices":[{"delta":{"content":"partial"}}]}',
+      'data: {"error":{"code":502,"message":"Upstream provider disconnected"},"choices":[{"delta":{"content":""},"finish_reason":"error"}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n")));
+    await expect(ask(new OpenAIProvider("sk-test"))).rejects.toThrow(/stream failed: 502 Upstream provider disconnected/u);
+  });
+});

@@ -80,6 +80,13 @@ function isAuthStatusError(err: unknown): boolean {
   return /\bAPI error 40[13]\b/u.test(message);
 }
 
+/** Why a chat-completions stream chunk reports the stream as failed, if it does. */
+function describeStreamChunkFailure(chunk: StreamSSEChunk): string | undefined {
+  if (chunk.error) return `${chunk.error.code ?? "error"} ${chunk.error.message ?? "(no detail)"}`;
+  if (chunk.choices?.[0]?.finish_reason === "error") return "finish_reason error";
+  return undefined;
+}
+
 /** An endpoint refusing `max_tokens` and naming `max_completion_tokens` as the replacement. */
 function isMaxTokensParamRejection(message: string): boolean {
   return /\bmax_tokens\b/u.test(message) && /\bmax_completion_tokens\b/u.test(message);
@@ -381,8 +388,22 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           const data = (line.startsWith("data: ") ? line.slice(6) : line.slice(5)).trim();
           if (data === "[DONE]") continue;
 
+          let chunk: StreamSSEChunk;
           try {
-            const chunk = JSON.parse(data) as StreamSSEChunk;
+            chunk = JSON.parse(data) as StreamSSEChunk;
+          } catch {
+            continue; // Ignore malformed SSE chunks
+          }
+          // A mid-stream upstream failure arrives as a chunk carrying `error`
+          // (OpenRouter documents it, with finish_reason "error"). It used to be
+          // read as a normal end, returning a truncated answer as complete.
+          const failure = describeStreamChunkFailure(chunk);
+          if (failure) {
+            void reader.cancel().catch(() => {});
+            throw new Error(`${this.name} stream failed: ${failure}`);
+          }
+
+          try {
             const delta = chunk.choices?.[0]?.delta;
 
             const streamText = this.extractStreamText(delta);
@@ -548,12 +569,24 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     let text = "";
     const toolCallAccumulator = new Map<string, { id: string; name: string; arguments: string }>();
     let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    // Set by `response.incomplete`: the backend stopped early (e.g. at
+    // max_output_tokens), so what arrived is a truncated answer, not a finished one.
+    let incompleteReason: string | undefined;
 
     const processFrame = (frame: string): void => {
       const parsed = this.parseChatGptSseFrame(frame);
       if (!parsed) return;
 
       const { eventName, data } = parsed;
+
+      // A failed stream (context overflow, server error) used to be ignored and
+      // whatever partial text had arrived was returned as a successful end_turn.
+      if (eventName === "response.failed" || eventName === "error") {
+        const failure = data.response?.error ?? data;
+        throw new Error(
+          `${this.name} stream failed: ${failure.code ?? eventName} ${failure.message ?? "(no detail)"}`,
+        );
+      }
 
       // The Codex/ChatGPT subscription backend emits `keepalive` heartbeat frames
       // (~every 30s) during the model's silent reasoning phase — gpt-5.x models can
@@ -625,7 +658,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         return;
       }
 
-      if (eventName === "response.completed" && data.response) {
+      if ((eventName === "response.completed" || eventName === "response.incomplete") && data.response) {
+        if (eventName === "response.incomplete") {
+          incompleteReason = data.response.incomplete_details?.reason ?? "unknown";
+        }
         const cached = data.response.usage?.input_tokens_details?.cached_tokens ?? 0;
         usage = {
           inputTokens: data.response.usage?.input_tokens ?? 0,
@@ -697,7 +733,11 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     return {
       text,
       toolCalls,
-      stopReason: toolCalls.length > 0 ? "tool_use" : "end_turn",
+      // A truncated turn is reported as such, even with tool calls: their
+      // arguments may be cut off mid-JSON.
+      stopReason: incompleteReason === "max_output_tokens"
+        ? "max_tokens"
+        : toolCalls.length > 0 ? "tool_use" : "end_turn",
       usage,
     };
   }
@@ -1509,6 +1549,7 @@ export interface OpenAIResponse {
 
 /** SSE streaming chunk format */
 interface StreamSSEChunk {
+  error?: { code?: string | number; message?: string };
   choices?: Array<{
     delta?: {
       content?: string;
@@ -1590,6 +1631,9 @@ type ChatGptOutputItem =
 interface ChatGptSseEventData {
   delta?: string;
   item_id?: string;
+  /** On a top-level `error` event. */
+  code?: string;
+  message?: string;
   item?: {
     id: string;
     type: string;
@@ -1605,5 +1649,9 @@ interface ChatGptSseEventData {
       input_tokens_details?: { cached_tokens?: number };
     };
     output?: ChatGptOutputItem[];
+    /** On `response.failed`. */
+    error?: { code?: string; message?: string } | null;
+    /** On `response.incomplete`. */
+    incomplete_details?: { reason?: string } | null;
   };
 }
