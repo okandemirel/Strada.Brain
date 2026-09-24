@@ -99,6 +99,16 @@ const commaSeparatedNumberList = z
   .pipe(z.array(z.number().int()))
   .optional();
 
+/** True when the runtime's Intl knows this IANA time zone name. */
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Config schema for validation */
 /**
  * One external MCP server entry.
@@ -709,7 +719,12 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(300000))
       .prefault("60000"),
-    daemonTimezone: z.string().default(""),
+    // croner accepts an unknown zone at construction and throws on every
+    // match/nextRun, so a typo silently disabled every scheduled trigger.
+    daemonTimezone: z.string().default("").refine(
+      (tz) => tz === "" || isValidTimeZone(tz),
+      { message: "STRADA_DAEMON_TIMEZONE must be an IANA time zone name (e.g. Europe/Istanbul)" },
+    ),
     daemonHeartbeatFile: z.string().default("./HEARTBEAT.md"),
     daemonDailyBudget: z
       .string()

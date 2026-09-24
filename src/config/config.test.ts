@@ -949,6 +949,12 @@ describe("loadConfig", () => {
       expect(config.daemon.backoff.failureThreshold).toBe(3);
     });
 
+    // TSK-18: croner took the misspelt zone and threw on every tick instead.
+    it("rejects an unknown daemon timezone", () => {
+      setEnv({ STRADA_DAEMON_TIMEZONE: "Europe/Istambul" });
+      expect(() => loadConfig()).toThrow("STRADA_DAEMON_TIMEZONE must be an IANA time zone");
+    });
+
     it("rejects intervalMs < 10000", () => {
       setEnv({ STRADA_DAEMON_INTERVAL_MS: "5000" });
       expect(() => loadConfig()).toThrow();
