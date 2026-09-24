@@ -82,43 +82,70 @@ function printMissingNpm() {
   console.error("or re-run the Strada launcher (strada.cmd / strada.ps1) to trigger the automatic Node.js setup.");
 }
 
-function resolveCommandBinary(command, platform = process.platform) {
+/**
+ * Resolve how to run npm without a shell whenever possible.
+ *
+ * On Windows npm ships as a `.cmd` stub, and Node.js 22+ only runs `.cmd`/`.bat`
+ * through `shell: true` (CVE-2024-27980). With a shell, Node joins the command
+ * and its arguments with plain spaces, so an unquoted `C:\Program Files\nodejs\npm.cmd`
+ * is split at the space by cmd.exe and npm "is missing" on every launch.
+ * Running npm's own JS entry (`node_modules/npm/bin/npm-cli.js`, next to
+ * node.exe in every official Windows install) with this Node binary needs no
+ * shell at all. When only the `.cmd` stub is present, the stub path is quoted
+ * for cmd.exe.
+ *
+ * Returns `{ command, args, shell }`: `args` are prepended to npm's own arguments.
+ */
+export function resolveNpmInvocation(options = {}) {
+  const platform = options.platform || process.platform;
   if (!isWindows(platform)) {
-    return command;
+    return { command: "npm", args: [], shell: false };
   }
-  // When using a portable/standalone Node.js (STRADA_NODE_PATH), npm.cmd lives
-  // next to node.exe and may not be on the system PATH.  Resolve the full path
-  // so that `execFileSync` / `spawnSync` find it regardless of PATH.
-  const nodeDir = process.env.STRADA_NODE_PATH ? path.dirname(process.env.STRADA_NODE_PATH) : null;
-  if (nodeDir) {
-    const candidate = path.join(nodeDir, `${command}.cmd`);
-    if (existsSync(candidate)) {
-      return candidate;
+  const env = options.env || process.env;
+  const execPath = options.execPath || process.execPath;
+  const exists = options.exists || existsSync;
+  // Injectable so the quoting can be exercised against a real shell on POSIX.
+  const pathImpl = options.pathImpl || path.win32;
+  // STRADA_NODE_PATH (set by strada.ps1 / strada.cmd, possibly a portable Node
+  // that is not on PATH) first, then the Node running this launcher.
+  const nodeDirs = [...new Set(
+    [env.STRADA_NODE_PATH, execPath].filter(Boolean).map((nodePath) => pathImpl.dirname(nodePath)),
+  )];
+  for (const nodeDir of nodeDirs) {
+    const npmCli = pathImpl.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+    if (exists(npmCli)) {
+      return { command: execPath, args: [npmCli], shell: false };
     }
   }
-  return `${command}.cmd`;
+  for (const nodeDir of nodeDirs) {
+    const npmCmd = pathImpl.join(nodeDir, "npm.cmd");
+    if (exists(npmCmd)) {
+      return { command: quoteCmdDouble(npmCmd), args: [], shell: true };
+    }
+  }
+  // Bare name: resolved through PATH by cmd.exe, and has no space to split.
+  return { command: "npm.cmd", args: [], shell: true };
 }
 
 /**
- * Build spawn options that work correctly on Windows.
- *
- * Node.js 22+ rejects `.cmd`/`.bat` execution via `spawn`/`execFile` without
- * `shell: true` (CVE-2024-27980). We add `shell: true` on Windows so that the
- * underlying CreateProcess call is handled by cmd.exe, which knows how to
- * launch `.cmd` stubs such as `npm.cmd`.
+ * Build the `[command, args, options]` triple for an npm call. `options.shell`
+ * is set only when the resolved invocation needs cmd.exe (a `.cmd` stub).
  */
-function windowsSafeSpawnOptions(options = {}) {
-  if (isWindows()) {
-    return { ...options, shell: true };
-  }
-  return options;
+export function buildNpmSpawn(npmArgs, spawnOptions = {}, resolveOptions = {}) {
+  const invocation = resolveNpmInvocation(resolveOptions);
+  const options = invocation.shell ? { ...spawnOptions, shell: true } : spawnOptions;
+  return [invocation.command, [...invocation.args, ...npmArgs], options];
+}
+
+function runNpmSync(npmArgs, spawnOptions) {
+  const [command, args, options] = buildNpmSpawn(npmArgs, spawnOptions);
+  return spawnSync(command, args, options);
 }
 
 function ensureSourceCheckout() {
   ensureRepositoryRoot();
-  const npmCommand = resolveCommandBinary("npm");
   try {
-    execFileSync(npmCommand, ["--version"], windowsSafeSpawnOptions({ stdio: "ignore" }));
+    execFileSync(...buildNpmSpawn(["--version"], { stdio: "ignore" }));
   } catch {
     printMissingNpm();
     process.exit(1);
@@ -126,10 +153,10 @@ function ensureSourceCheckout() {
 
   if (!existsSync(path.join(ROOT_DIR, "node_modules"))) {
     console.log("Preparing Strada dependencies...");
-    const result = spawnSync(npmCommand, ["install"], windowsSafeSpawnOptions({
+    const result = runNpmSync(["install"], {
       cwd: ROOT_DIR,
       stdio: "inherit",
-    }));
+    });
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }
@@ -200,10 +227,10 @@ function ensurePrepared() {
   ensureSourceCheckout();
   if (!existsSync(DIST_ENTRY)) {
     console.log("Preparing Strada build...");
-    const result = spawnSync(resolveCommandBinary("npm"), ["run", "bootstrap"], windowsSafeSpawnOptions({
+    const result = runNpmSync(["run", "bootstrap"], {
       cwd: ROOT_DIR,
       stdio: "inherit",
-    }));
+    });
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }
@@ -219,10 +246,10 @@ function ensurePrepared() {
       : "bootstrap";
     console.log("Web portal source changed since the last build; rebuilding it so the latest UI is served...");
     console.log("(set STRADA_SKIP_STALE_REBUILD=1 to skip this check)");
-    const result = spawnSync(resolveCommandBinary("npm"), ["run", rebuildScript], windowsSafeSpawnOptions({
+    const result = runNpmSync(["run", rebuildScript], {
       cwd: ROOT_DIR,
       stdio: "inherit",
-    }));
+    });
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }

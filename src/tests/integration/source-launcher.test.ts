@@ -678,3 +678,81 @@ describe("the flag the source child inherits (round 13 #35)", () => {
     expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "maybe" })).toBe("true");
   });
 });
+
+describe("source launcher npm invocation with a Node path containing a space (OPS-2)", () => {
+  const PROGRAM_FILES_NODE = "C:\\Program Files\\nodejs\\node.exe";
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Node's `shell: true` joins file + args with plain spaces before handing
+  // them to cmd.exe (`cmd /d /s /c "<line>"`), so this is the line cmd parses.
+  const shellCommandLine = (command: string, args: string[]) => [command, ...args].join(" ");
+
+  it("runs npm-cli.js with this Node binary and no shell when it sits next to node.exe", async () => {
+    const { buildNpmSpawn } = await loadSourceLauncherModule();
+    const npmCli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+    const [command, args, options] = buildNpmSpawn(["--version"], { stdio: "ignore" }, {
+      platform: "win32",
+      env: { STRADA_NODE_PATH: PROGRAM_FILES_NODE },
+      execPath: PROGRAM_FILES_NODE,
+      exists: (candidate: string) => candidate === npmCli,
+    });
+    expect(command).toBe(PROGRAM_FILES_NODE);
+    expect(args).toEqual([npmCli, "--version"]);
+    expect(options).toEqual({ stdio: "ignore" });
+  });
+
+  it("quotes the npm.cmd path for cmd.exe when only the .cmd stub is present", async () => {
+    const { buildNpmSpawn } = await loadSourceLauncherModule();
+    const npmCmd = "C:\\Program Files\\nodejs\\npm.cmd";
+    const [command, args, options] = buildNpmSpawn(["run", "bootstrap"], { cwd: "C:\\Repo" }, {
+      platform: "win32",
+      env: { STRADA_NODE_PATH: PROGRAM_FILES_NODE },
+      execPath: "C:\\hostedtoolcache\\node\\node.exe",
+      exists: (candidate: string) => candidate === npmCmd,
+    });
+    expect(options).toEqual({ cwd: "C:\\Repo", shell: true });
+    expect(shellCommandLine(command, args)).toBe(`"${npmCmd}" run bootstrap`);
+  });
+
+  it("falls back to the bare npm.cmd name (PATH lookup, nothing to split)", async () => {
+    const { resolveNpmInvocation } = await loadSourceLauncherModule();
+    expect(resolveNpmInvocation({
+      platform: "win32",
+      env: {},
+      execPath: PROGRAM_FILES_NODE,
+      exists: () => false,
+    })).toEqual({ command: "npm.cmd", args: [], shell: true });
+  });
+
+  it("leaves POSIX npm alone (no shell)", async () => {
+    const { buildNpmSpawn } = await loadSourceLauncherModule();
+    expect(buildNpmSpawn(["install"], { cwd: "/repo" }, { platform: "linux" }))
+      .toEqual(["npm", ["install"], { cwd: "/repo" }]);
+  });
+
+  it("executes a .cmd stub in a directory with a space through the real shell", async () => {
+    const { buildNpmSpawn } = await loadSourceLauncherModule();
+    const nodeDir = mkdtempSync(path.join(os.tmpdir(), "strada node dir "));
+    tempDirs.push(nodeDir);
+    const stub = path.join(nodeDir, "npm.cmd");
+    if (process.platform === "win32") {
+      writeFileSync(stub, "@echo off\r\necho npm-stub-ok %1\r\n", "utf8");
+    } else {
+      writeFileSync(stub, "#!/bin/sh\necho \"npm-stub-ok $1\"\n", { encoding: "utf8", mode: 0o755 });
+    }
+    const [command, args, options] = buildNpmSpawn(["--version"], { encoding: "utf8" }, {
+      platform: "win32",
+      env: { STRADA_NODE_PATH: path.join(nodeDir, "node.exe") },
+      execPath: path.join(nodeDir, "missing-node", "node.exe"),
+      // The host's path module, so the stub resolves wherever the test runs.
+      pathImpl: path,
+    });
+    expect(options.shell).toBe(true);
+    const output = execFileSync(command, args, options);
+    expect(String(output).trim()).toBe("npm-stub-ok --version");
+  });
+});
