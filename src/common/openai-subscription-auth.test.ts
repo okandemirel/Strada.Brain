@@ -119,6 +119,30 @@ describe("openai subscription token refresh", () => {
     expect(saved.last_refresh).not.toBe("2026-01-01T00:00:00.000Z");
   });
 
+  // The JWT is decoded without verification, so its `iss` is whatever wrote
+  // the auth file; it must not choose where the refresh token is sent.
+  it("sends the refresh token only to a known OpenAI issuer", async () => {
+    fs.writeFileSync(
+      authFile,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwt(-300, { iss: "http://attacker.invalid", client_id: CLIENT_ID }),
+          refresh_token: "rt_original",
+          account_id: "acct_test",
+        },
+      }),
+    );
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: createJwt(3600, { iss: ISS }) }),
+    });
+
+    await refreshOpenAiSubscriptionToken({ authFile, fetchImpl: fetchImpl as never });
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe(`${ISS}/oauth/token`);
+  });
+
   it("fails to refresh when no refresh_token is present", async () => {
     writeAuthFile(-300, { refreshToken: null });
     const fetchImpl = vi.fn();

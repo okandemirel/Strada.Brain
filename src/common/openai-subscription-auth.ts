@@ -5,6 +5,8 @@ import path from "node:path";
 export const OPENAI_CHATGPT_AUTH_DEFAULT_FILE = "~/.codex/auth.json";
 /** Fallback OAuth issuer / client when they cannot be derived from the token. */
 const DEFAULT_OPENAI_ISSUER = "https://auth.openai.com";
+/** Issuers a refresh token may be sent to (lowercase, no trailing slash). */
+const TRUSTED_OPENAI_ISSUERS: ReadonlySet<string> = new Set([DEFAULT_OPENAI_ISSUER, "https://auth0.openai.com"]);
 const FALLBACK_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 export type OpenAiSubscriptionAuthIssue =
@@ -256,7 +258,10 @@ async function performRefresh(
   const issuerClaim = (typeof accessClaims?.["iss"] === "string" && accessClaims["iss"])
     || (typeof idClaims?.["iss"] === "string" && idClaims["iss"])
     || DEFAULT_OPENAI_ISSUER;
-  const issuer = String(issuerClaim).replace(/\/+$/, "");
+  const claimedIssuer = String(issuerClaim).replace(/\/+$/, "");
+  // The claims are decoded, never verified: whatever wrote the auth file
+  // chose them. Only a known OpenAI issuer may receive the refresh token.
+  const issuer = TRUSTED_OPENAI_ISSUERS.has(claimedIssuer.toLowerCase()) ? claimedIssuer : DEFAULT_OPENAI_ISSUER;
   const clientId = resolveOAuthClientId(accessClaims, idClaims);
   const tokenUrl = `${issuer}/oauth/token`;
   const fetchImpl = options.fetchImpl ?? fetch;
