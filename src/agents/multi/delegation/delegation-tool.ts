@@ -50,11 +50,8 @@ export class DelegationTool implements ITool {
           type: "string",
           description: "Additional context for the sub-agent",
         },
-        mode: {
-          type: "string",
-          enum: ["sync", "async"],
-          description: "sync waits for result, async returns immediately",
-        },
+        // No "async" mode: nothing ever handed a detached sub-agent's result back to the
+        // parent, and the child kept spending and committing files after the parent's run.
       },
       required: ["task"],
     };
@@ -74,36 +71,17 @@ export class DelegationTool implements ITool {
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
     try {
-      const mode = (input.mode as string | undefined) === "async" ? "async" : "sync";
-
+      // Always synchronous, even when a model still asks for mode:"async": the result is the
+      // point of delegating, and a sub-agent must not outlive the run that asked for it.
       const request: DelegationRequest = {
         type: this.typeConfig.name,
         task: input.task as string,
         context: input.context as string | undefined,
         parentAgentId: this.parentAgentId,
         depth: this.currentDepth,
-        mode,
+        mode: "sync",
         toolContext: context,
       };
-
-      if (mode === "async") {
-        try {
-          // await: delegateAsync runs the pre-spawn gate (concurrency / all-providers-
-          // in-cooldown / parent-budget) synchronously and only THEN fires the
-          // fire-and-forget run, so a gate REJECTION surfaces here as a real failure
-          // instead of an unhandled promise rejection + a false "delegating..." ack.
-          await this.delegationManager.delegateAsync(request);
-        } catch (error) {
-          return {
-            content: `Delegation could not start: ${error instanceof Error ? error.message : String(error)}`,
-            isError: true,
-          };
-        }
-        return {
-          content: `[Delegating ${this.typeConfig.name} to sub-agent...]`,
-          metadata: { delegationMode: "async" },
-        };
-      }
 
       const result = await this.delegationManager.delegate(request);
       return {

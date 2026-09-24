@@ -118,12 +118,9 @@ describe("DelegationTool", () => {
       expect(schema).toHaveProperty("properties.context.type", "string");
     });
 
-    it("has optional mode field with sync/async enum", () => {
+    it("offers no async mode: a detached sub-agent's result never reached the parent", () => {
       const schema = tool.inputSchema;
-      expect(schema).toHaveProperty("properties.mode.type", "string");
-      expect(schema).toHaveProperty("properties.mode.enum");
-      const modeEnum = (schema as { properties: { mode: { enum: string[] } } }).properties.mode.enum;
-      expect(modeEnum).toEqual(["sync", "async"]);
+      expect(schema).not.toHaveProperty("properties.mode");
     });
   });
 
@@ -181,20 +178,22 @@ describe("DelegationTool", () => {
     });
   });
 
-  describe("execute() async mode", () => {
-    it("calls delegateAsync() and returns immediate acknowledgment", async () => {
-      mockManager.delegateAsync.mockResolvedValue(undefined);
+  describe("execute() with a requested async mode", () => {
+    it("runs the delegation synchronously and returns its result to the parent", async () => {
+      // The async path acknowledged immediately and nothing ever delivered the sub-agent's
+      // content or worker result back; the child kept running after the parent's run.
+      mockManager.delegate.mockResolvedValue(TEST_DELEGATION_RESULT);
 
       const result = await tool.execute(
         { task: "Analyze this file", mode: "async" },
         TEST_TOOL_CONTEXT,
       );
 
-      expect(mockManager.delegateAsync).toHaveBeenCalledOnce();
-      expect(mockManager.delegate).not.toHaveBeenCalled();
-      expect(result.content).toContain("code_review");
-      expect(result.metadata).toBeDefined();
-      expect(result.metadata!.delegationMode).toBe("async");
+      expect(mockManager.delegateAsync).not.toHaveBeenCalled();
+      expect(mockManager.delegate).toHaveBeenCalledOnce();
+      expect(mockManager.delegate.mock.calls[0]![0].mode).toBe("sync");
+      expect(result.content).toBe("Code review completed. Found 3 issues.");
+      expect(result.metadata!.delegationMode).toBe("sync");
     });
   });
 
