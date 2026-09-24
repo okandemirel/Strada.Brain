@@ -15,6 +15,7 @@ import { TogetherProvider } from "./together.js";
 import { FireworksProvider } from "./fireworks.js";
 import { OpencodeProvider } from "./opencode.js";
 import { OpenRouterProvider } from "./openrouter.js";
+import { createHash } from "node:crypto";
 import { getLogger } from "../../utils/logger.js";
 import { hasAnthropicSubscriptionCredential, hasOpenAISubscriptionCredential } from "./subscription-credential.js";
 
@@ -300,7 +301,12 @@ export function buildProviderChain(
       });
 
       const preset = PROVIDER_PRESETS[trimmed];
-      const keyPrefix = credential.apiKey?.slice(0, 6)
+      // A fingerprint, never characters of the key: keys without a vendor
+      // prefix (hex/alphanumeric) leaked real secret material into every boot
+      // log. Same hash family seatIdentity uses, so the two can be matched.
+      const keyFingerprint = (credential.apiKey
+        ? `sha256:${createHash("sha256").update(credential.apiKey).digest("hex").slice(0, 8)}`
+        : undefined)
         ?? (hasAnthropicSubscriptionCredential({
           anthropicAuthMode: credential.anthropicAuthMode,
           anthropicAuthToken: credential.anthropicAuthToken,
@@ -317,7 +323,7 @@ export function buildProviderChain(
           : undefined);
       logger.info(`Provider ready: ${provider.name}`, {
         model: overrides?.models?.[trimmed] ?? preset?.defaultModel ?? "default",
-        keyPrefix: keyPrefix ? `${keyPrefix}...` : "(none)",
+        key: keyFingerprint ?? "(none)",
       });
     } catch (error) {
       logger.warn(
