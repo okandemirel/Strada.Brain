@@ -972,20 +972,43 @@ export class CampaignManager {
 
   /** Subscribe to task lifecycle events. Idempotent. */
   attachEvents(): void {
-    if (this.eventsAttached) return;
+    if (this.eventsAttached || this.disposed) return;
     this.eventsAttached = true;
-    this.taskManager.on("task:completed", (taskId: string, result: string) => {
+    const listen = (event: string, listener: (...args: string[]) => void): void => {
+      this.taskManager.on(event, listener);
+      this.taskEventListeners.push([event, listener]);
+    };
+    listen("task:completed", (taskId: string, result: string) => {
       void this.handleTaskSettled(taskId, TaskStatus.completed, result);
     });
-    this.taskManager.on("task:failed", (taskId: string, error: string) => {
+    listen("task:failed", (taskId: string, error: string) => {
       void this.handleTaskSettled(taskId, TaskStatus.failed, error);
     });
-    this.taskManager.on("task:blocked", (taskId: string, reason: string) => {
+    listen("task:blocked", (taskId: string, reason: string) => {
       void this.handleTaskSettled(taskId, TaskStatus.blocked, reason);
     });
-    this.taskManager.on("task:cancelled", (taskId: string) => {
+    listen("task:cancelled", (taskId: string) => {
       void this.handleTaskSettled(taskId, TaskStatus.cancelled, "cancelled");
     });
+  }
+
+  private disposed = false;
+  private readonly taskEventListeners: Array<[string, (...args: string[]) => void]> = [];
+
+  /**
+   * Shutdown: stop reacting to task events BEFORE the task manager fails its
+   * in-flight work — those failures are the shutdown's, and reacting to them
+   * submitted a new milestone into a task manager that was closing (COR-9) —
+   * then close the campaign stores. Follow-ups scheduled for later find a
+   * disposed manager and do nothing.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const [event, listener] of this.taskEventListeners.splice(0)) this.taskManager.off(event, listener);
+    this.eventsAttached = false;
+    this.deliveryPackages?.close();
+    this.storage.close();
   }
 
   /** Idea mode: draft the GDD first, then stop at the single approval gate. */
@@ -2438,6 +2461,7 @@ export class CampaignManager {
   private readonly settleChains = new Map<string, Promise<void>>();
 
   private enqueueSettle(campaignId: string, fn: () => Promise<void>): void {
+    if (this.disposed) return;
     const prev = this.settleChains.get(campaignId) ?? Promise.resolve();
     const next = prev.then(fn).catch((err: unknown) => {
       getLoggerSafe().warn("Campaign settlement handler failed", {

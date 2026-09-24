@@ -237,6 +237,16 @@ export interface ShutdownOptions {
   vaultRegistry?: VaultRegistry;
   /** Background executor — shuts down to clear queue and release workspace leases. */
   backgroundExecutor?: { shutdown(): Promise<void> };
+  /**
+   * Real-tree guardian — stopped BEFORE the executor commits its leases, whose
+   * write-backs would otherwise arm a verify (and maybe a fix task) mid-shutdown.
+   */
+  realTreeGuardian?: { stop(): void };
+  /**
+   * Campaign manager — disposed BEFORE in-flight tasks are failed: it would
+   * react to those shutdown failures by submitting a new milestone (COR-9).
+   */
+  campaignManager?: { dispose(): void };
   /** Provider health registry — persisted on shutdown to survive restarts. */
   providerHealthRegistry?: ProviderHealthRegistry;
   /** Path to persist provider health registry state across restarts. */
@@ -347,6 +357,16 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       // Stop chain detection timer before draining events
       if (options.chainManager) {
         await runStep("chainManager", () => options.chainManager!.stop());
+      }
+
+      // Producers of NEW task work stop before the executor shuts down and the
+      // in-flight tasks are failed: those failures belong to the shutdown and
+      // must not be answered with more work (COR-9).
+      if (options.realTreeGuardian) {
+        await runStep("realTreeGuardian", () => options.realTreeGuardian!.stop());
+      }
+      if (options.campaignManager) {
+        await runStep("campaignManager", () => options.campaignManager!.dispose());
       }
 
       // Shut down background executor before failing tasks

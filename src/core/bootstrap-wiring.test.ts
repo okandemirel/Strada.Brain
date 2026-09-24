@@ -127,6 +127,22 @@ describe("createShutdownHandler", () => {
     expect(taskStorage.close).toHaveBeenCalledOnce();
   });
 
+  it("stops the guardian and the campaign before the executor and task failures (COR-9)", async () => {
+    const order: string[] = [];
+    const shutdown = createShutdownHandler({
+      channel: { disconnect: vi.fn(async () => {}) } as any,
+      cleanupInterval: setInterval(() => {}, 1000),
+      realTreeGuardian: { stop: () => { order.push("guardian.stop"); } },
+      campaignManager: { dispose: () => { order.push("campaign.dispose"); } },
+      backgroundExecutor: { shutdown: async () => { order.push("executor.shutdown"); } },
+      taskManager: { failActiveTasksOnShutdown: () => { order.push("tasks.fail"); } } as any,
+    });
+
+    await shutdown();
+
+    expect(order).toEqual(["guardian.stop", "campaign.dispose", "executor.shutdown", "tasks.fail"]);
+  });
+
   it("falls back to taskStorage when taskManager is absent", async () => {
     const activeTask = buildTask();
     const taskStorage = {

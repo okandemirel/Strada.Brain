@@ -1642,6 +1642,7 @@ async function bootstrapImpl(
     projectScopeFingerprint,
     commandHandler,
     messageRouter,
+    progressReporter,
     realTreeGuardian,
     campaignManager,
   } = await initializeTaskRuntimeStage({
@@ -1675,8 +1676,19 @@ async function bootstrapImpl(
   if (autoUpdater) {
     disposables.push("autoUpdater", () => autoUpdater.shutdown());
   }
-  if (realTreeGuardian) {
-    disposables.push("realTreeGuardian", () => realTreeGuardian.stop());
+  // Stopping the guardian also unhooks it from lease write-backs: the executor
+  // commits leases while it shuts down, and each one would re-arm a check.
+  const stopRealTreeGuardian = realTreeGuardian
+    ? (): void => {
+      backgroundExecutor?.setWorkspaceCommittedListener?.(undefined);
+      realTreeGuardian.stop();
+    }
+    : undefined;
+  if (stopRealTreeGuardian) {
+    disposables.push("realTreeGuardian", stopRealTreeGuardian);
+  }
+  if (campaignManager) {
+    disposables.push("campaignManager", () => campaignManager.dispose());
   }
   if (messageRouter) {
     disposables.push("messageRouter", () => messageRouter.dispose());
@@ -2469,8 +2481,11 @@ async function bootstrapImpl(
       notificationRouter: notificationRouterInstance,
       agentManager,
       messageRouter,
+      progressReporter,
       vaultRegistry,
       backgroundExecutor,
+      realTreeGuardian: stopRealTreeGuardian ? { stop: stopRealTreeGuardian } : undefined,
+      campaignManager,
       delegationManager,
       stoppableServers,
       soulLoader,
