@@ -20,6 +20,9 @@ import type { DaemonBudgetConfig, DaemonBudgetScope } from "../daemon-types.js";
 /** 24 hours in milliseconds */
 const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** daemon_state key: when `strada daemon budget reset` last ran (epoch ms). */
+export const DAEMON_BUDGET_RESET_KEY = "daemon_budget_reset_at";
+
 export interface BudgetUsage {
   usedUsd: number;
   limitUsd: number | undefined;
@@ -66,7 +69,9 @@ export class BudgetTracker {
    * (unlimited for non-daemon usage).
    */
   getUsage(): BudgetUsage {
-    const windowStart = Date.now() - ROLLING_WINDOW_MS;
+    // A manual reset moves the start of the daemon's window; the ledger itself
+    // is left intact (see resetBudget).
+    const windowStart = Math.max(Date.now() - ROLLING_WINDOW_MS, this.resetFloor());
     // Audited 2026-09-02: this summed EVERY source against the limit, so with a
     // dedicated STRADA_DAEMON_DAILY_BUDGET=5 ordinary chat spend of $5 read as
     // pct=1.0 and stopped the trigger loop and AgentCore for a daemon that had
@@ -101,9 +106,28 @@ export class BudgetTracker {
   }
 
   /**
-   * Clear all budget entries (manual reset via CLI).
+   * Reset the daemon's budget counter (manual reset via CLI).
+   *
+   * `budget_entries` is the ledger every spender shares: deleting it (as this
+   * did) also zeroed the global wallet, the chat and agent allowances and
+   * every per-campaign and per-task cost. The reset is a marker instead:
+   * this tracker counts only spend recorded after it.
    */
   resetBudget(): void {
-    this.storage.clearBudgetEntries();
+    const now = Date.now();
+    this.storage.setDaemonState(DAEMON_BUDGET_RESET_KEY, String(now));
+    this.resetAtMs = now;
+  }
+
+  private resetAtMs: number | undefined;
+
+  /** First timestamp the daemon's window may count (0 when never reset). */
+  private resetFloor(): number {
+    if (this.resetAtMs === undefined) {
+      const stored = Number(this.storage.getDaemonState(DAEMON_BUDGET_RESET_KEY));
+      this.resetAtMs = Number.isFinite(stored) ? stored : 0;
+    }
+    // Spend recorded in the reset's own millisecond belongs to before it.
+    return this.resetAtMs > 0 ? this.resetAtMs + 1 : 0;
   }
 }

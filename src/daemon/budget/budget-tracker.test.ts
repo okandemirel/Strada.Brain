@@ -194,7 +194,7 @@ describe("BudgetTracker", () => {
   // =========================================================================
 
   describe("resetBudget()", () => {
-    it("clears all entries via DaemonStorage.clearBudgetEntries", () => {
+    it("resets the daemon's counter to zero", () => {
       tracker.recordCost(3.0);
       tracker.recordCost(1.5);
       expect(tracker.getUsage().usedUsd).toBeCloseTo(4.5, 2);
@@ -204,6 +204,32 @@ describe("BudgetTracker", () => {
       const usage = tracker.getUsage();
       expect(usage.usedUsd).toBe(0);
       expect(usage.pct).toBe(0);
+    });
+
+    // TSK-10: the reset deleted the whole shared ledger — every source's
+    // spend, and every campaign's and task's cost attribution with it.
+    it("leaves the shared ledger alone: other sources and campaign costs survive", () => {
+      storage.migrateBudgetSource();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-01T10:00:00Z"));
+      const at = Date.now();
+      storage.insertBudgetEntryWithSource({ costUsd: 2, timestamp: at, source: "chat", campaignId: "camp_1" });
+      storage.insertBudgetEntryWithSource({ costUsd: 1, timestamp: at, source: "daemon" });
+      expect(tracker.getUsage().usedUsd).toBeCloseTo(3, 2);
+
+      vi.setSystemTime(at + 1_000);
+      tracker.resetBudget();
+
+      expect(tracker.getUsage().usedUsd).toBe(0);
+      expect(storage.sumBudgetSince(at)).toBeCloseTo(3, 2);
+      expect(storage.sumBudgetForSource("chat", at)).toBeCloseTo(2, 2);
+      expect(storage.sumBudgetForCampaign("camp_1").totalUsd).toBeCloseTo(2, 2);
+
+      // Spend after the reset counts again, and the reset outlives the tracker.
+      vi.setSystemTime(at + 2_000);
+      tracker.recordCost(0.5);
+      expect(tracker.getUsage().usedUsd).toBeCloseTo(0.5, 2);
+      expect(new BudgetTracker(storage, defaultConfig).getUsage().usedUsd).toBeCloseTo(0.5, 2);
     });
   });
 
