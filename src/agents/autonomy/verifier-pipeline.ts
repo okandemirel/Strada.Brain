@@ -14,7 +14,7 @@ import {
   MUTATION_TOOL_NAMES,
   shouldRunCompletionReview,
 } from "./completion-review.js";
-import type { VerificationState } from "./self-verification.js";
+import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verification.js";
 
 export type VerifierName =
   | "build"
@@ -119,7 +119,7 @@ export function planVerifierPipeline(params: {
 
   checks.push(buildLogVerifierCheck(evidence));
 
-  const unityCheck = buildUnityConsoleVerifierCheck(params.verificationState);
+  const unityCheck = buildUnityConsoleVerifierCheck(params.verificationState, evidence);
   if (unityCheck) {
     checks.push(unityCheck);
   }
@@ -762,12 +762,26 @@ function buildVerifierPipelineGate(
 
 function buildUnityConsoleVerifierCheck(
   verificationState: VerificationState,
+  evidence: VerifierPipelineEvidence,
 ): VerifierCheck | null {
   const errors = verificationState.unityConsoleErrors ?? [];
   const attempts = verificationState.unityErrorResolutionAttempts ?? 0;
 
   if (errors.length === 0) {
     return null;
+  }
+
+  // The same cap SelfVerification applies, and the same honest exit the
+  // sibling checks allow: this gate ran before the terminal-failure branch
+  // and ignored the attempt count, so a run whose remaining errors it could
+  // not fix could only end through loop recovery (audited 2026-09-24). The
+  // errors stay on record; they stop gating.
+  if (attempts >= MAX_UNITY_ERROR_ATTEMPTS || evidence.hasTerminalFailureReport) {
+    return {
+      name: "unity-console" as VerifierName,
+      status: "issues",
+      summary: `${errors.length} Unity console error(s) remain after ${attempts} attempt(s); no longer gating.`,
+    };
   }
 
   const errorList = errors.slice(0, 5).map(e => `  ✗ ${e}`).join("\n");
@@ -837,6 +851,15 @@ function buildSameErrorVerifierCheck(
 ): VerifierCheck | null {
   if (evidence.consecutiveSameErrors < SAME_ERROR_REPEAT_THRESHOLD) {
     return null;
+  }
+  // "Try a different approach" is no answer to a run reporting that it
+  // cannot finish: the report is the honest exit (audited 2026-09-24).
+  if (evidence.hasTerminalFailureReport) {
+    return {
+      name: "same-error-repeat" as VerifierName,
+      status: "issues",
+      summary: `Same error repeated ${evidence.consecutiveSameErrors} times; the draft reports the failure.`,
+    };
   }
 
   return {

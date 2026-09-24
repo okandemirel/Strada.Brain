@@ -256,6 +256,9 @@ export function getLatestGlobalBuildState(nowMs = Date.now()): {
     : { pendingFiles: new Set<string>(), hasCompilableChanges: false, lastBuildOk: null };
 }
 
+/** Console-error rounds after which the unity-console gate stops asking. */
+export const MAX_UNITY_ERROR_ATTEMPTS = 10;
+
 export class SelfVerification {
   private pendingFiles = new Set<string>();
   private touchedFiles = new Set<string>();
@@ -264,7 +267,7 @@ export class SelfVerification {
   private lastVerificationAt: number | null = null;
   private unityConsoleErrors: string[] = [];
   private unityErrorResolutionAttempts = 0;
-  private static readonly MAX_UNITY_ERROR_ATTEMPTS = 10;
+  private static readonly MAX_UNITY_ERROR_ATTEMPTS = MAX_UNITY_ERROR_ATTEMPTS;
   /** Test files changed since a tool last RAN tests, as opposed to compiling them. */
   private pendingTestFiles = new Set<string>();
   private testRunAttempts = 0;
