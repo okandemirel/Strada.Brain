@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
@@ -254,6 +254,17 @@ describe("GitBranchTool", () => {
       ctx,
     );
     expect(result.content).toContain("feature/checkout");
+  });
+
+  // `git checkout <name>` reads a name that is not a ref as a pathspec and
+  // restores it from the index: uncommitted edits vanished while the tool
+  // reported "Switched to branch".
+  it.each([".", "file.txt"])("never treats checkout name %j as a path to restore", async (name) => {
+    await writeFile(join(tempDir, "file.txt"), "uncommitted work\n");
+    const result = await tool.execute({ action: "checkout", name }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain("Switched to branch");
+    expect(await readFile(join(tempDir, "file.txt"), "utf-8")).toBe("uncommitted work\n");
   });
 
   it("requires name for create", async () => {

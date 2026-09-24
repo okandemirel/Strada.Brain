@@ -378,7 +378,11 @@ export class GitBranchTool implements ITool {
         if (context.readOnly) return { content: "Error: checkout is disabled in read-only mode", isError: true };
         const nameCheck = sanitizeGitArg(name, "branch name");
         if (!nameCheck.valid) return { content: `Error: ${nameCheck.error}`, isError: true };
-        const result = await runGit(["checkout", nameCheck.value], context.projectPath);
+        // `git switch`, not `git checkout`: checkout falls back to reading a
+        // name that is not a ref as a PATHSPEC and restores those paths from
+        // the index, silently discarding uncommitted work while this tool
+        // reported a branch switch. switch only ever takes a branch.
+        const result = await runGit(["switch", nameCheck.value], context.projectPath);
         if (result.exitCode !== 0) {
           return { content: `Error: ${result.stderr}`, isError: true };
         }
