@@ -63,37 +63,45 @@ export async function initializeOpsMonitoringStage(
   );
 
   const stoppableServers: Array<{ stop(): Promise<void> | void }> = [];
-  if (params.config.websocketDashboard.enabled) {
-    const { WebSocketDashboardServer } = await import("../../dashboard/websocket-server.js");
-    const wsDashboard = new WebSocketDashboardServer({
-      port: params.config.websocketDashboard.port,
-      bindHost: params.config.bindHost,
-      authToken: params.config.websocketDashboard.authToken,
-      allowedOrigins: params.config.websocketDashboard.allowedOrigins,
-      metrics: params.metrics,
-      getMemoryStats: () => params.memoryManager?.getStats(),
-    });
-    await wsDashboard.start();
-    stoppableServers.push(wsDashboard);
-    if (!params.config.websocketDashboard.authToken) {
-      params.logger.info("WebSocket dashboard enabled without static auth token; command mode is read-only");
+  try {
+    if (params.config.websocketDashboard.enabled) {
+      const { WebSocketDashboardServer } = await import("../../dashboard/websocket-server.js");
+      const wsDashboard = new WebSocketDashboardServer({
+        port: params.config.websocketDashboard.port,
+        bindHost: params.config.bindHost,
+        authToken: params.config.websocketDashboard.authToken,
+        allowedOrigins: params.config.websocketDashboard.allowedOrigins,
+        metrics: params.metrics,
+        getMemoryStats: () => params.memoryManager?.getStats(),
+      });
+      await wsDashboard.start();
+      stoppableServers.push(wsDashboard);
+      if (!params.config.websocketDashboard.authToken) {
+        params.logger.info("WebSocket dashboard enabled without static auth token; command mode is read-only");
+      }
+      params.logger.info("WebSocket dashboard started", { port: params.config.websocketDashboard.port });
     }
-    params.logger.info("WebSocket dashboard started", { port: params.config.websocketDashboard.port });
-  }
 
-  if (params.config.prometheus.enabled) {
-    const { PrometheusMetrics } = await import("../../dashboard/prometheus.js");
-    const prometheus = new PrometheusMetrics(
-      params.config.prometheus.port,
-      params.metrics,
-      () => params.memoryManager?.getStats(),
-      undefined,
-      params.config.bindHost,
-    );
-    await prometheus.start();
-    stoppableServers.push(prometheus);
-    params.logger.warn("SECURITY: Prometheus metrics endpoint has no authentication — restrict access at network level");
-    params.logger.info("Prometheus metrics started", { port: params.config.prometheus.port });
+    if (params.config.prometheus.enabled) {
+      const { PrometheusMetrics } = await import("../../dashboard/prometheus.js");
+      const prometheus = new PrometheusMetrics(
+        params.config.prometheus.port,
+        params.metrics,
+        () => params.memoryManager?.getStats(),
+        undefined,
+        params.config.bindHost,
+      );
+      await prometheus.start();
+      stoppableServers.push(prometheus);
+      params.logger.warn("SECURITY: Prometheus metrics endpoint has no authentication — restrict access at network level");
+      params.logger.info("Prometheus metrics started", { port: params.config.prometheus.port });
+    }
+  } catch (error) {
+    // A listener that fails to start aborts boot, and the servers started
+    // before it were not on the teardown stack yet, so they stayed bound and a
+    // retry in the same process hit EADDRINUSE (COR-17).
+    await Promise.allSettled([...stoppableServers, ...(dashboard ? [dashboard] : [])].map(async (server) => server.stop()));
+    throw error;
   }
 
   const rateLimiter = deps.initializeRateLimiter(params.config, params.logger);
