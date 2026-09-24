@@ -1146,7 +1146,9 @@ export class CampaignManager {
     const hash = this.amendGdd(campaign.id);
     await this.tell(
       campaign,
-      hash === undefined
+      hash === undefined && this.isIdeaModeBeforeApproval(campaign)
+        ? "The GDD is still a draft nobody has approved, so there is nothing to amend — approve it at the gate (**evet/onay**) instead."
+        : hash === undefined
         ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`
         : `GDD amendment acknowledged: the document on disk (${hash.slice(0, 8)}) is now the approved one; the next delivery is judged against it.`,
     );
@@ -1269,11 +1271,12 @@ export class CampaignManager {
     if (!milestone) {
       campaign.lastError = undefined;
       campaign.autoReviveAt = undefined;
-      if (this.isIdeaModeBeforeGdd(campaign)) {
-        // Idea mode, no GDD yet: the draft is the work, not the ladder.
-        this.persist(campaign);
-        await this.tell(campaign, "Reviving the campaign — rewriting the GDD from your idea.");
-        this.submitDraft(campaign);
+      if (this.isIdeaModeBeforeApproval(campaign)) {
+        // Idea mode, nothing approved yet: the gate (or the draft) is the
+        // work, not the ladder. A person's revival is a fresh revision
+        // budget, as it is a fresh attempt budget for a sprint.
+        campaign.draftAttempts = 0;
+        await this.reenterApprovalGate(campaign, "Reviving the campaign");
         return true;
       }
       // Failed before/during planning — replan from the GDD.
@@ -1734,15 +1737,14 @@ export class CampaignManager {
           if (!milestone) {
             fresh.lastError = undefined;
             fresh.autoReviveAt = undefined;
-            if (this.isIdeaModeBeforeGdd(fresh)) {
-              // Parked while drafting (idea mode): re-issue the DRAFT. Planning
-              // here would adopt an unrelated docs GDD (audited 2026-09-02).
-              this.persist(fresh);
-              getLoggerSafe().info("Campaign self-revival — redrafting the GDD from the idea", {
+            if (this.isIdeaModeBeforeApproval(fresh)) {
+              // Parked while drafting (idea mode): back to the gate, or re-issue
+              // the DRAFT. Planning here would adopt an unrelated docs GDD
+              // (audited 2026-09-02), or build a draft nobody approved.
+              getLoggerSafe().info("Campaign self-revival — back to the GDD approval gate", {
                 id: fresh.id,
               });
-              await this.tell(fresh, "Provider chain recovered — rewriting the GDD from your idea.");
-              this.submitDraft(fresh);
+              await this.reenterApprovalGate(fresh, "Provider chain recovered");
               return;
             }
             // Failed before the ladder existed (planning outage): replan from
@@ -1947,11 +1949,11 @@ export class CampaignManager {
         // different ladder from the one already announced. Resume the work
         // item instead; this milestone has never been submitted, so its first
         // attempt is charged exactly as a fresh launch charges it.
-        if (this.isIdeaModeBeforeGdd(campaign)) {
-          getLoggerSafe().info("Campaign resuming the GDD draft instead of planning", {
+        if (this.isIdeaModeBeforeApproval(campaign)) {
+          getLoggerSafe().info("Campaign resuming the GDD approval gate instead of planning", {
             id: campaign.id,
           });
-          this.submitDraft(campaign);
+          await this.reenterApprovalGate(campaign);
           return;
         }
         if (campaign.milestones.length > 0 && campaign.milestones[campaign.currentMilestone]) {
@@ -1979,15 +1981,42 @@ export class CampaignManager {
   // ===========================================================================
 
   /**
-   * Idea mode with no design document yet: the work to resume is the DRAFT,
-   * not planning. Audited 2026-09-02 — every pre-ladder resume (restart,
-   * "kampanya devam", outage self-revival) funnelled into planAndLaunch,
-   * which adopts the NEWEST docs/*GDD*.md by mtime. On a repo that already
-   * holds another game's GDD that plans a ladder for the wrong game and drops
-   * the idea silently.
+   * Idea mode whose GDD nobody has approved yet: the work to resume is the
+   * gate or the DRAFT, not planning. Audited 2026-09-02 — every pre-ladder
+   * resume (restart, "kampanya devam", outage self-revival) funnelled into
+   * planAndLaunch, which adopts the NEWEST docs/*GDD*.md by mtime. On a repo
+   * that already holds another game's GDD that plans a ladder for the wrong
+   * game and drops the idea silently.
+   *
+   * APPROVAL, NOT FILE PRESENCE (CMP-1). The first draft sets `gddPath` long
+   * before anyone approves it, so keying on the path read a rejected draft as
+   * the design to build. Only the gate stamps the approved hash and revision.
    */
-  private isIdeaModeBeforeGdd(campaign: Campaign): boolean {
-    return !!campaign.ideaText && !campaign.gddPath && !campaign.gddText;
+  private isIdeaModeBeforeApproval(campaign: Campaign): boolean {
+    return !!campaign.ideaText && (campaign.gddSha256 === undefined || campaign.gddRevision === undefined);
+  }
+
+  /**
+   * Put an unapproved idea-mode campaign back where a person decides: at the
+   * approval gate when a drafted document can be read, otherwise on a fresh
+   * draft. `lead` opens the chat message; without it the move is silent (a
+   * boot resume must not re-announce the gate on every restart).
+   */
+  private async reenterApprovalGate(campaign: Campaign, lead?: string): Promise<void> {
+    const draft = campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined;
+    if (draft === undefined) {
+      this.persist(campaign);
+      if (lead !== undefined) await this.tell(campaign, `${lead} — rewriting the GDD from your idea.`);
+      this.submitDraft(campaign);
+      return;
+    }
+    campaign.state = "awaiting-approval";
+    if (!this.persist(campaign) || lead === undefined) return;
+    await this.tell(
+      campaign,
+      `${lead} — the GDD draft at \`${campaign.gddPath}\` was never approved, so the build does not start from it. ` +
+        `Review it — reply **evet/onay** to start the build, or write what to change (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,
+    );
   }
 
   private newCampaign(
@@ -2038,6 +2067,14 @@ export class CampaignManager {
   private async planAndLaunch(campaignId: string): Promise<void> {
     const campaign = this.storage.get(campaignId);
     if (!campaign) return;
+    // THE GATE IS THE ONLY WAY IN for an idea-mode campaign: planning builds
+    // the approved document, and there is none yet (CMP-1). The refusal
+    // lands the campaign back at the gate rather than leaving it `planning`.
+    if (this.isIdeaModeBeforeApproval(campaign)) {
+      getLoggerSafe().warn("Refused to plan an idea-mode campaign whose GDD was never approved", { id: campaign.id });
+      await this.reenterApprovalGate(campaign, "Not planning yet");
+      return;
+    }
     campaign.state = "planning";
     if (!campaign.gddPath) {
       campaign.gddPath = this.findNewestGddPath();
@@ -5940,6 +5977,9 @@ export class CampaignManager {
   amendGdd(campaignId: string): string | undefined {
     const campaign = this.storage.get(campaignId);
     if (campaign === undefined || campaign.gddPath === undefined) return undefined;
+    // An amendment re-approves an APPROVED document; a draft still in
+    // revision is approved at the gate, never through this side door (CMP-1).
+    if (this.isIdeaModeBeforeApproval(campaign)) return undefined;
     const onDisk = readGddFile(this.projectRoot, campaign.gddPath);
     if (onDisk === undefined) return undefined;
     campaign.gddSha256 = sha256Of(onDisk);

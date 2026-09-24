@@ -9238,4 +9238,105 @@ describe("CampaignManager", () => {
       expect(storage.listUnreportedDeliveries().map((c) => c.id)).toEqual([a.id]);
     });
   });
+
+  describe("an idea-mode draft is built only after approval (CMP-1)", () => {
+    const planMilestones = (): ReturnType<typeof vi.fn> =>
+      (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
+
+    /** Idea → the first draft lands at the gate → the designer asks for a revision. */
+    const toRevision = async (): Promise<string> => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(await manager.tryHandleApproval("cli-local", "no, make it about cats")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      return campaign.id;
+    };
+
+    const expectBackAtTheGate = (id: string, submittedBefore: number): void => {
+      const after = storage.get(id)!;
+      expect(after.state).toBe("awaiting-approval");
+      expect(after.milestones).toHaveLength(0);
+      expect(after.gddSha256).toBeUndefined();
+      expect(planMilestones()).not.toHaveBeenCalled();
+      expect(tasks.submitted).toHaveLength(submittedBefore);
+      expect(messages.at(-1)!.text).toContain("never approved");
+    };
+
+    it("a person's revival of a failed revision re-opens the gate instead of planning the rejected draft", async () => {
+      const id = await toRevision();
+      const failed = storage.get(id)!;
+      failed.state = "failed";
+      failed.lastError = "GDD draft failed";
+      storage.save(failed);
+      const before = tasks.submitted.length;
+
+      expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+      await new Promise((r) => setTimeout(r, 100));
+      expectBackAtTheGate(id, before);
+
+      // …and the gate still works from there: approval plans and builds.
+      expect(await manager.tryHandleApproval("cli-local", "evet")).toBe(true);
+      await waitFor(() => expect(storage.get(id)!.state).toBe("executing"));
+      expect(planMilestones()).toHaveBeenCalledTimes(1);
+    });
+
+    it("a campaign cancelled for its revision budget revives at the gate with a fresh budget", async () => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      const spent = storage.get(campaign.id)!;
+      spent.draftAttempts = 3;
+      storage.save(spent);
+      expect(await manager.tryHandleApproval("cli-local", "still not what I meant")).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+
+      expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+      await new Promise((r) => setTimeout(r, 100));
+      expectBackAtTheGate(campaign.id, 1);
+      expect(storage.get(campaign.id)!.draftAttempts).toBe(0);
+    });
+
+    it("an outage self-revival of a revision re-opens the gate instead of planning", async () => {
+      const id = await toRevision();
+      const parked = storage.get(id)!;
+      parked.state = "failed";
+      parked.autoReviveAt = Date.now() + 60_000;
+      storage.save(parked);
+      const before = tasks.submitted.length;
+
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(id, 20);
+      await waitFor(() => expect(storage.get(id)!.state).toBe("awaiting-approval"));
+      await new Promise((r) => setTimeout(r, 50));
+      expectBackAtTheGate(id, before);
+      expect(storage.get(id)!.autoReviveAt).toBeUndefined();
+    });
+
+    it("planning refuses an idea-mode campaign nobody approved, and a boot resume goes back to the gate", async () => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+
+      await (manager as unknown as { planAndLaunch(id: string): Promise<void> }).planAndLaunch(campaign.id);
+      expectBackAtTheGate(campaign.id, 1);
+
+      // A row left `planning` before approval (the old revival path) resumes at the gate.
+      const planning = storage.get(campaign.id)!;
+      planning.state = "planning";
+      storage.save(planning);
+      await manager.resumeActive();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(storage.get(campaign.id)!.state).toBe("awaiting-approval");
+      expect(planMilestones()).not.toHaveBeenCalled();
+    });
+
+    it("'amend gdd' cannot approve a draft that is still in revision", async () => {
+      const id = await toRevision();
+      expect(await manager.tryHandleAmendment("cli-local", "amend gdd")).toBe(true);
+      const after = storage.get(id)!;
+      expect(after.gddSha256).toBeUndefined();
+      expect(after.gddRevision).toBeUndefined();
+      expect(messages.at(-1)!.text).toContain("nobody has approved");
+    });
+  });
 });
