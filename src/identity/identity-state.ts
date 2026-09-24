@@ -28,6 +28,11 @@ export interface IdentityState {
   totalTasks: number;
   projectContext: string;
   cleanShutdown: boolean;
+  /**
+   * The previous session's last activity, captured before this boot
+   * overwrote it (epoch ms). Absent before recordBoot or on first boot.
+   */
+  previousSessionActivityTs?: number;
 }
 
 const SCHEMA_SQL = `
@@ -72,6 +77,7 @@ export class IdentityStateManager {
   private db: Database.Database | null = null;
   private bootStartTime: number = 0;
   private crashDetected: boolean = false;
+  private previousSessionActivityTs: number = 0;
   private readonly agentName: string;
 
   // In-memory counter cache — flushed on shutdown and periodic intervals
@@ -148,6 +154,11 @@ export class IdentityStateManager {
 
     // Mark this boot as started (not yet cleanly shut down)
     this.setCached(K.cleanShutdown, "false");
+
+    // Keep the previous session's last activity before overwriting it: crash
+    // recovery measures the outage from there. Read after the overwrite, every
+    // outage was "less than a minute" in the context given to the model.
+    this.previousSessionActivityTs = parseInt(this.getCached(K.lastActivity) ?? "0", 10) || 0;
 
     // Update last activity
     this.setCached(K.lastActivity, Date.now().toString());
@@ -228,6 +239,7 @@ export class IdentityStateManager {
       totalTasks: parseInt(this.getCached(K.tasks) ?? "0", 10),
       projectContext: this.getCached(K.project) ?? "",
       cleanShutdown: this.getCached(K.cleanShutdown) === "true",
+      ...(this.previousSessionActivityTs > 0 ? { previousSessionActivityTs: this.previousSessionActivityTs } : {}),
     };
   }
 

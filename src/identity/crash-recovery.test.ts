@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildCrashRecoveryContext,
   formatDowntime,
 } from "./crash-recovery.js";
+import { IdentityStateManager } from "./identity-state.js";
 import { makeIdentityState, makeGoalTree } from "../test-helpers.js";
 
 describe("buildCrashRecoveryContext", () => {
@@ -75,5 +79,44 @@ describe("formatDowntime", () => {
 
   it('formats 180000000ms (2 days 2 hours) as "2 days 2 hours"', () => {
     expect(formatDowntime(180000000)).toBe("2 days 2 hours");
+  });
+});
+
+// recordBoot() stamps last activity before the crash context is built, so the
+// outage was measured from the boot itself: "less than a minute" every time,
+// and that sentence went into the system prompt.
+describe("crash recovery measured across a real reboot", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "crash-downtime-"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports the time since the previous session's last activity", () => {
+    const dbPath = join(dir, "identity.db");
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+
+    const before = new IdentityStateManager(dbPath);
+    before.initialize();
+    before.recordBoot();
+    before.recordActivity();
+    before.flush();
+    before.close(); // no recordShutdown: a crash
+
+    vi.setSystemTime(t0 + 5 * 3_600_000);
+    const after = new IdentityStateManager(dbPath);
+    after.initialize();
+    after.recordBoot();
+    const ctx = buildCrashRecoveryContext(after.wasCrash(), after.getState(), []);
+    after.close();
+
+    expect(ctx).not.toBeNull();
+    expect(ctx!.downtimeMs).toBeGreaterThanOrEqual(5 * 3_600_000);
+    expect(ctx!.lastActivityTs).toBe(t0);
+    expect(formatDowntime(ctx!.downtimeMs)).toBe("5 hours 0 minutes");
   });
 });

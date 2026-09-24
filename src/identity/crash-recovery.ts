@@ -34,12 +34,15 @@ export function buildCrashRecoveryContext(
     return null;
   }
 
-  const downtimeMs = Date.now() - identityState.lastActivityTs;
+  // The boot itself stamps last activity, so the outage runs from the
+  // previous session's last activity when the boot captured it.
+  const lastActivityTs = identityState.previousSessionActivityTs ?? identityState.lastActivityTs;
+  const downtimeMs = Date.now() - lastActivityTs;
 
   return {
     wasCrash: true,
     downtimeMs,
-    lastActivityTs: identityState.lastActivityTs,
+    lastActivityTs,
     bootCount: identityState.bootCount,
     interruptedTrees,
   };
