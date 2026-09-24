@@ -379,17 +379,18 @@ export function assessSpecScope(
 
   const assetsRoot = join(projectPath, "Assets");
   const files = (listFiles?.(assetsRoot) ?? walkCs(assetsRoot)).filter((f) => f.endsWith(".cs"));
-  const corpus = files
+  const rawCorpus = files
     .map((f) => {
       try {
         // Comments are not an implementation: a TODO naming every element
         // satisfied this gate (Codex 2026-09-11 B#18).
-        return stripCsComments(readFile?.(f) ?? readFileSync(f, "utf8")).toLowerCase();
+        return stripCsComments(readFile?.(f) ?? readFileSync(f, "utf8"));
       } catch {
         return "";
       }
     })
     .join("\n");
+  const corpus = rawCorpus.toLowerCase();
 
   // A long token anywhere in the code is a signal; a short one ("Cube",
   // "Pig", "Tray") only as a whole identifier word — as a substring it would
@@ -407,14 +408,26 @@ export function assessSpecScope(
       timesUsed.set(tok, (timesUsed.get(tok) ?? 0) + 1);
     }
   }
+  const asIdentifier = (needle: string, text: string): boolean =>
+    new RegExp(`(?<![A-Za-z0-9_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`).test(text);
+  const present = (tok: string, wholeOnly: boolean): boolean => {
+    const needle = tok.toLowerCase();
+    // One or two letters ("Ox") are searched as the spec's own capitalised
+    // spelling, whole: returning false here made such an element permanently
+    // missing, and case-blind they would match every `ox` offset variable.
+    if (needle.length < 3) return tok !== needle && asIdentifier(tok, rawCorpus);
+    if (needle.length >= 5 && !wholeOnly) return corpus.includes(needle);
+    return asIdentifier(needle, corpus);
+  };
   const missing = elements.filter((el) => {
-    const own = (tokensFor.get(el.name) ?? []).filter((tok) => (timesUsed.get(tok.toLowerCase()) ?? 0) === 1);
-    return !own.some((tok) => {
-      const needle = tok.toLowerCase();
-      if (needle.length >= 5) return corpus.includes(needle);
-      if (needle.length < 3) return false;
-      return new RegExp(`(?<![a-z0-9_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_])`).test(corpus);
-    });
+    const tokens = tokensFor.get(el.name) ?? [];
+    const own = tokens.filter((tok) => (timesUsed.get(tok.toLowerCase()) ?? 0) === 1);
+    if (own.length > 0) return !own.some((tok) => present(tok, false));
+    // Every spelling is shared ("Gate" beside "Gate (two-way)"), and with no
+    // own token nothing could ever satisfy it (audited 2026-09-24). The shared
+    // spelling counts only as a whole identifier, so `class GateTwoWay` still
+    // proves nothing about the base "Gate".
+    return !tokens.some((tok) => present(tok, true));
   });
   return {
     scheduled: elements.length,
