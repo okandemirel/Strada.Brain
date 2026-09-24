@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { DeploymentConfig, ReadinessResult } from "./deployment-types.js";
 import { validateScriptPath as validatePath } from "./validate-script-path.js";
+import { runBoundedProcess } from "./bounded-process.js";
 
 export interface ReadinessCheckerLogger {
   debug(msg: string, ...args: unknown[]): void;
@@ -106,59 +107,41 @@ export class ReadinessChecker {
   // Private Helpers
   // ===========================================================================
 
-  private runTestCommand(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const { testCommand } = this.config;
-      this.logger.debug(`Running test command: ${testCommand}`);
+  private async runTestCommand(): Promise<boolean> {
+    const { testCommand } = this.config;
+    this.logger.debug(`Running test command: ${testCommand}`);
 
-      const parsed = this.parseCommand(testCommand);
-      if (!parsed) {
-        this.logger.warn(`Invalid test command: ${testCommand}`);
-        resolve(false);
-        return;
-      }
+    const parsed = this.parseCommand(testCommand);
+    if (!parsed) {
+      this.logger.warn(`Invalid test command: ${testCommand}`);
+      return false;
+    }
 
-      const child = spawn(parsed.command, parsed.args, {
-        shell: false,
-        cwd: this.projectRoot,
-        timeout: this.config.testTimeoutMs,
-        killSignal: "SIGTERM",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const killTimer = setTimeout(() => child.kill("SIGKILL"), this.config.testTimeoutMs + 5000);
-
-      // Total cap (matches DeploymentExecutor) — only the first 200 chars are ever
-      // logged, so a chatty failing command can't grow stderr unbounded.
-      const MAX_STDERR_BYTES = 10 * 1024;
-      let stderr = "";
-      child.stderr?.on("data", (chunk: Buffer) => {
-        if (stderr.length < MAX_STDERR_BYTES) {
-          stderr += chunk.toString().slice(0, MAX_STDERR_BYTES - stderr.length);
-        }
-      });
-
-      child.on("error", (err) => {
-        // Clear the SIGKILL backstop too — on spawn errors (e.g. ENOENT) only
-        // "error" fires, never "close", so the timer would otherwise leak for
-        // ~testTimeoutMs+5s and fire kill() on a process that never started.
-        clearTimeout(killTimer);
-        this.logger.warn(`Test command error: ${err.message}`);
-        resolve(false);
-      });
-
-      child.on("close", (code, signal) => {
-        clearTimeout(killTimer);
-        if (signal) {
-          this.logger.warn(`Test command killed by signal: ${signal}`);
-          resolve(false);
-          return;
-        }
-        if (code !== 0) {
-          this.logger.warn(`Test command failed with exit code ${code}: ${stderr.slice(0, 200)}`);
-        }
-        resolve(code === 0);
-      });
+    // Bounded: the verdict follows the command's exit, so a watcher or worker
+    // it leaves holding stdio cannot hang this check (and with it every later
+    // refresh); what it left running is terminated, and on timeout so is the
+    // whole tree. Total stderr cap (matches DeploymentExecutor) — only the
+    // first 200 chars are ever logged, so a chatty failing command can't grow it.
+    const run = await runBoundedProcess({
+      command: parsed.command,
+      args: parsed.args,
+      cwd: this.projectRoot,
+      timeoutMs: this.config.testTimeoutMs,
+      maxOutputChars: 10 * 1024,
+      killTreeOnExit: true,
     });
+    if (run.error) {
+      this.logger.warn(`Test command error: ${run.error.message}`);
+      return false;
+    }
+    if (run.timedOut || run.signal) {
+      this.logger.warn(`Test command killed by signal: ${run.signal ?? "SIGTERM"}${run.timedOut ? " (timed out)" : ""}`);
+      return false;
+    }
+    if (run.exitCode !== 0) {
+      this.logger.warn(`Test command failed with exit code ${run.exitCode}: ${run.stderr.slice(0, 200)}`);
+    }
+    return run.exitCode === 0;
   }
 
   private parseCommand(commandLine: string): { command: string; args: string[] } | null {

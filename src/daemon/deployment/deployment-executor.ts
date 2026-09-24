@@ -11,7 +11,7 @@
  * Requirements: DEPLOY-02 (execution after human approval)
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -23,6 +23,7 @@ import type {
 } from "./deployment-types.js";
 import type { CircuitState } from "../daemon-types.js";
 import { validateScriptPath } from "./validate-script-path.js";
+import { runBoundedProcess } from "./bounded-process.js";
 
 /** Maximum captured output size per stream (10KB) */
 const MAX_OUTPUT_BYTES = 10 * 1024;
@@ -255,73 +256,47 @@ export class DeploymentExecutor {
    * Run a script via spawn() with timeout and output capture.
    * SECURITY: Uses spawn with array args (no shell) to prevent injection.
    */
-  private runScript(
+  private async runScript(
     resolvedScript: string,
     proposal: { id: string; approvedBy?: string },
   ): Promise<Omit<DeployResult, "durationMs">> {
-    return new Promise((resolve) => {
-      // SECURITY: Only pass a minimal allowlist of environment variables.
-      // Never spread process.env — it contains API keys, tokens, and secrets.
-      const safeEnv: Record<string, string> = {
-        PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-        HOME: process.env.HOME ?? "",
-        SHELL: process.env.SHELL ?? "/bin/sh",
-        LANG: process.env.LANG ?? "en_US.UTF-8",
-        TERM: process.env.TERM ?? "xterm-256color",
-        NODE_ENV: process.env.NODE_ENV ?? "production",
-        DEPLOY_TRIGGER: "auto",
-        DEPLOY_PROPOSAL_ID: proposal.id,
-        DEPLOY_APPROVED_BY: proposal.approvedBy ?? "",
-      };
+    // SECURITY: Only pass a minimal allowlist of environment variables.
+    // Never spread process.env — it contains API keys, tokens, and secrets.
+    const safeEnv: Record<string, string> = {
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      HOME: process.env.HOME ?? "",
+      SHELL: process.env.SHELL ?? "/bin/sh",
+      LANG: process.env.LANG ?? "en_US.UTF-8",
+      TERM: process.env.TERM ?? "xterm-256color",
+      NODE_ENV: process.env.NODE_ENV ?? "production",
+      DEPLOY_TRIGGER: "auto",
+      DEPLOY_PROPOSAL_ID: proposal.id,
+      DEPLOY_APPROVED_BY: proposal.approvedBy ?? "",
+    };
 
-      const child = spawn(resolvedScript, [], {
-        env: safeEnv,
-        cwd: this.projectRoot,
-        timeout: this.config.executionTimeoutMs,
-        killSignal: "SIGTERM",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const killTimer = setTimeout(() => child.kill("SIGKILL"), this.config.executionTimeoutMs + 5000);
-
-      this.activeProcess = child;
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout?.on("data", (chunk: Buffer) => {
-        if (stdout.length < MAX_OUTPUT_BYTES) {
-          stdout += chunk.toString().slice(0, MAX_OUTPUT_BYTES - stdout.length);
-        }
-      });
-
-      child.stderr?.on("data", (chunk: Buffer) => {
-        if (stderr.length < MAX_OUTPUT_BYTES) {
-          stderr += chunk.toString().slice(0, MAX_OUTPUT_BYTES - stderr.length);
-        }
-      });
-
-      child.on("error", (err) => {
-        clearTimeout(killTimer);
-        resolve({
-          success: false,
-          exitCode: null,
-          signal: null,
-          stdout,
-          stderr: err.message,
-        });
-      });
-
-      child.on("close", (code, signal) => {
-        clearTimeout(killTimer);
-        resolve({
-          success: code === 0 && signal === null,
-          exitCode: code,
-          signal,
-          stdout,
-          stderr,
-        });
-      });
+    // Bounded: completion follows the script's exit (a background process it
+    // leaves holding stdout no longer hangs the deploy forever) and a timeout
+    // terminates the whole process tree, not just the script.
+    const run = await runBoundedProcess({
+      command: resolvedScript,
+      cwd: this.projectRoot,
+      env: safeEnv,
+      timeoutMs: this.config.executionTimeoutMs,
+      maxOutputChars: MAX_OUTPUT_BYTES,
+      onSpawn: (child) => {
+        this.activeProcess = child;
+      },
     });
+    let stderr = run.stderr;
+    if (run.error) stderr = run.error.message;
+    else if (run.timedOut) stderr = `${stderr}${stderr ? "\n" : ""}Script timed out after ${this.config.executionTimeoutMs}ms`;
+    return {
+      success: run.error === undefined && !run.timedOut && run.exitCode === 0 && run.signal === null,
+      exitCode: run.exitCode,
+      signal: run.signal,
+      stdout: run.stdout,
+      stderr,
+    };
   }
 
   private async runPostVerify(
