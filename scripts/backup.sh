@@ -356,11 +356,14 @@ verify_backup() {
 cleanup_old_backups() {
     info "Cleaning up old backups (retention: $RETENTION_DAYS days)..."
     
+    # `deleted=$((deleted + 1))`, never `((deleted++))`: the post-increment
+    # evaluates to the OLD value, so 0 made the command "fail" and `set -e`
+    # aborted the run after the first expired archive, before remote sync.
     local deleted=0
     while IFS= read -r file; do
         rm -f "$file"
         rm -f "${file}.sha256"
-        ((deleted++))
+        deleted=$((deleted + 1))
     done < <(find "$BACKUP_DIR" -name "backup_*.tar.gz" -mtime +$RETENTION_DAYS 2>/dev/null)
     
     if [[ $deleted -gt 0 ]]; then
@@ -372,12 +375,14 @@ cleanup_old_backups() {
     # Keep only last N backups if specified
     local keep_count="${KEEP_COUNT:-0}"
     if [[ $keep_count -gt 0 ]]; then
-        local to_delete=$(ls -t "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | tail -n +$((keep_count + 1)))
-        for file in $to_delete; do
+        local to_delete
+        to_delete=$(ls -t "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | tail -n +$((keep_count + 1))) || true
+        while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
             rm -f "$file"
             rm -f "${file}.sha256"
-            ((deleted++))
-        done
+            deleted=$((deleted + 1))
+        done <<< "$to_delete"
         info "Retention cleanup: deleted $deleted backup(s), keeping last $keep_count"
     fi
 }
