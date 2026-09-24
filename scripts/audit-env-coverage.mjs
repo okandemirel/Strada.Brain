@@ -45,21 +45,7 @@ const DYNAMIC_FAMILIES = [
  * Documented, intended to work, but not read today. Listed so the audit can
  * gate without hiding them: each is printed on every run.
  */
-export const KNOWN_UNREAD = new Map(
-  [
-    "DEPLOY_ENABLED",
-    "DEPLOY_SCRIPT_PATH",
-    "DEPLOY_TEST_COMMAND",
-    "DEPLOY_TARGET_BRANCH",
-    "DEPLOY_REQUIRE_CLEAN_GIT",
-    "DEPLOY_TEST_TIMEOUT_MS",
-    "DEPLOY_EXECUTION_TIMEOUT_MS",
-    "DEPLOY_COOLDOWN_MINUTES",
-    "DEPLOY_NOTIFICATION_URGENCY",
-    "DEPLOY_POST_SCRIPT_PATH",
-    "DEPLOY_ROLLBACK_SCRIPT_PATH",
-  ].map((name) => [name, "bug: loadFromEnv() in src/config/config.ts never reads DEPLOY_*, so the schema default applies"]),
-);
+export const KNOWN_UNREAD = new Map([]);
 
 /**
  * Read by the code but deliberately NOT in .env.example: set by the runtime,
@@ -79,6 +65,7 @@ export const NOT_FOR_ENV_FILE = new Map([
   ["PATH", "OS"],
   ["PATHEXT", "OS"],
   ["SHELL", "OS"],
+  ["SYSTEMROOT", "OS (Windows)"],
   ["TEMP", "OS"],
   ["TERM", "terminal"],
   ["TMP", "OS"],
