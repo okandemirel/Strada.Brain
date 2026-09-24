@@ -223,8 +223,11 @@ describe("WebChannel reconnect security", () => {
     expect(sent).toHaveLength(2);
     expect(sent[1]?.chatId).toBe(originalChatId);
     expect(sent[1]?.reconnectToken).not.toBe(originalReconnectToken);
+    // WEB-1: the displaced socket gets the dedicated "session taken" code
+    // (was 1000), which tells the portal not to auto-reconnect and take the
+    // chat straight back.
     expect(firstSocket.getCloseCalls()).toEqual([
-      { code: 1000, reason: "Session resumed elsewhere" },
+      { code: 4001, reason: "session_taken" },
     ]);
   });
 });

@@ -50,6 +50,12 @@ export interface SessionState {
   language: SupportedLanguage
   confirmation: ConfirmationState | null
   reconnectExhausted: boolean
+  /**
+   * The server handed this chat to another socket holding the same reconnect
+   * token (another tab). The client stays disconnected until the user asks to
+   * use the chat here again (WEB-1).
+   */
+  sessionTaken: boolean
   viewingHistorical: boolean
 }
 
@@ -64,6 +70,7 @@ export interface SessionActions {
   setTyping: (isTyping: boolean) => void
   setConfirmation: (confirmation: ConfirmationState | null) => void
   setReconnectExhausted: (exhausted: boolean) => void
+  setSessionTaken: (taken: boolean) => void
   setViewingHistorical: (viewing: boolean) => void
   reset: () => void
   /**
@@ -84,6 +91,7 @@ const initialState: SessionState = {
   language: getInitialLanguage(),
   confirmation: null,
   reconnectExhausted: false,
+  sessionTaken: false,
   viewingHistorical: false,
 }
 
@@ -123,6 +131,8 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
   setConfirmation: (confirmation) => set({ confirmation }),
 
   setReconnectExhausted: (reconnectExhausted) => set({ reconnectExhausted }),
+
+  setSessionTaken: (sessionTaken) => set({ sessionTaken }),
 
   setViewingHistorical: (viewingHistorical) => set({ viewingHistorical }),
 

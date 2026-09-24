@@ -27,6 +27,11 @@ import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import { WebAttachmentStore } from "./web-attachment-store.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
+import {
+  WS_CLOSE_POLICY_VIOLATION,
+  WS_CLOSE_SESSION_TAKEN,
+  WS_CLOSE_SESSION_TAKEN_REASON,
+} from "./ws-protocol.js";
 import { detectCommand } from "../../tasks/command-detector.js";
 import {
   commandPrivilege,
@@ -1903,7 +1908,10 @@ export class WebChannel
     if (activeSession && activeSession.ws !== client.ws) {
       this.clients.delete(oldId);
       try {
-        activeSession.ws.close(1000, "Session resumed elsewhere");
+        // A dedicated code, not 1000: the portal auto-reconnects on a normal
+        // close, so two tabs sharing one reconnect token took the chat from
+        // each other every second, forever (WEB-1).
+        activeSession.ws.close(WS_CLOSE_SESSION_TAKEN, WS_CLOSE_SESSION_TAKEN_REASON);
       } catch {
         // Connection may already be closing.
       }
@@ -2020,7 +2028,7 @@ export class WebChannel
         // client AND runs per-chat cleanup (appliedInstinctIds, recentlyDisconnected,
         // streams, pendingConfirmations). Deleting here first made handleDisconnect's
         // `clients.get(chatId) === ws` guard fail, skipping all of that cleanup.
-        client.ws.close(1008, "Rate limit exceeded");
+        client.ws.close(WS_CLOSE_POLICY_VIOLATION, "Rate limit exceeded");
         return;
       }
     }

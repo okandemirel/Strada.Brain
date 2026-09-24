@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useCallback } from 'react'
+import { Suspense, lazy, useState, useCallback, useContext } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
@@ -14,6 +14,7 @@ import { useWorkspaceStore } from '../../stores/workspace-store'
 import { useSidebarStore } from '../../stores/sidebar-store'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { useSessionStore } from '../../stores/session-store'
+import { WebSocketContext } from '../../contexts/ws-context'
 
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
 const CanvasWorkspace = lazy(() => import('../canvas/CanvasWorkspace'))
@@ -128,6 +129,35 @@ function DisconnectBanner() {
   )
 }
 
+/**
+ * Another tab took this chat (WEB-1). The socket stays closed until the user
+ * picks this tab, which then takes the chat back from the other one.
+ */
+function SessionTakenBanner() {
+  const { t } = useTranslation()
+  const sessionTaken = useSessionStore((s) => s.sessionTaken)
+  // Read the context directly: tests mount this layout without a provider.
+  const ws = useContext(WebSocketContext)
+
+  if (!sessionTaken) return null
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-14 md:bottom-0 inset-x-0 z-50 flex items-center justify-center gap-3 px-4 py-2.5 text-sm font-medium bg-bg-secondary/95 text-text border-t border-border backdrop-blur-sm"
+    >
+      {t('connection.sessionTaken', 'This chat is open in another tab.')}
+      <button
+        onClick={() => ws?.resumeSession()}
+        className="ml-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent transition-colors hover:bg-accent/20"
+      >
+        {t('connection.useHere', 'Use here')}
+      </button>
+    </div>
+  )
+}
+
 function AppLayoutInner() {
   const setMode = useWorkspaceStore((s) => s.setMode)
   const toggleSecondary = useWorkspaceStore((s) => s.toggleSecondary)
@@ -147,6 +177,7 @@ function AppLayoutInner() {
       <BottomTabBar />
       <OfflineBanner />
       <DisconnectBanner />
+      <SessionTakenBanner />
       <Toaster
         position="bottom-right"
         toastOptions={{

@@ -215,6 +215,10 @@
   "ui.file": "파일",
 
   "connection.offline": "오프라인 상태입니다. 일부 기능을 사용할 수 없습니다.",
+  "connection.lost": "연결이 끊겼습니다. 다시 연결할 수 없습니다.",
+  "connection.reload": "새로고침",
+  "connection.sessionTaken": "이 채팅은 다른 탭에서 열려 있습니다.",
+  "connection.useHere": "여기서 사용",
 
   "time.xSecondsAgo_one": "{{count}}초 전",
   "time.xSecondsAgo_other": "{{count}}초 전",

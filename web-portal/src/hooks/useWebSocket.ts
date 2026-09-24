@@ -10,8 +10,21 @@ import { useSessionStore, onLogout } from '../stores/session-store'
 import { useCanvasStore } from '../stores/canvas-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
+import {
+  WS_CLOSE_POLICY_VIOLATION,
+  WS_CLOSE_SESSION_TAKEN,
+} from '../../../src/channels/web/ws-protocol.ts'
 
+const INITIAL_RECONNECT_DELAY = 1000
 const MAX_RECONNECT_DELAY = 30000
+/**
+ * How long a session must stay up after its `connected` frame before the
+ * reconnect backoff resets. A TCP open alone proves nothing: a socket that is
+ * closed again right after the handshake must keep backing off (WEB-1).
+ */
+const STABLE_CONNECTION_MS = 5000
+/** Floor for the delay after a rate-limit close: the server's window is 10 s. */
+const RATE_LIMITED_RECONNECT_DELAY = 10_000
 const MAX_RECONNECT_ATTEMPTS = 8
 const MESSAGE_RECEIPT_TIMEOUT_MS = 8000
 const CHAT_ID_STORAGE_KEY = 'strada-chatId'
@@ -62,6 +75,8 @@ export interface UseWebSocketReturn {
   switchProvider: (provider: string, model?: string) => boolean
   toggleAutonomous: (enabled: boolean, hours?: number) => boolean
   sendRawJSON: (payload: Record<string, unknown>) => boolean
+  /** Take the chat back after another tab took it, or retry after giving up. */
+  resumeSession: () => void
 }
 
 export function buildModelSwitchCommand(provider: string, model?: string): string {
@@ -104,9 +119,10 @@ export function useWebSocket(): UseWebSocketReturn {
   const chatIdRef = useRef<string | null>(readStoredChatId())
   const profileIdRef = useRef<string | null>(readStoredProfileId())
   const profileTokenRef = useRef<string | null>(readStoredProfileToken())
-  const reconnectDelayRef = useRef(1000)
+  const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
   const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stableConnectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingReconnectChatIdRef = useRef<string | null>(null)
   const pendingMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
@@ -287,6 +303,12 @@ export function useWebSocket(): UseWebSocketReturn {
     flushPendingOutboundMessages()
   }, [buildConfirmationOutbound, flushPendingOutboundMessages])
 
+  const clearStableConnectionTimer = useCallback(() => {
+    if (!stableConnectionTimerRef.current) return
+    clearTimeout(stableConnectionTimerRef.current)
+    stableConnectionTimerRef.current = null
+  }, [])
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return
 
@@ -294,13 +316,32 @@ export function useWebSocket(): UseWebSocketReturn {
     const ws = new WebSocket(`${protocol}//${window.location.host}`)
     wsRef.current = ws
     sessionReadyRef.current = false
+    // Every handler acts on shared refs, so a socket this hook has already
+    // replaced or closed (unmount, StrictMode double-mount, logout) must not
+    // drive them: its late close would schedule a second live socket.
+    const isCurrent = () => wsRef.current === ws
+
+    const markSessionReady = () => {
+      sessionReadyRef.current = true
+      useSessionStore.getState().setSessionTaken(false)
+      clearStableConnectionTimer()
+      stableConnectionTimerRef.current = setTimeout(() => {
+        stableConnectionTimerRef.current = null
+        if (!isCurrent() || ws.readyState !== WebSocket.OPEN) return
+        reconnectDelayRef.current = INITIAL_RECONNECT_DELAY
+        reconnectAttemptsRef.current = 0
+      }, STABLE_CONNECTION_MS)
+      flushPendingOutboundMessages()
+      resendInflightConfirmation()
+    }
 
     ws.addEventListener('open', () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || !isCurrent()) return
       useSessionStore.getState().setStatus('connected')
       useSessionStore.getState().setReconnectExhausted(false)
-      reconnectDelayRef.current = 1000
-      reconnectAttemptsRef.current = 0
+      // The backoff is not reset here but once the session has been accepted
+      // and stayed up (markSessionReady): resetting on a bare open made a
+      // socket that is closed right after its handshake retry every second.
 
       const savedChatId = readStoredChatId()
       const savedReconnectToken = readStoredReconnectToken()
@@ -321,8 +362,9 @@ export function useWebSocket(): UseWebSocketReturn {
       }))
     })
 
-    ws.addEventListener('close', () => {
-      if (!mountedRef.current) return
+    ws.addEventListener('close', (event: CloseEvent | undefined) => {
+      if (!mountedRef.current || !isCurrent()) return
+      clearStableConnectionTimer()
       sessionReadyRef.current = false
       useSessionStore.getState().setStatus('disconnected')
 
@@ -341,6 +383,17 @@ export function useWebSocket(): UseWebSocketReturn {
               : msg,
           ),
         )
+      }
+
+      // Another tab took this chat with the shared reconnect token. Taking it
+      // back automatically is what made two tabs displace each other forever;
+      // wait for the user to choose this tab (resumeSession).
+      if (event?.code === WS_CLOSE_SESSION_TAKEN) {
+        useSessionStore.getState().setSessionTaken(true)
+        return
+      }
+      if (event?.code === WS_CLOSE_POLICY_VIOLATION) {
+        reconnectDelayRef.current = Math.max(reconnectDelayRef.current, RATE_LIMITED_RECONNECT_DELAY)
       }
 
       // Fix 6.5: Cap reconnection attempts to avoid infinite loops
@@ -364,7 +417,7 @@ export function useWebSocket(): UseWebSocketReturn {
     })
 
     ws.addEventListener('message', (event) => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || !isCurrent()) return
 
       let parsed: { type: string; [key: string]: unknown }
       try {
@@ -402,9 +455,7 @@ export function useWebSocket(): UseWebSocketReturn {
               pendingReconnectTimerRef.current = null
               pendingReconnectChatIdRef.current = null
               acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
-              sessionReadyRef.current = true
-              flushPendingOutboundMessages()
-              resendInflightConfirmation()
+              markSessionReady()
             }, SESSION_RECLAIM_GRACE_MS)
             break
           }
@@ -416,9 +467,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
           pendingReconnectChatIdRef.current = null
           acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
-          sessionReadyRef.current = true
-          flushPendingOutboundMessages()
-          resendInflightConfirmation()
+          markSessionReady()
           break
         }
 
@@ -601,6 +650,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [
     acceptConnectedSession,
     clearPendingMessageTimer,
+    clearStableConnectionTimer,
     flushPendingOutboundMessages,
     markAllPendingMessagesFailed,
     resendInflightConfirmation,
@@ -657,6 +707,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (pendingReconnectTimerRef.current) {
         clearTimeout(pendingReconnectTimerRef.current)
       }
+      clearStableConnectionTimer()
       for (const timer of pendingTimers.values()) {
         clearTimeout(timer)
       }
@@ -666,7 +717,7 @@ export function useWebSocket(): UseWebSocketReturn {
         wsRef.current.close()
       }
     }
-  }, [connect])
+  }, [connect, clearStableConnectionTimer])
 
   const enqueueOrReconnect = useCallback((outbound: {
     payload: Record<string, unknown>
@@ -688,7 +739,9 @@ export function useWebSocket(): UseWebSocketReturn {
       if (
         mountedRef.current &&
         (!ws || ws.readyState === WebSocket.CLOSED) &&
-        !reconnectTimerRef.current
+        !reconnectTimerRef.current &&
+        // Queued, not sent: only the user's "use it here" takes the chat back.
+        !useSessionStore.getState().sessionTaken
       ) {
         useSessionStore.getState().setStatus('reconnecting')
         connectRef.current?.()
@@ -759,6 +812,23 @@ export function useWebSocket(): UseWebSocketReturn {
     })
   }, [enqueueOrReconnect])
 
+  const resumeSession = useCallback(() => {
+    if (!mountedRef.current) return
+    const store = useSessionStore.getState()
+    store.setSessionTaken(false)
+    store.setReconnectExhausted(false)
+    reconnectAttemptsRef.current = 0
+    reconnectDelayRef.current = INITIAL_RECONNECT_DELAY
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    const ws = wsRef.current
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+    store.setStatus('reconnecting')
+    connectRef.current?.()
+  }, [])
+
   return {
     messages,
     status,
@@ -772,5 +842,6 @@ export function useWebSocket(): UseWebSocketReturn {
     switchProvider,
     toggleAutonomous,
     sendRawJSON,
+    resumeSession,
   }
 }

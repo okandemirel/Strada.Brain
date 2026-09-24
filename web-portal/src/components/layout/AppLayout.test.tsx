@@ -23,6 +23,7 @@ vi.mock('../ui/tooltip', () => ({
 }))
 
 import AppLayout from './AppLayout'
+import { useSessionStore } from '../../stores/session-store'
 
 function Boom(): React.ReactNode {
   throw new Error('admin page boom')
@@ -79,6 +80,17 @@ describe('AppLayout', () => {
       expect(screen.getByTestId('sidebar')).toBeInTheDocument()
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  it('offers to use the chat here after another tab took it (WEB-1)', () => {
+    useSessionStore.getState().setSessionTaken(true)
+    try {
+      renderLayout()
+      expect(screen.getByText('This chat is open in another tab.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Use here' })).toBeInTheDocument()
+    } finally {
+      useSessionStore.getState().reset()
     }
   })
 })

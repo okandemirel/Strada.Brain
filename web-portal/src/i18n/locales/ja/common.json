@@ -215,6 +215,10 @@
   "ui.file": "ファイル",
 
   "connection.offline": "オフラインです。一部の機能が利用できない場合があります。",
+  "connection.lost": "接続が切れました。再接続できません。",
+  "connection.reload": "再読み込み",
+  "connection.sessionTaken": "このチャットは別のタブで開かれています。",
+  "connection.useHere": "ここで使う",
 
   "time.xSecondsAgo_one": "{{count}}秒前",
   "time.xSecondsAgo_other": "{{count}}秒前",

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -16,6 +17,8 @@ class MockWebSocket {
   static readonly CLOSING = 2
   static readonly CLOSED = 3
   static instances: MockWebSocket[] = []
+  /** A fake server's view of outgoing frames (WEB-1 tests). */
+  static onSend: ((socket: MockWebSocket, payload: string) => void) | null = null
 
   readonly sent: string[] = []
   readyState = MockWebSocket.CONNECTING
@@ -33,11 +36,20 @@ class MockWebSocket {
 
   send(payload: string) {
     this.sent.push(payload)
+    MockWebSocket.onSend?.(this, payload)
   }
 
   close() {
     this.readyState = MockWebSocket.CLOSED
     this.emit('close')
+  }
+
+  /** The server closes the socket: the close event carries its code. */
+  serverClose(code: number, reason = '') {
+    this.readyState = MockWebSocket.CLOSED
+    for (const listener of this.listeners.get('close') ?? []) {
+      listener({ code, reason } as unknown as MessageEvent)
+    }
   }
 
   emit(type: string, data?: unknown) {
@@ -67,43 +79,49 @@ function createStorageMock() {
   }
 }
 
-describe('buildModelSwitchCommand', () => {
-  beforeEach(() => {
-    MockWebSocket.instances = []
-    const storage = createStorageMock()
-    Object.defineProperty(globalThis, 'WebSocket', {
-      value: MockWebSocket,
-      configurable: true,
-    })
-    Object.defineProperty(globalThis, 'localStorage', {
-      value: storage,
-      configurable: true,
-    })
-    Object.defineProperty(window, 'localStorage', {
-      value: storage,
-      configurable: true,
-    })
-    useSessionStore.getState().reset()
-    useCanvasStore.getState().reset()
+function installTestEnvironment() {
+  MockWebSocket.instances = []
+  MockWebSocket.onSend = null
+  const storage = createStorageMock()
+  Object.defineProperty(globalThis, 'WebSocket', {
+    value: MockWebSocket,
+    configurable: true,
   })
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storage,
+    configurable: true,
+  })
+  Object.defineProperty(window, 'localStorage', {
+    value: storage,
+    configurable: true,
+  })
+  useSessionStore.getState().reset()
+  useCanvasStore.getState().reset()
+}
 
-  afterEach(() => {
-    cleanup()
-    useSessionStore.getState().reset()
-    useCanvasStore.getState().reset()
-    Object.defineProperty(globalThis, 'WebSocket', {
-      value: originalWebSocket,
-      configurable: true,
-    })
-    Object.defineProperty(globalThis, 'localStorage', {
-      value: originalLocalStorage,
-      configurable: true,
-    })
-    Object.defineProperty(window, 'localStorage', {
-      value: originalLocalStorage,
-      configurable: true,
-    })
+function restoreTestEnvironment() {
+  cleanup()
+  MockWebSocket.onSend = null
+  useSessionStore.getState().reset()
+  useCanvasStore.getState().reset()
+  Object.defineProperty(globalThis, 'WebSocket', {
+    value: originalWebSocket,
+    configurable: true,
   })
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: originalLocalStorage,
+    configurable: true,
+  })
+  Object.defineProperty(window, 'localStorage', {
+    value: originalLocalStorage,
+    configurable: true,
+  })
+}
+
+describe('buildModelSwitchCommand', () => {
+  beforeEach(installTestEnvironment)
+
+  afterEach(restoreTestEnvironment)
 
   it('preserves slash-delimited model ids for provider workers that use path-style names', () => {
     expect(
@@ -430,5 +448,179 @@ describe('buildModelSwitchCommand', () => {
     })
 
     expect(socket!.sent.some((payload) => payload.includes('monitor:cancel_task'))).toBe(false)
+  })
+})
+
+// WEB-1: two tabs share one localStorage, so both hold the chat's reconnect
+// token. The server hands the chat to whichever socket presents it last and
+// closes the other; when that close looked like any other, the displaced tab
+// reconnected a second later and took the chat back, forever.
+describe('useWebSocket session ownership (WEB-1)', () => {
+  beforeEach(() => {
+    installTestEnvironment()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    restoreTestEnvironment()
+    vi.useRealTimers()
+  })
+
+  const openSockets = () => MockWebSocket.instances.filter((s) => s.readyState === MockWebSocket.OPEN)
+
+  /** A server that implements WebChannel's reclaim rule, answering asynchronously. */
+  function createFakeServer() {
+    const chats = new Map<string, { token: string; holder: MockWebSocket }>()
+    const outbox: Array<() => void> = []
+    let seq = 0
+    MockWebSocket.onSend = (socket, payload) => {
+      const frame = JSON.parse(payload) as { type: string; chatId?: string; reconnectToken?: string }
+      if (frame.type !== 'session_init') return
+      outbox.push(() => {
+        if (socket.readyState !== MockWebSocket.OPEN) return
+        const held = frame.chatId ? chats.get(frame.chatId) : undefined
+        let chatId = `chat-${++seq}`
+        if (frame.chatId && held && held.token === frame.reconnectToken) {
+          chatId = frame.chatId
+          if (held.holder !== socket && held.holder.readyState === MockWebSocket.OPEN) {
+            held.holder.serverClose(4001, 'session_taken')
+          }
+        }
+        const token = `token-${++seq}`
+        chats.set(chatId, { token, holder: socket })
+        socket.emit('message', { type: 'connected', chatId, reconnectToken: token, profileId: 'profile-1' })
+      })
+    }
+    /** Let `ms` pass: dialing sockets open, the server answers, timers fire. */
+    const run = (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 250) {
+        act(() => {
+          for (const socket of MockWebSocket.instances) {
+            if (socket.readyState === MockWebSocket.CONNECTING) socket.emit('open')
+          }
+          while (outbox.length > 0) outbox.shift()!()
+          vi.advanceTimersByTime(250)
+        })
+      }
+    }
+    return { run }
+  }
+
+  // Both hooks share this module's store here (real tabs each have their
+  // own), so the assertions are about sockets, as a server would see them.
+  it('two tabs sharing storage settle on one open socket; "use here" moves the chat once', () => {
+    const server = createFakeServer()
+    const tabA = renderHook(() => useWebSocket())
+    server.run(1000)
+    expect(localStorage.getItem('strada-chatId')).toBe('chat-1')
+
+    // Tab B reads A's chat and token from the shared storage and takes the chat.
+    renderHook(() => useWebSocket())
+    server.run(120_000)
+    expect(MockWebSocket.instances).toHaveLength(2)
+    expect(openSockets()).toEqual([MockWebSocket.instances[1]])
+
+    // The user picks tab A: it takes the chat back, and B stays put this time.
+    act(() => { tabA.result.current.resumeSession() })
+    server.run(120_000)
+    expect(MockWebSocket.instances).toHaveLength(3)
+    expect(openSockets()).toEqual([MockWebSocket.instances[2]])
+  })
+
+  it('does not reconnect after a session_taken close, and queues sends until "use here"', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-x', reconnectToken: 'r', profileId: 'p' })
+    })
+    act(() => { socket.serverClose(4001, 'session_taken') })
+    act(() => { result.current.sendRawJSON({ type: 'cancel_task' }) })
+    act(() => { vi.advanceTimersByTime(120_000) })
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(useSessionStore.getState().sessionTaken).toBe(true)
+
+    act(() => { result.current.resumeSession() })
+    const next = MockWebSocket.instances[1]!
+    act(() => {
+      next.emit('open')
+      next.emit('message', { type: 'connected', chatId: 'chat-x', reconnectToken: 'r2', profileId: 'p' })
+    })
+    expect(useSessionStore.getState().sessionTaken).toBe(false)
+    expect(next.sent.map((s) => JSON.parse(s).type)).toEqual(['session_init', 'cancel_task'])
+  })
+
+  it('backs off after a rate-limit close instead of retrying a second later', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-rl', reconnectToken: 'r', profileId: 'p' })
+    })
+    act(() => { vi.advanceTimersByTime(60_000) })
+    act(() => { socket.serverClose(1008, 'Rate limit exceeded') })
+    act(() => { vi.advanceTimersByTime(9_000) })
+    expect(MockWebSocket.instances).toHaveLength(1)
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(MockWebSocket.instances).toHaveLength(2)
+  })
+
+  it('keeps backing off while sockets close right after opening, and gives up at the cap', () => {
+    renderHook(() => useWebSocket())
+    act(() => {
+      MockWebSocket.instances[0]!.emit('open')
+      MockWebSocket.instances[0]!.close()
+    })
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(MockWebSocket.instances).toHaveLength(2)
+
+    // A bare open must not reset the delay: the next retry waits 2 s, not 1 s.
+    act(() => {
+      MockWebSocket.instances[1]!.emit('open')
+      MockWebSocket.instances[1]!.close()
+    })
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(MockWebSocket.instances).toHaveLength(2)
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(MockWebSocket.instances).toHaveLength(3)
+
+    for (let i = 0; i < 10; i++) {
+      act(() => {
+        const last = MockWebSocket.instances.at(-1)!
+        last.emit('open')
+        last.close()
+      })
+      act(() => { vi.advanceTimersByTime(30_000) })
+    }
+    expect(useSessionStore.getState().reconnectExhausted).toBe(true)
+  })
+
+  it('resets the backoff once a session has stayed up after its connected frame', () => {
+    renderHook(() => useWebSocket())
+    for (let i = 0; i < 3; i++) {
+      act(() => { MockWebSocket.instances.at(-1)!.close() })
+      act(() => { vi.advanceTimersByTime(30_000) })
+    }
+    const socket = MockWebSocket.instances.at(-1)!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-ok', reconnectToken: 'r', profileId: 'p' })
+    })
+    act(() => { vi.advanceTimersByTime(5000) })
+    const count = MockWebSocket.instances.length
+    act(() => { socket.close() })
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(MockWebSocket.instances).toHaveLength(count + 1)
+  })
+
+  it('ignores the late close of a socket it already replaced (StrictMode double mount)', () => {
+    renderHook(() => useWebSocket(), { wrapper: StrictMode })
+    expect(MockWebSocket.instances).toHaveLength(2)
+    const [stale, live] = MockWebSocket.instances
+    // A browser delivers the first socket's close after the second one exists.
+    act(() => { stale!.emit('close') })
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(MockWebSocket.instances).toHaveLength(2)
+    expect(live!.readyState).toBe(MockWebSocket.CONNECTING)
   })
 })

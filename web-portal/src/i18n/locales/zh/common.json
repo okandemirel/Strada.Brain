@@ -215,6 +215,10 @@
   "ui.file": "文件",
 
   "connection.offline": "您已离线。部分功能可能不可用。",
+  "connection.lost": "连接已断开，无法重新连接。",
+  "connection.reload": "重新加载",
+  "connection.sessionTaken": "此聊天已在另一个标签页中打开。",
+  "connection.useHere": "在此使用",
 
   "time.xSecondsAgo_one": "{{count}} 秒前",
   "time.xSecondsAgo_other": "{{count}} 秒前",
