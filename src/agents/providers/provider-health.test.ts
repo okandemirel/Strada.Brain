@@ -473,6 +473,79 @@ describe("ProviderHealthRegistry — recordQuotaExhausted never shortens to a tr
   });
 });
 
+// PRV-4: parallel calls share a provider. A quota bench earned by one call must
+// survive a transient failure that a sibling call reports a moment later.
+describe("ProviderHealthRegistry — a transient failure never shortens an active bench", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  const EIGHT_HOURS = 8 * 60 * 60 * 1000;
+
+  it("keeps the 8h quota bench (and its reason) through a later generic failure", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    const benchUntil = registry.getEntry("kimi")!.cooldownUntil;
+    time += 1000;
+    registry.recordFailure("kimi", "terminated");
+
+    const entry = registry.getEntry("kimi")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil).toBe(benchUntil);
+    expect(entry.cooldownUntil - time).toBeGreaterThan(EIGHT_HOURS - 2000);
+    expect(entry.lastError).toContain("quota");
+    expect(entry.consecutiveFailures).toBe(2);
+  });
+
+  it("keeps the quota bench through an overload (503) and a single-provider overload", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    const benchUntil = registry.getEntry("kimi")!.cooldownUntil;
+    time += 1000;
+    registry.recordOverloaded("kimi", "HTTP 503");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(benchUntil);
+    registry.recordOverloadedShort("kimi", "HTTP 503");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(benchUntil);
+    expect(registry.isAvailable("kimi")).toBe(false);
+  });
+
+  it("keeps a multi-day hard stop through a later credential rejection", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaHardStop("kimi", 3 * 24 * 60 * 60 * 1000, "resets in ~3d");
+    const benchUntil = registry.getEntry("kimi")!.cooldownUntil;
+    time += 1000;
+    registry.recordCredentialRejected("kimi", "HTTP 401");
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBe(benchUntil);
+  });
+
+  it("a real success still clears the bench, and an expired bench no longer holds", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    time += EIGHT_HOURS + 1;
+    registry.recordFailure("kimi", "HTTP 500");
+    // The bench expired: the new failure is sized on its own merits.
+    expect(registry.getEntry("kimi")!.cooldownUntil).toBeLessThan(time + EIGHT_HOURS);
+
+    registry.recordQuotaExhausted("kimi", "HTTP 403: quota exceeded");
+    registry.recordSuccess("kimi");
+    expect(registry.getEntry("kimi")!.status).toBe("healthy");
+    expect(registry.isAvailable("kimi")).toBe(true);
+  });
+});
+
 describe("ProviderHealthRegistry — areAllUnavailable", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();

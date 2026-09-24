@@ -275,23 +275,39 @@ export class ProviderHealthRegistry {
       this.markDown(normalized, this.config.downCooldownMs, error, true);
     } else if (failures >= this.config.degradedThreshold) {
       const now = Date.now();
-      this.setEntry(normalized, {
+      this.setEntry(normalized, this.holdActiveBench(normalized, {
         status: "degraded",
         consecutiveFailures: failures,
         lastFailureAt: now,
         lastError: error.slice(0, 200),
         cooldownUntil: now + this.config.degradedCooldownMs,
-      });
+      }));
     } else {
       const now = Date.now();
-      this.setEntry(normalized, {
+      this.setEntry(normalized, this.holdActiveBench(normalized, {
         status: "healthy",
         consecutiveFailures: failures,
         lastFailureAt: now,
         lastError: error.slice(0, 200),
         cooldownUntil: 0,
-      });
+      }));
     }
+  }
+
+  /**
+   * A later, shorter failure never shortens an active bench.
+   *
+   * Parallel calls share a provider: one can earn an 8h quota bench while a
+   * sibling call already in flight dies with a 500, and that failure used to
+   * overwrite the bench with a 30s/5min cooldown — re-dialling the walled
+   * account half a minute later. The bench keeps its expiry, status and reason
+   * (the reason is what quota-outage checks read); a real success still resets.
+   */
+  private holdActiveBench(normalized: string, entry: ProviderHealthEntry): ProviderHealthEntry {
+    const existing = this.entries.get(normalized);
+    if (!existing || existing.status !== "down") return entry;
+    if (existing.cooldownUntil <= Math.max(Date.now(), entry.cooldownUntil)) return entry;
+    return { ...entry, status: "down", cooldownUntil: existing.cooldownUntil, lastError: existing.lastError };
   }
 
   /**
@@ -327,13 +343,13 @@ export class ProviderHealthRegistry {
   recordCredentialRejected(providerName: string, error: string): void {
     const normalized = this.norm(providerName);
     const now = Date.now();
-    this.setEntry(normalized, {
+    this.setEntry(normalized, this.holdActiveBench(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
       lastError: error.slice(0, 200),
       cooldownUntil: now + CREDENTIAL_COOLDOWN_MS,
-    });
+    }));
   }
 
   /**
@@ -450,13 +466,13 @@ export class ProviderHealthRegistry {
     // count written must be the one this cooldown was sized from plus one —
     // otherwise the file is always an episode behind (audited 2026-09-02).
     if (escalate) this.downEpisodes.set(normalized, episodes + 1);
-    this.setEntry(normalized, {
+    this.setEntry(normalized, this.holdActiveBench(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
       lastError: error.slice(0, 200),
       cooldownUntil,
-    });
+    }));
   }
 
   private nextFailureCount(normalizedName: string): number {
