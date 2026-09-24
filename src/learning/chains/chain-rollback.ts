@@ -113,12 +113,18 @@ export async function executeRollback(
           timeoutMs,
         );
       });
+      let result: { isError?: boolean } | undefined;
       try {
-        await Promise.race([tool.execute(input, context), timeoutPromise]);
+        result = await Promise.race([tool.execute(input, context), timeoutPromise]);
       } finally {
         // Cancel the timeout on the success path too — otherwise it leaks and keeps
         // the event loop alive for up to timeoutMs after the step already settled.
         clearTimeout(timeoutHandle);
+      }
+      // Tools report failure as a result, not only by throwing: a compensation
+      // that returned an error undid nothing and must not read as rolled back.
+      if (result?.isError === true) {
+        throw new Error(`Compensation tool '${compensatingAction.toolName}' reported an error`);
       }
 
       results.push({

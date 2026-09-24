@@ -355,3 +355,30 @@ describe("executeRollback", () => {
     expect(report.finalState).toBe("partially_rolled_back");
   });
 });
+
+// LRN-17: tools report failure as `{ isError: true }` rather than by throwing,
+// so a compensation that failed that way was recorded as rolled back.
+describe("executeRollback treats an error result as a failed compensation (LRN-17)", () => {
+  it("a compensation that returns isError is rollbackFailed, not rolledBack", async () => {
+    const registry = makeToolRegistry(async () => ({ content: "Error: nothing to undo", isError: true }));
+    const stepOutputs = new Map<string, Record<string, unknown>>([
+      ["step_0", { outputPath: "/tmp/file" }],
+      ["step_1", { recordId: "rec_123" }],
+    ]);
+
+    const report = await executeRollback(
+      "test_chain",
+      ["step_0", "step_1"],
+      stepOutputs,
+      makeMetadata(),
+      registry,
+      makeContext(),
+      30000,
+      makeEventBus(),
+    );
+
+    expect(report.finalState).toBe("rollback_failed");
+    expect(report.rollbackFailures).toEqual(["step_1", "step_0"]);
+    expect(report.stepsRolledBack.every((r) => r.state === "rollbackFailed")).toBe(true);
+  });
+});
