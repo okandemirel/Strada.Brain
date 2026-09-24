@@ -6932,6 +6932,21 @@ export class CampaignManager {
       // let a non-final sprint advance on a red tree whose receipt was
       // refused (round 4 #2): the verdict keeps what the verifier reported
       // and carries the refusal, and every gate holds `refused` as broken.
+      // …BUT A TREE THAT COULD NOT BE BOUND IS NOT A BROKEN ONE (CMP-6). With
+      // uncommitted build inputs (the milestone commit failed or was skipped:
+      // git identity, a hook, the project lock) no compile can be tied to a
+      // revision. That is NOT MEASURED — the sprint cannot fix it, and
+      // bouncing it as "does not compile" charged it for the commit's fault.
+      if (compileDecision !== undefined && !compileDecision.admitted && compileDecision.refusal === "SOURCE_DIRTY") {
+        return {
+          ok: false,
+          ran: false,
+          detail:
+            "NOT MEASURED — the project had uncommitted build inputs, so no compile result binds to a revision " +
+            "(the milestone commit did not land: check the git identity, commit hooks and the project write lock)" +
+            `${verdict.detail !== undefined ? `; the verifier reported: ${verdict.detail}` : ""}`,
+        };
+      }
       const refused = this.refusedProof(compileDecision, "compile");
       return refused === undefined
         ? verdict

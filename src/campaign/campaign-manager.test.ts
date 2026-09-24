@@ -3,7 +3,7 @@ import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync } from "node:fs";
 import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
@@ -9497,6 +9497,87 @@ describe("CampaignManager", () => {
       expect(manager.startFromGddFromDocs(ctx, "docs/Linked_GDD.md")).toBeUndefined();
       expect(tasks.submitted).toHaveLength(0);
     });
+  });
+
+  describe("a compile a dirty tree cannot bind is NOT MEASURED, never 'does not compile' (CMP-6)", () => {
+    const git = (...args: string[]): string => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    const initRepo = (): void => {
+      git("init", "-q");
+      git("config", "user.email", "t@t");
+      git("config", "user.name", "t");
+      git("config", "commit.gpgsign", "false");
+      git("add", "-A");
+      git("commit", "-qm", "baseline");
+    };
+    /** A compiler that answers green, with a receipt for the run it was given. */
+    const greenCompilerWithReceipt = async (_root: string, runId?: string): Promise<{ ok: boolean; ran: boolean; errors: number; detail: string; receipt?: string }> => ({
+      ok: true, ran: true, errors: 0, detail: "compiles",
+      ...(runId === undefined ? {} : {
+        receipt: JSON.stringify({
+          schemaVersion: 1, runId, kind: "compile", medium: "compiler", revision: git("rev-parse", "HEAD").trim(),
+          execution: { completed: true, exitCode: 0, timedOut: false },
+        }),
+      }),
+    });
+
+    it("the verdict says NOT MEASURED and carries no refusal", async () => {
+      initRepo();
+      writeFileSync(join(projectRoot, "Uncommitted.cs"), "class Uncommitted {}");
+      const campaign = {
+        id: "c_dirty", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      const m = new CampaignManager({
+        storage,
+        verifyCompile: greenCompilerWithReceipt,
+        receiptsExpected: true,
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async () => {},
+        projectRoot,
+      });
+      const verdict = await (m as unknown as { measureCompile(c: unknown, ms: unknown): Promise<{ ok: boolean; ran: boolean; refused?: string; detail?: string }> })
+        .measureCompile(campaign, { id: "m1", title: "Sprint", prompt: "p", status: "running", attempts: 1 });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.ran).toBe(false);
+      expect(verdict.refused).toBeUndefined();
+      expect(verdict.detail).toContain("NOT MEASURED");
+      expect(verdict.detail).toContain("commit");
+    }, 20_000);
+
+    it("a mid-ladder sprint whose milestone commit failed is not bounced as a compile failure", async () => {
+      initRepo();
+      // Every commit is rejected by a hook: the sprint's work stays in the tree.
+      writeFileSync(join(projectRoot, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(projectRoot, ".git", "hooks", "pre-commit"), 0o755);
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, "campaigns-dirty.db"));
+      manager = new CampaignManager({
+        storage,
+        verifyCompile: greenCompilerWithReceipt,
+        receiptsExpected: true,
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot,
+        retryAdoptionGraceMs: 10,
+        completedSettleDelayMs: 0,
+        milestoneTimeBoxMs: 60 * 60_000,
+      });
+      manager.attachEvents();
+
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      writeFileSync(join(projectRoot, "SprintA.cs"), "class SprintA {}");
+      settleMilestone("sprint A done");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(tasks.submitted[1]!.prompt).not.toContain("DOES NOT COMPILE");
+      const after = storage.get(campaign.id)!;
+      expect(after.currentMilestone).toBe(1); // the ladder moved on
+      expect(after.milestones[0]!.compileVerdict?.detail ?? "").toContain("NOT MEASURED");
+    }, 30_000);
   });
 
   describe("a campaign is only acted on by the manager of its own project (CMP-7)", () => {
