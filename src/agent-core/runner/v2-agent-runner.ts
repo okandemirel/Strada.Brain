@@ -325,8 +325,8 @@ export class V2AgentRunner implements AgentRunner {
     // had zero effect (the cap was frozen). Bridge the run to UnifiedBudgetManager.updateConfig: on a
     // config change re-read the resolved cap (same seed transform, incl. the -1→∞ unbounded sentinel)
     // and raise the Budget in place; the next gate tick observes the headroom. Raise-only (Budget guards
-    // it), and interactive-only — background epochs seed their own cap per epoch and a global config
-    // event must not perturb an in-flight epoch's frozen slice. Unsubscribed in the finally (exception-
+    // it), and interactive-only — only interactive runs carry an output-token cap (the policy leaves
+    // non-interactive runs uncapped by tokens; the cost cap bounds them). Unsubscribed in the finally (exception-
     // safe, mirroring the externalSignal hook). This wires the niche deferred at buildPolicySeed.
     let unsubBudgetConfig: (() => void) | undefined;
     if (isInteractive(mode)) {

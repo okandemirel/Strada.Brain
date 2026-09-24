@@ -483,14 +483,14 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     });
     const saveSpy = vi.fn(async () => {});
     port.saveBudgetExceededCheckpoint = saveSpy;
+    Object.assign(port, { renderInteractiveBudgetExceeded: vi.fn(async () => {}) });
     const runner = mkRunner(handles.plane, gateway, port, handles.clock);
 
-    const result = await drive(handles.clock, runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("worker")));
+    // Interactive: the output-token budget is the interactive task budget; a worker run has no
+    // token cap (its background-status mapping for a budget stop is pinned in stoppedStatus below).
+    const result = await drive(handles.clock, runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("interactive")));
 
     expect(result.reason).toBe("budget-exhausted:tokens");
-    // Review 2026-09-08: a budget stop is an outcome to judge, not a failure
-    // to retry — as "failed" it reached the mission keep-alive.
-    expect(result.status).toBe("blocked");
     expect(saveSpy).toHaveBeenCalledTimes(1);
     const cp = saveSpy.mock.calls[0]![0] as BudgetCheckpointParams;
     expect(cp.used).toBe(15); // three 5-token turns actually spent
@@ -829,6 +829,35 @@ describe("V2AgentRunner — retry (verdict retry → backoff → continue)", () 
     expect(waited).toBeGreaterThanOrEqual(10_000);
     expect(waited).toBeLessThan(20_000);
   });
+});
+
+describe("V2AgentRunner — the interactive token budget does not cap non-interactive runs", () => {
+  it.each(["background", "worker", "supervisor-node"] as const)(
+    "a %s run spending past the interactive output-token budget is not stopped by it",
+    async (mode) => {
+      // TASK_INTERACTIVE_TOKEN_BUDGET is documented per interactive task; as a whole-run cap it
+      // stopped multi-epoch background builds (and /token could not raise it for them).
+      const handles = mkPlane({ outputTokenCap: 100 });
+      const toolTurn = mkResponse({
+        text: "",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "t1", name: "file_read", input: {} }],
+        usage: { inputTokens: 10, outputTokens: 200, totalTokens: 210 },
+      });
+      const done = mkResponse({ text: "done", usage: { inputTokens: 10, outputTokens: 200, totalTokens: 210 } });
+      const gateway = new ModelGateway(scriptedStream([toolTurn, toolTurn, done]));
+      const port = mkPort(mkProvider(), {
+        planTransitionTo: AgentPhase.EXECUTING,
+        reflection: { agentState: { ...createInitialState("x"), phase: AgentPhase.EXECUTING }, terminal: false },
+      });
+      const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+      const result = await drive(handles.clock, runner.run(mkRequest(), mkIO(mode)));
+
+      expect(result.reason ?? "").not.toMatch(/budget-exhausted/);
+      expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("V2AgentRunner — request.maxEpochs caps background auto-continue", () => {

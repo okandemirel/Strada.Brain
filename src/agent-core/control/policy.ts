@@ -117,7 +117,11 @@ export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyR
       callFirstResponseMs,
       callStallMs,
       callHardMs,
-      outputTokenCap: seed.outputTokenCap,
+      // The seed's output-token cap is the INTERACTIVE task budget (TASK_INTERACTIVE_TOKEN_BUDGET,
+      // documented per interactive task, raised live by /token). As a whole-run cap it stopped
+      // multi-epoch background, worker and delegated runs that v1 never capped by tokens; those
+      // stay bounded by the cost cap, their iteration/epoch limits and the loop guard.
+      outputTokenCap: mode === "interactive" ? seed.outputTokenCap : Number.POSITIVE_INFINITY,
       costCapUsd: seed.costCapUsd,
       pauseRetryBudget: seed.pauseRetryBudget ?? 5,
     },
