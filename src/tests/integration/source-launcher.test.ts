@@ -763,6 +763,19 @@ describe("source launcher npm invocation with a Node path containing a space (OP
     })).toEqual({ command: "npm.cmd", args: [], shell: true });
   });
 
+  it("never looks for npm next to a bare `node` (that would be the launch directory)", async () => {
+    const { resolveNpmInvocation } = await loadSourceLauncherModule();
+    const npmCli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+    const invocation = resolveNpmInvocation({
+      platform: "win32",
+      // strada.cmd sets the bare name when node was found on PATH.
+      env: { STRADA_NODE_PATH: "node" },
+      execPath: PROGRAM_FILES_NODE,
+      exists: (candidate: string) => candidate === npmCli || !/^[A-Za-z]:\\/.test(candidate),
+    });
+    expect(invocation).toEqual({ command: PROGRAM_FILES_NODE, args: [npmCli], shell: false });
+  });
+
   it("leaves POSIX npm alone (no shell)", async () => {
     const { buildNpmSpawn } = await loadSourceLauncherModule();
     expect(buildNpmSpawn(["install"], { cwd: "/repo" }, { platform: "linux" }))

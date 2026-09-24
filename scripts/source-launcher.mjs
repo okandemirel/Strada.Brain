@@ -107,9 +107,14 @@ export function resolveNpmInvocation(options = {}) {
   // Injectable so the quoting can be exercised against a real shell on POSIX.
   const pathImpl = options.pathImpl || path.win32;
   // STRADA_NODE_PATH (set by strada.ps1 / strada.cmd, possibly a portable Node
-  // that is not on PATH) first, then the Node running this launcher.
+  // that is not on PATH) first, then the Node running this launcher. Absolute
+  // paths only: strada.cmd sets a bare `node` when node is on PATH, and its
+  // dirname "." would look for npm in the launch directory, which may be an
+  // untrusted project.
   const nodeDirs = [...new Set(
-    [env.STRADA_NODE_PATH, execPath].filter(Boolean).map((nodePath) => pathImpl.dirname(nodePath)),
+    [env.STRADA_NODE_PATH, execPath]
+      .filter((nodePath) => Boolean(nodePath) && pathImpl.isAbsolute(nodePath))
+      .map((nodePath) => pathImpl.dirname(nodePath)),
   )];
   for (const nodeDir of nodeDirs) {
     const npmCli = pathImpl.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
