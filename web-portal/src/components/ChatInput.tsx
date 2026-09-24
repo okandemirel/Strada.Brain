@@ -139,6 +139,15 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
   const { voice } = useVoiceSettings()
+  const [voiceBusy, setVoiceBusy] = useState(false)
+
+  // While a draft, attachments or a recording are in progress, hold back the
+  // server's mode suggestions: switching unmounts this input and loses them (WEB-5).
+  const inputBusy = text.trim().length > 0 || files.length > 0 || voiceBusy
+  useEffect(() => {
+    useWorkspaceStore.getState().setInputBusy(inputBusy)
+  }, [inputBusy])
+  useEffect(() => () => useWorkspaceStore.getState().setInputBusy(false), [])
 
   const filteredCommands = useMemo(() => {
     if (!showCommands) return []
@@ -447,7 +456,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
         />
         {voice.inputEnabled && (
-          <VoiceRecorder onVoiceMessage={handleVoiceMessage} onTextMessage={handleVoiceText} disabled={disabled} />
+          <VoiceRecorder onVoiceMessage={handleVoiceMessage} onTextMessage={handleVoiceText} onBusyChange={setVoiceBusy} disabled={disabled} />
         )}
         <CoolMode options={{ particle: '✦', particleCount: 8, speedUp: 18 }}>
           <ShimmerButton

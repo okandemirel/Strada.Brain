@@ -203,8 +203,9 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const ws = useWorkspaceStore.getState()
       const prevMode = ws.mode
       ws.suggestMode(payload.mode as WorkspaceMode)
-      // Show toast only if mode actually changed
-      if (!ws.userOverride && payload.mode !== prevMode) {
+      // Show toast only if mode actually changed (a suggestion is also held
+      // back while the chat input is busy, WEB-5)
+      if (useWorkspaceStore.getState().mode !== prevMode) {
         ws.addNotification({
           kind: 'mode_suggest',
           title: 'Mode switched',

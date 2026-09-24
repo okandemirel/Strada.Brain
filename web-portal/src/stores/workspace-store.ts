@@ -24,6 +24,13 @@ interface WorkspaceState {
   secondaryVisible: boolean
   panelSizes: PanelSizes
   notifications: WorkspaceNotification[]
+  /**
+   * The chat input holds a draft, attachments or a recording. A server-driven
+   * mode switch would unmount it and lose (or, for a recording, send half of)
+   * that work, so suggestions wait until it is clear (WEB-5).
+   */
+  inputBusy: boolean
+  setInputBusy: (busy: boolean) => void
   setMode: (mode: WorkspaceMode) => void
   suggestMode: (mode: WorkspaceMode) => void
   undoModeSwitch: () => void
@@ -44,12 +51,15 @@ const initialState = {
   secondaryVisible: false,
   panelSizes: { sidebar: 15, primary: 70, secondary: 15 } as PanelSizes,
   notifications: [] as WorkspaceNotification[],
+  inputBusy: false,
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   ...initialState,
   setMode: (mode) => set((state) => ({ mode, previousMode: state.mode, userOverride: true })),
-  suggestMode: (mode) => set((state) => (state.userOverride || state.mode === mode ? state : { mode, previousMode: state.mode })),
+  setInputBusy: (inputBusy) => set((state) => (state.inputBusy === inputBusy ? state : { inputBusy })),
+  suggestMode: (mode) =>
+    set((state) => (state.userOverride || state.inputBusy || state.mode === mode ? state : { mode, previousMode: state.mode })),
   undoModeSwitch: () => set((state) => (state.previousMode ? { mode: state.previousMode, previousMode: null, userOverride: false } : state)),
   resetOverride: () => set({ userOverride: false, mode: 'chat' }),
   toggleSecondary: () => set((state) => ({ secondaryVisible: !state.secondaryVisible })),

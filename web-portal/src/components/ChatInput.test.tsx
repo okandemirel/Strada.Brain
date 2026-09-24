@@ -21,6 +21,8 @@ vi.mock('./VoiceRecorder', () => ({
 }))
 
 import ChatInput from './ChatInput'
+import { useWorkspaceStore } from '../stores/workspace-store'
+import { dispatchWorkspaceMessage } from '../hooks/use-dashboard-socket'
 
 describe('ChatInput', () => {
   let onSend: (text: string, attachments?: unknown[]) => boolean
@@ -195,6 +197,26 @@ describe('ChatInput', () => {
     expect(resetOverrideSpy).toHaveBeenCalled()
 
     resetOverrideSpy.mockRestore()
+  })
+
+  // WEB-5: a server mode suggestion unmounted ChatView and dropped the draft.
+  it('holds back a server mode switch while a draft is typed, and lets it through once cleared', async () => {
+    useWorkspaceStore.getState().reset()
+    const user = userEvent.setup()
+    const { unmount } = render(<ChatInput onSend={onSend} disabled={false} />)
+    const input = screen.getByPlaceholderText(/Send a message/)
+
+    await user.type(input, 'half a thought')
+    dispatchWorkspaceMessage({ type: 'workspace:mode_suggest', payload: { mode: 'code', reason: 'Editing files' } })
+    expect(useWorkspaceStore.getState().mode).toBe('chat')
+    expect(input).toHaveValue('half a thought')
+
+    await user.clear(input)
+    dispatchWorkspaceMessage({ type: 'workspace:mode_suggest', payload: { mode: 'code', reason: 'Editing files' } })
+    expect(useWorkspaceStore.getState().mode).toBe('code')
+    unmount()
+    expect(useWorkspaceStore.getState().inputBusy).toBe(false)
+    useWorkspaceStore.getState().reset()
   })
 
   it('sends a recorded voice attachment', async () => {

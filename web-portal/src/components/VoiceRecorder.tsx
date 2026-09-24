@@ -9,6 +9,8 @@ interface VoiceRecorderProps {
   onVoiceMessage: (attachment: Attachment) => boolean | void
   /** Send a text-only message (used when browser STT succeeds). */
   onTextMessage?: (text: string) => boolean | void
+  /** True while recording, transcribing or preparing a clip. */
+  onBusyChange?: (busy: boolean) => void
   disabled?: boolean
 }
 
@@ -43,7 +45,7 @@ function pickRecorderMimeType(): string {
   return PREFERRED_AUDIO_TYPES.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) ?? ''
 }
 
-export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled }: VoiceRecorderProps) {
+export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyChange, disabled }: VoiceRecorderProps) {
   const { t } = useTranslation()
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -54,10 +56,18 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled 
   const chunksRef = useRef<Blob[]>([])
   const onVoiceMessageRef = useRef(onVoiceMessage)
   const startPendingRef = useRef(false)
+  // Set on unmount: the recorder's stop then fires onstop, and a clip cut short
+  // by the component going away (a mode switch, navigation) must not be sent.
+  const discardRef = useRef(false)
 
   useEffect(() => {
     onVoiceMessageRef.current = onVoiceMessage
   }, [onVoiceMessage])
+
+  const busy = isRecording || isProcessing || isTranscribing
+  useEffect(() => {
+    onBusyChange?.(busy)
+  }, [busy, onBusyChange])
 
   const cleanupStream = useCallback(() => {
     if (!streamRef.current) return
@@ -66,7 +76,9 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled 
   }, [])
 
   useEffect(() => {
+    discardRef.current = false
     return () => {
+      discardRef.current = true
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try { mediaRecorderRef.current.stop() } catch { /* ignore */ }
       }
@@ -83,6 +95,7 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled 
     chunksRef.current = []
     mediaRecorderRef.current = null
     cleanupStream()
+    if (discardRef.current) return
     setIsRecording(false)
 
     if (audioBlob.size === 0) {
@@ -100,6 +113,7 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled 
       setIsTranscribing(true)
       try {
         const transcript = await browserStt.transcribe(audioBlob)
+        if (discardRef.current) return
         if (transcript) {
           const sent = onTextMessage(transcript)
           if (sent !== false) return // Success — sent as text
@@ -120,6 +134,7 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, disabled 
         data: await blobToBase64(audioBlob),
         size: audioBlob.size,
       }
+      if (discardRef.current) return
       const sent = onVoiceMessageRef.current(attachment)
       if (sent === false) {
         toast.error(t('voice.couldNotSend'))

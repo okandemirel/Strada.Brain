@@ -27,6 +27,15 @@ describe('useWorkspaceStore', () => {
     expect(useWorkspaceStore.getState().mode).toBe('canvas')
   })
 
+  // WEB-5: a server suggestion unmounted the chat input mid-draft or mid-recording.
+  it('suggestMode waits while the chat input is busy; the user can still switch', () => {
+    useWorkspaceStore.getState().setInputBusy(true)
+    useWorkspaceStore.getState().suggestMode('code')
+    expect(useWorkspaceStore.getState().mode).toBe('chat')
+    useWorkspaceStore.getState().setMode('monitor')
+    expect(useWorkspaceStore.getState().mode).toBe('monitor')
+  })
+
   it('suggestMode works when userOverride is false', () => {
     useWorkspaceStore.getState().suggestMode('monitor')
     const state = useWorkspaceStore.getState()
