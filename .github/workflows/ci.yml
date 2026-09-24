@@ -64,6 +64,10 @@ jobs:
       - name: Test
         env:
           CI: "1"
+          # The clone above, for the tests that check the real Strada.Core
+          # declaration. Without it they looked for a sibling ../Strada.Core,
+          # which never exists here, and skipped on every run (OPS-11).
+          STRADA_CORE_PATH: /tmp/Strada.Core-ci
         run: npm test
 
       - name: Dashboard Live Tests
@@ -232,11 +236,35 @@ jobs:
       - name: Generate pinned corpus
         run: npm run bench:corpus
 
-      # The gate skips (and says so) when no baseline exists for this
-      # runner/Node combination, so a new runner never fails the build — it
-      # just reports that nobody has recorded a baseline there yet.
-      - name: Benchmark and gate on regression
-        run: npm run bench:check
+      # Timings are machine-specific, so the gate compares only against a
+      # baseline recorded on this runner type (benchmarks/baselines/
+      # linux-node22.json), and none is committed yet. Without one, `gate
+      # --check` exits 0 having measured nothing, and this step used to be
+      # green under a name that claimed a gate (OPS-12). Now: with a committed
+      # baseline it gates strictly; without one it records a baseline from
+      # this run, uploads it below, and says NOT GATED in a warning and the job
+      # summary. Committing that artifact's file turns the gate on.
+      - name: Benchmark (latency gate once a baseline for this runner is committed)
+        shell: bash
+        run: |
+          npm run bench
+          baseline="benchmarks/baselines/$(node -p 'process.platform + "-node" + process.versions.node.split(".")[0]').json"
+          if [ -f "$baseline" ]; then
+            node scripts/bench/gate.mjs --check --require-baseline --fail-on-missing-metric
+          else
+            node scripts/bench/gate.mjs --record
+            echo "::warning title=Latency gate NOT GATED::no committed ${baseline}; commit the one in the bench-baseline artifact to enable the gate"
+            echo "### Latency gate: NOT GATED (no committed ${baseline})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the baseline recorded on this runner
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: benchmarks/baselines/
+          if-no-files-found: ignore
+          retention-days: 14
 
       # Retrieval quality is machine-independent — same corpus, same index,
       # same query set, no timing — so unlike the latency gate this one has a

@@ -92,6 +92,26 @@ describe("ci.yml", () => {
       expect(ci, job).toMatch(new RegExp(`\\n {2}${job}:\\n`));
     }
   });
+
+  it("points the Strada.Core declaration tests at the checkout verify clones (OPS-11)", () => {
+    const verify = jobBlock(ci, "verify");
+    const clone = /git clone [^\n]*Strada\.Core\.git (\S+)/.exec(verify)?.[1];
+    expect(clone, "verify no longer clones Strada.Core").toBeDefined();
+    const testStep = verify.slice(verify.indexOf("- name: Test\n"));
+    const corePath = /STRADA_CORE_PATH: (\S+)/.exec(testStep.slice(0, testStep.indexOf("run: npm test")))?.[1];
+    expect(corePath, "the Test step does not set STRADA_CORE_PATH").toBe(clone);
+  });
+
+  it("never lets the latency gate pass without a baseline, and says when it is not gating (OPS-12)", () => {
+    const bench = jobBlock(ci, "bench");
+    // bench:check is `gate.mjs --check` without --require-baseline: exit 0,
+    // nothing compared.
+    expect(bench).not.toMatch(/npm run bench:check/);
+    const checks = bench.split("\n").filter((line) => /gate\.mjs --check/.test(line));
+    expect(checks.length, "bench never runs the gate").toBeGreaterThan(0);
+    for (const line of checks) expect(line).toMatch(/--require-baseline/);
+    expect(bench).toMatch(/::warning title=Latency gate NOT GATED::/);
+  });
 });
 
 describe("version-bump.yml", () => {
