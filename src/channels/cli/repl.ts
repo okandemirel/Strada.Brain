@@ -22,6 +22,23 @@ interface PendingCliConfirmation {
 }
 
 /**
+ * Ask the process to shut down through its graceful SIGINT handler (CHN-17).
+ *
+ * `process.kill(process.pid, "SIGINT")` is an unconditional termination on
+ * Windows (Node docs), so the registered shutdown (database close, learning
+ * flush, backups) never ran there when piped input ended. The in-process
+ * listeners are invoked directly instead; with none registered the signal is
+ * still sent, whose default action is to exit.
+ */
+function requestProcessShutdown(): void {
+  if (process.listenerCount("SIGINT") > 0) {
+    process.emit("SIGINT", "SIGINT");
+    return;
+  }
+  process.kill(process.pid, "SIGINT");
+}
+
+/**
  * CLI REPL channel for local development and testing.
  * Allows interacting with Strada Brain directly from the terminal.
  */
@@ -112,7 +129,7 @@ export class CLIChannel implements IChannelAdapter {
     console.log("\nStdin closed (EOF). Shutting down CLI...");
     this.healthy = false;
     this.shutdownAfterDrain = false;
-    process.kill(process.pid, "SIGINT");
+    requestProcessShutdown();
   }
 
   async disconnect(): Promise<void> {
@@ -252,7 +269,7 @@ export class CLIChannel implements IChannelAdapter {
 
     if (trimmed === "exit" || trimmed === "quit") {
       await this.disconnect();
-      process.kill(process.pid, "SIGINT");
+      requestProcessShutdown();
       return;
     }
 
