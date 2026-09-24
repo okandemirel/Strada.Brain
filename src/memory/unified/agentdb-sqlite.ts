@@ -141,6 +141,24 @@ function migratePatternDedup(db: Database.Database): void {
 }
 
 /**
+ * Make sure the consolidation soft-delete columns exist before any statement
+ * reads them. The consolidation engine adds them when it starts, but the load
+ * query below filters on `consolidated_into`, and it runs first on a database
+ * the engine has never touched. Idempotent — the same ALTERs the engine runs.
+ */
+export function ensureConsolidationColumns(db: Database.Database): void {
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!cols.has("consolidated_into")) {
+    db.exec("ALTER TABLE memories ADD COLUMN consolidated_into TEXT");
+  }
+  if (!cols.has("consolidated_at")) {
+    db.exec("ALTER TABLE memories ADD COLUMN consolidated_at INTEGER");
+  }
+}
+
+/**
  * Initialize the SQLite database, run schema creation, and prepare statements.
  * On failure, attempts an in-memory fallback.
  */
@@ -171,6 +189,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
 
     // Migration: deduplicate patterns table and add UNIQUE index for existing databases
     migratePatternDedup(ctx.sqliteDb);
+    ensureConsolidationColumns(ctx.sqliteDb);
 
     prepareSqliteStatements(ctx);
 
@@ -186,6 +205,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
       configureSqlitePragmas(ctx.sqliteDb, "memory");
       ctx.sqliteDb.exec(MEMORY_SCHEMA_SQL);
       migratePatternDedup(ctx.sqliteDb);
+      ensureConsolidationColumns(ctx.sqliteDb);
       prepareSqliteStatements(ctx);
       getLoggerSafe().warn("[AgentDBMemory] Running with in-memory SQLite fallback — data will not survive restarts");
     } catch (fallbackError) {
@@ -214,9 +234,13 @@ export function prepareSqliteStatements(ctx: AgentDBSqliteContext): void {
       `),
   );
 
+  // Rows consolidation soft-deleted (consolidated_into set) stay on disk for
+  // undo, but must not come back on load next to their summary.
   ctx.sqliteStatements.set(
     "getAllMemories",
-    ctx.sqliteDb!.prepare("SELECT * FROM memories ORDER BY created_at DESC"),
+    ctx.sqliteDb!.prepare(
+      "SELECT * FROM memories WHERE consolidated_into IS NULL ORDER BY created_at DESC",
+    ),
   );
 
   ctx.sqliteStatements.set(

@@ -236,6 +236,74 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("consolidated rows across a restart (MEM-1)", () => {
+    // Consolidation soft-deletes its source rows (consolidated_into set) and
+    // keeps them on disk for undo. loadEntries used to read every row, so after
+    // a restart recall returned the summary AND all of its originals.
+    const makeConfig = (dbPath: string) => ({
+      dbPath,
+      dimensions: 128,
+      maxEntriesPerTier: {
+        [MemoryTier.Working]: 10,
+        [MemoryTier.Ephemeral]: 50,
+        [MemoryTier.Persistent]: 100,
+      },
+      hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+      quantizationType: "none" as const,
+      cacheSize: 100,
+      enableAutoTiering: false,
+      ephemeralTtlMs: 60_000,
+    });
+
+    it("loads only the summary, not the soft-deleted originals", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "agentdb-consolidated-"));
+      const first = new AgentDBMemory(makeConfig(dir));
+      await first.initialize();
+      const a = await first.storeNote("Player health regenerates slowly", ["hp"]);
+      const b = await first.storeNote("Player health regenerates over time", ["hp"]);
+      const c = await first.storeNote("Health regen for the player is slow", ["hp"]);
+
+      const { MemoryConsolidationEngine } = await import("./consolidation-engine.js");
+      const internals = first.getConsolidationInternals();
+      const summaryVector = Array.from({ length: 128 }, (_, i) => (i % 2 === 0 ? 0.1 : -0.1));
+      const engine = new MemoryConsolidationEngine({
+        sqliteDb: internals.sqliteDb!,
+        entries: internals.entries,
+        hnswStore: internals.hnswStore,
+        hnswWriteMutex: internals.hnswWriteMutex,
+        textIndex: internals.textIndex,
+        config: {
+          enabled: true, idleMinutes: 5, threshold: 0.7, batchSize: 10,
+          minClusterSize: 2, maxDepth: 3, modelTier: "fast", minAgeMs: 0,
+        },
+        generateEmbedding: async () => summaryVector,
+        summarizeWithLLM: async () => ({ summary: "Player health regenerates slowly", cost: 0, model: "test" }),
+        eventEmitter: { emit: () => {} },
+        logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      });
+      const memberIds = [a.id, b.id, c.id] as string[];
+      await engine.processCluster({
+        seedId: memberIds[0]!,
+        memberIds,
+        avgSimilarity: 0.9,
+        tier: internals.entries.get(memberIds[0]!)!.tier,
+      });
+      expect(internals.entries.size).toBe(1); // in-process view: summary only
+      await first.shutdown();
+
+      const reopened = new AgentDBMemory(makeConfig(dir));
+      try {
+        expect((await reopened.initialize()).kind).toBe("ok");
+        const loaded = [...reopened.getConsolidationInternals().entries.keys()];
+        expect(loaded).toHaveLength(1);
+        for (const id of memberIds) expect(loaded).not.toContain(id);
+      } finally {
+        await reopened.shutdown();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("getIndexHealth SQLite integrity (audited 2026-09-02)", () => {
     // The integrity_check verdict from initSqlite used to go nowhere: a
     // memory.db that failed the check and could not be repaired was opened
