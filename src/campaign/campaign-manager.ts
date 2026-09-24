@@ -59,6 +59,7 @@ import {
   artDirectionText,
   deliveryVisualBlock,
   extractLookDescription,
+  frameMediaType,
   judgeVisualConformance,
   renderVisualAcceptance,
   selectGameplayFrame,
@@ -5348,7 +5349,7 @@ export class CampaignManager {
         type: "image",
         name: basename(frame.path),
         url: abs,
-        mimeType: "image/png",
+        mimeType: frameMediaType(abs),
         ...(size !== undefined ? { size } : {}),
       });
     } catch (err) {

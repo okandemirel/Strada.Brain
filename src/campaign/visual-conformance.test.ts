@@ -6,7 +6,7 @@ import {
   extractLookDescription,
   judgeVisualConformance,
   renderVisualConformance,
-  selectGameplayFrame, artDirectionText } from "./visual-conformance.js";
+  selectGameplayFrame, artDirectionText, frameMediaType } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 
 const dirs: string[] = [];
@@ -116,6 +116,23 @@ describe("the judgement", () => {
     expect(result.status).toBe("checked");
     expect(result.detail).toContain("plain grid");
     expect(renderVisualConformance(result, { path: frame })).toContain("claude");
+  });
+
+  it("declares a JPEG frame as image/jpeg, by its bytes (CMP-18)", async () => {
+    const root = tmp();
+    const frame = join(root, "f.jpg");
+    writeFileSync(frame, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]));
+    const chat = vi.fn(async (_system: string, _messages: unknown) => ({ text: "Pigs, as described.\nMATCH: yes" }));
+    await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
+    });
+    const sent = JSON.stringify(chat.mock.calls[0]![1]);
+    expect(sent).toContain('"media_type":"image/jpeg"');
+    // The bytes decide over a misleading name; the name decides when there are no bytes.
+    expect(frameMediaType("frame.png", Buffer.from([0xff, 0xd8, 0xff]))).toBe("image/jpeg");
+    expect(frameMediaType("frame.jpeg")).toBe("image/jpeg");
+    expect(frameMediaType("frame.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe("image/png");
   });
 
   it("reads the MATCH line as the verdict and renders it; no line, no verdict (2026-09-10)", async () => {

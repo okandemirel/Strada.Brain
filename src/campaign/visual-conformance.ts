@@ -310,6 +310,20 @@ export interface VisualConformance {
   reason?: VisualNotMeasuredReason;
 }
 
+/**
+ * The media type a frame actually is (CMP-18): its magic bytes when they are
+ * at hand, else its extension. Frames may be PNG or JPEG, and a provider that
+ * checks the declared type against the bytes refused every JPEG sent as
+ * image/png — the look gate then never measured anything.
+ */
+export function frameMediaType(path: string, bytes?: Uint8Array): "image/png" | "image/jpeg" {
+  if (bytes !== undefined && bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes !== undefined && bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "image/png";
+  }
+  return /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
+}
+
 const VISION_SYSTEM =
   "You are shown one frame captured from a running game, and the game design document's own " +
   "description of how that game should look. Answer in ONE sentence: does the frame plausibly " +
@@ -349,8 +363,11 @@ export async function judgeVisualConformance(params: {
   }
 
   let imageBase64: string;
+  let mediaType: "image/png" | "image/jpeg";
   try {
-    imageBase64 = readFileSync(frame.path).toString("base64");
+    const bytes = readFileSync(frame.path);
+    imageBase64 = bytes.toString("base64");
+    mediaType = frameMediaType(frame.path, bytes);
   } catch (err) {
     return {
       status: "not-checked",
@@ -368,7 +385,7 @@ export async function judgeVisualConformance(params: {
           role: "user",
           content: [
             { type: "text", text: `The GDD says the game should look like this:\n\n${look.text ?? ""}` },
-            { type: "image", source: { type: "base64", media_type: "image/png", data: imageBase64 } },
+            { type: "image", source: { type: "base64", media_type: mediaType, data: imageBase64 } },
           ],
         } as never,
       ],
