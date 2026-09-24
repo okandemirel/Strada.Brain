@@ -395,3 +395,59 @@ describe("decideCompaction — the provider's count is ground truth (measured 20
     expect(modest.toolShareExceeded).toBe(false);
   });
 });
+
+// ORC-3: the wire shape carries an assistant's tool calls in `tool_calls` (beside a string
+// content) and a tool result as a later user message. The estimate read only `content`, so a
+// session of large file_writes estimated at a few dozen tokens and never compacted, and the
+// grouping never formed a tool group, so stage 1 never ran.
+describe("tool-heavy sessions are measured and compacted (ORC-3)", () => {
+  const body = "public class Foo { void Bar() { int x = 1; } }\n".repeat(900); // ~42k chars
+
+  function writeSession(): ConversationMessage[] {
+    const msgs: ConversationMessage[] = [{ role: "user", content: "write the ten systems" }];
+    for (let i = 0; i < 10; i++) {
+      msgs.push({
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: `w${i}`, name: "file_write", input: { path: `Assets/Modules/M/S${i}.cs`, content: body } }],
+      } as ConversationMessage);
+      msgs.push({
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: `w${i}`, content: "Wrote file" },
+          { type: "text", text: "state: executing" },
+        ],
+      } as ConversationMessage);
+    }
+    return msgs;
+  }
+
+  it("counts assistant tool-call arguments and images in the estimate", () => {
+    const call = [{ role: "assistant", content: "", tool_calls: [{ id: "w", name: "file_write", input: { path: "a", content: body } }] }] as ConversationMessage[];
+    expect(estimateTokens(call)).toBeGreaterThan(body.length / 5);
+    const image = [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }] }] as ConversationMessage[];
+    expect(estimateTokens(image)).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("the write-heavy probe compacts at stage 1, fits the budget and keeps every call answered", () => {
+    const msgs = writeSession();
+    const maxTokens = 76_800;
+    expect(estimateTokens(msgs)).toBeGreaterThan(maxTokens);
+
+    const result = compactSession(msgs, { maxTokens });
+
+    expect(result.compacted).toBe(true);
+    expect(result.stageApplied).toBe("tool_result_compaction");
+    expect(result.finalTokens).toBeLessThanOrEqual(maxTokens);
+    // Pairing survives: every assistant tool call is still answered by the next message.
+    result.messages.forEach((m, i) => {
+      for (const tc of (m as { tool_calls?: { id: string; input: unknown }[] }).tool_calls ?? []) {
+        expect(typeof tc.input).toBe("object"); // providers require an object input
+        const next = result.messages[i + 1]!;
+        expect(Array.isArray(next.content) && next.content.some((b) => b.type === "tool_result" && b.tool_use_id === tc.id)).toBe(true);
+      }
+    });
+    // The two most recent tool groups are untouched.
+    expect(result.messages.slice(-4)).toEqual(msgs.slice(-4));
+  });
+});

@@ -80,8 +80,17 @@ import { createTokenBuckets, type TokenBuckets } from "../common/token-estimator
 /** Content block types that appear in message content arrays. */
 export type ContentBlock =
   | { readonly type: "text"; readonly text: string }
+  | { readonly type: "image"; readonly source: unknown }
   | { readonly type: "tool_use"; readonly id: string; readonly name: string; readonly input: unknown }
   | { readonly type: "tool_result"; readonly tool_use_id: string; readonly content: string | readonly ContentBlock[]; readonly is_error?: boolean };
+
+/** The wire shape's tool calls: they ride beside an assistant's text, not inside it. */
+type ToolCallLike = { readonly id: string; readonly name: string; readonly input: unknown };
+
+function toolCallsOf(msg: CompactableMessage): readonly ToolCallLike[] {
+  if (msg.role !== "assistant") return [];
+  return (msg as { tool_calls?: readonly ToolCallLike[] }).tool_calls ?? [];
+}
 
 /** Internal summary message used by the compaction pipeline. */
 export interface SystemSummaryMessage {
@@ -125,9 +134,18 @@ export interface CompactionResult {
 // TOKEN ESTIMATION — delegates to CJK-aware heuristic from rag.interface
 // =============================================================================
 
+/**
+ * Flat per-image cost. Providers bill an image by its pixels (Anthropic: w×h/750, about 1 600
+ * tokens at the size they downscale to), never by its base64 length, which is not counted.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1_600;
+/** Latin characters per token in the shared estimator (the same rule toolSchemaTokens uses). */
+const LATIN_CHARS_PER_TOKEN = 4;
+
 function contentBlockIntoBuckets(block: ContentBlock, buckets: TokenBuckets): void {
   switch (block.type) {
     case "text": buckets.addText(block.text); return;
+    case "image": buckets.addLatinChars(IMAGE_TOKEN_ESTIMATE * LATIN_CHARS_PER_TOKEN); return;
     case "tool_use": buckets.addText(block.name + JSON.stringify(block.input)); return;
     case "tool_result": {
       if (typeof block.content === "string") { buckets.addText(block.content); return; }
@@ -141,9 +159,12 @@ function contentBlockIntoBuckets(block: ContentBlock, buckets: TokenBuckets): vo
 function messageIntoBuckets(msg: CompactableMessage, buckets: TokenBuckets): void {
   if (typeof msg.content === "string") {
     buckets.addText(msg.content);
-    return;
+  } else {
+    for (const block of msg.content) contentBlockIntoBuckets(block as ContentBlock, buckets);
   }
-  for (const block of msg.content) contentBlockIntoBuckets(block as ContentBlock, buckets);
+  // A file_write's whole file body is in its call's input. Uncounted, a session of large
+  // writes estimated at a few dozen tokens and compaction never ran (ORC-3).
+  for (const tc of toolCallsOf(msg)) buckets.addText(tc.name + JSON.stringify(tc.input ?? {}));
 }
 
 /**
@@ -170,13 +191,15 @@ export function estimateTokens(
 // =============================================================================
 
 function hasToolUse(msg: CompactableMessage): boolean {
+  if (toolCallsOf(msg).length > 0) return true;
   if (typeof msg.content === "string") return false;
   return (msg.content as readonly ContentBlock[]).some((b) => b.type === "tool_use");
 }
 
+/** A user turn that answers tool calls. It may carry gate or reflection text after the results. */
 function isToolResultMessage(msg: CompactableMessage): boolean {
-  if (typeof msg.content === "string") return false;
-  return (msg.content as readonly ContentBlock[]).every((b) => b.type === "tool_result");
+  if (msg.role !== "user" || typeof msg.content === "string") return false;
+  return (msg.content as readonly ContentBlock[]).some((b) => b.type === "tool_result");
 }
 
 /**
@@ -298,18 +321,55 @@ function stage1ToolResultCompaction(groups: MessageGroup[]): MessageGroup[] {
   });
 }
 
+/** Kept verbatim at the head of a compacted tool result or tool-input string. */
+const COMPACTED_PREVIEW_CHARS = 200;
+
+function compactedText(text: string): string {
+  if (text.length <= COMPACTED_PREVIEW_CHARS + 100) return text;
+  return `${text.slice(0, COMPACTED_PREVIEW_CHARS)}… [compacted, ${text.length} chars]`;
+}
+
+/**
+ * Shorten a tool call's input while keeping it an object — providers require tool_use input to
+ * be one (the old "[compacted]" string was not). Long strings keep their head; large nested
+ * values are replaced by a marker.
+ */
+function compactToolInput(input: unknown): unknown {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  if (JSON.stringify(input).length <= COMPACTED_PREVIEW_CHARS + 100) return input;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof value === "string") out[key] = compactedText(value);
+    else if (value !== null && typeof value === "object" && JSON.stringify(value).length > COMPACTED_PREVIEW_CHARS) out[key] = "[compacted]";
+    else out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Shorten an old tool group IN PLACE: the tool_use/tool_result blocks stay (so pairing survives
+ * and the provider still sees what was called), their payloads shrink. Turning results into text
+ * blocks, as this did, left the assistant's tool_calls unanswered.
+ */
 function compactToolGroup(messages: readonly CompactableMessage[]): CompactableMessage[] {
   return messages.map((msg) => {
-    if (typeof msg.content === "string") return msg;
-    const blocks = (msg.content as readonly ContentBlock[]).map((block): ContentBlock => {
-      if (block.type === "tool_result") return { type: "text", text: `[tool ${block.tool_use_id}: ${block.is_error ? "FAIL" : "OK"}]` };
-      if (block.type === "tool_use") return { type: "tool_use", id: block.id, name: block.name, input: "[compacted]" as unknown };
+    const calls = toolCallsOf(msg);
+    const withCalls = calls.length > 0
+      ? ({ ...msg, tool_calls: calls.map((tc) => ({ ...tc, input: compactToolInput(tc.input) })) } as CompactableMessage)
+      : msg;
+    if (typeof withCalls.content === "string") return withCalls;
+    const blocks = (withCalls.content as readonly ContentBlock[]).map((block): ContentBlock => {
+      if (block.type === "tool_result") {
+        const text = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        return { ...block, content: compactedText(text) };
+      }
+      if (block.type === "tool_use") return { ...block, input: compactToolInput(block.input) };
       return block;
     });
     // Same-altitude cast as the content reads above: the runtime arrays carry
     // tool blocks that the nominal UserMessage/AssistantMessage content types
     // do not express.
-    return { ...msg, content: blocks } as CompactableMessage;
+    return { ...withCalls, content: blocks } as CompactableMessage;
   });
 }
 
