@@ -63,3 +63,46 @@ describe("nginx.conf", () => {
     expect(own[0]).toMatch(/return\s+200/);
   });
 });
+
+/** Active (uncommented) configuration only. */
+const active = conf
+  .split("\n")
+  .map((line) => line.replace(/#.*$/, ""))
+  .join("\n");
+
+describe("nginx.conf hardening (OPS-19)", () => {
+  it("sends `Connection: upgrade` only for WebSocket handshakes", () => {
+    // Forced on every request it defeated the upstream keepalive pool.
+    expect(active).not.toMatch(/proxy_set_header\s+Connection\s+"upgrade"/);
+    expect(active).toMatch(/map\s+\$http_upgrade\s+\$connection_upgrade\s*\{[^}]*default\s+upgrade;[^}]*''\s+'';/);
+    // The portal's chat WebSocket connects on `/` of the HTTPS server.
+    const httpsRoot = locations(active.slice(active.indexOf("listen 443")), "/")[0];
+    expect(httpsRoot).toMatch(/proxy_set_header\s+Connection\s+\$connection_upgrade/);
+  });
+
+  it("keeps /metrics off the public internet", () => {
+    const metrics = locations(active, "/metrics");
+    expect(metrics.length).toBe(1);
+    expect(metrics[0]).toMatch(/deny\s+all;/);
+  });
+
+  it("sends HSTS from the HTTPS server", () => {
+    expect(active).toMatch(/add_header\s+Strict-Transport-Security\s+"max-age=\d+/);
+  });
+
+  it("allows eval in no Content-Security-Policy", () => {
+    expect(active).not.toMatch(/'unsafe-eval'/);
+  });
+
+  it("sets a request body limit instead of the 1 MB default", () => {
+    expect(active).toMatch(/client_max_body_size\s+\d+[kmg];/i);
+  });
+
+  it("uses no add_header inside a location of the HTTPS server (it would drop the security headers there)", () => {
+    const https = active.slice(active.indexOf("listen 443"));
+    const offenders = [...https.matchAll(/location\s+[^{]+\{([^{}]*)\}/g)]
+      .filter((m) => /\badd_header\b/.test(m[1]!))
+      .map((m) => m[0].split("{")[0]!.trim());
+    expect(offenders).toEqual([]);
+  });
+});
