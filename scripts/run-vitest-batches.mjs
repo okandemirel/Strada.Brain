@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { runAllBatches } from "./vitest-batch-policy.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(__dirname);
@@ -83,15 +84,8 @@ async function main() {
   const files = [...srcFiles, ...testsFiles].sort();
   const batches = partitionFiles(files);
 
-  for (const [index, batch] of batches.entries()) {
-    console.log(
-      `\n[vitest-batch] ${index + 1}/${batches.length} (${batch.length} files)`,
-    );
-    const exitCode = await runVitest([...BASE_ARGS, ...batch]);
-    if (exitCode !== 0) {
-      process.exit(exitCode);
-    }
-  }
+  // Every batch runs; a failure is reported at the end, not by stopping early.
+  process.exit(await runAllBatches(batches, (batch) => runVitest([...BASE_ARGS, ...batch])));
 }
 
 main().catch((error) => {
