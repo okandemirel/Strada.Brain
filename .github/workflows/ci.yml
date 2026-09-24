@@ -55,6 +55,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Before Test, not after: scripts/backup.sh (restore-script.test.ts) runs
+      # the compiled helper in dist/, so on a clean runner the suite could only
+      # fail there. A broken build also stops the job before minutes of tests.
+      - name: Build
+        run: npm run build
+
       - name: Test
         env:
           CI: "1"
@@ -71,8 +77,84 @@ jobs:
       - name: Portal Tests
         run: npm run test:portal
 
+  # Boot what was built (14F6 / D75). verify type-checks, lints, tests and
+  # builds, but nothing STARTED the build, so a boot-time crash (a missing
+  # import, a stage that throws on an empty home, a port the web channel cannot
+  # bind) went green. Its own job and runner, so a boot failure is attributable
+  # at a glance and cannot be mistaken for a failing test.
+  smoke:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web-portal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The full build, portal included: the smoke boots the web channel, and
+      # the acceptance run packs the file set a release would publish.
+      - name: Install portal dependencies
+        run: npm ci --prefix web-portal
+
       - name: Build
         run: npm run build
+
+      # dist/index.js start --channel web in a throwaway home, against a stub
+      # Ollama that answers only the reachability probe: /health must answer ok
+      # and SIGTERM must end it cleanly. Exit 2 means dist/ is missing.
+      - name: Boot smoke
+        env:
+          BOOT_SMOKE_TIMEOUT_S: "180"
+        run: npm run smoke:boot
+
+      # Release acceptance (plan 6.13) against the build above: the packed file
+      # set installed clean and booted, an upgrade from a genuinely older
+      # release, and backup.sh + restore.mjs round-tripping real databases.
+      # Exit 1 (a scenario FAILED) and 2 (no dist/) fail the job. Exit 3 means a
+      # runnable scenario did NOT RUN: on this runner the upgrade, until a
+      # previous-release tarball is committed under
+      # tests/fixtures/release-acceptance/. That is "not proven", never a pass,
+      # so it is raised as a warning and written to the job summary and the
+      # kept report rather than failing every commit for a missing fixture.
+      - name: Release acceptance
+        env:
+          # strada-brain is not published on npm, so nothing under that name on
+          # the registry is this project's; CI never installs and boots it.
+          STRADA_ACCEPTANCE_NO_REGISTRY: "1"
+        shell: bash
+        run: |
+          set +e
+          npm run accept:release -- --json release-acceptance.json
+          code=$?
+          set -e
+          verdict="$(node -e 'try { console.log(require("./release-acceptance.json").summary.verdict) } catch { console.log("no report written") }')"
+          echo "### Release acceptance: ${verdict}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 3 ]; then
+            echo "::warning title=Release acceptance NOT PROVEN::${verdict} (see the release-acceptance artifact)"
+            exit 0
+          fi
+          exit "$code"
+
+      - name: Upload release acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-acceptance
+          path: release-acceptance.json
+          if-no-files-found: warn
+          retention-days: 14
 
   windows-verify:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"

@@ -1,23 +1,22 @@
 /**
- * CI workflow contract (14F6 / D75).
+ * CI workflow contract (14F6 / D75, OPS-1, OPS-14, X-5).
  *
- * THESE FIVE TESTS ARE RED ON PURPOSE UNTIL THE WORKFLOW FILES LAND.
- * The change they describe was written and reviewed here, but the push that
- * carried everything else was refused for the two files under
- * .github/workflows: GitHub will not let this OAuth app create or update a
- * workflow without the `workflow` scope. The diff is saved at
- * ~/Desktop/strada-workflow-changes.patch — `git apply` it and commit from an
- * account that has the scope, and these tests go green. Skipping them instead
- * would turn a real, unlanded change into a green suite, which is the exact
- * failure this project keeps closing.
+ * These tests were committed ahead of the workflow change they describe (the
+ * OAuth app that pushed them lacked the `workflow` scope), which kept CI red
+ * on every push. The workflow files now carry the change.
  *
- * Two holes this closes:
+ * Holes this closes:
  *   - CI type-checked, linted, tested and built, but never started what it
  *     built. `npm run smoke:boot` existed and nothing ran it, so a boot-time
  *     crash went green.
  *   - Version Bump triggered on `push` to main, independently of CI. A commit
  *     that failed every job still got a version bump, published as if it were a
  *     release candidate. The bump must depend on the CI run for that commit.
+ *   - The first design of that dependency was itself unsafe (OPS-14): it
+ *     checked out the branch TIP rather than the SHA CI tested, and nothing
+ *     kept a pull request's CI run (a fork's branch can be named `main`) from
+ *     triggering a write to this repository's main.
+ *   - verify ran `npm test` before `npm run build`, and a test needs dist/.
  *
  * Asserted over the workflow YAML as text (no YAML parser is a dependency
  * here); the properties are which job runs what, and what triggers the bump.
@@ -61,6 +60,31 @@ describe("ci.yml", () => {
   it("is named CI — the version bump keys its workflow_run on that name", () => {
     expect(ci).toMatch(/^name: CI$/m);
   });
+
+  it("verify builds before it tests: a test drives the compiled helper in dist/ (X-5)", () => {
+    const verify = jobBlock(ci, "verify");
+    const build = verify.indexOf("run: npm run build");
+    expect(build, "verify has no Build step").toBeGreaterThan(-1);
+    expect(build).toBeLessThan(verify.indexOf("run: npm test"));
+  });
+
+  it("the smoke job boots the build before running release acceptance, and never boots a registry package", () => {
+    const smoke = jobBlock(ci, "smoke");
+    const build = smoke.indexOf("run: npm run build");
+    expect(build).toBeLessThan(smoke.indexOf("npm run smoke:boot"));
+    expect(build).toBeLessThan(smoke.indexOf("npm run accept:release"));
+    // strada-brain is not published, so the name on the registry is not ours.
+    expect(smoke).toMatch(/STRADA_ACCEPTANCE_NO_REGISTRY: "1"/);
+    // "NOT PROVEN" (exit 3) is surfaced, not failed and not hidden.
+    expect(smoke).toMatch(/"\$code" -eq 3/);
+    expect(smoke).toMatch(/::warning title=Release acceptance NOT PROVEN::/);
+  });
+
+  it("keeps every other job", () => {
+    for (const job of ["verify", "windows-verify", "bench", "coverage"]) {
+      expect(ci, job).toMatch(new RegExp(`\\n {2}${job}:\\n`));
+    }
+  });
 });
 
 describe("version-bump.yml", () => {
@@ -81,6 +105,26 @@ describe("version-bump.yml", () => {
 
   it("bumps the commit CI verified, not whatever main points at now", () => {
     const job = jobBlock(bump, "bump");
-    expect(job).toMatch(/ref: \$\{\{ github\.event\.workflow_run\.head_branch \}\}/);
+    // head_sha is the commit the CI run tested; head_branch names a branch whose
+    // tip may already be a commit CI never saw (OPS-14).
+    expect(job).toMatch(/ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+    expect(job).not.toMatch(/ref: \$\{\{ github\.event\.workflow_run\.head_branch \}\}/);
+  });
+
+  it("acts only on a CI run for a push to this repository's main (OPS-14)", () => {
+    const job = jobBlock(bump, "bump");
+    // workflow_run runs with this repository's write token: a pull request's CI
+    // run — a fork's branch can be called main — must never reach the push.
+    expect(job).toMatch(/github\.event\.workflow_run\.event == 'push'/);
+    expect(job).toMatch(/github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
+    expect(job).toMatch(/github\.event\.workflow_run\.head_branch == 'main'/);
+  });
+
+  it("fast-forwards main from the verified commit, never force-pushes (OPS-14)", () => {
+    const job = jobBlock(bump, "bump");
+    expect(job).toMatch(/git push origin HEAD:main\s*$/m);
+    expect(job).not.toMatch(/git push[^\n]*(--force|\s-f\b|\+HEAD)/);
+    // A main that moved past the verified commit is left to that commit's own run.
+    expect(job).toMatch(/git rev-parse FETCH_HEAD/);
   });
 });

@@ -1,9 +1,20 @@
 name: Version Bump
 
+# After CI, not on push (14F6 / D75): a push-triggered bump ran independently of
+# CI, so a commit that failed every job still got a version bump. This bumps
+# only a commit CI verified green, and only that commit (OPS-14):
+#   - the checkout is the SHA the CI run tested (head_sha), not the branch tip,
+#     which may have moved to a commit CI never saw;
+#   - only a CI run for a PUSH to THIS repository's main counts. workflow_run
+#     runs in this repository's context with write access, and a pull request
+#     run (a fork's branch can be named main too) must never reach it;
+#   - the push is a plain fast-forward of main. If main has moved past the
+#     verified commit, this run stops and the newer commit's own CI run bumps.
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
@@ -14,15 +25,22 @@ concurrency:
 
 jobs:
   bump:
-    # Skip version-bump commits to prevent loop
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # A green CI run of a push to this repository's main, and never the bump's
+    # own [skip ci] commit (which would loop).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      !contains(github.event.workflow_run.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Checkout
+      - name: Checkout the verified commit
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure git
@@ -30,12 +48,29 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Stop if main has moved past the verified commit
+        id: current
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --depth=1 origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$VERIFIED_SHA" ]; then
+            echo "::notice title=Version bump skipped::main is no longer at the verified commit $VERIFIED_SHA; the newer commit's CI run bumps the version"
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Bump patch version
+        if: steps.current.outputs.bump == 'true'
         run: npm version patch --no-git-tag-version
 
+      # Not forced: if main moved between the check above and this push, the
+      # push is refused as a non-fast-forward and nothing is overwritten.
       - name: Commit and push
+        if: steps.current.outputs.bump == 'true'
         run: |
           VERSION=$(node -p "require('./package.json').version")
           git add package.json package-lock.json
           git commit -m "chore: bump version to v${VERSION} [skip ci]"
-          git push
+          git push origin HEAD:main
