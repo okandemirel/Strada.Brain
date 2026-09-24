@@ -13,7 +13,8 @@
  *     following user message) is moved up; a result that never arrived is recorded as such;
  *  2. a tool_result with no matching call right before it becomes plain text (nothing it said is
  *     lost, and the shape is legal);
- *  3. an assistant turn with no text and no tool calls is dropped (Anthropic rejects it);
+ *  3. an assistant turn with no text and no tool calls, and an empty user turn, are dropped
+ *     (Anthropic rejects both);
  *  4. the conversation starts with a user turn.
  *
  * Returns the SAME array when nothing needed fixing, so callers can tell a repair happened.
@@ -34,9 +35,11 @@ function orphanAsText(block: ToolResultBlock): MessageContent {
   };
 }
 
+// Content is typed, but restored session files and worker answers are checked at runtime: a
+// null or otherwise non-array content is treated as text, never indexed as blocks.
 function blocksOf(content: string | MessageContent[]): MessageContent[] {
-  if (typeof content !== "string") return content;
-  return content.length > 0 ? [{ type: "text", text: content }] : [];
+  if (Array.isArray(content)) return content;
+  return typeof content === "string" && content.trim().length > 0 ? [{ type: "text", text: content }] : [];
 }
 
 function isBlankAssistant(msg: ConversationMessage): boolean {
@@ -48,7 +51,7 @@ function isBlankAssistant(msg: ConversationMessage): boolean {
 
 /** The next message already answers `calls` exactly, results first — keep it untouched. */
 function answersCalls(msg: ConversationMessage | undefined, calls: readonly ToolCall[]): boolean {
-  if (!msg || msg.role !== "user" || typeof msg.content === "string") return false;
+  if (!msg || msg.role !== "user" || !Array.isArray(msg.content)) return false;
   const ids = new Set(calls.map((c) => c.id));
   const results = msg.content.filter((b): b is ToolResultBlock => b.type === "tool_result");
   if (results.length !== ids.size) return false;
@@ -59,7 +62,7 @@ function answersCalls(msg: ConversationMessage | undefined, calls: readonly Tool
 
 /** A user message outside a tool exchange must carry no tool_result blocks. */
 function withoutOrphans(msg: ConversationMessage): ConversationMessage {
-  if (msg.role !== "user" || typeof msg.content === "string") return msg;
+  if (msg.role !== "user" || !Array.isArray(msg.content)) return msg;
   if (!msg.content.some((b) => b.type === "tool_result")) return msg;
   return { role: "user", content: msg.content.map((b) => (b.type === "tool_result" ? orphanAsText(b) : b)) };
 }
@@ -76,7 +79,7 @@ function answerFor(calls: readonly ToolCall[], followers: readonly ConversationM
   const ids = new Set(calls.map((c) => c.id));
   let lastWithResult = -1;
   followers.forEach((f, idx) => {
-    if (typeof f.content !== "string" && f.content.some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
+    if (Array.isArray(f.content) && f.content.some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
       lastWithResult = idx;
     }
   });
@@ -103,6 +106,12 @@ export function normalizeConversation(messages: ConversationMessage[]): Conversa
   while (i < messages.length) {
     const msg = messages[i]!;
     if (msg.role === "user") {
+      if (blocksOf(msg.content).length === 0) {
+        // Nothing to send: providers reject an empty turn.
+        changed = true;
+        i++;
+        continue;
+      }
       const clean = withoutOrphans(msg);
       if (clean !== msg) changed = true;
       out.push(clean);

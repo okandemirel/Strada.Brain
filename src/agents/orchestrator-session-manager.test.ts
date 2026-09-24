@@ -439,6 +439,48 @@ describe("SessionManager", () => {
       expect(restored!.messages[0]!.content).toBe("msg-30");
     });
 
+    // ORC-7: the 50-message cut lands inside a tool exchange in any tool-heavy chat.
+    it("a restored tool-heavy session opens with a valid head and every tool_result has its tool_use", () => {
+      const messages: ConversationMessage[] = [{ role: "user", content: "go" }];
+      for (let i = 0; i < 30; i++) {
+        messages.push({ role: "assistant", content: "", tool_calls: [{ id: `t${i}`, name: "file_read", input: { path: `f${i}` } }] });
+        messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `x${i}` }] });
+      }
+      messages.push({ role: "assistant", content: "done" });
+      const session: Session = { messages, lastActivity: new Date(), visibleMessages: [] };
+
+      const restored = SessionManager.deserializeSession(SessionManager.serializeSession(session))!;
+
+      const head = restored.messages[0]!;
+      expect(head.role).toBe("user");
+      expect(Array.isArray(head.content) && head.content.some((b) => b.type === "tool_result")).toBe(false);
+      restored.messages.forEach((m, i) => {
+        if (m.role !== "user" || !Array.isArray(m.content)) return;
+        for (const b of m.content) {
+          if (b.type !== "tool_result") continue;
+          const prev = restored.messages[i - 1];
+          expect(prev?.role === "assistant" && prev.tool_calls?.some((c) => c.id === b.tool_use_id)).toBe(true);
+        }
+      });
+      expect(restored.messages.at(-1)).toEqual({ role: "assistant", content: "done" });
+    });
+
+    it("repairs a session file written before the cut was made safe", () => {
+      const legacy = JSON.stringify({
+        messages: [
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "t5", content: "orphaned" }] },
+          { role: "assistant", content: "", tool_calls: [{ id: "t6", name: "file_read", input: {} }] },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "t6", content: "ok" }, null, 42] },
+        ],
+        lastActivity: new Date().toISOString(),
+      });
+      const restored = SessionManager.deserializeSession(legacy)!;
+      expect(restored.messages[0]!.role).toBe("user");
+      expect(JSON.stringify(restored.messages[0])).toContain("orphaned");
+      expect(JSON.stringify(restored.messages[0])).not.toContain("tool_result");
+      expect(restored.messages[2]!.content).toEqual([{ type: "tool_result", tool_use_id: "t6", content: "ok" }]);
+    });
+
     it("returns null for expired sessions (>24h)", () => {
       const session: Session = {
         messages: [{ role: "user", content: "old" }],

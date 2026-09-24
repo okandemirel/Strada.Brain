@@ -34,6 +34,7 @@ import {
   stripVisibleProviderArtifacts,
 } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
+import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -707,7 +708,10 @@ export class SessionManager {
   // ── Serialization ─────────────────────────────────────────────────────────
 
   static serializeSession(session: Session): string {
-    const messages = session.messages.slice(-SessionManager.MAX_PERSISTED_MESSAGES);
+    // The cap cuts wherever it lands, usually through a tool exchange: a restored session then
+    // opened with a tool_result whose tool_use was cut away, and Anthropic refused every turn
+    // until the chat grew past the trim cap. Persist a sendable conversation instead (ORC-7).
+    const messages = normalizeConversation(session.messages.slice(-SessionManager.MAX_PERSISTED_MESSAGES));
     return JSON.stringify({
       messages,
       lastActivity: session.lastActivity.toISOString(),
@@ -728,7 +732,7 @@ export class SessionManager {
       }
       // Validate message structure to prevent injection via tampered session files
       const rawMessages = Array.isArray(data.messages) ? data.messages : [];
-      const messages = rawMessages.filter(
+      const validMessages = rawMessages.filter(
         (m: unknown): m is ConversationMessage =>
           typeof m === "object" && m !== null &&
           "role" in m &&
@@ -737,7 +741,18 @@ export class SessionManager {
           (typeof (m as Record<string, unknown>).content === "string" ||
            (m as Record<string, unknown>).content === null ||
            Array.isArray((m as Record<string, unknown>).content)),
+      ).map((m: ConversationMessage): ConversationMessage =>
+        Array.isArray(m.content)
+          ? ({
+              ...m,
+              content: (m.content as unknown[]).filter(
+                (b) => typeof b === "object" && b !== null && typeof (b as { type?: unknown }).type === "string",
+              ),
+            } as ConversationMessage)
+          : m,
       );
+      // Files written before the persisted slice was repaired can still open mid-exchange.
+      const messages = normalizeConversation(validMessages);
       // Migration: legacy session files (pre-reflectionOverrideCount) default to 0.
       const rawOverrideCount = (data as Record<string, unknown>).reflectionOverrideCount;
       const reflectionOverrideCount =

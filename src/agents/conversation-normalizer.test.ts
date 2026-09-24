@@ -13,6 +13,10 @@ const call = (...ids: string[]): Msg => ({
 const result = (id: string, content = `res-${id}`): MessageContent => ({ type: "tool_result", tool_use_id: id, content });
 const text = (t: string): MessageContent => ({ type: "text", text: t });
 
+function blocksCount(m: Msg): number {
+  return Array.isArray(m.content) ? m.content.length : typeof m.content === "string" ? m.content.trim().length : 0;
+}
+
 /** The contract every provider needs. */
 function assertContract(messages: readonly Msg[]): void {
   if (messages.length === 0) return;
@@ -36,7 +40,9 @@ function assertContract(messages: readonly Msg[]): void {
     }
   });
   messages.forEach((m, i) => {
-    if (m.role !== "user" || typeof m.content === "string") return;
+    if (m.role !== "user") return;
+    expect(blocksCount(m), `empty user turn at ${i}`).toBeGreaterThan(0);
+    if (!Array.isArray(m.content)) return;
     const results = m.content.filter((b) => b.type === "tool_result");
     if (!answered.has(i)) expect(results, `orphan tool_result at ${i}`).toHaveLength(0);
     else expect(m.content.slice(results.length).every((b) => b.type !== "tool_result")).toBe(true);
@@ -75,6 +81,12 @@ describe("normalizeConversation — the cases the review measured", () => {
     const assistantHead = normalizeConversation([{ role: "assistant", content: "" }, { role: "assistant", content: "done reading" }]);
     assertContract(assistantHead);
     expect(assistantHead.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("tolerates a null content from a restored session file (ORC-7)", () => {
+    const restored = [{ role: "user", content: null }, call("a"), { role: "user", content: null }] as unknown as Msg[];
+    const out = normalizeConversation(restored);
+    assertContract(out);
   });
 
   it("returns the same array when the conversation is already valid", () => {
