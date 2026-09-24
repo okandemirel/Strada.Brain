@@ -694,6 +694,14 @@ export interface LearningConfig {
    * different from what a reader assumes once rows older than this are gone.
    */
   readonly exposureRetentionDays: number;
+  /**
+   * How long the append-only learning history is kept (LRN-14): the
+   * intervention log (a row per warned tool call), processed trajectories with
+   * their verdicts, and cross-session dedup markers. None had a retention path.
+   * The credit ledger follows exposureRetentionDays instead: it is the other
+   * half of the exposure ledger, and the two are read together.
+   */
+  readonly historyRetentionDays: number;
 }
 
 /** Default learning configuration */
@@ -713,6 +721,9 @@ export const DEFAULT_LEARNING_CONFIG: LearningConfig = {
   // Longer than observations: the coverage number is read over weeks, and an
   // exposure row is a few dozen bytes.
   exposureRetentionDays: 90,
+  // Conservative: nothing reads these past a few weeks, and a restart must not
+  // look like lost history.
+  historyRetentionDays: 180,
 };
 
 // =============================================================================

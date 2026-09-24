@@ -2826,6 +2826,43 @@ export class LearningStorage {
     return info.changes;
   }
 
+  /** Drop intervention-log rows older than a cutoff; returns how many went. */
+  pruneInterventionLog(olderThanMs: number): number {
+    this.ensureConnection();
+    const info = this.db!.prepare("DELETE FROM intervention_log WHERE created_at < ?").run(olderThanMs);
+    return info.changes;
+  }
+
+  /**
+   * Drop PROCESSED trajectories older than a cutoff, with their verdicts and
+   * instinct links (deleted explicitly: foreign keys are not enforced on every
+   * connection). Unprocessed trajectories are kept whatever their age.
+   * Returns how many trajectories went.
+   */
+  pruneProcessedTrajectories(olderThanMs: number): number {
+    this.ensureConnection();
+    this.flush();
+    const old = "SELECT id FROM trajectories WHERE processed = 1 AND created_at < ?";
+    return this.db!.transaction(() => {
+      this.db!.prepare(`DELETE FROM verdicts WHERE trajectory_id IN (${old})`).run(olderThanMs);
+      this.db!.prepare(`DELETE FROM trajectory_instincts WHERE trajectory_id IN (${old})`).run(olderThanMs);
+      return this.db!.prepare("DELETE FROM trajectories WHERE processed = 1 AND created_at < ?").run(olderThanMs).changes;
+    })();
+  }
+
+  /**
+   * Drop cross-session dedup markers ('session_hit' rows) older than a cutoff.
+   * A marker only has to outlive its session; one is written per instinct per
+   * session. Returns how many went.
+   */
+  pruneSessionHitMarkers(olderThanMs: number): number {
+    this.ensureConnection();
+    const info = this.db!.prepare(
+      "DELETE FROM instinct_scopes WHERE scope_type = 'session_hit' AND created_at < ?",
+    ).run(olderThanMs);
+    return info.changes;
+  }
+
   /** Every runtime artifact generated FROM this instinct, whatever its state. */
   getRuntimeArtifactsBySourceInstinct(instinctId: string): RuntimeArtifact[] {
     this.ensureConnection();

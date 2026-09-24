@@ -182,6 +182,8 @@ export class LearningPipeline {
   private isRunning = false;
 
   private static readonly RESOLUTION_LINK_WINDOW_MS = 5 * 60 * 1000;
+  /** Most vault-note ids remembered for dedup (LRN-14). */
+  private static readonly MAX_NOTED_IDS = 5_000;
   private static readonly STALE_RESOLUTION_THRESHOLD_MS = 10 * 60 * 1000;
 
   private recentObservations: Array<{
@@ -1994,6 +1996,37 @@ export class LearningPipeline {
 
     this.pruneObservations();
     this.pruneExposures();
+    this.pruneHistory();
+  }
+
+  /**
+   * Retention sweep for the rest of the append-only learning tables (LRN-14).
+   *
+   * pruneInstinctCredits existed and nothing called it (the same defect round 15
+   * #15 fixed for the exposure log), and the intervention log (a row per warned
+   * tool call), processed trajectories with their verdicts, and the
+   * cross-session dedup markers had no retention at all, so learning.db grew
+   * for the life of the daemon. The credit ledger keeps the exposure log's
+   * window, since the two are read together; the rest keep historyRetentionDays.
+   */
+  pruneHistory(): { credits: number; interventions: number; trajectories: number; sessionHits: number } {
+    const day = 24 * 60 * 60 * 1000;
+    const ledgerCutoff = Date.now() - this.config.exposureRetentionDays * day;
+    const historyCutoff = Date.now() - this.config.historyRetentionDays * day;
+    const counts = { credits: 0, interventions: 0, trajectories: 0, sessionHits: 0 };
+    // Each sweep on its own: one that cannot run is not a reason to skip the others.
+    const sweep = (key: keyof typeof counts, run: () => number): void => {
+      try {
+        counts[key] = run();
+      } catch {
+        // The next periodic pass retries.
+      }
+    };
+    sweep("credits", () => this.storage.pruneInstinctCredits(ledgerCutoff));
+    sweep("interventions", () => this.storage.pruneInterventionLog(historyCutoff));
+    sweep("trajectories", () => this.storage.pruneProcessedTrajectories(historyCutoff));
+    sweep("sessionHits", () => this.storage.pruneSessionHitMarkers(historyCutoff));
+    return counts;
   }
 
   /**
@@ -2414,6 +2447,12 @@ export class LearningPipeline {
     if (!writer) return;
     if (this.notedIds.has(dedupId)) return;
     this.notedIds.add(dedupId);
+    // In-memory dedup only; bounded so a long-running daemon does not keep one
+    // entry per clean trajectory for ever (the oldest go first).
+    if (this.notedIds.size > LearningPipeline.MAX_NOTED_IDS) {
+      const oldest = this.notedIds.values().next();
+      if (!oldest.done) this.notedIds.delete(oldest.value);
+    }
     void writer.writeNote(relPath, content).catch(() => {
       // Best-effort: the writer already swallows+logs; this catch is a final guard.
     });
