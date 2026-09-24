@@ -114,6 +114,36 @@ describe('VaultRegistry', () => {
       .rejects.toThrow('vault root is outside the allowed project roots');
   });
 
+  // MEM-7: every vault_init {rootPath} created (and registered over) a fresh
+  // vault for the same root, orphaning the previous one's SQLite handle and
+  // watcher where nothing could stop them.
+  it('createAndRegister returns the vault already registered for that root', async () => {
+    const allowed = makeTempDir('strada-registry-allowed-');
+    const registry = new VaultRegistry();
+    const createVault = vi.fn((rootPath: string) => createFakeVault({ id: 'generic:x', rootPath }));
+    registry.setFactory({ createVault, allowedRootPaths: [allowed] });
+
+    const first = await registry.createAndRegister(allowed);
+    const second = await registry.createAndRegister(allowed);
+
+    expect(second).toBe(first);
+    expect(createVault).toHaveBeenCalledTimes(1);
+    expect(first.dispose).not.toHaveBeenCalled();
+  });
+
+  it('register disposes a different instance it replaces under the same id', () => {
+    const registry = new VaultRegistry();
+    const older = createFakeVault({ id: 'same', rootPath: '/tmp/vault-same' });
+    const newer = createFakeVault({ id: 'same', rootPath: '/tmp/vault-same' });
+    registry.register(older);
+    registry.register(older); // re-registering the same instance is not a replacement
+    expect(older.dispose).not.toHaveBeenCalled();
+
+    registry.register(newer);
+    expect(older.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.get('same')).toBe(newer);
+  });
+
   it('createAndRegister rejects when no factory is configured', async () => {
     const dir = makeTempDir('strada-registry-');
     const registry = new VaultRegistry();

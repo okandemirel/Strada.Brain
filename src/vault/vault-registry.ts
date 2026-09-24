@@ -87,6 +87,14 @@ export class VaultRegistry {
   }
 
   register(v: IVault, name?: string): void {
+    // A different instance under the same id would otherwise be dropped from
+    // the map with its SQLite handle and watcher still live, and nothing could
+    // ever stop them (MEM-7).
+    const previous = this.vaults.get(v.id);
+    if (previous && previous !== v) {
+      this.rootRealpathCache.delete(previous.rootPath);
+      void previous.dispose().catch(() => undefined);
+    }
     this.vaults.set(v.id, v);
     this.rootRealpathCache.set(v.rootPath, safeRealpath(v.rootPath));
     if (name !== undefined) this.names.set(v.id, name);
@@ -117,9 +125,22 @@ export class VaultRegistry {
     if (allowedRootPaths.length === 0 || !await isVaultRootAllowed(root.realPath, allowedRootPaths)) {
       throw new Error('vault root is outside the allowed project roots');
     }
+    // The same root must not get a second vault: each extra one opens
+    // another index.db handle and watcher over the same tree (MEM-7).
+    const existing = this.findByRealRoot(root.realPath);
+    if (existing) return existing;
     const vault = await this.vaultFactory.createVault(root.realPath);
     this.register(vault);
     return vault;
+  }
+
+  /** The registered vault whose root resolves to `realRoot`, if any. */
+  private findByRealRoot(realRoot: string): IVault | undefined {
+    for (const vault of this.vaults.values()) {
+      const vaultRoot = this.rootRealpathCache.get(vault.rootPath) ?? safeRealpath(vault.rootPath);
+      if (vaultRoot === realRoot) return vault;
+    }
+    return undefined;
   }
   unregister(id: VaultId): void {
     const v = this.vaults.get(id);
