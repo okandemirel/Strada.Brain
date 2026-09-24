@@ -158,7 +158,10 @@ describe("runtime paths", () => {
  * HOME could still read and WRITE the developer's real `.env`.
  */
 describe("STRADA_SOURCE_CHECKOUT is three-state (plan 6.8)", () => {
-  const inRepo = { installRoot: process.cwd(), cwd: "/Users/tester/.strada", homeDir: "/Users/tester" };
+  // The app home is per platform (README: `~/.strada` on macOS/Linux,
+  // `%LOCALAPPDATA%\Strada` on Windows), so the platform is pinned: unpinned,
+  // this read the HOST's app home and failed on the Windows CI runner.
+  const inRepo = { installRoot: process.cwd(), cwd: "/Users/tester/.strada", homeDir: "/Users/tester", platform: "darwin" as const };
 
   it("false moves the config root into the app home, even inside a checkout", () => {
     const paths = resolveRuntimePaths({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "false" } });
@@ -166,6 +169,19 @@ describe("STRADA_SOURCE_CHECKOUT is three-state (plan 6.8)", () => {
     expect(paths.configRoot).toBe(path.join("/Users/tester", ".strada"));
     expect(resolveDotenvPath({ ...inRepo, env: { STRADA_SOURCE_CHECKOUT: "false" } }))
       .toBe(path.join("/Users/tester", ".strada", ".env"));
+  });
+
+  it("false on Windows moves the config root into %LOCALAPPDATA%\\Strada, the Windows app home", () => {
+    const onWindows = {
+      ...inRepo,
+      homeDir: "C:\\Users\\tester",
+      platform: "win32" as const,
+      env: { STRADA_SOURCE_CHECKOUT: "false", LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
+    };
+    const paths = resolveRuntimePaths(onWindows);
+    expect(paths.sourceCheckout).toBe(false);
+    expect(paths.configRoot).toBe(path.join("C:\\Users\\tester\\AppData\\Local", "Strada"));
+    expect(resolveDotenvPath(onWindows)).toBe(path.join("C:\\Users\\tester\\AppData\\Local", "Strada", ".env"));
   });
 
   it("true still forces a source checkout, and 0/1/yes/no are read too", () => {

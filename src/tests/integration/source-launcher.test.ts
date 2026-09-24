@@ -598,10 +598,21 @@ describe("the launcher reads STRADA_SOURCE_CHECKOUT in three states (round 13 #3
   });
   it("false moves the config root to the app home even inside a checkout", async () => {
     const { resolveRuntimeRoots } = await loadSourceLauncherModule();
-    const inCheckout = { rootDir: process.cwd(), homeDir: "/Users/tester", cwd: "/Users/tester/.strada" };
+    // The app home is per platform, so the platform is pinned (unpinned, this
+    // read the host's and failed on the Windows CI runner).
+    const inCheckout = { rootDir: process.cwd(), homeDir: "/Users/tester", cwd: "/Users/tester/.strada", platform: "darwin" };
     const off = resolveRuntimeRoots({ ...inCheckout, env: { STRADA_SOURCE_CHECKOUT: "false" } });
     expect(off.sourceCheckout).toBe(false);
     expect(off.configRoot).toBe(path.join("/Users/tester", ".strada"));
+    // On Windows the app home is %LOCALAPPDATA%\Strada, as the README and runtime-paths.ts say.
+    const offOnWindows = resolveRuntimeRoots({
+      ...inCheckout,
+      platform: "win32",
+      homeDir: "C:\\Users\\tester",
+      env: { STRADA_SOURCE_CHECKOUT: "false", LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
+    });
+    expect(offOnWindows.sourceCheckout).toBe(false);
+    expect(offOnWindows.configRoot).toBe(path.join("C:\\Users\\tester\\AppData\\Local", "Strada"));
     // true still forces it, and the other spellings are read as well.
     for (const yes of ["true", "1", "YES"]) {
       expect(resolveRuntimeRoots({ ...inCheckout, env: { STRADA_SOURCE_CHECKOUT: yes } }).sourceCheckout, yes).toBe(true);
@@ -616,34 +627,44 @@ describe("the launcher reads STRADA_SOURCE_CHECKOUT in three states (round 13 #3
     }
   });
 
-  it("purge-config with an explicit false leaves the checkout alone and clears the app home", async () => {
-    const { uninstallCommand: uninstall } = await loadSourceLauncherModule();
-    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-home-"));
-    const tempRepo = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-repo-"));
-    tempDirs.push(tempHome, tempRepo);
-    const appHome = path.join(tempHome, ".strada");
-    mkdirSync(appHome, { recursive: true });
-    mkdirSync(path.join(tempRepo, ".git"), { recursive: true });
-    // The operator's real configuration, and a checkout that must not be touched.
-    writeFileSync(path.join(appHome, ".env"), "KIMI_API_KEY=k\n", "utf8");
-    writeFileSync(path.join(tempRepo, ".env"), "DEVELOPER=me\n", "utf8");
+  // Both platforms on every host: the app home is `~/.strada` on macOS/Linux
+  // and `%LOCALAPPDATA%\Strada` on Windows. Unpinned, this used the HOST's and
+  // looked for the app home in the wrong place on the Windows CI runner.
+  for (const platform of ["darwin", "win32"] as const) {
+    it(`purge-config with an explicit false leaves the checkout alone and clears the app home (${platform})`, async () => {
+      const { uninstallCommand: uninstall } = await loadSourceLauncherModule();
+      const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-home-"));
+      const tempRepo = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-repo-"));
+      tempDirs.push(tempHome, tempRepo);
+      const localAppData = path.join(tempHome, "AppData", "Local");
+      const appHome = platform === "win32" ? path.join(localAppData, "Strada") : path.join(tempHome, ".strada");
+      mkdirSync(appHome, { recursive: true });
+      mkdirSync(path.join(tempRepo, ".git"), { recursive: true });
+      // The operator's real configuration, and a checkout that must not be touched.
+      writeFileSync(path.join(appHome, ".env"), "KIMI_API_KEY=k\n", "utf8");
+      writeFileSync(path.join(tempRepo, ".env"), "DEVELOPER=me\n", "utf8");
 
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      uninstall({
-        env: { STRADA_SOURCE_CHECKOUT: "false", HOME: tempHome },
-        homeDir: tempHome,
-        rootDir: tempRepo,
-        purgeConfig: true,
-      });
-    } finally {
-      consoleSpy.mockRestore();
-    }
+      const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        uninstall({
+          platform,
+          env: { STRADA_SOURCE_CHECKOUT: "false", HOME: tempHome, LOCALAPPDATA: localAppData },
+          homeDir: tempHome,
+          rootDir: tempRepo,
+          purgeConfig: true,
+          // Never the real user PATH or a real deferred delete from a test.
+          windowsPathRemoveSync: vi.fn().mockReturnValue({ updated: false, path: "" }),
+          windowsDeferredDelete: vi.fn().mockReturnValue(true),
+        });
+      } finally {
+        consoleSpy.mockRestore();
+      }
 
-    expect(existsSync(path.join(appHome, ".env"))).toBe(false);
-    // The developer's own checkout configuration is none of its business.
-    expect(existsSync(path.join(tempRepo, ".env"))).toBe(true);
-  });
+      expect(existsSync(path.join(appHome, ".env"))).toBe(false);
+      // The developer's own checkout configuration is none of its business.
+      expect(existsSync(path.join(tempRepo, ".env"))).toBe(true);
+    });
+  }
 });
 
 describe("the flag the source child inherits (round 13 #35)", () => {
