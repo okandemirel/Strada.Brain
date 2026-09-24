@@ -147,34 +147,14 @@ export class ConfidenceScorer {
     const total = newTimesApplied + newTimesFailed;
     const newSuccessRate = total > 0 ? newTimesApplied / total : 0;
 
-    const { alpha: currentAlpha, beta: currentBeta } = this.startingEvidence(instinct);
-
-    // Apply verdict-weighted evidence
-    // When verdictScore is provided, it acts as a fractional observation weight:
-    //   Success with verdictScore=0.9: alpha += 0.9, beta += 0.1 (strong positive)
-    //   Failure with verdictScore=0.2: alpha += 0.2, beta += 0.8 (strong negative)
-    // When verdictScore is not provided, use full unit evidence based on success/failure.
-    let newAlpha: number;
-    let newBeta: number;
-    if (verdictScore !== undefined) {
-      // Verdict score already encodes direction: high for success, low for failure
-      newAlpha = currentAlpha + verdictScore;
-      newBeta = currentBeta + (1 - verdictScore);
-    } else if (success) {
-      newAlpha = currentAlpha + 1;
-      newBeta = currentBeta;
-    } else {
-      newAlpha = currentAlpha;
-      newBeta = currentBeta + 1;
-    }
-
-    // Success rate boost: 3+ applications with high success rate accelerate evidence
-    if (success && newTimesApplied >= 3) {
-      if (newSuccessRate >= 0.8) {
-        const boost = Math.min(0.15, (newSuccessRate - 0.8) * 0.75);
-        newAlpha += boost;
-      }
-    }
+    const current = this.startingEvidence(instinct);
+    const { alpha: newAlpha, beta: newBeta } = this.nextEvidence(
+      current,
+      success,
+      verdictScore,
+      newTimesApplied,
+      newSuccessRate,
+    );
 
     // Posterior mean (with optional success-rate boost applied above)
     const newConfidence = newAlpha / (newAlpha + newBeta);
@@ -221,6 +201,23 @@ export class ConfidenceScorer {
       bayesianBeta: newBeta,
       updatedAt: Date.now() as import("../../types/index.js").TimestampMs,
     };
+  }
+
+  /**
+   * The confidence a rule with no prior evidence reaches after `runs` clean
+   * applications, each scored `verdictScore`.
+   *
+   * Verdict-weighted evidence counts a clean run as only `verdictScore` of a
+   * success, so even a flawless record converges well below 1 (about 0.913 at
+   * the default 0.9). A lifecycle threshold above what such a record reaches is
+   * a gate that never opens; this is how a caller finds that out.
+   */
+  confidenceAfterCleanRuns(runs: number, verdictScore: number): number {
+    let evidence = { alpha: this.priorAlpha, beta: this.priorBeta };
+    for (let applied = 1; applied <= runs; applied++) {
+      evidence = this.nextEvidence(evidence, true, verdictScore, applied, 1);
+    }
+    return evidence.alpha / (evidence.alpha + evidence.beta);
   }
 
   /**
@@ -328,6 +325,42 @@ export class ConfidenceScorer {
       alpha: mean * strength + instinct.stats.timesApplied,
       beta: (1 - mean) * strength + instinct.stats.timesFailed,
     };
+  }
+
+  /**
+   * One observation's worth of verdict-weighted evidence. When verdictScore is
+   * provided it acts as a fractional observation weight:
+   *   Success with verdictScore=0.9: alpha += 0.9, beta += 0.1 (strong positive)
+   *   Failure with verdictScore=0.2: alpha += 0.2, beta += 0.8 (strong negative)
+   * Without it, full unit evidence by success/failure. `timesApplied` and
+   * `successRate` are the counts AFTER this observation.
+   */
+  private nextEvidence(
+    current: { alpha: number; beta: number },
+    success: boolean,
+    verdictScore: number | undefined,
+    timesApplied: number,
+    successRate: number,
+  ): { alpha: number; beta: number } {
+    let alpha: number;
+    let beta: number;
+    if (verdictScore !== undefined) {
+      // Verdict score already encodes direction: high for success, low for failure
+      alpha = current.alpha + verdictScore;
+      beta = current.beta + (1 - verdictScore);
+    } else if (success) {
+      alpha = current.alpha + 1;
+      beta = current.beta;
+    } else {
+      alpha = current.alpha;
+      beta = current.beta + 1;
+    }
+
+    // Success rate boost: 3+ applications with high success rate accelerate evidence
+    if (success && timesApplied >= 3 && successRate >= 0.8) {
+      alpha += Math.min(0.15, (successRate - 0.8) * 0.75);
+    }
+    return { alpha, beta };
   }
 
   private computeFactors(

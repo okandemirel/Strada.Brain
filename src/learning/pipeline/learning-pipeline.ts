@@ -138,6 +138,25 @@ const DEFAULT_BAYESIAN_CONFIG: BayesianConfig = {
   verdictFailure: 0.2,
 };
 
+/**
+ * The confidence bar for promotion to permanent and for runtime artifacts.
+ *
+ * The configured autoEvolveThreshold (0.95 by default) is above what the
+ * verdict-weighted posterior can reach: with only clean successes it tends to
+ * about 0.913, so neither happened through normal evidence and only rules
+ * inflated by reactions crossed it. The bar is the configured threshold, or,
+ * when that is out of reach, the confidence a flawless record of
+ * promotionMinObservations clean runs reaches.
+ */
+export function reachableAutoEvolveBar(config: BayesianConfig, scorer: ConfidenceScorer): number {
+  const flawless = scorer.confidenceAfterCleanRuns(
+    Math.max(1, config.promotionMinObservations),
+    config.verdictCleanSuccess,
+  );
+  // A hair under, so the record that defines the bar also clears it.
+  return Math.min(config.autoEvolveThreshold, flawless - 1e-9);
+}
+
 // ─── LearningPipeline Class ──────────────────────────────────────────────────
 
 export class LearningPipeline {
@@ -147,6 +166,11 @@ export class LearningPipeline {
   private readonly runtimeArtifacts: RuntimeArtifactManager;
   private config: LearningConfig;
   private bayesianConfig: BayesianConfig;
+  /**
+   * The confidence at which an active rule is promoted to permanent and a rule
+   * is materialized as a runtime artifact (see reachableAutoEvolveBar).
+   */
+  private readonly autoEvolveBar: number;
   private eventBus: IEventBus<LearningEventMap> | null = null;
   private readonly feedbackHandler: FeedbackHandler;
   private embeddingQueue: EmbeddingQueue | null = null;
@@ -884,6 +908,7 @@ export class LearningPipeline {
     this.config = { ...DEFAULT_LEARNING_CONFIG, ...config };
     this.bayesianConfig = bayesianConfig ?? DEFAULT_BAYESIAN_CONFIG;
     this.confidenceScorer = new ConfidenceScorer();
+    this.autoEvolveBar = reachableAutoEvolveBar(this.bayesianConfig, this.confidenceScorer);
     // The same provider that embeds every created instinct (EmbeddingQueue,
     // below) must also be what reads those vectors back; this matcher was
     // built without it, so the stored embeddings were never consulted
@@ -1671,7 +1696,7 @@ export class LearningPipeline {
 
     // ─── PROMOTION CHECK (before cooling -- high confidence trumps everything) ───
     if (
-      instinct.confidence >= config.autoEvolveThreshold &&
+      instinct.confidence >= this.autoEvolveBar &&
       totalObs >= config.promotionMinObservations &&
       instinct.status === "active"
     ) {
@@ -1686,7 +1711,7 @@ export class LearningPipeline {
       this.emitLifecycleEvent("instinct:promoted", updatedInstinct, instinct.status, "permanent", `Promoted to permanent: confidence=${instinct.confidence.toFixed(3)}, observations=${totalObs}`);
 
       // Persist lifecycle log
-      this.writeLifecycleLogSafe(instinct, "permanent", `Auto-promoted: confidence ${instinct.confidence.toFixed(3)} >= ${config.autoEvolveThreshold} with ${totalObs} observations`);
+      this.writeLifecycleLogSafe(instinct, "permanent", `Auto-promoted: confidence ${instinct.confidence.toFixed(3)} >= ${this.autoEvolveBar.toFixed(3)} with ${totalObs} observations`);
 
       // Increment weekly counter
       this.incrementWeeklyCounterSafe("promoted");
@@ -1768,18 +1793,20 @@ export class LearningPipeline {
 
     let proposals = 0;
     let artifacts = 0;
-    const candidates = this.storage.getInstincts({
-      status: "active",
-      minConfidence: CONFIDENCE_THRESHOLDS.EVOLUTION,
-    });
+    // Same bar and observation minimum as promotion, and permanent rules too: a
+    // rule that crossed the bar is promoted by the status update before this
+    // tick runs, and reading only `active` left it out. The minimum is what
+    // keeps a rule inflated by reactions alone (no applications) out.
+    const minObservations = this.bayesianConfig.promotionMinObservations;
+    const candidates = (["active", "permanent"] as const)
+      .flatMap((status) => this.storage.getInstincts({ status, minConfidence: this.autoEvolveBar }))
+      .filter((instinct) => instinct.stats.timesApplied + instinct.stats.timesFailed >= minObservations);
 
     for (const instinct of candidates) {
-      if (instinct.confidence > CONFIDENCE_THRESHOLDS.AUTO_EVOLVE) {
-        const result = this.materializeRuntimeArtifact(instinct);
-        if (result.proposalCreated) {
-          proposals++;
-          artifacts++;
-        }
+      const result = this.materializeRuntimeArtifact(instinct);
+      if (result.proposalCreated) {
+        proposals++;
+        artifacts++;
       }
     }
 
