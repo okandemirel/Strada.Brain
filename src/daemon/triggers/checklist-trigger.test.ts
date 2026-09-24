@@ -107,6 +107,41 @@ describe("ChecklistTrigger", () => {
     expect(trigger.shouldFire(new Date())).toBe(false);
   });
 
+  /**
+   * `cron.match(now)` matched only in second :00 of the occurrence, and the
+   * heartbeat ticks at whatever second it drifted to, so a scheduled item
+   * fired roughly once in sixty days.
+   */
+  it("fires a scheduled item on a drifting heartbeat, once per occurrence", () => {
+    vi.setSystemTime(new Date("2026-03-09T08:57:17Z"));
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("Daily standup notes", { schedule: "0 9 * * *" })]),
+      "UTC",
+    );
+    const fires: string[] = [];
+    for (const tick of ["08:58:17", "08:59:17", "09:00:17", "09:01:17", "09:02:17"]) {
+      const now = new Date(`2026-03-09T${tick}Z`);
+      if (trigger.shouldFire(now)) {
+        fires.push(tick);
+        trigger.onFired(now);
+      }
+    }
+    expect(fires).toEqual(["09:00:17"]);
+  });
+
+  it("gives a scheduled item's occurrence back when the fire never became work", () => {
+    vi.setSystemTime(new Date("2026-03-09T08:59:17Z"));
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("Daily standup notes", { schedule: "0 9 * * *" })]),
+      "UTC",
+    );
+    const now = new Date("2026-03-09T09:00:17Z");
+    expect(trigger.shouldFire(now)).toBe(true);
+    trigger.onFired(now);
+    trigger.onSubmitFailed(now);
+    expect(trigger.shouldFire(new Date("2026-03-09T09:01:17Z"))).toBe(true);
+  });
+
   // ===========================================================================
   // shouldFire -- checked items always skipped
   // ===========================================================================

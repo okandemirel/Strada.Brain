@@ -2,8 +2,9 @@
  * CronTrigger
  *
  * Implements ITrigger using the croner library for cron pattern matching.
- * Fires when the current minute matches the cron expression. Prevents
- * double-fire within the same minute via lastFired tracking.
+ * Fires once for each occurrence that fell since the previous evaluation
+ * (see isOccurrenceDue). Prevents double-fire within the same minute via
+ * lastFired tracking.
  *
  * The circuit breaker state is managed externally by HeartbeatLoop (Plan 04),
  * not by this trigger itself.
@@ -12,15 +13,12 @@
  */
 
 import { Cron } from "croner";
-
-/** How far back a restarted daemon looks for an occurrence it missed. */
-const CATCH_UP_WINDOW_MS = 6 * 60 * 60_000;
 import type {
   ITrigger,
   TriggerMetadata,
   TriggerState,
 } from "../daemon-types.js";
-import { floorToMinute } from "./trigger-utils.js";
+import { floorToMinute, isOccurrenceDue } from "./trigger-utils.js";
 
 export class CronTrigger implements ITrigger {
   readonly metadata: TriggerMetadata;
@@ -38,6 +36,8 @@ export class CronTrigger implements ITrigger {
    * 03:01 has missed its 03:00 occurrence (Codex 2026-09-13 AG#12).
    */
   private lastChecked: Date = new Date();
+  /** lastChecked before the look that made the last fire due (see onSubmitFailed). */
+  private checkedBeforeLastLook: Date = this.lastChecked;
 
   constructor(
     metadata: TriggerMetadata,
@@ -55,7 +55,7 @@ export class CronTrigger implements ITrigger {
    * Check if the trigger should fire at the given time.
    *
    * Returns false if:
-   * - The cron pattern does not match the current minute
+   * - No occurrence fell since the previous evaluation
    * - The trigger has already fired in the current minute (double-fire prevention)
    */
   shouldFire(now: Date): boolean {
@@ -63,20 +63,26 @@ export class CronTrigger implements ITrigger {
     if (this.lastFired && floorToMinute(this.lastFired) === floorToMinute(now)) {
       return false;
     }
-    if (this.cron.match(now)) return true;
-    // A DUE OCCURRENCE IS NOT LOST BECAUSE NOBODY LOOKED IN ITS MINUTE. The
-    // match was against the current minute alone, so an evaluation at
-    // 02:59:50 and the next at 03:01:10 — a busy foreground, a restart, a
-    // slow tick — skipped "0 3 * * *" entirely, and the work never ran
-    // (Codex 2026-09-13 AG#12). An occurrence between the last look and this
-    // one is due now.
+    // A DUE OCCURRENCE IS NOT LOST BECAUSE NOBODY LOOKED IN ITS MINUTE
+    // (Codex 2026-09-13 AG#12): an occurrence between the last look and this
+    // one is due now. Every look advances lastChecked — including one that
+    // matched, which used to leave it behind so the next look found the same
+    // occurrence again and fired it twice.
     const since = this.lastChecked;
+    this.checkedBeforeLastLook = since;
     this.lastChecked = now;
-    // Bounded: a daemon that was down for a week runs the last occurrence,
-    // not every one it missed.
-    const from = new Date(Math.max(since.getTime(), now.getTime() - CATCH_UP_WINDOW_MS));
-    const missed = this.cron.nextRun(from);
-    return missed !== null && missed.getTime() <= now.getTime();
+    // Bounded (inside isOccurrenceDue): a daemon that was down for a week
+    // runs the last occurrence, not every one it missed.
+    return isOccurrenceDue(this.cron, since, now);
+  }
+
+  /**
+   * The fire never became work (the submission threw): the occurrence this
+   * look consumed is due again on the next one.
+   */
+  onSubmitFailed(_now: Date): void {
+    this.lastChecked = this.checkedBeforeLastLook;
+    this.lastFired = null;
   }
 
   /**

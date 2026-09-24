@@ -2,8 +2,9 @@
  * ChecklistTrigger
  *
  * Implements ITrigger for evaluating checklist items from HEARTBEAT.md.
- * Each unchecked item can have an optional cron schedule -- items without
- * a schedule fire on every evaluation. Minute-floor deduplication prevents
+ * Each unchecked item can have an optional cron schedule -- a scheduled item
+ * fires once per occurrence (isOccurrenceDue, shared with CronTrigger), an item
+ * without a schedule fires once. Minute-floor deduplication prevents
  * double-fire within the same minute (same pattern as CronTrigger).
  *
  * The trigger provides a getDueItems() accessor for Plan 03 event payloads
@@ -20,7 +21,7 @@ import type {
   ChecklistTriggerDef,
   ChecklistItem,
 } from "../daemon-types.js";
-import { floorToMinute } from "./trigger-utils.js";
+import { floorToMinute, isOccurrenceDue } from "./trigger-utils.js";
 
 export class ChecklistTrigger implements ITrigger {
   private _metadata: TriggerMetadata;
@@ -28,6 +29,10 @@ export class ChecklistTrigger implements ITrigger {
   private readonly timezone: string;
   private items: ChecklistItem[];
   private itemCrons: Map<number, Cron>;
+  /** Per scheduled item: the previous evaluation, so an occurrence since then is due. */
+  private itemLastChecked = new Map<number, Date>();
+  /** itemLastChecked before the latest look, to give a consumed occurrence back. */
+  private checkedBeforeLastLook = new Map<number, Date>();
   private lastFiredMinute: Map<number | string, number>;
   private dueItems: ChecklistItem[];
 
@@ -62,6 +67,8 @@ export class ChecklistTrigger implements ITrigger {
    */
   private buildCronMap(): void {
     this.itemCrons.clear();
+    this.itemLastChecked.clear();
+    const builtAt = new Date();
 
     for (let i = 0; i < this.items.length; i++) {
       const item = this.items[i]!;
@@ -73,6 +80,7 @@ export class ChecklistTrigger implements ITrigger {
             paused: true,
           }),
         );
+        this.itemLastChecked.set(i, builtAt);
       }
     }
   }
@@ -87,13 +95,15 @@ export class ChecklistTrigger implements ITrigger {
   /**
    * Check if any unchecked items are due at the given time.
    *
-   * For items with a cron schedule: checks if the cron matches `now`.
+   * For items with a cron schedule: due when an occurrence fell since the
+   * previous evaluation (not only when `now` is second :00 of it).
    * For items without a schedule: always considered due.
    * Both are subject to minute-floor dedup to prevent double-fire.
    */
   shouldFire(now: Date): boolean {
     const minuteFloor = floorToMinute(now);
     this.dueItems = [];
+    this.checkedBeforeLastLook = new Map();
 
     for (let i = 0; i < this.items.length; i++) {
       const item = this.items[i]!;
@@ -105,9 +115,16 @@ export class ChecklistTrigger implements ITrigger {
       if (this.lastFiredMinute.get(i) === minuteFloor) continue;
 
       if (item.schedule) {
-        // Scheduled item: check cron match
+        // Scheduled item. `cron.match(now)` matched only when a tick landed
+        // in second :00 of the occurrence, so a drifting heartbeat almost
+        // never fired it; look for an occurrence since the previous look
+        // instead, and advance the look on every evaluation.
         const cron = this.itemCrons.get(i);
-        if (cron && cron.match(now)) {
+        if (!cron) continue;
+        const since = this.itemLastChecked.get(i) ?? now;
+        this.checkedBeforeLastLook.set(i, since);
+        this.itemLastChecked.set(i, now);
+        if (isOccurrenceDue(cron, since, now)) {
           this.dueItems.push(item);
         }
       } else {
@@ -127,6 +144,8 @@ export class ChecklistTrigger implements ITrigger {
    */
   /** The items the last onFired marked as done, in case it never became work. */
   private consumedByLastFire: ChecklistItem[] = [];
+  /** The look-back each consumed scheduled item had before that fire. */
+  private consumedLookBack = new Map<number, Date>();
 
   onFired(now: Date): void {
     const minuteFloor = floorToMinute(now);
@@ -151,16 +170,21 @@ export class ChecklistTrigger implements ITrigger {
     // WHAT THIS FIRE CONSUMED, so it can be given back if the fire never
     // became work (Codex 2026-09-13 AG#12).
     this.consumedByLastFire = [...this.dueItems];
+    this.consumedLookBack = new Map(this.checkedBeforeLastLook);
   }
 
   /**
-   * The submission threw: an unscheduled item this fire consumed is due
-   * again. Without this the item was gone — marked fired, never run.
+   * The submission threw: an item this fire consumed is due again. Without this the item was gone — marked fired, never run.
    */
   onSubmitFailed(_now: Date): void {
     for (const item of this.consumedByLastFire) {
       const idx = this.items.indexOf(item);
-      if (idx !== -1) this.lastFiredMinute.delete(idx);
+      if (idx !== -1) {
+        this.lastFiredMinute.delete(idx);
+        // A scheduled item's occurrence is due again on the next look.
+        const lookBack = this.consumedLookBack.get(idx);
+        if (item.schedule && lookBack) this.itemLastChecked.set(idx, lookBack);
+      }
       if (!item.schedule) this.lastFiredMinute.delete(item.text);
     }
   }

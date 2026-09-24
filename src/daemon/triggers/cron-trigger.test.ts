@@ -65,6 +65,43 @@ describe("CronTrigger", () => {
     expect(trigger.shouldFire(new Date("2026-03-10T03:00:20Z"))).toBe(true);
   });
 
+  /**
+   * A look that matched did not advance lastChecked, so the next look (in a
+   * different minute, past the same-minute guard) found the same occurrence
+   * again and the job ran twice.
+   */
+  it("fires once for an occurrence it matched, not again on the next look", () => {
+    vi.setSystemTime(new Date("2026-03-09T02:59:00Z"));
+    const trigger = new CronTrigger(metadata, "0 * * * *", "UTC");
+    expect(trigger.shouldFire(new Date("2026-03-09T03:00:00.300Z"))).toBe(true);
+    trigger.onFired(new Date("2026-03-09T03:00:00.300Z"));
+    expect(trigger.shouldFire(new Date("2026-03-09T03:01:00.300Z"))).toBe(false);
+  });
+
+  it("fires on a drifting heartbeat whose ticks never land on second :00", () => {
+    vi.setSystemTime(new Date("2026-03-09T08:57:17Z"));
+    const trigger = new CronTrigger(metadata, "0 9 * * *", "UTC");
+    const fires: string[] = [];
+    for (const tick of ["08:58:17", "08:59:17", "09:00:17", "09:01:17", "09:02:17"]) {
+      const now = new Date(`2026-03-09T${tick}Z`);
+      if (trigger.shouldFire(now)) {
+        fires.push(tick);
+        trigger.onFired(now);
+      }
+    }
+    expect(fires).toEqual(["09:00:17"]);
+  });
+
+  it("gives the occurrence back when the fire never became work", () => {
+    vi.setSystemTime(new Date("2026-03-09T08:59:17Z"));
+    const trigger = new CronTrigger(metadata, "0 9 * * *", "UTC");
+    const first = new Date("2026-03-09T09:00:17Z");
+    expect(trigger.shouldFire(first)).toBe(true);
+    trigger.onFired(first);
+    trigger.onSubmitFailed(first);
+    expect(trigger.shouldFire(new Date("2026-03-09T09:01:17Z"))).toBe(true);
+  });
+
   it("shouldFire returns false when croner does not match", () => {
     // Set time to 10:30 AM -- cron is for 9:00
     vi.setSystemTime(new Date("2026-03-09T10:30:00Z"));
