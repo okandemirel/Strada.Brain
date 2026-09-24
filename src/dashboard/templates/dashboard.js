@@ -21,17 +21,51 @@ function fmtDuration(ms) {
   return s + 's';
 }
 
+// CHN-21: once a dashboard token is configured every /api/ call needs it as a
+// bearer token, and this page had no way to send one. It is asked for once,
+// kept for this tab only (sessionStorage), and asked for again only when the
+// server refuses the stored one. Declining stops the prompts until a reload.
+var TOKEN_KEY = 'strada-dashboard-token';
+var tokenDeclined = false;
+
+function storedToken() {
+  try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+}
+
+function withToken(init, token) {
+  var options = Object.assign({}, init || {});
+  if (token) options.headers = Object.assign({}, options.headers || {}, { Authorization: 'Bearer ' + token });
+  return options;
+}
+
+async function apiFetch(path, init) {
+  var used = storedToken();
+  var res = await fetch(path, withToken(init, used));
+  if (res.status !== 401) return res;
+  // A parallel request may already have obtained a newer token.
+  var latest = storedToken();
+  if (latest && latest !== used) return fetch(path, withToken(init, latest));
+  if (tokenDeclined) return res;
+  var entered = prompt('This dashboard needs its access token (WEBSOCKET_DASHBOARD_AUTH_TOKEN):');
+  if (!entered || !entered.trim()) {
+    tokenDeclined = true;
+    return res;
+  }
+  try { sessionStorage.setItem(TOKEN_KEY, entered.trim()); } catch (e) { /* storage unavailable: use it once */ }
+  return fetch(path, withToken(init, entered.trim()));
+}
+
 async function refresh() {
   try {
     const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes, delegationsRes, consolidationRes, deploymentRes] = await Promise.all([
-      fetch('/api/metrics'),
-      fetch('/api/daemon').catch(function() { return null; }),
-      fetch('/api/maintenance').catch(function() { return null; }),
-      fetch('/api/chain-resilience').catch(function() { return null; }),
-      fetch('/api/agents').catch(function() { return null; }),
-      fetch('/api/delegations').catch(function() { return null; }),
-      fetch('/api/consolidation').catch(function() { return null; }),
-      fetch('/api/deployment').catch(function() { return null; })
+      apiFetch('/api/metrics'),
+      apiFetch('/api/daemon').catch(function() { return null; }),
+      apiFetch('/api/maintenance').catch(function() { return null; }),
+      apiFetch('/api/chain-resilience').catch(function() { return null; }),
+      apiFetch('/api/agents').catch(function() { return null; }),
+      apiFetch('/api/delegations').catch(function() { return null; }),
+      apiFetch('/api/consolidation').catch(function() { return null; }),
+      apiFetch('/api/deployment').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -871,7 +905,7 @@ function renderDeployment(data) {
   checkBtn.onclick = function() {
     checkBtn.disabled = true;
     checkBtn.textContent = 'Checking...';
-    fetch('/api/deployment/check', { method: 'POST' })
+    apiFetch('/api/deployment/check', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(result) {
         checkBtn.textContent = result.ready ? 'Ready' : 'Not Ready';
