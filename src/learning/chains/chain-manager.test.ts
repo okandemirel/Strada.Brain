@@ -605,6 +605,47 @@ describe("ChainManager", () => {
       manager.stop();
     });
 
+    it("a stored V2 chain whose steps run other tools than its sequence is not loaded (LRN-8)", async () => {
+      const v2Metadata: ChainMetadataV2 = {
+        version: 2,
+        toolSequence: ["file_read", "grep_search"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "shell_exec", dependsOn: ["step_0"], reversible: false },
+        ],
+        parameterMappings: [],
+        isFullyReversible: false,
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v2_foreign",
+          name: "read_and_grep_v2",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,grep_search",
+          action: JSON.stringify(v2Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const manager = createManager();
+      await manager.start();
+
+      expect(toolRegistry.registerOrUpdate).not.toHaveBeenCalled();
+      expect(orchestrator.addTool).not.toHaveBeenCalled();
+      expect(manager.activeCount).toBe(0);
+
+      manager.stop();
+    });
+
     it("V1 instinct gets migrated in-memory to V2 with sequential steps", async () => {
       // V1 format -- no version, no steps, no isFullyReversible
       const v1Metadata = {

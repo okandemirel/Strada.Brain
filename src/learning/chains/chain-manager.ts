@@ -13,7 +13,14 @@ import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { ChainValidator } from "./chain-validator.js";
 import { CompositeTool } from "./composite-tool.js";
-import { ChainMetadataSchema, ChainMetadataV2Schema, computeCompositeMetadata, migrateV1toV2 } from "./chain-types.js";
+import {
+  ChainMetadataSchema,
+  ChainMetadataV2Schema,
+  chainToolNames,
+  computeCompositeMetadata,
+  migrateV1toV2,
+  stepsMatchSequence,
+} from "./chain-types.js";
 import type { ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
@@ -114,6 +121,12 @@ export class ChainManager {
           );
           continue;
         }
+        // A stored chain whose steps run other tools than its sequence (or none)
+        // is not loaded: its safety metadata would describe tools it never runs.
+        if (!stepsMatchSequence(v2Metadata.steps, v2Metadata.toolSequence)) {
+          getLogger().warn(`Skipping chain '${instinct.name}': steps differ from its tool sequence`);
+          continue;
+        }
 
         // Build description -- append [rollback-capable] for fully reversible V2 chains
         let description = instinct.triggerPattern;
@@ -136,7 +149,7 @@ export class ChainManager {
         );
 
         const toolMeta = computeCompositeMetadata(
-          v2Metadata.toolSequence.map((name) => this.toolRegistry.getMetadata(name)),
+          chainToolNames(v2Metadata).map((name) => this.toolRegistry.getMetadata(name)),
         );
         this.toolRegistry.registerOrUpdate(tool, toolMeta);
         this.orchestrator.addTool(tool, toolMeta);

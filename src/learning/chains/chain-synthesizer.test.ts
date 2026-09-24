@@ -636,3 +636,76 @@ describe("ChainSynthesizer", () => {
     });
   });
 });
+
+// LRN-8: a chain's safety metadata and its existence check are computed from
+// the DETECTED tool sequence, while its steps come from the LLM. A step naming
+// any other tool ran it outside the list those decisions were made on.
+describe("a chain runs only the tools it was detected from (LRN-8)", () => {
+  const detected = ["tool_a", "tool_b"];
+
+  function registryWithDangerousTools(): ToolRegistry {
+    return makeToolRegistry(["tool_a", "tool_b", "shell_exec", "file_delete"], {
+      tool_a: { readOnly: true },
+      tool_b: { readOnly: true },
+      shell_exec: { dangerous: true, requiresConfirmation: true },
+      file_delete: { dangerous: true, requiresConfirmation: true },
+    });
+  }
+
+  async function synthesizeWith(
+    registry: ToolRegistry,
+    steps: Parameters<typeof makeLLMV2Response>[2],
+  ): Promise<{ tools: unknown[]; storage: LearningStorage }> {
+    const storage = makeMockStorage(0);
+    const synthesizer = new ChainSynthesizer(storage, registry, makeEventBus(), makeConfig());
+    synthesizer.setProvider(makeProvider([makeLLMV2Response("read_then_check", "Reads a file then checks it", steps, false)]));
+    const tools = await synthesizer.synthesize([makeCandidate(detected, 5)]);
+    return { tools, storage };
+  }
+
+  it("rejects steps that name a tool outside the detected sequence", async () => {
+    const registry = registryWithDangerousTools();
+    const { tools, storage } = await synthesizeWith(registry, [
+      { stepId: "step_0", toolName: "tool_a", dependsOn: [] },
+      { stepId: "step_1", toolName: "shell_exec", dependsOn: ["step_0"] },
+    ]);
+    expect(tools).toHaveLength(0);
+    expect(registry.registerOrUpdate).not.toHaveBeenCalled();
+    expect(storage.createInstinct).not.toHaveBeenCalled();
+  });
+
+  it("rejects an extra step", async () => {
+    const registry = registryWithDangerousTools();
+    const { tools } = await synthesizeWith(registry, [
+      { stepId: "step_0", toolName: "tool_a", dependsOn: [] },
+      { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"] },
+      { stepId: "step_2", toolName: "file_delete", dependsOn: ["step_1"] },
+    ]);
+    expect(tools).toHaveLength(0);
+    expect(registry.registerOrUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty step list", async () => {
+    const registry = registryWithDangerousTools();
+    const { tools } = await synthesizeWith(registry, []);
+    expect(tools).toHaveLength(0);
+    expect(registry.registerOrUpdate).not.toHaveBeenCalled();
+  });
+
+  it("computes the composite's safety metadata over its compensating tools too", async () => {
+    const registry = registryWithDangerousTools();
+    const { tools } = await synthesizeWith(registry, [
+      {
+        stepId: "step_0",
+        toolName: "tool_a",
+        dependsOn: [],
+        reversible: true,
+        compensatingAction: { toolName: "file_delete", inputMappings: { path: "step_0.path" } },
+      },
+      { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"] },
+    ]);
+    expect(tools).toHaveLength(1);
+    const [, meta] = vi.mocked(registry.registerOrUpdate).mock.calls[0]!;
+    expect(meta).toMatchObject({ dangerous: true, requiresConfirmation: true });
+  });
+});

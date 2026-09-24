@@ -31,6 +31,8 @@ import {
   LLMChainOutputV2Schema,
   computeSuccessRate,
   computeCompositeMetadata,
+  chainToolNames,
+  stepsMatchSequence,
   parseLLMJsonOutput,
   safeStringify,
 } from "./chain-types.js";
@@ -158,6 +160,17 @@ export class ChainSynthesizer {
     candidate: CandidateChain,
     successRate: number,
   ): CompositeTool | null {
+    // The steps must run the detected tools and nothing else: the composite's
+    // safety metadata and existence check are computed from that sequence.
+    if (!stepsMatchSequence(llmOutput.steps, candidate.toolNames)) {
+      getLogger().info("V2 synthesis: rejecting chain whose steps differ from the detected tools", {
+        chain: llmOutput.name,
+        detected: candidate.toolNames,
+        steps: llmOutput.steps.map((step) => step.toolName),
+      });
+      return null;
+    }
+
     // Validate DAG, fall back to sequential on cycle
     let steps = this.validateAndFixDAG(llmOutput.steps, candidate.toolNames);
 
@@ -277,7 +290,7 @@ export class ChainSynthesizer {
 
     // Register with metadata inheriting confirmation gates from component tools
     const toolMeta = computeCompositeMetadata(
-      candidate.toolNames.map((n) => this.toolRegistry.getMetadata(n)),
+      chainToolNames(chainMetadata).map((n) => this.toolRegistry.getMetadata(n)),
     );
     this.toolRegistry.registerOrUpdate(tool, toolMeta);
 

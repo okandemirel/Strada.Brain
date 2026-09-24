@@ -94,6 +94,39 @@ export const COMPOSITE_TOOL_METADATA = {
 } as const;
 
 /** Compute composite tool metadata inheriting the most restrictive flags from component tools */
+/**
+ * Whether a chain's steps run exactly the tools of its detected sequence: the
+ * same tools, each as many times, and at least two.
+ *
+ * Steps come from the LLM, while the composite's safety metadata (dangerous,
+ * confirmation) and its existence check read the detected sequence. A step
+ * naming any other tool ran it outside the list those decisions were made on.
+ */
+export function stepsMatchSequence(
+  steps: ReadonlyArray<{ readonly toolName: string }>,
+  toolSequence: readonly string[],
+): boolean {
+  if (steps.length < 2 || steps.length !== toolSequence.length) return false;
+  const stepTools = steps.map((step) => step.toolName).sort();
+  const sequence = [...toolSequence].sort();
+  return stepTools.every((name, i) => name === sequence[i]);
+}
+
+/**
+ * Every tool a chain can run: its sequence and, for a V2 chain, each step's
+ * compensating action. Safety metadata is computed over all of them.
+ */
+export function chainToolNames(metadata: ChainMetadata | ChainMetadataV2): string[] {
+  const names = new Set(metadata.toolSequence);
+  if ("steps" in metadata) {
+    for (const step of metadata.steps) {
+      names.add(step.toolName);
+      if (step.compensatingAction) names.add(step.compensatingAction.toolName);
+    }
+  }
+  return [...names];
+}
+
 export function computeCompositeMetadata(
   componentMeta: Array<{
     dangerous?: boolean;
