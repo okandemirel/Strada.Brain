@@ -926,6 +926,15 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Load metadata
     const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
     const configuredAtRuntime = this.config;
+    // An index built for other dimensions cannot be read at these: without a
+    // sidecar to catch it, readIndex would load it under the wrong width. Say
+    // so plainly so the owner can discard the index and rebuild.
+    const storedDimensions = Number(metadata.config?.dimensions);
+    if (Number.isFinite(storedDimensions) && storedDimensions !== configuredAtRuntime.dimensions) {
+      throw new Error(
+        `HNSW index at ${path} was built for ${storedDimensions} dimensions, store is configured for ${configuredAtRuntime.dimensions}`,
+      );
+    }
     this.config = {
       ...metadata.config,
       ...configuredAtRuntime,

@@ -12,7 +12,6 @@
  *   - agentdb-time.ts    — shared clock utility
  */
 
-import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -31,7 +30,6 @@ import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.j
 import { getLogger } from "../../utils/logger.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { VectorEntry } from "../../rag/rag.interface.js";
-import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import { TextIndex, extractTerms } from "../text-index.js";
 import type {
   Result,
@@ -70,7 +68,7 @@ import {
   indexProvenance,
   inferProvenance,
   isHashBasedEmbedding,
-  detectAndHandleDimensionMismatch,
+  openAgentDbHnswStore,
   reEmbedHashEntries,
   type ReEmbedResult,
 } from "./agentdb-vector.js";
@@ -318,26 +316,15 @@ export class AgentDBMemory implements IUnifiedMemory {
         this.taskExecutionStore = new TaskExecutionStore(this.sqliteDb);
       }
 
-      // Initialize HNSW vector store
-      const vectorStorePath = join(this.dbPath, "hnsw");
-      this.hnswStore = await createHNSWVectorStore(vectorStorePath, {
-        dimensions: this.config.dimensions,
-        maxElements: Object.values(this.config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
-        M: this.config.hnswParams.M,
-        efConstruction: this.config.hnswParams.efConstruction,
-        efSearch: this.config.hnswParams.efSearch,
-        metric: "cosine",
-        quantization: this.config.quantizationType,
-      });
+      // Initialize HNSW vector store. A persisted index that no longer fits
+      // the config (e.g. other embedding dimensions) is discarded while
+      // opening; loadEntries rebuilds the index from SQLite either way.
+      this.hnswStore = await openAgentDbHnswStore(this.dbPath, this.config);
       // Gate the store's background compaction rebuild behind the same write mutex
       // that serializes all other HNSW writes (M1). Optional: this is best-effort
       // wiring of an optimization, so a store implementation/mock that lacks the
       // method must not abort initialize().
       this.hnswStore.setWriteSerializer?.(this.writeMutex);
-
-      // Detect HNSW dimension mismatch (e.g. user switched embedding provider)
-      // Writes through to this.hnswStore via proxy if rebuild occurs
-      await detectAndHandleDimensionMismatch(this.getVectorCtx());
 
       // Load existing entries from AgentDB-style storage
       await this.loadEntries();
@@ -351,6 +338,13 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       return ok(undefined);
     } catch (error) {
+      // Release what this attempt opened: the caller falls back to another
+      // backend, and a leaked handle keeps memory.db attached for the life of
+      // the process (restores then refuse to swap it).
+      this.hnswStore = undefined;
+      this.userProfileStore = null;
+      this.taskExecutionStore = null;
+      closeSqlite(this.getSqliteCtx());
       return err(error instanceof Error ? error : new Error(String(error)));
     }
   }

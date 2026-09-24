@@ -246,6 +246,32 @@ describeIfHnsw("HNSW vector persistence", () => {
     ).rejects.toThrow(/dimensions/);
   });
 
+  it("refuses an inline-format index written for a different width (no sidecar to catch it)", async () => {
+    // hnswlib's readIndex does not check the width: an index read at the wrong
+    // dimensions loads and answers searches with garbage (MEM-2).
+    const store = await open();
+    await store.upsertBatch(Array.from({ length: 5 }, (_, i) => entry(`c${i}`, i + 1)));
+    await store.saveIndex(dir);
+    await store.shutdown();
+    const metadataPath = join(dir, "metadata.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+    delete metadata.vectorsFormat;
+    writeFileSync(metadataPath, JSON.stringify(metadata), "utf-8");
+    rmSync(join(dir, SIDECAR));
+
+    await expect(
+      createHNSWVectorStore(dir, {
+        dimensions: DIMENSIONS / 2,
+        maxElements: 500,
+        M: 8,
+        efConstruction: 50,
+        efSearch: 32,
+        metric: "cosine",
+        quantization: "none",
+      }),
+    ).rejects.toThrow(/built for 64 dimensions/);
+  });
+
   it("does not destroy the index when a compaction finds vectors missing", async () => {
     // Defence in depth behind the reader: recreateIndex() clears every map, so
     // a rebuild that recovered fewer entries than it has chunks deletes the

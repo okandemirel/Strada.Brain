@@ -236,6 +236,60 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("embedding dimension change across a restart (MEM-2)", () => {
+    const makeConfig = (dbPath: string, dimensions: number) => ({
+      dbPath,
+      dimensions,
+      maxEntriesPerTier: {
+        [MemoryTier.Working]: 10,
+        [MemoryTier.Ephemeral]: 50,
+        [MemoryTier.Persistent]: 100,
+      },
+      hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+      quantizationType: "none" as const,
+      cacheSize: 100,
+      enableAutoTiering: false,
+      ephemeralTtlMs: 60_000,
+    });
+
+    it("discards the persisted HNSW index and reloads every row from SQLite", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "agentdb-dims-"));
+      const first = new AgentDBMemory(makeConfig(dir, 8));
+      await first.initialize();
+      await first.storeNote("First note about the player", ["a"]);
+      await first.storeNote("Second note about the enemy", ["b"]);
+      await first.shutdown(); // persists hnsw/ at 8 dimensions
+
+      const reopened = new AgentDBMemory(makeConfig(dir, 4));
+      try {
+        const result = await reopened.initialize();
+        expect(result.kind).toBe("ok");
+        expect(reopened.getConsolidationInternals().entries.size).toBe(2);
+        // The store is usable at the new width.
+        await expect(reopened.storeNote("Third note at four dimensions", ["c"])).resolves.toBeDefined();
+        expect(reopened.getConsolidationInternals().entries.size).toBe(3);
+      } finally {
+        await reopened.shutdown();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("closes the SQLite handle when initialize() fails", async () => {
+      const { HNSWVectorStore } = await import("../../rag/hnsw/hnsw-vector-store.js");
+      const spy = vi.spyOn(HNSWVectorStore.prototype, "initialize").mockRejectedValue(new Error("boom"));
+      const dir = mkdtempSync(join(tmpdir(), "agentdb-initfail-"));
+      const failing = new AgentDBMemory(makeConfig(dir, 8));
+      try {
+        const result = await failing.initialize();
+        expect(result.kind).toBe("err");
+        expect((failing as any).sqliteDb).toBeNull();
+      } finally {
+        spy.mockRestore();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("consolidated rows across a restart (MEM-1)", () => {
     // Consolidation soft-deletes its source rows (consolidated_into set) and
     // keeps them on disk for undo. loadEntries used to read every row, so after

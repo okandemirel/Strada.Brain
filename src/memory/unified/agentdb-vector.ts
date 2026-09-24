@@ -6,7 +6,7 @@
  */
 
 import { join } from "node:path";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import type {
   EmbeddingProvenance,
   UnifiedMemoryConfig,
@@ -17,8 +17,8 @@ import {
   HISTOGRAM_PROVENANCE,
   UNKNOWN_PROVENANCE,
 } from "./unified-memory.interface.js";
-import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
-import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
+import type { HNSWConfig, HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
+import { createHNSWVectorStore, isHnswAvailable } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { VectorEntry } from "../../rag/rag.interface.js";
 import type {
   TimestampMs,
@@ -248,6 +248,53 @@ export function isHashBasedEmbedding(_content: string, embedding: number[]): boo
 }
 
 // ---------------------------------------------------------------------------
+// Opening the store
+// ---------------------------------------------------------------------------
+
+/** The HNSW store configuration AgentDB derives from its memory config. */
+export function agentDbHnswConfig(config: UnifiedMemoryConfig): Partial<HNSWConfig> {
+  return {
+    dimensions: config.dimensions,
+    maxElements: Object.values(config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
+    M: config.hnswParams.M,
+    efConstruction: config.hnswParams.efConstruction,
+    efSearch: config.hnswParams.efSearch,
+    metric: "cosine",
+    quantization: config.quantizationType,
+  };
+}
+
+/**
+ * Open AgentDB's HNSW store at `<dbPath>/hnsw`.
+ *
+ * For AgentDB the persisted index is only a cache: loadEntries always rebuilds
+ * it from SQLite with replaceAll. A persisted index that cannot be opened with
+ * the current configuration (most often one written for other embedding
+ * dimensions after a provider switch, or a damaged file) is therefore
+ * discarded and the store starts empty, instead of failing initialize() and
+ * putting every AgentDB memory out of reach (MEM-2). When hnswlib-node itself
+ * is missing there is nothing to reset, so that error still propagates.
+ */
+export async function openAgentDbHnswStore(
+  dbPath: string,
+  config: UnifiedMemoryConfig,
+): Promise<HNSWVectorStore> {
+  const vectorStorePath = join(dbPath, "hnsw");
+  const hnswConfig = agentDbHnswConfig(config);
+  try {
+    return await createHNSWVectorStore(vectorStorePath, hnswConfig);
+  } catch (error) {
+    if (!isHnswAvailable() || !existsSync(vectorStorePath)) throw error;
+    getLoggerSafe().warn(
+      "[AgentDBMemory] Persisted HNSW index cannot be opened with the current configuration; discarding it (it is rebuilt from SQLite)",
+      { path: vectorStorePath, dimensions: config.dimensions, error: String(error) },
+    );
+    rmSync(vectorStorePath, { recursive: true, force: true });
+    return createHNSWVectorStore(vectorStorePath, hnswConfig);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dimension mismatch detection
 // ---------------------------------------------------------------------------
 
@@ -326,15 +373,7 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
     }
 
     // Recreate HNSW store with correct dimensions
-    ctx.hnswStore = await createHNSWVectorStore(vectorStorePath, {
-      dimensions: ctx.config.dimensions,
-      maxElements: Object.values(ctx.config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
-      M: ctx.config.hnswParams.M,
-      efConstruction: ctx.config.hnswParams.efConstruction,
-      efSearch: ctx.config.hnswParams.efSearch,
-      metric: "cosine",
-      quantization: ctx.config.quantizationType,
-    });
+    ctx.hnswStore = await createHNSWVectorStore(vectorStorePath, agentDbHnswConfig(ctx.config));
     // Gate the store's background compaction behind the shared write mutex (M1).
     // Optional: best-effort wiring, must not abort rebuild if the store lacks it.
     ctx.hnswStore.setWriteSerializer?.(ctx.writeMutex);
