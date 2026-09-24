@@ -67,6 +67,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "nod
 import { open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,7 +118,11 @@ interface SkillContentScanBase {
   readonly byteCount: number;
   /** Relative paths of every symlink met (never followed). Non-empty → not approvable. */
   readonly symlinks: readonly string[];
-  /** The executable entry point present at the top level (`index.ts`/`index.js`), if any. */
+  /**
+   * The executable entry point at the top level, as named on disk: `index.ts`/
+   * `index.js`, or a name differing from them only in case (SEC-1 — such a
+   * file is code on a case-insensitive filesystem; see skill-entry-point.ts).
+   */
   readonly entryPoint: string | null;
 }
 
@@ -134,7 +139,6 @@ export type SkillContentScan =
       readonly exceeded: SkillScanLimitBreach;
     });
 
-const ENTRY_POINTS = ["index.ts", "index.js"];
 /** Directory names excluded from the hash (see the module comment). `node_modules` is NOT here (round 7 #10). */
 const EXCLUDED_DIRS = new Set([".git"]);
 
@@ -449,7 +453,7 @@ export async function scanSkillContent(
     if (depth === 1) {
       // Decide the entry point from the complete top-level listing, before any
       // recursion can stop the scan.
-      entryPoint = ENTRY_POINTS.find((name) => entries.some((e) => e.name === name && !e.isDirectory())) ?? null;
+      entryPoint = findSkillEntryPoint(entries.filter((e) => !e.isDirectory()).map((e) => e.name))?.name ?? null;
     }
     for (const entry of entries) {
       if (exceeded) return;
@@ -532,9 +536,10 @@ function limitRefusal(breach: SkillScanLimitBreach): string {
  * project. A skill over the scan budget is never trusted (fail closed). A
  * skill with no entry point imports nothing (`loadSkillTools` returns before
  * any `import()`), so there is nothing to approve and it is trusted
- * trivially. A skill whose directory holds a symlink is never trusted.
- * Otherwise a record for (project, skill) must exist AND its hash must equal
- * the current hash of the skill's content.
+ * trivially. A skill whose directory holds a symlink, or whose entry point
+ * differs from `index.ts`/`index.js` only in letter case (SEC-1), is never
+ * trusted. Otherwise a record for (project, skill) must exist AND its hash
+ * must equal the current hash of the skill's content.
  */
 export async function assessWorkspaceSkillTrust(
   projectRoot: string,
@@ -550,6 +555,9 @@ export async function assessWorkspaceSkillTrust(
     return { trusted: true, sha256: null };
   }
   const { sha256 } = scan;
+  if (!SKILL_ENTRY_POINTS.includes(scan.entryPoint)) {
+    return { trusted: false, sha256, reason: entryCaseRefusal(scan.entryPoint) };
+  }
   const projectId = await projectIdentity(projectRoot);
   const howTo = `run \`strada skill trust ${skillName}\` in ${projectId} to approve it (recorded in ${trustedSkillsDbPath()})`;
 
@@ -583,6 +591,15 @@ function symlinkRefusal(symlinks: readonly string[]): string {
   return `Workspace skill holds symlinked code, which cannot be approved (its target can change without the hash changing): ${symlinks.join(", ")}`;
 }
 
+/**
+ * SEC-1: a differently-cased entry point is code on a case-insensitive
+ * filesystem, but the loader only ever imports the exact name, so there is
+ * nothing it could approve.
+ */
+function entryCaseRefusal(entryPoint: string): string {
+  return `Workspace skill entry point "${entryPoint}" is not named exactly ${SKILL_ENTRY_POINTS.join(" or ")}, so it will not be loaded and cannot be approved; rename it`;
+}
+
 // ---------------------------------------------------------------------------
 // Approve / revoke
 // ---------------------------------------------------------------------------
@@ -612,7 +629,10 @@ export async function approveWorkspaceSkill(
     throw new Error(`Cannot approve ${skillPath}: ${limitRefusal(scan.exceeded)}`);
   }
   if (!scan || scan.entryPoint === null) {
-    throw new Error(`Nothing to approve: ${skillPath} has no entry point (${ENTRY_POINTS.join("/")}), so no code of it is executed`);
+    throw new Error(`Nothing to approve: ${skillPath} has no entry point (${SKILL_ENTRY_POINTS.join("/")}), so no code of it is executed`);
+  }
+  if (!SKILL_ENTRY_POINTS.includes(scan.entryPoint)) {
+    throw new Error(`Cannot approve ${skillPath}: ${entryCaseRefusal(scan.entryPoint)}`);
   }
   if (scan.symlinks.length > 0) {
     throw new Error(`Cannot approve ${skillPath}: ${symlinkRefusal(scan.symlinks)}`);

@@ -316,6 +316,28 @@ describe("assessWorkspaceSkillTrust / approve / revoke", () => {
     await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/lib/);
   });
 
+  // ---- SEC-1 ----------------------------------------------------------------
+  // On a case-insensitive filesystem the loader's old `stat("index.js")` opened
+  // `Index.js`; the scan must count such a file as code, never as "no entry".
+  it("a differently-cased entry point is code: untrusted without approval, and cannot be approved (SEC-1)", async () => {
+    const dir = await writeSkill("cased", { "SKILL.md": "x", "Index.js": "export const tools = [];" });
+    expect((await scanSkillContent(dir))!.entryPoint).toBe("Index.js");
+
+    const verdict = await assessWorkspaceSkillTrust(projectRoot, dir, "cased");
+    expect(verdict.trusted).toBe(false);
+    if (verdict.trusted) throw new Error("unreachable");
+    expect(verdict.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(verdict.reason).toContain('"Index.js" is not named exactly index.ts or index.js');
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/Index\.js" is not named exactly/);
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
+
+    for (const variant of ["INDEX.TS", "index.Js"]) {
+      const other = await writeSkill(`cased-${variant.replace(/\W/g, "")}`, { [variant]: "" });
+      const v = await assessWorkspaceSkillTrust(projectRoot, other, "cased");
+      expect(v.trusted).toBe(false);
+    }
+  });
+
   it("the project identity is the realpath: an approval through a symlinked root applies to the real root", async () => {
     const dir = await writeSkill("sym", { "index.js": "export const tools = [];" });
     const link = join(fakeHome, "proj-link");

@@ -18,6 +18,7 @@ import { getLoggerSafe } from "../utils/logger.js";
 import type { SkillManifest, SkillEntry } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
 import { describePinDrift } from "./skill-pin.js";
+import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -254,15 +255,33 @@ export async function loadSkillTools(skill: DiscoveredSkill): Promise<ITool[]> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * The entry point `loadSkillTools` imports, decided from the directory listing
+ * by the same rule as the trust scan (SEC-1, see skill-entry-point.ts): only a
+ * file listed under exactly `index.ts`/`index.js`. A differently-cased entry is
+ * refused, never resolved through a (possibly case-insensitive) `stat`.
+ */
 async function resolveEntryPoint(skillDir: string): Promise<string | null> {
-  for (const filename of ["index.ts", "index.js"]) {
-    const candidate = join(skillDir, filename);
-    try {
-      const s = await stat(candidate);
-      if (s.isFile()) return candidate;
-    } catch {
-      // File does not exist
-    }
+  let names: string[];
+  try {
+    names = (await readdir(skillDir, { withFileTypes: true }))
+      .filter((entry) => !entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return null;
   }
-  return null;
+  const entry = findSkillEntryPoint(names);
+  if (!entry) return null;
+  if (!entry.exact) {
+    throw new Error(
+      `Entry point "${entry.name}" is not named exactly ${SKILL_ENTRY_POINTS.join(" or ")}; refusing to load it (rename it)`,
+    );
+  }
+  const candidate = join(skillDir, entry.name);
+  try {
+    const s = await stat(candidate);
+    return s.isFile() ? candidate : null;
+  } catch {
+    return null;
+  }
 }

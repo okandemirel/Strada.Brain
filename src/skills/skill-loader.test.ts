@@ -60,6 +60,8 @@ function makeSkillMd(fields: Record<string, string | string[]>): string {
 
 const dirStat = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
 const fileStat = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false };
+/** A `readdir(…, { withFileTypes: true })` entry for a regular file. */
+const dirent = (name: string) => ({ name, ...fileStat });
 
 // ---------------------------------------------------------------------------
 // discoverSkills
@@ -239,9 +241,13 @@ describe("loadSkillTools", () => {
       path: "/mock/skills/gmail",
     };
 
-    // Mock stat to find index.js
+    // The entry point is picked from the directory listing (SEC-1), then
+    // confirmed to be a file.
+    fsMock.readdir.mockImplementation(async (path: string) => {
+      if (path === "/mock/skills/gmail") return [dirent("SKILL.md"), dirent("index.js")];
+      throw new Error("ENOENT");
+    });
     fsMock.stat.mockImplementation(async (path: string) => {
-      if (path === "/mock/skills/gmail/index.ts") throw new Error("ENOENT");
       if (path === "/mock/skills/gmail/index.js") return fileStat;
       throw new Error("ENOENT");
     });
@@ -252,8 +258,6 @@ describe("loadSkillTools", () => {
     // For a full integration test, we'd need actual files on disk.
 
     // Instead, let's verify the entry point resolution works:
-    // The loadSkillTools function will try to stat index.ts first, then index.js
-    // We verify it finds index.js
     // The actual import will fail since the file doesn't exist, so we catch that
     try {
       await loadSkillTools(skill);
@@ -262,9 +266,9 @@ describe("loadSkillTools", () => {
       // This tests the path resolution logic
     }
 
-    // Verify stat was called for both potential entry points
-    expect(fsMock.stat).toHaveBeenCalledWith("/mock/skills/gmail/index.ts");
+    // Only the listed entry point was probed — never a name the listing lacks.
     expect(fsMock.stat).toHaveBeenCalledWith("/mock/skills/gmail/index.js");
+    expect(fsMock.stat).not.toHaveBeenCalledWith("/mock/skills/gmail/index.ts");
   });
 
   it("returns empty array when no entry point exists", async () => {
@@ -274,9 +278,35 @@ describe("loadSkillTools", () => {
       path: "/mock/skills/empty",
     };
 
+    fsMock.readdir.mockResolvedValue([dirent("SKILL.md")]);
     fsMock.stat.mockRejectedValue(new Error("ENOENT"));
 
     const tools = await loadSkillTools(skill);
     expect(tools).toEqual([]);
+  });
+
+  // SEC-1: on a case-insensitive filesystem (APFS, NTFS) `stat("<dir>/index.js")`
+  // also opens `Index.js`. The loader must import only an entry whose exact name
+  // is in the listing — the one the trust scan saw — and refuse anything else.
+  it("refuses an entry point whose exact-case name is not in the listing (simulated case-insensitive filesystem)", async () => {
+    const skill: DiscoveredSkill = {
+      manifest: { name: "cased", version: "1.0.0", description: "Cased entry" },
+      tier: "workspace",
+      path: "/mock/skills/cased",
+    };
+    const onDisk = ["SKILL.md", "Index.js"];
+    fsMock.readdir.mockImplementation(async (path: string) => {
+      if (path === "/mock/skills/cased") return onDisk.map((name) => dirent(name));
+      throw new Error("ENOENT");
+    });
+    // Case-insensitive lookup, as APFS/NTFS answer it.
+    fsMock.stat.mockImplementation(async (path: string) => {
+      const base = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+      if (path.startsWith("/mock/skills/cased/") && onDisk.some((n) => n.toLowerCase() === base)) return fileStat;
+      throw new Error("ENOENT");
+    });
+
+    await expect(loadSkillTools(skill)).rejects.toThrow(/"Index\.js" is not named exactly index\.ts or index\.js/);
+    expect(fsMock.stat).not.toHaveBeenCalled();
   });
 });
