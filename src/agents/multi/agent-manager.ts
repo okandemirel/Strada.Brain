@@ -15,7 +15,7 @@
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
-import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
+import type { ChannelType, IncomingMessage } from "../../channels/channel-messages.interface.js";
 import { detectCommand } from "../../tasks/command-detector.js";
 import type { CommandHandler } from "../../tasks/command-handler.js";
 import { buildBatchedPrompt, buildBurstOrQueueNotice } from "../../tasks/message-bursting.js";
@@ -143,6 +143,12 @@ interface PendingBackgroundBatch {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/**
+ * The task queries AgentManager reads: active tasks per chat (queue notices) and, when the
+ * manager provides it, across all chats (the eviction guard).
+ */
+type AgentTaskView = Pick<TaskManager, "listActiveTasks"> & Partial<Pick<TaskManager, "listAllActiveTasks">>;
+
 type BackgroundTaskSubmitter = (
   msg: IncomingMessage,
   agent: AgentInstance,
@@ -193,7 +199,7 @@ export class AgentManager {
   private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly messageBurstWindowMs: number;
   private readonly maxBurstMessages: number;
-  private taskManager?: Pick<TaskManager, "listActiveTasks">;
+  private taskManager?: AgentTaskView;
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
 
@@ -261,7 +267,7 @@ export class AgentManager {
     this.backgroundTaskSubmitter = submitter;
   }
 
-  setTaskManager(taskManager: Pick<TaskManager, "listActiveTasks">): void {
+  setTaskManager(taskManager: AgentTaskView): void {
     this.taskManager = taskManager;
   }
 
@@ -366,9 +372,40 @@ export class AgentManager {
     }
   }
 
-  /** True when the agent has at least one in-flight request and must not be evicted. */
-  private isAgentBusy(key: string): boolean {
-    return (this.inFlightRequests.get(key) ?? 0) > 0;
+  /**
+   * True when the agent must not be evicted or torn down: it has an in-flight interactive
+   * request, or a background task that is still active on its orchestrator. Every message
+   * goes through the background submitter in production and that path never marks the
+   * agent in-flight, so without the task check an idle sweep shut down the memory under a
+   * running task.
+   */
+  private isAgentBusy(liveAgent: LiveAgent): boolean {
+    if ((this.inFlightRequests.get(liveAgent.instance.key) ?? 0) > 0) return true;
+    return this.hasActiveTaskForAgent(liveAgent);
+  }
+
+  private hasActiveTaskForAgent(liveAgent: LiveAgent): boolean {
+    const taskManager = this.taskManager;
+    if (!taskManager) return false;
+    try {
+      // All active tasks when available: a conversation-keyed agent can own tasks submitted
+      // under an earlier chatId than the one it was last synced to.
+      const tasks = taskManager.listAllActiveTasks
+        ? taskManager.listAllActiveTasks()
+        : taskManager.listActiveTasks(liveAgent.instance.chatId);
+      return tasks.some((task) =>
+        task.agentId === liveAgent.instance.id ||
+        resolveAgentKey(task.channelType as ChannelType, task.conversationId?.trim() || task.chatId) ===
+          liveAgent.instance.key,
+      );
+    } catch (error) {
+      // Unknown means busy: eviction only frees memory, a wrong eviction breaks a live run.
+      getLoggerSafe().warn("Could not read active tasks for the eviction guard", {
+        agentId: liveAgent.instance.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return true;
+    }
   }
 
   // ===========================================================================
@@ -379,6 +416,13 @@ export class AgentManager {
   async stopAgent(id: AgentId, force?: boolean): Promise<void> {
     const liveAgent = this.findLiveAgentById(id);
     if (!liveAgent) return;
+
+    // A forced stop shuts the agent's memory down; refuse it while a task still runs on it.
+    if (force && this.isAgentBusy(liveAgent)) {
+      throw new Error(
+        `Agent ${id} has an active task; cancel it (or stop without force) before a forced stop.`,
+      );
+    }
 
     // Clean up pending background batches for this agent. The buffered
     // messages were never submitted and never acknowledged; the process and
@@ -447,10 +491,10 @@ export class AgentManager {
       if (
         (liveAgent.instance.status === "active" || liveAgent.instance.status === "budget_exceeded") &&
         now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs &&
-        // Never evict an agent with an in-flight request: shutting down its
-        // memory mid-request would cause a use-after-shutdown in handleMessage
-        // / syncMemoryCount.
-        !this.isAgentBusy(key)
+        // Never evict an agent with an in-flight request or an active task:
+        // shutting down its memory mid-run would cause a use-after-shutdown in
+        // handleMessage / syncMemoryCount / the task's memory writes.
+        !this.isAgentBusy(liveAgent)
       ) {
         toEvict.push(key);
       }
@@ -911,7 +955,7 @@ export class AgentManager {
       // and have no in-flight request (eviction would shut down memory mid-request).
       if (now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs &&
           liveAgent.instance.lastActivity < oldestActivity &&
-          !this.isAgentBusy(key)) {
+          !this.isAgentBusy(liveAgent)) {
         oldestActivity = liveAgent.instance.lastActivity;
         oldestKey = key;
       }

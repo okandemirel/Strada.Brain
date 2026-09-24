@@ -994,6 +994,92 @@ describe("AgentManager", () => {
 
       await idleManager.shutdown();
     });
+
+    describe("an agent whose background task is still running", () => {
+      // Production routes every message through the background submitter, which returns at
+      // once while the task keeps running on the agent's orchestrator and memory for hours.
+      function backgroundManager(config: Partial<AgentConfig>, activeTasks: () => unknown[]) {
+        const m = new AgentManager({
+          // idleTimeoutMs < 0: every agent is past the timeout; only the busy guard can keep it.
+          config: makeConfig({ idleTimeoutMs: -1, ...config }),
+          registry,
+          budgetTracker,
+          eventBus,
+          providerManager: {} as never,
+          toolRegistry: { getAllTools: () => [] } as never,
+          channel: { sendText, sendMarkdown } as never,
+          projectPath: "/fake/project",
+          readOnly: false,
+          requireConfirmation: false,
+          metrics: undefined,
+          streamingEnabled: false,
+          stradaDeps: { installed: false, version: undefined },
+          memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        });
+        m.setBackgroundTaskSubmitter(vi.fn());
+        m.setTaskManager({
+          listActiveTasks: vi.fn(() => []),
+          listAllActiveTasks: vi.fn(activeTasks),
+        } as never);
+        return m;
+      }
+
+      it("is not evicted by the idle sweep until its task ends", async () => {
+        const evictEvents: unknown[] = [];
+        eventBus.on("agent:evicted", (evt) => evictEvents.push(evt));
+        let tasks: unknown[] = [];
+        const m = backgroundManager({}, () => tasks);
+        await m.routeMessage(makeMsg({ chatId: "chat-1" }));
+        const agent = m.getAllAgents()[0]!;
+        tasks = [{ chatId: "chat-1", channelType: "web", agentId: agent.id }];
+
+        m.evictIdleAgents();
+        expect(m.getActiveCount()).toBe(1);
+        expect(m.getLiveOrchestrator(agent.id)).toBeDefined();
+        expect(evictEvents).toHaveLength(0);
+
+        tasks = [];
+        m.evictIdleAgents();
+        expect(m.getActiveCount()).toBe(0);
+        await m.shutdown();
+      });
+
+      it("is matched by conversation when the task carries no agent id", async () => {
+        const m = backgroundManager({}, () => [
+          { chatId: "chat-9", channelType: "web", conversationId: "stable-conv" },
+        ]);
+        await m.routeMessage(makeMsg({ chatId: "chat-1", conversationId: "stable-conv" }));
+
+        m.evictIdleAgents();
+        expect(m.getActiveCount()).toBe(1);
+        await m.shutdown();
+      });
+
+      it("is not evicted to make room for a new agent at maxConcurrent", async () => {
+        let tasks: unknown[] = [];
+        const m = backgroundManager({ maxConcurrent: 1 }, () => tasks);
+        await m.routeMessage(makeMsg({ chatId: "chat-1" }));
+        const first = m.getAllAgents()[0]!;
+        tasks = [{ chatId: "chat-1", channelType: "web", agentId: first.id }];
+
+        await m.routeMessage(makeMsg({ chatId: "chat-2" }));
+
+        expect(m.getLiveOrchestrator(first.id)).toBeDefined();
+        expect(m.getActiveCount()).toBe(2);
+        await m.shutdown();
+      });
+
+      it("refuses a forced stop, keeping its resources live", async () => {
+        const m = backgroundManager({}, () => [{ chatId: "chat-1", channelType: "web" }]);
+        await m.routeMessage(makeMsg({ chatId: "chat-1" }));
+        const agent = m.getAllAgents()[0]!;
+
+        await expect(m.stopAgent(agent.id, true)).rejects.toThrow(/active task/);
+        expect(m.getLiveOrchestrator(agent.id)).toBeDefined();
+        expect(m.getAgent(agent.id)?.status).toBe("active");
+        await m.shutdown();
+      });
+    });
   });
 
   // ===========================================================================
