@@ -107,10 +107,16 @@ export async function requestWriteConfirmation(
       question = `Confirm git commit: "${String(input["message"]).slice(0, 80)}"?`;
       details = `Creating git commit`;
       break;
-    case "git_push":
-      question = "Confirm git push to remote?";
-      details = `Pushing to ${input["remote"] ?? "origin"}`;
+    case "git_push": {
+      // Name what is being pushed where: the prompt used to show neither the
+      // branch nor, in the question, the remote.
+      const remote = String(input["remote"] ?? "origin");
+      const branch = input["branch"] ? `branch \`${String(input["branch"])}\`` : "the current branch";
+      const upstream = input["set_upstream"] ? " and set it as upstream" : "";
+      question = `Confirm git push of ${branch} to remote \`${remote}\`?`;
+      details = `Pushing ${branch} to ${remote}${upstream}`;
       break;
+    }
     case "batch_execute": {
       // audited 2026-09-02: a batch used to fall to the default and ask
       // "Confirm file edit: unknown?" — the human could not see what they

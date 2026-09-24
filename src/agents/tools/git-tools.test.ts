@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import {
   GitStatusTool,
   GitDiffTool,
@@ -423,6 +423,72 @@ describe("GitPushTool", () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("must not start with '-'");
+  });
+
+  // `branch` was handed to git as a refspec verbatim, so its syntax could
+  // force-update or delete the remote branch, and `remote` could be any URL
+  // or path rather than a configured remote.
+  describe("pushes only a branch, to a configured remote", () => {
+    let bare: string;
+    let current: string;
+    const gitIn = (cwd: string, ...args: string[]): string =>
+      execFileSync("git", args, { cwd, stdio: "pipe" }).toString().trim();
+    const remoteHead = (ref: string): string =>
+      gitIn(bare, "for-each-ref", "--format=%(objectname)", `refs/heads/${ref}`);
+
+    beforeEach(async () => {
+      bare = await mkdtemp(join(tmpdir(), "git-push-remote-"));
+      gitIn(bare, "init", "--bare");
+      current = gitIn(tempDir, "rev-parse", "--abbrev-ref", "HEAD");
+      gitIn(tempDir, "remote", "add", "origin", bare);
+      gitIn(tempDir, "push", "origin", `refs/heads/${current}:refs/heads/${current}`);
+    });
+
+    afterEach(async () => {
+      await rm(bare, { recursive: true, force: true });
+    });
+
+    it("pushes the named branch to the configured remote", async () => {
+      await writeFile(join(tempDir, "file.txt"), "second\n");
+      gitIn(tempDir, "commit", "-am", "second");
+      const result = await tool.execute({ remote: "origin", branch: current, set_upstream: true }, ctx);
+      expect(result.isError).toBeFalsy();
+      expect(remoteHead(current)).toBe(gitIn(tempDir, "rev-parse", "HEAD"));
+    });
+
+    it("refuses a branch that is a refspec", async () => {
+      const before = remoteHead(current);
+      for (const branch of ["+HEAD:" + current, ":" + current, "HEAD:refs/heads/other"]) {
+        const result = await tool.execute({ remote: "origin", branch }, ctx);
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain("not a valid branch name");
+      }
+      expect(remoteHead(current)).toBe(before);
+      expect(remoteHead("other")).toBe("");
+    });
+
+    it("never force-updates the remote branch", async () => {
+      const before = remoteHead(current);
+      await writeFile(join(tempDir, "file.txt"), "rewritten\n");
+      gitIn(tempDir, "commit", "-a", "--amend", "-m", "rewritten");
+      const result = await tool.execute({ remote: "origin", branch: `+${current}` }, ctx);
+      expect(result.isError).toBe(true);
+      expect(remoteHead(current)).toBe(before);
+    });
+
+    it("refuses a URL or path in place of a configured remote name", async () => {
+      const other = await mkdtemp(join(tmpdir(), "git-push-other-"));
+      try {
+        gitIn(other, "init", "--bare");
+        const result = await tool.execute({ remote: other, branch: current }, ctx);
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain("not a configured remote");
+        expect(result.content).toContain("origin");
+        expect(gitIn(other, "for-each-ref")).toBe("");
+      } finally {
+        await rm(other, { recursive: true, force: true });
+      }
+    });
   });
 });
 

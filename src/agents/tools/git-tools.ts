@@ -406,11 +406,11 @@ export class GitPushTool implements ITool {
     properties: {
       remote: {
         type: "string",
-        description: "Remote name (default: 'origin').",
+        description: "Configured remote name, as listed by `git remote` (default: 'origin'). URLs and paths are refused.",
       },
       branch: {
         type: "string",
-        description: "Branch to push. Default: current branch.",
+        description: "Local branch to push to the remote branch of the same name. Default: current branch.",
       },
       set_upstream: {
         type: "boolean",
@@ -432,15 +432,44 @@ export class GitPushTool implements ITool {
     const remoteCheck = sanitizeGitArg(remoteRaw, "remote");
     if (!remoteCheck.valid) return { content: `Error: ${remoteCheck.error}`, isError: true };
 
-    const args = ["push"];
-    if (input["set_upstream"]) args.push("-u");
-    args.push(remoteCheck.value);
-
+    // The refspec is built here, never passed through: git reads a pushed
+    // argument as a REFSPEC, whose syntax can force-update or delete the
+    // remote branch — neither of which this tool offers or its confirmation
+    // shows. The name must be a valid branch name by git's own rules (which
+    // exclude `:`), and both sides are fully qualified, so no input can make
+    // the refspec start with `+` or have an empty source.
+    let refspec: string | undefined;
     if (input["branch"]) {
       const branchCheck = sanitizeGitArg(String(input["branch"]), "branch");
       if (!branchCheck.valid) return { content: `Error: ${branchCheck.error}`, isError: true };
-      args.push(branchCheck.value);
+      const format = await runGit(["check-ref-format", "--branch", branchCheck.value], context.projectPath);
+      const branch = format.stdout.trim();
+      if (format.exitCode !== 0 || !branch) {
+        return { content: `Error: '${branchCheck.value}' is not a valid branch name`, isError: true };
+      }
+      refspec = `refs/heads/${branch}:refs/heads/${branch}`;
     }
+
+    // A configured remote NAME only. git also accepts a URL or a filesystem
+    // path here, which would send the commits somewhere nobody configured.
+    const remotes = await runGit(["remote"], context.projectPath);
+    if (remotes.exitCode !== 0) {
+      return { content: `Error: could not list remotes\n${remotes.stderr}`, isError: true };
+    }
+    const remoteNames = remotes.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    if (!remoteNames.includes(remoteCheck.value)) {
+      const configured = remoteNames.length > 0 ? `configured: ${remoteNames.join(", ")}` : "this repository has none";
+      return {
+        content: `Error: '${remoteCheck.value}' is not a configured remote (${configured}). ` +
+          "Push to a remote name listed by `git remote`, not a URL or path.",
+        isError: true,
+      };
+    }
+
+    const args = ["push"];
+    if (input["set_upstream"]) args.push("-u");
+    args.push(remoteCheck.value);
+    if (refspec) args.push(refspec);
 
     const result = await runGit(args, context.projectPath);
     if (result.exitCode !== 0) {
