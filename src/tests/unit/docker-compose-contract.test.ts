@@ -12,9 +12,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const compose = readFileSync(path.join(repoRoot, "docker-compose.yml"), "utf8");
@@ -231,26 +231,12 @@ describe.each([
   });
 });
 
-/** Every env var name the application source reads (non-test `.ts` under src/). */
-function envVarsReadBySource(): Set<string> {
-  const names = new Set<string>();
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "tests" && entry.name !== "node_modules") walk(full);
-      } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-        const text = readFileSync(full, "utf8");
-        // env["X"], env.X, and a name held in a `const SOMETHING_ENV = "X"`.
-        const pattern = /\benv\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]|\benv\.([A-Z][A-Z0-9_]*)\b|\bconst\s+\w+_ENV\s*=\s*["']([A-Z][A-Z0-9_]*)["']/g;
-        for (const m of text.matchAll(pattern)) {
-          names.add((m[1] ?? m[2] ?? m[3])!);
-        }
-      }
-    }
-  };
-  walk(path.join(repoRoot, "src"));
-  return names;
+/** Every env var name the application source reads — the same scan `npm run audit:env` uses. */
+async function envVarsReadBySource(): Promise<Set<string>> {
+  const { collectEnvReads } = (await import(
+    pathToFileURL(path.join(repoRoot, "scripts", "audit-env-coverage.mjs")).href
+  )) as { collectEnvReads: (srcDir: string) => Set<string> };
+  return collectEnvReads(path.join(repoRoot, "src"));
 }
 
 /**
@@ -293,8 +279,8 @@ describe.each([
     expect(published.some((p) => p.mapping.endsWith(`:${webPort}`))).toBe(true);
   });
 
-  it("sets no env var the application never reads", () => {
-    const read = envVarsReadBySource();
+  it("sets no env var the application never reads", async () => {
+    const read = await envVarsReadBySource();
     // Read by the OS, npm or Node rather than by src/.
     const external = new Set(["HOME", "USER", "NODE_ENV"]);
     const unread = [...new Set([...dockerfile.env.keys(), ...composeEnv.keys()])]
