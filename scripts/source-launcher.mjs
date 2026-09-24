@@ -535,8 +535,10 @@ exit $LASTEXITCODE
 
 function buildCmdWrapper() {
   const sourceLauncher = path.join(ROOT_DIR, "scripts", "source-launcher.mjs");
+  // No EnableDelayedExpansion: nothing below uses !var!, and with it on cmd
+  // strips every "!" from the arguments and paths (OPS-17).
   return `@echo off
-setlocal EnableDelayedExpansion
+setlocal
 set "STRADA_SOURCE_LAUNCHER=${sourceLauncher}"
 :: --- Node.js resolution with portable fallback ---
 if defined STRADA_NODE_PATH ( set "NODE_EXE=%STRADA_NODE_PATH%" & goto :strada_found )
@@ -567,10 +569,12 @@ rmdir /s /q "%TD%" 2>nul
 echo Installed Node.js %NV% to %SNDIR% & echo.
 set "NODE_EXE=%SNDIR%\\node.exe"
 :strada_found
+if /i "%NODE_EXE%"=="node" goto :strada_path_ready
 for %%I in ("%NODE_EXE%") do set "NDIR=%%~dpI"
 set "NDIR=%NDIR:~0,-1%"
 echo "%PATH%" | findstr /i /c:"%NDIR%" >nul 2>nul
 if errorlevel 1 set "PATH=%NDIR%;%PATH%"
+:strada_path_ready
 set "STRADA_NODE_PATH=%NODE_EXE%"
 "%NODE_EXE%" "%STRADA_SOURCE_LAUNCHER%" --wrapper-kind cmd --wrapper-path "%~f0" %*
 exit /b %ERRORLEVEL%

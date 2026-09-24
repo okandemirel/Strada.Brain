@@ -1,5 +1,7 @@
 @echo off
-setlocal EnableDelayedExpansion
+:: No EnableDelayedExpansion: nothing uses !var!, and with it on cmd strips
+:: every "!" from the arguments and from this script's own path.
+setlocal
 
 :: --- Node.js resolution with automatic portable download ---
 
@@ -102,11 +104,15 @@ echo Or set STRADA_NODE_PATH to point to your node.exe
 exit /b 1
 
 :found_node
-:: Ensure the directory containing node (and npm) is on PATH for child processes
+:: Ensure the directory containing node (and npm) is on PATH for child processes.
+:: A bare `node` came from PATH already, and the drive+path of a bare name is
+:: the CURRENT (launch) directory, which must not go first on PATH.
+if /i "%NODE_EXE%"=="node" goto :node_path_ready
 for %%I in ("%NODE_EXE%") do set "NODE_DIR=%%~dpI"
 set "NODE_DIR=%NODE_DIR:~0,-1%"
 echo "%PATH%" | findstr /i /c:"%NODE_DIR%" >nul 2>nul
 if errorlevel 1 set "PATH=%NODE_DIR%;%PATH%"
+:node_path_ready
 set "STRADA_NODE_PATH=%NODE_EXE%"
 
 set "ROOT_DIR=%~dp0"

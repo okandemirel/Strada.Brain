@@ -714,6 +714,57 @@ describe("the flag the source child inherits (round 13 #35)", () => {
   });
 });
 
+describe("Windows .cmd launchers (OPS-17)", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function generatedCmdWrapper(): Promise<string> {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-cmd-wrapper-"));
+    tempDirs.push(tempHome);
+    const localAppData = path.join(tempHome, "AppData", "Local");
+    const { installCommand } = await loadSourceLauncherModule();
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      installCommand({
+        platform: "win32",
+        env: { LOCALAPPDATA: localAppData, PATH: "" },
+        homeDir: tempHome,
+        launcherPath: "C:\\Repo\\Strada.Brain\\strada.ps1",
+        windowsPathSync: vi.fn().mockReturnValue({ updated: false, path: "" }),
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+    return readFileSync(path.join(localAppData, "Strada", "bin", "strada.cmd"), "utf8");
+  }
+
+  const sources = async () => [
+    ["strada.cmd", readFileSync(path.join(process.cwd(), "strada.cmd"), "utf8")],
+    ["generated strada.cmd", await generatedCmdWrapper()],
+  ] as const;
+
+  it("do not enable delayed expansion (it strips every ! from arguments and paths)", async () => {
+    for (const [name, source] of await sources()) {
+      const code = source.split(/\r?\n/).filter((line) => !line.trimStart().startsWith("::")).join("\n");
+      expect(code, name).not.toMatch(/EnableDelayedExpansion/i);
+      // Nothing may rely on it either.
+      expect(code, name).not.toMatch(/![A-Za-z_]\w*!/);
+    }
+  });
+
+  it("never put the launch directory on PATH for a bare `node` found on PATH", async () => {
+    for (const [name, source] of await sources()) {
+      const lines = source.split(/\r?\n/);
+      const skip = lines.findIndex((line) => /^if \/i "%NODE_EXE%"=="node" goto :\S+$/.test(line));
+      const prepend = lines.findIndex((line) => /set "PATH=%N(?:ODE_)?DIR%;%PATH%"/.test(line));
+      expect(skip, `${name}: no bare-node guard`).toBeGreaterThan(-1);
+      expect(prepend, `${name}: no PATH prepend`).toBeGreaterThan(skip);
+    }
+  });
+});
+
 describe("source launcher npm invocation with a Node path containing a space (OPS-2)", () => {
   const PROGRAM_FILES_NODE = "C:\\Program Files\\nodejs\\node.exe";
   const tempDirs: string[] = [];
