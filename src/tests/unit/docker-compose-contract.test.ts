@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -332,5 +332,47 @@ describe("nginx.conf targets the web channel (OPS-6)", () => {
     const dockerfile = productionStageEnv(readFileSync(path.join(repoRoot, "Dockerfile"), "utf8"));
     const upstream = /upstream\s+strata_backend\s*\{[^}]*\bserver\s+strada-brain:(\d+)/.exec(conf);
     expect(upstream?.[1]).toBe(dockerfile.env.get("WEB_CHANNEL_PORT"));
+  });
+});
+
+/** Service names declared under the top-level `services:` key. */
+function serviceNames(source: string): string[] {
+  const names: string[] = [];
+  let inServices = false;
+  for (const line of source.split(/\r?\n/)) {
+    if (/^\S/.test(line)) inServices = /^services:\s*$/.test(line);
+    const name = inServices ? /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line) : null;
+    if (name) names.push(name[1]!);
+  }
+  return names;
+}
+
+/**
+ * OPS-5. Compose auto-merges `docker-compose.override.yml`, and that file turned
+ * the documented production `docker compose up -d` into a development build
+ * (tsx watch, root user, debug logging, nginx disabled). Merged, it was not even
+ * valid: it depended on a Redis it had moved into a profile.
+ */
+describe("the development stack is opt-in (OPS-5)", () => {
+  it("ships no auto-loaded compose override next to the production file", () => {
+    for (const name of ["docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml"]) {
+      expect(existsSync(path.join(repoRoot, name)), name).toBe(false);
+    }
+  });
+
+  it("only overrides services the production file defines", () => {
+    const dev = readFileSync(path.join(repoRoot, "docker-compose.dev.yml"), "utf8");
+    const production = new Set(serviceNames(compose));
+    const devServices = serviceNames(dev);
+    expect(devServices.length).toBeGreaterThan(0);
+    expect(devServices.filter((name) => !production.has(name))).toEqual([]);
+  });
+
+  it("runs the development image stage as a non-root user", () => {
+    const dockerfile = readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+    const stage = dockerfile.split(/^FROM\s+/m).find((chunk) => /^\S+\s+AS\s+development\b/i.test(chunk)) ?? "";
+    const users = [...stage.matchAll(/^USER\s+(\S+)/gm)].map((m) => m[1]!);
+    expect(users.length, "the development stage runs as root").toBeGreaterThan(0);
+    expect(users.at(-1)).not.toMatch(/^(?:root|0)(?::|$)/);
   });
 });

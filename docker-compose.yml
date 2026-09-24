@@ -2,10 +2,14 @@
 # Strada.Brain - Production Docker Compose Configuration
 # =============================================================================
 # Usage:
-#   docker compose up -d                    # Start all services
-#   docker compose -f docker-compose.yml up -d  # Production mode
-#   docker compose down                     # Stop all services
-#   docker compose logs -f strada-brain     # View logs
+#   docker compose up -d                        # Production: strada-brain + nginx
+#   docker compose --profile monitoring up -d   # ... plus Prometheus and Grafana
+#   docker compose down                         # Stop all services
+#   docker compose logs -f strada-brain         # View logs
+#
+# Development (hot reload, no nginx) is an explicit second file, never an
+# auto-loaded docker-compose.override.yml (OPS-5):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 #
 # Environment Variables (create .env file):
 #   ANTHROPIC_API_KEY=sk-ant-...

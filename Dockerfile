@@ -189,10 +189,21 @@ FROM builder AS development
 # Install additional dev tools
 RUN apk add --no-cache git
 
-# Set environment
+# Same runtime layout as production: the config root and state directories
+# belong to the base image's `node` user, and this stage does not run as root
+# (OPS-5).
+RUN mkdir -p /app/.strada /app/.strada-memory /app/logs && \
+    chown -R node:node /app/.strada /app/.strada-memory /app/logs
+
+# Set environment. npm's cache/logs go to /tmp: /app is not the user's to write.
 ENV NODE_ENV=development \
+    HOME=/app \
+    STRADA_HOME=/app/.strada \
+    NPM_CONFIG_CACHE=/tmp/.npm \
     BIND_HOST=0.0.0.0 \
     DASHBOARD_PORT=3100
+
+USER node
 
 # Expose ports
 EXPOSE 3000 3100 9090

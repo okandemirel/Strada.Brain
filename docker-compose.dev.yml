@@ -1,10 +1,12 @@
 # =============================================================================
-# Strada.Brain - Docker Compose Override (Development)
+# Strada.Brain - Docker Compose Development Overrides
 # =============================================================================
-# This file is automatically loaded by Docker Compose alongside docker-compose.yml
-# Use it for local development overrides
+# Hot reload from ./src, debug logging, no nginx. Never auto-loaded: as
+# docker-compose.override.yml it silently turned the documented production
+# `docker compose up -d` into this development stack (OPS-5).
 #
-# To use: docker compose up -d
+# To use:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 # =============================================================================
 
 services:
@@ -26,15 +28,10 @@ services:
     # Override command for development
     command: ["npm", "run", "dev"]
 
-  # Disable nginx in development (access dashboard directly)
+  # Disable nginx in development (open the portal on http://127.0.0.1:3000)
   nginx:
     profiles:
       - disabled
-
-  # Redis optional in development
-  redis:
-    profiles:
-      - optional
 
 volumes:
   node_modules:
