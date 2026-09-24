@@ -53,7 +53,7 @@ import { runConsensusVerification } from "../../agents/orchestrator-consensus.js
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../../goals/types.js";
 import { processReflectionPreamble, handlePlanPhaseTransition } from "../../agents/orchestrator-loop-utils.js";
 import { recordExecutionTrace, recordPhaseOutcome, consensusUsageSink } from "./accounting.js";
-import { emitVisibleBoundary } from "./render.js";
+import { emitVisibleBoundary, sanitizeBlockedVisibleText } from "./render.js";
 import type { RenderDeps } from "./render.js";
 import type { ReviewDeps } from "./review.js";
 import type { EngineRunContext } from "./engine-deps.js";
@@ -310,8 +310,9 @@ export async function portDispatchReflection(
     params.responseText,
     writeCapableFrom(deps),
   );
+  const transcriptLengthBefore = deps.sessionManager.getVisibleTranscript(runCtx.session).length;
   if (writeRejectionText) {
-    await emitVisibleBoundary(deps, chatId, runCtx.session, writeRejectionText);
+    await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, writeRejectionText, transcriptLengthBefore);
     return { agentState: params.agentState, terminal: true, reason: "self-managed-write-rejected" };
   }
   const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0);
@@ -374,11 +375,11 @@ export async function portDispatchReflection(
       // intervention extended the run — the spine must honor it over the parse-time verdict.
       return { agentState: action.newState, terminal: false, extendRequested: true };
     case "done": {
-      await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);
+      await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
       return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
     }
     case "blocked": {
-      const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);
+      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
       return {
         agentState: safe.marked
           ? { ...params.agentState, loopDetectionBlocked: true }
@@ -388,6 +389,30 @@ export async function portDispatchReflection(
       };
     }
   }
+}
+
+/**
+ * Only an interactive run speaks to the chat from inside the run. Background, worker and
+ * supervisor-node runs hand their answer back as finalText, and the task system delivers it
+ * after the run commits; rendering here as well posted every answer twice and sent node
+ * workers' internal answers to the user's chat. Off the interactive path the text is only
+ * recorded, once: the background handlers append the answers they produce themselves, so the
+ * boundary appends only when the handler recorded nothing.
+ */
+async function settleVisibleBoundary(
+  deps: ReflectionDeps,
+  mode: DispatchEndTurnParams["mode"],
+  chatId: string,
+  session: Session,
+  visibleText: string | undefined,
+  transcriptLengthBefore: number,
+): Promise<{ text: string; marked: boolean }> {
+  if (mode === "interactive") return emitVisibleBoundary(deps, chatId, session, visibleText);
+  const safe = sanitizeBlockedVisibleText(deps, visibleText ?? "");
+  if (safe.text && deps.sessionManager.getVisibleTranscript(session).length === transcriptLengthBefore) {
+    deps.sessionManager.appendVisibleAssistantMessage(session, safe.text);
+  }
+  return safe;
 }
 
 /**
@@ -437,8 +462,9 @@ export async function portDispatchEndTurn(
     params.responseText,
     writeCapableFrom(deps),
   );
+  const transcriptLengthBefore = deps.sessionManager.getVisibleTranscript(runCtx.session).length;
   if (writeRejectionText) {
-    const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, writeRejectionText);
+    const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, writeRejectionText, transcriptLengthBefore);
     // A rejected write that the model then acknowledged with an empty "done"
     // is NOT a delivery. This return carried no status, so the runner's
     // default "completed" settled the task as done (Codex 2026-09-16 plan
@@ -463,7 +489,7 @@ export async function portDispatchEndTurn(
 
   switch (action.flow) {
     case "done": {
-      const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);
+      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
       return {
         agentState: action.newState,
         finalText: safe.text,
@@ -483,7 +509,7 @@ export async function portDispatchEndTurn(
       };
     }
     case "blocked": {
-      const safe = await emitVisibleBoundary(deps, chatId, runCtx.session, action.visibleText);
+      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
       return {
         agentState: safe.marked
           ? { ...params.agentState, loopDetectionBlocked: true }

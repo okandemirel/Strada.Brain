@@ -21,6 +21,8 @@ vi.mock("./render.js", () => ({
     text,
     marked: false,
   })),
+  // Background runs record the boundary text without rendering it (ORC-1).
+  sanitizeBlockedVisibleText: vi.fn((_d: unknown, text: string) => ({ text, marked: false })),
 }));
 
 import { handleBgEndTurn, handleInteractiveEndTurn } from "../../agents/orchestrator-end-turn-handler.js";
