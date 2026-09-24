@@ -359,18 +359,38 @@ export type ContentBlock =
 
 /**
  * Assembles the content blocks for the user message after tool execution:
- * state injection context, reflection prompt (if reflecting), and tool results.
+ * the tool results, then any gate notes, the state injection context and the
+ * reflection prompt (if reflecting).
+ *
+ * The tool_result blocks come FIRST. They must answer the assistant's tool_use
+ * turn immediately, and inside the user turn a text block ahead of them is
+ * rejected by Anthropic and makes the OpenAI-compatible repair relabel the
+ * real results as orphans — the model is told its calls never completed.
  *
  * @param options.providerHealthContext - When provided, injected into the reflection
  *   prompt so the LLM can reason about provider instability when deciding next steps.
+ * @param options.notes - Gate text for this turn (read-only stall, consensus objection).
  */
 export function buildToolResultContentBlocks(
   stateCtx: string | null,
   agentState: AgentState,
   toolResults: readonly ToolResult[],
-  options?: { providerHealthContext?: string },
+  options?: { providerHealthContext?: string; notes?: readonly string[] },
 ): ContentBlock[] {
   const contentBlocks: ContentBlock[] = [];
+
+  for (const tr of toolResults) {
+    contentBlocks.push({
+      type: "tool_result",
+      tool_use_id: tr.toolCallId,
+      content: tr.content,
+      is_error: tr.isError,
+    });
+  }
+
+  for (const note of options?.notes ?? []) {
+    contentBlocks.push({ type: "text", text: note });
+  }
 
   if (stateCtx) {
     contentBlocks.push({ type: "text", text: stateCtx });
@@ -382,15 +402,6 @@ export function buildToolResultContentBlocks(
       text: buildReflectionPrompt(agentState, {
         providerHealthContext: options?.providerHealthContext,
       }),
-    });
-  }
-
-  for (const tr of toolResults) {
-    contentBlocks.push({
-      type: "tool_result",
-      tool_use_id: tr.toolCallId,
-      content: tr.content,
-      is_error: tr.isError,
     });
   }
 

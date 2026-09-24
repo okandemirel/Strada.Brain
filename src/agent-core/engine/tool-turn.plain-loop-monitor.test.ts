@@ -241,7 +241,19 @@ describe("portExecuteToolTurn — SUPPRESSION on supervisor/decomposed/joined ru
 });
 
 describe("portExecuteToolTurn — a read-only streak is told to the model", () => {
-  it("pushes the READ-ONLY STREAK gate into the session when the tracker reports a stall", async () => {
+  // The gate rides as a text block AFTER the tool results of the turn that raised it — a
+  // separate user message between tool_use and tool_result broke provider pairing (ORC-5).
+  type Msg = { role: string; content: string | Array<{ type: string; text?: string }> };
+  const texts = (messages: Msg[]): string[] =>
+    messages.flatMap((m) =>
+      m.role !== "user"
+        ? []
+        : typeof m.content === "string"
+          ? [m.content]
+          : m.content.filter((b) => b.type === "text").map((b) => b.text ?? ""),
+    );
+
+  it("adds the READ-ONLY STREAK gate after the turn's tool results when the tracker reports a stall", async () => {
     const deps = makeDeps();
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     const runCtx = makeRunCtx({ controlLoopTracker: tracker });
@@ -250,32 +262,34 @@ describe("portExecuteToolTurn — a read-only streak is told to the model", () =
     }
     // The turn's two calls (read_file, edit_file — neither a known mutation tool) complete the streak.
     await portExecuteToolTurn(deps, makeArgs(), runCtx);
-    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
-    const gate = messages.find((m) => m.role === "user" && String(m.content).startsWith("[READ-ONLY STREAK]"));
+    const messages = (runCtx.session as unknown as { messages: Msg[] }).messages;
+    const gate = texts(messages).find((t) => t.startsWith("[READ-ONLY STREAK]"));
     expect(gate).toBeDefined();
-    expect(gate!.content).toContain("Do not read more first");
+    expect(gate).toContain("Do not read more first");
+    const answer = messages[messages.length - 1]!.content as Array<{ type: string }>;
+    expect(answer.slice(0, 2).map((b) => b.type)).toEqual(["tool_result", "tool_result"]);
   });
 
   it("the SECOND streak escalates: a ×2 gate and a write-only tool list for the next turn", async () => {
     const deps = makeDeps();
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     const runCtx = makeRunCtx({ controlLoopTracker: tracker });
-    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
+    const messages = (runCtx.session as unknown as { messages: Msg[] }).messages;
     for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 2; i++) tracker.markToolExecution("vault_search", `vault_search:{"query":"a${i}"}`);
     await portExecuteToolTurn(deps, makeArgs(), runCtx); // first streak
     expect(runCtx.restrictToProgressTools).not.toBe(true);
-    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK]"))).toBe(true);
+    expect(texts(messages).some((t) => t.startsWith("[READ-ONLY STREAK]"))).toBe(true);
     for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 2; i++) tracker.markToolExecution("vault_search", `vault_search:{"query":"b${i}"}`);
     await portExecuteToolTurn(deps, makeArgs(), runCtx); // second streak
     expect(runCtx.restrictToProgressTools).toBe(true);
-    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK ×2]"))).toBe(true);
+    expect(texts(messages).some((t) => t.startsWith("[READ-ONLY STREAK ×2]"))).toBe(true);
   });
 
-  it("pushes nothing while the streak is short", async () => {
+  it("adds nothing while the streak is short", async () => {
     const deps = makeDeps();
     const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });
     await portExecuteToolTurn(deps, makeArgs(), runCtx);
-    const messages = (runCtx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
-    expect(messages.some((m) => String(m.content).startsWith("[READ-ONLY STREAK]"))).toBe(false);
+    const messages = (runCtx.session as unknown as { messages: Msg[] }).messages;
+    expect(texts(messages).some((t) => t.startsWith("[READ-ONLY STREAK]"))).toBe(false);
   });
 });

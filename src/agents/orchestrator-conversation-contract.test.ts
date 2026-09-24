@@ -5,9 +5,9 @@
  *  - Delivery (ORC-1): only an interactive run posts to the chat from inside the run. Background,
  *    worker and supervisor-node answers are returned as finalText and delivered by the task
  *    system, and the answer is recorded in the run's transcript exactly once.
- *  - Pairing (ORC-2): every assistant tool_use is answered by the very next user message,
+ *  - Pairing (ORC-2, ORC-5): every assistant tool_use is answered by the very next user message,
  *    whose leading blocks are the tool_result blocks for all of its call ids — also when a gate
- *    throws.
+ *    throws, and when the engine adds gate text to the same turn.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -208,7 +208,7 @@ describe("background, worker and node runs do not post to the chat (ORC-1)", () 
   });
 });
 
-describe("tool_use / tool_result pairing (ORC-2)", () => {
+describe("tool_use / tool_result pairing (ORC-2, ORC-5)", () => {
   it("a gate that throws while running a tool still leaves a tool_result for the call (ORC-2)", async () => {
     const h = harness();
     h.chat.mockResolvedValueOnce(
@@ -238,5 +238,27 @@ describe("tool_use / tool_result pairing (ORC-2)", () => {
     );
     expect(answered, shape(session.messages)).toBe(true);
     expectPaired(session.messages);
+  });
+
+  it("the read-only-stall gate rides after the tool results, never between tool_use and tool_result (ORC-5)", async () => {
+    const h = harness();
+    h.chat.mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }));
+    for (let i = 1; i <= 10; i++) {
+      h.chat.mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: `r${i}`, name: "file_read", input: { path: "Assets/Same.cs" } }] as ToolCall[],
+        }),
+      );
+    }
+    h.chat.mockResolvedValue(resp({ text: "done reading", stopReason: "end_turn" }));
+
+    await h.run("worker");
+
+    const gateSeen = h.runSession().messages.some((m) => JSON.stringify(m.content).includes("READ-ONLY"));
+    expect(gateSeen, "the stall gate must fire for this test to mean anything").toBe(true);
+    expectPaired(h.runSession().messages);
+    for (const body of h.sent) expectPaired(body);
   });
 });

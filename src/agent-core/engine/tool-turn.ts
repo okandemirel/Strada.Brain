@@ -222,6 +222,11 @@ export async function portExecuteToolTurn(
       },
     });
 
+    // Gate text raised by this turn. It rides in the SAME user message as the tool results,
+    // after them: a separate user message between tool_use and tool_result broke the pairing
+    // every provider requires (ORC-5).
+    const turnNotes: string[] = [];
+
     // STEP B — control-loop tracker mark (per call), as v1 does.
     if (runCtx.controlLoopTracker) {
       for (const tc of toolCalls) {
@@ -246,7 +251,7 @@ export async function portExecuteToolTurn(
         // A warning nobody reads is not an intervention: the model is told —
         // and from the second streak on, handed a write-only tool list.
         const level = runCtx.controlLoopTracker.getReadOnlyStreakReports();
-        runCtx.session.messages.push({ role: "user", content: readOnlyStreakGate(stall, level) });
+        turnNotes.push(readOnlyStreakGate(stall, level));
         if (level >= 2) runCtx.restrictToProgressTools = true;
       }
     }
@@ -281,13 +286,11 @@ export async function portExecuteToolTurn(
       // objection in front of the model as a message it must address, instead
       // of a warn-log nobody reads (audited 2026-08-30: advisory-only).
       if (consensusVerdict && !consensusVerdict.agreed) {
-        (session as { messages: ConversationMessage[] }).messages.push({
-          role: "user",
-          content:
-            "[CONSENSUS REVIEWER OBJECTION] A second model reviewed the last critical step and disagreed: " +
+        turnNotes.push(
+          "[CONSENSUS REVIEWER OBJECTION] A second model reviewed the last critical step and disagreed: " +
             `${(consensusVerdict.reasoning ?? "no reasoning returned").slice(0, 600)}\n` +
             "Address this objection explicitly before proceeding: re-verify the result, and correct course if the objection holds.",
-        });
+        );
       }
     }
 
@@ -333,6 +336,7 @@ export async function portExecuteToolTurn(
     const providerHealthContext = runCtx.iterationHealth.buildHealthSummary();
     const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
       providerHealthContext,
+      notes: turnNotes,
     });
     session.messages.push({
       role: "user",
