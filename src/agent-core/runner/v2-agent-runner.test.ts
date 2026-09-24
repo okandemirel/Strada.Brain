@@ -831,6 +831,33 @@ describe("V2AgentRunner — retry (verdict retry → backoff → continue)", () 
   });
 });
 
+describe("V2AgentRunner — request.maxEpochs caps background auto-continue", () => {
+  it("a delegated run capped at one epoch takes exactly its iteration limit of steps", async () => {
+    // A delegated sub-agent's maxIterations is the epoch iteration limit; with background
+    // auto-continue on it used to roll into more epochs and multiply its configured budget.
+    const handles = mkPlane();
+    const toolTurn = mkResponse({
+      text: "",
+      stopReason: "tool_use",
+      toolCalls: [{ id: "t1", name: "file_read", input: {} }],
+    });
+    const gateway = new ModelGateway(scriptedStream([toolTurn]));
+    const port = mkPort(mkProvider(), {
+      bgEpochLimit: 2,
+      planTransitionTo: AgentPhase.EXECUTING,
+      reflection: { agentState: createInitialState("x"), terminal: false },
+    });
+    // Auto-continue would allow three epochs.
+    Object.assign(port, { canAutoContinueBackgroundEpoch: (n: number) => n < 3 });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest({ maxEpochs: 1 }), mkIO("supervisor-node")));
+
+    expect(handles.events().filter((e) => e.type === "step.started")).toHaveLength(2);
+    expect(result.reason).toBe("epoch-budget-exhausted");
+  });
+});
+
 describe("V2AgentRunner — a signal already aborted when the run opens", () => {
   it("is a user-cancel: no model call, no health failure", async () => {
     // An "abort" listener added after the fact never fires; the run used to start live, every

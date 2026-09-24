@@ -441,6 +441,22 @@ describe("DelegationManager", () => {
       expect(result.content).toBe("The verifier loop is caused by a stale fingerprint");
     });
 
+    it("caps the sub-agent run at one epoch, so its maxIterations is the whole budget", async () => {
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockResolvedValueOnce({
+        status: "completed", finalText: "done", finalSummary: "done", provider: "mock-provider",
+        catalogVersion: "mock-provider:mock-model", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      });
+
+      await manager.delegate({
+        type: "code_review", task: "Review Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(orchestratorOpts.maxIterations).toBe(10);
+      expect(scriptedRunnerRun).toHaveBeenCalledWith(expect.objectContaining({ maxEpochs: 1 }), expect.anything());
+    });
+
     it("refuses a delegation whose type keeps timing out at the cap, before any lease is taken", async () => {
       // Measured 2026-09-07: every code_review sub-agent of the day timed out
       // at 60 s after seeding a 2000-file lease.

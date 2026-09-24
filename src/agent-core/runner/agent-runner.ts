@@ -213,6 +213,13 @@ export interface AgentRunRequest {
   readonly interactiveSession?: unknown;
 
   /**
+   * Hard cap on this run's epochs; auto-continue stops at it. A delegated sub-agent's configured
+   * `maxIterations` is a whole-run cap, so delegation passes 1 — otherwise background
+   * auto-continue multiplied it by the epoch count. Absent ⇒ only the policy's epoch limits apply.
+   */
+  readonly maxEpochs?: number;
+
+  /**
    * Phase 1+ only: parent `RunClock` view for delegated/supervisor-node runs (shared clock,
    * read-only — ARCHITECTURE §1.1). Undefined in Phase 0 (no control plane in the loop yet).
    * Present in the contract now so the field is stable when Phase 1 threads it.

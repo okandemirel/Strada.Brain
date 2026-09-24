@@ -922,7 +922,8 @@ export class V2AgentRunner implements AgentRunner {
           emit({ type: "run.ending", reason: terminalReason });
           break;
         }
-        if (!port.canAutoContinueBackgroundEpoch(epoch + 1)) {
+        const epochCapReached = request.maxEpochs !== undefined && epoch + 1 >= request.maxEpochs;
+        if (epochCapReached || !port.canAutoContinueBackgroundEpoch(epoch + 1)) {
           // GAP3 — the epoch-budget-exhausted STOP path. Fire v1's end-of-epoch side effects with
           // continued=false BEFORE the break, so the "blocked" phase-outcome telemetry + the
           // per-epoch persistExecutionMemory still run (v1 runBackgroundTask's end-of-epoch ran on the

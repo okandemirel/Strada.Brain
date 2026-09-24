@@ -811,6 +811,9 @@ export class DelegationManager {
               workspaceLease,
               // The V2 runner reads its sink from the REQUEST, not the Orchestrator.
               onUsage,
+              // The type's maxIterations is the sub-agent's whole budget (it is the
+              // epoch's iteration limit): one epoch, no background auto-continue.
+              maxEpochs: 1,
             },
             {
               mode,
