@@ -456,6 +456,7 @@ export class AgentManager {
 
     if (force) {
       liveAgent.orchestrator.cleanupSessions();
+      liveAgent.orchestrator.dispose();
       await liveAgent.memory.shutdown();
       this.agents.delete(liveAgent.instance.key);
     }
@@ -532,6 +533,7 @@ export class AgentManager {
     const closePromises: Promise<unknown>[] = [];
     for (const [, liveAgent] of this.agents) {
       liveAgent.orchestrator.cleanupSessions();
+      liveAgent.orchestrator.dispose();
       closePromises.push(liveAgent.memory.shutdown());
     }
 
@@ -976,8 +978,9 @@ export class AgentManager {
 
   /** Evict a specific agent: close memory, remove from map, update registry, emit event */
   private async evictAgent(key: string, liveAgent: LiveAgent): Promise<void> {
-    // Clean up orchestrator sessions
+    // Clean up orchestrator sessions, then release its timer and listeners
     liveAgent.orchestrator.cleanupSessions();
+    liveAgent.orchestrator.dispose();
 
     // Remove from in-memory map (synchronous — visible to callers immediately)
     this.agents.delete(key);

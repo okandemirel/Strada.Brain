@@ -46,6 +46,8 @@ let scriptedRunnerRun: ReturnType<typeof vi.fn> | undefined;
 let orchestratorOpts: Record<string, unknown>;
 let seededAuthorizations: Array<[string, string[]]> = [];
 
+const constructedOrchestrators: Array<Record<string, unknown>> = [];
+
 vi.mock("../../orchestrator.js", () => {
   return {
     Orchestrator: vi.fn().mockImplementation(function (this: Record<string, unknown>, opts: Record<string, unknown>) {
@@ -65,6 +67,8 @@ vi.mock("../../orchestrator.js", () => {
       });
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
+      this.dispose = vi.fn();
+      constructedOrchestrators.push(this);
     }),
   };
 });
@@ -333,6 +337,8 @@ describe("DelegationManager", () => {
       expect(duringRun, "the delegate ran without its parent's authorization").toEqual(["/a/gdd.docx"]);
       // Per-run entries must not accumulate for the daemon's lifetime.
       expect([...store.keys()]).toEqual(["chat-parent"]);
+      // Nor may the delegate's Orchestrator, whose cleanup timer pins it (ORC-11).
+      expect(constructedOrchestrators.at(-1)?.dispose).toHaveBeenCalledTimes(1);
     });
 
     it("spawns a sub-agent and returns captured result", async () => {

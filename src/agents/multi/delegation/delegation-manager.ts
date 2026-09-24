@@ -733,6 +733,9 @@ export class DelegationManager {
       }
     };
 
+    // Held outside the try so the finally can release it: an Orchestrator owns a
+    // session-cleanup timer and a budget listener that otherwise outlive the run.
+    let delegateOrchestrator: Orchestrator | undefined;
     try {
       workspaceLease = this.opts.workspaceLeaseManager
         ? await this.opts.workspaceLeaseManager.acquireLease({
@@ -764,6 +767,7 @@ export class DelegationManager {
         authorizedPathsStore: this.opts.authorizedPathsStore,
         onUsage,
       });
+      delegateOrchestrator = orchestrator;
       // Carry the user's authorization across the instance boundary, keyed to
       // the delegate's own chat id. The parent's tool context is the only
       // source: the delegate's brief below is parent-model text, and the
@@ -1000,6 +1004,7 @@ export class DelegationManager {
       // The delegate's entry in the shared store is per-run: drop it with the
       // run, or every delegation leaves one behind for the daemon's lifetime.
       this.opts.authorizedPathsStore?.delete(delegateChatId);
+      delegateOrchestrator?.dispose();
       this.cleanup(subAgentId);
       markSettled();
     }

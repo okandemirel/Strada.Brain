@@ -57,6 +57,7 @@ vi.mock("../orchestrator.js", () => {
           return "mock response";
         }),
         cleanupSessions: vi.fn(),
+        dispose: vi.fn(),
         setTaskManager: vi.fn(),
         setWorkspaceBus: vi.fn(),
         setMonitorLifecycle: vi.fn(),
@@ -876,6 +877,11 @@ describe("AgentManager", () => {
       idleManager.evictIdleAgents();
 
       expect(idleManager.getActiveCount()).toBe(0);
+      // The evicted Orchestrator's cleanup timer and budget listener are released
+      // with it, or every evicted agent stays pinned by its own interval (ORC-11).
+      const { Orchestrator } = await import("../orchestrator.js");
+      const evicted = vi.mocked(Orchestrator).mock.results.at(-1)?.value as { dispose: ReturnType<typeof vi.fn> };
+      expect(evicted.dispose).toHaveBeenCalledTimes(1);
 
       await idleManager.shutdown();
       vi.useRealTimers();
