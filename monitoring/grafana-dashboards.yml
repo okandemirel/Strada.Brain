@@ -1,0 +1,17 @@
+# =============================================================================
+# Grafana Dashboard Provider
+# =============================================================================
+# Grafana loads dashboards through a provider like this one; a dashboard JSON
+# placed directly in provisioning/dashboards/ is never loaded (OPS-24).
+# docker-compose.yml mounts ../grafana-dashboard.json into `path` below.
+
+apiVersion: 1
+
+providers:
+  - name: strada-brain
+    folder: Strada.Brain
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

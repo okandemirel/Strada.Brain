@@ -7,7 +7,6 @@ global:
   evaluation_interval: 15s
   external_labels:
     cluster: 'strada-brain'
-    replica: '{{.ExternalURL}}'
 
 # Alertmanager configuration (optional)
 # alerting:
@@ -38,19 +37,9 @@ scrape_configs:
     scrape_interval: 10s
     scrape_timeout: 5s
 
-  # Redis exporter (if enabled)
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis:6379']
-    metrics_path: /metrics
-    scrape_interval: 30s
-
-  # Nginx exporter (if enabled)
-  - job_name: 'nginx'
-    static_configs:
-      - targets: ['nginx:9113']
-    metrics_path: /metrics
-    scrape_interval: 30s
+  # No redis or nginx job (OPS-24): Redis does not serve HTTP metrics and the
+  # stack runs no redis_exporter or nginx-prometheus-exporter, so those targets
+  # were permanently down. Add the exporter service before adding its job.
 
   # Node exporter (host metrics) - if running externally
   # - job_name: 'node'

@@ -390,9 +390,15 @@ services:
       - type: volume
         source: grafana-data
         target: /var/lib/grafana
+      # Dashboards load through a provider (OPS-24); a JSON dropped straight
+      # into provisioning/dashboards/ is ignored.
+      - type: bind
+        source: ./monitoring/grafana-dashboards.yml
+        target: /etc/grafana/provisioning/dashboards/strada-brain.yml
+        read_only: true
       - type: bind
         source: ./grafana-dashboard.json
-        target: /etc/grafana/provisioning/dashboards/strada-dashboard.json
+        target: /etc/grafana/dashboards/strada-dashboard.json
         read_only: true
       - type: bind
         source: ./monitoring/grafana-datasource.yml
