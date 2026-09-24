@@ -15,8 +15,10 @@ import { Worker } from "node:worker_threads";
  * from src (tsx, vitest) and from the built dist without a separate file to
  * resolve or copy.
  */
+// The worker loads worker_threads via process.getBuiltinModule, not require():
+// this package bans require( in source (src/no-require-in-esm.test.ts).
 const WORKER_SOURCE = `
-const { parentPort, workerData } = require("node:worker_threads");
+const { parentPort, workerData } = process.getBuiltinModule("node:worker_threads");
 const regex = new RegExp(workerData.source, workerData.flags);
 parentPort.on("message", (msg) => {
   const lines = msg.text.split("\\n");

@@ -183,9 +183,11 @@ export interface SearchableText {
   readonly text: string;
 }
 
+// The worker loads worker_threads via process.getBuiltinModule, not require():
+// this package bans require( in source (src/no-require-in-esm.test.ts).
 const LINE_SEARCH_WORKER = `
 "use strict";
-const { parentPort, workerData } = require("node:worker_threads");
+const { parentPort, workerData } = process.getBuiltinModule("node:worker_threads");
 const { source, files, maxResults, maxChars } = workerData;
 const regex = new RegExp(source);
 const matches = [];
