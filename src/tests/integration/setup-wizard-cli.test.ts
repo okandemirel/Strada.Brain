@@ -33,7 +33,7 @@ describe("Terminal Wizard Integration", () => {
     fs.writeFileSync(envPath, content, "utf-8");
     const written = fs.readFileSync(envPath, "utf-8");
     expect(written).toContain("UNITY_PROJECT_PATH=");
-    expect(written).toContain('ANTHROPIC_API_KEY="sk-ant-test-key"');
+    expect(written).toContain("ANTHROPIC_API_KEY='sk-ant-test-key'");
     expect(written).toContain("LANGUAGE_PREFERENCE=tr");
     expect(written).toContain("STREAMING_ENABLED=true");
   });
@@ -47,7 +47,7 @@ describe("Terminal Wizard Integration", () => {
       language: "en",
     });
 
-    expect(content).toContain('DEEPSEEK_API_KEY="sk-deepseek-test-key"');
+    expect(content).toContain("DEEPSEEK_API_KEY='sk-deepseek-test-key'");
     expect(content).toContain("PROVIDER_CHAIN=deepseek");
   });
 

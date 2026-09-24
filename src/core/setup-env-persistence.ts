@@ -68,6 +68,25 @@ export interface PersistSetupResult extends MergeEnvResult {
   diskMatchesCommit: boolean;
 }
 
+/**
+ * Quote a value for a `KEY=value` line so dotenv reads back the same string.
+ *
+ * Both wizards used double quotes, where dotenv expands `\n`/`\r` and keeps
+ * `\"` verbatim: a Windows path such as `C:\repos\new` came back with a CR
+ * and an LF in it, and a secret containing `"` came back altered (COR-1).
+ * Single quotes and backticks are literal in dotenv, so one of them is used;
+ * double quotes only when the value holds both, and only when it has no
+ * escape sequence dotenv would expand. A raw line break is dropped so a value
+ * can never start a second `.env` line.
+ */
+export function formatEnvValue(value: unknown): string {
+  const text = typeof value === "string" ? value.replace(/[\r\n]/g, "") : "";
+  if (!text.includes("'")) return `'${text}'`;
+  if (!text.includes("`")) return `\`${text}\``;
+  if (!text.includes('"') && !/\\[nr]/.test(text)) return `"${text}"`;
+  throw new Error("This value cannot be stored in .env: it mixes single quotes, double quotes and backticks.");
+}
+
 /** Split generated `KEY=value` lines into entries; comments and blanks are dropped. */
 export function parseEnvLines(lines: readonly string[]): EnvUpdateEntry[] {
   const entries: EnvUpdateEntry[] = [];
@@ -92,7 +111,10 @@ function quotedBlockLength(lines: readonly string[], start: number, rest: string
   const quote = trimmed.startsWith('"') ? '"' : trimmed.startsWith("'") ? "'" : trimmed.startsWith("`") ? "`" : null;
   if (!quote) return 1;
   const body = trimmed.slice(1);
-  const closesOnSameLine = new RegExp(`(?<!\\\\)${quote}`).test(body);
+  // dotenv also closes on a quote that follows a backslash when only a comment
+  // follows it: `'C:\'` is the complete value `C:\`, not an open block.
+  const closesOnSameLine = new RegExp(`(?<!\\\\)${quote}`).test(body)
+    || new RegExp(`^(?:\\\\${quote}|[^${quote}])*${quote}\\s*(?:#.*)?$`).test(body);
   if (closesOnSameLine) return 1;
   for (let i = start + 1; i < lines.length; i++) {
     if (new RegExp(`(?<!\\\\)${quote}`).test(lines[i]!)) {

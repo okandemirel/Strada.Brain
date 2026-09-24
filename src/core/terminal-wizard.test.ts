@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as dotenvParse } from "dotenv";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildWebSetupUpgradeShellScript,
@@ -51,9 +52,9 @@ describe("generateEnvContent", () => {
       language: "en",
     });
 
-    expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-key"');
+    expect(content).toContain("OPENAI_API_KEY='sk-proj-openai-key'");
     expect(content).toContain("PROVIDER_CHAIN=openai");
-    expect(content).toContain('GEMINI_API_KEY="AIza-gemini-key"');
+    expect(content).toContain("GEMINI_API_KEY='AIza-gemini-key'");
     expect(content).toContain("EMBEDDING_PROVIDER=gemini");
   });
 
@@ -70,7 +71,7 @@ describe("generateEnvContent", () => {
 
     expect(content).toContain("OPENAI_AUTH_MODE=chatgpt-subscription");
     expect(content).toContain("PROVIDER_CHAIN=openai");
-    expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
+    expect(content).toContain("OPENAI_API_KEY='sk-proj-openai-embed-key'");
   });
 
   it("supports Claude subscription mode with a bearer auth token", () => {
@@ -90,7 +91,7 @@ describe("generateEnvContent", () => {
     });
 
     expect(content).toContain("ANTHROPIC_AUTH_MODE=claude-subscription");
-    expect(content).toContain('ANTHROPIC_AUTH_TOKEN="claude-subscription-token-123456"');
+    expect(content).toContain("ANTHROPIC_AUTH_TOKEN='claude-subscription-token-123456'");
     expect(content).toContain("PROVIDER_CHAIN=claude");
     expect(content).not.toContain("ANTHROPIC_API_KEY");
   });
@@ -105,7 +106,7 @@ describe("generateEnvContent", () => {
       language: "en",
     });
 
-    expect(content).toContain('DEEPSEEK_API_KEY="sk-deepseek-key"');
+    expect(content).toContain("DEEPSEEK_API_KEY='sk-deepseek-key'");
     expect(content).toContain("PROVIDER_CHAIN=deepseek");
   });
 
@@ -143,9 +144,9 @@ describe("generateEnvContent", () => {
 
     expect(content).toContain("PROVIDER_CHAIN=openai,gemini,qwen");
     expect(content).toContain("OPENAI_AUTH_MODE=chatgpt-subscription");
-    expect(content).toContain('GEMINI_API_KEY="AIza-gemini-response-key"');
-    expect(content).toContain('QWEN_API_KEY="sk-qwen-key"');
-    expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
+    expect(content).toContain("GEMINI_API_KEY='AIza-gemini-response-key'");
+    expect(content).toContain("QWEN_API_KEY='sk-qwen-key'");
+    expect(content).toContain("OPENAI_API_KEY='sk-proj-openai-embed-key'");
   });
 });
 
@@ -463,9 +464,25 @@ describe("the terminal wizard's setup contract", () => {
       language: "en",
     });
     expect(content).toContain("DEFAULT_CHANNEL=telegram");
-    expect(content).toContain('TELEGRAM_BOT_TOKEN="123:ABC"');
-    expect(content).toContain('ALLOWED_TELEGRAM_USER_IDS="42"');
+    expect(content).toContain("TELEGRAM_BOT_TOKEN='123:ABC'");
+    expect(content).toContain("ALLOWED_TELEGRAM_USER_IDS='42'");
     expect(content).toContain("OPENCODE_BASE_URL=");
+  });
+
+  it("writes values dotenv reads back unchanged: Windows paths, quotes, # (COR-1)", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "C:\\repos\\Game",
+      providerChain: ["claude", "gemini"],
+      providerCredentials: { claude: 'sk-ant-a"b', gemini: "AIza'x#y" },
+      channel: "telegram",
+      channelCredentials: { TELEGRAM_BOT_TOKEN: "123:A#B", ALLOWED_TELEGRAM_USER_IDS: "42" },
+      language: "en",
+    });
+    const parsed = dotenvParse(content);
+    expect(parsed.UNITY_PROJECT_PATH).toBe("C:\\repos\\Game");
+    expect(parsed.ANTHROPIC_API_KEY).toBe('sk-ant-a"b');
+    expect(parsed.GEMINI_API_KEY).toBe("AIza'x#y");
+    expect(parsed.TELEGRAM_BOT_TOKEN).toBe("123:A#B");
   });
 
   it("RAG follows the embedding candidate: off with a reason when nothing can embed", () => {

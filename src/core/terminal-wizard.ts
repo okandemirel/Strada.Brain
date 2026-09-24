@@ -33,7 +33,7 @@ import {
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
-import { describeEffectiveBudget, persistSetup } from "./setup-env-persistence.js";
+import { describeEffectiveBudget, formatEnvValue, persistSetup } from "./setup-env-persistence.js";
 import {
   formatProviderPreflightFailures,
   preflightResponseProviders,
@@ -177,13 +177,12 @@ export function validateUnityPath(inputPath: string): ValidationResult {
 }
 
 /**
- * Sanitise a value before embedding it in a .env file line.
- *
- * Strips carriage returns and newline characters to prevent injection
- * of extra lines into the .env file, then trims whitespace.
+ * Clean an answer before it is stored: strips carriage returns and newline
+ * characters (no answer may span two .env lines), then trims whitespace.
+ * Quoting is formatEnvValue's job — a `"` is part of the value, not noise.
  */
 export function sanitizeEnvValue(value: string): string {
-  return String(value).replace(/[\r\n"]/g, "").trim();
+  return String(value).replace(/[\r\n]/g, "").trim();
 }
 
 /**
@@ -475,7 +474,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
     "",
   ];
 
-  lines.push(`UNITY_PROJECT_PATH="${sanitizeEnvValue(answers.unityProjectPath)}"`);
+  lines.push(`UNITY_PROJECT_PATH=${formatEnvValue(sanitizeEnvValue(answers.unityProjectPath))}`);
   if (answers.stradaMcpAllowProjectLocal !== undefined) {
     lines.push(`STRADA_MCP_ALLOW_PROJECT_LOCAL=${answers.stradaMcpAllowProjectLocal ? "true" : "false"}`);
   }
@@ -492,10 +491,10 @@ export function generateEnvContent(answers: WizardAnswers): string {
       lines.push(`ANTHROPIC_AUTH_MODE=${authMode === "claude-subscription" ? "claude-subscription" : "api-key"}`);
       if ((authMode ?? "api-key") === "claude-subscription") {
         if (sanitizedCredential) {
-          lines.push(`ANTHROPIC_AUTH_TOKEN="${sanitizedCredential}"`);
+          lines.push(`ANTHROPIC_AUTH_TOKEN=${formatEnvValue(sanitizedCredential)}`);
         }
       } else if (sanitizedCredential) {
-        lines.push(`${envKey}="${sanitizedCredential}"`);
+        lines.push(`${envKey}=${formatEnvValue(sanitizedCredential)}`);
       }
       continue;
     }
@@ -503,13 +502,13 @@ export function generateEnvContent(answers: WizardAnswers): string {
     if (providerName === "openai") {
       lines.push(`OPENAI_AUTH_MODE=${authMode ?? "api-key"}`);
       if ((authMode ?? "api-key") === "api-key" && sanitizedCredential) {
-        lines.push(`${envKey}="${sanitizedCredential}"`);
+        lines.push(`${envKey}=${formatEnvValue(sanitizedCredential)}`);
       }
       continue;
     }
 
     if (providerName !== "ollama" && envKey && sanitizedCredential) {
-      lines.push(`${envKey}="${sanitizedCredential}"`);
+      lines.push(`${envKey}=${formatEnvValue(sanitizedCredential)}`);
     }
   }
   if (providerChain.includes("opencode")) {
@@ -541,7 +540,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
     ) {
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingKey) {
-        lines.push(`OPENAI_API_KEY="${embeddingKey}"`);
+        lines.push(`OPENAI_API_KEY=${formatEnvValue(embeddingKey)}`);
       }
     } else if (
       rag.embeddingProvider !== "ollama" &&
@@ -550,7 +549,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
       const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[rag.embeddingProvider];
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingEnvKey && embeddingKey) {
-        lines.push(`${embeddingEnvKey}="${embeddingKey}"`);
+        lines.push(`${embeddingEnvKey}=${formatEnvValue(embeddingKey)}`);
       }
     }
     lines.push(`EMBEDDING_PROVIDER=${rag.embeddingProvider}`);
@@ -561,7 +560,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
   for (const field of getChannelCredentialFields(answers.channel)) {
     const value = sanitizeEnvValue(answers.channelCredentials?.[field.envKey] ?? "");
     if (value) {
-      lines.push(`${field.envKey}="${value}"`);
+      lines.push(`${field.envKey}=${formatEnvValue(value)}`);
     }
   }
   lines.push(`LANGUAGE_PREFERENCE=${sanitizeEnvValue(answers.language)}`);

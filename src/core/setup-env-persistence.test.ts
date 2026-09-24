@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeEffectiveBudget,
   ENV_SAVE_LOCK,
+  formatEnvValue,
   mergeEnvContent,
   parseEnvLines,
   __testing as ENV_SAVE_LOCK_TESTING,
@@ -574,4 +575,44 @@ it("round 12 #4 a recovery file replaced between judging and removing survives",
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("formatEnvValue: what the wizards write is what dotenv reads (COR-1)", () => {
+  const readBack = (value: string): Record<string, string> =>
+    dotenvParse(`KEY=${formatEnvValue(value)}\nNEXT='kept'\n`);
+
+  it.each([
+    "C:\\repos\\new\\x",
+    "C:\\Users\\rachel\\newgame",
+    "C:\\",
+    'sk-ant-a"b',
+    "sk-it's",
+    "O'Brien \"quoted\" C:\\new",
+    "it's `ticked` C:\\path",
+    "key#fragment",
+    "  padded  ",
+    "",
+  ])("round-trips %j", (value) => {
+    const parsed = readBack(value);
+    expect(parsed.KEY).toBe(value);
+    expect(parsed.NEXT).toBe("kept");
+  });
+
+  it("drops raw line breaks so a value can never add a line", () => {
+    expect(readBack("value\nINJECTED=true")).toEqual({ KEY: "valueINJECTED=true", NEXT: "kept" });
+    expect(formatEnvValue(undefined)).toBe("''");
+  });
+
+  it("refuses a value no dotenv quoting can carry unchanged", () => {
+    expect(() => formatEnvValue("a'b\"c`d")).toThrow(/cannot be stored/);
+    expect(() => formatEnvValue("it's `x` C:\\new")).toThrow(/cannot be stored/);
+  });
+
+  it("a merge reads a quoted value ending in a backslash as one line", () => {
+    const existing = "UNITY_PROJECT_PATH='C:\\'\nMY_KEY=kept\nOTHER='x'\n";
+    const result = mergeEnvContent(existing, parseEnvLines([`UNITY_PROJECT_PATH=${formatEnvValue("D:\\Game")}`]), {
+      ownedKeys: ["UNITY_PROJECT_PATH"],
+    });
+    expect(dotenvParse(result.content)).toEqual({ UNITY_PROJECT_PATH: "D:\\Game", MY_KEY: "kept", OTHER: "x" });
+  });
 });

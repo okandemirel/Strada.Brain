@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { homedir } from "node:os";
 import path from "node:path";
+import { parse as dotenvParse } from "dotenv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -230,8 +231,8 @@ describe("SetupWizard path validation", () => {
       EMBEDDING_MODEL: "bge-m3",
     }, homedir(), 3000);
 
-    expect(lines).toContain('EMBEDDING_PROVIDER="ollama"');
-    expect(lines).toContain('EMBEDDING_MODEL="bge-m3"');
+    expect(lines).toContain("EMBEDDING_PROVIDER='ollama'");
+    expect(lines).toContain("EMBEDDING_MODEL='bge-m3'");
   });
 
   it("writes STRADA_DAEMON_ENABLED=true explicitly when the key is untouched or true (audit 10.1 / 10.6 / D25)", () => {
@@ -279,6 +280,24 @@ describe("SetupWizard path validation", () => {
     expect(lines.some((line) => line.startsWith("EMBEDDING_MODEL="))).toBe(false);
   });
 
+  it("writes values dotenv reads back unchanged: Windows paths, quotes, # (COR-1)", () => {
+    const config: Record<string, string> = {
+      PROVIDER_CHAIN: "claude,openai,gemini",
+      ANTHROPIC_API_KEY: 'sk-ant-a"b',
+      OPENAI_API_KEY: "sk-it's",
+      GEMINI_API_KEY: "AIza#frag",
+      OBSIDIAN_ENABLED: "true",
+      OBSIDIAN_VAULT_PATH: "C:\\Users\\rachel\\notes",
+    };
+    const parsed = dotenvParse(buildSetupEnvLines(config, "C:\\repos\\new\\x", 3000).join("\n"));
+    expect(parsed.UNITY_PROJECT_PATH).toBe("C:\\repos\\new\\x");
+    expect(parsed.ANTHROPIC_API_KEY).toBe('sk-ant-a"b');
+    expect(parsed.OPENAI_API_KEY).toBe("sk-it's");
+    expect(parsed.GEMINI_API_KEY).toBe("AIza#frag");
+    expect(parsed.OBSIDIAN_VAULT_PATH).toBe("C:\\Users\\rachel\\notes");
+    expect(parsed.PROVIDER_CHAIN).toBe("claude,openai,gemini");
+  });
+
   it("persists OPENCODE_BASE_URL and OPENCODE_DEFAULT_MODEL alongside the API key", () => {
     const lines = buildSetupEnvLines({
       PROVIDER_CHAIN: "opencode",
@@ -287,9 +306,9 @@ describe("SetupWizard path validation", () => {
       OPENCODE_DEFAULT_MODEL: "opencode-go-1",
     }, homedir(), 3000);
 
-    expect(lines).toContain('OPENCODE_API_KEY="sk-oc-test"');
-    expect(lines).toContain('OPENCODE_BASE_URL="https://opencode.ai/zen/v1"');
-    expect(lines).toContain('OPENCODE_DEFAULT_MODEL="opencode-go-1"');
+    expect(lines).toContain("OPENCODE_API_KEY='sk-oc-test'");
+    expect(lines).toContain("OPENCODE_BASE_URL='https://opencode.ai/zen/v1'");
+    expect(lines).toContain("OPENCODE_DEFAULT_MODEL='opencode-go-1'");
     // opencode must NOT appear in KNOWN_PROVIDER_MODEL_ORDER so no stale preset default leaks through
     expect(lines.some((l) => /^OPENCODE_MODEL=/.test(l))).toBe(false);
   });
@@ -343,10 +362,10 @@ describe("SetupWizard path validation", () => {
       OPENAI_MODEL: "gpt-5.4",
     }, homedir(), 3000);
 
-    expect(lines).toContain('CLAUDE_MODEL="claude-sonnet-5"');
-    expect(lines).toContain('DEEPSEEK_MODEL="deepseek-chat"');
-    expect(lines).toContain('GEMINI_MODEL="gemini-3-flash-preview"');
-    expect(lines).toContain('OPENAI_MODEL="gpt-5.4"');
+    expect(lines).toContain("CLAUDE_MODEL='claude-sonnet-5'");
+    expect(lines).toContain("DEEPSEEK_MODEL='deepseek-chat'");
+    expect(lines).toContain("GEMINI_MODEL='gemini-3-flash-preview'");
+    expect(lines).toContain("OPENAI_MODEL='gpt-5.4'");
   });
 
   it("writes Claude subscription env lines when setup selects bearer auth", () => {
@@ -356,8 +375,8 @@ describe("SetupWizard path validation", () => {
       ANTHROPIC_AUTH_TOKEN: "claude-subscription-token-123456",
     }, homedir(), 3000);
 
-    expect(lines).toContain('ANTHROPIC_AUTH_MODE="claude-subscription"');
-    expect(lines).toContain('ANTHROPIC_AUTH_TOKEN="claude-subscription-token-123456"');
+    expect(lines).toContain("ANTHROPIC_AUTH_MODE='claude-subscription'");
+    expect(lines).toContain("ANTHROPIC_AUTH_TOKEN='claude-subscription-token-123456'");
     expect(lines).not.toContain("ANTHROPIC_API_KEY");
   });
 
@@ -553,9 +572,9 @@ describe("SetupWizard path validation", () => {
     });
 
     const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
-    expect(envContent).toContain('PROVIDER_CHAIN="kimi,deepseek"');
-    expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
-    expect(envContent).toContain('DEEPSEEK_API_KEY="sk-deepseek"');
+    expect(envContent).toContain("PROVIDER_CHAIN='kimi,deepseek'");
+    expect(envContent).toContain("KIMI_API_KEY='sk-kimi'");
+    expect(envContent).toContain("DEEPSEEK_API_KEY='sk-deepseek'");
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
     expect(envContent).toContain("MULTI_AGENT_ENABLED=true");
@@ -804,7 +823,7 @@ describe("SetupWizard path validation", () => {
     expect(envContent).toContain("LOG_LEVEL=debug");
     expect(envContent).not.toContain("LOG_LEVEL=info");
     // Wizard-owned keys are rewritten in place / removed when de-selected.
-    expect(envContent).toContain(`UNITY_PROJECT_PATH="${homedir()}"`);
+    expect(envContent).toContain(`UNITY_PROJECT_PATH='${homedir()}'`);
     expect(envContent).not.toContain("UNITY_PROJECT_PATH=/tmp/old");
     expect(envContent).not.toContain("DEEPSEEK_API_KEY");
     // And the response shows the effective file, not the request — but a key
@@ -845,8 +864,8 @@ describe("SetupWizard path validation", () => {
     const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
     expect(envContent).toContain("STRADA_DAEMON_DAILY_BUDGET=2.5");
     expect(envContent).toContain("OBSIDIAN_ENABLED=true");
-    expect(envContent).toContain('OBSIDIAN_VAULT_PATH="/Users/me/Vault"');
-    expect(envContent).toContain('OBSIDIAN_API_KEY="obs-key"');
+    expect(envContent).toContain("OBSIDIAN_VAULT_PATH='/Users/me/Vault'");
+    expect(envContent).toContain("OBSIDIAN_API_KEY='obs-key'");
     expect(body.effectiveConfig.STRADA_DAEMON_DAILY_BUDGET).toBe("2.5");
     expect(body.effectiveConfig.OBSIDIAN_VAULT_PATH).toBe("/Users/me/Vault");
     expect(body.effectiveConfig.OBSIDIAN_API_KEY).toBe("<set>");
