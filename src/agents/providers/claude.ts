@@ -22,6 +22,9 @@ import { getLogger, getLoggerSafe } from "../../utils/logger.js";
  */
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
 
+/** `anthropic-beta` value for OAuth-bearer requests (SDK: OAUTH_API_BETA_HEADER). */
+const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
+
 /**
  * Claude AI provider using the Anthropic SDK.
  * Primary provider for Strada Brain.
@@ -50,15 +53,23 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       | { mode: "claude-subscription"; authToken: string },
     model = DEFAULT_CLAUDE_MODEL,
   ) {
-    let normalizedAuth: { apiKey: string } | { authToken: string };
-    if (typeof auth === "string") {
-      normalizedAuth = { apiKey: auth };
-    } else if (auth.mode === "claude-subscription") {
-      normalizedAuth = { authToken: auth.authToken };
+    // Exactly one credential per mode, with the other set to null: left
+    // undefined, the SDK falls back to ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
+    // from the environment and sends a second credential beside ours.
+    let clientOptions: ConstructorParameters<typeof Anthropic>[0];
+    if (typeof auth !== "string" && auth.mode === "claude-subscription") {
+      clientOptions = {
+        apiKey: null,
+        authToken: auth.authToken,
+        // A subscription token is an OAuth bearer token, and the SDK documents
+        // this beta as required on requests that use one — but only adds it on
+        // its own token-cache path, never for a plain authToken.
+        defaultHeaders: { "anthropic-beta": CLAUDE_OAUTH_BETA },
+      };
     } else {
-      normalizedAuth = { apiKey: auth.apiKey };
+      clientOptions = { apiKey: typeof auth === "string" ? auth : auth.apiKey, authToken: null };
     }
-    this.client = new Anthropic(normalizedAuth);
+    this.client = new Anthropic(clientOptions);
     this.model = model;
   }
 
