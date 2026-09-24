@@ -53,6 +53,8 @@ export function resolveDelegationBudget(
 ): DelegationBudget {
   let consecutiveTimeouts = 0;
   for (const entry of recent) {
+    // A blocked run stopped short; it is not the success that proves the budget suffices.
+    if (entry.status === "blocked") continue;
     if (entry.status !== "timeout") break;
     if (entry.startedAt !== undefined && now - entry.startedAt > DELEGATION_HISTORY_WINDOW_MS) break;
     consecutiveTimeouts++;

@@ -178,6 +178,21 @@ describe("DelegationTool", () => {
     });
   });
 
+  describe("execute() with a blocked sub-agent", () => {
+    it("returns an error the parent cannot read as finished work", async () => {
+      mockManager.delegate.mockResolvedValue({
+        ...TEST_DELEGATION_RESULT,
+        content: "Task stuck: budget exhausted",
+        workerResult: { status: "blocked" } as never,
+      });
+
+      const result = await tool.execute({ task: "Review this code" }, TEST_TOOL_CONTEXT);
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe("BLOCKED: Task stuck: budget exhausted");
+    });
+  });
+
   describe("execute() with a requested async mode", () => {
     it("runs the delegation synchronously and returns its result to the parent", async () => {
       // The async path acknowledged immediately and nothing ever delivered the sub-agent's

@@ -120,7 +120,7 @@ export class DelegationLog {
       // persisted as a provider timeout (audited 2026-09-02).
       complete: this.db.prepare(
         `UPDATE delegation_log
-         SET status = 'completed', duration_ms = ?, cost_usd = ?, result_summary = ?, escalated_from = ?, completed_at = ?
+         SET status = ?, duration_ms = ?, cost_usd = ?, result_summary = ?, escalated_from = ?, completed_at = ?
          WHERE id = ? AND status = 'running'`,
       ),
       fail: this.db.prepare(
@@ -174,7 +174,8 @@ export class DelegationLog {
   }
 
   /**
-   * Mark a delegation as completed with results.
+   * Mark a delegation as finished with results: "completed", or "blocked" when the sub-agent
+   * ran to its end but stopped short of the task.
    */
   complete(
     id: number,
@@ -183,9 +184,11 @@ export class DelegationLog {
       costUsd: number;
       resultSummary: string;
       escalatedFrom?: string;
+      status?: "completed" | "blocked";
     },
   ): void {
     this.stmts.complete.run(
+      result.status ?? "completed",
       result.durationMs,
       result.costUsd,
       result.resultSummary,

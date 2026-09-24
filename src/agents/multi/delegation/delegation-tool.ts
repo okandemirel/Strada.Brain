@@ -84,8 +84,11 @@ export class DelegationTool implements ITool {
       };
 
       const result = await this.delegationManager.delegate(request);
+      // A blocked sub-agent stopped short of the task; the parent must not read it as done.
+      const blocked = result.workerResult?.status === "blocked";
       return {
-        content: result.content,
+        content: blocked ? `BLOCKED: ${result.content}` : result.content,
+        ...(blocked ? { isError: true } : {}),
         metadata: {
           ...result.metadata,
           workerResult: result.workerResult,

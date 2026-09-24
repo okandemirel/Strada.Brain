@@ -408,6 +408,25 @@ describe("DelegationManager", () => {
       expect(result.content).toBe("Checkpoint from delegated worker");
     });
 
+    it("records a blocked worker as blocked, not as a successful completion", async () => {
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockResolvedValueOnce({
+        status: "blocked", finalText: "Stopped: epoch budget exhausted", finalSummary: "stuck", provider: "mock-provider",
+        catalogVersion: "mock-provider:mock-model", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+        verificationResults: [], reviewFindings: [], artifacts: [], reason: "epoch-budget-exhausted",
+      });
+      const localOpts = buildManagerOpts({ delegationLog });
+      const mgr = new DelegationManager(localOpts);
+
+      await mgr.delegate({
+        type: "analysis", task: "Analyze the loop", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(delegationLog.getHistory(1)[0]!.status).toBe("blocked");
+      const completed = vi.mocked(localOpts.eventBus.emit).mock.calls.find(([name]) => name === "delegation:completed");
+      expect((completed?.[1] as { success?: boolean } | undefined)?.success).toBe(false);
+    });
+
     it("round-trips a COMPLETED delegated worker result through the runner seam (Step 2 success path)", async () => {
       orchestratorHasAgentCore = true;
       scriptedRunnerRun = vi.fn().mockResolvedValueOnce({

@@ -898,11 +898,15 @@ export class DelegationManager {
       const durationMs = Date.now() - startTime;
       const costUsd = settleCost(durationMs, "completed");
 
+      // A blocked worker (budget or epoch exhaustion, provider outage, a question) stopped
+      // short: record it as such, never as a completed, successful delegation.
+      const blocked = workerResult?.status === "blocked";
       delegationLog.complete(logId, {
         durationMs,
         costUsd,
         resultSummary: captureChannel.getLastResponse().substring(0, 200),
         escalatedFrom,
+        ...(blocked ? { status: "blocked" as const } : {}),
       });
 
       eventBus.emit("delegation:completed", {
@@ -911,7 +915,7 @@ export class DelegationManager {
         type: request.type,
         tier,
         model: providerConfig.model,
-        success: true,
+        success: !blocked,
         durationMs,
         costUsd,
         escalated: !!escalatedFrom,

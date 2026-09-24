@@ -27,6 +27,11 @@ describe("resolveDelegationBudget", () => {
     expect(resolveDelegationBudget("code_review", 60_000, [ok, ...wall]).refusal).toBeUndefined();
   });
 
+  it("a blocked run does not end a timeout streak (it is not a success)", () => {
+    const blocked = { status: "blocked", durationMs: 30_000 };
+    expect(resolveDelegationBudget("code_review", 60_000, [blocked, t(60_000)]).timeoutMs).toBe(120_000);
+  });
+
   it("a refusal expires: cap timeouts older than the window are not evidence", () => {
     // A refusal is decided before a new row can be written, so without a window nothing could
     // ever end the streak — one slow afternoon refused the type forever.
