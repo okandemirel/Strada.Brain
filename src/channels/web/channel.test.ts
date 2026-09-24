@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
+import { applyStreamUpdate } from "./ws-protocol.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 import { TypedEventBus } from "../../core/event-bus.js";
 import { createMonitorBridge } from "../../dashboard/monitor-bridge.js";
@@ -3748,3 +3749,74 @@ describe("WebChannel shared instance: the ways around the owner check (round 13)
 });
 
 type WsClientView = { profileId: string };
+
+// WEB-2: the progress reporter streams a status line that is REPLACED by a
+// new summary each time, but every update went out as `accumulated.slice(
+// lastLength)`, so the portal glued the tail of the new summary onto the old
+// one (and a shorter summary was never sent at all).
+describe("WebChannel streamed updates: replace vs append (WEB-2)", () => {
+  function connectClient(channel: WebChannel) {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const chatId = String(socket.getSentMessages()[0]!.chatId);
+    return { socket, chatId };
+  }
+
+  /** What the portal shows: every stream_update folded the way it applies them. */
+  function clientText(socket: ReturnType<typeof createMockSocket>, streamId: string): string {
+    return socket.getSentMessages()
+      .filter((m) => m.type === "stream_update" && m.streamId === streamId)
+      .reduce((text, frame) => applyStreamUpdate(text, frame), "");
+  }
+
+  it("shows each replacement status line exactly, longer or shorter", async () => {
+    const channel = new WebChannel();
+    const { socket, chatId } = connectClient(channel);
+    const streamId = (await channel.startStreamingMessage(chatId))!;
+
+    const s1 = "Aşama: çalışma. Dosyaları inceleyip bulduklarımı paylaşacağım.";
+    const s2 = "Aşama: düzenleme. Değişiklikleri uygulayıp testlerle doğrulayacağım, sonra raporlayacağım.";
+    const s3 = "Aşama: bitti.";
+    await channel.updateStreamingMessage(chatId, streamId, s1);
+    expect(clientText(socket, streamId)).toBe(s1);
+    await channel.updateStreamingMessage(chatId, streamId, s2);
+    expect(clientText(socket, streamId)).toBe(s2);
+    await channel.updateStreamingMessage(chatId, streamId, s3);
+    expect(clientText(socket, streamId)).toBe(s3);
+  });
+
+  it("still sends an appending stream as deltas (guard)", async () => {
+    const channel = new WebChannel();
+    const { socket, chatId } = connectClient(channel);
+    const streamId = (await channel.startStreamingMessage(chatId))!;
+
+    await channel.updateStreamingMessage(chatId, streamId, "Hello");
+    await channel.updateStreamingMessage(chatId, streamId, "Hello world");
+    await channel.updateStreamingMessage(chatId, streamId, "Hello world");
+
+    const updates = socket.getSentMessages().filter((m) => m.type === "stream_update");
+    expect(updates.map((m) => m.delta)).toEqual(["Hello", " world"]);
+    expect(updates.some((m) => "text" in m)).toBe(false);
+  });
+
+  it("sends the whole text after the client was away, instead of a delta it cannot apply", async () => {
+    const channel = new WebChannel();
+    const first = connectClient(channel);
+    const token = String(first.socket.getSentMessages()[0]!.reconnectToken);
+    const streamId = (await channel.startStreamingMessage(first.chatId))!;
+    await channel.updateStreamingMessage(first.chatId, streamId, "Step 1");
+
+    first.socket.emit("close");
+    // Produced while nobody is connected: stream frames are not buffered.
+    await channel.updateStreamingMessage(first.chatId, streamId, "Step 1, step 2");
+
+    const second = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(second);
+    second.emit("message", Buffer.from(JSON.stringify({ type: "reconnect", chatId: first.chatId, reconnectToken: token })));
+    await channel.updateStreamingMessage(first.chatId, streamId, "Step 1, step 2, step 3");
+
+    // The reconnected client kept "Step 1" from before; the update replaces it.
+    const update = second.getSentMessages().find((m) => m.type === "stream_update");
+    expect(applyStreamUpdate("Step 1", update!)).toBe("Step 1, step 2, step 3");
+  });
+});

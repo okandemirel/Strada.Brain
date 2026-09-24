@@ -31,6 +31,7 @@ import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CLOSE_SESSION_TAKEN,
   WS_CLOSE_SESSION_TAKEN_REASON,
+  nextStreamUpdate,
 } from "./ws-protocol.js";
 import { detectCommand } from "../../tasks/command-detector.js";
 import {
@@ -296,8 +297,8 @@ export class WebChannel
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-chatId applied instinct IDs so responses can carry them for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
-  /** Tracks the length of text already sent for each active stream to enable delta protocol. */
-  private readonly streamSentLengths = new Map<string, number>();
+  /** The text the client already has for each active stream, so an update can be sent as a delta. */
+  private readonly streamSentTexts = new Map<string, string>();
   /** Maps streamId → chatId so abandoned streams can be cleaned up on disconnect. */
   private readonly streamChatIds = new Map<string, string>();
   private readonly staticDir = resolveStaticDir();
@@ -832,7 +833,7 @@ export class WebChannel
     }
     this.pendingConfirmations.clear();
     this.settledConfirmations.clear();
-    this.streamSentLengths.clear();
+    this.streamSentTexts.clear();
     this.streamChatIds.clear();
 
     for (const [, client] of this.clients) {
@@ -1528,7 +1529,7 @@ export class WebChannel
 
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
     const streamId = randomUUID();
-    this.streamSentLengths.set(streamId, 0);
+    this.streamSentTexts.set(streamId, "");
     this.streamChatIds.set(streamId, chatId);
     this.sendToClient(chatId, { type: "stream_start", streamId, text: "" });
     return streamId;
@@ -1539,11 +1540,18 @@ export class WebChannel
     streamId: string,
     accumulatedText: string,
   ): Promise<void> {
-    const lastLen = this.streamSentLengths.get(streamId) ?? 0;
-    const delta = accumulatedText.slice(lastLen);
-    if (delta.length === 0) return; // Nothing new to send
-    this.streamSentLengths.set(streamId, accumulatedText.length);
-    this.sendToClient(chatId, { type: "stream_update", streamId, delta });
+    // A delta only when the new text extends what the client has; a replaced
+    // status line, or a stream whose state a disconnect dropped, is sent whole
+    // as `text` so the client replaces instead of appending (WEB-2).
+    const update = nextStreamUpdate(this.streamSentTexts.get(streamId), accumulatedText);
+    if (!update) return; // Nothing new to send
+    if (this.sendToClient(chatId, { type: "stream_update", streamId, ...update })) {
+      this.streamSentTexts.set(streamId, accumulatedText);
+    } else {
+      // Not delivered (stream frames are not buffered): the next update must
+      // not be a delta against text the client never got.
+      this.streamSentTexts.delete(streamId);
+    }
   }
 
   async finalizeStreamingMessage(
@@ -1551,7 +1559,7 @@ export class WebChannel
     streamId: string,
     finalText: string,
   ): Promise<void> {
-    this.streamSentLengths.delete(streamId);
+    this.streamSentTexts.delete(streamId);
     this.streamChatIds.delete(streamId);
     const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
@@ -1818,7 +1826,7 @@ export class WebChannel
         this.appliedInstinctIds.delete(chatId);
         for (const [sid, cid] of this.streamChatIds) {
           if (cid === chatId) {
-            this.streamSentLengths.delete(sid);
+            this.streamSentTexts.delete(sid);
             this.streamChatIds.delete(sid);
           }
         }

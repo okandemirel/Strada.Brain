@@ -32,8 +32,13 @@ export interface StreamStartMessage {
 export interface StreamUpdateMessage {
   type: 'stream_update'
   streamId: string
-  /** The new text delta (not the full accumulated text). */
-  delta: string
+  /** Text to append to what the stream shows. Absent when `text` is sent. */
+  delta?: string
+  /**
+   * The stream's whole text, replacing what it shows (a replaced status line,
+   * or the first update after a reconnect). Wins over `delta`.
+   */
+  text?: string
 }
 
 export interface StreamEndMessage {

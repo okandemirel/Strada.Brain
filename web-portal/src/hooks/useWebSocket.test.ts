@@ -660,3 +660,29 @@ describe('useWebSocket after the retry cap (WEB-9)', () => {
     expect(socket.sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'message', text: 'hello again' }))
   })
 })
+
+// WEB-2: a stream_update may replace the stream's text (`text`) instead of
+// appending to it (`delta`); every frame used to be appended.
+describe('useWebSocket stream updates (WEB-2)', () => {
+  beforeEach(installTestEnvironment)
+  afterEach(restoreTestEnvironment)
+
+  it('replaces the streamed text on a `text` update and appends on a `delta` one', () => {
+    renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    const streamText = () => useSessionStore.getState().messages.find((m) => m.streamId === 'st-1')?.text
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-st', reconnectToken: 'r', profileId: 'p' })
+      socket.emit('message', { type: 'stream_start', streamId: 'st-1', text: '' })
+      socket.emit('message', { type: 'stream_update', streamId: 'st-1', delta: 'Phase: working. Reading the files.' })
+    })
+    expect(streamText()).toBe('Phase: working. Reading the files.')
+
+    act(() => { socket.emit('message', { type: 'stream_update', streamId: 'st-1', text: 'Phase: editing.' }) })
+    expect(streamText()).toBe('Phase: editing.')
+
+    act(() => { socket.emit('message', { type: 'stream_update', streamId: 'st-1', delta: ' Running tests.' }) })
+    expect(streamText()).toBe('Phase: editing. Running tests.')
+  })
+})

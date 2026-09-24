@@ -13,6 +13,7 @@ import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-so
 import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CLOSE_SESSION_TAKEN,
+  applyStreamUpdate,
 } from '../../../src/channels/web/ws-protocol.ts'
 
 const INITIAL_RECONNECT_DELAY = 1000
@@ -585,7 +586,6 @@ export function useWebSocket(): UseWebSocketReturn {
 
         case 'stream_update': {
           const suStreamId = typeof data.streamId === 'string' ? data.streamId : ''
-          const suDelta = typeof data.delta === 'string' ? data.delta : ''
           if (!suStreamId) break
           const store = useSessionStore.getState()
           const msgIndex = streamIdToIndexRef.current.get(suStreamId)
@@ -597,7 +597,8 @@ export function useWebSocket(): UseWebSocketReturn {
               const correctIndex = store.messages.findIndex((m) => m.id === streamMsg.id)
               if (correctIndex >= 0) streamIdToIndexRef.current.set(suStreamId, correctIndex)
             }
-            const newText = streamMsg.text + suDelta
+            // `text` replaces (a new status line), `delta` appends (WEB-2).
+            const newText = applyStreamUpdate(streamMsg.text, data)
             streamsRef.current.set(suStreamId, newText)
             store.updateMessage(streamMsg.id, { text: newText })
           }
