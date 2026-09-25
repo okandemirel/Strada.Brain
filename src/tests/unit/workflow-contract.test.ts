@@ -87,6 +87,20 @@ describe("ci.yml", () => {
     expect(smoke).toMatch(/::warning title=Release acceptance NOT PROVEN::/);
   });
 
+  it("the smoke job runs the CLI release smoke after release acceptance, with its own time limit", () => {
+    // scripts/release/cli-release-smoke.mjs existed and CI never ran it, so its
+    // scenarios (failover, routing, PAOR recovery) regressed unseen.
+    const smoke = jobBlock(ci, "smoke");
+    const step = smoke.indexOf("run: npm run smoke:cli:release");
+    expect(step, "the smoke job does not run the CLI release smoke").toBeGreaterThan(-1);
+    expect(step).toBeGreaterThan(smoke.indexOf("run: npm run build"));
+    expect(step).toBeGreaterThan(smoke.indexOf("npm run accept:release"));
+    const stepBlock = smoke.slice(smoke.lastIndexOf("- name:", step), step);
+    expect(stepBlock).toMatch(/timeout-minutes: \d+/);
+    // Not allowed to fail: a red smoke is a red build.
+    expect(stepBlock).not.toMatch(/continue-on-error/);
+  });
+
   it("keeps every other job", () => {
     for (const job of ["verify", "windows-verify", "bench", "coverage"]) {
       expect(ci, job).toMatch(new RegExp(`\\n {2}${job}:\\n`));

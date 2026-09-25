@@ -151,6 +151,14 @@ jobs:
           fi
           exit "$code"
 
+      # The CLI release smoke: interactive memory, preferences, exact output,
+      # provider failover and routing, and the daemon's autonomy, delegation
+      # and PAOR recovery, driven end to end against a scripted mock provider.
+      # Offline and sandboxed (its own HOME, no real provider, no clone).
+      - name: CLI release smoke
+        timeout-minutes: 15
+        run: npm run smoke:cli:release
+
       - name: Upload release acceptance report
         if: always()
         uses: actions/upload-artifact@v4
