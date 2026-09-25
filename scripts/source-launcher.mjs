@@ -487,6 +487,34 @@ exec "$NODE_BIN" ${quotePosixSingle(path.join(ROOT_DIR, "scripts", "source-launc
 `;
 }
 
+/**
+ * The PowerShell the Windows `.cmd` launchers (strada.cmd and the generated
+ * wrapper) run to fetch a portable Node (OPS-17).
+ *
+ * Paths and names arrive through the environment (STRADA_NODE_TMP,
+ * STRADA_NODE_ZIP, STRADA_NODE_VERSION), never through cmd's %VAR% expansion
+ * into the command text: a quote in %TEMP% (user O'Brien) used to end a
+ * single-quoted PowerShell string early. The archive must match the official
+ * SHASUMS256.txt of that exact release before anything is extracted. One line,
+ * because cmd cannot continue a quoted argument onto the next line.
+ */
+export const CMD_NODE_DOWNLOAD_POWERSHELL = [
+  "$ErrorActionPreference='Stop';",
+  "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;",
+  "$ProgressPreference='SilentlyContinue';",
+  "$dir=$env:STRADA_NODE_TMP; $zip=$env:STRADA_NODE_ZIP;",
+  "$base='https://nodejs.org/dist/'+$env:STRADA_NODE_VERSION+'/';",
+  "$zipPath=Join-Path $dir $zip; $sumsPath=Join-Path $dir 'SHASUMS256.txt';",
+  "Invoke-WebRequest -Uri ($base+$zip) -OutFile $zipPath -UseBasicParsing;",
+  "Invoke-WebRequest -Uri ($base+'SHASUMS256.txt') -OutFile $sumsPath -UseBasicParsing;",
+  "$expected=$null;",
+  "foreach($line in Get-Content -LiteralPath $sumsPath){$fields=$line.Trim() -split '\\s+'; if($fields.Count -eq 2 -and $fields[1] -eq $zip){$expected=$fields[0]}};",
+  "if(-not $expected){throw ('SHASUMS256.txt lists no '+$zip)};",
+  "$actual=(Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash;",
+  "if($actual -ne $expected){throw ('SHA-256 mismatch for '+$zip)};",
+  "Expand-Archive -LiteralPath $zipPath -DestinationPath $dir -Force",
+].join(" ");
+
 function buildPowerShellWrapper() {
   const sourceLauncherPath = quotePowerShellSingle(path.join(ROOT_DIR, "scripts", "source-launcher.mjs"));
   return `$ErrorActionPreference = "Stop"
@@ -515,7 +543,13 @@ if (-not $nodePath) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $ProgressPreference = 'SilentlyContinue'; Write-Host "Downloading Node.js $nodeVer ($arch)..."
     Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmp $zip) -UseBasicParsing
-    Expand-Archive -Path (Join-Path $tmp $zip) -DestinationPath $tmp -Force
+    # Extract only an archive listed in the official SHASUMS256.txt of this release (OPS-17).
+    $sums = Join-Path $tmp 'SHASUMS256.txt'
+    Invoke-WebRequest -Uri "https://nodejs.org/dist/$nodeVer/SHASUMS256.txt" -OutFile $sums -UseBasicParsing
+    $expected = Get-Content -LiteralPath $sums | ForEach-Object { $f = $_.Trim() -split '\\s+'; if ($f.Count -eq 2 -and $f[1] -eq $zip) { $f[0] } } | Select-Object -First 1
+    if (-not $expected) { throw "SHASUMS256.txt lists no $zip" }
+    if ((Get-FileHash -LiteralPath (Join-Path $tmp $zip) -Algorithm SHA256).Hash -ne $expected) { throw "SHA-256 mismatch for $zip" }
+    Expand-Archive -LiteralPath (Join-Path $tmp $zip) -DestinationPath $tmp -Force
     $ex = Join-Path $tmp "node-$nodeVer-win-$arch"
     Copy-Item (Join-Path $ex 'node.exe') $nodeDir -Force
     foreach ($f in @('npm','npm.cmd','npx','npx.cmd','corepack','corepack.cmd')) { $s = Join-Path $ex $f; if (Test-Path $s) { Copy-Item $s $nodeDir -Force } }
@@ -554,13 +588,21 @@ if /i "%CONFIRM%"=="no" ( echo Install Node.js from https://nodejs.org or set ST
 set "ARCH=x64"
 if "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ARCH=arm64"
 if "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ARCH=arm64"
-set "NV=v22.18.0" & set "ZN=node-%NV%-win-%ARCH%.zip"
+:: One set per line: cmd expands %NV% when it reads the line, so a set and a use
+:: on the same line gave a zip name without the version.
+set "NV=v22.18.0"
+set "ZN=node-%NV%-win-%ARCH%.zip"
 echo. & echo Downloading Node.js %NV% (%ARCH%)...
 set "TD=%TEMP%\\strada-node-install"
 if exist "%TD%" rmdir /s /q "%TD%"
 mkdir "%TD%" & mkdir "%SNDIR%" 2>nul
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$ProgressPreference='SilentlyContinue';Invoke-WebRequest -Uri 'https://nodejs.org/dist/%NV%/%ZN%' -OutFile '%TD%\\%ZN%' -UseBasicParsing;Expand-Archive -Path '%TD%\\%ZN%' -DestinationPath '%TD%' -Force"
-if errorlevel 1 ( echo Download failed. Install Node.js from https://nodejs.org & rmdir /s /q "%TD%" 2>nul & exit /b 1 )
+:: PowerShell reads the paths from the environment, not from %VAR% in its source,
+:: and extracts only a zip that matches the release's SHASUMS256.txt (OPS-17).
+set "STRADA_NODE_TMP=%TD%"
+set "STRADA_NODE_ZIP=%ZN%"
+set "STRADA_NODE_VERSION=%NV%"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${CMD_NODE_DOWNLOAD_POWERSHELL}"
+if errorlevel 1 ( echo Download or checksum verification failed. Install Node.js from https://nodejs.org & rmdir /s /q "%TD%" 2>nul & exit /b 1 )
 set "EX=%TD%\\node-%NV%-win-%ARCH%"
 copy /y "%EX%\\node.exe" "%SNDIR%\\node.exe" >nul
 for %%F in (npm npm.cmd npx npx.cmd corepack corepack.cmd) do ( if exist "%EX%\\%%F" copy /y "%EX%\\%%F" "%SNDIR%\\%%F" >nul )

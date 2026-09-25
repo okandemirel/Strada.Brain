@@ -1,4 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -882,6 +883,184 @@ describe("Windows .cmd launchers (OPS-17)", () => {
       expect(prepend, `${name}: no PATH prepend`).toBeGreaterThan(skip);
     }
   });
+});
+
+/**
+ * OPS-17 (download path). The launchers fetched a portable Node and extracted it
+ * unchecked, and the .cmd ones built PowerShell source out of %TEMP%: a quote
+ * in it (user O'Brien) ended a single-quoted string. Everything below except
+ * the win32-only tests runs anywhere; those two are the only real run of the
+ * download code, and it happens on the windows-verify CI job.
+ */
+describe("Windows portable Node download (OPS-17)", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  async function generatedWrappers(): Promise<{ cmd: string; ps1: string; ps1Path: string }> {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-download-wrapper-"));
+    tempDirs.push(tempHome);
+    const installDir = path.join(tempHome, "AppData", "Local", "Strada", "bin");
+    const { installCommand } = await loadSourceLauncherModule();
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      installCommand({
+        platform: "win32",
+        env: { LOCALAPPDATA: path.join(tempHome, "AppData", "Local"), PATH: "" },
+        homeDir: tempHome,
+        launcherPath: "C:\\Repo\\Strada.Brain\\strada.ps1",
+        windowsPathSync: vi.fn().mockReturnValue({ updated: false, path: "" }),
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+    return {
+      cmd: readFileSync(path.join(installDir, "strada.cmd"), "utf8"),
+      ps1: readFileSync(path.join(installDir, "strada.ps1"), "utf8"),
+      ps1Path: path.join(installDir, "strada.ps1"),
+    };
+  }
+
+  const readRepoFile = (name: string) => readFileSync(path.join(process.cwd(), name), "utf8");
+
+  /**
+   * Just enough of cmd.exe to follow the download branch: cmd expands %VAR%
+   * (undefined: empty) when it READS a line, then runs its `&`-joined commands.
+   * `set "N=V"` and `if "a"=="b" set ...` change the environment; the expanded
+   * powershell.exe line is what PowerShell is handed.
+   */
+  function simulateCmdDownload(source: string, env: Record<string, string>) {
+    const vars = new Map(Object.entries(env).map(([name, value]) => [name.toUpperCase(), value]));
+    const lines = source.replace(/\^\r?\n/g, "").split(/\r?\n/);
+    const start = lines.findIndex((line) => line.startsWith('set "ARCH=x64"'));
+    expect(start, "no download branch").toBeGreaterThan(-1);
+    for (const raw of lines.slice(start)) {
+      if (raw.trimStart().startsWith("::")) continue;
+      const line = raw.replace(/%([A-Za-z_]\w*)%/g, (_match, name: string) => vars.get(name.toUpperCase()) ?? "");
+      if (/^\s*powershell\.exe\s/i.test(line)) {
+        return { vars, command: /-Command\s+"(.*)"\s*$/.exec(line)?.[1] ?? null };
+      }
+      for (const statement of line.split(" & ")) {
+        const condition = /^\s*if "([^"]*)"=="([^"]*)" (.*)$/.exec(statement);
+        const body = condition ? (condition[1] === condition[2] ? condition[3] ?? "" : "") : statement;
+        const assignment = /^\s*set "([^=]+)=(.*)"\s*$/.exec(body);
+        if (assignment?.[1] !== undefined) vars.set(assignment[1].toUpperCase(), assignment[2] ?? "");
+      }
+    }
+    return { vars, command: null };
+  }
+
+  it("the .cmd launchers hand PowerShell a %TEMP% with a quote through its environment", async () => {
+    const { CMD_NODE_DOWNLOAD_POWERSHELL } = await loadSourceLauncherModule();
+    // Nothing in the PowerShell source is left for cmd to expand, and cmd has
+    // no quote in it to unbalance.
+    expect(CMD_NODE_DOWNLOAD_POWERSHELL).not.toMatch(/[%"]/);
+    const env = {
+      TEMP: "C:\\Users\\O'Brien\\AppData\\Local\\Temp",
+      LOCALAPPDATA: "C:\\Users\\O'Brien\\AppData\\Local",
+      PROCESSOR_ARCHITECTURE: "AMD64",
+    };
+    for (const [name, source] of [["strada.cmd", readRepoFile("strada.cmd")], ["generated strada.cmd", (await generatedWrappers()).cmd]]) {
+      const { vars, command } = simulateCmdDownload(source, env);
+      // Was: '%TD%\%ZN%' in the source, which became 'C:\Users\O'Brien\...'.
+      expect(command, name).toBe(CMD_NODE_DOWNLOAD_POWERSHELL);
+      expect(vars.get("STRADA_NODE_TMP"), name).toBe("C:\\Users\\O'Brien\\AppData\\Local\\Temp\\strada-node-install");
+      // The generated wrapper set NV and used it on one line, so the zip name
+      // had no version and the download could never succeed.
+      expect(vars.get("STRADA_NODE_ZIP"), name).toBe("node-v22.18.0-win-x64.zip");
+      expect(vars.get("STRADA_NODE_VERSION"), name).toBe("v22.18.0");
+    }
+  });
+
+  it("every launcher extracts the portable Node only after checking it against the release's SHASUMS256.txt", async () => {
+    const { CMD_NODE_DOWNLOAD_POWERSHELL } = await loadSourceLauncherModule();
+    const generated = await generatedWrappers();
+    const scripts = [
+      ["strada.cmd / generated strada.cmd", CMD_NODE_DOWNLOAD_POWERSHELL],
+      ["strada.ps1", readRepoFile("strada.ps1")],
+      ["generated strada.ps1", generated.ps1],
+    ] as const;
+    for (const [name, source] of scripts) {
+      const sums = source.search(/Invoke-WebRequest[^\n]*SHASUMS256\.txt/);
+      const hash = source.search(/Get-FileHash\s+-LiteralPath\s+[^\n]*-Algorithm SHA256/);
+      const mismatch = source.search(/-ne \$expected\w*\)\s*\{\s*throw\b/);
+      const extract = source.indexOf("Expand-Archive");
+      expect(sums, `${name}: SHASUMS256.txt is never downloaded`).toBeGreaterThan(-1);
+      expect(hash, `${name}: the zip is never hashed`).toBeGreaterThan(sums);
+      expect(mismatch, `${name}: a mismatch does not stop the install`).toBeGreaterThan(hash);
+      expect(extract, `${name}: extracted before it is checked`).toBeGreaterThan(mismatch);
+      // A release with no line for this zip is refused too.
+      expect(source, name).toMatch(/if\s*\(-not \$expected\w*\)\s*\{\s*throw\b/);
+    }
+    // The checksum list is the one published with the zip's own release.
+    for (const [name, source] of [["strada.ps1", readRepoFile("strada.ps1")], ["generated strada.ps1", generated.ps1]]) {
+      const zipRelease = /https:\/\/nodejs\.org\/dist\/(\$\{?\w+\}?)\/\$\{?zip/i.exec(source)?.[1];
+      const sumsRelease = /https:\/\/nodejs\.org\/dist\/(\$\{?\w+\}?)\/SHASUMS256\.txt/.exec(source)?.[1];
+      expect(zipRelease, name).toBeDefined();
+      expect(sumsRelease, name).toBe(zipRelease);
+    }
+    expect(CMD_NODE_DOWNLOAD_POWERSHELL).toContain("Invoke-WebRequest -Uri ($base+$zip)");
+    expect(CMD_NODE_DOWNLOAD_POWERSHELL).toContain("Invoke-WebRequest -Uri ($base+'SHASUMS256.txt')");
+  });
+
+  // The real thing, with nodejs.org replaced by local fixtures and a temp
+  // directory that has a quote and spaces in it.
+  it.runIf(process.platform === "win32")("the .cmd download verifies the zip and refuses a mismatch (Windows)", async () => {
+    const { CMD_NODE_DOWNLOAD_POWERSHELL } = await loadSourceLauncherModule();
+    const root = mkdtempSync(path.join(os.tmpdir(), "strada o'brien "));
+    tempDirs.push(root);
+    const zipName = "node-v22.18.0-win-x64.zip";
+    const dist = path.join(root, "dist");
+    const payload = path.join(root, "payload", "node-v22.18.0-win-x64");
+    mkdirSync(dist);
+    mkdirSync(payload, { recursive: true });
+    writeFileSync(path.join(payload, "node.exe"), "not really node\n");
+    const powershell = (script: string, env: Record<string, string>) => execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { env: { ...process.env, ...env }, encoding: "utf8", timeout: 120_000 },
+    );
+    powershell(
+      "$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath $env:STRADA_TEST_SRC -DestinationPath $env:STRADA_TEST_ZIP",
+      { STRADA_TEST_SRC: payload, STRADA_TEST_ZIP: path.join(dist, zipName) },
+    );
+    const sha = createHash("sha256").update(readFileSync(path.join(dist, zipName))).digest("hex");
+    // Serves the fixture named by the URL's last segment instead of nodejs.org.
+    const offline = "function Invoke-WebRequest { param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing) Copy-Item -LiteralPath (Join-Path $env:STRADA_TEST_DIST ($Uri -split '/')[-1]) -Destination $OutFile }; ";
+    const install = (sums: string) => {
+      writeFileSync(path.join(dist, "SHASUMS256.txt"), sums);
+      const work = mkdtempSync(path.join(root, "temp o'brien "));
+      let ok = true;
+      try {
+        powershell(offline + CMD_NODE_DOWNLOAD_POWERSHELL, {
+          STRADA_TEST_DIST: dist,
+          STRADA_NODE_TMP: work,
+          STRADA_NODE_ZIP: zipName,
+          STRADA_NODE_VERSION: "v22.18.0",
+        });
+      } catch {
+        ok = false;
+      }
+      return { ok, extracted: existsSync(path.join(work, "node-v22.18.0-win-x64", "node.exe")) };
+    };
+    const otherZip = `${"1".repeat(64)}  node-v22.18.0-win-arm64.zip\n`;
+    expect(install(`${otherZip}${sha}  ${zipName}\n`)).toEqual({ ok: true, extracted: true });
+    expect(install(`${otherZip}${"0".repeat(64)}  ${zipName}\n`)).toEqual({ ok: false, extracted: false });
+    expect(install(otherZip)).toEqual({ ok: false, extracted: false });
+  }, 300_000);
+
+  it.runIf(process.platform === "win32")("strada.ps1 and the generated wrapper parse (Windows)", async () => {
+    const { ps1Path } = await generatedWrappers();
+    const parse = "$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:STRADA_TEST_PS1, [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Output $_.Message }; exit 1 }";
+    for (const file of [path.join(process.cwd(), "strada.ps1"), ps1Path]) {
+      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", parse], {
+        env: { ...process.env, STRADA_TEST_PS1: file },
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+    }
+  }, 300_000);
 });
 
 describe("source launcher npm invocation with a Node path containing a space (OPS-2)", () => {

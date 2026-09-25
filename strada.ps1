@@ -65,10 +65,21 @@ function Install-StradaNode {
     $ProgressPreference = 'SilentlyContinue'
     Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
 
+    # Extract only an archive listed in the official SHASUMS256.txt of this
+    # exact release; a truncated or altered download stops here.
+    $sumsPath = Join-Path $tempDir "SHASUMS256.txt"
+    Invoke-WebRequest -Uri "https://nodejs.org/dist/${nodeVersion}/SHASUMS256.txt" -OutFile $sumsPath -UseBasicParsing
+    $expectedHash = Get-Content -LiteralPath $sumsPath |
+      ForEach-Object { $fields = $_.Trim() -split '\s+'; if ($fields.Count -eq 2 -and $fields[1] -eq $zipName) { $fields[0] } } |
+      Select-Object -First 1
+    if (-not $expectedHash) { throw "SHASUMS256.txt lists no $zipName" }
+    $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+    if ($actualHash -ne $expectedHash) { throw "SHA-256 mismatch for ${zipName}: expected $expectedHash, got $actualHash" }
+
     Write-Host "Extracting..."
 
     # Extract the zip
-    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $tempDir -Force
 
     # The zip contains a folder like node-v22.18.0-win-x64/
     $extractedFolder = Join-Path $tempDir "node-${nodeVersion}-win-${arch}"
