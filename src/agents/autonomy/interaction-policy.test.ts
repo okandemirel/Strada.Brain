@@ -27,6 +27,46 @@ describe("InteractionPolicyStateMachine", () => {
     expect(policy.getWriteBlock("chat-1", true)).toBeNull();
   });
 
+  it("keeps the gate for replies that only start with an approval word (AUT-9)", () => {
+    // The approval test used to be a prefix match, so a reply that began with
+    // "ok"/"yes"/"continue"/"tamam" cleared the write block even when the rest
+    // of it was a condition, a question or an outright "no".
+    const feedback = [
+      "ok but don't touch the save system yet, change step 3 first",
+      "Continue reviewing — no writes yet",
+      "yes? what does step 2 do",
+      "tamam değil, planı değiştir",
+      "go ahead with step 1 only",
+      "devam etme",
+      "approve after you swap steps 2 and 3",
+    ];
+    for (const text of feedback) {
+      const policy = new InteractionPolicyStateMachine();
+      policy.requirePlanReview("chat-1", "review the plan before any writes");
+      expect(policy.noteUserMessage("chat-1", text), text).toBeNull();
+      expect(policy.getWriteBlock("chat-1", true), text).not.toBeNull();
+    }
+  });
+
+  it("still clears the gate on short, unconditional approvals (AUT-9)", () => {
+    const approvals = [
+      "ok",
+      "Yes, go ahead",
+      "Approve",
+      "looks good!",
+      "LGTM, ship it",
+      "tamam devam et",
+      "Evet, onaylıyorum.",
+      "sounds good, please proceed",
+    ];
+    for (const text of approvals) {
+      const policy = new InteractionPolicyStateMachine();
+      policy.requirePlanReview("chat-1", "review the plan before any writes");
+      expect(policy.noteUserMessage("chat-1", text), text).not.toBeNull();
+      expect(policy.getWriteBlock("chat-1", true), text).toBeNull();
+    }
+  });
+
   it("retains the latest concrete plan text for deferred plan-review surfacing", () => {
     const policy = new InteractionPolicyStateMachine();
     policy.requirePlanReview(

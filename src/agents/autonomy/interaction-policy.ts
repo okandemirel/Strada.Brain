@@ -13,7 +13,58 @@ export interface InteractionWriteBlock {
   readonly reason: string;
 }
 
-const PLAN_APPROVAL_MESSAGE_RE = /^(?:\s*)(?:approve|approved|go ahead|proceed|continue|yes|ok|okay|looks good|ship it|tamam|devam|uygun)(?:\b|[.!])/iu;
+/**
+ * Plan approval is judged on the WHOLE message, not its first word.
+ *
+ * A prefix match cleared the write block for replies that only began with an
+ * approval-ish word and then asked a question, added a condition or said no.
+ * Now every word must come from a small approval vocabulary, at least one must
+ * be an actual approval, the reply must be short, and a question mark keeps the
+ * gate. Anything else (a condition, a negation, a change request, a question)
+ * is review feedback and leaves the plan parked.
+ */
+const PLAN_APPROVAL_WORDS: ReadonlySet<string> = new Set([
+  "approve", "approved", "proceed", "continue", "yes", "ok", "okay", "lgtm",
+  "tamam", "devam", "uygun", "evet", "onay", "onayla", "onaylıyorum", "onaylandı",
+]);
+const PLAN_APPROVAL_PHRASES: readonly (readonly [string, string])[] = [
+  ["go", "ahead"],
+  ["looks", "good"],
+  ["sounds", "good"],
+  ["ship", "it"],
+];
+/** Words that may accompany an approval without changing what it means. */
+const PLAN_APPROVAL_FILLER: ReadonlySet<string> = new Set([
+  "go", "ahead", "looks", "sounds", "good", "great", "fine", "perfect", "ship", "it",
+  "please", "thanks", "thank", "you", "sure", "yep", "yeah", "alright", "the", "plan",
+  "with", "that", "this", "lets", "let's", "let’s", "do", "all", "right",
+  "lütfen", "teşekkürler", "sağol", "et", "edelim", "edebilirsin", "olur", "hadi", "başla",
+]);
+const PLAN_APPROVAL_MAX_WORDS = 8;
+
+function isPlanApprovalMessage(text: string): boolean {
+  const normalized = text.normalize("NFC").trim().toLowerCase();
+  if (!normalized || normalized.includes("?")) {
+    return false;
+  }
+  const words = normalized
+    .replace(/[\s.,!;:()"—–-]+/gu, " ")
+    .trim()
+    .split(" ")
+    .filter((word) => word.length > 0);
+  if (words.length === 0 || words.length > PLAN_APPROVAL_MAX_WORDS) {
+    return false;
+  }
+  if (!words.every((word) => PLAN_APPROVAL_WORDS.has(word) || PLAN_APPROVAL_FILLER.has(word))) {
+    return false;
+  }
+  if (words.some((word) => PLAN_APPROVAL_WORDS.has(word))) {
+    return true;
+  }
+  return PLAN_APPROVAL_PHRASES.some(([first, second]) =>
+    words.some((word, index) => word === first && words[index + 1] === second),
+  );
+}
 
 export class InteractionPolicyStateMachine {
   private readonly gates = new Map<string, InteractionGateState>();
@@ -43,7 +94,7 @@ export class InteractionPolicyStateMachine {
     if (!gate) {
       return null;
     }
-    if (gate.kind === "plan-review-required" && PLAN_APPROVAL_MESSAGE_RE.test(text.trim())) {
+    if (gate.kind === "plan-review-required" && isPlanApprovalMessage(text)) {
       this.gates.delete(chatId);
       return gate;
     }
