@@ -38,6 +38,50 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
+/**
+ * The same completion as an OpenAI-compatible SSE stream, for requests that
+ * set `stream: true`. The orchestrator streams, and the provider's stream
+ * parser read the plain JSON body as an empty response, so every turn failed.
+ * Shape matches what OpenAIProvider.chatStream parses: `data: <chunk>` lines
+ * whose choices[0].delta carries the content and tool_calls, a final chunk with
+ * finish_reason, a usage chunk, then `data: [DONE]`.
+ */
+function streamResponse(completion) {
+  const { id, created, model } = completion;
+  const choice = completion.choices[0];
+  const chunk = (choices, extra = {}) => ({ id, object: "chat.completion.chunk", created, model, choices, ...extra });
+  const delta = (value) => chunk([{ index: 0, delta: value, finish_reason: null }]);
+
+  const chunks = [delta({ role: "assistant", content: "" })];
+  const text = choice.message.content ?? "";
+  // Two content deltas, so the parser's accumulation is exercised as well.
+  const mid = Math.ceil(text.length / 2);
+  for (const part of [text.slice(0, mid), text.slice(mid)]) {
+    if (part) chunks.push(delta({ content: part }));
+  }
+  (choice.message.tool_calls ?? []).forEach((call, index) => {
+    chunks.push(delta({
+      tool_calls: [{
+        index,
+        id: call.id,
+        type: "function",
+        function: { name: call.function.name, arguments: call.function.arguments },
+      }],
+    }));
+  });
+  chunks.push(chunk([{ index: 0, delta: {}, finish_reason: choice.finish_reason }]));
+  chunks.push(chunk([], { usage: completion.usage }));
+
+  const body = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("")}data: [DONE]\n\n`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    },
+  });
+}
+
 function extractText(content) {
   if (typeof content === "string") {
     return content;
@@ -172,6 +216,15 @@ function buildResponse(body) {
   if (synthesisResult) {
     return buildChatCompletion({
       text: synthesisResult,
+    });
+  }
+
+  // Goal decomposition gets no plan, so each scripted scenario runs as the one
+  // task it scripts. The PAOR script's numbered plan was otherwise read as
+  // three sub-goals whose node prompts no scenario recognises.
+  if (normalizedUserText.includes("decompose this task into sub-goals:")) {
+    return buildChatCompletion({
+      text: "No decomposition: this is a single task.",
     });
   }
 
@@ -388,7 +441,8 @@ function buildResponse(body) {
     }
   }
 
-  if (normalizedUserText.includes("provider fallback smoke")) {
+  // Every turn of the fallback task, whatever its last message (see mockFetch).
+  if (conversationText.includes("provider fallback smoke")) {
     return buildChatCompletion({
       text: "provider fallback ok",
     });
@@ -437,16 +491,24 @@ globalThis.fetch = async function mockFetch(input, init) {
   if (url.includes("/chat/completions")) {
     const body = parseJsonBody(init);
     const lastUserText = getLastUserText(body.messages ?? []);
-    const normalizedLastUserText = lastUserText.toLowerCase();
-    if (url.includes("api.kimi.com") && normalizedLastUserText.includes("provider fallback smoke")) {
-      const error = new TypeError("fetch failed");
+    // Kimi is down for every request of the fallback task, not only the one
+    // whose last user message is the prompt: the agent loop's follow-up turns
+    // carry other last messages, and a primary that answered those would never
+    // be failed over from.
+    const inFallbackSmoke = getConversationText(body.messages ?? []).toLowerCase().includes("provider fallback smoke");
+    if (url.includes("api.kimi.com") && inFallbackSmoke) {
+      // An outage answered with 503, not a thrown "fetch failed": fetchWithRetry
+      // deliberately waits out a transport failure for about four minutes
+      // (networkMaxRetries) before the chain may fail over, far past this
+      // smoke's budget. A 5xx spends the short status-retry budget instead.
+      const error = "503 Service Unavailable";
       log({
         type: "chat-failure",
         url,
         lastUserText,
-        error: error.message,
+        error,
       });
-      throw error;
+      return jsonResponse({ error: { message: "smoke: primary provider unavailable", type: "server_error" } }, 503);
     }
     const response = buildResponse(body);
     log({
@@ -454,9 +516,10 @@ globalThis.fetch = async function mockFetch(input, init) {
       url,
       lastUserText,
       lastToolResult: getLastToolResult(body.messages ?? []),
+      stream: body.stream === true,
       response,
     });
-    return jsonResponse(response);
+    return body.stream === true ? streamResponse(response) : jsonResponse(response);
   }
 
   if (originalFetch) {

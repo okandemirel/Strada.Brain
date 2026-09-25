@@ -434,7 +434,8 @@ async function runProviderFallbackSmoke(memoryDir, projectDir, sandbox) {
 
     let cursor = session.output.length;
     session.sendLine("/model kimi");
-    await session.waitFor("Strada will use `kimi`", {
+    // The soft selection's confirmation (command-handler.ts); a hard pin says "hard-pinned to".
+    await session.waitFor("Strada will bias routing toward `kimi`", {
       fromIndex: cursor,
       timeoutMs: 20_000,
     });
@@ -472,9 +473,12 @@ async function runProviderFallbackSmoke(memoryDir, projectDir, sandbox) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+  // `includes`, not equality: the retry that reaches the fallback wraps the
+  // original prompt in a continuation message.
   const promptEntries = entries.filter((entry) =>
     (entry.type === "chat" || entry.type === "chat-failure") &&
-    entry.lastUserText === PROVIDER_FALLBACK_PROMPT,
+    typeof entry.lastUserText === "string" &&
+    entry.lastUserText.includes(PROVIDER_FALLBACK_PROMPT),
   );
   const failedKimiAttempt = promptEntries.some((entry) =>
     entry.type === "chat-failure" &&
