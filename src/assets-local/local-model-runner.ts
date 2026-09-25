@@ -41,7 +41,11 @@ p.add_argument("--steps", type=int, default=0)
 p.add_argument("--size", type=int, default=512)
 p.add_argument("--rmbg", type=int, default=0)
 p.add_argument("--seed", type=int, default=-1)
+p.add_argument("--revision", default="")
 a = p.parse_args()
+# The revision the install fetched, when the catalog pins one: loading "main"
+# instead would draw with weights nobody verified.
+rev = a.revision or None
 # One pipeline load for many prompts: --jobs names a JSON list of
 # {"prompt","negative","out"}. Loading SD1.5 costs ~10 s per process; a
 # sprint that needs two hundred sprites pays it once, not two hundred times.
@@ -57,15 +61,15 @@ device = "mps" if torch.backends.mps.is_available() else "cpu"
 # 512²; FLUX is the exception — it is built for bfloat16.
 if a.family == "flux":
     from diffusers import FluxPipeline
-    pipe = FluxPipeline.from_pretrained(a.model, torch_dtype=torch.bfloat16)
+    pipe = FluxPipeline.from_pretrained(a.model, revision=rev, torch_dtype=torch.bfloat16)
     steps = a.steps or 4
 elif a.family == "sdxl":
     from diffusers import StableDiffusionXLPipeline
-    pipe = StableDiffusionXLPipeline.from_pretrained(a.model, torch_dtype=torch.float32)
+    pipe = StableDiffusionXLPipeline.from_pretrained(a.model, revision=rev, torch_dtype=torch.float32)
     steps = a.steps or 25
 else:
     from diffusers import StableDiffusionPipeline
-    pipe = StableDiffusionPipeline.from_pretrained(a.model, torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(a.model, revision=rev, torch_dtype=torch.float32)
     steps = a.steps or 20
 
 pipe = pipe.to(device)
@@ -123,16 +127,18 @@ export const FETCH_WEIGHTS_SCRIPT = `import argparse, sys
 p = argparse.ArgumentParser()
 p.add_argument("--model", required=True)
 p.add_argument("--files", default="")
+p.add_argument("--revision", default="")
 a = p.parse_args()
+rev = a.revision or None
 
 names = [f for f in a.files.split(",") if f]
 if names:
     from huggingface_hub import hf_hub_download
     for name in names:
-        print("FETCHED", hf_hub_download(repo_id=a.model, filename=name), flush=True)
+        print("FETCHED", hf_hub_download(repo_id=a.model, filename=name, revision=rev), flush=True)
 else:
     from diffusers import DiffusionPipeline
-    print("FETCHED", DiffusionPipeline.download(a.model), flush=True)
+    print("FETCHED", DiffusionPipeline.download(a.model, revision=rev), flush=True)
 `;
 
 export const IMG2MESH_SCRIPT = `import argparse, sys
@@ -271,6 +277,9 @@ function hfSnapshotDir(spec: LocalModelSpec): string | null {
     return existsSync(root) ? root : null;
   }
   const ref = spec.weightsRevision ?? "main";
+  // A COMMIT revision has no refs/ file: the cache names its snapshot by the
+  // commit itself.
+  if (/^[0-9a-f]{40}$/.test(ref)) return existsSync(join(snapshots, ref)) ? join(snapshots, ref) : null;
   try {
     const sha = readFileSync(join(root, "refs", ref), "utf-8").trim();
     if (sha && existsSync(join(snapshots, sha))) return join(snapshots, sha);
@@ -288,6 +297,11 @@ function hfSnapshotDir(spec: LocalModelSpec): string | null {
   } catch {
     return null;
   }
+}
+
+/** `--revision=<rev>` for a catalog entry that pins its weights, as one token. */
+function revisionArgs(spec: LocalModelSpec): string[] {
+  return spec.weightsRevision === undefined ? [] : [`--revision=${spec.weightsRevision}`];
 }
 
 /** A file in a snapshot whose blob is still downloading is not there yet. */
@@ -568,7 +582,13 @@ export class LocalModelRunner {
     onProgress?: (line: string) => void,
   ): Promise<{ ok: boolean; detail: string }> {
     const repoDir = join(ROOT_DIR(), "src", spec.id);
-    if (!existsSync(repoDir)) {
+    if (!existsSync(repoDir) && spec.repoCommit !== undefined) {
+      // THE PINNED COMMIT, not whatever HEAD is today (CMP-13): pip installs
+      // this tree's requirements and every lift imports its code.
+      onProgress?.(`fetching ${spec.repoUrl} at ${spec.repoCommit.slice(0, 12)}…`);
+      const pinned = await this.checkoutPinnedRepo(spec.repoUrl ?? "", spec.repoCommit, repoDir, env);
+      if (!pinned.ok) return pinned;
+    } else if (!existsSync(repoDir)) {
       onProgress?.(`cloning ${spec.repoUrl}…`);
       const clone = await this.spawn(
         "git",
@@ -623,6 +643,34 @@ export class LocalModelRunner {
   }
 
   /**
+   * Exactly one commit of a repo-shipped model, verified: a fetch that did not
+   * land on that commit leaves no source tree behind to be taken as installed.
+   */
+  private async checkoutPinnedRepo(
+    url: string,
+    commit: string,
+    repoDir: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<{ ok: boolean; detail: string }> {
+    const git = (args: string[], timeoutMs = 60_000): ReturnType<SpawnImpl> => this.spawn("git", args, { timeoutMs, env });
+    const steps: Array<[string, string[], number?]> = [
+      ["git init", ["init", "-q", repoDir]],
+      ["git fetch", ["-C", repoDir, "fetch", "--depth", "1", "-q", "--", url, commit], 600_000],
+      ["git checkout", ["-C", repoDir, "checkout", "-q", "--detach", "FETCH_HEAD"]],
+    ];
+    const fail = (detail: string): { ok: false; detail: string } => {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch { /* reported below */ }
+      return { ok: false, detail };
+    };
+    for (const [what, args, timeoutMs] of steps) {
+      const run = await git(args, timeoutMs);
+      if (run.code !== 0) return fail(`${what} failed: ${run.stderr.slice(0, 300)}`);
+    }
+    const head = (await git(["-C", repoDir, "rev-parse", "HEAD"])).stdout.trim();
+    return head === commit ? { ok: true, detail: commit } : fail(`the source checkout is at ${head.slice(0, 12) || "nothing"}, not the pinned ${commit.slice(0, 12)}`);
+  }
+
+  /**
    * Download the weights into the HF cache as part of the install, so a
    * finished install is a model that can draw offline (item 2.15). The
    * download's exit code is the verdict here — the same authority pip gets —
@@ -639,6 +687,9 @@ export class LocalModelRunner {
     onProgress?.(`downloading ${spec.label} weights (~${spec.diskGb} GB, resumable)…`);
     const args = [join(SCRIPTS(), "fetch_weights.py"), "--model", spec.weightsRef];
     if (spec.weightFiles && spec.weightFiles.length > 0) args.push("--files", spec.weightFiles.join(","));
+    // THE REVISION THE READINESS CHECK VERIFIES is the one fetched (CMP-13):
+    // the fetch took "main" while the check looked for refs/<weightsRevision>.
+    args.push(...revisionArgs(spec));
     const run = await this.spawn(venvPython(), args, { timeoutMs: 3_600_000, env });
     if (run.code !== 0) {
       return { ok: false, detail: `weights download failed: ${(run.stderr || run.stdout).slice(-400)}` };
@@ -671,6 +722,7 @@ export class LocalModelRunner {
       "--size", String(opts.size ?? 512),
       "--rmbg", opts.removeBackground ? "1" : "0",
       "--seed", String(opts.seed ?? -1),
+      ...revisionArgs(spec),
     ];
     const env = this.envWithWeights();
     if (opts.removeBackground) {
@@ -717,6 +769,7 @@ export class LocalModelRunner {
         "--steps", String(opts.steps ?? 0),
         "--size", String(opts.size ?? 512),
         "--rmbg", opts.removeBackground ? "1" : "0",
+        ...revisionArgs(spec),
       ];
       // Only files this run produced count as written (review 2026-09-07:
       // a batch that drew nothing over three earlier PNGs reported "3 of 3
@@ -782,7 +835,9 @@ export class LocalModelRunner {
     try { rmSync(staged, { force: true }); } catch { /* nothing to clear */ }
     const args = [
       join(SCRIPTS(), "img2mesh.py"),
-      "--weights", spec.weightsRef,
+      // TSR.from_pretrained takes no revision: a pinned one is loaded from
+      // its own snapshot directory, which it reads like a local checkout.
+      "--weights", (spec.weightsRevision !== undefined ? hfSnapshotDir(spec) : null) ?? spec.weightsRef,
       "--image", imagePath,
       "--out", staged,
     ];

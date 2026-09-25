@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
   LocalModelRunner,
+  FETCH_WEIGHTS_SCRIPT,
   RMBG_IMPORT_PROBE,
+  TXT2IMG_SCRIPT,
   RMBG_REPAIR_TIMEOUT_MS,
   hfWeightsDir,
   modelSubprocessEnv,
@@ -147,19 +149,20 @@ describe("LocalModelRunner", () => {
     const seen: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv | undefined }> = [];
     const spawn: SpawnImpl = async (cmd, args, opts) => {
       seen.push({ cmd, args, env: opts.env });
-      if (cmd === "git" && args[0] === "clone") {
-        // What a clone leaves behind, so the install carries on to pip.
+      if (cmd === "git" && args[0] === "init") {
+        // What the pinned checkout leaves behind, so the install carries on to pip.
         const repoDir = args[args.length - 1]!;
         mkdirSync(join(repoDir, "tsr"), { recursive: true });
         writeFileSync(join(repoDir, "requirements.txt"), "numpy\n");
       }
+      if (cmd === "git" && args.includes("rev-parse")) return { code: 0, stdout: getModelSpec("triposr")!.repoCommit!, stderr: "" };
       return { code: 0, stdout: "ok", stderr: "" };
     };
     try {
       const runner = new LocalModelRunner(spawn);
       await runner.install(getModelSpec("sd15")!);
-      await runner.install(getModelSpec("triposr")!); // the repo path: git clone, then pip
-      expect(seen.some((c) => c.cmd === "git" && c.args[0] === "clone")).toBe(true);
+      await runner.install(getModelSpec("triposr")!); // the repo path: the pinned source, then pip
+      expect(seen.some((c) => c.cmd === "git" && c.args.includes("fetch"))).toBe(true);
       expect(seen.some((c) => c.args.includes("venv"))).toBe(true);
       expect(seen.some((c) => c.args.includes("-r"))).toBe(true); // the unpinned requirements
       for (const call of seen) {
@@ -879,6 +882,65 @@ describe("isModelInstalled measures the weights, not just the marker (item 2.15)
     const fetch = calls.find((c) => c.args.some((a) => a.endsWith("fetch_weights.py")));
     expect(fetch, "install never fetched the weights").toBeDefined();
     expect(fetch!.args).toContain(getModelSpec("sd15")!.weightsRef);
+  });
+
+  it("a pinned weights revision is the one fetched, drawn with, and verified (CMP-13)", async () => {
+    const rev = "0123456789abcdef0123456789abcdef01234567";
+    const pinned = { ...getModelSpec("sd15")!, weightsRevision: rev };
+    const { spawn, calls } = spawnOk();
+    const runner = new LocalModelRunner(spawn);
+    await runner.install(pinned);
+    const fetch = calls.find((c) => c.args.some((a) => a.endsWith("fetch_weights.py")));
+    expect(fetch!.args).toContain(`--revision=${rev}`);
+    // …and nothing is pinned for an entry that pins nothing.
+    calls.length = 0;
+    await runner.install(getModelSpec("sd15")!);
+    expect(calls.flatMap((c) => c.args).some((a) => a.startsWith("--revision"))).toBe(false);
+    // The draw asks the pipeline for the same revision…
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    calls.length = 0;
+    await runner.textToImage(pinned, "a pig", join(dir, "pig.png"));
+    expect(calls.at(-1)!.args).toContain(`--revision=${rev}`);
+    // …and the readiness check verifies that commit's snapshot, not "main"'s.
+    venv();
+    marker("sd15");
+    weightFile("sd15", join("snapshots", "other", "unet", "diffusion_pytorch_model.safetensors"), "main-bytes");
+    const checker = { ...getModelSpec("sd15")!, weightsRevision: rev };
+    expect(modelWeightsPresent(checker)).toBe(false);
+    weightFile("sd15", join("snapshots", rev, "unet", "diffusion_pytorch_model.safetensors"), "pinned-bytes");
+    expect(modelWeightsPresent(checker)).toBe(true);
+  });
+
+  it("the drivers take the revision they are given (CMP-13)", () => {
+    expect(FETCH_WEIGHTS_SCRIPT).toContain('p.add_argument("--revision", default="")');
+    expect(FETCH_WEIGHTS_SCRIPT).toContain("revision=rev");
+    expect(TXT2IMG_SCRIPT).toContain('p.add_argument("--revision", default="")');
+    expect(TXT2IMG_SCRIPT.match(/from_pretrained\(a\.model, revision=rev/g)).toHaveLength(3);
+  });
+
+  it("a repo-shipped model is installed at its pinned commit, and a checkout elsewhere is refused (CMP-13)", async () => {
+    const spec = getModelSpec("triposr")!;
+    expect(spec.repoCommit).toMatch(/^[0-9a-f]{40}$/);
+    let head = spec.repoCommit!;
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const spawn: SpawnImpl = async (cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "git" && args.includes("rev-parse")) return { code: 0, stdout: `${head}\n`, stderr: "" };
+      if (cmd === "git" && args[0] === "init") mkdirSync(args[2]!, { recursive: true });
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    await new LocalModelRunner(spawn).install(spec);
+    const git = calls.filter((c) => c.cmd === "git").map((c) => c.args);
+    expect(git.some((a) => a.includes("clone"))).toBe(false);
+    expect(git.find((a) => a.includes("fetch"))).toEqual(expect.arrayContaining(["--depth", "1", spec.repoUrl!, spec.repoCommit!]));
+    expect(git.find((a) => a.includes("checkout"))).toEqual(expect.arrayContaining(["--detach", "FETCH_HEAD"]));
+    // A fetch that landed anywhere else leaves no source tree to be taken as installed.
+    rmSync(join(dir, "src", "triposr"), { recursive: true, force: true });
+    head = "f".repeat(40);
+    const refused = await new LocalModelRunner(spawn).install(spec);
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toContain("not the pinned");
+    expect(existsSync(join(dir, "src", "triposr"))).toBe(false);
   });
 
   it("a failed weights download is an honest failure, not a marker", async () => {

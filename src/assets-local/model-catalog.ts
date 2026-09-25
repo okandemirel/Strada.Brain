@@ -49,6 +49,12 @@ export interface LocalModelSpec {
    */
   readonly installMethod?: "pip" | "repo";
   readonly repoUrl?: string;
+  /**
+   * The commit of `repoUrl` the runner checks out (CMP-13). pip installs that
+   * tree's requirements and every inference imports its code, so HEAD — which
+   * a force-push can change — is not what gets installed. Absent = HEAD.
+   */
+  readonly repoCommit?: string;
   /** Path to the requirements file inside the cloned repo. */
   readonly repoRequirements?: string;
   /** HF repo the runner pulls weights from at INSTALL time (item 2.15). */
@@ -115,6 +121,10 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     speedHint: "fast",
     installMethod: "repo",
     repoUrl: "https://github.com/VAST-AI-Research/TripoSR.git",
+    // Upstream HEAD as `git ls-remote` reported it on 2026-09-25. The weights
+    // (stabilityai/TripoSR) are NOT pinned: no revision could be resolved from
+    // the Hugging Face API at the time, and an invented one would be worse.
+    repoCommit: "107cefdc244c39106fa830359024f6a2f1c78871",
     repoRequirements: "requirements.txt",
   },
   // ---- 2D (text → image) ----
