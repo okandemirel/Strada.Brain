@@ -25,7 +25,8 @@ import type { TaskExecutionStore } from "../memory/unified/task-execution-store.
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
@@ -832,10 +833,32 @@ export class SessionManager {
   private async persistSessionToDisk(chatId: string, session: Session): Promise<void> {
     const dir = this.deps.sessionsDir;
     if (!dir) return;
+    const json = SessionManager.serializeSession(session);
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
     }
-    await writeFile(this.sessionFilePath(chatId), SessionManager.serializeSession(session), { encoding: "utf-8", mode: 0o600 });
+    // ORC-16: temp file + rename, so a crash mid-write leaves the previous file
+    // instead of truncated JSON (which restore silently discards).
+    const filePath = this.sessionFilePath(chatId);
+    const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tmpPath, json, { encoding: "utf-8", mode: 0o600 });
+      await rename(tmpPath, filePath);
+    } catch (error) {
+      await unlink(tmpPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Fire-and-forget {@link persistSessionToDisk}; a failure is logged, never thrown. */
+  private persistSessionToDiskInBackground(chatId: string, session: Session): void {
+    if (!this.deps.sessionsDir) return;
+    this.persistSessionToDisk(chatId, session).catch((err) => {
+      getLogger().debug("Session disk persist failed", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   private static readonly MAX_SESSION_FILE_BYTES = 512 * 1024; // 512KB safety cap
@@ -866,7 +889,8 @@ export class SessionManager {
     if (!dir || !existsSync(dir)) return;
     try {
       for (const file of readdirSync(dir)) {
-        if (!file.endsWith(".json")) continue;
+        // `.tmp`: a write interrupted before its rename (ORC-16).
+        if (!file.endsWith(".json") && !file.endsWith(".tmp")) continue;
         try {
           const filePath = join(dir, file);
           const stat = statSync(filePath);
@@ -1159,6 +1183,12 @@ export class SessionManager {
     chatId: string,
     messages: ConversationMessage[],
     force = false,
+    /**
+     * ORC-16: the session written to disk, resolved when the call is made — an
+     * eviction deletes it from the map right after calling, and a lookup after
+     * the memory write's await found nothing and skipped the final state.
+     */
+    session: Session | undefined = this.sessions.get(chatId),
   ): Promise<void> {
     if (!this.deps.memoryManager) return;
     if (messages.length < 2) return;
@@ -1233,17 +1263,7 @@ export class SessionManager {
     }
 
     // Fire-and-forget disk persistence
-    if (this.deps.sessionsDir) {
-      const sessionForDisk = this.sessions.get(chatId);
-      if (sessionForDisk) {
-        this.persistSessionToDisk(chatId, sessionForDisk).catch((err) => {
-          getLogger().debug("Session disk persist failed", {
-            chatId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
-    }
+    if (session) this.persistSessionToDiskInBackground(chatId, session);
   }
 
   persistExecutionMemory(scopeKey: string, executionJournal: ExecutionJournal): void {
@@ -1480,7 +1500,7 @@ export class SessionManager {
             });
         }
         // Persist before cleanup (forced — session is being evicted)
-        void this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
+        void this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true, session);
         this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
         this.deps.activeGoalTrees.delete(session.conversationScope ?? chatId);
