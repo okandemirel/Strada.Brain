@@ -414,4 +414,52 @@ describe("reporting a refused write", () => {
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(sessionWith(REJECTION), "")).toBeNull();
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(sessionWith(REJECTION), "DONE")).toBeNull();
   });
+
+  it("reports the same refusal text in each session that got it (ORC-15)", () => {
+    // One SessionManager serves every chat and background run: the report
+    // marker is per session, so a second chat's identical refusal is not
+    // swallowed as "already reported".
+    const sm = manager();
+    const chatA = sessionWith(REJECTION);
+    const chatB = sessionWith(REJECTION);
+
+    expect(sm.getPendingSelfManagedWriteRejectionVisibleText(chatA, "ok")).toContain("Execution stopped");
+    expect(sm.getPendingSelfManagedWriteRejectionVisibleText(chatB, "ok")).toContain("Execution stopped");
+    expect(sm.getPendingSelfManagedWriteRejectionVisibleText(chatA, "ok")).toBeNull();
+  });
+
+  it("a restored session does not re-report a refusal it already reported (ORC-15)", () => {
+    const session = {
+      messages: [
+        { role: "user", content: "clean the build output" },
+        { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "shell_exec", input: {} }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: REJECTION }] },
+      ],
+      lastActivity: new Date(),
+    } as never;
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session, "ok")).toContain("Execution stopped");
+
+    const json = SessionManager.serializeSession(session);
+    // The refusal is still in the restored history, so only the marker keeps it quiet.
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(
+      { ...SessionManager.deserializeSession(json)!, consumedWriteRejections: undefined },
+      "ok",
+    )).toContain("Execution stopped");
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(
+      SessionManager.deserializeSession(json)!,
+      "ok",
+    )).toBeNull();
+  });
+
+  it("keeps the per-session report marker bounded (ORC-15)", () => {
+    const sm = manager();
+    const messages = Array.from({ length: 50 }, (_, i) => ({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: `t${i}`, content: REJECTION }],
+    }));
+    const session = { messages } as { messages: unknown[]; consumedWriteRejections?: string[] };
+    for (let i = 0; i < 50; i++) sm.getPendingSelfManagedWriteRejectionVisibleText(session as never, "ok");
+
+    expect(session.consumedWriteRejections!.length).toBeLessThanOrEqual(32);
+  });
 });

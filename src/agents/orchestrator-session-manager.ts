@@ -78,7 +78,16 @@ export interface Session {
    * so a stale count cannot re-trigger before the next call reports.
    */
   lastInputTokens?: number;
+  /**
+   * Self-managed write rejections already reported for THIS session (ORC-15),
+   * keyed by the tool call. Persisted so a restored session does not re-report
+   * a refusal that is still in its history; capped (oldest dropped).
+   */
+  consumedWriteRejections?: string[];
 }
+
+/** Cap on {@link Session.consumedWriteRejections}. */
+const MAX_CONSUMED_WRITE_REJECTIONS = 32;
 
 /**
  * Narrow dependency interface for SessionManager — carries only the external
@@ -731,6 +740,7 @@ export class SessionManager {
       lastJournalSnapshot: session.lastJournalSnapshot,
       reflectionOverrideCount: session.reflectionOverrideCount,
       compactionSummary: session.compactionSummary,
+      consumedWriteRejections: session.consumedWriteRejections,
     });
   }
 
@@ -792,6 +802,10 @@ export class SessionManager {
           } catch { /* logger not initialized — non-fatal */ }
         }
       }
+      const rawConsumed = (data as Record<string, unknown>).consumedWriteRejections;
+      const consumedWriteRejections = Array.isArray(rawConsumed)
+        ? rawConsumed.filter((v): v is string => typeof v === "string").slice(-MAX_CONSUMED_WRITE_REJECTIONS)
+        : undefined;
       return {
         messages,
         visibleMessages: [],
@@ -801,6 +815,7 @@ export class SessionManager {
         lastJournalSnapshot: data.lastJournalSnapshot,
         reflectionOverrideCount,
         compactionSummary,
+        consumedWriteRejections,
       };
     } catch {
       return null;
@@ -1330,9 +1345,6 @@ export class SessionManager {
    * the v2 end-turn boundary (portDispatchEndTurn) — v1 checked it via the deleted checkPendingBlocks
    * inside the loops (cutover Step 5); the FLIP left it unsurfaced until now.
    */
-  /** Rejections already reported, so one refusal cannot end several turns. */
-  private readonly consumedWriteRejections = new Set<string>();
-
   getPendingSelfManagedWriteRejectionVisibleText(
     session: Session,
     draft: string | null | undefined,
@@ -1381,10 +1393,16 @@ export class SessionManager {
         // Each rejection stops the run once. The scan walks the whole history
         // with no turn boundary, so without this a single old rejection ended
         // every later turn as well — measured as four "execution stopped"
-        // reports in one run from far fewer refusals.
-        const fingerprint = block.content.slice(0, 200);
-        if (this.consumedWriteRejections.has(fingerprint)) continue;
-        this.consumedWriteRejections.add(fingerprint);
+        // reports in one run from far fewer refusals. ORC-15: remembered per
+        // session and per tool call; a process-wide set of texts let one chat's
+        // report silence another chat's identical refusal, and never shrank.
+        const fingerprint = `${block.tool_use_id}|${block.content.slice(0, 120)}`;
+        const consumed = (session.consumedWriteRejections ??= []);
+        if (consumed.includes(fingerprint)) continue;
+        consumed.push(fingerprint);
+        if (consumed.length > MAX_CONSUMED_WRITE_REJECTIONS) {
+          consumed.splice(0, consumed.length - MAX_CONSUMED_WRITE_REJECTIONS);
+        }
 
         const match = block.content.match(
           /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
