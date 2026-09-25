@@ -84,6 +84,56 @@ export class HubOwnerStore {
   }
 
   /**
+   * Every persisted binding with when it was last written, oldest first, so a
+   * caller that keeps them in insertion order gets least-recently-used first.
+   * Empty (never throwing) when the database is unusable.
+   */
+  loadEntries(): Array<{ chatId: string; channelType: string; updatedAt: number }> {
+    if (!this.db) return [];
+    try {
+      const rows = this.db
+        .prepare("SELECT chat_id, channel_type, updated_at FROM hub_owners ORDER BY updated_at ASC, rowid ASC")
+        .all() as Array<OwnerRow & { updated_at: number }>;
+      return rows
+        .filter((row) => row.chat_id && row.channel_type)
+        .map((row) => ({ chatId: row.chat_id, channelType: row.channel_type, updatedAt: row.updated_at }));
+    } catch (err) {
+      getLoggerSafe().warn("Hub owner store unreadable — starting without persisted ownership", {
+        path: this.dbPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * CHN-19: ownership rows are routing hints, not authority, and there used to
+   * be one per chat id forever (a web chat id is a new UUID per connection
+   * unless reclaimed). Drops rows not written since `olderThan`, then all but
+   * the `keepNewest` most recently written. Returns how many went.
+   */
+  prune(olderThan: number, keepNewest: number): number {
+    if (!this.db) return 0;
+    try {
+      const db = this.db;
+      return db.transaction(() =>
+        db.prepare("DELETE FROM hub_owners WHERE updated_at < ?").run(olderThan).changes
+        + db.prepare(
+          `DELETE FROM hub_owners WHERE chat_id NOT IN (
+             SELECT chat_id FROM hub_owners ORDER BY updated_at DESC, rowid DESC LIMIT ?
+           )`,
+        ).run(keepNewest).changes,
+      )();
+    } catch (err) {
+      getLoggerSafe().warn("Hub owner store prune failed", {
+        path: this.dbPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 0;
+    }
+  }
+
+  /**
    * Record ONE binding as a keyed upsert. This is the only write path: no other
    * chat's row is read, merged or rewritten, so a concurrent writer's binding
    * survives and a stale in-memory view cannot undo a newer rebind (#31).

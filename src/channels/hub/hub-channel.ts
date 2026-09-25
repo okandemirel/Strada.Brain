@@ -34,6 +34,23 @@ import { HubOwnerStore } from "./owner-store.js";
 
 type Handler = (msg: IncomingMessage) => Promise<void>;
 
+/**
+ * Ownership rows are routing hints, not authority (CHN-19): a web chat id is a
+ * new UUID per connection unless reclaimed, so keeping one row per id forever
+ * grew without bound. A binding unused for OWNER_TTL_MS is forgotten (routing
+ * falls back to the id's shape), and at most MAX_OWNERS are kept, least
+ * recently used dropped first. A binding in use is re-persisted at most once
+ * per OWNER_TOUCH_MS so its age on disk stays current.
+ */
+const OWNER_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_OWNERS = 10_000;
+const OWNER_TOUCH_MS = 24 * 60 * 60 * 1000;
+
+interface OwnerEntry {
+  member: string;
+  touchedAt: number;
+}
+
 /** The optional surface members may expose; every call site below feature-checks. */
 interface MemberExtras {
   claimsChatId?(chatId: string): boolean;
@@ -65,8 +82,11 @@ export interface HubChannelOptions {
 export class HubChannel implements IChannelAdapter {
   readonly name: string;
   readonly members: readonly Member[];
-  /** chatId → member name. Names (not instances) so the map survives a restart. */
-  private readonly owners = new Map<string, string>();
+  /**
+   * chatId → member name. Names (not instances) so the map survives a restart.
+   * Map order is recency (least recently used first).
+   */
+  private readonly owners = new Map<string, OwnerEntry>();
   private readonly ownerStore: HubOwnerStore | null;
   private readonly unownedWarned = new Set<string>();
   private handler: Handler | undefined;
@@ -79,7 +99,11 @@ export class HubChannel implements IChannelAdapter {
     this.name = members.map((m) => m.name).join("+");
     this.ownerStore = options.ownerStore === undefined ? new HubOwnerStore(HubOwnerStore.defaultPath()) : options.ownerStore;
     if (this.ownerStore) {
-      for (const [chatId, memberName] of this.ownerStore.load()) this.owners.set(chatId, memberName);
+      const now = Date.now();
+      this.ownerStore.prune(now - OWNER_TTL_MS, MAX_OWNERS);
+      for (const { chatId, channelType, updatedAt } of this.ownerStore.loadEntries()) {
+        this.owners.set(chatId, { member: channelType, touchedAt: updatedAt });
+      }
     }
   }
 
@@ -132,7 +156,7 @@ export class HubChannel implements IChannelAdapter {
         // First inbound binds; a later inbound never overwrites an owner that
         // still resolves to a live member (2.9). A stale persisted name whose
         // member is no longer configured is replaced.
-        if (!this.memberNamed(this.owners.get(msg.chatId))) this.record(msg.chatId, member.name);
+        if (!this.memberNamed(this.ownerName(msg.chatId))) this.record(msg.chatId, member.name);
         await this.handler?.(msg);
       });
     }
@@ -147,13 +171,34 @@ export class HubChannel implements IChannelAdapter {
    */
   bindOwner(chatId: string, channelType: string): boolean {
     if (!this.memberNamed(channelType)) return false;
-    if (this.owners.get(chatId) !== channelType) this.record(chatId, channelType);
+    if (this.ownerName(chatId) !== channelType) this.record(chatId, channelType);
     return true;
   }
 
   /** The persisted view of ownership — for tests and /daemon status. */
   ownerNames(): ReadonlyMap<string, string> {
-    return this.owners;
+    return new Map([...this.owners].map(([chatId, entry]) => [chatId, entry.member]));
+  }
+
+  /**
+   * The member name bound to `chatId`, touching the binding (LRU order, and its
+   * stored age once a day). A binding past its TTL is forgotten instead.
+   */
+  private ownerName(chatId: string): string | undefined {
+    const entry = this.owners.get(chatId);
+    if (!entry) return undefined;
+    const now = Date.now();
+    if (now - entry.touchedAt > OWNER_TTL_MS) {
+      this.owners.delete(chatId);
+      return undefined;
+    }
+    this.owners.delete(chatId);
+    this.owners.set(chatId, entry);
+    if (now - entry.touchedAt > OWNER_TOUCH_MS) {
+      entry.touchedAt = now;
+      this.ownerStore?.bind(chatId, entry.member);
+    }
+    return entry.member;
   }
 
   private memberNamed(name: string | undefined): Member | undefined {
@@ -161,13 +206,19 @@ export class HubChannel implements IChannelAdapter {
   }
 
   private record(chatId: string, memberName: string): void {
-    this.owners.set(chatId, memberName);
+    this.owners.delete(chatId);
+    this.owners.set(chatId, { member: memberName, touchedAt: Date.now() });
+    while (this.owners.size > MAX_OWNERS) {
+      const oldest = this.owners.keys().next().value;
+      if (oldest === undefined) break;
+      this.owners.delete(oldest);
+    }
     this.ownerStore?.bind(chatId, memberName);
   }
 
   /** The member that owns a chat id (see the file header for the order of precedence). */
   ownerOf(chatId: string): Member {
-    const known = this.memberNamed(this.owners.get(chatId));
+    const known = this.memberNamed(this.ownerName(chatId));
     if (known) return known;
     const claimant = this.members.find((m) => m.claimsChatId?.(chatId) === true);
     if (claimant) {
@@ -187,7 +238,7 @@ export class HubChannel implements IChannelAdapter {
   }
 
   claimsChatId(chatId: string): boolean {
-    return this.memberNamed(this.owners.get(chatId)) !== undefined || this.members.some((m) => m.claimsChatId?.(chatId) === true);
+    return this.memberNamed(this.ownerName(chatId)) !== undefined || this.members.some((m) => m.claimsChatId?.(chatId) === true);
   }
 
   // ---- per-chat sending ----------------------------------------------------

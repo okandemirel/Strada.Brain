@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vites
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { HubChannel } from "./hub-channel.js";
 import { HubOwnerStore, HUB_OWNERS_DB_FILE } from "./owner-store.js";
 import type { IChannelAdapter } from "../channel.interface.js";
@@ -280,6 +281,58 @@ describe("HubChannel", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // CHN-19: ownership rows are routing hints. Every chat id used to keep its
+  // row (and its map entry) forever.
+  describe("ownership is bounded (CHN-19)", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    it("drops persisted bindings unused past the TTL when it loads them", () => {
+      const dir = mkdtempSync(join(tmpdir(), "hub-ttl-"));
+      try {
+        const dbPath = join(dir, HUB_OWNERS_DB_FILE);
+        const seed = new HubOwnerStore(dbPath);
+        seed.bind("stale-chat", "slack");
+        seed.bind("fresh-chat", "slack");
+        seed.close();
+        const raw = new Database(dbPath);
+        raw.prepare("UPDATE hub_owners SET updated_at = ? WHERE chat_id = ?").run(Date.now() - 120 * DAY, "stale-chat");
+        raw.close();
+
+        const store = new HubOwnerStore(dbPath);
+        const hub = new HubChannel([fake("telegram"), fake("slack")], { ownerStore: store });
+        expect([...hub.ownerNames().keys()]).toEqual(["fresh-chat"]);
+        expect([...store.load().keys()]).toEqual(["fresh-chat"]);
+        store.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("forgets a binding unused past the TTL while running", () => {
+      vi.useFakeTimers();
+      try {
+        const slack = fake("slack");
+        const tg = fake("telegram");
+        const hub = new HubChannel([tg, slack], { ownerStore: null });
+        expect(hub.bindOwner("chat-1", "slack")).toBe(true);
+        vi.setSystemTime(Date.now() + 91 * DAY);
+        expect(hub.ownerOf("chat-1").name).toBe("telegram"); // the primary fallback
+        expect(hub.ownerNames().has("chat-1")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps at most 10000 bindings, least recently used dropped first", () => {
+      const hub = new HubChannel([fake("telegram"), fake("slack")], { ownerStore: null });
+      for (let i = 0; i <= 10_000; i++) hub.bindOwner(`chat-${i}`, "slack");
+      const names = hub.ownerNames();
+      expect(names.size).toBe(10_000);
+      expect(names.has("chat-0")).toBe(false);
+      expect(names.has("chat-10000")).toBe(true);
+    });
   });
 
 });
