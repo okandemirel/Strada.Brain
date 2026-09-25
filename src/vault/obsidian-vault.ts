@@ -14,6 +14,7 @@ import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { AsyncLock } from './async-lock.js';
+import { writeFileAtomic } from '../common/atomic-file.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
 import {
   getIndexableFileInfo,
@@ -95,6 +96,8 @@ export class ObsidianVault implements IVault {
    * HNSW upsert/delete sequencing (which can otherwise leak orphan HNSW IDs).
    */
   private writeLock = new AsyncLock();
+  /** Serializes canvas regenerations (a separate lock: sync() holds writeLock while it regenerates). */
+  private canvasLock = new AsyncLock();
   /**
    * Set when a canvas regeneration fails. Forces the next sync() to retry the
    * canvas/wikilink derivation even when no source files changed, so a transient
@@ -680,12 +683,16 @@ export class ObsidianVault implements IVault {
    * 1. build canvas in memory
    * 2. serialize to JSON
    * 3. PARSE the JSON back (P2 fix: validates the write before clobbering the old file)
-   * 4. write to .tmp + fsync, then atomic rename
+   * 4. write to a unique temp file + fsync, then atomic rename
    * On any error, the old canvas file is left intact and a status is returned.
    */
   private async regenerateCanvasWithStatus(): Promise<{ ok: boolean; error?: string }> {
+    // One at a time: regenerateCanvas() is public and runs outside writeLock (MEM-15).
+    return this.canvasLock.run(() => this.regenerateCanvasInternal());
+  }
+
+  private async regenerateCanvasInternal(): Promise<{ ok: boolean; error?: string }> {
     const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
-    const tmpPath = `${finalPath}.tmp`;
     try {
       const files = this.store.listFiles();
       const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
@@ -703,15 +710,9 @@ export class ObsidianVault implements IVault {
         });
         return { ok: false, error: `validation_failed: ${msg}` };
       }
-      await writeFile(tmpPath, serialized, 'utf8');
-      try {
-        // Use fsp.rename so test code can spy/intercept via the namespace.
-        await fsp.rename(tmpPath, finalPath);
-      } catch (renameErr) {
-        // Rename failed — try to clean up the tmp file so we don't leak.
-        await fsp.unlink(tmpPath).catch(() => undefined);
-        throw renameErr;
-      }
+      // A unique temp file per write (a fixed `.tmp` name let two concurrent
+      // regenerations interleave into it); removed again if the rename fails.
+      await writeFileAtomic(finalPath, serialized);
       return { ok: true };
     } catch (err) {
       const rawMsg = err instanceof Error ? err.message : String(err);

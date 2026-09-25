@@ -18,6 +18,7 @@ import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { AsyncLock } from './async-lock.js';
+import { writeFileAtomic } from '../common/atomic-file.js';
 import { escapeFtsQuery } from './fts-query.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
@@ -82,6 +83,8 @@ export class UnityProjectVault implements IVault {
   protected initialized = false;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
+  /** Serializes canvas regenerations (SelfVault runs one watcher per root, plus sync). */
+  private canvasLock = new AsyncLock();
   /**
    * Throttles the per-file "embedding failed" WARN. When the embedding backend
    * is down, indexing throws once per file (~1 line per indexed file, e.g. 1500+
@@ -542,24 +545,24 @@ export class UnityProjectVault implements IVault {
   }
 
   async regenerateCanvas(): Promise<void> {
-    try {
-      const files = this.store.listFiles();
-      const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
-      const edges = this.store.listEdges();
-      const wikilinks = this.store.listWikilinks();
-      const canvas = buildCanvas({ symbols, edges, files, wikilinks });
-      // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
-      // never observes a partial JSON document mid-write.
-      const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
-      const tmpPath = `${finalPath}.tmp`;
-      await writeFile(tmpPath, JSON.stringify(canvas, null, 2), 'utf8');
-      const { rename } = await import('node:fs/promises');
-      await rename(tmpPath, finalPath);
-    } catch (err) {
-      getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // One at a time, each through its own temp file: concurrent regenerations
+    // shared one fixed `.tmp` path and could publish interleaved bytes (MEM-15).
+    await this.canvasLock.run(async () => {
+      try {
+        const files = this.store.listFiles();
+        const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
+        const edges = this.store.listEdges();
+        const wikilinks = this.store.listWikilinks();
+        const canvas = buildCanvas({ symbols, edges, files, wikilinks });
+        // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
+        // never observes a partial JSON document mid-write.
+        await writeFileAtomic(join(this.rootPath, '.strada/vault/graph.canvas'), JSON.stringify(canvas, null, 2));
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
   }
 
   async readCanvas(): Promise<unknown> {

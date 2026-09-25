@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ObsidianVault, VaultQueryError, redactPathsInMessage } from './obsidian-vault.js';
@@ -100,6 +100,8 @@ describe('ObsidianVault', () => {
     expect(statSync(canvasPath).isDirectory()).toBe(true);
     expect(existsSync(join(canvasPath, 'occupied.txt'))).toBe(true);
     expect(existsSync(`${canvasPath}.tmp`)).toBe(false);
+    // Temp files are uniquely named now (MEM-15); none may be left behind.
+    expect(readdirSync(join(root, '.strada', 'vault')).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     // SecH1: the returned error never leaks the vault's absolute path.
     expect(r.canvas?.error).toBeTruthy();
     expect(r.canvas?.error).not.toContain(root);
