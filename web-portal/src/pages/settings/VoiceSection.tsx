@@ -71,7 +71,6 @@ export default function VoiceSection() {
         const serverValues: Partial<VoiceSettings> = {}
         if (typeof d.inputEnabled === 'boolean') serverValues.inputEnabled = d.inputEnabled
         if (typeof d.outputEnabled === 'boolean') serverValues.outputEnabled = d.outputEnabled
-        if (typeof d.browserSttEnabled === 'boolean') serverValues.browserSttEnabled = d.browserSttEnabled
         if (Object.keys(serverValues).length > 0) {
           updateVoiceSettings((prev) => ({ ...prev, ...serverValues }))
         }
@@ -118,13 +117,6 @@ export default function VoiceSection() {
     [outputSupported, setAndSync, t],
   )
 
-  const handleBrowserSttToggle = useCallback(
-    (next: boolean) => {
-      setAndSync({ browserSttEnabled: next })
-    },
-    [setAndSync],
-  )
-
   return (
     <div>
       <h2 className="text-lg font-semibold text-text mb-1">{t('voice.title')}</h2>
@@ -164,12 +156,6 @@ export default function VoiceSection() {
         enabled={voice.outputEnabled && outputSupported}
         disabled={!outputSupported}
         onChange={handleOutputToggle}
-      />
-      <Toggle
-        label={t('voice.browserStt')}
-        description={t('voice.browserSttDesc')}
-        enabled={voice.browserSttEnabled}
-        onChange={handleBrowserSttToggle}
       />
     </div>
   )

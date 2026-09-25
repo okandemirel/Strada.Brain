@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from 'react'
 export interface VoiceSettings {
   inputEnabled: boolean
   outputEnabled: boolean
-  browserSttEnabled: boolean
 }
 
 export const VOICE_STORAGE_KEY = 'strada-voice-settings'
@@ -11,7 +10,6 @@ const VOICE_SETTINGS_EVENT = 'strada:voice-settings-changed'
 const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   inputEnabled: true,
   outputEnabled: true,
-  browserSttEnabled: false, // opt-in: model download is ~40 MB
 }
 
 export function loadVoiceSettings(): VoiceSettings {
@@ -25,7 +23,6 @@ export function loadVoiceSettings(): VoiceSettings {
     return {
       inputEnabled: parsed.inputEnabled ?? DEFAULT_VOICE_SETTINGS.inputEnabled,
       outputEnabled: parsed.outputEnabled ?? DEFAULT_VOICE_SETTINGS.outputEnabled,
-      browserSttEnabled: parsed.browserSttEnabled ?? DEFAULT_VOICE_SETTINGS.browserSttEnabled,
     }
   } catch {
     return DEFAULT_VOICE_SETTINGS

@@ -14,6 +14,10 @@ function jsonResponse(data: unknown): Response {
 describe('VoiceSection', () => {
   beforeEach(() => {
     localStorage.removeItem(VOICE_STORAGE_KEY)
+    // jsdom has no speech synthesis; without it the Voice Output toggle is
+    // disabled. (These tests used the Browser STT toggle, which needed no
+    // browser support, until in-browser STT was removed: WEB-15.)
+    vi.stubGlobal('speechSynthesis', {})
   })
 
   afterEach(() => {
@@ -24,7 +28,7 @@ describe('VoiceSection', () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }))
       return Promise.resolve(
-        jsonResponse({ inputEnabled: false, outputEnabled: false, browserSttEnabled: true }),
+        jsonResponse({ inputEnabled: false, outputEnabled: false }),
       )
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -37,35 +41,35 @@ describe('VoiceSection', () => {
       fetchMock.mock.calls.some(([url, init]) => url === '/api/settings/voice' && init?.method !== 'POST'),
     ).toBe(true)
 
-    // Default browserSttEnabled is false — true proves server hydration won.
+    // Default outputEnabled is true (and the toggle is supported here), so
+    // false proves server hydration won.
     await waitFor(() => {
       const switches = screen.getAllByRole('switch')
       expect(switches[0].getAttribute('aria-checked')).toBe('false')
       expect(switches[1].getAttribute('aria-checked')).toBe('false')
-      expect(switches[2].getAttribute('aria-checked')).toBe('true')
     })
   })
 
-  it('syncs the Browser STT toggle to the backend via POST', async () => {
+  it('syncs the Voice Output toggle to the backend via POST', async () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }))
       return Promise.resolve(
-        jsonResponse({ inputEnabled: null, outputEnabled: null, browserSttEnabled: null }),
+        jsonResponse({ inputEnabled: null, outputEnabled: null }),
       )
     })
     vi.stubGlobal('fetch', fetchMock)
 
     render(<VoiceSection />)
 
-    const browserSttToggle = screen.getAllByRole('switch')[2]
-    fireEvent.click(browserSttToggle)
+    const outputToggle = screen.getAllByRole('switch')[1]
+    fireEvent.click(outputToggle)
 
     await waitFor(() => {
       const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
       expect(postCall).toBeDefined()
       expect(postCall![0]).toBe('/api/settings/voice')
       const body = JSON.parse(String(postCall![1]?.body)) as Record<string, unknown>
-      expect(body.browserSttEnabled).toBe(true)
+      expect(body.outputEnabled).toBe(false)
     })
   })
 
@@ -73,7 +77,7 @@ describe('VoiceSection', () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }))
       return Promise.resolve(
-        jsonResponse({ inputEnabled: null, outputEnabled: null, browserSttEnabled: null }),
+        jsonResponse({ inputEnabled: null, outputEnabled: null }),
       )
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -84,8 +88,8 @@ describe('VoiceSection', () => {
       </StrictMode>,
     )
 
-    const browserSttToggle = screen.getAllByRole('switch')[2]
-    fireEvent.click(browserSttToggle)
+    const outputToggle = screen.getAllByRole('switch')[1]
+    fireEvent.click(outputToggle)
 
     const postCalls = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
     await waitFor(() => {
@@ -105,8 +109,9 @@ describe('VoiceSection', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
 
     const switches = screen.getAllByRole('switch')
-    expect(switches).toHaveLength(3)
-    // Default: browserSttEnabled is false (opt-in).
-    expect(switches[2].getAttribute('aria-checked')).toBe('false')
+    // Voice input and voice output; there is no in-browser STT toggle (WEB-15).
+    expect(switches).toHaveLength(2)
+    // Default: outputEnabled is true.
+    expect(switches[1].getAttribute('aria-checked')).toBe('true')
   })
 })

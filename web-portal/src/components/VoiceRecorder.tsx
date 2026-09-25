@@ -3,13 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { Attachment } from '../types/messages'
 import { hasVoiceInputSupport } from '../hooks/use-voice-settings'
-import { useBrowserStt } from '../hooks/use-browser-stt'
 
 interface VoiceRecorderProps {
   onVoiceMessage: (attachment: Attachment) => boolean | void
-  /** Send a text-only message (used when browser STT succeeds). */
-  onTextMessage?: (text: string) => boolean | void
-  /** True while recording, transcribing or preparing a clip. */
+  /** True while recording or preparing a clip. */
   onBusyChange?: (busy: boolean) => void
   disabled?: boolean
 }
@@ -45,12 +42,10 @@ function pickRecorderMimeType(): string {
   return PREFERRED_AUDIO_TYPES.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) ?? ''
 }
 
-export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyChange, disabled }: VoiceRecorderProps) {
+export default function VoiceRecorder({ onVoiceMessage, onBusyChange, disabled }: VoiceRecorderProps) {
   const { t } = useTranslation()
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [isTranscribing, setIsTranscribing] = useState(false)
-  const browserStt = useBrowserStt()
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -64,7 +59,7 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyCha
     onVoiceMessageRef.current = onVoiceMessage
   }, [onVoiceMessage])
 
-  const busy = isRecording || isProcessing || isTranscribing
+  const busy = isRecording || isProcessing
   useEffect(() => {
     onBusyChange?.(busy)
   }, [busy, onBusyChange])
@@ -108,24 +103,9 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyCha
       return
     }
 
-    // Tier 1: Try browser-side Whisper transcription
-    if (browserStt.enabled && onTextMessage) {
-      setIsTranscribing(true)
-      try {
-        const transcript = await browserStt.transcribe(audioBlob)
-        if (discardRef.current) return
-        if (transcript) {
-          const sent = onTextMessage(transcript)
-          if (sent !== false) return // Success — sent as text
-        }
-      } catch {
-        // Fall through to audio attachment
-      } finally {
-        setIsTranscribing(false)
-      }
-    }
-
-    // Tier 2: Send raw audio for server-side transcription
+    // The clip is sent as audio and transcribed on the server. In-browser
+    // Whisper was removed (WEB-15): the portal CSP cannot load its model or
+    // WASM, so it only ever fell back to this path after a long wait.
     setIsProcessing(true)
     try {
       const attachment: Attachment = {
@@ -148,7 +128,7 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyCha
     } finally {
       setIsProcessing(false)
     }
-  }, [cleanupStream, t, browserStt, onTextMessage])
+  }, [cleanupStream, t])
 
   const startRecording = useCallback(async () => {
     if (startPendingRef.current || isProcessing) return
@@ -216,15 +196,13 @@ export default function VoiceRecorder({ onVoiceMessage, onTextMessage, onBusyCha
       className={`flex items-center justify-center w-[42px] h-[42px] border rounded-xl cursor-pointer shrink-0 transition-all duration-200 ${
         isRecording
           ? 'text-error border-error bg-error/15 animate-[voice-pulse_1.5s_ease-in-out_infinite]'
-          : isTranscribing
-            ? 'text-info border-info bg-info/10'
           : isProcessing
             ? 'text-accent border-accent bg-accent/10'
           : 'border-border bg-bg-tertiary text-text-secondary hover:text-accent hover:border-accent hover:bg-accent-glow'
       } disabled:opacity-40 disabled:cursor-not-allowed`}
       onClick={toggleRecording}
-      disabled={disabled || isProcessing || isTranscribing}
-      title={isRecording ? t('voice.stopRecording') : isTranscribing ? t('voice.transcribing') : isProcessing ? t('voice.sendingVoice') : t('voice.voiceInput')}
+      disabled={disabled || isProcessing}
+      title={isRecording ? t('voice.stopRecording') : isProcessing ? t('voice.sendingVoice') : t('voice.voiceInput')}
       type="button"
     >
       {isProcessing ? (
