@@ -130,9 +130,11 @@ is `TEAMS_MAX_MESSAGE_LENGTH = 18_000`.
 3. **Expect:** after restart, the reply is still delivered to the chat.
 
 Mechanism: conversation references are mirrored to
-`.strada/teams-conversation-references.json` and restored on `connect()`.
+`teams-conversation-references.json` under the Strada home (`STRADA_HOME`,
+default `~/.strada`, `%LOCALAPPDATA%\Strada` on Windows) and restored on
+`connect()`. The write is debounced by about a second and atomic.
 
-- Confirm the file exists and contains your chat after the first message.
+- Confirm the file exists and contains your chat shortly after the first message.
 - **FAIL signature:** reply lost after restart, or the references file missing/empty.
 
 ### 11. Allowlist denial

@@ -6,12 +6,14 @@
  *         TEAMS_APP_TENANT_ID, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import type { IChannelAdapter } from "../channel.interface.js";
 import { limitIncomingText, type Attachment, type IncomingMessage } from "../channel-messages.interface.js";
 import { chunkText } from "../chunk-text.js";
 import { getLogger } from "../../utils/logger.js";
+import { resolveStradaHome } from "../../common/runtime-paths.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import {
   downloadMedia,
@@ -33,11 +35,31 @@ const TEAMS_MAX_MESSAGE_LENGTH = 18_000;
 type TeamsAppType = "MultiTenant" | "SingleTenant";
 
 /**
- * On-disk location for persisted conversation references. The in-memory map is
- * lost on restart, which silently drops any reply produced after a restart; we
- * mirror it to a tiny JSON file under `.strada` so proactive delivery survives.
+ * Persisted conversation references. The in-memory map is lost on restart,
+ * which silently drops any reply produced after a restart; we mirror it to a
+ * small JSON file under the Strada home so proactive delivery survives. It used
+ * to live under a cwd-relative `.strada`, so starting from another directory
+ * lost every reference (CHN-16); that file is still read once as a fallback.
  */
-const CONVERSATION_REFERENCES_FILE = join(".strada", "teams-conversation-references.json");
+const CONVERSATION_REFERENCES_FILE_NAME = "teams-conversation-references.json";
+const LEGACY_CONVERSATION_REFERENCES_FILE = join(".strada", CONVERSATION_REFERENCES_FILE_NAME);
+
+/**
+ * Bounds on the reference map (CHN-16): one entry per conversation, dropped
+ * least-recently-used past the cap and after a quiet period, so a long-lived
+ * bot does not carry every conversation it ever saw.
+ */
+const MAX_CONVERSATION_REFERENCES = 1_000;
+const CONVERSATION_REFERENCE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+/** An unchanged reference is rewritten at most this often, to refresh its TTL on disk. */
+const CONVERSATION_REFERENCE_TOUCH_MS = 24 * 60 * 60 * 1000;
+/** Captures within this window share one write. */
+const CONVERSATION_REFERENCE_WRITE_DELAY_MS = 1_000;
+
+interface StoredConversationReference {
+  reference: ConversationReferenceLike;
+  updatedAt: number;
+}
 
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 type FeedbackReactionCallback = (
@@ -102,7 +124,11 @@ export class TeamsChannel implements IChannelAdapter {
    * fire-and-forget agent replies can be delivered proactively via
    * adapter.continueConversationAsync.
    */
-  private readonly conversationReferences = new Map<string, ConversationReferenceLike>();
+  private readonly conversationReferences = new Map<string, StoredConversationReference>();
+  private readonly conversationReferencesFile = join(resolveStradaHome(), CONVERSATION_REFERENCES_FILE_NAME);
+  private referencesWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Serialises writes so two snapshots never race on the rename. */
+  private referencesWriteChain: Promise<void> = Promise.resolve();
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-conversationId applied instinct IDs for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
@@ -168,7 +194,7 @@ export class TeamsChannel implements IChannelAdapter {
 
     // Restore conversation references persisted before the last shutdown so a
     // reply produced after a restart can still be delivered proactively.
-    this.restoreConversationReferences();
+    await this.restoreConversationReferences();
 
     // Create HTTP server for Bot Framework messages
     const { createServer } = await import("node:http");
@@ -283,6 +309,8 @@ export class TeamsChannel implements IChannelAdapter {
   async disconnect(): Promise<void> {
     this.healthy = false;
     this.activeTurnContexts.clear();
+    // A capture still waiting for its debounced write is flushed, not lost.
+    await this.flushConversationReferences();
     this.conversationReferences.clear();
     await new Promise<void>((resolve) => {
       if (this.server) {
@@ -326,7 +354,7 @@ export class TeamsChannel implements IChannelAdapter {
     if (chunks.length === 0) return; // nothing to send (empty/whitespace input)
 
     const context = this.activeTurnContexts.get(chatId);
-    const reference = this.conversationReferences.get(chatId);
+    const reference = this.conversationReferences.get(chatId)?.reference;
 
     if (!context && !reference) {
       // Make the dropped delivery loud: with neither a live turn context nor a
@@ -366,10 +394,20 @@ export class TeamsChannel implements IChannelAdapter {
     if (!this.turnContextClass) return;
     try {
       const reference = this.turnContextClass.getConversationReference(activity);
-      this.conversationReferences.set(chatId, reference);
+      const now = Date.now();
+      const previous = this.conversationReferences.get(chatId);
+      const unchanged = previous !== undefined
+        && JSON.stringify(previous.reference) === JSON.stringify(reference)
+        && now - previous.updatedAt < CONVERSATION_REFERENCE_TOUCH_MS;
+      // Re-insert so Map order is recency for the LRU bound. An unchanged
+      // reference keeps the timestamp the file already holds and is not rewritten.
+      this.conversationReferences.delete(chatId);
+      this.conversationReferences.set(chatId, unchanged ? previous : { reference, updatedAt: now });
+      if (unchanged) return;
+      this.pruneConversationReferences(now);
       // Mirror to disk so the reference survives a restart and a later
       // fire-and-forget reply can still be delivered proactively.
-      this.persistConversationReferences();
+      this.scheduleConversationReferencesWrite();
     } catch (err) {
       getLogger().warn("Teams failed to capture conversation reference", {
         error: err instanceof Error ? err.message : String(err),
@@ -377,46 +415,107 @@ export class TeamsChannel implements IChannelAdapter {
     }
   }
 
-  /**
-   * Persist the in-memory conversation references to a small JSON file under
-   * `.strada`. Best-effort: a write failure must not break inbound handling, so
-   * it is logged and swallowed. Bot Framework conversation references are plain
-   * JSON-serialisable objects, so a JSON round-trip is lossless.
-   */
-  private persistConversationReferences(): void {
-    try {
-      mkdirSync(dirname(CONVERSATION_REFERENCES_FILE), { recursive: true });
-      const serialisable = Object.fromEntries(this.conversationReferences);
-      writeFileSync(CONVERSATION_REFERENCES_FILE, JSON.stringify(serialisable), "utf8");
-    } catch (err) {
-      getLogger().warn("Teams failed to persist conversation references", {
-        error: err instanceof Error ? err.message : String(err),
-      });
+  /** Drop references past their TTL, then the least recently used past the cap. */
+  private pruneConversationReferences(now: number): void {
+    for (const [chatId, stored] of this.conversationReferences) {
+      if (now - stored.updatedAt > CONVERSATION_REFERENCE_TTL_MS) this.conversationReferences.delete(chatId);
+    }
+    while (this.conversationReferences.size > MAX_CONVERSATION_REFERENCES) {
+      const oldest = this.conversationReferences.keys().next().value;
+      if (oldest === undefined) break;
+      this.conversationReferences.delete(oldest);
     }
   }
 
   /**
-   * Restore conversation references from disk into the in-memory map. Best-effort:
-   * a missing or malformed file is treated as "no references yet" and logged at
-   * debug level so a fresh install does not warn.
+   * Debounce persistence off the request path: every inbound message used to
+   * rewrite the whole file synchronously (CHN-16).
    */
-  private restoreConversationReferences(): void {
-    let raw: string;
-    try {
-      raw = readFileSync(CONVERSATION_REFERENCES_FILE, "utf8");
-    } catch {
-      // No persisted file yet (first run / never received a message) — nothing to restore.
+  private scheduleConversationReferencesWrite(): void {
+    if (this.referencesWriteTimer) return;
+    this.referencesWriteTimer = setTimeout(() => {
+      this.referencesWriteTimer = null;
+      void this.writeConversationReferences();
+    }, CONVERSATION_REFERENCE_WRITE_DELAY_MS);
+    this.referencesWriteTimer.unref?.();
+  }
+
+  /** Write any pending snapshot now, and wait for writes already in flight. */
+  private async flushConversationReferences(): Promise<void> {
+    if (this.referencesWriteTimer) {
+      clearTimeout(this.referencesWriteTimer);
+      this.referencesWriteTimer = null;
+      await this.writeConversationReferences();
       return;
     }
-    try {
-      const parsed = JSON.parse(raw) as Record<string, ConversationReferenceLike>;
-      if (parsed && typeof parsed === "object") {
-        for (const [chatId, reference] of Object.entries(parsed)) {
-          if (reference && typeof reference === "object") {
-            this.conversationReferences.set(chatId, reference);
-          }
-        }
+    await this.referencesWriteChain;
+  }
+
+  /**
+   * Persist the in-memory references atomically (temp file + rename), so a
+   * crash mid-write leaves the previous file intact instead of a truncated one.
+   * Best-effort: a failure is logged and swallowed, never thrown into inbound
+   * handling. Bot Framework conversation references are plain JSON objects, so
+   * a JSON round-trip is lossless.
+   */
+  private writeConversationReferences(): Promise<void> {
+    const file = this.conversationReferencesFile;
+    const snapshot = JSON.stringify({
+      version: 2,
+      references: Object.fromEntries(this.conversationReferences),
+    });
+    this.referencesWriteChain = this.referencesWriteChain.then(async () => {
+      const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(tmp, snapshot, "utf8");
+        await rename(tmp, file);
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        getLogger().warn("Teams failed to persist conversation references", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
+    });
+    return this.referencesWriteChain;
+  }
+
+  /**
+   * Restore conversation references from disk into the in-memory map. Best-effort:
+   * a missing file is "no references yet", a malformed one is logged. Reads the
+   * pre-CHN-16 cwd-relative file when the home file does not exist yet, and
+   * accepts its older shape (a bare chatId -> reference map).
+   */
+  private async restoreConversationReferences(): Promise<void> {
+    let raw: string | undefined;
+    for (const candidate of [this.conversationReferencesFile, resolve(LEGACY_CONVERSATION_REFERENCES_FILE)]) {
+      try {
+        raw = await readFile(candidate, "utf8");
+        break;
+      } catch {
+        // Not there: try the next location (first run / never received a message).
+      }
+    }
+    if (raw === undefined) return;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object") return;
+      const bag = parsed as { version?: unknown; references?: unknown };
+      const versioned = bag.version === 2 && bag.references !== null && typeof bag.references === "object";
+      const entries = Object.entries((versioned ? bag.references : parsed) as Record<string, unknown>);
+      const now = Date.now();
+      for (const [chatId, value] of entries) {
+        if (!value || typeof value !== "object") continue;
+        if (!versioned) {
+          this.conversationReferences.set(chatId, { reference: value as ConversationReferenceLike, updatedAt: now });
+          continue;
+        }
+        const stored = value as Partial<StoredConversationReference>;
+        if (!stored.reference || typeof stored.reference !== "object") continue;
+        const updatedAt = typeof stored.updatedAt === "number" ? stored.updatedAt : now;
+        this.conversationReferences.set(chatId, { reference: stored.reference, updatedAt });
+      }
+      this.pruneConversationReferences(now);
     } catch (err) {
       getLogger().warn("Teams failed to restore conversation references", {
         error: err instanceof Error ? err.message : String(err),

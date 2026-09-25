@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_TEAMS_PORT, resolveTeamsPort, TeamsChannel } from "./channel.js";
 
 // Controls how the mocked HTTP server resolves a listen() call: succeed via the
@@ -44,25 +47,20 @@ vi.mock("botbuilder", () => ({
   },
 }));
 
-// In-memory stand-in for the .strada conversation-reference store so the
-// persistence round-trip can be tested without touching the real filesystem.
-const fakeFs = new Map<string, string>();
-
-vi.mock("node:fs", () => ({
-  mkdirSync: vi.fn(),
-  readFileSync: (path: string) => {
-    const value = fakeFs.get(path);
-    if (value === undefined) {
-      const err = new Error(`ENOENT: no such file ${path}`) as NodeJS.ErrnoException;
-      err.code = "ENOENT";
-      throw err;
-    }
-    return value;
-  },
-  writeFileSync: (path: string, data: string) => {
-    fakeFs.set(path, data);
-  },
-}));
+// Conversation references persist under the Strada home: point it at a fresh
+// temp directory per test so no test reads or writes the real one.
+let stradaHome = "";
+const originalStradaHome = process.env.STRADA_HOME;
+beforeEach(() => {
+  stradaHome = mkdtempSync(join(tmpdir(), "strada-teams-"));
+  process.env.STRADA_HOME = stradaHome;
+});
+afterEach(() => {
+  if (originalStradaHome === undefined) delete process.env.STRADA_HOME;
+  else process.env.STRADA_HOME = originalStradaHome;
+  rmSync(stradaHome, { recursive: true, force: true });
+});
+const referencesFile = () => join(stradaHome, "teams-conversation-references.json");
 
 const mockDownloadMedia = vi.fn().mockResolvedValue({
   data: Buffer.from("voice"),
@@ -197,7 +195,7 @@ describe("TeamsChannel", () => {
     (channel as any).adapter = { continueConversationAsync };
     (channel as unknown as {
       conversationReferences: Map<string, unknown>;
-    }).conversationReferences.set("chat-1", { conversation: { id: "chat-1" } });
+    }).conversationReferences.set("chat-1", { reference: { conversation: { id: "chat-1" } }, updatedAt: Date.now() });
 
     await channel.sendText("chat-1", "delivered later");
 
@@ -400,7 +398,6 @@ describe("TeamsChannel", () => {
   // reply is still delivered proactively.
   it("persists conversation references and restores them across a restart", async () => {
     listenBehavior = "ok";
-    fakeFs.clear();
 
     // First "process lifetime": capture a reference (mirrors it to disk).
     const channel1 = new TeamsChannel("app-id", "app-password");
@@ -445,6 +442,91 @@ describe("TeamsChannel", () => {
     });
 
     await channel2.disconnect();
+  });
+
+  // CHN-16: the file lives under the Strada home (not the process cwd), is
+  // written off the request path and atomically, and is bounded.
+  describe("conversation reference store (CHN-16)", () => {
+    const capture = (channel: TeamsChannel, chatId: string, serviceUrl = "https://smba.example/") =>
+      (channel as any).captureConversationReference(chatId, {
+        type: "message",
+        conversation: { id: chatId, serviceUrl },
+        from: { id: "user-1" },
+      });
+
+    it("writes under the Strada home, after the request, via a temp file and rename", async () => {
+      listenBehavior = "ok";
+      const cwdFile = join(process.cwd(), ".strada", "teams-conversation-references.json");
+      const cwdFileBefore = existsSync(cwdFile) ? readFileSync(cwdFile, "utf8") : undefined;
+      const channel = new TeamsChannel("app-id", "app-password");
+      await channel.connect();
+
+      capture(channel, "chat-1");
+      // Nothing is written synchronously on the inbound path.
+      expect(existsSync(referencesFile())).toBe(false);
+
+      await channel.disconnect(); // flushes the pending write
+      const stored = JSON.parse(readFileSync(referencesFile(), "utf8")) as {
+        version: number;
+        references: Record<string, { reference: unknown; updatedAt: number }>;
+      };
+      expect(stored.version).toBe(2);
+      expect(stored.references["chat-1"]?.reference).toEqual({ conversation: { id: "chat-1" } });
+      expect(readdirSync(stradaHome).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+      // The cwd-relative file the old code wrote is untouched.
+      expect(existsSync(cwdFile) ? readFileSync(cwdFile, "utf8") : undefined).toBe(cwdFileBefore);
+    });
+
+    it("does not rewrite the file for a reference that did not change", async () => {
+      listenBehavior = "ok";
+      const channel = new TeamsChannel("app-id", "app-password");
+      await channel.connect();
+      capture(channel, "chat-1");
+      await (channel as any).flushConversationReferences();
+      const write = vi.spyOn(channel as any, "writeConversationReferences");
+
+      capture(channel, "chat-1");
+      await (channel as any).flushConversationReferences();
+
+      expect(write).not.toHaveBeenCalled();
+      await channel.disconnect();
+    });
+
+    it("drops references past their TTL when restoring, and reads the older file shape", async () => {
+      listenBehavior = "ok";
+      const now = Date.now();
+      writeFileSync(referencesFile(), JSON.stringify({
+        version: 2,
+        references: {
+          stale: { reference: { conversation: { id: "stale" } }, updatedAt: now - 365 * 24 * 60 * 60 * 1000 },
+          fresh: { reference: { conversation: { id: "fresh" } }, updatedAt: now },
+        },
+      }));
+      const channel = new TeamsChannel("app-id", "app-password");
+      await channel.connect();
+      const refs = (channel as unknown as { conversationReferences: Map<string, unknown> }).conversationReferences;
+      expect([...refs.keys()]).toEqual(["fresh"]);
+      await channel.disconnect();
+
+      writeFileSync(referencesFile(), JSON.stringify({ legacy: { conversation: { id: "legacy" } } }));
+      const upgraded = new TeamsChannel("app-id", "app-password");
+      await upgraded.connect();
+      const upgradedRefs = (upgraded as unknown as { conversationReferences: Map<string, unknown> }).conversationReferences;
+      expect([...upgradedRefs.keys()]).toEqual(["legacy"]);
+      await upgraded.disconnect();
+    });
+
+    it("keeps at most the 1000 most recently used references", async () => {
+      listenBehavior = "ok";
+      const channel = new TeamsChannel("app-id", "app-password");
+      await channel.connect();
+      for (let i = 0; i < 1005; i++) capture(channel, `chat-${i}`);
+      const refs = (channel as unknown as { conversationReferences: Map<string, unknown> }).conversationReferences;
+      expect(refs.size).toBe(1000);
+      expect(refs.has("chat-0")).toBe(false);
+      expect(refs.has("chat-1004")).toBe(true);
+      await channel.disconnect();
+    });
   });
 });
 
