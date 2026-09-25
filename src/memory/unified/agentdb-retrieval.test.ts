@@ -377,6 +377,36 @@ describe("retrieveSemantic", () => {
     expect(ctx.sqlitePersistEntry).toHaveBeenCalledWith(entry);
   });
 
+  it("counts an access only for the entries it returns, not every candidate (MEM-22)", async () => {
+    const pool = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < 5; i++) pool.set(`c${i}`, makeEntry(`c${i}`, `candidate ${i}`));
+    const mockHnsw = {
+      search: vi.fn(async () => [...pool.keys()].map((id, i) => ({ chunk: { id }, score: 0.9 - i * 0.1 }))),
+    };
+    const ctx = makeCtx(pool, mockHnsw as any);
+
+    const results = await retrieveSemantic(ctx, "candidate", { limit: 1 });
+
+    expect(results.map((r) => r.entry.id)).toEqual(["c0"]);
+    expect([...pool.values()].map((e) => e.accessCount)).toEqual([1, 0, 0, 0, 0]);
+    expect(ctx.sqlitePersistEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("hybrid retrieval counts only the entries it returns (MEM-22)", async () => {
+    const pool = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < 5; i++) pool.set(`h${i}`, makeEntry(`h${i}`, `unrelated words ${i}`));
+    const mockHnsw = {
+      search: vi.fn(async () => [...pool.keys()].map((id, i) => ({ chunk: { id }, score: 0.9 - i * 0.1 }))),
+    };
+    const ctx = makeCtx(pool, mockHnsw as any);
+
+    const results = await retrieveHybrid(ctx, "zzz", { limit: 1 });
+
+    expect(results).toHaveLength(1);
+    const counted = [...pool.values()].filter((e) => e.accessCount > 0).map((e) => e.id);
+    expect(counted).toEqual([results[0]!.entry.id]);
+  });
+
   it("should track search time in searchTimes array", async () => {
     const mockHnsw = {
       search: vi.fn(async () => []),

@@ -184,10 +184,36 @@ function fuseRankedLists(
 // ---------------------------------------------------------------------------
 
 /** HNSW-based semantic search with optional MMR. */
+/**
+ * Count one access for each entry a caller actually receives. Counting every
+ * candidate of the over-fetch window inflated the counts that drive promotion
+ * and eviction, and re-persisted rows nobody was shown (MEM-22).
+ */
+function recordAccess(ctx: AgentDBRetrievalContext, hits: readonly RetrievalResult<MemoryEntry>[]): void {
+  const now = getNow();
+  for (const hit of hits) {
+    const entry = ctx.entries.get(hit.entry.id as string);
+    if (!entry) continue;
+    // NOTE: Race condition — in-memory read-modify-write is not atomic.
+    // The retrieval context does not expose direct DB access, so an atomic
+    // SQL increment (access_count = access_count + 1) is not possible here.
+    // Under concurrent retrievals the count may drift, but this is acceptable
+    // for access-frequency heuristics.
+    entry.accessCount++;
+    entry.lastAccessedAt = now;
+    ctx.sqlitePersistEntry?.(entry);
+  }
+}
+
+/**
+ * @param countAccess false when the caller re-ranks and cuts the results
+ *   itself (retrieveHybrid) and records access for its own final set.
+ */
 export async function retrieveSemantic(
   ctx: AgentDBRetrievalContext,
   query: string,
   options: UnifiedMemoryQuery = {},
+  countAccess = true,
 ): Promise<RetrievalResult<MemoryEntry>[]> {
   if (!ctx.hnswStore) {
     // Fallback to TF-IDF — same shared filter, same result set (plan 0-B.9)
@@ -256,16 +282,6 @@ export async function retrieveSemantic(
       // One filter layer shared with retrieveTFIDF (plan 0-B.9 / 3.9)
       if (!matchesRetrievalFilters(entry, filters, now)) continue;
 
-      // NOTE: Race condition — in-memory read-modify-write is not atomic.
-      // The retrieval context does not expose direct DB access, so an atomic
-      // SQL increment (access_count = access_count + 1) is not possible here.
-      // Under concurrent retrievals the count may drift, but this is acceptable
-      // for access-frequency heuristics.  A future refactor could add a
-      // dedicated `sqliteIncrementAccessCount` callback to AgentDBRetrievalContext.
-      entry.accessCount++;
-      entry.lastAccessedAt = getNow();
-      ctx.sqlitePersistEntry?.(entry);
-
       vectorHits.push({
         entry: entry as unknown as MemoryEntry,
         score: hit.score,
@@ -318,17 +334,17 @@ export async function retrieveSemantic(
   if (ctx.searchTimes.length > 100) ctx.searchTimes.shift();
 
   // Apply MMR if requested
-  if (options.useMMR) {
-    return applyMMR(
+  const selected = options.useMMR
+    ? applyMMR(
       results,
       queryEmbedding,
       options.mmrLambda ?? 0.5,
       options.limit ?? 5,
       expectedProvenance,
-    ).map(sanitizeResult);
-  }
-
-  return results.slice(0, options.limit ?? 5).map(sanitizeResult);
+    )
+    : results.slice(0, options.limit ?? 5);
+  if (countAccess) recordAccess(ctx, selected);
+  return selected.map(sanitizeResult);
 }
 
 /**
@@ -391,7 +407,7 @@ export async function retrieveHybrid(
     // Get both semantic and text results — same filters on both halves
     const shared = { limit: (options?.limit ?? 5) * 2, tier: options?.tier, scope: options?.scope };
     const [semanticResults, textResults] = await Promise.all([
-      retrieveSemantic(ctx, query, shared),
+      retrieveSemantic(ctx, query, shared, false),
       Promise.resolve(retrieveTFIDF(ctx, query, { mode: "text", query, ...shared })),
     ]);
 
@@ -421,7 +437,11 @@ export async function retrieveHybrid(
       .sort((a, b) => b.score - a.score)
       .slice(0, options?.limit ?? 5);
 
-    return merged.map((m) => ({ entry: m.entry, score: m.score }));
+    const hits = merged.map((m) => ({ entry: m.entry, score: m.score }));
+    // Only the semantic half used to count accesses, for all 2x limit of its
+    // candidates; count the entries this call returns instead (MEM-22).
+    recordAccess(ctx, hits);
+    return hits;
   } catch (error) {
     getLoggerSafe().error("[AgentDBMemory] Hybrid retrieval failed", { error: String(error) });
     return [];
