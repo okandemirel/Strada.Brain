@@ -611,7 +611,7 @@ export class ErrorLearningHooks {
     // whatever the text says, and the exposure is counted as unjudged.
     const action = normalizeAction(resolution.action);
     if (action.length >= MIN_ACTION_MATCH_CHARS) {
-      for (const instinct of this.storage.getInstincts()) {
+      for (const instinct of this.storage.getInstincts({ withEmbedding: false })) {
         if (!MATCHABLE_STATUSES.has(instinct.status)) continue;
         const candidate = normalizeAction(instinct.action);
         if (candidate.length < MIN_ACTION_MATCH_CHARS) continue;

@@ -371,12 +371,16 @@ export class LearningStorage {
   private readonly lastCountedSession = new Map<string, string>();
   private flushTimer: NodeJS.Timeout | null = null;
 
+  /** `i."<col>"` for every instinct column but `embedding`; read after migrations. */
+  private instinctColumnsNoEmbedding: string | null = null;
+
   constructor(dbPath: string = "./data/learning.db") {
     this.dbPath = dbPath;
   }
 
   /** Initialize the database connection and schema */
   initialize(): void {
+    this.instinctColumnsNoEmbedding = null;
     // ROUND 13 #18 — DO NOT OPEN A DATABASE A RESTORE IS REPLACING. The restore
     // probes for attached users, but a probe only describes the instant it ran:
     // a store that opens learning.db while the swap is in flight ends up writing
@@ -1391,12 +1395,15 @@ export class LearningStorage {
    * retrieval is FOR: another user's private instinct is not returned. Omitted,
    * every row is returned — for bookkeeping callers (creation-side duplicate
    * checks), never for text that reaches a prompt.
+   *
+   * `withEmbedding: false` leaves the vector out (see {@link instinctColumns}).
    */
   getInstincts(options: {
     status?: Instinct["status"];
     type?: Instinct["type"];
     minConfidence?: number;
     visibleTo?: { readonly userId?: string };
+    withEmbedding?: boolean;
   } = {}): Instinct[] {
     this.ensureConnection();
     
@@ -1404,7 +1411,7 @@ export class LearningStorage {
     // with every row here too — the creation-side duplicate check reads this
     // path, and without them every candidate looked unowned, so one person's
     // private rule blocked everybody else's identical learning.
-    let sql = `SELECT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i WHERE 1=1`;
+    let sql = `SELECT ${this.instinctColumns(options.withEmbedding)}, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i WHERE 1=1`;
     const params: (string | number)[] = [];
     
     if (options.status) {
@@ -1442,6 +1449,24 @@ export class LearningStorage {
     this.db!.prepare("UPDATE instincts SET updated_at = MAX(updated_at, ?) WHERE id = ?").run(at, id);
   }
 
+  /**
+   * The instinct columns a read selects (LRN-1). A candidate scan that never
+   * compares vectors should not copy and JSON-parse one per row: on the
+   * per-message and per-tool-error paths that was most of a retrieval's cost.
+   * Leaving it out is safe to write back: updateInstinct never touches it.
+   */
+  private instinctColumns(withEmbedding: boolean = true): string {
+    if (withEmbedding) return "i.*";
+    if (this.instinctColumnsNoEmbedding === null) {
+      const columns = this.db!.prepare("PRAGMA table_info(instincts)").all() as Array<{ name: string }>;
+      this.instinctColumnsNoEmbedding = columns
+        .filter((c) => c.name !== "embedding")
+        .map((c) => `i."${c.name}"`)
+        .join(", ");
+    }
+    return this.instinctColumnsNoEmbedding;
+  }
+
   /** Delete an instinct */
   deleteInstinct(id: string): void {
     this.ensureConnection();
@@ -1465,6 +1490,8 @@ export class LearningStorage {
    * for. A scope row of type 'user' that names an owner is returned ONLY to that
    * owner; a 'user' row that names nobody (written before this fix) stays
    * reachable, and project/global rows are unaffected.
+   *
+   * `withEmbedding: false` leaves the vector out (see {@link instinctColumns}).
    */
   getInstinctsForScope(options: {
     projectPath: string;
@@ -1474,6 +1501,7 @@ export class LearningStorage {
     minConfidence?: number;
     userId?: string;
     eventBus?: IEventBus;
+    withEmbedding?: boolean;
   }): Instinct[] {
     this.ensureConnection();
 
@@ -1543,7 +1571,7 @@ export class LearningStorage {
     // instinct (item 3.1) so the caller sees what it is scoped to.
     // `AND ${NOT_BOOKKEEPING_S}`: a session_hit marker is not a scope, so it can
     // neither admit an instinct into a scope nor speak for its ownership (#3).
-    let sql = `SELECT DISTINCT i.*, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE ${NOT_BOOKKEEPING_S}`;
+    let sql = `SELECT DISTINCT ${this.instinctColumns(options.withEmbedding)}, ${NARROWEST_SCOPE_SUBQUERIES} FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE ${NOT_BOOKKEEPING_S}`;
     const params: (string | number)[] = [];
 
     // Scope filter

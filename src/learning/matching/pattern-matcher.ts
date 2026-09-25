@@ -250,7 +250,8 @@ export class PatternMatcher {
     // Get candidate instincts — under the same ownership clause the task-time
     // retrieval (getInstinctsForScope) applies. This path used to read every
     // row, so one user's private rule was recovery guidance for everybody.
-    const candidates = this.storage.getInstincts({ visibleTo: { userId } })
+    // Matching here is lexical only, so the vectors are not read (LRN-1).
+    const candidates = this.storage.getInstincts({ visibleTo: { userId }, withEmbedding: false })
       .filter(i => statusFilter.includes(i.status));
 
     const matches: PatternMatch[] = [];
@@ -298,7 +299,9 @@ export class PatternMatcher {
       scope,
     } = options;
 
-    // Choose retrieval path based on scope context
+    // Choose retrieval path based on scope context. The vectors are read only
+    // when the semantic pass below will compare them (LRN-1).
+    const withEmbedding = this.embedder !== undefined;
     let candidates: Instinct[];
     if (scope) {
       candidates = this.storage.getInstinctsForScope({
@@ -309,9 +312,10 @@ export class PatternMatcher {
         // candidate for this turn.
         ...(scope.userId ? { userId: scope.userId } : {}),
         eventBus: this.eventBus,
+        withEmbedding,
       });
     } else {
-      candidates = this.storage.getInstincts();
+      candidates = this.storage.getInstincts({ withEmbedding });
     }
 
     if (typeFilter) {
