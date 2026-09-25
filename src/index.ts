@@ -47,6 +47,7 @@ import { CHANNEL_DEFAULTS } from "./common/constants.js";
 import { isValidChannelSpec, parseChannelSpec } from "./channels/channel-spec.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
+import { resolveDaemonDashboardClient } from "./core/daemon-dashboard-client.js";
 import { registerPresetCommands } from "./config/preset-cli.js";
 import {
   getConfiguredDefaultChannel,
@@ -421,9 +422,18 @@ program
 registerPresetCommands(program);
 
 // Register daemon management commands (status, trigger, reset, audit, config, budget)
-// Context is provided via callback since daemon may not be initialized at registration time
+// Context is provided via callback since daemon may not be initialized at registration time.
+// A `strada daemon …` process never runs startApp, so its context is always
+// undefined: `daemon status` reads the running runtime over the dashboard API
+// that this install's config describes instead (COR-13).
 let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;
-registerDaemonCommands(program, () => appResult?.daemonContext);
+registerDaemonCommands(program, () => appResult?.daemonContext, () => {
+  const configResult = loadConfigSafe();
+  if (configResult.kind === "err") {
+    return { kind: "unavailable", message: `the configuration could not be loaded (${configResult.error})` };
+  }
+  return resolveDaemonDashboardClient(configResult.value);
+});
 
 // Register skill management commands (install, remove, list, update, search, info)
 import { registerSkillCommands } from "./skills/skill-cli.js";

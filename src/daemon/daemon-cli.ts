@@ -13,8 +13,12 @@
  *   strada daemon notify  -- Send a test notification
  *   strada daemon chain:status -- Show tool chain resilience status
  *
- * Uses callback-based DI: getDaemonContext() returns the running daemon's
- * context or undefined if daemon is not running.
+ * Uses callback-based DI: getDaemonContext() returns the daemon context when
+ * these commands run inside the runtime process. `strada daemon …` typed at a
+ * shell runs in a separate CLI process where it is always undefined (COR-13):
+ * there, `status` reads the running daemon over its dashboard API and every
+ * command without an API says it is not available from the CLI — neither
+ * claims the daemon is "not running", which that process cannot know.
  *
  * Requirements: DAEMON-01, DAEMON-04, RPT-01, RPT-03
  */
@@ -41,6 +45,8 @@ import {
 } from "../learning/chains/chain-types.js";
 import { computeChainWaves } from "../learning/chains/chain-dag.js";
 import type { ChainResilienceConfig, ChainMetadataV2 } from "../learning/chains/chain-types.js";
+import { z } from "zod";
+import type { DashboardClientResolution } from "../core/daemon-dashboard-client.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -86,11 +92,13 @@ export interface DaemonContext {
  * Register daemon management subcommands on the given Commander program.
  *
  * @param program - The root Commander program
- * @param getDaemonContext - Callback returning the daemon context, or undefined if daemon is not running
+ * @param getDaemonContext - Callback returning the in-process daemon context, or undefined outside the runtime process
+ * @param getDashboardClient - Resolves a client for the running runtime's dashboard API (used when there is no in-process context)
  */
 export function registerDaemonCommands(
   program: Command,
   getDaemonContext: () => DaemonContext | undefined,
+  getDashboardClient?: () => DashboardClientResolution,
 ): void {
   const daemon = program
     .command("daemon")
@@ -102,10 +110,10 @@ export function registerDaemonCommands(
   daemon
     .command("status")
     .description("Show daemon heartbeat state, triggers, budget, and pending approvals")
-    .action(() => {
+    .action(async () => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.log("Daemon: not running");
+        await printRemoteDaemonStatus(getDashboardClient);
         return;
       }
 
@@ -191,7 +199,7 @@ export function registerDaemonCommands(
     .action((name: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Cannot fire triggers.");
+        reportNotAvailableFromCli("daemon trigger");
         return;
       }
 
@@ -214,7 +222,7 @@ export function registerDaemonCommands(
     .action((name: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Cannot reset circuit breakers.");
+        reportNotAvailableFromCli("daemon reset");
         return;
       }
 
@@ -242,7 +250,7 @@ export function registerDaemonCommands(
     .action((opts: { limit: string }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.log("Daemon: not running");
+        reportNotAvailableFromCli("daemon audit");
         return;
       }
 
@@ -285,7 +293,7 @@ export function registerDaemonCommands(
     .action(() => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.log("Daemon: not running");
+        reportNotAvailableFromCli("daemon config");
         return;
       }
 
@@ -341,7 +349,7 @@ export function registerDaemonCommands(
     .action(() => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Cannot reset budget.");
+        reportNotAvailableFromCli("daemon budget reset");
         return;
       }
 
@@ -359,7 +367,7 @@ export function registerDaemonCommands(
     .action(async (opts: { dryRun?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running.");
+        reportNotAvailableFromCli("daemon digest");
         return;
       }
 
@@ -390,7 +398,7 @@ export function registerDaemonCommands(
     .action((opts: { level?: string; limit: string }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.log("Daemon: not running");
+        reportNotAvailableFromCli("daemon notifications");
         return;
       }
 
@@ -447,7 +455,7 @@ export function registerDaemonCommands(
     .action(async (opts: { level: string; message: string }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running.");
+        reportNotAvailableFromCli("daemon notify");
         return;
       }
 
@@ -481,8 +489,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon memory:decay-status");
         return;
       }
 
@@ -546,8 +553,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon chain:status");
         return;
       }
 
@@ -688,7 +694,11 @@ export function registerDaemonCommands(
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
-      if (!ctx?.agentManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon agent list");
+        return;
+      }
+      if (!ctx.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
@@ -741,7 +751,11 @@ export function registerDaemonCommands(
     .action((id: string, opts: { json?: boolean }) => {
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
-      if (!ctx?.agentManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon agent status");
+        return;
+      }
+      if (!ctx.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
@@ -790,7 +804,11 @@ export function registerDaemonCommands(
     .action(async (id: string, opts: { force?: boolean }) => {
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
-      if (!ctx?.agentManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon agent stop");
+        return;
+      }
+      if (!ctx.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
@@ -811,7 +829,11 @@ export function registerDaemonCommands(
     .action(async (id: string) => {
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
-      if (!ctx?.agentManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon agent start");
+        return;
+      }
+      if (!ctx.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
@@ -833,7 +855,11 @@ export function registerDaemonCommands(
     .action((id: string, amount: string) => {
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
-      if (!ctx?.agentManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon agent budget set");
+        return;
+      }
+      if (!ctx.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
@@ -861,7 +887,11 @@ export function registerDaemonCommands(
     .option("--json", "Output as JSON")
     .action((opts: { limit: string; type?: string; json?: boolean }) => {
       const ctx = getDaemonContext();
-      if (!ctx?.delegationLog) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon delegation:history");
+        return;
+      }
+      if (!ctx.delegationLog) {
         console.log("Task delegation is not enabled");
         return;
       }
@@ -918,7 +948,11 @@ export function registerDaemonCommands(
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
-      if (!ctx?.delegationLog) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon delegation:stats");
+        return;
+      }
+      if (!ctx.delegationLog) {
         console.log("Task delegation is not enabled");
         return;
       }
@@ -967,7 +1001,11 @@ export function registerDaemonCommands(
     .description("Show currently active delegations")
     .action(() => {
       const ctx = getDaemonContext();
-      if (!ctx?.delegationManager) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon delegation:watch");
+        return;
+      }
+      if (!ctx.delegationManager) {
         console.log("Task delegation is not enabled");
         return;
       }
@@ -1004,7 +1042,11 @@ export function registerDaemonCommands(
     .description("Set runtime tier override for a delegation type")
     .action((type: string, tier: string) => {
       const ctx = getDaemonContext();
-      if (!ctx?.tierRouter) {
+      if (!ctx) {
+        reportNotAvailableFromCli("daemon delegation:tier");
+        return;
+      }
+      if (!ctx.tierRouter) {
         console.log("Task delegation is not enabled");
         return;
       }
@@ -1030,8 +1072,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon memory:consolidation-status");
         return;
       }
 
@@ -1081,8 +1122,7 @@ export function registerDaemonCommands(
     .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon memory:consolidation-preview");
         return;
       }
 
@@ -1134,8 +1174,7 @@ export function registerDaemonCommands(
     .action(async (opts: { force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon memory:consolidate");
         return;
       }
 
@@ -1166,8 +1205,7 @@ export function registerDaemonCommands(
     .action(async (logId: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon memory:consolidation-undo");
         return;
       }
 
@@ -1195,8 +1233,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon deploy:status");
         return;
       }
 
@@ -1231,8 +1268,7 @@ export function registerDaemonCommands(
     .action((opts: { limit: string; json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon deploy:history");
         return;
       }
 
@@ -1283,8 +1319,7 @@ export function registerDaemonCommands(
     .action(async (opts: { execute?: boolean; force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strada daemon start");
-        process.exitCode = 1;
+        reportNotAvailableFromCli("daemon deploy:check");
         return;
       }
 
@@ -1355,6 +1390,104 @@ function isValidAgentId(id: string): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * A command that only works inside the runtime process, run from a shell
+ * (COR-13). It used to print "Daemon is not running" and exit 0 whether or not
+ * a daemon was running; the dashboard API has no endpoint for these, so say so.
+ */
+function reportNotAvailableFromCli(command: string): void {
+  console.error(
+    `\`strada ${command}\` is not available from the CLI: the running daemon exposes no API for it. ` +
+    "Use the web portal or the dashboard to see and manage the running daemon.",
+  );
+  process.exitCode = 1;
+}
+
+/** The part of GET /api/daemon that `daemon status` prints. */
+const RemoteDaemonStatusSchema = z.object({
+  running: z.boolean(),
+  configured: z.boolean().optional(),
+  intervalMs: z.number().optional(),
+  triggers: z.array(z.object({
+    name: z.string(),
+    type: z.string(),
+    state: z.string(),
+    circuitState: z.string().optional(),
+    nextRun: z.string().nullable().optional(),
+  })).default([]),
+  budget: z.object({
+    usedUsd: z.number(),
+    limitUsd: z.number(),
+    pct: z.number(),
+  }).optional(),
+  approvalQueue: z.array(z.unknown()).default([]),
+});
+
+/** `daemon status` from a shell: read the running runtime over its dashboard API. */
+async function printRemoteDaemonStatus(getDashboardClient?: () => DashboardClientResolution): Promise<void> {
+  const resolution: DashboardClientResolution = getDashboardClient?.()
+    ?? { kind: "unavailable", message: "no dashboard connection is configured for this CLI" };
+  if (resolution.kind === "unavailable") {
+    console.error(`Cannot read the daemon status: ${resolution.message}.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await resolution.client.getJson("/api/daemon");
+  if (result.kind !== "ok") {
+    console.error(`Cannot read the daemon status: ${result.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  const parsed = RemoteDaemonStatusSchema.safeParse(result.body);
+  if (!parsed.success) {
+    console.error(`Cannot read the daemon status: the dashboard at ${resolution.client.baseUrl} answered /api/daemon in an unexpected shape.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const status = parsed.data;
+  if (status.configured === false) {
+    // The runtime answered, so it IS running — just without the heartbeat.
+    console.log("Daemon: not enabled (Strada is running without daemon mode; start it with --daemon)");
+    console.log(`Dashboard: ${resolution.client.baseUrl}`);
+    return;
+  }
+
+  console.log(`Daemon: ${status.running ? "running" : "stopped"}`);
+  console.log(`Dashboard: ${resolution.client.baseUrl}`);
+  if (status.intervalMs !== undefined) console.log(`Heartbeat interval: ${status.intervalMs}ms`);
+  console.log("");
+
+  if (status.triggers.length > 0) {
+    console.log("Triggers:");
+    console.log(padRight("Name", 25) + padRight("Type", 10) + padRight("State", 12) + padRight("Circuit", 12) + padRight("Next Run", 25));
+    console.log("-".repeat(84));
+    for (const trigger of status.triggers) {
+      console.log(
+        padRight(trigger.name, 25) +
+        padRight(trigger.type, 10) +
+        padRight(trigger.state, 12) +
+        padRight(trigger.circuitState ?? "-", 12) +
+        padRight(trigger.nextRun ?? "N/A", 25),
+      );
+    }
+    console.log("");
+  } else {
+    console.log("Triggers: none registered");
+    console.log("");
+  }
+
+  if (status.budget) {
+    // The API reports an absent limit as 0.
+    const { usedUsd, limitUsd, pct } = status.budget;
+    console.log(limitUsd > 0
+      ? `Budget: $${usedUsd.toFixed(2)} / $${limitUsd.toFixed(2)} (${(pct * 100).toFixed(1)}%)`
+      : `Budget: $${usedUsd.toFixed(2)} (no daily limit)`);
+  }
+  console.log(`Pending approvals: ${status.approvalQueue.length}`);
 }
 
 function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {

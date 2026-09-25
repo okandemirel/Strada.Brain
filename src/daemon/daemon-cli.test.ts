@@ -4,11 +4,14 @@
  * Tests for registerDaemonCommands: status, trigger, reset, audit, config, budget reset.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Command } from "commander";
 import { registerDaemonCommands, type DaemonContext } from "./daemon-cli.js";
 import type { DaemonConfig, ITrigger, TriggerMetadata, TriggerState, AuditEntry } from "./daemon-types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
+import { createDaemonDashboardClient, type DashboardClientResolution } from "../core/daemon-dashboard-client.js";
 
 // =============================================================================
 // HELPERS
@@ -85,6 +88,7 @@ function makeMockContext(overrides?: Partial<DaemonContext>): DaemonContext {
 async function runDaemonCommand(
   getDaemonContext: () => DaemonContext | undefined,
   args: string[],
+  getDashboardClient?: () => DashboardClientResolution,
 ): Promise<{ stdout: string; stderr: string }> {
   const program = new Command();
   program.exitOverride();
@@ -93,7 +97,7 @@ async function runDaemonCommand(
     writeErr: () => {},
   });
 
-  registerDaemonCommands(program, getDaemonContext);
+  registerDaemonCommands(program, getDaemonContext, getDashboardClient);
 
   const stdoutLines: string[] = [];
   const stderrLines: string[] = [];
@@ -117,6 +121,11 @@ async function runDaemonCommand(
 // =============================================================================
 // TESTS
 // =============================================================================
+
+afterEach(() => {
+  // Commands report failure through process.exitCode; keep it per test.
+  process.exitCode = undefined;
+});
 
 describe("registerDaemonCommands", () => {
   it("adds a 'daemon' command group to Commander", () => {
@@ -171,9 +180,13 @@ describe("daemon status", () => {
     expect(stdout).toContain("1");
   });
 
-  it("shows 'Daemon: not running' when context is undefined", async () => {
-    const { stdout } = await runDaemonCommand(() => undefined, ["status"]);
-    expect(stdout.toLowerCase()).toContain("not running");
+  // COR-13: without an in-process context (every shell invocation) the CLI
+  // cannot know whether a daemon runs; it used to print "not running" anyway.
+  it("does not claim 'not running' when it has no way to reach the daemon", async () => {
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["status"]);
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(stderr).toContain("Cannot read the daemon status");
+    expect(process.exitCode).toBe(1);
   });
 });
 
@@ -450,10 +463,11 @@ describe("daemon memory:decay-status", () => {
     expect(stdout).toContain("MEMORY_DECAY_ENABLED=false");
   });
 
-  it("errors when daemon is not running", async () => {
+  it("says it is not available from the CLI outside the runtime process (COR-13)", async () => {
     const { stderr } = await runDaemonCommand(() => undefined, ["memory:decay-status"]);
 
-    expect(stderr).toContain("Daemon is not running");
+    expect(stderr).toContain("not available from the CLI");
+    expect(process.exitCode).toBe(1);
   });
 
   it("errors when memory manager has no getDecayStats", async () => {
@@ -606,10 +620,11 @@ describe("daemon chain:status", () => {
     expect(stdout).toContain("75.0%");
   });
 
-  it("errors when daemon is not running", async () => {
+  it("says it is not available from the CLI outside the runtime process (COR-13)", async () => {
     const { stderr } = await runDaemonCommand(() => undefined, ["chain:status"]);
 
-    expect(stderr).toContain("Daemon is not running");
+    expect(stderr).toContain("not available from the CLI");
+    expect(process.exitCode).toBe(1);
   });
 
   it("errors when learning storage is not available", async () => {
@@ -634,5 +649,130 @@ describe("daemon chain:status", () => {
     expect(stdout).toContain("active_chain");
     expect(stdout).not.toContain("deprecated_chain");
     expect(stdout).not.toContain("proposed_chain");
+  });
+});
+
+// =============================================================================
+// COR-13: `strada daemon …` from a shell reads the running runtime over HTTP
+// =============================================================================
+
+describe("daemon commands outside the runtime process (COR-13)", () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+    server = undefined;
+  });
+
+  /** A stub dashboard that serves GET /api/daemon to the right bearer only. */
+  async function startStubDashboard(token: string, body: unknown): Promise<{ baseUrl: string; seen: string[] }> {
+    const seen: string[] = [];
+    server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url} ${req.headers["authorization"] ?? "-"}`);
+      if (req.headers["authorization"] !== `Bearer ${token}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Authentication required" }));
+        return;
+      }
+      if (req.url !== "/api/daemon") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not found" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    return { baseUrl: `http://127.0.0.1:${port}`, seen };
+  }
+
+  const liveDaemon = {
+    running: true,
+    configured: true,
+    intervalMs: 60000,
+    triggers: [{ name: "nightly-build", type: "cron", state: "active", circuitState: "OPEN", lastFired: null, nextRun: "2026-03-09T00:00:00.000Z" }],
+    budget: { usedUsd: 1.25, limitUsd: 5, pct: 0.25 },
+    approvalQueue: [{ id: "a1", toolName: "shell_exec", triggerName: "nightly-build", status: "pending", createdAt: 1, expiresAt: 2 }],
+  };
+
+  it("daemon status prints the running daemon's state read from the dashboard, sending its bearer token", async () => {
+    const { baseUrl, seen } = await startStubDashboard("s3cret", liveDaemon);
+    const client = createDaemonDashboardClient({ baseUrl, token: "s3cret" });
+
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["status"], () => ({ kind: "ok", client }));
+
+    expect(stderr).toBe("");
+    expect(seen).toEqual(["GET /api/daemon Bearer s3cret"]);
+    expect(stdout).toContain("Daemon: running");
+    expect(stdout).toContain("nightly-build");
+    expect(stdout).toContain("OPEN");
+    expect(stdout).toContain("Budget: $1.25 / $5.00 (25.0%)");
+    expect(stdout).toContain("Pending approvals: 1");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("daemon status reports a runtime without daemon mode as such, not as 'not running'", async () => {
+    const { baseUrl } = await startStubDashboard("t", { running: false, configured: false, triggers: [], budget: { usedUsd: 0, limitUsd: 0, pct: 0 }, approvalQueue: [] });
+    const client = createDaemonDashboardClient({ baseUrl, token: "t" });
+
+    const { stdout } = await runDaemonCommand(() => undefined, ["status"], () => ({ kind: "ok", client }));
+
+    expect(stdout).toContain("Daemon: not enabled");
+    expect(stdout.toLowerCase()).not.toContain("not running");
+  });
+
+  it("daemon status names the URL and exits non-zero when nothing answers, without claiming the daemon is down", async () => {
+    // Bind and release a port so nothing is listening on it.
+    const { baseUrl } = await startStubDashboard("t", liveDaemon);
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+    const client = createDaemonDashboardClient({ baseUrl, token: "t" });
+
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["status"], () => ({ kind: "ok", client }));
+
+    expect(stderr).toContain(`could not reach the daemon dashboard at ${baseUrl}`);
+    expect(stderr).toContain("is Strada running with the dashboard enabled?");
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon status surfaces an auth refusal and exits non-zero", async () => {
+    const { baseUrl } = await startStubDashboard("right", liveDaemon);
+    const client = createDaemonDashboardClient({ baseUrl, token: "wrong" });
+
+    const { stderr } = await runDaemonCommand(() => undefined, ["status"], () => ({ kind: "ok", client }));
+
+    expect(stderr).toContain("Authentication required");
+    expect(stderr).toContain("WEBSOCKET_DASHBOARD_AUTH_TOKEN");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon status reports an unusable configuration instead of a daemon state", async () => {
+    const { stderr } = await runDaemonCommand(
+      () => undefined,
+      ["status"],
+      () => ({ kind: "unavailable", message: "the dashboard is disabled in this install's configuration (DASHBOARD_ENABLED)" }),
+    );
+    expect(stderr).toContain("DASHBOARD_ENABLED");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    [["trigger", "nightly-build"], "daemon trigger"],
+    [["reset", "nightly-build"], "daemon reset"],
+    [["audit"], "daemon audit"],
+    [["budget", "reset"], "daemon budget reset"],
+    [["agent", "list"], "daemon agent list"],
+    [["delegation:history"], "daemon delegation:history"],
+  ])("%j has no dashboard endpoint: says so and exits non-zero instead of 'not running'", async (args, name) => {
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, args, () => ({
+      kind: "ok",
+      client: { baseUrl: "http://127.0.0.1:1", getJson: () => Promise.reject(new Error("must not be called")) },
+    }));
+    expect(stderr).toContain(`\`strada ${name}\` is not available from the CLI`);
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(`${stdout}\n${stderr}`).not.toContain("is not enabled");
+    expect(process.exitCode).toBe(1);
   });
 });
