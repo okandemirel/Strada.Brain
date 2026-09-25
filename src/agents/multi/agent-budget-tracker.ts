@@ -61,6 +61,8 @@ export class AgentBudgetTracker {
    */
   initialize(): void {
     this.storage.migrateAgentBudget();
+    // The source column this tracker's rows are labelled with (see recordCost). Idempotent.
+    this.storage.migrateBudgetSource();
   }
 
   /**
@@ -86,13 +88,16 @@ export class AgentBudgetTracker {
       const reservation = this.reservations.get(opts.reservationId);
       if (reservation) reservation.chargedUsd += costUsd;
     }
-    this.storage.insertBudgetEntryWithAgent({
+    // Labelled as agent spend. Written without a source, the row took the column's 'daemon'
+    // default, so every delegated sub-agent's cost was charged to the daemon's sub-limit.
+    this.storage.insertBudgetEntryWithSource({
       costUsd,
       model: opts?.model,
       tokensIn: opts?.tokensIn,
       tokensOut: opts?.tokensOut,
       triggerName: opts?.triggerName,
       timestamp: Date.now(),
+      source: "agent",
       agentId,
     });
   }

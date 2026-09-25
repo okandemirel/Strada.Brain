@@ -84,6 +84,17 @@ describe("AgentBudgetTracker", () => {
       const usage = tracker.getAgentUsage(agentA, 5.0);
       expect(usage.usedUsd).toBeCloseTo(0.5, 2);
     });
+
+    it("books an agent's spend as agent spend, never against the daemon's sub-limit", () => {
+      // Delegated sub-agents are billed through this tracker; its rows took the source
+      // column's 'daemon' default and were charged to the daemon's budget.
+      storage.migrateBudgetSource(); // what bootstrap does on the shared storage
+      tracker.recordCost(agentA, 1.25);
+      const since = Date.now() - 60_000;
+      expect(storage.sumBudgetForSource("agent", since)).toBeCloseTo(1.25, 2);
+      expect(storage.sumBudgetForSource("daemon", since)).toBe(0);
+      expect(tracker.getAgentUsage(agentA).usedUsd).toBeCloseTo(1.25, 2);
+    });
   });
 
   // =========================================================================
