@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.js";
@@ -91,5 +91,29 @@ describe("MCP server config", () => {
 
   it("returns nothing when no config file exists", () => {
     expect(loadWith()).toEqual([]);
+  });
+});
+
+// FND-19: STRADA_HOME is the app home itself (resolveStradaHome), not the
+// parent of a `.strada` directory.
+describe("MCP config location", () => {
+  const server = JSON.stringify([{ name: "files", command: "mcp-files" }]);
+
+  it("reads mcp.json from the app home that STRADA_HOME names", () => {
+    const home = join(dir, "home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "mcp.json"), server, "utf8");
+
+    const servers = loadConfig({ ...requiredEnv(dir), STRADA_HOME: home }).mcpServers;
+    expect(servers.map((s) => s.name)).toEqual(["files"]);
+  });
+
+  it("still reads a file left at the old <STRADA_HOME>/.strada location", () => {
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".strada"), { recursive: true });
+    writeFileSync(join(home, ".strada", "mcp.json"), server, "utf8");
+
+    const servers = loadConfig({ ...requiredEnv(dir), STRADA_HOME: home }).mcpServers;
+    expect(servers.map((s) => s.name)).toEqual(["files"]);
   });
 });

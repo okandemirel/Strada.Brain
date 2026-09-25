@@ -15,7 +15,7 @@ import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { Result, ValidationResult, ValidationError } from "../types/index.js";
-import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { resolveDotenvPath, resolveStradaHome } from "../common/runtime-paths.js";
 import { mcpServerEntrySchema } from "./config-schema.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import { getPreset } from "./presets.js";
@@ -1120,6 +1120,21 @@ interface EnvVars {
  * Load configuration from environment variables
  */
 /**
+ * Where mcp.json lives: MCP_CONFIG_PATH, else the app home every other runtime
+ * file uses (FND-19). This used to treat STRADA_HOME as the PARENT of `.strada`
+ * and ignore the Windows home (%LOCALAPPDATA%\Strada); a file already at that
+ * old location is still read so an existing setup keeps its servers.
+ */
+export function resolveMcpConfigPath(env: Record<string, string | undefined>): string {
+  const explicit = env["MCP_CONFIG_PATH"];
+  if (explicit !== undefined) return explicit;
+  const current = join(resolveStradaHome(env), "mcp.json");
+  if (existsSync(current)) return current;
+  const legacy = join(env["STRADA_HOME"] ?? homedir(), ".strada", "mcp.json");
+  return existsSync(legacy) ? legacy : current;
+}
+
+/**
  * Reads the external MCP server list.
  *
  * A file rather than an environment variable: server lists are structured
@@ -1131,7 +1146,7 @@ interface EnvVars {
  * must cost the user their MCP tools, never their ability to start Strada.
  */
 function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
-  const path = env["MCP_CONFIG_PATH"] ?? join(env["STRADA_HOME"] ?? homedir(), ".strada", "mcp.json");
+  const path = resolveMcpConfigPath(env);
   if (!existsSync(path)) return [];
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
