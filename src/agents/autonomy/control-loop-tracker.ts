@@ -472,7 +472,28 @@ function normalizeFingerprint(
   gate?: string,
 ): string {
   const summary = summarizeText(reason || gate || "no-reason");
-  return `${kind}:${summary}`;
+  const signature = gateSignature(gate);
+  return signature ? `${kind}:${summary}|${signature}` : `${kind}:${summary}`;
+}
+
+/**
+ * What a gate IS, independent of its prose: the tags that open its paragraphs
+ * and the names of the verifier checks it lists. Every verifier gate arrives
+ * with the same generic summary, so fingerprinting on the summary alone made a
+ * compile gate, a module gate and a test-assembly gate — three different
+ * problems, with edits between them — look like one gate repeated three times.
+ */
+function gateSignature(gate?: string): string {
+  if (!gate) return "";
+  const parts = new Set<string>();
+  for (const match of gate.matchAll(/(?:^|\n\n|Required verifier actions:\n)\s*\[([A-Z][A-Z0-9 .:#×_-]{1,60})\]/gu)) {
+    parts.add(match[1]!.trim().toLowerCase());
+  }
+  const checks = /(?:^|\n)Failed verifier checks:\n((?:- [^\n]*(?:\n|$))+)/u.exec(gate)?.[1] ?? "";
+  for (const match of checks.matchAll(/^- ([a-z0-9][a-z0-9_-]*):/gmu)) {
+    parts.add(match[1]!);
+  }
+  return [...parts].sort().join(",");
 }
 
 function summarizeText(text: string): string {

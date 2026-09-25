@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ControlLoopTracker, restrictToProgressTools } from "./control-loop-tracker.js";
+import { planVerifierPipeline } from "./verifier-pipeline.js";
+import { AgentPhase, type AgentState } from "../agent-state.js";
 
 describe("ControlLoopTracker", () => {
   it("triggers when the same fingerprint repeats within the short window", () => {
@@ -750,5 +752,72 @@ describe("read-only stall episodes (2026-09-10)", () => {
     // Verified progress earns a fresh start.
     tracker.markVerificationClean(1);
     expect(tracker.getStallEpisodes()).toBe(0);
+  });
+});
+
+describe("verifier gate fingerprints name the gate, not the generic summary (AUT-12)", () => {
+  // Real gates from the verifier pipeline: every one of them arrives with the
+  // same generic summary as its reason.
+  const verifierGate = (buildGate: string | null, conformanceGate: string | null): string => {
+    const plan = planVerifierPipeline({
+      prompt: "Build the board game",
+      draft: "All done.\nDONE",
+      state: {
+        phase: AgentPhase.EXECUTING,
+        taskDescription: "Build the board game",
+        iteration: 2,
+        plan: "Implement the modules",
+        stepResults: [],
+        failedApproaches: [],
+        reflectionCount: 0,
+        lastReflection: null,
+        consecutiveErrors: 0,
+        learnedInsights: [],
+      } as unknown as AgentState,
+      task: { type: "implementation", complexity: "moderate", criticality: "medium" },
+      verificationState: {
+        pendingFiles: new Set(buildGate ? ["Assets/Scripts/Board.cs"] : []),
+        touchedFiles: new Set(["Assets/Scripts/Board.cs"]),
+        hasCompilableChanges: buildGate !== null,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: buildGate,
+      conformanceGate,
+      logEntries: [],
+      chatId: "chat-aut12",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+    expect(plan.summary).toBe(SUMMARY);
+    return plan.gate!;
+  };
+  const SUMMARY = "Static verifier checks still require more work.";
+
+  it("different gates with edits between them are not a repeated-gate loop", () => {
+    const tracker = new ControlLoopTracker();
+    const gates = [
+      verifierGate("[VERIFICATION REQUIRED] Compile the changed scripts.", null),
+      verifierGate(null, "[STRADA MODULE INCOMPLETE] The Board module has no system."),
+      verifierGate(null, "[STRADA TEST ASSEMBLY EMPTY] The test assembly holds no tests."),
+      verifierGate(null, "[STRADA FILE TOO LONG] BoardSystem.cs is over the limit."),
+    ];
+    let iteration = 1;
+    for (const gate of gates) {
+      expect(tracker.recordGate({ kind: "verifier_continue", reason: SUMMARY, gate, iteration })).toBeNull();
+      for (let i = 0; i < 3; i++) tracker.markToolExecution("file_edit", `file_edit:${iteration}:${i}`);
+      iteration += 4;
+    }
+  });
+
+  it("the same gate three times is still a loop, whatever happened between", () => {
+    const tracker = new ControlLoopTracker();
+    const gate = verifierGate(null, "[STRADA MODULE INCOMPLETE] The Board module has no system.");
+    let trigger = null;
+    for (let iteration = 1; iteration <= 9; iteration += 4) {
+      trigger = tracker.recordGate({ kind: "verifier_continue", reason: SUMMARY, gate, iteration });
+      tracker.markToolExecution("file_edit", `file_edit:${iteration}`);
+    }
+    expect(trigger?.reason).toBe("same_fingerprint_repeated");
+    expect(trigger?.sameFingerprintCount).toBe(3);
   });
 });
