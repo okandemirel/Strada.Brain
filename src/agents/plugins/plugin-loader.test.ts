@@ -238,6 +238,90 @@ export const tools = [{
     });
   });
 
+  describe("plugin and tool names (PRV-19)", () => {
+    function writePlugin(dirName: string, pluginName: string, toolName: string): string {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, dirName);
+      mkdirSync(pluginDir, { recursive: true });
+      writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
+        name: pluginName,
+        version: "1.0.0",
+        description: "names",
+        entry: "index.mjs",
+      }));
+      writeFileSync(join(pluginDir, "index.mjs"), `
+export const tools = [{
+  name: ${JSON.stringify(toolName)},
+  description: "d",
+  inputSchema: { type: "object", properties: {} },
+  execute: async () => ({ content: "ok" }),
+}];
+`);
+      return pluginsDir;
+    }
+
+    it("refuses a plugin name providers would reject in a tool name", async () => {
+      const pluginsDir = writePlugin("spaced", "my plugin", "hello");
+      const loader = new PluginLoader([pluginsDir]);
+      expect(await loader.loadAll()).toEqual([]);
+      expect(loader.getLoadedPlugins()).toEqual([]);
+    });
+
+    it("refuses a tool name outside the providers' alphabet", async () => {
+      const pluginsDir = writePlugin("dotted", "tools", "do.thing");
+      const loader = new PluginLoader([pluginsDir]);
+      expect(await loader.loadAll()).toEqual([]);
+    });
+
+    it("refuses a tool whose registered name would exceed 64 characters", async () => {
+      const pluginsDir = writePlugin("long", "long-plugin-name", "x".repeat(60));
+      const loader = new PluginLoader([pluginsDir]);
+      expect(await loader.loadAll()).toEqual([]);
+    });
+
+    it("still loads a well-named plugin beside a refused one", async () => {
+      writePlugin("spaced", "my plugin", "hello");
+      const pluginsDir = writePlugin("good", "good_plugin-1", "say-hello_2");
+      const loader = new PluginLoader([pluginsDir]);
+      const tools = await loader.loadAll();
+      expect(tools.map((t) => t.name)).toEqual(["plugin_good_plugin-1_say-hello_2"]);
+    });
+  });
+
+  describe("reloadAll", () => {
+    it("imports each plugin once per reload, not twice (PRV-19)", async () => {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, "counted");
+      mkdirSync(pluginDir, { recursive: true });
+      writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
+        name: "counted",
+        version: "1.0.0",
+        description: "counts its imports",
+        entry: "index.mjs",
+      }));
+      const counterKey = `__stradaPluginImports_${Date.now()}`;
+      writeFileSync(join(pluginDir, "index.mjs"), `
+globalThis[${JSON.stringify(counterKey)}] = (globalThis[${JSON.stringify(counterKey)}] ?? 0) + 1;
+export const tools = [{
+  name: "hello",
+  description: "d",
+  inputSchema: { type: "object", properties: {} },
+  execute: async () => ({ content: "ok" }),
+}];
+`);
+      const imports = (): unknown => (globalThis as Record<string, unknown>)[counterKey];
+
+      const loader = new PluginLoader([pluginsDir]);
+      await loader.loadAll();
+      expect(imports()).toBe(1);
+
+      const tools = await loader.reloadAll();
+      expect(imports()).toBe(2);
+      expect(tools.map((t) => t.name)).toEqual(["plugin_counted_hello"]);
+      expect(loader.getLoadedPlugins()).toHaveLength(1);
+    });
+  });
+
   describe("reloadPlugin", () => {
     it("reloads updated plugin code instead of reusing stale ESM cache", async () => {
       const pluginsDir = join(tempDir, "plugins");

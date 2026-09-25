@@ -271,10 +271,22 @@ export class ToolRegistry {
     if (this.pluginLoader) {
       try {
         const pluginTools = await this.pluginLoader.loadAll();
+        // One by one: a tool that cannot be registered (a name another tool
+        // already holds) used to throw out of the loop and drop every plugin
+        // tool after it.
+        let registered = 0;
         for (const tool of pluginTools) {
-          this.register(tool, classifyRuntimeToolMetadata(tool, "code"));
+          try {
+            this.register(tool, classifyRuntimeToolMetadata(tool, "code"));
+            registered++;
+          } catch (error) {
+            logger.warn("Skipped a plugin tool that could not be registered", {
+              tool: tool.name,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
-        logger.info(`Loaded ${pluginTools.length} plugin tools`);
+        logger.info(`Loaded ${registered} plugin tools`);
       } catch (error) {
         logger.warn("Failed to load plugin tools", {
           error: error instanceof Error ? error.message : String(error),

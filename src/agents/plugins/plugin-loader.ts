@@ -16,6 +16,17 @@ export interface PluginManifest {
 }
 
 /**
+ * Plugin tools ride on every LLM request that carries tools, and a provider
+ * rejects the whole request over one tool name outside its alphabet (OpenAI:
+ * ^[a-zA-Z0-9_-]{1,64}$). The registered name is built from the manifest name
+ * and the tool's own, so both are held to that alphabet and the result to that
+ * length — a plugin that breaks the rule is refused at load, not at call time.
+ */
+const PLUGIN_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const MAX_TOOL_NAME_LENGTH = 64;
+
+/**
  * A loaded plugin with its tools.
  */
 export interface LoadedPlugin {
@@ -94,6 +105,14 @@ export class PluginLoader {
    * Returns all tools from all loaded plugins.
    */
   async loadAll(): Promise<ITool[]> {
+    return this.scanPluginDirs(new Set());
+  }
+
+  /**
+   * Load every plugin in the plugin directories except those whose root is in
+   * `skipRoots` (plugins the caller has just loaded itself).
+   */
+  private async scanPluginDirs(skipRoots: ReadonlySet<string>): Promise<ITool[]> {
     const logger = getLogger();
     const allTools: ITool[] = [];
 
@@ -112,6 +131,7 @@ export class PluginLoader {
 
         const pluginPath = join(dir, entry.name);
         try {
+          if (skipRoots.size > 0 && skipRoots.has(await realpath(pluginPath))) continue;
           const plugin = await this.loadPlugin(pluginPath);
           if (plugin) {
             this.loadedPlugins.set(plugin.manifest.name, plugin);
@@ -148,6 +168,10 @@ export class PluginLoader {
     if (!manifest.name || !manifest.entry) {
       throw new Error("Plugin manifest missing required fields: name, entry");
     }
+    // Checked before the entry is imported: a refused plugin runs no code.
+    if (typeof manifest.name !== "string" || !PLUGIN_NAME_RE.test(manifest.name)) {
+      throw new Error("Plugin name must be 1-32 characters of letters, digits, '_' or '-'");
+    }
 
     const { pluginRootPath, entryPath } = await this.resolvePluginEntryPaths(pluginPath, manifest.entry);
 
@@ -168,6 +192,13 @@ export class PluginLoader {
     for (const tool of tools) {
       if (!tool.name || !tool.description || !tool.inputSchema || typeof tool.execute !== "function") {
         throw new Error(`Invalid tool in plugin '${manifest.name}': missing required ITool fields`);
+      }
+      const registeredName = `plugin_${manifest.name}_${String(tool.name)}`;
+      if (!PLUGIN_TOOL_NAME_RE.test(String(tool.name)) || registeredName.length > MAX_TOOL_NAME_LENGTH) {
+        throw new Error(
+          `Invalid tool name in plugin '${manifest.name}': tool names must be letters, digits, '_' or '-', `
+            + `and '${registeredName}' must fit in ${MAX_TOOL_NAME_LENGTH} characters`,
+        );
       }
     }
 
@@ -236,8 +267,10 @@ export class PluginLoader {
       }
     }
     
-    // Also scan for new plugins
-    const newTools = await this.loadAll();
+    // Also scan for new plugins. The ones just reloaded are skipped: loading
+    // them again imported every plugin twice, running its module-level code
+    // twice and leaving a second copy in the ESM cache.
+    const newTools = await this.scanPluginDirs(new Set([...pluginPaths.values()].map((p) => p.path)));
     
     // Merge and deduplicate
     const seenNames = new Set(allTools.map(t => t.name));

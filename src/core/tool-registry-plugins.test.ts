@@ -109,3 +109,36 @@ describe("runtime-registered tool classification (audited 2026-09-02)", () => {
     expect(classifyRuntimeToolMetadata(declaredWriter, "code")).toMatchObject({ readOnly: false, dangerous: true });
   });
 });
+
+describe("plugin tool registration (PRV-19)", () => {
+  let pluginRoot: string;
+
+  beforeAll(() => {
+    createLogger("error", "test.log");
+    pluginRoot = mkdtempSync(join(tmpdir(), "strada-plugin-dup-"));
+    const pluginDir = join(pluginRoot, "dup");
+    mkdirSync(pluginDir);
+    writeFileSync(
+      join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "dup", version: "1.0.0", entry: "index.js" }),
+    );
+    const tool = (name: string): string =>
+      `  { name: "${name}", description: "d", inputSchema: { type: "object", properties: {} }, async execute() { return { content: "ok" }; } },`;
+    writeFileSync(
+      join(pluginDir, "index.js"),
+      ["export const tools = [", tool("inspect_a"), tool("inspect_a"), tool("inspect_b"), "];", ""].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(pluginRoot, { recursive: true, force: true });
+  });
+
+  it("one tool that cannot be registered does not drop the plugin tools after it", async () => {
+    const registry = new ToolRegistry([pluginRoot]);
+    await registry.initialize({ shellEnabled: false } as unknown as Parameters<ToolRegistry["initialize"]>[0]);
+
+    expect(registry.has("plugin_dup_inspect_a")).toBe(true);
+    expect(registry.has("plugin_dup_inspect_b")).toBe(true);
+  });
+});
