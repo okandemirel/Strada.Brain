@@ -242,3 +242,79 @@ describe("WebIdentityStore owner reassignment (round 14 #7)", () => {
     expect(runbook).toContain("reassignOwner");
   });
 });
+
+// CHN-19: identities were kept forever. Abandoned ones (never sent a message,
+// not presented for N days) are pruned at boot, leaving a tombstone so that the
+// id stays "issued" for every privacy check and is never handed out again.
+describe("WebIdentityStore prunes abandoned identities (CHN-19)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const tempDb = () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-web-identity-prune-"));
+    tempDirs.push(dir);
+    return join(dir, "web-identities.db");
+  };
+
+  it("prunes an abandoned guest at boot, keeping it issued but unusable", () => {
+    const dbPath = tempDb();
+    const first = new WebIdentityStore(dbPath);
+    const owner = first.issue();
+    const abandoned = first.issue();
+    const active = first.issue();
+    const presented = first.issue();
+    first.markMessaged(active.profileId);
+    first.close();
+    const raw = new Database(dbPath);
+    raw.prepare("UPDATE web_identities SET updated_at = ?").run(Date.now() - 60 * DAY);
+    raw.prepare("UPDATE web_identities SET last_seen_at = ? WHERE profile_id = ?").run(Date.now() - DAY, presented.profileId);
+    raw.close();
+
+    const store = new WebIdentityStore(dbPath);
+    try {
+      // Only the guest that never sent a message and was not presented lately.
+      expect(store.verify(abandoned.profileId, abandoned.profileToken)).toBe(false);
+      for (const kept of [owner, active, presented]) {
+        expect(store.verify(kept.profileId, kept.profileToken)).toBe(true);
+      }
+      // Still issued: whatever it owned stays private, and the instance stays shared.
+      expect(store.has(abandoned.profileId)).toBe(true);
+      expect(store.count()).toBe(4);
+      // Never registered again, by the legacy path or as the owner.
+      expect(store.issue(abandoned.profileId).profileId).not.toBe(abandoned.profileId);
+      expect(store.reassignOwner(abandoned.profileId)).toBe(owner.profileId);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("never prunes the owner or an identity that predates activity tracking", () => {
+    const dbPath = tempDb();
+    // An instance from before CHN-19: nobody can say what these identities did.
+    const raw = new Database(dbPath);
+    raw.exec(`CREATE TABLE web_identities (
+      profile_id TEXT PRIMARY KEY, token_hash BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    const insert = raw.prepare("INSERT INTO web_identities (profile_id, token_hash, created_at, updated_at) VALUES (?, ?, ?, ?)");
+    insert.run("legacy-owner", Buffer.alloc(32), 1, 1);
+    insert.run("legacy-guest", Buffer.alloc(32), 2, 2);
+    raw.close();
+
+    const store = new WebIdentityStore(dbPath, 0);
+    try {
+      expect(store.ownerProfileId()).toBe("legacy-owner");
+      const fresh = store.issue();
+      // Only the identity issued (and abandoned) since tracking began.
+      expect(store.pruneAbandoned(Date.now() + DAY)).toBe(1);
+      expect(store.verify(fresh.profileId, fresh.profileToken)).toBe(false);
+      const check = new Database(dbPath, { readonly: true });
+      const live = (check.prepare("SELECT profile_id FROM web_identities ORDER BY profile_id").all() as Array<{ profile_id: string }>)
+        .map((r) => r.profile_id);
+      check.close();
+      expect(live).toEqual(["legacy-guest", "legacy-owner"]);
+    } finally {
+      store.close();
+    }
+  });
+});

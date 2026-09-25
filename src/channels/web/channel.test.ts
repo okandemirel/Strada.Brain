@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { validateHeaderValue } from "node:http";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
+import { IdentityIssueLimiter } from "./identity-issue-limiter.js";
 import {
   MAX_ATTACHMENT_BYTES_PER_MESSAGE,
   MEDIA_SIZE_LIMITS,
@@ -3731,6 +3732,9 @@ describe("WebChannel shared instance: the ways around the owner check (round 13)
     const guest = identify(channel, GUEST_ID);
 
     // 500 newer chats, each recording its own binding — the owner's is pushed out.
+    // They all come from one test "address", so lift the per-address issuance
+    // limit (CHN-19), which is not what this test is about.
+    (channel as unknown as { identityIssueLimiter: IdentityIssueLimiter }).identityIssueLimiter = new IdentityIssueLimiter(1_000);
     for (let i = 0; i < 500; i++) {
       const filler = open(channel);
       filler.send({ type: "session_init" });
@@ -4083,5 +4087,71 @@ describe("WebChannel attachment downloads with non-Latin-1 names (CHN-15)", () =
     const disposition = out.headers!["Content-Disposition"]!;
     expect(disposition.startsWith("attachment; filename=\"rapor _")).toBe(true);
     expect(disposition).toContain("filename*=UTF-8''rapor%20%F0%9F%93%8A.pdf");
+  });
+});
+
+// CHN-19: every session_init without a valid pair minted and persisted an
+// identity, without limit and forever.
+describe("WebChannel web identity growth (CHN-19)", () => {
+  function connect(channel: WebChannel, payload: Record<string, unknown>, address = "10.0.0.7") {
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown, address?: string) => void })
+      .handleWsConnection(socket, address);
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session_init", ...payload })));
+    const connected = socket.getSentMessages().filter((m) => m.type === "connected").at(-1)!;
+    return { socket, connected };
+  }
+  const identities = (channel: WebChannel) =>
+    (channel as unknown as { identityStore: { count: () => number } }).identityStore.count();
+
+  it("limits how many new identities one address is issued, never a returning one", async () => {
+    const channel = new WebChannel(3000, 3100);
+    const first = connect(channel, {});
+    const returning = { profileId: String(first.connected.profileId), profileToken: String(first.connected.profileToken) };
+    for (let i = 1; i < 20; i++) connect(channel, {});
+    expect(identities(channel)).toBe(20);
+
+    const refused = connect(channel, {});
+    expect(refused.connected.profileId).toBeUndefined();
+    expect(refused.socket.getCloseCalls()[0]?.code).toBe(1008);
+    expect(identities(channel)).toBe(20);
+
+    // Another address is counted on its own, and a browser that holds an
+    // identity verifies it whatever its address has been issued.
+    expect(connect(channel, {}, "10.0.0.8").connected.profileId).toBeDefined();
+    expect(connect(channel, returning).connected.profileId).toBe(returning.profileId);
+    await channel.disconnect();
+  });
+
+  it("marks an identity that sends a message so it is never pruned as abandoned", async () => {
+    const channel = new WebChannel(3000, 3100);
+    channel.onMessage(async () => undefined);
+    connect(channel, {}); // the owner, never pruned
+    const talker = connect(channel, {});
+    const idle = connect(channel, {});
+    talker.socket.emit("message", Buffer.from(JSON.stringify({ type: "message", text: "build the level" })));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const store = (channel as unknown as {
+      identityStore: {
+        pruneAbandoned: (now?: number) => number;
+        has: (id: string) => boolean;
+        verify: (id: string, token: string) => boolean;
+      };
+    }).identityStore;
+    expect(store.pruneAbandoned(Date.now() + 365 * 24 * 60 * 60 * 1000)).toBe(1);
+    expect(store.verify(String(talker.connected.profileId), String(talker.connected.profileToken))).toBe(true);
+    expect(store.verify(String(idle.connected.profileId), String(idle.connected.profileToken))).toBe(false);
+    // Pruned, but still an identity this instance issued: its traffic stays
+    // private to it, and the instance stays shared.
+    expect(store.has(String(idle.connected.profileId))).toBe(true);
+    expect(identities(channel)).toBe(3);
+    const view = channel as unknown as {
+      monitorFrameVisibleTo: (origin: string | undefined, profileId: string) => boolean;
+      instanceFacts: () => { shared: boolean };
+    };
+    expect(view.monitorFrameVisibleTo(String(idle.connected.profileId), String(talker.connected.profileId))).toBe(false);
+    expect(view.instanceFacts().shared).toBe(true);
+    await channel.disconnect();
   });
 });

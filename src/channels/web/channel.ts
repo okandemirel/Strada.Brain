@@ -27,6 +27,7 @@ import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import { WebAttachmentStore } from "./web-attachment-store.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
+import { IdentityIssueLimiter } from "./identity-issue-limiter.js";
 import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CLOSE_SESSION_TAKEN,
@@ -101,6 +102,8 @@ interface WsClient {
    * a power just because the instance happens to have one identity.
    */
   sessionInitialized: boolean;
+  /** The socket's remote address, which new-identity issuance is limited by (CHN-19). */
+  remoteAddress?: string;
 }
 
 interface RecentlyDisconnectedSession {
@@ -419,6 +422,7 @@ export class WebChannel
   private readonly streamChatIds = new Map<string, string>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
+  private readonly identityIssueLimiter = new IdentityIssueLimiter();
   /** Attachment records, by token: rows, so a restart does not break the links. */
   private readonly attachmentStore: WebAttachmentStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
@@ -622,7 +626,7 @@ export class WebChannel
       maxPayload: WS_MAX_PAYLOAD_BYTES,
       verifyClient: ({ req }: { req: HttpReq }) => this.acceptsHost(req) && this.acceptsWsOrigin(req),
     });
-    this.wss.on("connection", (ws) => this.handleWsConnection(ws));
+    this.wss.on("connection", (ws, req) => this.handleWsConnection(ws, req.socket.remoteAddress));
 
     await new Promise<void>((res, rej) => {
       const onError = (error: Error) => {
@@ -1883,7 +1887,7 @@ export class WebChannel
   // WebSocket Handler
   // ===========================================================================
 
-  private handleWsConnection(ws: WebSocket): void {
+  private handleWsConnection(ws: WebSocket, remoteAddress?: string): void {
     let chatId: string = randomUUID();
     let assignedId = false;
     const client: WsClient = {
@@ -1895,6 +1899,7 @@ export class WebChannel
       windowStart: Date.now(),
       isAlive: true,
       sessionInitialized: false,
+      ...(remoteAddress ? { remoteAddress } : {}),
     };
     this.clients.set(chatId, client);
 
@@ -2087,7 +2092,17 @@ export class WebChannel
     // replayed board plus its buffered answers belong to the identity that owns
     // the chat. Reclaiming chat X while authenticating as a different identity
     // would hand X's history to whoever holds only X's chat token.
-    const identity = this.resolveWebIdentity(data);
+    const identity = this.resolveWebIdentity(data, client.remoteAddress);
+    if (!identity) {
+      // CHN-19: this address was issued too many new identities recently. The
+      // socket gets none (and stays unidentified); a browser that already holds
+      // an identity is never refused here.
+      getLoggerSafe().warn("[WebChannel] new identity refused: issuance rate limit for this address", {
+        remoteAddress: client.remoteAddress ?? null,
+      });
+      ws.close(WS_CLOSE_POLICY_VIOLATION, "Too many new sessions from this address; try again later");
+      return { chatId: client.chatId, reconnectToken: client.reconnectToken };
+    }
     client.profileId = identity.profileId;
     // From here this socket has an identity this channel issued (round 13 #9).
     client.sessionInitialized = true;
@@ -2280,6 +2295,11 @@ export class WebChannel
           attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(),
         };
+        // An identity that sent a message is never pruned as abandoned (CHN-19).
+        if (client?.sessionInitialized) {
+          const sender = client.profileId;
+          this.recordIdentityActivity(() => this.identityStore.markMessaged(sender));
+        }
 
         this.handler(msg).catch((err) => {
           this.sendToClient(chatId, {
@@ -3035,7 +3055,8 @@ export class WebChannel
     }
   }
 
-  private resolveWebIdentity(data: Record<string, unknown>): WebIdentity {
+  /** The identity this socket presents, else a new one; undefined when issuance is rate limited (CHN-19). */
+  private resolveWebIdentity(data: Record<string, unknown>, remoteAddress?: string): WebIdentity | undefined {
     const profileId = typeof data.profileId === "string" ? data.profileId.trim() : "";
     const profileToken = typeof data.profileToken === "string" ? data.profileToken.trim() : "";
     if (
@@ -3043,7 +3064,13 @@ export class WebChannel
       profileToken.length > 0 &&
       this.identityStore.verify(profileId, profileToken)
     ) {
+      // Presented and verified: not abandoned (CHN-19).
+      this.recordIdentityActivity(() => this.identityStore.markSeen(profileId));
       return { profileId, profileToken };
+    }
+
+    if (!this.identityIssueLimiter.tryTake(remoteAddress ?? "unknown")) {
+      return undefined;
     }
 
     const legacyProfileId = this.resolveLegacyProfileId(data);
@@ -3067,6 +3094,17 @@ export class WebChannel
         ? data.profileChatId.trim()
         : "";
     return WebChannel.UUID_RE.test(legacyProfileId) ? legacyProfileId : undefined;
+  }
+
+  /** Identity activity bookkeeping is best-effort: it must never block a session or a message. */
+  private recordIdentityActivity(record: () => void): void {
+    try {
+      record();
+    } catch (err) {
+      getLoggerSafe().debug("[WebChannel] identity activity not recorded", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private generateReconnectToken(): string {

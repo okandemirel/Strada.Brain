@@ -10,6 +10,13 @@ export interface WebIdentity {
   profileToken: string;
 }
 
+/**
+ * CHN-19: an identity that never sent a message and has not been presented for
+ * this long is abandoned (a private window, cleared storage, a script looping
+ * sockets) and is pruned at boot.
+ */
+export const ABANDONED_IDENTITY_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class WebIdentityStore {
   private db: Database.Database | null = null;
   private stmtGet!: Database.Statement;
@@ -17,11 +24,20 @@ export class WebIdentityStore {
   private stmtCount!: Database.Statement;
   private stmtGetMeta!: Database.Statement;
   private stmtClaimOwner!: Database.Statement;
+  private stmtTombstoned!: Database.Statement;
+  private stmtCountTombstones!: Database.Statement;
+  private stmtMarkMessaged!: Database.Statement;
+  private stmtMarkSeen!: Database.Statement;
+  /** Profiles already known to have sent a message, so the hot path skips the write. */
+  private readonly messagedProfiles = new Set<string>();
 
   /** The meta key holding the instance owner's profile id (plan 6.14). */
   private static readonly OWNER_KEY = "owner_profile_id";
 
-  constructor(private readonly dbPath: string = ":memory:") {
+  constructor(
+    private readonly dbPath: string = ":memory:",
+    private readonly abandonedAfterMs: number = ABANDONED_IDENTITY_MS,
+  ) {
     this.initialize();
   }
 
@@ -55,9 +71,35 @@ export class WebIdentityStore {
       )
     `);
 
+    // CHN-19: activity, for pruning abandoned identities. Rows that predate
+    // these columns take the defaults: `messaged` 1, i.e. never pruned, because
+    // nobody can say what they did.
+    for (const column of ["messaged INTEGER NOT NULL DEFAULT 1", "last_seen_at INTEGER"]) {
+      try {
+        this.db.exec(`ALTER TABLE web_identities ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists.
+      }
+    }
+    // A pruned identity leaves a tombstone: it was ISSUED, and stays so for
+    // every visibility and ownership check (has(), count()), while no token
+    // verifies for it and the legacy path can never register it again.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS web_identity_tombstones (
+        profile_id TEXT PRIMARY KEY,
+        pruned_at INTEGER NOT NULL
+      )
+    `);
+
     this.stmtGet = this.db.prepare(
       "SELECT token_hash FROM web_identities WHERE profile_id = ?",
     );
+    this.stmtTombstoned = this.db.prepare("SELECT 1 FROM web_identity_tombstones WHERE profile_id = ?");
+    this.stmtCountTombstones = this.db.prepare("SELECT COUNT(*) AS n FROM web_identity_tombstones");
+    this.stmtMarkMessaged = this.db.prepare(
+      "UPDATE web_identities SET messaged = 1 WHERE profile_id = ? AND messaged = 0",
+    );
+    this.stmtMarkSeen = this.db.prepare("UPDATE web_identities SET last_seen_at = ? WHERE profile_id = ?");
     this.stmtCount = this.db.prepare("SELECT COUNT(*) AS n FROM web_identities");
     this.stmtGetMeta = this.db.prepare("SELECT value FROM web_instance_meta WHERE key = ?");
     // DO NOTHING on conflict: ownership is claimed ONCE, by the first identity.
@@ -68,14 +110,67 @@ export class WebIdentityStore {
        ON CONFLICT(key) DO NOTHING`,
     );
     this.stmtSet = this.db.prepare(
-      `INSERT INTO web_identities (profile_id, token_hash, created_at, updated_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO web_identities (profile_id, token_hash, created_at, updated_at, messaged)
+       VALUES (?, ?, ?, ?, 0)
        ON CONFLICT(profile_id) DO UPDATE SET
          token_hash = excluded.token_hash,
          updated_at = excluded.updated_at`,
     );
 
     this.adoptEstablishedOwner();
+    this.pruneAbandoned();
+  }
+
+  /**
+   * CHN-19: every portal socket without a valid pair minted an identity that
+   * was kept forever. At boot, an identity that never sent a message and has
+   * not been presented for `abandonedAfterMs` is pruned: its row (and token)
+   * goes, a tombstone stays. It never sent a message, so it owns no task,
+   * board or delivered attachment; and because the tombstone keeps it
+   * "issued", anything it might own stays as private as before. The owner is
+   * never pruned. Returns how many were pruned.
+   */
+  pruneAbandoned(now: number = Date.now()): number {
+    const db = this.db!;
+    const cutoff = now - this.abandonedAfterMs;
+    const owner = this.ownerProfileId() ?? "";
+    try {
+      return db.transaction(() => {
+        const stale = db.prepare(
+          `SELECT profile_id FROM web_identities
+           WHERE messaged = 0 AND COALESCE(last_seen_at, updated_at) < ? AND profile_id != ?`,
+        ).all(cutoff, owner) as Array<{ profile_id: string }>;
+        const bury = db.prepare("INSERT OR IGNORE INTO web_identity_tombstones (profile_id, pruned_at) VALUES (?, ?)");
+        const remove = db.prepare("DELETE FROM web_identities WHERE profile_id = ?");
+        for (const { profile_id } of stale) {
+          bury.run(profile_id, now);
+          remove.run(profile_id);
+        }
+        if (stale.length > 0) {
+          getLoggerSafe().info("[WebIdentityStore] pruned abandoned identities", { count: stale.length });
+        }
+        return stale.length;
+      })();
+    } catch (err) {
+      getLoggerSafe().warn("[WebIdentityStore] pruning abandoned identities failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 0;
+    }
+  }
+
+  /** Record that `profileId` sent a message: it is no longer prunable (CHN-19). */
+  markMessaged(profileId: string): void {
+    const normalized = profileId.trim();
+    if (!normalized || this.messagedProfiles.has(normalized)) return;
+    this.stmtMarkMessaged.run(normalized);
+    this.messagedProfiles.add(normalized);
+  }
+
+  /** Record that `profileId` was presented and verified now (CHN-19). */
+  markSeen(profileId: string, now: number = Date.now()): void {
+    const normalized = profileId.trim();
+    if (normalized) this.stmtMarkSeen.run(now, normalized);
   }
 
   /**
@@ -108,7 +203,9 @@ export class WebIdentityStore {
   }
 
   issue(preferredProfileId?: string): WebIdentity {
-    const profileId = preferredProfileId?.trim() || randomUUID();
+    const preferred = preferredProfileId?.trim();
+    // A pruned id is never handed out again (CHN-19).
+    const profileId = preferred && this.stmtTombstoned.get(preferred) === undefined ? preferred : randomUUID();
     const profileToken = randomBytes(32).toString("base64url");
     const now = Date.now();
 
@@ -179,7 +276,8 @@ export class WebIdentityStore {
    */
   reassignOwner(profileId: string): string | undefined {
     const normalized = profileId.trim();
-    if (!normalized || !this.has(normalized)) {
+    // A LIVE identity: a pruned one is issued but can never present a token.
+    if (!normalized || this.stmtGet.get(normalized) === undefined) {
       getLoggerSafe().warn("[WebIdentityStore] owner reassignment refused: not an identity this instance issued", {
         profileId: normalized || null,
       });
@@ -207,10 +305,16 @@ export class WebIdentityStore {
     return owner !== undefined && profileId !== undefined && profileId.trim() === owner;
   }
 
-  /** How many identities this instance has ever issued — >1 means it is genuinely shared. */
+  /**
+   * How many identities this instance has ever issued — >1 means it is
+   * genuinely shared. Pruned identities still count (CHN-19): pruning must never
+   * turn a shared instance back into a single-identity one, which would widen
+   * what an unattributed request may see.
+   */
   count(): number {
-    const row = this.stmtCount.get() as { n: number } | undefined;
-    return row?.n ?? 0;
+    const live = this.stmtCount.get() as { n: number } | undefined;
+    const pruned = this.stmtCountTombstones.get() as { n: number } | undefined;
+    return (live?.n ?? 0) + (pruned?.n ?? 0);
   }
 
   /**
@@ -223,7 +327,9 @@ export class WebIdentityStore {
     if (!normalized) {
       return false;
     }
-    return this.stmtGet.get(normalized) !== undefined;
+    // A pruned identity was issued (CHN-19): its boards and attachments stay
+    // private, and the legacy path must not register its id to someone else.
+    return this.stmtGet.get(normalized) !== undefined || this.stmtTombstoned.get(normalized) !== undefined;
   }
 
   verify(profileId: string, profileToken: string): boolean {
