@@ -6522,7 +6522,10 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     settleMilestone("green, shipping");
-    await waitFor(() => expect(buildTargetsAsked.length).toBeGreaterThan(0));
+    // The builds run one after another, each under a ticket whose repository
+    // probes are awaited (CMP-11): wait for the gate's recorded verdict, not
+    // for the first build request.
+    await waitFor(() => expect(storage.get(campaign.id)!.milestones[2]!.buildVerdict).toBeDefined());
 
     // EVERY named platform is built. Building only the first and disclosing
     // the rest made every multi-platform GDD unsatisfiable: the missing
