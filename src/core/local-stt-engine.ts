@@ -125,7 +125,15 @@ async function doCreatePipeline(): Promise<Pipeline> {
 }
 
 function getOrCreatePipeline(): Promise<Pipeline> {
-  if (!pipelinePromise) pipelinePromise = doCreatePipeline();
+  if (!pipelinePromise) {
+    const created = doCreatePipeline();
+    // COR-18: a failed load (a network blip during the first model download)
+    // must not be cached for the process lifetime — the next call retries.
+    created.catch(() => {
+      if (pipelinePromise === created) pipelinePromise = null;
+    });
+    pipelinePromise = created;
+  }
   return pipelinePromise;
 }
 
@@ -148,6 +156,30 @@ function mimeToExt(mimeType: string): string {
   return MIME_TO_EXT[base] ?? "audio";
 }
 
+/** The ffmpeg demuxer for each accepted MIME type (a name the demuxer matches). */
+const MIME_TO_DEMUXER: Record<string, string> = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/mp4": "mp4",
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/flac": "flac",
+};
+
+/**
+ * ffmpeg input options for chat-supplied audio. The bytes were checked against
+ * the declared MIME type only, so the demuxer is pinned to that type rather
+ * than probed from the content, and only plain file access is allowed (COR-18).
+ * Undefined for a type with no known demuxer: such audio is not converted.
+ */
+export function ffmpegInputArgs(mimeType: string, inputPath: string): string[] | undefined {
+  const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const demuxer = MIME_TO_DEMUXER[base];
+  if (!demuxer) return undefined;
+  return ["-protocol_whitelist", "file", "-f", demuxer, "-i", inputPath];
+}
+
 /** Convert audio to 16 kHz mono Float32Array using FFmpeg. */
 async function convertWithFfmpeg(audioData: Buffer, mimeType: string): Promise<Float32Array | null> {
   const ffmpeg = await detectFfmpeg();
@@ -159,11 +191,13 @@ async function convertWithFfmpeg(audioData: Buffer, mimeType: string): Promise<F
     const ext = mimeToExt(mimeType);
     const inputPath = join(tmpDir, `input.${ext}`);
     const outputPath = join(tmpDir, "output.wav");
+    const inputArgs = ffmpegInputArgs(mimeType, inputPath);
+    if (!inputArgs) return null;
 
     await writeFile(inputPath, audioData);
 
     await execFileAsync(ffmpeg, [
-      "-i", inputPath,
+      ...inputArgs,
       "-ar", "16000",
       "-ac", "1",
       "-c:a", "pcm_f32le",
@@ -282,12 +316,13 @@ export async function transcribeLocal(
 
     const pipeline = await getOrCreatePipeline();
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
       pipeline(samples),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Local STT timeout (30 s)")), 30_000),
-      ),
-    ]);
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Local STT timeout (30 s)")), 30_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
 
     const text = result?.text?.trim() ?? "";
     if (text) {

@@ -69,6 +69,64 @@ describe("local-stt-engine", () => {
       expect(() => disposeLocalStt()).not.toThrow();
     });
   });
+
+  // COR-18
+  describe("pipeline load failures and timers", () => {
+    function mockWhisper(factory: (task: string, model: string) => Promise<(audio: Float32Array) => Promise<{ text: string }>>) {
+      vi.doMock("@huggingface/transformers", () => ({ pipeline: factory, env: {} }));
+      vi.doMock("wavefile", () => ({
+        WaveFile: class {
+          toBitDepth(): void {}
+          toSampleRate(): void {}
+          getSamples(): Float32Array { return new Float32Array([0.1, 0.2, 0.3]); }
+        },
+      }));
+    }
+
+    afterEach(() => {
+      vi.doUnmock("@huggingface/transformers");
+      vi.doUnmock("wavefile");
+      vi.useRealTimers();
+    });
+
+    it("retries the model load after a transient failure instead of caching it", async () => {
+      const factory = vi.fn()
+        .mockRejectedValueOnce(new Error("network blip"))
+        .mockResolvedValueOnce(async () => ({ text: "hello world" }));
+      mockWhisper(factory);
+      const { transcribeLocal } = await import("./local-stt-engine.js");
+
+      expect(await transcribeLocal(Buffer.from("RIFF"), "audio/wav")).toBeNull();
+      expect(await transcribeLocal(Buffer.from("RIFF"), "audio/wav")).toBe("hello world");
+      expect(factory).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves no 30 s timeout timer behind after a transcription", async () => {
+      mockWhisper(async () => async () => ({ text: "done" }));
+      const { transcribeLocal } = await import("./local-stt-engine.js");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      expect(await transcribeLocal(Buffer.from("RIFF"), "audio/wav")).toBe("done");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe("ffmpegInputArgs", () => {
+    it("pins the demuxer to the validated MIME type and allows file access only", async () => {
+      const { ffmpegInputArgs } = await import("./local-stt-engine.js");
+      expect(ffmpegInputArgs("audio/ogg; codecs=opus", "/tmp/x/input.ogg")).toEqual([
+        "-protocol_whitelist", "file", "-f", "ogg", "-i", "/tmp/x/input.ogg",
+      ]);
+      expect(ffmpegInputArgs("audio/mpeg", "in.mp3")).toEqual(["-protocol_whitelist", "file", "-f", "mp3", "-i", "in.mp3"]);
+      expect(ffmpegInputArgs("audio/webm", "in.webm")?.slice(0, 4)).toEqual(["-protocol_whitelist", "file", "-f", "webm"]);
+      expect(ffmpegInputArgs("audio/mp4", "in.m4a")?.slice(2, 4)).toEqual(["-f", "mp4"]);
+    });
+
+    it("refuses a type it has no demuxer for rather than letting ffmpeg guess", async () => {
+      const { ffmpegInputArgs } = await import("./local-stt-engine.js");
+      expect(ffmpegInputArgs("audio/x-unknown", "in.audio")).toBeUndefined();
+    });
+  });
 });
 
 describe("incoming-audio-transcription with local STT", () => {
