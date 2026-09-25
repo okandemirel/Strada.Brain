@@ -246,12 +246,15 @@ describe("a stored delivery package reaches the durable history", () => {
   });
 
   it("gives every stored package revision its own delivery event, each naming its revision", () => {
-    // A re-assembled package carries a new `assembledAt`, so the store keeps it
-    // as a new revision — and a new revision IS a new delivery to remember. The
-    // history follows the store's revisions rather than inventing its own.
+    // A package that CHANGED is a new revision — and a new revision IS a new
+    // delivery to remember. The history follows the store's revisions rather
+    // than inventing its own. The same report re-assembled later is not a new
+    // revision (CMP-14: only its `assembledAt` differs), so it adds no event.
     const row = campaign({ state: "done", milestones: [milestone({ id: "m1", title: "Sprint A", status: "green" })] });
     storePackage(row);
     storePackage(row);
+    expect(eventsOf("delivery").map((e) => e.version.campaignRevision)).toEqual(["pkg-r1"]);
+    storePackage({ ...row, state: "failed" });
     const revisions = eventsOf("delivery").map((e) => e.version.campaignRevision).sort();
     expect(revisions).toEqual(["pkg-r1", "pkg-r2"]);
     expect(eventsOf("delivery").every((e) => e.owner.userId === OWNER)).toBe(true);
