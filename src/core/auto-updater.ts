@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { recordUpdateEvent } from "./update-history.js";
+import { planTreeKill } from "../utils/process-runner.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
@@ -410,46 +411,6 @@ export class AutoUpdater {
     }
   }
 
-  private spawnWithTimeout(
-    cmd: string,
-    args: string[],
-    timeoutMs: number,
-    cwd?: string,
-  ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const shell = process.platform === "win32" && (cmd === "npm" || cmd.endsWith(".cmd") || cmd.endsWith(".bat"));
-      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd, shell });
-      let stdoutData = "";
-      let stderrData = "";
-
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const timer = setTimeout(() => {
-        proc.kill("SIGTERM");
-        killTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
-        reject(new Error(`Command timed out: ${cmd} ${args.join(" ")}`));
-      }, timeoutMs);
-
-      proc.stdout.on("data", (data: Buffer) => {
-        stdoutData += data.toString();
-      });
-      proc.stderr.on("data", (data: Buffer) => {
-        stderrData += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        clearTimeout(timer);
-        if (killTimer) clearTimeout(killTimer);
-        if (code === 0) resolve(stdoutData);
-        else reject(new Error(`${cmd} exited with code ${code}: ${stderrData}`));
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
-  }
-
   private runCommand(
     cmd: string,
     args: string[],
@@ -459,7 +420,7 @@ export class AutoUpdater {
     if (this.commandRunner) {
       return this.commandRunner(cmd, args, timeoutMs, cwd);
     }
-    return this.spawnWithTimeout(cmd, args, timeoutMs, cwd);
+    return spawnWithTimeout(cmd, args, timeoutMs, cwd);
   }
 
   /**
@@ -1442,4 +1403,100 @@ export class AutoUpdater {
     }
     this.savePendingVersion();
   }
+}
+
+export interface SpawnWithTimeoutOptions {
+  /** How long a timed-out command gets after SIGTERM before SIGKILL. */
+  killGraceMs?: number;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Run an updater command (git, npm, node) with a deadline.
+ *
+ * COR-20: a timeout used to reject the moment it fired, while the command was
+ * still dying — so the rollback that follows (`git checkout`, `npm install`)
+ * ran alongside the old `npm install` in the same tree. The promise now
+ * settles only once the command has exited. On Windows the `.cmd` shims run
+ * under a shell, and killing that shell leaves npm/node running, so the whole
+ * tree is ended with taskkill.
+ */
+export function spawnWithTimeout(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  cwd?: string,
+  options: SpawnWithTimeoutOptions = {},
+): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  const killGraceMs = options.killGraceMs ?? 5000;
+  return new Promise((resolve, reject) => {
+    const shell = platform === "win32" && (cmd === "npm" || cmd.endsWith(".cmd") || cmd.endsWith(".bat"));
+    const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd, shell, windowsHide: true });
+    let stdoutData = "";
+    let stderrData = "";
+    let timedOut = false;
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let abandonTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (finish: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (abandonTimer) clearTimeout(abandonTimer);
+      finish();
+    };
+    const timeoutError = (): Error => new Error(`Command timed out: ${cmd} ${args.join(" ")}`);
+
+    const killTree = (signal: NodeJS.Signals): void => {
+      if (platform === "win32" && proc.pid !== undefined) {
+        const plan = planTreeKill(platform, proc.pid, signal);
+        if (plan.kind === "taskkill") {
+          const killer = spawn(plan.command, plan.args, { stdio: "ignore", windowsHide: true });
+          killer.on("error", () => {
+            try { proc.kill(signal); } catch { /* already gone */ }
+          });
+          return;
+        }
+      }
+      try { proc.kill(signal); } catch { /* already gone */ }
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree("SIGTERM");
+      killTimer = setTimeout(() => {
+        killTree("SIGKILL");
+        // A process that survives SIGKILL (stuck in the kernel) must not hang
+        // the updater forever; this is the only path that settles early.
+        abandonTimer = setTimeout(() => settle(() => reject(timeoutError())), killGraceMs);
+      }, killGraceMs);
+    }, timeoutMs);
+
+    proc.stdout.on("data", (data: Buffer) => {
+      stdoutData += data.toString();
+    });
+    proc.stderr.on("data", (data: Buffer) => {
+      stderrData += data.toString();
+    });
+
+    // 'exit', not 'close': a grandchild that inherited the pipes can keep them
+    // open after the command itself is gone.
+    proc.on("exit", () => {
+      if (timedOut) settle(() => reject(timeoutError()));
+    });
+    proc.on("close", (code) => {
+      settle(() => {
+        if (timedOut) reject(timeoutError());
+        else if (code === 0) resolve(stdoutData);
+        else reject(new Error(`${cmd} exited with code ${code}: ${stderrData}`));
+      });
+    });
+
+    proc.on("error", (err) => {
+      settle(() => reject(err));
+    });
+  });
 }
