@@ -213,6 +213,11 @@ describe("getPreset", () => {
     expect(getPreset(" free")).toBeUndefined();
     expect(getPreset("free ")).toBeUndefined();
   });
+
+  // FND-22: prototype keys read through Object.prototype and were accepted.
+  it.each(["constructor", "toString", "hasOwnProperty", "__proto__"])("returns undefined for the prototype key '%s'", (name) => {
+    expect(getPreset(name)).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

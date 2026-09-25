@@ -291,7 +291,9 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, Array<{
  * Returns undefined if the name is not a valid preset.
  */
 export function getPreset(name: string): SystemPreset | undefined {
-  return SYSTEM_PRESETS[name as PresetName];
+  // Own keys only: "constructor" or "toString" read through the prototype and
+  // passed as a preset with every field undefined (FND-22).
+  return Object.hasOwn(SYSTEM_PRESETS, name) ? SYSTEM_PRESETS[name as PresetName] : undefined;
 }
 
 /**

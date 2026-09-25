@@ -6,8 +6,14 @@
 
 import { Command } from "commander";
 import { listPresets, getPreset, PROVIDER_MODEL_OPTIONS } from "./presets.js";
+import { persistSetup } from "../core/setup-env-persistence.js";
 
-export function registerPresetCommands(program: Command): void {
+export interface PresetCommandOptions {
+  /** The .env `preset set` writes; the runtime's cwd is its config root. */
+  envPath?: string;
+}
+
+export function registerPresetCommands(program: Command, options: PresetCommandOptions = {}): void {
   const preset = program
     .command("preset")
     .description("Manage system presets for provider/model configuration");
@@ -77,20 +83,11 @@ export function registerPresetCommands(program: Command): void {
         process.exit(1);
       }
 
-      const { readFileSync, writeFileSync } = await import("node:fs");
-      const envPath = ".env";
-      let envContent = "";
-      try { envContent = readFileSync(envPath, "utf-8"); } catch { /* new file */ }
-
-      // Update or add SYSTEM_PRESET
-      const presetLine = `SYSTEM_PRESET=${name}`;
-      if (/^SYSTEM_PRESET=/m.test(envContent)) {
-        envContent = envContent.replace(/^SYSTEM_PRESET=.*$/m, presetLine);
-      } else {
-        envContent = envContent.trimEnd() + "\n" + presetLine + "\n";
-      }
-
-      writeFileSync(envPath, envContent);
+      // FND-22: the .env holds every API key. A plain writeFile truncated it
+      // first (a crash or full disk left it empty) and created it 0644; the
+      // setup writer merges under the .env lock, writes a 0600 temp file and
+      // renames it into place, keeping every other line as it was.
+      await persistSetup(options.envPath ?? ".env", [`SYSTEM_PRESET=${name}`], { ownedKeys: [] });
       console.log(`\nPreset set to "${name}" (${p.label})`);
       console.log(`Estimated cost: ${p.estimatedMonthlyCost}/month`);
       console.log("Restart Strada Brain to apply.\n");
