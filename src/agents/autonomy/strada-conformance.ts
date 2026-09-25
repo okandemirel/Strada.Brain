@@ -1239,7 +1239,10 @@ export class StradaConformanceGuard {
         // Only a config (a ScriptableObject) is instantiated as an .asset. A
         // MonoBehaviour's fields are bound on the scene or prefab it sits in,
         // so demanding an .asset for one steered runs into creating a bogus
-        // asset (audited 2026-09-25).
+        // asset (audited 2026-09-25). That is also why only .asset files are
+        // searched for the guid below, and .prefab/.unity are not: a
+        // ScriptableObject is never a component on a scene or prefab object,
+        // and the editor saves a custom one as an .asset (AUT-18).
         if (!CONFIG_CLASS_RE.test(code)) continue;
         const prefabFields = code.match(
           /\[SerializeField\][^;]{0,120}\bGameObject\b[^;]{0,80};/gu,

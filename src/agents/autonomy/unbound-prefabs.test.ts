@@ -181,6 +181,21 @@ describe("a config that holds prefabs and was never instantiated", () => {
     expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA PREFABS UNBOUND]");
   });
 
+  it("ignores prefab fields that are commented out of a ScriptableObject config (AUT-18)", () => {
+    // A field that was commented out declares nothing, so there is nothing
+    // for an .asset to bind.
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
+    writeFileSync(
+      configPath,
+      "public class PresentationPrefabsConfig : ScriptableObject {\n" +
+        "    // [SerializeField] private GameObject _pigPrefab;\n" +
+        "    /* [SerializeField] private GameObject _cubePrefab; */\n" +
+        "    [SerializeField] private int _spawnBudget;\n}",
+    );
+
+    expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA PREFABS UNBOUND]");
+  });
+
   it("still asks for a config deriving from a Strada config base", () => {
     const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
     writeFileSync(
