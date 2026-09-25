@@ -16,7 +16,7 @@
  * that ever pays the download cost.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, rmSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { BACKGROUND_REMOVAL_PACKAGES, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { PASSTHROUGH_VAR, SHELL_ENV_ALLOWLIST, buildShellEnv } from "../agents/tools/shell-env-policy.js";
+import { planTreeKill } from "../utils/process-runner.js";
 
 // =============================================================================
 // PYTHON DRIVERS (written into the venv area on demand)
@@ -440,28 +441,98 @@ export type SpawnImpl = (
   opts: { timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-const defaultSpawn: SpawnImpl = (cmd, args, opts) =>
+/** Captured output per stream; past it the run is stopped, as execFile's maxBuffer did. */
+const MODEL_OUTPUT_CAP = 32 * 1024 * 1024;
+/** Between the polite and the forced kill of a timed-out tree. */
+const MODEL_KILL_GRACE_MS = 5_000;
+/** After the forced kill, the answer does not wait on pipes a survivor still holds. */
+const MODEL_ABANDON_MS = 3_000;
+
+/**
+ * Signal the child AND what it started (CMP-19). A timed-out `pip install` or
+ * `git clone` left its build or `git-remote-https` grandchildren running when
+ * only the direct child got SIGTERM. POSIX: the child leads its own process
+ * group; Windows: `taskkill /T /F`, by absolute path (planTreeKill).
+ */
+function killModelTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid === undefined) {
+      child.kill(signal);
+      return;
+    }
+    const plan = planTreeKill(process.platform, child.pid, signal);
+    if (plan.kind === "group") {
+      process.kill(plan.pid, plan.signal);
+      return;
+    }
+    execFile(plan.command, plan.args, { windowsHide: true, timeout: 10_000 }, (err) => {
+      // taskkill that could not START is not "already gone": at least the child goes.
+      if (err && typeof (err as NodeJS.ErrnoException).code === "string") {
+        try { child.kill(signal); } catch { /* already gone */ }
+      }
+    });
+  } catch {
+    try { child.kill(signal); } catch { /* already gone */ }
+  }
+}
+
+export const defaultSpawn: SpawnImpl = (cmd, args, opts) =>
   new Promise((resolvePromise) => {
     // No env given is never "inherit everything" (CMP-10).
     const env = opts.env ?? modelSubprocessEnv(process.env);
-    execFile(cmd, args, { timeout: opts.timeoutMs, env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        const anyErr = err as NodeJS.ErrnoException & { code?: unknown; signal?: string; killed?: boolean };
-        if (typeof anyErr.code === "number") {
-          resolvePromise({ code: anyErr.code, stdout: String(stdout), stderr: String(stderr) });
-          return;
-        }
-        // A timeout (SIGTERM, code null), a missing interpreter (ENOENT) or
-        // an overflowed buffer is a FAILED inference, not an exception for
-        // the tool to leak (review 2026-09-07: a killed batch threw out of
-        // the tool and left every job's .meta behind).
-        const why = anyErr.killed || anyErr.signal
-          ? `killed by ${anyErr.signal ?? "timeout"} after ${opts.timeoutMs} ms`
-          : anyErr.message;
-        resolvePromise({ code: -1, stdout: String(stdout), stderr: `${String(stderr)}\n${why}`.trim() });
-        return;
-      }
-      resolvePromise({ code: 0, stdout: String(stdout), stderr: String(stderr) });
+    let stdout = "";
+    let stderr = "";
+    let killedBy: string | undefined;
+    let settled = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const finish = (result: { code: number; stdout: string; stderr: string }): void => {
+      if (settled) return;
+      settled = true;
+      for (const t of timers) clearTimeout(t);
+      resolvePromise(result);
+    };
+    // A timeout (SIGTERM, code null), a missing interpreter (ENOENT) or an
+    // overflowed buffer is a FAILED inference, not an exception for the tool
+    // to leak (review 2026-09-07: a killed batch threw out of the tool and
+    // left every job's .meta behind).
+    const failed = (why: string): void => finish({ code: -1, stdout, stderr: `${stderr}\n${why}`.trim() });
+    let child: ChildProcess;
+    try {
+      child = spawn(cmd, args, {
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        // Its own process group on POSIX, so a timeout reaches the whole tree.
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      });
+    } catch (err) {
+      failed(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    const stopTree = (why: string): void => {
+      if (killedBy !== undefined) return;
+      killedBy = why;
+      killModelTree(child, "SIGTERM");
+      timers.push(setTimeout(() => {
+        killModelTree(child, "SIGKILL");
+        timers.push(setTimeout(() => failed(why), MODEL_ABANDON_MS));
+      }, MODEL_KILL_GRACE_MS));
+    };
+    const collect = (which: "out" | "err") => (chunk: string): void => {
+      if (which === "out") stdout += chunk;
+      else stderr += chunk;
+      if (stdout.length + stderr.length > MODEL_OUTPUT_CAP) stopTree("stdout maxBuffer length exceeded");
+    };
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", collect("out"));
+    child.stderr?.on("data", collect("err"));
+    timers.push(setTimeout(() => stopTree(`killed by SIGTERM after ${opts.timeoutMs} ms`), opts.timeoutMs));
+    child.on("error", (err) => failed(err.message));
+    child.on("close", (code, signal) => {
+      if (killedBy !== undefined) return failed(killedBy);
+      if (typeof code === "number") return finish({ code, stdout, stderr });
+      failed(`killed by ${signal ?? "a signal"}`);
     });
   });
 

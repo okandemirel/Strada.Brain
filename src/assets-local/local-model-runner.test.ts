@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
   LocalModelRunner,
+  defaultSpawn,
   FETCH_WEIGHTS_SCRIPT,
   RMBG_IMPORT_PROBE,
   TXT2IMG_SCRIPT,
@@ -334,6 +335,45 @@ describe("a mesh must be newly produced geometry (Codex 2026-09-12 AE#10)", () =
     expect(result.ok).toBe(true);
     expect(readFileSync(out, "utf8")).toBe(OBJ);
     expect(existsSync(out.replace(/\.obj$/, ".staging.obj"))).toBe(false);
+  });
+});
+
+describe("a timed-out model subprocess takes its whole tree with it (CMP-19)", () => {
+  /** Alive and not a zombie waiting to be reaped. */
+  const running = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    try {
+      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+    } catch {
+      return true;
+    }
+  };
+
+  it.skipIf(process.platform === "win32")("kills what the child started, not just the child", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "lmr-tree-"));
+    const pidFile = join(scratch, "grandchild.pid");
+    try {
+      const result = await defaultSpawn("sh", ["-c", `sleep 30 & echo $! > "${pidFile}"; wait`], { timeoutMs: 400 });
+      expect(result.code).toBe(-1);
+      expect(result.stderr).toMatch(/killed by SIGTERM after 400 ms/);
+      const grandchild = Number(readFileSync(pidFile, "utf8").trim());
+      expect(grandchild).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(running(grandchild)).toBe(false), { timeout: 5_000 });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("a run that finishes in time keeps its exit code and output", async () => {
+    const ok = await defaultSpawn(process.execPath, ["-e", "process.stdout.write('WROTE x'); process.exit(3)"], { timeoutMs: 10_000 });
+    expect(ok).toEqual({ code: 3, stdout: "WROTE x", stderr: "" });
+    const missing = await defaultSpawn(join(tmpdir(), "no-such-interpreter-cmp19"), [], { timeoutMs: 10_000 });
+    expect(missing.code).toBe(-1);
+    expect(missing.stderr).toMatch(/ENOENT/);
   });
 });
 
