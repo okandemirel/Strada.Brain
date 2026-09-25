@@ -124,6 +124,15 @@ describe("BrowserSecurity", () => {
       ["64:ff9b::10.0.0.1", "private"],
       ["2002:7f00:1::", "loopback"],
       ["2002:a9fe:a9fe::1", "link-local"],
+      // SEC-20: local-use NAT64, Teredo, discard-only and ORCHID space
+      ["64:ff9b:1::a9fe:a9fe", "link-local"],
+      ["64:ff9b:1::10.0.0.1", "private"],
+      ["64:ff9b:1:a9fe:a9:fe00::", "local-use NAT64"],
+      ["2001:0:4136:e378:8000:63bf:3fff:fdd2", "Teredo"],
+      ["2001::1", "Teredo"],
+      ["100::1", "discard-only"],
+      ["2001:10::1", "ORCHID"],
+      ["2001:1f:ffff::1", "ORCHID"],
     ];
 
     it.each(forbidden)("refuses %s (%s)", (ip, reasonFragment) => {
@@ -153,6 +162,8 @@ describe("BrowserSecurity", () => {
       "::ffff:808:808",
       "64:ff9b::808:808",
       "2002:808:808::1",
+      "64:ff9b:1::808:808", // local-use NAT64 of a public IPv4
+      "2001:200::1", // 2001::/16 outside Teredo and ORCHID
     ];
 
     it.each(allowed)("allows public %s", (ip) => {

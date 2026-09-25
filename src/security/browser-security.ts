@@ -419,12 +419,27 @@ function classifyIpv6(g: number[]): string | null {
     const reason = classifyIpv4(v4);
     return reason ? `NAT64 ${v4}: ${reason}` : null;
   }
+  // SEC-20: local-use NAT64 64:ff9b:1::/48 (RFC 8215). A translator inside the
+  // network maps it to IPv4, including private and link-local space. With the
+  // /96 layout (middle zero) classify the embedded IPv4; another layout puts
+  // it where it cannot be read unambiguously, so refuse.
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) {
+    if (g.slice(3, 6).some((x) => x !== 0)) return "local-use NAT64 (64:ff9b:1::/48)";
+    const v4 = embeddedV4(g[6]!, g[7]!);
+    const reason = classifyIpv4(v4);
+    return reason ? `local-use NAT64 ${v4}: ${reason}` : null;
+  }
   // 6to4 2002:a.b.c.d::/48 — classify the embedded IPv4.
   if (g[0] === 0x2002) {
     const v4 = embeddedV4(g[1]!, g[2]!);
     const reason = classifyIpv4(v4);
     return reason ? `6to4 ${v4}: ${reason}` : null;
   }
+  // SEC-20: Teredo tunnels to an IPv4 server/client the address only encodes;
+  // discard-only and ORCHID space are never a legitimate fetch target.
+  if (g[0] === 0x2001 && g[1] === 0) return "Teredo (2001::/32)";
+  if (g[0] === 0x0100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return "discard-only (100::/64)";
+  if (g[0] === 0x2001 && (g[1]! & 0xfff0) === 0x0010) return "ORCHID (2001:10::/28)";
   if ((g[0]! & 0xffc0) === 0xfe80) return "link-local (fe80::/10)";
   if ((g[0]! & 0xffc0) === 0xfec0) return "site-local (fec0::/10)";
   if ((g[0]! & 0xfe00) === 0xfc00) return "unique-local (fc00::/7)";
@@ -451,7 +466,8 @@ export function classifyForbiddenAddress(ip: string): string | null {
 /**
  * True if `ip` is loopback, link-local, private (RFC 1918), CGNAT, multicast,
  * unspecified, reserved, unique-local / link-local / site-local IPv6, or an
- * IPv4-mapped / -compatible / NAT64 / 6to4 form of any of those. Strings that
+ * IPv4-mapped / -compatible / NAT64 (well-known or local-use) / 6to4 form of
+ * any of those, or Teredo / discard-only / ORCHID IPv6 space. Strings that
  * are not IP literals are also forbidden (they must go through resolution).
  */
 export function isForbiddenAddress(ip: string): boolean {
