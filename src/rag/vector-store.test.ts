@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -299,6 +299,52 @@ describe("FileVectorStore", () => {
       expect(results[0]!.chunk.id).toBe("p1");
       expect(results[0]!.score).toBeCloseTo(1.0, 5);
 
+      await store2.shutdown();
+    });
+
+    it("refuses a chunks.json and vectors.bin from different saves instead of mispairing them (MEM-13)", async () => {
+      const storePath = join(tmpDir, "torn");
+      const store1 = new FileVectorStore(storePath, DIMS);
+      await store1.initialize();
+      await store1.upsert([makeEntry("a", "/src/A.cs"), makeEntry("b", "/src/B.cs")]);
+      await store1.shutdown();
+      const olderChunks = readFileSync(join(storePath, "chunks.json"));
+
+      // Re-index A: its chunk leaves and comes back at the end, so the order
+      // (and every vector position) changes while the count stays 2.
+      const store2 = new FileVectorStore(storePath, DIMS);
+      await store2.initialize();
+      await store2.removeByFile("/src/A.cs");
+      await store2.upsert([makeEntry("a2", "/src/A.cs")]);
+      await store2.shutdown();
+
+      // A crash between the two file writes: new vectors, old chunk list.
+      writeFileSync(join(storePath, "chunks.json"), olderChunks);
+
+      const store3 = new FileVectorStore(storePath, DIMS);
+      await store3.initialize();
+      expect(store3.count()).toBe(0);
+      const names = readdirSync(storePath);
+      expect(names.some((n) => n.startsWith("chunks.json.corrupt-"))).toBe(true);
+      expect(names.some((n) => n.startsWith("vectors.bin.corrupt-"))).toBe(true);
+      await store3.shutdown();
+    });
+
+    it("refuses a vectors.bin whose size does not match the chunk count, and keeps the files", async () => {
+      const storePath = join(tmpDir, "short");
+      const store1 = new FileVectorStore(storePath, DIMS);
+      await store1.initialize();
+      await store1.upsert([makeEntry("a"), makeEntry("b")]);
+      await store1.shutdown();
+      const vectors = readFileSync(join(storePath, "vectors.bin"));
+      writeFileSync(join(storePath, "vectors.bin"), vectors.subarray(0, DIMS * 4));
+
+      const store2 = new FileVectorStore(storePath, DIMS);
+      await store2.initialize();
+      expect(store2.count()).toBe(0);
+      const aside = readdirSync(storePath).find((n) => n.startsWith("vectors.bin.corrupt-"));
+      expect(aside).toBeDefined();
+      expect(readFileSync(join(storePath, aside!)).byteLength).toBe(DIMS * 4);
       await store2.shutdown();
     });
   });

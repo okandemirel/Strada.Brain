@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -19,6 +19,7 @@ import {
 } from "./text-index.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
+import { moveAsideCorruptFile, writeFileAtomic } from "../common/atomic-file.js";
 import type { 
   Result, 
   Option, 
@@ -275,6 +276,13 @@ export class FileMemoryManager implements IMemoryManager {
   private flushDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
   private pendingFlush: boolean = false;
+  /** Flushes run one at a time: the timers, compact() and shutdown() can all start one. */
+  private flushChain: Promise<void> = Promise.resolve();
+  /**
+   * Set when memory.json exists but could neither be read nor moved aside.
+   * Saving would replace data this process never loaded, so it is refused.
+   */
+  private persistenceBlocked = false;
   
   // LRU cache for recent entries (access-based eviction)
   private entryAccessCache: LRUCache<string, number> = new LRUCache(100);
@@ -288,91 +296,87 @@ export class FileMemoryManager implements IMemoryManager {
     try {
       await mkdir(this.dbPath, { recursive: true });
 
-      // Load memory entries
-      try {
-        const raw = await readFile(join(this.dbPath, "memory.json"), "utf-8");
-        const data = JSON.parse(raw) as PersistedMemory;
-
-        if (data.version === 1) {
-          this.entries = data.entries.map((e) => {
-            const baseEntry = {
-              id: createBrand(e.id, "MemoryId" as const),
+      // Load memory entries. Only a MISSING file means "start fresh": a file
+      // that cannot be read or parsed used to be treated the same way, and the
+      // first flush then overwrote every stored memory (MEM-13).
+      const data = await this.loadPersistedMemory(join(this.dbPath, "memory.json"));
+      if (data) {
+        this.entries = data.entries.map((e) => {
+          const baseEntry = {
+            id: createBrand(e.id, "MemoryId" as const),
+            type: e.type,
+            content: e.content,
+            createdAt: createBrand(new Date(e.createdAt).getTime(), "TimestampMs" as const),
+            tags: e.tags,
+            importance: e.importance ?? "medium",
+            accessCount: e.accessCount ?? 0,
+            lastAccessedAt: e.lastAccessedAt ? createBrand(new Date(e.lastAccessedAt).getTime(), "TimestampMs" as const) : undefined,
+            archived: e.archived ?? false,
+            metadata: {},
+            // Ownership survives a reload for every type (Codex round 7 #19);
+            // it used to be re-read for conversations only.
+            ...(e.chatId ? { chatId: createBrand(e.chatId, "ChatId" as const) } : {}),
+            ...(e.userId ? { userId: e.userId } : {}),
+            ...(e.projectId ? { projectId: e.projectId } : {}),
+            ...(e.shared === true ? { shared: true } : {}),
+          };
+          
+          // Add type-specific fields
+          if (e.type === "conversation") {
+            return {
+              ...baseEntry,
+              type: "conversation" as const,
+              chatId: e.chatId ? createBrand(e.chatId, "ChatId" as const) : (createBrand("default", "ChatId" as const)),
+              userMessage: e.content,
+            } as ConversationMemoryEntry;
+          } else if (e.type === "analysis") {
+            return {
+              ...baseEntry,
+              type: "analysis" as const,
+              projectPath: "unknown",
+              category: "structure" as const,
+              version: "1.0",
+            } as import("./memory.interface.js").AnalysisMemoryEntry;
+          } else if (e.type === "note" || e.type === "insight") {
+            return {
+              ...baseEntry,
               type: e.type,
-              content: e.content,
-              createdAt: createBrand(new Date(e.createdAt).getTime(), "TimestampMs" as const),
-              tags: e.tags,
-              importance: e.importance ?? "medium",
-              accessCount: e.accessCount ?? 0,
-              lastAccessedAt: e.lastAccessedAt ? createBrand(new Date(e.lastAccessedAt).getTime(), "TimestampMs" as const) : undefined,
-              archived: e.archived ?? false,
-              metadata: {},
-              // Ownership survives a reload for every type (Codex round 7 #19);
-              // it used to be re-read for conversations only.
-              ...(e.chatId ? { chatId: createBrand(e.chatId, "ChatId" as const) } : {}),
-              ...(e.userId ? { userId: e.userId } : {}),
-              ...(e.projectId ? { projectId: e.projectId } : {}),
-              ...(e.shared === true ? { shared: true } : {}),
-            };
-            
-            // Add type-specific fields
-            if (e.type === "conversation") {
-              return {
-                ...baseEntry,
-                type: "conversation" as const,
-                chatId: e.chatId ? createBrand(e.chatId, "ChatId" as const) : (createBrand("default", "ChatId" as const)),
-                userMessage: e.content,
-              } as ConversationMemoryEntry;
-            } else if (e.type === "analysis") {
-              return {
-                ...baseEntry,
-                type: "analysis" as const,
-                projectPath: "unknown",
-                category: "structure" as const,
-                version: "1.0",
-              } as import("./memory.interface.js").AnalysisMemoryEntry;
-            } else if (e.type === "note" || e.type === "insight") {
-              return {
-                ...baseEntry,
-                type: e.type,
-                source: "user",
-              } as import("./memory.interface.js").NoteMemoryEntry;
-            } else if (e.type === "error") {
-              return {
-                ...baseEntry,
-                type: "error" as const,
-                errorCategory: "general",
-                resolved: false,
-              } as import("./memory.interface.js").ErrorMemoryEntry;
-            } else if (e.type === "command") {
-              return {
-                ...baseEntry,
-                type: "command" as const,
-                command: e.content,
-                workingDirectory: ".",
-                exitCode: 0,
-                success: true,
-              } as import("./memory.interface.js").CommandMemoryEntry;
-            } else if (e.type === "task") {
-              return {
-                ...baseEntry,
-                type: "task" as const,
-                task: e.content,
-                status: "pending" as const,
-              } as import("./memory.interface.js").TaskMemoryEntry;
-            }
-            
-            return baseEntry as unknown as MemoryEntry;
-          });
-
-          // Rebuild index
-          this.index = new OptimizedTextIndex();
-          for (const entry of this.entries) {
-            const terms = extractTerms(entry.content);
-            this.index.addDocument(terms);
+              source: "user",
+            } as import("./memory.interface.js").NoteMemoryEntry;
+          } else if (e.type === "error") {
+            return {
+              ...baseEntry,
+              type: "error" as const,
+              errorCategory: "general",
+              resolved: false,
+            } as import("./memory.interface.js").ErrorMemoryEntry;
+          } else if (e.type === "command") {
+            return {
+              ...baseEntry,
+              type: "command" as const,
+              command: e.content,
+              workingDirectory: ".",
+              exitCode: 0,
+              success: true,
+            } as import("./memory.interface.js").CommandMemoryEntry;
+          } else if (e.type === "task") {
+            return {
+              ...baseEntry,
+              type: "task" as const,
+              task: e.content,
+              status: "pending" as const,
+            } as import("./memory.interface.js").TaskMemoryEntry;
           }
+          
+          return baseEntry as unknown as MemoryEntry;
+        });
+
+        // Rebuild index
+        this.index = new OptimizedTextIndex();
+        for (const entry of this.entries) {
+          const terms = extractTerms(entry.content);
+          this.index.addDocument(terms);
         }
-      } catch {
-        // No existing memory — start fresh
       }
 
       // Load analysis cache
@@ -400,6 +404,44 @@ export class FileMemoryManager implements IMemoryManager {
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Read memory.json. Returns null when there is nothing to load: the file is
+   * missing, or it was unreadable/unparseable and has been moved aside to
+   * `memory.json.corrupt-<ts>` (or, if even that failed, saving is blocked).
+   */
+  private async loadPersistedMemory(path: string): Promise<PersistedMemory | null> {
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      return this.quarantineMemoryFile(path, error);
+    }
+    try {
+      const data = JSON.parse(raw) as PersistedMemory;
+      const valid = data?.version === 1
+        && Array.isArray(data.entries)
+        && data.entries.every((e) => typeof e?.id === "string" && typeof e.content === "string");
+      if (!valid) throw new Error("unrecognized memory.json format");
+      return data;
+    } catch (error) {
+      return this.quarantineMemoryFile(path, error);
+    }
+  }
+
+  private async quarantineMemoryFile(path: string, cause: unknown): Promise<null> {
+    const aside = await moveAsideCorruptFile(path);
+    if (aside === null) this.persistenceBlocked = true;
+    getLogger().error("[FileMemoryManager] memory.json could not be loaded — starting empty", {
+      path,
+      error: cause instanceof Error ? cause.message : String(cause),
+      ...(aside !== null
+        ? { preservedAs: aside }
+        : { note: "the file could not be moved aside either; saving is disabled so it is not overwritten" }),
+    });
+    return null;
   }
 
   async shutdown(): Promise<Result<void, Error>> {
@@ -439,10 +481,9 @@ export class FileMemoryManager implements IMemoryManager {
         } as unknown as StradaProjectAnalysis & { analyzedAt: string },
       };
 
-      await writeFile(
+      await writeFileAtomic(
         join(this.dbPath, "analysis.json"),
         JSON.stringify(persisted, null, 2),
-        "utf-8"
       );
 
       return ok(undefined);
@@ -1164,7 +1205,7 @@ export class FileMemoryManager implements IMemoryManager {
       this.flushTimer = null;
       this.flushDeadlineTimer = null;
       this.pendingFlush = false;
-      void this.flush();
+      this.flushInBackground();
     }, FLUSH_DEBOUNCE_MS);
     
     // Ensure we flush eventually even if more changes keep coming
@@ -1176,13 +1217,35 @@ export class FileMemoryManager implements IMemoryManager {
           this.flushTimer = null;
         }
         this.pendingFlush = false;
-        void this.flush();
+        this.flushInBackground();
       }, MAX_FLUSH_WAIT_MS);
     }
   }
 
-  private async flush(): Promise<void> {
+  /** Timer-driven flush: a failed save is logged, never an unhandled rejection. */
+  private flushInBackground(): void {
+    this.flush().catch((error: unknown) => {
+      getLogger().error("[FileMemoryManager] Failed to save memory.json", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /** Queue a save behind any in flight, so two never write memory.json at once. */
+  private flush(): Promise<void> {
+    const run = this.flushChain.then(() => this.flushNow());
+    this.flushChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async flushNow(): Promise<void> {
     if (!this.dirty) return;
+    if (this.persistenceBlocked) {
+      getLogger().error("[FileMemoryManager] Not saving: memory.json could not be loaded or moved aside", {
+        path: join(this.dbPath, "memory.json"),
+      });
+      return;
+    }
 
     const persisted: PersistedMemory = {
       version: 1,
@@ -1204,13 +1267,17 @@ export class FileMemoryManager implements IMemoryManager {
       index: this.index.serialize(),
     };
 
-    await writeFile(
-      join(this.dbPath, "memory.json"),
-      JSON.stringify(persisted),
-      "utf-8"
-    );
-
+    // Clear the flag before the write: a change made while it is in flight
+    // marks the store dirty again instead of being forgotten.
     this.dirty = false;
+    try {
+      // Atomic: a crash mid-write used to leave truncated JSON (MEM-13).
+      await writeFileAtomic(join(this.dbPath, "memory.json"), JSON.stringify(persisted));
+    } catch (error) {
+      this.dirty = true;
+      throw error;
+    }
+
     const logger = getLogger();
     logger.debug("Memory flushed to disk", { entries: this.entries.length });
   }

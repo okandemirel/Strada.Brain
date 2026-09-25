@@ -1,11 +1,32 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { moveAsideCorruptFileSync, writeFileAtomicSync } from "../common/atomic-file.js";
 import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "./rag.interface.js";
 import { collectIndexedFiles } from "./rag.interface.js";
 import { getLogger } from "../utils/logger.js";
 
 const CHUNKS_FILE = "chunks.json";
 const VECTORS_FILE = "vectors.bin";
+/**
+ * Written after chunks.json and vectors.bin, holding a hash of each: the pair
+ * is saved as two files, and a crash between them used to leave every chunk
+ * silently paired with another chunk's vector (MEM-13). A mismatch on load
+ * means the two came from different saves.
+ */
+const MANIFEST_FILE = "store-manifest.json";
+
+interface StoreManifest {
+  version: 1;
+  count: number;
+  dimensions: number;
+  chunksSha256: string;
+  vectorsSha256: string;
+}
+
+function sha256(data: Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
+}
 const FLUSH_DEBOUNCE_MS = 5_000;
 const HNSW_M = 16; // Number of bi-directional links for each element
 const HNSW_EF_CONSTRUCTION = 200; // Size of dynamic list for nearest neighbors
@@ -542,10 +563,11 @@ export class FileVectorStore implements IVectorStore {
     }
 
     try {
-      const chunksRaw = readFileSync(chunksPath, "utf8");
-      this.chunks = JSON.parse(chunksRaw) as CodeChunk[];
-
+      const chunksBuf = readFileSync(chunksPath);
       const vectorsBuf = readFileSync(vectorsPath);
+      const chunks = JSON.parse(chunksBuf.toString("utf8")) as CodeChunk[];
+      this.assertConsistentPair(chunks, chunksBuf, vectorsBuf);
+      this.chunks = chunks;
       this.vectors = new Float32Array(
         vectorsBuf.buffer,
         vectorsBuf.byteOffset,
@@ -559,15 +581,40 @@ export class FileVectorStore implements IVectorStore {
         count: this.chunks.length,
       });
     } catch (err) {
-      getLogger().error("[FileVectorStore] Failed to load from disk, starting empty", {
+      // Keep the unusable files for inspection rather than overwriting them
+      // with the next save; the index is derived data and the next indexing
+      // pass rebuilds it.
+      const preserved = [chunksPath, vectorsPath, join(this.storePath, MANIFEST_FILE)]
+        .filter((path) => existsSync(path))
+        .map((path) => moveAsideCorruptFileSync(path) ?? `${path} (could not be moved aside)`);
+      getLogger().error("[FileVectorStore] Stored index is unusable, starting empty", {
         storePath: this.storePath,
-        err,
+        error: err instanceof Error ? err.message : String(err),
+        preserved,
       });
       this.chunks = [];
       this.vectors = new Float32Array(0);
       this.idIndex = new Map();
       this.fileIndex = new Map();
       this.hnswIndex.clear();
+    }
+  }
+
+  /** Throws when chunks.json and vectors.bin cannot belong to the same save. */
+  private assertConsistentPair(chunks: unknown, chunksBuf: Buffer, vectorsBuf: Buffer): void {
+    if (!Array.isArray(chunks)) throw new Error(`${CHUNKS_FILE} does not hold a chunk list`);
+    const expectedBytes = chunks.length * this.dimensions * 4;
+    if (vectorsBuf.byteLength !== expectedBytes) {
+      throw new Error(
+        `${VECTORS_FILE} holds ${vectorsBuf.byteLength} bytes; ${chunks.length} chunks at ${this.dimensions} dimensions need ${expectedBytes}`,
+      );
+    }
+    const manifestPath = join(this.storePath, MANIFEST_FILE);
+    // A store saved before the manifest existed only gets the size check.
+    if (!existsSync(manifestPath)) return;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Partial<StoreManifest>;
+    if (manifest.chunksSha256 !== sha256(chunksBuf) || manifest.vectorsSha256 !== sha256(vectorsBuf)) {
+      throw new Error(`${CHUNKS_FILE} and ${VECTORS_FILE} come from different saves`);
     }
   }
 
@@ -808,14 +855,24 @@ export class FileVectorStore implements IVectorStore {
       const chunksPath = join(this.storePath, CHUNKS_FILE);
       const vectorsPath = join(this.storePath, VECTORS_FILE);
 
-      writeFileSync(chunksPath, JSON.stringify(this.chunks), "utf8");
-
-      const buf = Buffer.from(
+      const chunksBuf = Buffer.from(JSON.stringify(this.chunks), "utf8");
+      const vectorsBuf = Buffer.from(
         this.vectors.buffer,
         this.vectors.byteOffset,
         this.vectors.byteLength,
       );
-      writeFileSync(vectorsPath, buf);
+      const manifest: StoreManifest = {
+        version: 1,
+        count: this.chunks.length,
+        dimensions: this.dimensions,
+        chunksSha256: sha256(chunksBuf),
+        vectorsSha256: sha256(vectorsBuf),
+      };
+      // Each file is replaced atomically, and the manifest goes last: a crash
+      // anywhere before it is caught on load (see MANIFEST_FILE).
+      writeFileAtomicSync(vectorsPath, vectorsBuf);
+      writeFileAtomicSync(chunksPath, chunksBuf);
+      writeFileAtomicSync(join(this.storePath, MANIFEST_FILE), JSON.stringify(manifest));
 
       this.dirty = false;
       getLogger().debug("[FileVectorStore] Flushed to disk", {

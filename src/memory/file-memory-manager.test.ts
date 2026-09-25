@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FileMemoryManager } from "./file-memory-manager.js";
 import { withTempDir } from "../test-helpers.js";
-import { readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import { unwrap, isOk, isSome, isNone, unwrapOption } from "../types/index.js";
@@ -598,6 +598,68 @@ describe("storeNote ownership (Codex round 7 #19)", () => {
       const hits = unwrap(await reopened.retrieve({ mode: "text", query: "inventory ScriptableObject", scope: { chatId: "any-chat" as never } }));
       expect(hits.map((r) => r.entry.id)).toEqual([sharedId]);
       await reopened.shutdown();
+    });
+  });
+});
+
+describe("memory.json persistence safety (MEM-13)", () => {
+  it("moves an unparseable memory.json aside instead of overwriting it on the next save", async () => {
+    await withTempDir(async (dir) => {
+      const dbPath = join(dir, "db");
+      const mm1 = new FileMemoryManager(dbPath);
+      await mm1.initialize();
+      await mm1.storeNote("the only copy of a precious memory");
+      await mm1.shutdown();
+      const original = await readFile(join(dbPath, "memory.json"), "utf-8");
+      // A crash mid-write left truncated JSON behind.
+      const truncated = original.slice(0, Math.floor(original.length / 2));
+      await writeFile(join(dbPath, "memory.json"), truncated, "utf-8");
+
+      const mm2 = new FileMemoryManager(dbPath);
+      await mm2.initialize();
+      await mm2.storeNote("written after the crash");
+      await mm2.shutdown();
+
+      const aside = (await readdir(dbPath)).filter((name) => name.startsWith("memory.json.corrupt-"));
+      expect(aside).toHaveLength(1);
+      // The damaged bytes are preserved for recovery, untouched by the save.
+      expect(await readFile(join(dbPath, aside[0]!), "utf-8")).toBe(truncated);
+      const saved = JSON.parse(await readFile(join(dbPath, "memory.json"), "utf-8")) as { entries: unknown[] };
+      expect(saved.entries).toHaveLength(1);
+    });
+  });
+
+  it("moves a memory.json of an unknown format aside too", async () => {
+    await withTempDir(async (dir) => {
+      const dbPath = join(dir, "db");
+      await mkdir(dbPath, { recursive: true });
+      const future = JSON.stringify({ version: 2, records: [{ id: "x" }] });
+      await writeFile(join(dbPath, "memory.json"), future, "utf-8");
+
+      const mm = new FileMemoryManager(dbPath);
+      await mm.initialize();
+      await mm.storeNote("new note");
+      await mm.shutdown();
+
+      const aside = (await readdir(dbPath)).filter((name) => name.startsWith("memory.json.corrupt-"));
+      expect(aside).toHaveLength(1);
+      expect(await readFile(join(dbPath, aside[0]!), "utf-8")).toBe(future);
+    });
+  });
+
+  it("serializes overlapping saves and leaves no temp files behind", async () => {
+    await withTempDir(async (dir) => {
+      const dbPath = join(dir, "db");
+      const mm = new FileMemoryManager(dbPath);
+      await mm.initialize();
+      for (let i = 0; i < 20; i++) await mm.storeNote(`note number ${i} about combat systems`);
+      // compact() and shutdown() both flush; run them together.
+      await Promise.all([mm.compact(), mm.shutdown()]);
+
+      const names = await readdir(dbPath);
+      expect(names.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      const saved = JSON.parse(await readFile(join(dbPath, "memory.json"), "utf-8")) as { entries: unknown[] };
+      expect(saved.entries).toHaveLength(20);
     });
   });
 });
