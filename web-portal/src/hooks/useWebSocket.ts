@@ -78,6 +78,16 @@ function storageRemove(key: string): void {
   }
 }
 
+/**
+ * The message a stream writes to. While a stored session is on screen the live
+ * one is set aside in `liveMessages`, and its stream must keep going (WEB-11).
+ */
+function findStreamMessage(streamId: string): ChatMessage | undefined {
+  const { messages, liveMessages } = useSessionStore.getState()
+  return messages.find((m) => m.streamId === streamId)
+    ?? liveMessages?.find((m) => m.streamId === streamId)
+}
+
 function readStoredChatId(): string | null {
   return storageGet(CHAT_ID_STORAGE_KEY)
 }
@@ -251,7 +261,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const markAllPendingMessagesFailed = useCallback(() => {
     const store = useSessionStore.getState()
-    for (const message of store.messages) {
+    for (const message of [...store.messages, ...(store.liveMessages ?? [])]) {
       if (message.sender === 'user' && message.deliveryState === 'pending') {
         markMessageFailed(message.id)
       }
@@ -419,18 +429,12 @@ export function useWebSocket(): UseWebSocketReturn {
       // Fix 6.3: Reset typing indicator on disconnect
       useSessionStore.getState().setTyping(false)
 
-      // Fix 6.2: Complete any orphaned streaming messages
+      // Fix 6.2: Complete any orphaned streaming messages (also the ones set
+      // aside while a stored session is on screen).
       if (streamsRef.current.size > 0) {
         const orphanedStreamIds = new Set(streamsRef.current.keys())
         streamsRef.current.clear()
-        const store = useSessionStore.getState()
-        store.setMessages(
-          store.messages.map((msg) =>
-            msg.streamId && orphanedStreamIds.has(msg.streamId)
-              ? { ...msg, isStreaming: false }
-              : msg,
-          ),
-        )
+        useSessionStore.getState().endStreams(orphanedStreamIds)
       }
 
       // Another tab took this chat with the shared reconnect token. Taking it
@@ -641,7 +645,7 @@ export function useWebSocket(): UseWebSocketReturn {
           const msgIndex = streamIdToIndexRef.current.get(suStreamId)
           const streamMsg = (msgIndex !== undefined && store.messages[msgIndex]?.streamId === suStreamId)
             ? store.messages[msgIndex]
-            : store.messages.find((m) => m.streamId === suStreamId)
+            : findStreamMessage(suStreamId)
           if (streamMsg) {
             if (msgIndex === undefined || store.messages[msgIndex]?.streamId !== suStreamId) {
               const correctIndex = store.messages.findIndex((m) => m.id === streamMsg.id)
@@ -665,7 +669,7 @@ export function useWebSocket(): UseWebSocketReturn {
           const store = useSessionStore.getState()
           const streamMsg = (endIndex !== undefined && store.messages[endIndex]?.streamId === seStreamId)
             ? store.messages[endIndex]
-            : store.messages.find((m) => m.streamId === seStreamId)
+            : findStreamMessage(seStreamId)
           if (streamMsg) {
             if (seText) {
               const streamEndInstinctIds = Array.isArray(data.instinctIds)

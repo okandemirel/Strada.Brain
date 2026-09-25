@@ -9,7 +9,7 @@ import TypingIndicator from './TypingIndicator'
 import EmptyState from './EmptyState'
 import PrimaryWorkerSelector from './PrimaryWorkerSelector'
 import { BlurFade } from './ui/blur-fade'
-import { useSessionStore, type ChatMessage as ChatMessageType } from '../stores/session-store'
+import { useSessionStore } from '../stores/session-store'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
 import { useSessionHistory } from '../hooks/use-session-history'
 import { readSessionMessages, writeSessionMessages } from '../hooks/websocket-storage'
@@ -17,11 +17,8 @@ import { readSessionMessages, writeSessionMessages } from '../hooks/websocket-st
 const VISIBLE_BATCH_SIZE = 50
 
 /* ------------------------------------------------------------------ */
-/*  SessionPicker — module-level state survives unmount/remount        */
+/*  SessionPicker                                                      */
 /* ------------------------------------------------------------------ */
-let savedMessages: ChatMessageType[] | null = null
-let historicalIds = new Set<string>()
-
 function SessionPicker() {
   const { t } = useTranslation()
   const sessions = useSessionHistory()
@@ -44,18 +41,14 @@ function SessionPicker() {
 
   const returnToCurrent = useCallback(() => {
     const store = useSessionStore.getState()
-    if (savedMessages) {
-      const savedIds = new Set(savedMessages.map((m) => m.id))
-      const newFromBackend = store.messages.filter(
-        (m) => !savedIds.has(m.id) && !historicalIds.has(m.id),
-      )
-      store.setMessages([...savedMessages, ...newFromBackend])
-      savedMessages = null
-      historicalIds = new Set()
-    } else {
-      const currentProfileId = store.profileId
-      if (currentProfileId) store.setMessages(readSessionMessages(currentProfileId))
+    // The store keeps the live conversation aside while history is shown and
+    // keeps applying live frames to it (WEB-11).
+    if (store.liveMessages) {
+      store.returnToLiveMessages()
+      return
     }
+    const currentProfileId = store.profileId
+    if (currentProfileId) store.setMessages(readSessionMessages(currentProfileId))
     store.setViewingHistorical(false)
   }, [])
 
@@ -66,15 +59,8 @@ function SessionPicker() {
       return
     }
     const store = useSessionStore.getState()
-    if (!store.viewingHistorical) {
-      savedMessages = store.messages
-      if (profileId) writeSessionMessages(profileId, store.messages)
-      historicalIds = new Set()
-    }
-    const messages = readSessionMessages(sessionKey)
-    for (const m of messages) historicalIds.add(m.id)
-    store.setMessages(messages)
-    store.setViewingHistorical(true)
+    if (!store.viewingHistorical && profileId) writeSessionMessages(profileId, store.messages)
+    store.showHistoricalMessages(readSessionMessages(sessionKey))
     setOpen(false)
   }, [profileId, returnToCurrent])
 

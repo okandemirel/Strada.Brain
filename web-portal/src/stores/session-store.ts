@@ -57,6 +57,13 @@ export interface SessionState {
    */
   sessionTaken: boolean
   viewingHistorical: boolean
+  /**
+   * The live conversation, set aside while a stored session is on screen
+   * (viewingHistorical). Receipts and stream frames for the live chat keep
+   * applying to it: they used to find nothing, so returning showed a stale
+   * snapshot with a stream that never ended (WEB-11).
+   */
+  liveMessages: ChatMessage[] | null
 }
 
 export interface SessionActions {
@@ -72,6 +79,15 @@ export interface SessionActions {
   setReconnectExhausted: (exhausted: boolean) => void
   setSessionTaken: (taken: boolean) => void
   setViewingHistorical: (viewing: boolean) => void
+  /** Show a stored session, keeping the live conversation aside in liveMessages. */
+  showHistoricalMessages: (messages: ChatMessage[]) => void
+  /**
+   * Back to the live conversation, followed by the live messages that arrived
+   * while the stored session was on screen.
+   */
+  returnToLiveMessages: () => void
+  /** Clear isStreaming on the messages of streams that will get no more frames. */
+  endStreams: (streamIds: ReadonlySet<string>) => void
   reset: () => void
   /**
    * Full session logout: clears auth-related localStorage keys,
@@ -93,6 +109,20 @@ const initialState: SessionState = {
   reconnectExhausted: false,
   sessionTaken: false,
   viewingHistorical: false,
+  liveMessages: null,
+}
+
+/** Ids of the stored sessions' messages shown since leaving the live view. */
+let historicalIds = new Set<string>()
+
+function patchMessages(
+  messages: ChatMessage[],
+  id: string,
+  updates: Partial<ChatMessage>,
+): ChatMessage[] {
+  return messages.some((m) => m.id === id)
+    ? messages.map((m) => (m.id === id ? { ...m, ...updates } : m))
+    : messages
 }
 
 export const useSessionStore = create<SessionState & SessionActions>()((set) => ({
@@ -110,14 +140,14 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
 
   updateMessage: (id, updates) =>
     set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === id ? { ...m, ...updates } : m,
-      ),
+      messages: patchMessages(state.messages, id, updates),
+      liveMessages: state.liveMessages && patchMessages(state.liveMessages, id, updates),
     })),
 
   removeMessage: (id) =>
     set((state) => ({
       messages: state.messages.filter((m) => m.id !== id),
+      liveMessages: state.liveMessages && state.liveMessages.filter((m) => m.id !== id),
     })),
 
   setStatus: (status) => set({ status }),
@@ -136,7 +166,41 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
 
   setViewingHistorical: (viewingHistorical) => set({ viewingHistorical }),
 
-  reset: () => set(initialState),
+  showHistoricalMessages: (messages) =>
+    set((state) => {
+      if (!state.viewingHistorical) historicalIds = new Set()
+      for (const m of messages) historicalIds.add(m.id)
+      return {
+        messages,
+        liveMessages: state.viewingHistorical ? state.liveMessages : state.messages,
+        viewingHistorical: true,
+      }
+    }),
+
+  returnToLiveMessages: () =>
+    set((state) => {
+      if (!state.viewingHistorical) return state
+      const live = state.liveMessages ?? []
+      const liveIds = new Set(live.map((m) => m.id))
+      const arrived = state.messages.filter((m) => !liveIds.has(m.id) && !historicalIds.has(m.id))
+      historicalIds = new Set()
+      return { messages: [...live, ...arrived], liveMessages: null, viewingHistorical: false }
+    }),
+
+  endStreams: (streamIds) =>
+    set((state) => {
+      const end = (messages: ChatMessage[]) =>
+        messages.map((m) => (m.streamId && streamIds.has(m.streamId) ? { ...m, isStreaming: false } : m))
+      return {
+        messages: end(state.messages),
+        liveMessages: state.liveMessages && end(state.liveMessages),
+      }
+    }),
+
+  reset: () => {
+    historicalIds = new Set()
+    set(initialState)
+  },
 
   logout: () => {
     // 1. Clear auth-related localStorage keys
@@ -147,6 +211,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
     }
 
     // 2. Reset session store to initial state
+    historicalIds = new Set()
     set(initialState)
 
     // 3. Invoke registered logout hooks (WebSocket disconnect, sibling store resets, etc.)
