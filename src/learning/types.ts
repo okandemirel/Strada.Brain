@@ -710,7 +710,10 @@ export const DEFAULT_LEARNING_CONFIG: LearningConfig = {
   batchSize: 10,
   detectionIntervalMs: 5 * 60 * 1000 as DurationMs, // 5 minutes
   evolutionIntervalMs: 60 * 60 * 1000 as DurationMs, // 1 hour
-  minConfidenceForCreation: 0.6 as NormalizedScore,
+  // At most CONFIDENCE_THRESHOLDS.MAX_INITIAL, the cap every new instinct's
+  // confidence starts under: 0.6 rejected everything (LRN-20). The value
+  // bootstrap uses (LEARNING_DEFAULTS).
+  minConfidenceForCreation: 0.4 as NormalizedScore,
   maxInstincts: 1000,
   enabled: true,
   strategy: "periodic",

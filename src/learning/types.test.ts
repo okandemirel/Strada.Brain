@@ -29,7 +29,8 @@ describe("Learning Types", () => {
       expect(DEFAULT_LEARNING_CONFIG.dbPath).toBe("./data/learning.db");
       expect(DEFAULT_LEARNING_CONFIG.batchSize).toBe(10);
       expect(DEFAULT_LEARNING_CONFIG.enabled).toBe(true);
-      expect(DEFAULT_LEARNING_CONFIG.minConfidenceForCreation).toBe(0.6);
+      // LRN-20: at most the initial confidence cap, or nothing is ever created.
+      expect(DEFAULT_LEARNING_CONFIG.minConfidenceForCreation).toBeLessThanOrEqual(CONFIDENCE_THRESHOLDS.MAX_INITIAL);
       expect(DEFAULT_LEARNING_CONFIG.maxInstincts).toBe(1000);
     });
 

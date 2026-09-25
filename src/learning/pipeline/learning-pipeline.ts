@@ -908,6 +908,14 @@ export class LearningPipeline {
   ) {
     this.storage = storage;
     this.config = { ...DEFAULT_LEARNING_CONFIG, ...config };
+    // A creation gate above the initial-confidence cap rejects every instinct
+    // (LRN-20): refuse the configuration instead of learning nothing silently.
+    if (this.config.minConfidenceForCreation > CONFIDENCE_THRESHOLDS.MAX_INITIAL) {
+      throw new RangeError(
+        `minConfidenceForCreation (${this.config.minConfidenceForCreation}) is above the initial confidence cap ` +
+          `(${CONFIDENCE_THRESHOLDS.MAX_INITIAL}), so no instinct could ever be created`,
+      );
+    }
     this.bayesianConfig = bayesianConfig ?? DEFAULT_BAYESIAN_CONFIG;
     this.confidenceScorer = new ConfidenceScorer();
     this.autoEvolveBar = reachableAutoEvolveBar(this.bayesianConfig, this.confidenceScorer);

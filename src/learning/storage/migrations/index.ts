@@ -8,7 +8,7 @@
  * Design: Phases 17 and 19 can reuse this runner with their own migrations.
  */
 
-import { copyFileSync, existsSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
 import type Database from "better-sqlite3";
 
@@ -105,7 +105,10 @@ export class MigrationRunner {
     }
 
     const backupPath = this.dbPath + ".bak-" + Date.now();
-    copyFileSync(this.dbPath, backupPath);
+    // Through the open connection, not a file copy (LRN-20): in WAL mode the
+    // latest commits can still be in the -wal file, which copying the main
+    // file alone leaves out of the backup.
+    this.db.prepare("VACUUM INTO ?").run(backupPath);
   }
 
   /**
