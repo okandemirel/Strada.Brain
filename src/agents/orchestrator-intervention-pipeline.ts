@@ -1344,6 +1344,10 @@ export async function resolveVerifierIntervention(
   const buildVerificationGate = params.selfVerification.needsVerification()
     ? params.selfVerification.getPrompt()
     : null;
+  // The conformance rules sweep Assets/; read it with fs.promises first so the
+  // synchronous getPrompt() does not stall every channel (AUT-15). On failure
+  // getPrompt() simply measures synchronously, as it always did.
+  await params.stradaConformance.prepare?.().catch(() => undefined);
   const conformanceGate = params.stradaConformance.getPrompt();
   if (conformanceGate !== null) {
     // Gates were invisible: their text goes into the model's context and nowhere

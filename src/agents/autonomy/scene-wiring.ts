@@ -57,11 +57,15 @@ const defaultIo: SceneWiringIo = {
  * pack of textures cannot exhaust it before the files a rule actually reads;
  * traversal itself stays hard-capped so a stray Library/ cannot hang a check.
  */
-function walk(dir: string, match?: (file: string) => boolean, budget = 12_000): string[] {
+/** The default walk's match budget and visit cap; a replayed walk (project-walk.ts) uses the same. */
+export const SCENE_WALK_BUDGET = 12_000;
+export const SCENE_WALK_VISIT_CAP = 60_000;
+
+function walk(dir: string, match?: (file: string) => boolean, budget = SCENE_WALK_BUDGET): string[] {
   const out: string[] = [];
   const stack = [dir];
   let visited = 0;
-  while (stack.length > 0 && out.length < budget && visited < 60_000) {
+  while (stack.length > 0 && out.length < budget && visited < SCENE_WALK_VISIT_CAP) {
     const current = stack.pop()!;
     let entries: string[];
     try {

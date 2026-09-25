@@ -387,3 +387,30 @@ describe("a converted table's blank lines (Codex 2026-09-12 AC)", () => {
     expect(thenProse.partial).toBeUndefined();
   });
 });
+
+describe("the spec-scope code walk is bounded (AUT-15)", () => {
+  // It had no budget at all: two links back to Assets/ made one synchronous
+  // call walk 2^40 paths. Bounded, it stops — and says its corpus is partial,
+  // so nothing it did not read is reported missing by the conformance gate.
+  it.skipIf(process.platform === "win32")("stops on a symlink cycle and reports a partial corpus", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "spec-scope-loop-"));
+    try {
+      mkdirSync(join(root, "docs"), { recursive: true });
+      writeFileSync(join(root, "docs", "GDD.md"), GDD_SNIPPET);
+      const assets = join(root, "Assets");
+      mkdirSync(assets, { recursive: true });
+      writeFileSync(join(assets, "IceBlock.cs"), "public class IceBlock {}");
+      symlinkSync(assets, join(assets, "a"), "dir");
+      symlinkSync(assets, join(assets, "b"), "dir");
+
+      const report = assessSpecScope(root);
+      expect(report.scheduled).toBe(4);
+      expect(report.corpusPartial).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});

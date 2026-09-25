@@ -302,6 +302,11 @@ export interface SpecCoverageReport {
    * complete, hiding every element below the break (Codex 2026-09-12 AC J1).
    */
   readonly schedulePartial?: boolean;
+  /**
+   * Set when the code walk stopped on its budget: an element reported missing
+   * may be implemented in a file that was never read.
+   */
+  readonly corpusPartial?: boolean;
 }
 
 /**
@@ -337,7 +342,8 @@ export function assessSpecScope(
   }
 
   const assetsRoot = join(projectPath, "Assets");
-  const files = (listFiles?.(assetsRoot) ?? walkCs(assetsRoot)).filter((f) => f.endsWith(".cs"));
+  const walked = listFiles ? { files: listFiles(assetsRoot), truncated: false } : walkCs(assetsRoot);
+  const files = walked.files.filter((f) => f.endsWith(".cs"));
   const rawCorpus = files
     .map((f) => {
       try {
@@ -393,15 +399,27 @@ export function assessSpecScope(
     missing,
     gddPath: doc,
     ...(read.partial === true ? { schedulePartial: true } : {}),
+    ...(walked.truncated ? { corpusPartial: true } : {}),
   };
 }
 
-function walkCs(root: string): string[] {
+/** How many .cs files, and directory entries, the spec-scope walk reads before it stops. */
+export const SPEC_SCOPE_CS_BUDGET = 20_000;
+export const SPEC_SCOPE_VISIT_CAP = 120_000;
+
+/**
+ * Every .cs under `root`, bounded. The walk had no budget at all, so a
+ * symlink loop or a vendored tree made one synchronous call walk without end
+ * (audited 2026-09-25). `truncated` says the corpus is partial.
+ */
+function walkCs(root: string): { files: string[]; truncated: boolean } {
   const out: string[] = [];
   const stack = [root];
-  while (stack.length > 0) {
+  let visited = 0;
+  while (stack.length > 0 && out.length < SPEC_SCOPE_CS_BUDGET && visited < SPEC_SCOPE_VISIT_CAP) {
     const dir = stack.pop()!;
     for (const entry of safeReaddir(dir)) {
+      visited++;
       const p = join(dir, entry);
       const st = statSafe(p);
       if (st === null) continue;
@@ -409,5 +427,5 @@ function walkCs(root: string): string[] {
       else if (/\.cs$/i.test(entry)) out.push(p);
     }
   }
-  return out;
+  return { files: out, truncated: stack.length > 0 };
 }

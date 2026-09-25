@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, promises as fsp, readdirSync, readFileSync, statSync } from "node:fs";
 import { assessSpecScope } from "./spec-scope.js";
 import { elementCodeTokens, extractScheduledElements, findDesignDoc } from "./spec-scope.js";
 import { createHash } from "node:crypto";
@@ -90,27 +90,104 @@ function walkFilesWithStatus(
   return { files: out, truncated: stack.length > 0 };
 }
 
-/** Does any .asset under Assets point at this script's guid? */
-function anyAssetReferences(assetsRoot: string, guid: string): boolean {
+/** Every guid the .asset files under Assets name, and whether the walk saw them all. */
+interface AssetGuidCensus {
+  readonly guids: ReadonlySet<string>;
+  readonly truncated: boolean;
+}
+
+/** Walk limits of the .asset census: budget counts .asset files (see below). */
+const ASSET_CENSUS_BUDGET = 20_000;
+/** The visit cap walkFilesWithStatus applies, and the snapshot prepare() records. */
+const CONFORMANCE_WALK_VISIT_CAP = 60_000;
+const GUID_TOKEN_RE = /(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/gu;
+
+function addGuidTokens(text: string, into: Set<string>): void {
+  for (const m of text.matchAll(GUID_TOKEN_RE)) into.add(m[0]);
+}
+
+/**
+ * Which guids do the .asset files under Assets point at?
+ *
+ * Read once per census and shared by every config the prefab rule judges.
+ * The rule used to walk and read every .asset again for EACH script
+ * (audited 2026-09-25: scripts × assets synchronous reads on every draft).
+ */
+function assetReferencedGuids(assetsRoot: string): AssetGuidCensus {
   // Filtered INSIDE the walk so the budget counts .asset files, not every
   // texture and .meta of an imported pack (audited 2026-09-02: an unfiltered
   // 4000-file walk never reached the module's own .asset and accused a bound
   // config of being unbound).
-  const walk = walkFilesWithStatus(assetsRoot, 20_000, (f) => f.endsWith(".asset"));
+  const walk = walkFilesWithStatus(assetsRoot, ASSET_CENSUS_BUDGET, (f) => f.endsWith(".asset"));
+  const guids = new Set<string>();
   for (const file of walk.files) {
     try {
-      if (readFileSync(file, "utf8").includes(guid)) return true;
+      addGuidTokens(readFileSync(file, "utf8"), guids);
     } catch {
       // Unreadable asset: cannot prove a reference, keep looking.
     }
   }
-  if (walk.truncated) {
-    // Not every .asset was read, so "nothing references it" is not known.
-    // Absence of evidence is not evidence: say referenced rather than accuse.
-    debugLog("Asset-reference walk truncated; not accusing", { assetsRoot, guid });
-    return true;
+  return { guids, truncated: walk.truncated };
+}
+
+/** Every guid a .meta under these roots declares, and whether every .meta was read. */
+interface KnownGuidCensus {
+  readonly known: ReadonlySet<string>;
+  readonly complete: boolean;
+}
+
+const META_CENSUS_BUDGET = 60_000;
+
+function knownGuidCensus(bases: readonly string[]): KnownGuidCensus {
+  const known = new Set<string>();
+  let complete = true;
+  for (const base of bases) {
+    if (!existsSync(base)) continue;
+    // Filtered INSIDE the walk so the budget counts .meta files. Audited
+    // 2026-09-02: the unfiltered default 4000-file walk was filled by the
+    // first ~2000 assets of an imported pack, every later .meta went unread,
+    // and a valid reference was accused of dangling — by a gate with no ask
+    // budget, which then hid every real gate behind it for the whole run.
+    const walk = walkFilesWithStatus(base, META_CENSUS_BUDGET, (f) => f.endsWith(".meta"));
+    if (walk.truncated) complete = false;
+    for (const file of walk.files) {
+      try {
+        const g = /guid:\s*([a-f0-9]{32})/u.exec(readFileSync(file, "utf8"))?.[1];
+        if (g) known.add(g);
+      } catch {
+        // Unreadable meta: cannot learn its guid, so cannot judge it.
+      }
+    }
   }
-  return false;
+  return { known, complete };
+}
+
+/** The same census, walked and read with fs.promises (see StradaConformanceGuard.prepare). */
+async function knownGuidCensusAsync(bases: readonly string[], assets: TreeSnapshot): Promise<KnownGuidCensus> {
+  const known = new Set<string>();
+  let complete = true;
+  for (const base of bases) {
+    let snapshot = assets.root === base ? assets : null;
+    if (snapshot === null) {
+      try {
+        await fsp.access(base);
+      } catch {
+        continue;
+      }
+      snapshot = await snapshotTree(base, CONFORMANCE_WALK_VISIT_CAP);
+    }
+    const walk = snapshot.replay(base, (f) => f.endsWith(".meta"), {
+      budget: META_CENSUS_BUDGET,
+      visitCap: CONFORMANCE_WALK_VISIT_CAP,
+      followLinks: false,
+    });
+    if (walk.truncated) complete = false;
+    await forEachFileText(walk.files, (_file, text) => {
+      const g = text === null ? undefined : /guid:\s*([a-f0-9]{32})/u.exec(text)?.[1];
+      if (g) known.add(g);
+    });
+  }
+  return { known, complete };
 }
 
 /**
@@ -134,7 +211,15 @@ function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
-import { assessFrameworkBypass, assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
+import {
+  assessFrameworkBypass,
+  assessSceneWiring,
+  assessViewLayer,
+  SCENE_WALK_BUDGET,
+  SCENE_WALK_VISIT_CAP,
+  type SceneWiringIo,
+} from "./scene-wiring.js";
+import { cachedReadFile, forEachFileText, snapshotTree, type TreeSnapshot } from "./project-walk.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePaths } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
@@ -348,6 +433,12 @@ const NOTHING_DRAWN_GATE_LIMIT = 3;
  * recovery blocked the run (audited 2026-09-24).
  */
 const GATE_ASK_LIMIT = 3;
+/**
+ * How long a census stays good with no tool call in between: long enough to
+ * cover one verifier intervention and the delivery check after it, short
+ * enough that an edit made outside the run is seen on the next draft.
+ */
+const CENSUS_TTL_MS = 30_000;
 
 /** What a budgeted gate says when it asks for the last time. */
 function lastAskNote(asked: { last: boolean }): string {
@@ -554,6 +645,16 @@ export class StradaConformanceGuard {
    */
   private readonly writtenSources = new Set<string>();
   private toolCallsSeen = 0;
+  /**
+   * What the rules measured on disk, for as long as nothing can have changed
+   * it: the same generation (no tool call since) and younger than
+   * CENSUS_TTL_MS. getPrompt(), alsoOpen() and unmetDeliveryConditions() used
+   * to repeat every sweep of Assets/ within one verifier intervention
+   * (audited 2026-09-25).
+   */
+  private census: { generation: number; at: number; values: Map<string, unknown> } | null = null;
+  /** Bumped by every trackToolCall(), tracked or not: any tool may have written. */
+  private generation = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
   /**
@@ -593,6 +694,7 @@ export class StradaConformanceGuard {
     isError = false,
     output = "",
   ): void {
+    this.generation += 1;
     if (!hasAuthoritativeSource(this.deps)) {
       return;
     }
@@ -684,6 +786,107 @@ export class StradaConformanceGuard {
         this.consultedAuthoritativeSource = true;
       }
     }
+  }
+
+  /** The current census, started afresh when a tool ran or it aged out. */
+  private currentCensus(): Map<string, unknown> {
+    const now = Date.now();
+    if (this.census === null || this.census.generation !== this.generation || now - this.census.at > CENSUS_TTL_MS) {
+      this.census = { generation: this.generation, at: now, values: new Map() };
+    }
+    return this.census.values;
+  }
+
+  /** A rule's measurement, taken once per census. */
+  private cached<T>(name: string, compute: () => T): T {
+    const values = this.currentCensus();
+    if (values.has(name)) return values.get(name) as T;
+    const value = compute();
+    values.set(name, value);
+    return value;
+  }
+
+  /** The scene rules' walk, replayed from the snapshot prepare() took, when there is one. */
+  private sceneIo(): SceneWiringIo | undefined {
+    const prepared = this.currentCensus().get("scene-io") as
+      | { snapshot: TreeSnapshot; texts: ReadonlyMap<string, string> }
+      | undefined;
+    if (prepared === undefined) return undefined;
+    return {
+      listFiles: (dir, match) =>
+        prepared.snapshot.replay(dir, match, {
+          budget: SCENE_WALK_BUDGET,
+          visitCap: SCENE_WALK_VISIT_CAP,
+          followLinks: true,
+        }).files,
+      readFile: (path) => cachedReadFile(prepared.texts, path),
+      exists: (path) => existsSync(path),
+    };
+  }
+
+  /**
+   * Do the bulk of the next getPrompt()'s disk work now, with fs.promises.
+   *
+   * getPrompt() is synchronous and runs on the event loop that serves every
+   * channel; on a project with an imported asset pack its sweeps of Assets/
+   * (tens of thousands of readdir/stat/read calls) stalled the daemon for
+   * seconds on every completion draft (audited 2026-09-25). This walks the
+   * tree and reads the .meta/.asset/.cs files those sweeps need, awaiting
+   * each one, and leaves the results in the census getPrompt() reads. A tool
+   * call in the meantime makes them stale, and getPrompt() measures afresh.
+   */
+  async prepare(): Promise<void> {
+    if (!this.isEnabled()) return;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return;
+    const moduleRules = this.touchedModuleRoots.size > 0;
+    if (!moduleRules && !this.wroteProjectCode) return;
+    const assetsRoot = joinPath(projectPath, "Assets");
+    try {
+      await fsp.access(assetsRoot);
+    } catch {
+      return;
+    }
+    const generation = this.generation;
+    const values = this.currentCensus();
+    if (values.has("scene-io")) return;
+
+    const snapshot = await snapshotTree(assetsRoot, CONFORMANCE_WALK_VISIT_CAP);
+    const texts = new Map<string, string>();
+    const sources = snapshot.replay(assetsRoot, (f) => f.endsWith(".cs") && !isVendorPath(f), {
+      budget: SCENE_WALK_BUDGET,
+      visitCap: SCENE_WALK_VISIT_CAP,
+      followLinks: true,
+    });
+    await forEachFileText(sources.files, (file, text) => {
+      if (text !== null) texts.set(file, text);
+    });
+
+    let references: AssetGuidCensus | undefined;
+    let known: KnownGuidCensus | undefined;
+    if (moduleRules) {
+      const assets = snapshot.replay(assetsRoot, (f) => f.endsWith(".asset"), {
+        budget: ASSET_CENSUS_BUDGET,
+        visitCap: CONFORMANCE_WALK_VISIT_CAP,
+        followLinks: false,
+      });
+      const guids = new Set<string>();
+      await forEachFileText(assets.files, (_file, text) => {
+        if (text !== null) addGuidTokens(text, guids);
+      });
+      references = { guids, truncated: assets.truncated };
+      known = await knownGuidCensusAsync(
+        [assetsRoot, joinPath(projectPath, "Packages"), joinPath(projectPath, "Library", "PackageCache")],
+        snapshot,
+      );
+    }
+
+    // A tool ran while this was reading: what was read may already be stale.
+    if (generation !== this.generation) return;
+    const fresh = this.currentCensus();
+    fresh.set("scene-io", { snapshot, texts });
+    if (references) fresh.set("asset-ref-guids", references);
+    if (known) fresh.set("known-guids", known);
   }
 
   /** Whether this guard will ever raise a gate — false for a run that opted out (see conformanceAppliesTo). */
@@ -849,7 +1052,8 @@ export class StradaConformanceGuard {
     if (!existsSync(joinPath(projectPath, "Assets"))) return null;
     try {
       const report = assessSpecScope(projectPath);
-      if (report.scheduled === 0 || report.missing.length === 0) return null;
+      // A partial code corpus cannot prove an element absent.
+      if (report.scheduled === 0 || report.missing.length === 0 || report.corpusPartial === true) return null;
       const names = report.missing
         .slice(0, 8)
         .map((m) => `${m.name} (${m.unlock})`)
@@ -968,26 +1172,9 @@ export class StradaConformanceGuard {
       debugLog("Registry packages not cached; not judging dangling references", { projectPath });
       return [];
     }
-    const known = new Set<string>();
-    let censusComplete = true;
-    for (const base of [assetsRoot, joinPath(projectPath, "Packages"), packageCache]) {
-      if (!existsSync(base)) continue;
-      // Filtered INSIDE the walk so the budget counts .meta files. Audited
-      // 2026-09-02: the unfiltered default 4000-file walk was filled by the
-      // first ~2000 assets of an imported pack, every later .meta went unread,
-      // and a valid reference was accused of dangling — by a gate with no ask
-      // budget, which then hid every real gate behind it for the whole run.
-      const walk = walkFilesWithStatus(base, 60_000, (f) => f.endsWith(".meta"));
-      if (walk.truncated) censusComplete = false;
-      for (const file of walk.files) {
-        try {
-          const g = /guid:\s*([a-f0-9]{32})/u.exec(readFileSync(file, "utf8"))?.[1];
-          if (g) known.add(g);
-        } catch {
-          // Unreadable meta: cannot learn its guid, so cannot judge it.
-        }
-      }
-    }
+    const { known, complete: censusComplete } = this.cached("known-guids", () =>
+      knownGuidCensus([assetsRoot, joinPath(projectPath, "Packages"), packageCache]),
+    );
     if (known.size === 0) return [];
     if (!censusComplete) {
       // A truncated census cannot tell a missing guid from an unread one.
@@ -1059,7 +1246,14 @@ export class StradaConformanceGuard {
         }
         if (!guid) continue;
 
-        if (!anyAssetReferences(assetsRoot, guid)) {
+        const references = this.cached("asset-ref-guids", () => assetReferencedGuids(assetsRoot));
+        if (references.truncated) {
+          // Not every .asset was read, so "nothing references it" is not known.
+          // Absence of evidence is not evidence: say referenced rather than accuse.
+          debugLog("Asset-reference walk truncated; not accusing", { assetsRoot, guid });
+          continue;
+        }
+        if (!references.guids.has(guid)) {
           const name = script.split(/[/\\]/u).pop()?.replace(/\.cs$/u, "") ?? script;
           out.push(`${name} (${prefabFields.length} prefab field(s), no .asset instance)`);
         }
@@ -1201,7 +1395,7 @@ export class StradaConformanceGuard {
     // of evidence, and this rule accuses only on evidence.
     if (!existsSync(joinPath(projectPath, "Assets"))) return null;
     try {
-      return assessSceneWiring(projectPath);
+      return assessSceneWiring(projectPath, this.sceneIo());
     } catch {
       // An unreadable project is not evidence that the game is unwired.
       return null;
@@ -1225,7 +1419,7 @@ export class StradaConformanceGuard {
     // to stop reimplementing spent that time building a fourth
     // service-and-system pair for rendering, never having heard that nothing in
     // the project could render at all.
-    return this.assessBypass().length === 0
+    return this.cached("bypass", () => this.assessBypass()).length === 0
       ? ""
       : " Also still true, and not fixed by adding views: this project reimplements " +
         "subsystems Strada.Core provides.";
@@ -1238,7 +1432,7 @@ export class StradaConformanceGuard {
     if (!projectPath) return [];
     if (!existsSync(joinPath(projectPath, "Assets"))) return [];
     try {
-      return assessFrameworkBypass(projectPath, undefined, (file) => this.wrote(file));
+      return assessFrameworkBypass(projectPath, this.sceneIo(), (file) => this.wrote(file));
     } catch {
       return [];
     }
@@ -1251,7 +1445,7 @@ export class StradaConformanceGuard {
     if (!projectPath) return null;
     if (!existsSync(joinPath(projectPath, "Assets"))) return null;
     try {
-      return assessViewLayer(projectPath);
+      return assessViewLayer(projectPath, this.sceneIo());
     } catch {
       return null;
     }
@@ -1308,7 +1502,7 @@ export class StradaConformanceGuard {
     // is not yet a finding — a project mid-build is allowed to have nothing in
     // it, and the gates for "not assembled" and "never run" say that better.
     if (!this.wroteProjectCode || !this.attemptedPlaymodeVerification) return null;
-    if (this.projectVisualAssetCount() > 0) return null;
+    if (this.cached("visual-assets", () => this.projectVisualAssetCount()) > 0) return null;
 
     return (
       "this game has been assembled and played, and contains no art whatsoever — " +
@@ -1466,12 +1660,12 @@ export class StradaConformanceGuard {
     // whole schedule, and a sprint that correctly built only its own elements
     // could no longer deliver because later sprints' elements had no art yet.
     const unmet: string[] = [];
-    const notDrawn = this.nothingDrawnReason();
+    const notDrawn = this.cached("nothing-drawn", () => this.nothingDrawnReason());
     if (notDrawn !== null) {
       unmet.push(`the game has never been observed to render: ${notDrawn}`);
     }
 
-    const wiring = this.assessWiring();
+    const wiring = this.cached("wiring", () => this.assessWiring());
     if (wiring && !wiring.wired) {
       unmet.push(
         "this run wrote game code and the project is not a runnable game: " +
@@ -1485,7 +1679,7 @@ export class StradaConformanceGuard {
       );
     }
 
-    const views = this.assessViews();
+    const views = this.cached("views", () => this.assessViews());
     if (views && views.camerslessScenes.length > 0) {
       unmet.push(
         `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn`,
@@ -1499,7 +1693,7 @@ export class StradaConformanceGuard {
     // checked the switch, so a real-tree repair (see conformanceAppliesTo)
     // still got MODULE INCOMPLETE and FILE TOO LONG on every call.
     if (!this.isEnabled()) return null;
-    const incomplete = this.incompleteModules();
+    const incomplete = this.cached("incomplete-modules", () => this.incompleteModules());
     const incompleteAsk = incomplete.length > 0 ? this.ask("module-incomplete", GATE_ASK_LIMIT) : null;
     if (incompleteAsk) {
       return (
@@ -1514,7 +1708,7 @@ export class StradaConformanceGuard {
 
     // Ahead of the coverage gate: a duplicate name means nothing in the project
     // compiles at all, which makes any advice about test coverage moot.
-    const duplicates = this.duplicateAssemblyNames();
+    const duplicates = this.cached("duplicate-assemblies", () => this.duplicateAssemblyNames());
     const duplicateAsk = duplicates.length > 0 ? this.ask("duplicate-assembly", GATE_ASK_LIMIT) : null;
     if (duplicateAsk) {
       return (
@@ -1544,7 +1738,7 @@ export class StradaConformanceGuard {
     // have seen an empty screen. The tests passed because they call services
     // directly and never go through a scene, so nothing above this line could
     // have caught it.
-    const views = this.assessViews();
+    const views = this.cached("views", () => this.assessViews());
     // Ahead of the view question: a scene with no camera draws nothing at all,
     // so views would not help. Measured 2026-08-21: every prefab carried a
     // SpriteRenderer and the only scene held one GameObject and no Camera.
@@ -1587,7 +1781,7 @@ export class StradaConformanceGuard {
     // [Inject] for wiring, a ModuleConfig for registration, and wrote a plain
     // C# game inside the shell. Every rule here passed, because none of them
     // asked what the framework was for.
-    const bypasses = this.assessBypass();
+    const bypasses = this.cached("bypass", () => this.assessBypass());
     const bypassAsk = bypasses.length > 0 ? this.ask("reimplemented", GATE_ASK_LIMIT) : null;
     if (bypassAsk) {
       return (
@@ -1609,7 +1803,7 @@ export class StradaConformanceGuard {
     // general gate cannot.
     // A reference that resolves to nothing, before the broader complaints. The
     // config exists and looks assigned; only the guid says otherwise.
-    const dangling = this.danglingAssetReferences();
+    const dangling = this.cached("dangling", () => this.danglingAssetReferences());
     const danglingAsk = dangling.length > 0 ? this.ask("reference-dangling", GATE_ASK_LIMIT) : null;
     if (danglingAsk) {
       return (
@@ -1625,7 +1819,7 @@ export class StradaConformanceGuard {
     }
 
 
-    const unbound = this.unboundPrefabConfigs();
+    const unbound = this.cached("unbound-prefabs", () => this.unboundPrefabConfigs());
     const unboundAsk = unbound.length > 0 ? this.ask("prefabs-unbound", UNBOUND_PREFABS_GATE_LIMIT) : null;
     if (unboundAsk) {
       const lastAsk = unboundAsk.last;
@@ -1647,7 +1841,7 @@ export class StradaConformanceGuard {
       );
     }
 
-    const wiring = this.assessWiring();
+    const wiring = this.cached("wiring", () => this.assessWiring());
     const wiringAsk = wiring && !wiring.wired ? this.ask("not-assembled", GATE_ASK_LIMIT) : null;
     if (wiring && wiringAsk) {
       return (
@@ -1678,7 +1872,7 @@ export class StradaConformanceGuard {
     //
     // Counting the container rather than its contents is the same mistake as
     // counting compile errors without checking that anything compiled.
-    const empty = this.emptyTestAssemblies();
+    const empty = this.cached("empty-test-assemblies", () => this.emptyTestAssemblies());
     const emptyAsk = empty.length > 0 ? this.ask("test-assembly-empty", GATE_ASK_LIMIT) : null;
     if (emptyAsk) {
       return (
@@ -1696,7 +1890,7 @@ export class StradaConformanceGuard {
     // framework. The limit is a smell threshold, not a style rule: past it, a
     // class is almost always doing several jobs that the pattern set already has
     // homes for.
-    const oversized = this.oversizedSources();
+    const oversized = this.cached("oversized", () => this.oversizedSources());
     const oversizedAsk = oversized.length > 0 ? this.ask("file-too-long", GATE_ASK_LIMIT) : null;
     if (oversizedAsk) {
       return (
@@ -1709,7 +1903,7 @@ export class StradaConformanceGuard {
       );
     }
 
-    const untested = this.untestedAssemblies();
+    const untested = this.cached("untested", () => this.untestedAssemblies());
     const untestedAsk = untested.length > 0 ? this.ask("module-tests-missing", GATE_ASK_LIMIT) : null;
     if (untestedAsk) {
       return (
@@ -1755,7 +1949,7 @@ export class StradaConformanceGuard {
     // exist. SPEC SCOPE checks code against the schedule; this gate checks
     // the schedule against ART — each element needs a sprite that exists AND
     // is bound into something that renders it.
-    const coverage = this.elementAssetCoverageReason();
+    const coverage = this.cached("element-coverage", () => this.elementAssetCoverageReason());
     const coverageAsk = coverage !== null ? this.ask("element-assets", ELEMENT_ASSET_COVERAGE_GATE_LIMIT) : null;
     if (coverageAsk) {
       const lastAsk = coverageAsk.last;
@@ -1779,12 +1973,12 @@ export class StradaConformanceGuard {
     // Last, because it is the least specific complaint: every gate above names
     // something to fix, while this one only knows the outcome. Placed earlier it
     // shadowed all of them.
-    const notDrawn = this.nothingDrawnReason();
+    const notDrawn = this.cached("nothing-drawn", () => this.nothingDrawnReason());
     const drawnAsk = notDrawn !== null ? this.ask("nothing-drawn", NOTHING_DRAWN_GATE_LIMIT) : null;
     if (drawnAsk) {
       const lastAsk = drawnAsk.last;
       return (
-        this.specScopePrompt() ??
+        this.cached("spec-scope", () => this.specScopePrompt()) ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
         "A passing suite proves the simulation, not the picture — measured on this project, 54 " +
         "tests went green while all 120 captured frames were the same empty sky. Run " +
