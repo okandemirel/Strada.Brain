@@ -4,7 +4,7 @@ import { InteractionPolicyStateMachine } from "./interaction-policy.js";
 describe("InteractionPolicyStateMachine", () => {
   it("blocks write operations while explicit plan review is pending", () => {
     const policy = new InteractionPolicyStateMachine();
-    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first");
+    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first", undefined, "user-a");
 
     expect(policy.getWriteBlock("chat-1", true)).toEqual({
       kind: "plan-review-required",
@@ -15,9 +15,9 @@ describe("InteractionPolicyStateMachine", () => {
 
   it("clears a pending plan-review gate after an approval-like user message", () => {
     const policy = new InteractionPolicyStateMachine();
-    policy.requirePlanReview("chat-1", "review the plan before any writes");
+    policy.requirePlanReview("chat-1", "review the plan before any writes", undefined, "user-a");
 
-    const cleared = policy.noteUserMessage("chat-1", "tamam, proceed");
+    const cleared = policy.noteUserMessage("chat-1", "tamam, proceed", "user-a");
 
     expect(cleared).toMatchObject({
       kind: "plan-review-required",
@@ -42,8 +42,8 @@ describe("InteractionPolicyStateMachine", () => {
     ];
     for (const text of feedback) {
       const policy = new InteractionPolicyStateMachine();
-      policy.requirePlanReview("chat-1", "review the plan before any writes");
-      expect(policy.noteUserMessage("chat-1", text), text).toBeNull();
+      policy.requirePlanReview("chat-1", "review the plan before any writes", undefined, "user-a");
+      expect(policy.noteUserMessage("chat-1", text, "user-a"), text).toBeNull();
       expect(policy.getWriteBlock("chat-1", true), text).not.toBeNull();
     }
   });
@@ -61,8 +61,8 @@ describe("InteractionPolicyStateMachine", () => {
     ];
     for (const text of approvals) {
       const policy = new InteractionPolicyStateMachine();
-      policy.requirePlanReview("chat-1", "review the plan before any writes");
-      expect(policy.noteUserMessage("chat-1", text), text).not.toBeNull();
+      policy.requirePlanReview("chat-1", "review the plan before any writes", undefined, "user-a");
+      expect(policy.noteUserMessage("chat-1", text, "user-a"), text).not.toBeNull();
       expect(policy.getWriteBlock("chat-1", true), text).toBeNull();
     }
   });
@@ -73,8 +73,9 @@ describe("InteractionPolicyStateMachine", () => {
       "chat-1",
       "user explicitly asked to review a plan first",
       "Plan: Inspect the failing path\n\nSteps:\n1. Read the logs\n2. Patch the bug",
+      "user-a",
     );
-    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first");
+    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first", undefined, "user-a");
 
     expect(policy.get("chat-1")).toMatchObject({
       kind: "plan-review-required",
@@ -90,7 +91,7 @@ describe("InteractionPolicyStateMachine", () => {
     // already classifies writes from registry metadata and tool shape; the gate
     // must not have a second, narrower opinion.
     const policy = new InteractionPolicyStateMachine();
-    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first");
+    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first", undefined, "user-a");
 
     // A tool name the static list has never heard of, classified as a write by
     // the orchestrator, is blocked exactly like file_write.
@@ -100,5 +101,28 @@ describe("InteractionPolicyStateMachine", () => {
     });
     // No verdict is smuggled in through a tool-name argument.
     expect((policy.getWriteBlock as unknown as (a: string, b: string) => unknown)("chat-1", "file_edit")).toBeNull();
+  });
+
+  it("only the user who asked for the plan can approve it (AUT-9)", () => {
+    // The gate is keyed by chat, so in a shared Discord/Slack channel another member's
+    // "ok" used to approve someone else's plan and unblock writes they never agreed to.
+    const policy = new InteractionPolicyStateMachine();
+    policy.requirePlanReview("chat-1", "review the plan before any writes", "Plan: rename the module", "user-a");
+
+    expect(policy.noteUserMessage("chat-1", "ok", "user-b")).toBeNull();
+    expect(policy.noteUserMessage("chat-1", "Yes, go ahead", "user-b")).toBeNull();
+    expect(policy.getWriteBlock("chat-1", true)).not.toBeNull();
+
+    expect(policy.noteUserMessage("chat-1", "ok", "user-a")).toMatchObject({ requestedBy: "user-a" });
+    expect(policy.getWriteBlock("chat-1", true)).toBeNull();
+  });
+
+  it("a re-parked plan keeps its latest requester", () => {
+    const policy = new InteractionPolicyStateMachine();
+    policy.requirePlanReview("chat-1", "review the plan before any writes", "Plan A", "user-a");
+    policy.requirePlanReview("chat-1", "review the plan before any writes", "Plan B", "user-b");
+
+    expect(policy.noteUserMessage("chat-1", "approve", "user-a")).toBeNull();
+    expect(policy.noteUserMessage("chat-1", "approve", "user-b")).not.toBeNull();
   });
 });

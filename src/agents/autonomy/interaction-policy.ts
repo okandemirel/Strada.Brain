@@ -6,6 +6,11 @@ export interface InteractionGateState {
   readonly requestedAt: number;
   readonly blocksWrite: boolean;
   readonly planText?: string;
+  /**
+   * Identity key of the user who asked for the plan. Only a message from the same identity
+   * approves it; in a shared channel another member's "ok" is not their decision to make.
+   */
+  readonly requestedBy: string;
 }
 
 export interface InteractionWriteBlock {
@@ -69,7 +74,8 @@ function isPlanApprovalMessage(text: string): boolean {
 export class InteractionPolicyStateMachine {
   private readonly gates = new Map<string, InteractionGateState>();
 
-  requirePlanReview(chatId: string, reason: string, planText?: string): void {
+  /** @param requestedBy identity key of the user whose request produced the plan. */
+  requirePlanReview(chatId: string, reason: string, planText: string | undefined, requestedBy: string): void {
     const existingGate = this.gates.get(chatId);
     const normalizedPlanText = planText?.trim() || existingGate?.planText;
     this.gates.set(chatId, {
@@ -78,6 +84,7 @@ export class InteractionPolicyStateMachine {
       requestedAt: Date.now(),
       blocksWrite: true,
       planText: normalizedPlanText,
+      requestedBy,
     });
   }
 
@@ -89,12 +96,13 @@ export class InteractionPolicyStateMachine {
     return this.gates.get(chatId);
   }
 
-  noteUserMessage(chatId: string, text: string): InteractionGateState | null {
+  /** @param senderKey identity key of the message's author (resolved like the requester's). */
+  noteUserMessage(chatId: string, text: string, senderKey: string): InteractionGateState | null {
     const gate = this.gates.get(chatId);
     if (!gate) {
       return null;
     }
-    if (gate.kind === "plan-review-required" && isPlanApprovalMessage(text)) {
+    if (gate.kind === "plan-review-required" && senderKey === gate.requestedBy && isPlanApprovalMessage(text)) {
       this.gates.delete(chatId);
       return gate;
     }

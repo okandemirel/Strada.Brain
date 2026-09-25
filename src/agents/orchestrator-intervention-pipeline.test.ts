@@ -3,6 +3,7 @@ import { AgentPhase, createInitialState, transitionPhase } from "./agent-state.j
 import {
   handleBackgroundLoopRecovery,
   resolveVerifierIntervention,
+  resolveVisibleDraftDecision,
   type InterventionDeps,
 } from "./orchestrator-intervention-pipeline.js";
 import { ControlLoopTracker } from "./autonomy/control-loop-tracker.js";
@@ -407,5 +408,31 @@ describe("arbiter evidence rules (Codex review, 2026-09-07)", () => {
     for (let i = 0; i < 6; i++) base.state.stepResults.push({ toolName: "file_read", success: true, timestamp: Date.now() - 60_000 + i } as (typeof base.state.stepResults)[number]);
     const r = await handleBackgroundLoopRecovery(base, makeDeps());
     expect(r.action).toBe("blocked");
+  });
+});
+
+describe("resolveVisibleDraftDecision plan review", () => {
+  it("parks the plan review for the identity that asked for the plan (AUT-9)", async () => {
+    const deps = makeDeps();
+    const decision = await resolveVisibleDraftDecision({
+      chatId: "chat-1",
+      identityKey: "identity-alice",
+      prompt: "show me your plan before you proceed",
+      draft: "## Plan\n1. First, read the files\n2. Then apply the change",
+      agentState: transitionPhase(createInitialState("show me your plan"), AgentPhase.EXECUTING),
+      strategy: makeStrategy() as never,
+      systemPrompt: "test",
+      selfVerification: new SelfVerification(),
+      taskStartedAtMs: Date.now(),
+      availableToolNames: [],
+    }, deps);
+
+    expect(decision.kind).toBe("plan_review");
+    expect(deps.interactionPolicy.requirePlanReview).toHaveBeenCalledWith(
+      "chat-1",
+      expect.any(String),
+      expect.stringContaining("## Plan"),
+      "identity-alice",
+    );
   });
 });

@@ -495,6 +495,31 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     expect(sm.getPendingPlanReviewVisibleText("v2-plan-1")).toBeFalsy();
   });
 
+  it("flag ON (v2): 3.5 — in a shared chat, another member's approval does not clear someone else's plan review (AUT-9)", async () => {
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: createPlanArtifactProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+    const sm = (
+      orch as unknown as {
+        sessionManager: { getPendingPlanReviewVisibleText(id: string): string | undefined };
+      }
+    ).sessionManager;
+    const say = (userId: string, text: string) =>
+      orch.handleMessage({ channelType: "discord", chatId: "v2-plan-shared", userId, text, timestamp: new Date() });
+
+    await say("alice", "show me your plan before you proceed");
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-shared")).toBeTruthy();
+
+    await say("bob", "yes, go ahead");
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-shared")).toBeTruthy(); // still parked
+
+    await say("alice", "yes, go ahead");
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-shared")).toBeFalsy();
+  });
+
   it("flag ON (v2): 3.6 — a goal-block response submits exactly ONE background task, acks, and terminates (no inline double-run)", async () => {
     const channel = createMockChannel();
     const taskManager = createTaskManagerSpy();

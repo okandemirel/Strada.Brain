@@ -4960,6 +4960,17 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(
       toolResultContents.some((content) => content.includes("Plan approval is still required")),
     ).toBe(true);
+    // The parked review belongs to the person who asked for the plan (AUT-9): only their
+    // approval clears it, not another member's in the same chat.
+    const policy = (guardedOrch as unknown as {
+      interactionPolicy: {
+        get(chatId: string): { requestedBy?: string } | undefined;
+        noteUserMessage(chatId: string, text: string, senderKey: string): unknown;
+      };
+    }).interactionPolicy;
+    expect(policy.get("interactive-plan-reject")?.requestedBy).toBe("user1");
+    expect(policy.noteUserMessage("interactive-plan-reject", "ok", "user2")).toBeNull();
+    expect(policy.get("interactive-plan-reject")).toBeDefined();
   });
 
   it("cancels write operation when user denies confirmation", async () => {

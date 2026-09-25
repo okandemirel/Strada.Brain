@@ -150,7 +150,8 @@ export interface InterventionDeps {
   readonly clarificationContext: ClarificationContext;
   readonly stripInternalDecisionMarkers: (text: string | null | undefined) => string;
   readonly interactionPolicy: {
-    requirePlanReview(chatId: string, reason: string, planText: string): void;
+    /** `requestedBy`: identity key of the user who asked for the plan — only they approve it. */
+    requirePlanReview(chatId: string, reason: string, planText: string, requestedBy: string): void;
   };
   /** Check if autonomous mode is active for a chat (plans auto-execute without user review) */
   readonly isAutonomousActive?: (chatId: string, userId?: string) => boolean;
@@ -1753,6 +1754,7 @@ export async function resolveVisibleDraftDecision(
       params.chatId,
       "user explicitly asked to review a plan first",
       cleanedDraft,
+      params.identityKey,
     );
     return {
       kind: "plan_review",

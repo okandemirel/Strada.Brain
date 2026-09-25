@@ -75,7 +75,8 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
   readonly taskManager: () => TaskManager | null;
   readonly dmPolicy?: DMPolicy;
   readonly interactionPolicy: {
-    requirePlanReview: (chatId: string, reason: string, planText: string) => void;
+    /** `requestedBy`: identity key of the user who asked for the plan — only they approve it. */
+    requirePlanReview: (chatId: string, reason: string, planText: string, requestedBy: string) => void;
   };
   readonly consensusManager?: ConsensusManager;
   readonly confidenceEstimator?: ConfidenceEstimator;
@@ -612,6 +613,7 @@ export async function portHandlePlanPhase(
           lastUserMessage,
           stripInternalDecisionMarkersHelper(params.responseText) || params.responseText || "",
         ),
+        runCtx.identityKey,
       );
       const planText = deps.sessionManager.getPendingPlanReviewVisibleText(chatId) ?? "";
       return { agentState, yield: { kind: "plan_review", visibleText: planText } };

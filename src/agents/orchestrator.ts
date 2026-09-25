@@ -3543,7 +3543,8 @@ export class Orchestrator {
     // living on a shared instance field that concurrent turns would race on.
 
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
-    const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
+    // Only the person who asked for the plan can approve it (AUT-9).
+    const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text, identityKey);
     if (clearedPlanReview) {
       logger.info("Cleared pending plan review after explicit user approval", {
         chatId,
@@ -4435,6 +4436,17 @@ export class Orchestrator {
     return normalizePolicyText(value);
   }
 
+  /**
+   * Who may approve a plan parked now: the identity of the run that asked for it — resolved the
+   * way processMessage resolves the approving message's author, so the two keys compare.
+   */
+  private resolvePlanRequesterKey(chatId: string, userId?: string): string {
+    const scoped = this.getTaskExecutionContext();
+    const sameChat = scoped?.chatId === chatId;
+    if (sameChat && scoped?.identityKey) return scoped.identityKey;
+    return resolveIdentityKey(chatId, userId, sameChat ? scoped?.conversationId : undefined, this.userProfileStore);
+  }
+
   private async resolveInteractiveToolCall(
     chatId: string,
     toolCall: ToolCall,
@@ -4447,10 +4459,13 @@ export class Orchestrator {
         const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
         if (explicitPlanReview) {
           const planText = formatRequestedPlan(toolCall.input);
+          const requestedBy = this.resolvePlanRequesterKey(chatId, userId);
           if (!planText) {
             this.interactionPolicy.requirePlanReview(
               chatId,
               "user explicitly asked to review a plan first",
+              undefined,
+              requestedBy,
           );
           return {
             toolCallId: toolCall.id,
@@ -4466,6 +4481,7 @@ export class Orchestrator {
           chatId,
           "user explicitly asked to review a plan first",
           planText,
+          requestedBy,
         );
 
         if (mode === "interactive" && this.channel && supportsInteractivity(this.channel)) {
