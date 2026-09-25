@@ -289,3 +289,49 @@ describeIfHnsw("HNSW vector persistence", () => {
   });
 
 });
+
+describe("HNSW quantized vectors across a restart (MEM-24)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "hnsw-quantized-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const open = (): Promise<HNSWVectorStore> =>
+    createHNSWVectorStore(dir, {
+      dimensions: DIMENSIONS,
+      maxElements: 500,
+      M: 8,
+      efConstruction: 50,
+      efSearch: 32,
+      metric: "cosine",
+      quantization: "scalar",
+      allowExactFallback: true,
+    });
+
+  it("keeps quantized data out of metadata.json and rebuilds it on load, with finite stats", async () => {
+    const count = 100;
+    const store = await open();
+    await store.upsertBatch(Array.from({ length: count }, (_, i) => entry(`c${i}`, i + 1)));
+    await store.shutdown();
+
+    const metadataPath = join(dir, "metadata.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+    expect(metadata.quantizedVectors).toEqual([]);
+    // Chunk bookkeeping only: a few hundred bytes per entry, not one JSON key
+    // per quantized dimension.
+    expect(statSync(metadataPath).size).toBeLessThan(count * 600);
+
+    const reopened = await open();
+    expect(reopened.count()).toBe(count);
+    expect(Number.isFinite(reopened.getMemoryUsage())).toBe(true);
+    const stats = reopened.getHNSWStats();
+    expect(Number.isFinite(stats.memoryUsageBytes)).toBe(true);
+    expect(stats.quantization?.compressionRatio).toBeGreaterThan(1);
+    await reopened.shutdown();
+  });
+});

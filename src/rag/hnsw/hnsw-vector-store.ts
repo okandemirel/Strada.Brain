@@ -1010,7 +1010,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       vectorsByIndex: [],
       vectorsFormat: VECTOR_SIDECAR_FORMAT,
       indexFormat: this.usingExactIndex ? EXACT_INDEX_FORMAT : NATIVE_INDEX_FORMAT,
-      quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
+      // Not persisted: a typed array serialises as {"0": n, "1": n, ...}, about
+      // 24 KB per 1536-dim vector, and did not even load back as one (MEM-24).
+      // loadIndex re-derives the quantized copies from the sidecar vectors.
+      quantizedVectors: [],
     };
 
     writeVectorSidecar(
@@ -1020,7 +1023,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     );
 
     const metadataPath = join(path, "metadata.json");
-    writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+    writeFileSync(metadataPath, JSON.stringify(metadata), "utf-8");
   }
 
   async loadIndex(path: string): Promise<void> {
@@ -1068,8 +1071,17 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.deletedIndices = new Set(metadata.deletedIndices);
     }
 
-    if (metadata.quantizedVectors) {
-      this.quantizedVectors = new Map(metadata.quantizedVectors);
+    // Quantized copies are derived data: rebuild them from the vectors. Any
+    // `quantizedVectors` an older build wrote into metadata.json is ignored —
+    // its typed arrays came back as plain objects (no length, NaN stats).
+    this.quantizedVectors = new Map();
+    if (this.config.quantization && this.config.quantization !== "none") {
+      const live = [...this.vectorsByIndex].filter(([index]) => this.chunks.has(index) && !this.deletedIndices.has(index));
+      if (live.length > 0) {
+        const { quantizeBatch } = await import("./quantization.js");
+        const quantized = quantizeBatch(live.map(([, v]) => new Float32Array(v)), this.config.quantization);
+        live.forEach(([index], i) => this.quantizedVectors.set(index, quantized[i]!));
+      }
     }
 
     // Load HNSW index
