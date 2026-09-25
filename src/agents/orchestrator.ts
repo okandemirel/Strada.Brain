@@ -237,7 +237,7 @@ import {
 import {
   buildSupervisorActivationNarrative,
 } from "../supervisor/supervisor-feedback.js";
-import { SessionManager, type Session } from "./orchestrator-session-manager.js";
+import { SessionManager, replaceProviderFailureNotice, type Session } from "./orchestrator-session-manager.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
   resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
@@ -4171,11 +4171,9 @@ export class Orchestrator {
       });
       // Surface the failure to the agent so it can adapt its approach
       // (e.g. simplify the request, reduce tool usage, skip non-critical work).
-      // This mirrors Claude Code's behavior of showing errors to the user.
-      session.messages.push({
-        role: "user",
-        content: `[System: The AI provider (${provider.name}) failed to respond. Error: ${fallbackMsg}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`,
-      } as ConversationMessage);
+      // ORC-21: one redacted notice, replacing the previous one — the session
+      // persists, and each failed call used to append the raw error again.
+      replaceProviderFailureNotice(session, provider.name, fallbackMsg);
       // Return a synthetic empty response so the PAOR loop can continue with the
       // agent's awareness of the failure. The explicit `meta.empty` flag is the
       // canonical signal the circuit breaker (runBackgroundTask / runAgentLoop)

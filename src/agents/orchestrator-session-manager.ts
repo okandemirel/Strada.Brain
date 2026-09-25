@@ -90,6 +90,38 @@ export interface Session {
 /** Cap on {@link Session.consumedWriteRejections}. */
 const MAX_CONSUMED_WRITE_REJECTIONS = 32;
 
+const PROVIDER_FAILURE_NOTICE_PREFIX = "[System: The AI provider (";
+/** Enough of a provider error to act on; its full body can carry request ids and org names. */
+const MAX_PROVIDER_FAILURE_DETAIL_CHARS = 300;
+
+/**
+ * The turn that tells the model its provider call failed (ORC-21). The error
+ * is redacted and bounded: this turn is persisted with the session and resent
+ * on every later call.
+ */
+export function buildProviderFailureNotice(providerName: string, error: string): string {
+  const detail = redactSensitiveText(error).replace(/\s+/g, " ").trim().slice(0, MAX_PROVIDER_FAILURE_DETAIL_CHARS);
+  return `${PROVIDER_FAILURE_NOTICE_PREFIX}${providerName}) failed to respond. Error: ${detail}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`;
+}
+
+/** A turn written by {@link buildProviderFailureNotice} — the system's words, not the user's. */
+export function isProviderFailureNotice(message: ConversationMessage): boolean {
+  return message.role === "user"
+    && typeof message.content === "string"
+    && message.content.startsWith(PROVIDER_FAILURE_NOTICE_PREFIX);
+}
+
+/**
+ * Put the provider-failure notice on the session, replacing any earlier one
+ * (ORC-21): a flaky provider used to add one user turn per failed call.
+ */
+export function replaceProviderFailureNotice(session: Session, providerName: string, error: string): void {
+  for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+    if (isProviderFailureNotice(session.messages[i]!)) session.messages.splice(i, 1);
+  }
+  session.messages.push({ role: "user", content: buildProviderFailureNotice(providerName, error) });
+}
+
 /**
  * Narrow dependency interface for SessionManager — carries only the external
  * collaborators it actually needs.
@@ -1092,7 +1124,9 @@ export class SessionManager {
   extractLastUserContent(session: Session): string | MessageContent[] | null {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      if (msg.role === "user") {
+      // ORC-21: a provider-failure notice is not what the user last said (shell
+      // review and correction detection read this).
+      if (msg.role === "user" && !isProviderFailureNotice(msg)) {
         return msg.content as string | MessageContent[] | null;
       }
     }
