@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
 import { useProviderModels } from '../hooks/use-api'
 import { apiFetch } from '../utils/api'
+import { useSessionStore } from '../stores/session-store'
 
 export interface ProviderInfo {
   name: string
@@ -243,6 +244,30 @@ export default function PrimaryWorkerSelector() {
     fetchProviders()
   }, [fetchProviders])
 
+  // A switch is a `/model` chat command, and the server answers it with a chat
+  // message: the new selection, or why it refused (a guest, a disallowed
+  // command). The selection shown at once is only a guess, and it used to stay
+  // even after a refusal or a failed send (WEB-21). Once the answer (or the
+  // failure) is in, show the selection the server really has.
+  const stopWatchingRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => stopWatchingRef.current?.(), [])
+
+  const reconcileAfterSwitch = useCallback((lastIdBeforeSwitch: string | undefined) => {
+    stopWatchingRef.current?.()
+    const stop = () => {
+      unsubscribe()
+      if (stopWatchingRef.current === stop) stopWatchingRef.current = null
+    }
+    const unsubscribe = useSessionStore.subscribe((state) => {
+      const last = state.messages.at(-1)
+      if (!last || last.id === lastIdBeforeSwitch) return
+      if (last.sender === 'user' && last.deliveryState !== 'failed') return
+      stop()
+      void fetchProviders()
+    })
+    stopWatchingRef.current = stop
+  }, [fetchProviders])
+
   useEffect(() => {
     if (!open) return
 
@@ -278,22 +303,28 @@ export default function PrimaryWorkerSelector() {
         return
       }
 
-      switchProvider(providerName)
-      setActive({ provider: providerName })
+      const lastIdBeforeSwitch = useSessionStore.getState().messages.at(-1)?.id
+      if (switchProvider(providerName)) {
+        setActive({ provider: providerName })
+        reconcileAfterSwitch(lastIdBeforeSwitch)
+      }
       setOpen(false)
       setExpandedProvider(null)
     },
-    [switchProvider],
+    [switchProvider, reconcileAfterSwitch],
   )
 
   const handleModelSelect = useCallback(
     (providerName: string, model: string) => {
-      switchProvider(providerName, model)
-      setActive({ provider: providerName, model })
+      const lastIdBeforeSwitch = useSessionStore.getState().messages.at(-1)?.id
+      if (switchProvider(providerName, model)) {
+        setActive({ provider: providerName, model })
+        reconcileAfterSwitch(lastIdBeforeSwitch)
+      }
       setOpen(false)
       setExpandedProvider(null)
     },
-    [switchProvider],
+    [switchProvider, reconcileAfterSwitch],
   )
 
   if (loading || providers.length === 0) {

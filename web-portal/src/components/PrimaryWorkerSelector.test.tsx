@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import '../i18n'
 import { PrimaryWorkerSelectorSurface } from './PrimaryWorkerSelector'
@@ -192,5 +192,87 @@ describe('PrimaryWorkerSelector (live catalog model source)', () => {
     await openSelector()
 
     await waitFor(() => expect(screen.getByText(/loading models/i)).toBeTruthy())
+  })
+})
+
+// WEB-21: the switcher showed the chosen provider at once and never checked
+// it: a refused or undelivered `/model` command left the wrong provider on
+// screen until a reload, while the old one kept answering.
+describe('PrimaryWorkerSelector after a switch', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  const activeCalls = () => fetchSpy.mock.calls.filter((c) => String(c[0]).startsWith('/api/providers/active')).length
+
+  beforeEach(async () => {
+    const { useSessionStore } = await import('../stores/session-store')
+    useSessionStore.getState().reset()
+    switchProvider.mockReset()
+    useProviderModelsMock.mockReset()
+    useProviderModelsMock.mockReturnValue({
+      data: { providers: [{ name: 'claude', models: ['claude-live'] }, { name: 'openai', models: ['gpt-live'] }] },
+      isLoading: false,
+      isFetching: false,
+    })
+    // The server never switches in these cases: it keeps answering claude.
+    fetchSpy = mockAvailableAndActive({ active: { provider: 'claude' } })
+  })
+
+  afterEach(async () => {
+    fetchSpy.mockRestore()
+    const { useSessionStore } = await import('../stores/session-store')
+    useSessionStore.getState().reset()
+    vi.resetModules()
+  })
+
+  async function renderSelector() {
+    const { default: PrimaryWorkerSelector } = await import('./PrimaryWorkerSelector')
+    const { useSessionStore } = await import('../stores/session-store')
+    render(<PrimaryWorkerSelector />, { wrapper: Wrapper })
+    const trigger = await screen.findByTitle(/primary worker|worker/i)
+    await waitFor(() => expect(trigger.textContent).toContain('claude'))
+    return { trigger, store: useSessionStore }
+  }
+
+  it('shows the provider the server really has once it answers the command', async () => {
+    const { trigger, store } = await renderSelector()
+    switchProvider.mockImplementation(() => {
+      store.getState().addMessage({ id: 'cmd', sender: 'user', text: '/model openai', isMarkdown: false, timestamp: 1, deliveryState: 'pending' })
+      return true
+    })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByText('openai'))
+    expect(trigger.textContent).toContain('openai')
+    const before = activeCalls()
+
+    act(() => { store.getState().updateMessage('cmd', { deliveryState: undefined }) })
+    expect(activeCalls()).toBe(before) // received is not answered
+
+    act(() => {
+      store.getState().addMessage({ id: 'answer', sender: 'assistant', text: 'Refused: guests cannot switch.', isMarkdown: false, timestamp: 2 })
+    })
+    await waitFor(() => expect(trigger.textContent).toContain('claude'))
+    expect(activeCalls()).toBe(before + 1)
+  })
+
+  it('shows the provider the server really has when the command is not delivered', async () => {
+    const { trigger, store } = await renderSelector()
+    switchProvider.mockImplementation(() => {
+      store.getState().addMessage({ id: 'cmd', sender: 'user', text: '/model openai', isMarkdown: false, timestamp: 1, deliveryState: 'pending' })
+      return true
+    })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByText('openai'))
+    expect(trigger.textContent).toContain('openai')
+
+    act(() => { store.getState().updateMessage('cmd', { deliveryState: 'failed' }) })
+    await waitFor(() => expect(trigger.textContent).toContain('claude'))
+  })
+
+  it('does not show a switch that was never sent', async () => {
+    const { trigger } = await renderSelector()
+    switchProvider.mockImplementation(() => false)
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByText('openai'))
+    expect(switchProvider).toHaveBeenCalledWith('openai')
+    expect(trigger.textContent).toContain('claude')
   })
 })
