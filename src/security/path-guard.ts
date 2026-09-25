@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { readFileSync, statSync } from "node:fs";
 import { resolve, sep, normalize, isAbsolute, join, relative } from "node:path";
 
@@ -69,8 +69,45 @@ export function isSensitivePath(absolutePath: string): boolean {
   return BLOCKED_PATTERNS.some((pattern) => pattern.test(absolutePath));
 }
 
-// Cache resolved project root to avoid repeated realpath() syscalls
-const realRootCache = new Map<string, string>();
+/**
+ * SEC-23: the path-guard caches are keyed by project root, and every task
+ * lease is a new root, so a long-running daemon added an entry per lease
+ * forever. Both caches are LRU-capped at this many roots.
+ */
+export const PATH_GUARD_CACHE_MAX_ROOTS = 256;
+
+/** Read `key`, refreshing its recency (Map order is least-recently-used first). */
+function lruGet<V>(cache: Map<string, V>, key: string): V | undefined {
+  const value = cache.get(key);
+  if (value !== undefined) {
+    cache.delete(key);
+    cache.set(key, value);
+  }
+  return value;
+}
+
+function lruSet<V>(cache: Map<string, V>, key: string, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > PATH_GUARD_CACHE_MAX_ROOTS) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
+/**
+ * Cache resolved project root to avoid repeated realpath() syscalls. The
+ * root's identity (dev/ino) is kept with it: a root that was removed, or
+ * recreated as something else, is re-resolved instead of reusing its old
+ * realpath (SEC-23).
+ */
+const realRootCache = new Map<string, { real: string; dev: number; ino: number }>();
+
+/** Number of roots each path-guard cache holds (tests). */
+export function pathGuardCacheSizes(): { realRoots: number; leaseOwners: number } {
+  return { realRoots: realRootCache.size, leaseOwners: leaseOwnerCache.size };
+}
 
 /**
  * Resolve a relative path against the project root and validate it is safe to access.
@@ -144,7 +181,7 @@ export function leaseOwnerRootOf(projectRoot: string): string | undefined {
   } catch {
     return undefined;
   }
-  const cached = leaseOwnerCache.get(projectRoot);
+  const cached = lruGet(leaseOwnerCache, projectRoot);
   if (cached && cached.mtimeMs === mtimeMs) return cached.owner;
   let owner: string | undefined;
   try {
@@ -153,7 +190,7 @@ export function leaseOwnerRootOf(projectRoot: string): string | undefined {
   } catch {
     owner = undefined;
   }
-  leaseOwnerCache.set(projectRoot, { mtimeMs, owner });
+  lruSet(leaseOwnerCache, projectRoot, { mtimeMs, owner });
   return owner;
 }
 
@@ -176,6 +213,25 @@ export function redirectRealCheckoutPath(projectRoot: string, absolutePath: stri
   if (target !== owner && !target.startsWith(ownerPrefix)) return undefined;
   const rel = relative(owner, target);
   return rel === "" ? "." : rel;
+}
+
+/**
+ * The realpath of `projectRoot`: cached while the root still names the same
+ * directory (dev/ino), re-resolved otherwise. Throws when it does not exist.
+ */
+async function resolveRealRoot(projectRoot: string): Promise<string> {
+  let current: { dev: number; ino: number };
+  try {
+    current = await stat(projectRoot);
+  } catch (err) {
+    realRootCache.delete(projectRoot);
+    throw err;
+  }
+  const cached = lruGet(realRootCache, projectRoot);
+  if (cached && cached.dev === current.dev && cached.ino === current.ino) return cached.real;
+  const real = await realpath(projectRoot);
+  lruSet(realRootCache, projectRoot, { real, dev: current.dev, ino: current.ino });
+  return real;
 }
 
 export async function validatePath(
@@ -202,19 +258,16 @@ export async function validatePath(
 
   const rawFullPath = resolve(projectRoot, relativePath);
 
-  // Resolve symlinks for project root (cached since it doesn't change)
-  let realRoot = realRootCache.get(projectRoot);
-  if (!realRoot) {
-    try {
-      realRoot = await realpath(projectRoot);
-      realRootCache.set(projectRoot, realRoot);
-    } catch {
-      return {
-        valid: false,
-        fullPath: rawFullPath,
-        error: "Project root does not exist",
-      };
-    }
+  // Resolve symlinks for project root (cached while the root is the same directory)
+  let realRoot: string;
+  try {
+    realRoot = await resolveRealRoot(projectRoot);
+  } catch {
+    return {
+      valid: false,
+      fullPath: rawFullPath,
+      error: "Project root does not exist",
+    };
   }
 
   let realFullPath: string;
