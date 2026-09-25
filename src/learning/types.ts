@@ -926,6 +926,12 @@ export interface RuntimeArtifact {
   readonly ownerScope?: RuntimeArtifactOwnerScope;
   /** The identity a 'user'-scoped artifact belongs to, and nobody else. */
   readonly ownerUserId?: string;
+  /**
+   * Each source instinct's evidence count (applications + failures) when the
+   * artifact was rejected or retired (LRN-15). The instinct may be
+   * materialized again only once it has more evidence than this.
+   */
+  readonly sourceEvidenceAtClose?: Readonly<Record<string, number>>;
   readonly createdAt: TimestampMs;
   readonly updatedAt: TimestampMs;
 }

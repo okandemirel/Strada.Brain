@@ -116,6 +116,12 @@ export class RuntimeArtifactManager {
   } {
     const kind = this.determineArtifactKind(instinct);
     const existing = this.storage.getRuntimeArtifactBySourceInstinct(instinct.id, kind, ["shadow", "active"]);
+    if (!existing) {
+      // LRN-15: guidance judged harmful or worn out comes back only on new
+      // evidence for its rule, never merely because the rule is still eligible.
+      const closed = this.closedArtifactWithoutNewEvidence(instinct, kind);
+      if (closed) return { artifact: closed, proposal: null, proposalCreated: false, created: false };
+    }
     // r11 #1: the owner travels with the guidance from the moment the artifact
     // is made, and a merge that would widen the reach collapses to 'unknown'
     // rather than quietly publishing one person's rule.
@@ -191,6 +197,26 @@ export class RuntimeArtifactManager {
       proposalCreated: proposal !== null,
       created: existing == null,
     };
+  }
+
+  /**
+   * The latest rejected or retired artifact of this kind from this instinct,
+   * when the instinct has no more evidence (applications + failures) than it
+   * had at the close. updatedAt is no measure: it moves on every use. A row
+   * closed before the count was recorded gets today's count as its baseline.
+   */
+  private closedArtifactWithoutNewEvidence(instinct: Instinct, kind: RuntimeArtifactKind): RuntimeArtifact | null {
+    const closed = this.storage.getRuntimeArtifactBySourceInstinct(instinct.id, kind, ["rejected", "retired"]);
+    if (!closed) return null;
+    const evidence = instinct.stats.timesApplied + instinct.stats.timesFailed;
+    const atClose = closed.sourceEvidenceAtClose?.[instinct.id];
+    if (atClose !== undefined) return evidence > atClose ? null : closed;
+    const baselined: RuntimeArtifact = {
+      ...closed,
+      sourceEvidenceAtClose: { ...closed.sourceEvidenceAtClose, [instinct.id]: evidence },
+    };
+    this.storage.upsertRuntimeArtifact(baselined);
+    return baselined;
   }
 
   matchForTask(params: {
@@ -303,6 +329,7 @@ export class RuntimeArtifactManager {
         }
       }
 
+      const closing = state !== artifact.state && (state === "rejected" || state === "retired");
       const nextArtifact: RuntimeArtifact = {
         ...artifact,
         state,
@@ -311,6 +338,10 @@ export class RuntimeArtifactManager {
         rejectedAt,
         retiredAt,
         lastStateReason,
+        // LRN-15: what a later re-materialization has to exceed.
+        ...(closing
+          ? { sourceEvidenceAtClose: this.storage.instinctEvidenceCounts(artifact.sourceInstinctIds) }
+          : {}),
         updatedAt: now,
       };
       this.storage.upsertRuntimeArtifact(nextArtifact);

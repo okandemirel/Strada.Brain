@@ -162,7 +162,7 @@ describe("RuntimeArtifactManager", () => {
     expect(promoted?.stats.regressionFingerprints).toEqual({});
   });
 
-  it("starts a fresh shadow artifact after a rejected artifact instead of reusing terminal state", () => {
+  it("starts a fresh shadow artifact after a rejection, once its rule has new evidence, instead of reusing terminal state", () => {
     const instinct = createInstinct({
       id: "instinct_retry",
       type: "correction",
@@ -186,7 +186,8 @@ describe("RuntimeArtifactManager", () => {
       failureFingerprint: "same-blocker",
     });
 
-    const second = manager.materializeShadowArtifact(instinct, "/projects/retry");
+    const withNewEvidence = { ...instinct, stats: { ...instinct.stats, timesApplied: instinct.stats.timesApplied + 1 } };
+    const second = manager.materializeShadowArtifact(withNewEvidence, "/projects/retry");
     expect(second.artifact.id).not.toBe(first.artifact.id);
     expect(second.artifact.state).toBe("shadow");
     expect(second.proposalCreated).toBe(true);
@@ -502,6 +503,99 @@ describe("RuntimeArtifactManager", () => {
     }
 
     expect(storage.getRuntimeArtifact(artifact.id)?.state).toBe("retired");
+  });
+});
+
+// LRN-15: a rejected or retired artifact came back as a fresh shadow on the
+// next evolution tick while its rule was still eligible, with no new evidence.
+describe("a closed runtime artifact returns only on new evidence (LRN-15)", () => {
+  let tempDir: string;
+  let storage: LearningStorage;
+  let manager: RuntimeArtifactManager;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "runtime-artifacts-closed-"));
+    storage = new LearningStorage(join(tempDir, "learning.db"));
+    storage.initialize();
+    manager = new RuntimeArtifactManager(storage);
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function rejectedArtifactFor(instinct: Instinct) {
+    storage.createInstinct(instinct);
+    const first = manager.materializeShadowArtifact(instinct);
+    for (let i = 0; i < 3; i++) {
+      manager.recordEvaluation({ artifactIds: [first.artifact.id], verdict: "failure", blocker: false, reason: "Harmful." });
+    }
+    expect(storage.getRuntimeArtifact(first.artifact.id)?.state).toBe("rejected");
+    return first.artifact;
+  }
+
+  function withOneMoreApplication(instinct: Instinct): Instinct {
+    const next = { ...instinct, stats: { ...instinct.stats, timesApplied: instinct.stats.timesApplied + 1 } };
+    storage.updateInstinct(next);
+    return next;
+  }
+
+  const artifactsFor = (id: string) => storage.getRuntimeArtifactsBySourceInstinct(id);
+
+  it("a rejected artifact records its rule's evidence and is not re-materialized without more", () => {
+    const instinct = createInstinct({ id: "instinct_harmful", type: "correction", triggerPattern: "harmful tactic", action: "Do the harmful thing." });
+    const rejected = rejectedArtifactFor(instinct);
+    expect(storage.getRuntimeArtifact(rejected.id)?.sourceEvidenceAtClose).toEqual({ instinct_harmful: 20 });
+
+    // Later ticks: same rule, same evidence, even though it was touched since.
+    const again = manager.materializeShadowArtifact({ ...instinct, updatedAt: (Date.now() + 60_000) as TimestampMs });
+    expect(again).toMatchObject({ created: false, proposalCreated: false });
+    expect(artifactsFor(instinct.id).map((a) => a.state)).toEqual(["rejected"]);
+    expect(storage.getEvolutionProposals({ instinctId: instinct.id })).toHaveLength(1);
+
+    // New evidence for the rule: it may be evaluated again, from a fresh shadow.
+    const fresh = manager.materializeShadowArtifact(withOneMoreApplication(instinct));
+    expect(fresh).toMatchObject({ created: true, proposalCreated: true });
+    expect(fresh.artifact.id).not.toBe(rejected.id);
+    expect(fresh.artifact.state).toBe("shadow");
+  });
+
+  it("a retired artifact is not re-materialized without new evidence either", () => {
+    const instinct = createInstinct({ id: "instinct_worn", type: "correction", triggerPattern: "worn out tactic", action: "Use the worn out tactic." });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+    storage.upsertRuntimeArtifact({ ...storage.getRuntimeArtifact(artifact.id)!, state: "active" });
+    for (let i = 0; i < 4; i++) {
+      manager.recordEvaluation({ artifactIds: [artifact.id], verdict: "retry", blocker: true, reason: "Needed replan." });
+    }
+    expect(storage.getRuntimeArtifact(artifact.id)?.state).toBe("retired");
+
+    expect(manager.materializeShadowArtifact(instinct).created).toBe(false);
+    expect(artifactsFor(instinct.id)).toHaveLength(1);
+  });
+
+  it("a closure recorded before the count existed takes today's count as its baseline", () => {
+    const instinct = createInstinct({ id: "instinct_legacy", type: "correction", triggerPattern: "legacy tactic", action: "Use the legacy tactic." });
+    const rejected = rejectedArtifactFor(instinct);
+    const legacy = { ...storage.getRuntimeArtifact(rejected.id)! };
+    delete (legacy as { sourceEvidenceAtClose?: unknown }).sourceEvidenceAtClose;
+    storage.upsertRuntimeArtifact(legacy);
+
+    expect(manager.materializeShadowArtifact(instinct).created).toBe(false);
+    expect(storage.getRuntimeArtifact(rejected.id)?.sourceEvidenceAtClose).toEqual({ instinct_legacy: 20 });
+    expect(manager.materializeShadowArtifact(withOneMoreApplication(instinct)).created).toBe(true);
+  });
+
+  it("retiring the rule records the evidence on the artifacts it retires", () => {
+    const instinct = createInstinct({ id: "instinct_manual", type: "correction", triggerPattern: "manual tactic", action: "Use the manual tactic." });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+    storage.retireInstinct(instinct.id, { reason: "wrong", actor: "test" });
+    expect(storage.getRuntimeArtifact(artifact.id)).toMatchObject({
+      state: "retired",
+      sourceEvidenceAtClose: { instinct_manual: 20 },
+    });
   });
 });
 

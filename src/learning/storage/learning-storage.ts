@@ -302,6 +302,9 @@ CREATE TABLE IF NOT EXISTS runtime_artifacts (
   -- NOBODY until resolveRuntimeArtifactOwnership() can establish an owner.
   owner_scope TEXT NOT NULL DEFAULT 'unknown',
   owner_user_id TEXT,
+  -- LRN-15: each source instinct's evidence count (applications + failures)
+  -- when the artifact was rejected or retired. JSON object; NULL while open.
+  source_evidence_at_close TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -672,6 +675,8 @@ export class LearningStorage {
       // an owner or quarantines them.
       "ALTER TABLE runtime_artifacts ADD COLUMN owner_scope TEXT NOT NULL DEFAULT 'unknown'",
       'ALTER TABLE runtime_artifacts ADD COLUMN owner_user_id TEXT',
+      // LRN-15: the evidence a closed artifact was judged on; NULL on older rows.
+      'ALTER TABLE runtime_artifacts ADD COLUMN source_evidence_at_close TEXT',
       // Round 11 #8: WHEN the run was shown the guidance, as distinct from when
       // its credit settled (timestamp). NULL on every row written before this.
       'ALTER TABLE instinct_credit_log ADD COLUMN exposed_at INTEGER',
@@ -2220,8 +2225,8 @@ export class LearningStorage {
       (id, kind, state, name, description, guidance, task_types, task_patterns, project_world_fingerprint,
        required_tool_names, required_capabilities, source_instinct_ids, source_trajectory_ids, stats,
        shadow_activated_at, promoted_at, rejected_at, retired_at, last_state_reason, owner_scope, owner_user_id,
-       created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       source_evidence_at_close, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         state = excluded.state,
@@ -2243,6 +2248,7 @@ export class LearningStorage {
         last_state_reason = excluded.last_state_reason,
         owner_scope = excluded.owner_scope,
         owner_user_id = excluded.owner_user_id,
+        source_evidence_at_close = excluded.source_evidence_at_close,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `).run(
@@ -2267,6 +2273,7 @@ export class LearningStorage {
       artifact.lastStateReason ?? null,
       ownership.scope,
       ownership.ownerUserId ?? null,
+      artifact.sourceEvidenceAtClose ? JSON.stringify(artifact.sourceEvidenceAtClose) : null,
       artifact.createdAt,
       artifact.updatedAt,
     );
@@ -2891,6 +2898,19 @@ export class LearningStorage {
     return info.changes;
   }
 
+  /**
+   * Each instinct's evidence count: applications plus failures, the number the
+   * lifecycle's observation minimums read. Unknown ids are left out.
+   */
+  instinctEvidenceCounts(instinctIds: readonly string[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const id of instinctIds) {
+      const instinct = this.getInstinct(id);
+      if (instinct) counts[id] = (instinct.stats?.timesApplied ?? 0) + (instinct.stats?.timesFailed ?? 0);
+    }
+    return counts;
+  }
+
   /** Every runtime artifact generated FROM this instinct, whatever its state. */
   getRuntimeArtifactsBySourceInstinct(instinctId: string): RuntimeArtifact[] {
     this.ensureConnection();
@@ -2953,8 +2973,14 @@ export class LearningStorage {
       this.db!.prepare("UPDATE instincts SET status = ?, updated_at = ? WHERE id = ?").run(to, now, instinctId);
       for (const artifact of artifacts) {
         this.db!.prepare(
-          "UPDATE runtime_artifacts SET state = 'retired', retired_at = ?, last_state_reason = ?, updated_at = ? WHERE id = ?",
-        ).run(now, `source instinct retired: ${reason}`.slice(0, 500), now, artifact.id);
+          "UPDATE runtime_artifacts SET state = 'retired', retired_at = ?, last_state_reason = ?, source_evidence_at_close = ?, updated_at = ? WHERE id = ?",
+        ).run(
+          now,
+          `source instinct retired: ${reason}`.slice(0, 500),
+          JSON.stringify(this.instinctEvidenceCounts(artifact.sourceInstinctIds)),
+          now,
+          artifact.id,
+        );
       }
       this.db!.prepare(`
         INSERT INTO instinct_lifecycle_log
@@ -3505,6 +3531,7 @@ export class LearningStorage {
       lastStateReason: row.last_state_reason ?? undefined,
       ownerScope: (row.owner_scope ?? "unknown") as RuntimeArtifactOwnerScope,
       ownerUserId: row.owner_user_id ?? undefined,
+      sourceEvidenceAtClose: parseEvidenceCounts(row.source_evidence_at_close),
       createdAt: row.created_at as TimestampMs,
       updatedAt: row.updated_at as TimestampMs,
     };
@@ -3725,8 +3752,25 @@ interface RuntimeArtifactRow {
   last_state_reason: string | null;
   owner_scope: string | null;
   owner_user_id: string | null;
+  source_evidence_at_close?: string | null;
   created_at: number;
   updated_at: number;
+}
+
+/** A stored evidence snapshot; anything unreadable reads as none recorded. */
+function parseEvidenceCounts(raw: string | null | undefined): Record<string, number> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const counts: Record<string, number> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value)) counts[id] = value;
+    }
+    return counts;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Statistics Interface ───────────────────────────────────────────────────────
