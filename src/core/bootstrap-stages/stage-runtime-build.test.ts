@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { receiptOfFailure } from "../../campaign/producer-failure.js";
-import { parsePlayerBuildOutput, buildEvidenceFromToolResult, makeRunPlayer, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
+import { parsePlayerBuildOutput, buildEvidenceFromToolResult, makeRunPlayer, makeRunPlaymodeSuite, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -50,6 +50,25 @@ describe("buildEvidenceFromToolResult — the tool's outer failure is not a buil
     expect(failed.ok).toBe(false);
     expect((failed.reasons ?? []).join(" ")).toContain("the build tool reported an error");
     expect((failed.reasons ?? []).join(" ")).toContain("crashed after writing");
+  });
+});
+
+describe("makeRunPlaymodeSuite — the campaign's own whole-suite run (CMP-8)", () => {
+  it("runs the suite unfiltered under the ticket's run id, returns the receipt, and a red suite is an answer", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const receipt = JSON.stringify({ schemaVersion: 1, runId: "r1", kind: "playmode-suite", medium: "editor" });
+    const registry = {
+      getAvailableToolNames: () => ["unity_playmode_verify"],
+      execute: async (_name: string, input: Record<string, unknown>) => {
+        asked.push(input);
+        return { content: `PlayMode verification FAILED: 1 of 42 tests failed\n\n\`\`\`strada-evidence\n${receipt}\n\`\`\``, isError: true };
+      },
+    };
+    const out = await makeRunPlaymodeSuite(registry)("/p", "r1");
+    expect(asked).toEqual([{ evidenceRunId: "r1" }]);
+    expect(out.receipt).toBe(receipt);
+    expect(out.detail).toContain("FAILED");
+    await expect(makeRunPlaymodeSuite({ getAvailableToolNames: () => [], execute: async () => ({}) })("/p", "r1")).rejects.toThrow(/not registered/);
   });
 });
 

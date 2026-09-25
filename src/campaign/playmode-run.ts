@@ -229,3 +229,34 @@ export function measuredAtMs(value: unknown): number | undefined {
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : undefined;
 }
+
+/**
+ * Why a suite record is NOT the run an admitted receipt describes, or nothing
+ * when it is (CMP-8).
+ *
+ * The producer's receipt states the counts it read from the NUnit results and
+ * the scope it ran; the record is a file in the project that anything can
+ * write. The record is only the campaign's run when the two agree — the same
+ * binding the player's verdict gets from its digest. A receipt that states no
+ * counts binds nothing, and one for a narrowed run is not the whole suite.
+ */
+export function suiteDisagreesWithReceipt(
+  payload: Record<string, unknown> | undefined,
+  run: PlaymodeRunEvidence,
+): string | undefined {
+  const count = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
+  const total = count(payload?.["total"]);
+  const passed = count(payload?.["passed"]);
+  const failed = count(payload?.["failed"]);
+  if (total === undefined || passed === undefined || failed === undefined) {
+    return "the suite receipt was admitted but states no counts — nothing ties the record to the run";
+  }
+  const scope = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
+  const narrowed = scope(payload?.["filter"]) ?? scope(payload?.["categories"]);
+  if (narrowed !== undefined) return `the suite receipt says the run was narrowed (${narrowed.slice(0, 80)}), not the whole suite`;
+  const skipped = count(payload?.["skipped"]) ?? 0;
+  const same = run.total === total && run.passed === passed && run.failed === failed && (run.skipped ?? 0) === skipped;
+  return same
+    ? undefined
+    : `the suite record is not the run the receipt describes (receipt: ${passed} passed, ${failed} failed of ${total}; record: ${run.passed ?? "?"} passed, ${run.failed ?? "?"} failed of ${run.total ?? "?"})`;
+}

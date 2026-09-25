@@ -47,7 +47,7 @@ import { detectCampaignIntent } from "./campaign-intake.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
-import { readPlaymodeRun } from "./playmode-run.js";
+import { readPlaymodeRun, suiteDisagreesWithReceipt, PLAYMODE_RUN_RECORD_REL } from "./playmode-run.js";
 import { writtenBefore } from "./file-freshness.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
 import { planSessionBatch } from "./batch-plan.js";
@@ -169,6 +169,14 @@ export interface CampaignManagerOptions {
    * does not need one yet). See stage-runtime for the tool-backed default.
    */
   buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
+  /**
+   * Run the WHOLE PlayMode suite (no filter, no categories) from the project
+   * root, under the run id of a ticket this campaign issued (CMP-8). The
+   * final sprint's "suite green, unfiltered" proof comes only from this run:
+   * the record a sprint leaves behind is a file its worker could have written.
+   * Absent = the proof is missing, never read from the worker's file.
+   */
+  runPlaymodeSuite?: (projectRoot: string, evidenceRunId: string) => Promise<{ receipt?: string; detail?: string } | void>;
   /** Pause before a NOT DELIVERED campaign resumes its final sprint by itself (default 15 min). */
   deliveryResumeDelayMs?: number;
   /**
@@ -418,7 +426,7 @@ export function proofsSpanTwoRevisions(before: string, after: string): boolean {
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|the built player was never played to a verdict)/i;
+  /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|unity_playmode_verify is not registered|the built player was never played to a verdict)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -962,6 +970,7 @@ export class CampaignManager {
   private readonly verifyCompile?: (projectRoot: string, evidenceRunId?: string) => Promise<CompileVerdict>;
   private readonly receiptsExpected: boolean;
   private readonly buildPlayer?: (projectRoot: string, target?: string, evidenceRunId?: string) => Promise<PlayerBuildEvidence>;
+  private readonly runPlaymodeSuite?: CampaignManagerOptions["runPlaymodeSuite"];
   private readonly deliveryResumeDelayMs: number;
   private readonly implementationReviveDelayMs: number;
   private readonly runPlayer?: (
@@ -991,6 +1000,7 @@ export class CampaignManager {
     this.verifyCompile = options.verifyCompile;
     this.receiptsExpected = options.receiptsExpected === true;
     this.buildPlayer = options.buildPlayer;
+    this.runPlaymodeSuite = options.runPlaymodeSuite;
     this.deliveryResumeDelayMs = options.deliveryResumeDelayMs ?? 15 * 60_000;
     this.implementationReviveDelayMs = options.implementationReviveDelayMs ?? IMPLEMENTATION_REVIVE_DELAY_MS;
     this.runPlayer = options.runPlayer;
@@ -3634,13 +3644,25 @@ export class CampaignManager {
         // come from there — green is failed === 0 with tests executed,
         // unfiltered is "no -testFilter/-categories given", never a word in a
         // sentence. The prose-derived verdict remains the fallback.
-        const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
         // A STALE record is not silence: reading an old result with
         // unity_test_results produced green prose while the record on disk
         // predated the attempt, so the prose fallback turned a cached answer
         // into fresh proof (Codex 2026-09-11 C#10). The final sprint is held
         // to the file; earlier sprints keep the prose fallback.
         const finalSprint = campaign.currentMilestone >= campaign.milestones.length - 1;
+        // THE FINAL SPRINT'S SUITE IS RUN BY THE CAMPAIGN (CMP-8). The record a
+        // sprint leaves is a file its worker can write, so at delivery the
+        // campaign runs the whole suite itself, under a ticket, and reads only
+        // the record that run wrote. Earlier sprints keep reading the sprint's.
+        milestone.suiteRunMissing = undefined;
+        let run: ReturnType<typeof readPlaymodeRun>;
+        if (finalSprint) {
+          const suite = await this.measureDeliverySuite(campaign, milestone);
+          run = suite.run;
+          if (suite.missing !== undefined) milestone.suiteRunMissing = suite.missing;
+        } else {
+          run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
+        }
         // THE FINAL SPRINT NEEDS THE RECORD, not prose. Accepting prose when
         // no record file happened to exist — and clearing it when a stale one
         // did — made an unrelated file decide whether identical evidence
@@ -3844,7 +3866,7 @@ export class CampaignManager {
           );
         }
         if (gddDrift !== undefined) missingProofs.push(gddDrift);
-        if (!milestone.testVerdict) missingProofs.push("no test run was observed");
+        if (!milestone.testVerdict) missingProofs.push(milestone.suiteRunMissing?.slice(0, 220) ?? "no test run was observed");
         else if (milestone.testVerdictUnfiltered !== true) missingProofs.push("the only green test run was FILTERED (a subset the sprint chose)");
         if (compileBroken) missingProofs.push(`the project does not compile${typeof compile.errors === "number" ? ` (${compile.errors} error(s))` : ""}`);
         if (compileNotRun) missingProofs.push(`the compile check did not run: ${compile.detail ?? "no reason recorded"}`.slice(0, 220));
@@ -3993,6 +4015,9 @@ export class CampaignManager {
           "Run the FULL PlayMode suite UNFILTERED against the assembled scene, capture a frame of " +
           "the running game, and report the suite's actual pass/fail counts. Delivery is not declared on a sprint " +
           "whose whole suite was never seen to pass.\n" +
+          // CMP-8: the delivery proof is the campaign's own run, not a record.
+          "Before delivery the campaign runs the whole suite ITSELF: your run is how you find what fails, and a " +
+          "record you leave behind is not the proof.\n" +
           // Measured live 2026-09-03 23:30: the sprint answered this directive
           // with a JSON INVENTORY (module counts, prefab counts, a scene list)
           // and changed nothing. "Report the counts" was read as "produce a
@@ -6903,6 +6928,74 @@ export class CampaignManager {
       "symbol, module or prefab you need to find; use file_read only for exact contents of a file you " +
       "already know. Do not walk directories to learn the codebase.\n" +
       `${close}`;
+  }
+
+  /**
+   * The WHOLE PlayMode suite, run by the campaign for the final sprint (CMP-8).
+   *
+   * The sprint's own record is a file its worker could have written, so the
+   * delivery proof comes from a run dispatched here under a ticket. The record
+   * counts only when that run is what wrote it: an admitted receipt whose
+   * counts are the record's, or — for a producer that issues no receipts in a
+   * deployment that expects none — the ticket's run id stamped in the record.
+   * The worker never sees that id. A red record is taken as red whatever the
+   * receipt said: it can only refuse a delivery. Never throws.
+   */
+  private async measureDeliverySuite(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+  ): Promise<{ run: ReturnType<typeof readPlaymodeRun>; missing?: string }> {
+    const none = { found: false } as const;
+    if (!this.runPlaymodeSuite) {
+      return { run: none, missing: "the whole suite was not run by the campaign: no test verifier is configured (a sprint's own record is not delivery proof)" };
+    }
+    // THE PREVIOUS RECORD GOES FIRST, so the file read afterwards can only be
+    // one written during this run.
+    const at = join(this.projectRoot, PLAYMODE_RUN_RECORD_REL);
+    try {
+      rmSync(at, { force: true });
+    } catch (err) {
+      return { run: none, missing: `the previous suite record could not be removed (${err instanceof Error ? err.message : String(err)})` };
+    }
+    if (existsSync(at)) return { run: none, missing: "the previous suite record could not be removed" };
+    const since = Date.now();
+    let decision: EvidenceDecision | undefined;
+    let ticketRunId: string | undefined;
+    let toolDetail: string | undefined;
+    try {
+      await this.underTicket(
+        campaign,
+        milestone,
+        // A batch editor owns its process and must say how it ended.
+        { kind: "playmode-suite", medium: "editor" },
+        async (runId) => {
+          ticketRunId = runId;
+          const out = await this.runPlaymodeSuite!(this.projectRoot, runId);
+          toolDetail = out?.detail;
+          return { value: undefined, ...(out?.receipt === undefined ? {} : { receipt: out.receipt }) };
+        },
+        (d) => { decision = d; },
+      );
+    } catch (err) {
+      return { run: none, missing: `the whole suite could not be run by the campaign: ${err instanceof Error ? err.message : String(err)}`.slice(0, 400) };
+    }
+    const run = readPlaymodeRun(this.projectRoot, since - 1000, ticketRunId);
+    const red = run.found && run.total !== undefined && run.green !== true;
+    if (red) return { run, missing: `the campaign's own run of the whole suite is not green: ${run.detail ?? "no detail"}` };
+    if (!run.found) {
+      return { run: none, missing: `no test run was observed: the campaign's run of the whole suite left no record${toolDetail ? ` (${toolDetail.slice(0, 200)})` : ""}` };
+    }
+    const refused = this.refusedProof(decision, "suite");
+    if (refused !== undefined) return { run: none, missing: refused };
+    if (decision?.admitted === true) {
+      const substituted = suiteDisagreesWithReceipt(decision.record.payload, run);
+      return substituted === undefined ? { run } : { run: none, missing: substituted };
+    }
+    // NO RECEIPT, and none expected: only the id this ticket issued binds the
+    // record to the run — and a record without it is nobody's proof.
+    return run.runId === ticketRunId
+      ? { run }
+      : { run: none, missing: "the suite record does not carry the run id the campaign issued for its own run" };
   }
 
   /**

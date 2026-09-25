@@ -28,6 +28,18 @@ import { TaskStatus } from "../tasks/types.js";
 let onTaskCompleted: (() => void) | undefined;
 /** The NUnit record a settling sprint leaves behind; undefined = it ran no suite. */
 let runRecordOnSettle: Record<string, unknown> | undefined;
+/**
+ * The campaign's own run of the whole suite at the final sprint (CMP-8): the
+ * harness answers with the record a settling sprint would leave, stamped with
+ * the run id the campaign issued for this run.
+ */
+const suiteRunner = async (root: string, runId: string): Promise<void> => {
+  if (!runRecordOnSettle) return;
+  mkdirSync(join(root, "Recordings", "tests"), { recursive: true });
+  const record: Record<string, unknown> = { measuredAt: new Date().toISOString(), ...runRecordOnSettle, runId };
+  if (record.measuredAt === null) delete record.measuredAt;
+  writeFileSync(join(root, "Recordings", "tests", "playmode-last.json"), JSON.stringify(record));
+};
 /** Real git checkouts a test made, cleaned up with the fixture. */
 const repos: string[] = [];
 
@@ -348,6 +360,7 @@ describe("CampaignManager", () => {
     manager = new CampaignManager({
       storage,
       // The gate measures the compiler; tests drive it through this.
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -1302,6 +1315,7 @@ describe("CampaignManager", () => {
     manager = new CampaignManager({
       storage,
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => { builds++; return original; },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
@@ -1639,6 +1653,7 @@ describe("CampaignManager", () => {
       storage,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       planner: { planMilestones: vi.fn().mockResolvedValue(structured), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
       taskManager: tasks as unknown as TaskManager,
@@ -1716,6 +1731,7 @@ describe("CampaignManager", () => {
         taskManager: tasks as unknown as TaskManager,
         messenger: async (chatId, text) => { messages.push({ chatId, text }); },
         projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+        runPlaymodeSuite: suiteRunner,
         verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       });
       manager.attachEvents();
@@ -3152,6 +3168,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -3240,6 +3257,7 @@ describe("CampaignManager", () => {
     };
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string, evidenceRunId?: string) => {
         buildTargetsAsked.push(target);
@@ -3328,6 +3346,7 @@ describe("CampaignManager", () => {
 
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string, evidenceRunId?: string) => {
         buildTargetsAsked.push(target);
@@ -3606,6 +3625,7 @@ describe("CampaignManager", () => {
 
     const managerWith = (medium: string, exitCode: number | null) => new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async (_root: string, runId?: string) => ({
         ok: true, ran: true, errors: 0, detail: "compiles",
         ...(runId === undefined ? {} : { receipt: receiptFor(runId, medium, exitCode) }),
@@ -3895,6 +3915,7 @@ describe("CampaignManager", () => {
             artifactSha256: artifactDigest(artifact), execution: { completed: true, exitCode: 0, timedOut: false },
           }),
         }),
+        runPlaymodeSuite: suiteRunner,
         verifyCompile: async (_root, runId) => ({
           ok: true, ran: true,
           receipt: JSON.stringify({ schemaVersion: 1, runId, kind: compileKind, medium: "compiler", revision, execution: { completed: true, exitCode: 0, timedOut: false } }),
@@ -4687,6 +4708,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -4755,6 +4777,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -4812,6 +4835,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -4875,6 +4899,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -5127,6 +5152,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot: repoRoot,
       retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
     });
     manager.attachEvents();
@@ -5351,6 +5377,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
     });
     manager.attachEvents();
@@ -5387,6 +5414,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -5558,6 +5586,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact, spec) => {
@@ -5704,6 +5733,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact) => { played.push(artifact); writePlayerVerdict(true, {}, root); },
@@ -5749,6 +5779,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async (_root: string, target?: string) => ({
         ran: true, ok: true,
@@ -5808,6 +5839,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       // Both targets report the SAME artifact path.
       buildPlayer: async (_root: string, target?: string) => ({
@@ -5851,6 +5883,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); writePlayerVerdict(true, {}, root); },
@@ -5890,6 +5923,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact, spec) => { specs.push(spec); writePlayerVerdict(true, {}, root); },
@@ -6041,6 +6075,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async (_root: string, target?: string) => ({
         ran: true,
@@ -6088,6 +6123,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       buildPlayer: async (_root: string, target?: string) => ({
         ran: true,
@@ -6163,6 +6199,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
       // An .apk on this machine: built, and not executable HERE.
       buildPlayer: async () => ({
@@ -6219,6 +6256,7 @@ describe("CampaignManager", () => {
       messenger: async (chatId, text) => { messages.push({ chatId, text }); },
       projectRoot, retryAdoptionGraceMs: 10, completedSettleDelayMs: 0, milestoneTimeBoxMs: 60 * 60_000,
       deliveryResumeDelayMs: 20,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => ({ ok: true, ran: true, errors: 0 }),
     });
     manager.attachEvents();
@@ -6345,6 +6383,7 @@ describe("CampaignManager", () => {
     const gaps = Array.from({ length: 6 }, (_, i) => `Mechanic ${i + 1}: no milestone implemented it`);
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -6398,6 +6437,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-queued-proof.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -6837,6 +6877,7 @@ describe("CampaignManager", () => {
       .mockResolvedValue([]);
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7282,6 +7323,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-dupe-gaps.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7324,6 +7366,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-no-runner.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       // runPlayer: deliberately absent — this deployment configured none.
@@ -7367,6 +7410,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-delivery-budget.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7431,6 +7475,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-stale-budget.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
@@ -7527,6 +7572,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-total-budget.db"));
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
@@ -7652,6 +7698,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage, planner,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async () => buildVerdict,
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7744,6 +7791,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7791,6 +7839,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7833,6 +7882,7 @@ describe("CampaignManager", () => {
     const seenPrompts: string[] = [];
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7874,6 +7924,7 @@ describe("CampaignManager", () => {
     let campaignId: string | undefined;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -7922,6 +7973,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8005,6 +8057,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); }, // no Recordings/ dir → no evidence
@@ -8103,6 +8156,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8311,6 +8365,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8526,6 +8581,7 @@ describe("CampaignManager", () => {
     const planMilestones = vi.fn().mockResolvedValue(LADDER);
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8675,6 +8731,7 @@ describe("CampaignManager", () => {
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8738,6 +8795,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8910,6 +8968,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -8968,6 +9027,7 @@ describe("CampaignManager", () => {
       taskManager: tasks as unknown as TaskManager,
       messenger: async (chatId, text) => messages.push({ chatId, text }),
       projectRoot,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -9134,6 +9194,7 @@ describe("CampaignManager", () => {
       } as unknown as CampaignPlanner;
       manager = new CampaignManager({
         storage, planner, taskManager: tasks as unknown as TaskManager,
+      runPlaymodeSuite: suiteRunner,
       verifyCompile: async () => compileVerdict,
       buildPlayer: async (_root: string, target?: string) => { buildTargetsAsked.push(target); return buildVerdict; },
       runPlayer: async (root, artifact) => { playerRuns.push(artifact); if (playerVerdictOnRun) writePlayerVerdict(playerVerdictOnRun.ok, playerVerdictOnRun.extra, root); afterPlayerRun?.(); },
@@ -9584,6 +9645,7 @@ describe("CampaignManager", () => {
       } as unknown as Campaign;
       const m = new CampaignManager({
         storage,
+        runPlaymodeSuite: suiteRunner,
         verifyCompile: greenCompilerWithReceipt,
         receiptsExpected: true,
         planner: { planMilestones: vi.fn().mockResolvedValue(LADDER) } as unknown as CampaignPlanner,
@@ -9610,6 +9672,7 @@ describe("CampaignManager", () => {
       storage = new CampaignStorage(join(dir, "campaigns-dirty.db"));
       manager = new CampaignManager({
         storage,
+        runPlaymodeSuite: suiteRunner,
         verifyCompile: greenCompilerWithReceipt,
         receiptsExpected: true,
         planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
@@ -9692,6 +9755,125 @@ describe("CampaignManager", () => {
       await same.resumeActive();
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
       expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+  });
+
+  describe("the final sprint's suite proof is a run the campaign makes itself (CMP-8)", () => {
+    /** A manager like the harness's, with the suite runner a test chooses (or none). */
+    const managerWithSuite = (
+      runPlaymodeSuite: ((root: string, runId: string) => Promise<{ receipt?: string } | void>) | undefined,
+      extra: { receiptsExpected?: boolean } = {},
+    ): CampaignManager => {
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, `campaigns-cmp8-${Math.random().toString(36).slice(2)}.db`));
+      const m = new CampaignManager({
+        storage,
+        ...(runPlaymodeSuite === undefined ? {} : { runPlaymodeSuite }),
+        verifyCompile: async () => compileVerdict,
+        buildPlayer: async () => buildVerdict,
+        runPlayer: async (root) => { writePlayerVerdict(true, {}, root); },
+        planner: {
+          planMilestones: vi.fn().mockResolvedValue(LADDER),
+          auditCoverage: vi.fn().mockResolvedValue([]),
+          resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [], open: [...reqs] })),
+        } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot,
+        retryAdoptionGraceMs: 10,
+        completedSettleDelayMs: 0,
+        milestoneTimeBoxMs: 60 * 60_000,
+        ...extra,
+      });
+      m.attachEvents();
+      return m;
+    };
+    const reachFinalSettle = async (m: CampaignManager): Promise<string> => {
+      const campaign = m.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      settleMilestone("sprint A done");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      settleMilestone("sprint B done");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+      // The worker leaves a fresh, stamped, green, unfiltered record.
+      runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
+      settleMilestone("green, shipping");
+      return campaign.id;
+    };
+
+    it("a record the worker wrote is not delivery proof when the campaign runs no suite of its own", async () => {
+      const m = managerWithSuite(undefined);
+      const id = await reachFinalSettle(m);
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+      const after = storage.get(id)!;
+      expect(after.state).not.toBe("done");
+      expect(after.milestones[2]!.testVerdict).toBeUndefined();
+      expect(after.milestones[2]!.suiteRunMissing).toContain("no test verifier is configured");
+    });
+
+    it("a record the campaign's run did not stamp with its ticket's run id is not delivery proof", async () => {
+      const ranWith: string[] = [];
+      // A producer that ran and left a green record naming no run.
+      const m = managerWithSuite(async (root, runId) => {
+        ranWith.push(runId);
+        mkdirSync(join(root, "Recordings", "tests"), { recursive: true });
+        writeFileSync(join(root, "Recordings", "tests", "playmode-last.json"), JSON.stringify({
+          total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date().toISOString(),
+        }));
+      });
+      const id = await reachFinalSettle(m);
+      await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
+      expect(ranWith.length).toBeGreaterThanOrEqual(1);
+      const after = storage.get(id)!;
+      expect(after.state).not.toBe("done");
+      expect(after.milestones[2]!.suiteRunMissing).toContain("run id the campaign issued");
+    });
+
+    it("the campaign's own run, stamped with its ticket, delivers — and the worker's record is removed first", async () => {
+      let sawWorkerRecord: boolean | undefined;
+      const m = managerWithSuite(async (root, runId) => {
+        sawWorkerRecord = existsSync(join(root, "Recordings", "tests", "playmode-last.json"));
+        await suiteRunner(root, runId);
+      });
+      const id = await reachFinalSettle(m);
+      await waitFor(() => expect(storage.get(id)!.state).toBe("done"), { timeout: 15_000 });
+      expect(sawWorkerRecord).toBe(false);
+      expect(storage.get(id)!.milestones[2]!.testVerdictUnfiltered).toBe(true);
+    });
+
+    it("an admitted receipt binds the record only when its counts are the record's", async () => {
+      const campaign = {
+        id: "c_cmp8", chatId: "chat", channelType: "cli", userId: "u", projectRoot,
+        state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      } as unknown as Campaign;
+      let recordTotal = 42;
+      const m = managerWithSuite(async (root, runId) => {
+        mkdirSync(join(root, "Recordings", "tests"), { recursive: true });
+        writeFileSync(join(root, "Recordings", "tests", "playmode-last.json"), JSON.stringify({
+          total: recordTotal, passed: recordTotal, failed: 0, skipped: 0, unfiltered: true, measuredAt: new Date().toISOString(),
+        }));
+        // What the producer measured, in its receipt; the record names no run.
+        return {
+          receipt: JSON.stringify({
+            schemaVersion: 1, runId, kind: "playmode-suite", medium: "editor", revision: "",
+            execution: { completed: true, exitCode: 0, timedOut: false },
+            payload: { result: "Passed", total: 42, passed: 42, failed: 0, skipped: 0, exceptions: 0, filter: null, categories: null },
+          }),
+        };
+      }, { receiptsExpected: true });
+      type Measured = { run: { found: boolean; green?: boolean }; missing?: string };
+      const measure = (): Promise<Measured> =>
+        (m as unknown as { measureDeliverySuite(c: unknown, ms: unknown): Promise<Measured> })
+          .measureDeliverySuite(campaign, { id: "m_cmp8", title: "Delivery", prompt: "p", status: "running", attempts: 1 });
+      const bound = await measure();
+      expect(bound.missing).toBeUndefined();
+      expect(bound.run.green).toBe(true);
+      // A green record that is not the run the receipt describes is some other file.
+      recordTotal = 40;
+      const other = await measure();
+      expect(other.run.found).toBe(false);
+      expect(other.missing).toContain("not the run the receipt describes");
     });
   });
 });

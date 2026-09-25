@@ -172,6 +172,12 @@ export interface CampaignMilestone {
   testVerdictUnfiltered?: boolean;
   /** Where the verdict came from: the NUnit run record the tool wrote, or the tool's prose (2026-09-10). */
   testRunSource?: "nunit" | "prose";
+  /**
+   * Why the final sprint's campaign-run suite (CMP-8) does not prove the
+   * suite green: no runner, a refused receipt, a record the run did not
+   * write, or a run that was red. Unset when it does.
+   */
+  suiteRunMissing?: string;
   /** Tests the last observed run reported FAILING (bounded; see the verdict). */
   testFailures?: readonly string[];
   /** How many further failing names the run printed beyond those listed. */

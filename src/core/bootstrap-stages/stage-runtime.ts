@@ -470,6 +470,9 @@ export async function initializeTaskRuntimeStage(
       // Play the artifact the campaign built: unity_run_player writes its
       // verdict under Recordings/player-playthrough, which the campaign reads.
       runPlayer: params.toolRegistry ? makeRunPlayer(params.toolRegistry) : undefined,
+      // The final sprint's suite proof is a run the campaign makes itself,
+      // under its own ticket — never the record a sprint left (CMP-8).
+      runPlaymodeSuite: params.toolRegistry ? makeRunPlaymodeSuite(params.toolRegistry) : undefined,
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
     });
     campaignManager.attachEvents();
@@ -1101,6 +1104,31 @@ export function makeVerifyCompile(
               ...(errors === undefined ? {} : { errors }),
               detail: detail.slice(0, 300),
             });
+  };
+}
+
+/**
+ * The campaign's own run of the WHOLE PlayMode suite (CMP-8): unity_playmode_verify
+ * with no filter and no categories, carrying the ticket's run id so the
+ * producer stamps a receipt for it. A red suite is an answer, not a failure of
+ * the dispatch: the record it wrote is the verdict, so nothing is thrown.
+ */
+export function makeRunPlaymodeSuite(registry: {
+  getAvailableToolNames(): readonly string[];
+  execute(name: string, input: Record<string, unknown>, context: never): Promise<{ content?: unknown; isError?: boolean }>;
+}): (projectRoot: string, evidenceRunId: string) => Promise<{ receipt?: string; detail?: string }> {
+  return async (projectRoot, evidenceRunId) => {
+    if (!registry.getAvailableToolNames().includes("unity_playmode_verify")) {
+      throw new Error("unity_playmode_verify is not registered");
+    }
+    const result = await registry.execute(
+      "unity_playmode_verify",
+      { evidenceRunId },
+      { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false } as never,
+    );
+    const content = String(result.content ?? "");
+    const receipt = extractReceipt(content);
+    return { ...(receipt === undefined ? {} : { receipt }), ...(result.isError === true ? { detail: content.slice(0, 300) } : {}) };
   };
 }
 
