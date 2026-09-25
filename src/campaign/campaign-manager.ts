@@ -207,6 +207,12 @@ export interface CampaignManagerOptions {
   maxMilestoneAttempts?: number;
   /** GDD revision rounds at the approval gate before cancelling. */
   maxDraftAttempts?: number;
+  /**
+   * How long a drafted GDD may wait at the approval gate with no answer
+   * before the campaign is parked as cancelled (default 72 h, CMP-4). The gate
+   * holds the chat and the project slot; "kampanya devam" reopens it.
+   */
+  approvalTimeoutMs?: number;
   /** Grace before reacting to a bad settlement (tests shrink it). */
   retryAdoptionGraceMs?: number;
   /** Delay before acting on a COMPLETED settle (lets the lease write-back land). */
@@ -259,6 +265,16 @@ const CANCEL_RE = /^(?:kampanya(?:yı)?\s+(?:iptal(?:\s+et)?|durdur)|campaign\s+
  * judged on its own outcome.
  */
 const RETRY_ADOPTION_GRACE_MS = 90_000;
+
+/**
+ * How long an unanswered GDD approval gate holds the chat and the project
+ * slot (CMP-4). Long enough for a person to sleep on a design over a weekend;
+ * an expired gate is parked as cancelled, and "kampanya devam" reopens it on
+ * the same draft.
+ */
+const APPROVAL_GATE_TIMEOUT_MS = 72 * 60 * 60_000;
+/** setTimeout's own ceiling (~24.8 days): a longer delay fires at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /** A markdown file whose name says it is a game design document. */
 const GDD_NAME_RE = /(?:gdd|game[ _-]?design[ _-]?doc)[^/\\]*\.md$/i;
@@ -983,6 +999,7 @@ export class CampaignManager {
   private readonly independentReviewer: CampaignManagerOptions["independentReviewer"];
   private readonly maxMilestoneAttempts: number;
   private readonly maxDraftAttempts: number;
+  private readonly approvalTimeoutMs: number;
   private readonly retryAdoptionGraceMs: number;
   private readonly completedSettleDelayMs: number;
   private readonly milestoneTimeBoxMs: number;
@@ -1008,6 +1025,7 @@ export class CampaignManager {
     this.independentReviewer = options.independentReviewer;
     this.maxMilestoneAttempts = options.maxMilestoneAttempts ?? 2;
     this.maxDraftAttempts = options.maxDraftAttempts ?? 3;
+    this.approvalTimeoutMs = options.approvalTimeoutMs ?? APPROVAL_GATE_TIMEOUT_MS;
     this.retryAdoptionGraceMs = options.retryAdoptionGraceMs ?? RETRY_ADOPTION_GRACE_MS;
     this.completedSettleDelayMs = options.completedSettleDelayMs ?? 5_000;
     this.milestoneTimeBoxMs = options.milestoneTimeBoxMs ?? 6 * 60 * 60_000;
@@ -2110,6 +2128,8 @@ export class CampaignManager {
       case "awaiting-approval":
         // Passive by design: the designer's next message re-enters via
         // tryHandleApproval. A boot-time nudge would re-spam every restart.
+        // Its expiry is re-armed, though: the timer died with the process.
+        this.armApprovalExpiry(campaign.id);
         return;
       default:
         return;
@@ -2119,6 +2139,46 @@ export class CampaignManager {
   // ===========================================================================
   // INTERNAL — transitions
   // ===========================================================================
+
+  /**
+   * THE GATE DOES NOT WAIT FOREVER (CMP-4). An unanswered approval gate held
+   * the chat and the project slot until someone replied. Armed whenever the
+   * gate opens (and again at boot): once the row has sat at the gate for
+   * `approvalTimeoutMs` with nothing written to it, the campaign is parked as
+   * cancelled — revivable with "kampanya devam", which reopens the gate on
+   * the same draft — and the chat is told.
+   */
+  private armApprovalExpiry(campaignId: string): void {
+    const fresh = this.storage.get(campaignId);
+    if (!fresh || fresh.state !== "awaiting-approval") return;
+    const dueInMs = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, fresh.updatedAt + this.approvalTimeoutMs - Date.now()));
+    const timer = setTimeout(() => {
+      this.enqueueSettle(campaignId, () => this.expireApprovalGate(campaignId));
+    }, dueInMs);
+    timer.unref?.();
+  }
+
+  private async expireApprovalGate(campaignId: string): Promise<void> {
+    if (!this.storage.isOpen()) return;
+    const fresh = this.storage.get(campaignId);
+    // Answered, revised or cancelled meanwhile: the gate is not waiting.
+    if (!fresh || fresh.state !== "awaiting-approval" || !this.isOurs(fresh)) return;
+    // Written to since this timer was armed: the clock runs from that write.
+    if (Date.now() < fresh.updatedAt + this.approvalTimeoutMs) {
+      this.armApprovalExpiry(campaignId);
+      return;
+    }
+    const hours = Math.max(1, Math.round(this.approvalTimeoutMs / 3_600_000));
+    fresh.state = "cancelled";
+    fresh.lastError = `the GDD approval gate expired — no answer in ${hours} h`;
+    if (!this.persist(fresh)) return;
+    getLoggerSafe().info("Campaign GDD approval gate expired", { id: campaignId, hours });
+    await this.tell(
+      fresh,
+      `The GDD draft${fresh.gddPath ? ` at \`${fresh.gddPath}\`` : ""} waited ${hours} h for approval with no answer, ` +
+        "so the campaign is parked and this chat and project are free again. Reply **kampanya devam** to reopen the gate on the same draft.",
+    );
+  }
 
   /**
    * Idea mode whose GDD nobody has approved yet: the work to resume is the
@@ -2151,7 +2211,9 @@ export class CampaignManager {
       return;
     }
     campaign.state = "awaiting-approval";
-    if (!this.persist(campaign) || lead === undefined) return;
+    if (!this.persist(campaign)) return;
+    this.armApprovalExpiry(campaign.id);
+    if (lead === undefined) return;
     await this.tell(
       campaign,
       `${lead} — the GDD draft at \`${campaign.gddPath}\` was never approved, so the build does not start from it. ` +
@@ -2872,7 +2934,7 @@ export class CampaignManager {
       }
       campaign.gddPath = gddPath;
       campaign.state = "awaiting-approval";
-      this.persist(campaign);
+      if (this.persist(campaign)) this.armApprovalExpiry(campaign.id);
       await this.tell(
         campaign,
         `GDD drafted at \`${gddPath}\`. Review it — reply **evet/onay** to start the build, or **revise: <what to change>** (revision ${campaign.draftAttempts + 1} of max ${this.maxDraftAttempts}).`,

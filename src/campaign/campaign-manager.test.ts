@@ -9538,6 +9538,51 @@ describe("CampaignManager", () => {
       expect(await say("evet")).toBe(true);
       await waitFor(() => expect(storage.get(id)!.state).toBe("executing"));
     });
+
+    /** A manager on its own storage whose gate waits `approvalTimeoutMs`. */
+    const gateManager = (approvalTimeoutMs: number): CampaignManager => {
+      const m = new CampaignManager({
+        storage,
+        planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+        taskManager: tasks as unknown as TaskManager,
+        messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+        projectRoot,
+        retryAdoptionGraceMs: 10,
+        completedSettleDelayMs: 0,
+        approvalTimeoutMs,
+      });
+      m.attachEvents();
+      return m;
+    };
+
+    it("an unanswered gate expires into a cancelled campaign that frees the chat and revives onto the same draft", async () => {
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, "campaigns-gate-expiry.db"));
+      manager = gateManager(300);
+      const id = await atTheGate();
+      await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+      expect(storage.get(id)!.lastError).toContain("approval gate expired");
+      expect(messages.at(-1)!.text).toContain("kampanya devam");
+      expect(storage.listActive().map((c) => c.id)).not.toContain(id);
+      // A person's revival reopens the gate on the same draft — no redraft.
+      expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
+      expect(storage.get(id)!.state).toBe("awaiting-approval");
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("a gate that was waiting when the process stopped still expires after a restart", async () => {
+      tasks = new FakeTaskManager();
+      storage.close();
+      storage = new CampaignStorage(join(dir, "campaigns-gate-boot.db"));
+      manager = gateManager(72 * 60 * 60_000);
+      const id = await atTheGate();
+      manager.dispose();
+      storage = new CampaignStorage(join(dir, "campaigns-gate-boot.db"));
+      manager = gateManager(1);
+      await manager.resumeActive();
+      await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+    });
   });
 
   describe("a GDD is read only from inside the project (CMP-12)", () => {
