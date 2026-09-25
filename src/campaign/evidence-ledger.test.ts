@@ -4,10 +4,11 @@
  * all, so its refusals constrained nothing (Codex 2026-09-13 AF#1).
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, symlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, artifactManifest, describeLedgerRow } from "./evidence-ledger.js";
+import { basename, join } from "node:path";
+import { ARTIFACT_DIGEST_VERSION, EvidenceLedger, artifactDigest, artifactDigestAsync, artifactManifest, describeLedgerRow } from "./evidence-ledger.js";
 import { issueRunId, receiveEvidence, recordSha256, type EvidenceTicket } from "./producer-evidence.js";
 
 const REVISION = "a".repeat(40);
@@ -117,6 +118,46 @@ describe("artifactDigest", () => {
     const b = artifactDigest(bundle("B.app", Buffer.alloc(26_648, 2)));
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect(a).not.toBe(b);
+  });
+
+  /** The digest scheme computed by hand from whole-file reads, as the producer computes it. */
+  const byHand = (app: string, files: ReadonlyArray<[rel: string, bytes: Buffer]>): string => {
+    const hash = createHash("sha256").update(`${ARTIFACT_DIGEST_VERSION}\n`).update(`${basename(app)}\n`);
+    for (const [rel, bytes] of files) hash.update(`${rel}:${bytes.length}\n`).update(bytes);
+    return hash.digest("hex");
+  };
+
+  it("reads a large artifact in pieces and without blocking the event loop, to the same digest (CMP-11)", async () => {
+    // Larger than one read chunk, so both the chunked read and the stream span several.
+    const game = Buffer.alloc(3 * 1024 * 1024 + 17, 3);
+    const plist = Buffer.from("<plist/>");
+    const put = (name: string): string => {
+      const app = bundle(name, game);
+      writeFileSync(join(app, "Contents", "Info.plist"), plist);
+      return app;
+    };
+    const streamed = put("Streamed.app");
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 0);
+    const digest = await artifactDigestAsync(streamed);
+    clearInterval(timer);
+    expect(digest).toBe(byHand(streamed, [["/Contents/Info.plist", plist], ["/Contents/MacOS/Game", game]]));
+    expect(ticks).toBeGreaterThan(0);
+    const chunked = put("Chunked.app");
+    expect(artifactDigest(chunked)).toBe(byHand(chunked, [["/Contents/Info.plist", plist], ["/Contents/MacOS/Game", game]]));
+    expect(await artifactDigestAsync(join(dir, "Nothing.app"))).toBeUndefined();
+  });
+
+  it("a remembered digest is not reused once the bytes change, even at the same size and mtime (CMP-11)", async () => {
+    const app = bundle("Same.app", Buffer.alloc(4096, 1));
+    const exe = join(app, "Contents", "MacOS", "Game");
+    const before = artifactDigest(app);
+    expect(await artifactDigestAsync(app)).toBe(before);
+    const { mtime, atime } = statSync(exe);
+    writeFileSync(exe, Buffer.alloc(4096, 2));
+    utimesSync(exe, atime, mtime);
+    expect(artifactDigest(app)).not.toBe(before);
+    expect(await artifactDigestAsync(app)).toBe(artifactDigest(app));
   });
 
   it("is stable for the same bytes and absent for an artifact that is not there", () => {

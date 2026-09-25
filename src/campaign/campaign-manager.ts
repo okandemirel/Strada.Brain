@@ -11,7 +11,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
-import { EvidenceLedger, artifactDigest, describeLedgerRow } from "./evidence-ledger.js";
+import { EvidenceLedger, artifactDigest, artifactDigestAsync, describeLedgerRow } from "./evidence-ledger.js";
 import { receiptOfFailure } from "./producer-failure.js";
 import {
   issueRunId,
@@ -22,7 +22,8 @@ import {
   type EvidenceDecision,
   type EvidenceTicket,
 } from "./producer-evidence.js";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
@@ -265,6 +266,17 @@ const CANCEL_RE = /^(?:kampanya(?:yı)?\s+(?:iptal(?:\s+et)?|durdur)|campaign\s+
  * judged on its own outcome.
  */
 const RETRY_ADOPTION_GRACE_MS = 90_000;
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * `git status` over the BUILD INPUTS only — shared by the blocking probe and
+ * the one a dispatch awaits (CMP-11), so the two cannot drift apart.
+ */
+const DIRTY_STATUS_ARGS: readonly string[] = [
+  "status", "--porcelain", "--ignore-submodules=none",
+  "--", ".", ":(exclude).strada", ":(exclude)Recordings",
+];
 
 /**
  * How long an unanswered GDD approval gate holds the chat and the project
@@ -5098,10 +5110,7 @@ export class CampaignManager {
       // submodules — still counts.
       const out = execFileSync(
         "git",
-        [
-          "status", "--porcelain", "--ignore-submodules=none",
-          "--", ".", ":(exclude).strada", ":(exclude)Recordings",
-        ],
+        [...DIRTY_STATUS_ARGS],
         {
           cwd: this.projectRoot,
           encoding: "utf8",
@@ -5152,14 +5161,7 @@ export class CampaignManager {
       // …and no `.git` ANYWHERE ABOVE the project: checking only the
       // project's own directory called a subdirectory of a repository "no
       // git" and let it close requirements uncached (Codex 2026-09-12 AB).
-      let at = this.projectRoot;
-      for (;;) {
-        if (existsSync(join(at, ".git"))) return "unknown";
-        const up = dirname(at);
-        if (up === at) break;
-        at = up;
-      }
-      return "none";
+      return this.gitAboveProject() ? "unknown" : "none";
     }
   }
 
@@ -5240,6 +5242,51 @@ export class CampaignManager {
     };
     walk(this.projectRoot, "");
     return incomplete ? "" : `fp:${hash.digest("hex")}`;
+  }
+
+  /**
+   * The repository probes a ticketed dispatch makes before and after every
+   * run, without blocking the event loop (CMP-11): `git status` on a large
+   * Unity tree takes seconds, and the daemon's chats, portal and executor
+   * all waited on it. Same commands, same answers as the blocking ones.
+   */
+  private async projectRevisionAsync(): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 });
+      return stdout.trim();
+    } catch {
+      return "";
+    }
+  }
+
+  private async projectIsDirtyAsync(): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync("git", [...DIRTY_STATUS_ARGS], { cwd: this.projectRoot, encoding: "utf8", timeout: 20_000 });
+      return stdout.trim() !== "";
+    } catch {
+      return true;
+    }
+  }
+
+  private async projectRepoStateAsync(): Promise<"revision" | "none" | "unknown"> {
+    if ((await this.projectRevisionAsync()) !== "") return "revision";
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000 });
+      return stdout.trim() === "true" ? "unknown" : "none";
+    } catch {
+      return this.gitAboveProject() ? "unknown" : "none";
+    }
+  }
+
+  /** Is there a `.git` anywhere at or above the project? */
+  private gitAboveProject(): boolean {
+    let at = this.projectRoot;
+    for (;;) {
+      if (existsSync(join(at, ".git"))) return true;
+      const up = dirname(at);
+      if (up === at) return false;
+      at = up;
+    }
   }
 
   private projectRevision(): string {
@@ -8222,9 +8269,12 @@ export class CampaignManager {
     // outside git refused every receipt as SOURCE_DIRTY (Codex 2026-09-13
     // AI#6). An unborn or broken repository is a different thing: it is
     // UNKNOWN, and unknown is not clean.
-    const repoBefore = this.projectRepoState();
-    const dirtyBefore = repoBefore === "none" ? false : this.projectIsDirty();
-    const artifactBefore = artifactDigest(binding.artifactPath);
+    // AWAITED, not blocking (CMP-11): the probes and the digest of a
+    // gigabyte player run before and after every dispatch.
+    const repoBefore = await this.projectRepoStateAsync();
+    const dirtyBefore = repoBefore === "none" ? false : await this.projectIsDirtyAsync();
+    const revisionBefore = await this.projectRevisionAsync();
+    const artifactBefore = await artifactDigestAsync(binding.artifactPath);
     const ticket: EvidenceTicket = {
       issuedAt: Date.now(),
       ...(binding.requestedSessions === undefined ? {} : { requestedSessions: binding.requestedSessions }),
@@ -8236,7 +8286,7 @@ export class CampaignManager {
         runId: issueRunId(),
         kind: binding.kind,
         medium: binding.medium,
-        revision: this.projectRevision(),
+        revision: revisionBefore,
         dirty: dirtyBefore,
         ...(binding.target === undefined ? {} : { target: binding.target }),
         ...(artifactBefore === undefined ? {} : { artifactSha256: artifactBefore }),
@@ -8262,7 +8312,10 @@ export class CampaignManager {
       failedReceipt = receiptOfFailure(err);
       throw err;
     } finally {
-      const repoNow = this.projectRepoState();
+      const repoNow = await this.projectRepoStateAsync();
+      const revisionNow = await this.projectRevisionAsync();
+      const dirtyNow = repoNow === "none" ? false : await this.projectIsDirtyAsync();
+      const artifactNow = binding.artifactPath === undefined ? undefined : await artifactDigestAsync(binding.artifactPath);
       // WHAT THIS CALLER ACTUALLY OBSERVED, and nothing more. The transport
       // observation used to carry `exitCode: 0` on the strength of the
       // callback having returned — an exit code nobody here measured, which
@@ -8279,14 +8332,14 @@ export class CampaignManager {
         outcome?.receipt ?? failedReceipt,
         { completed: outcome !== undefined, exitCode: null, timedOut: false },
         {
-          revisionNow: this.projectRevision(),
-          dirtyNow: repoNow === "none" ? false : this.projectIsDirty(),
+          revisionNow,
+          dirtyNow,
           // …and a repository state nobody could read binds no tree at all.
           ...(repoNow === "unknown" ? { sourceUnknown: true } : {}),
           // THE ARTIFACT AS IT IS NOW, measured here: a player receipt cannot
           // be admitted without a digest the caller took for itself, and this
           // wrapper never supplied one (AH#6).
-          ...(binding.artifactPath === undefined ? {} : { artifactSha256: artifactDigest(binding.artifactPath) ?? "" }),
+          ...(binding.artifactPath === undefined ? {} : { artifactSha256: artifactNow ?? "" }),
         },
       );
       onDecision?.(decision);

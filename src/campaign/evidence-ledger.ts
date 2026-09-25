@@ -16,9 +16,10 @@
  */
 
 import Database from "better-sqlite3";
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { mkdirSync, readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { closeSync, createReadStream, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, realpathSync, type BigIntStats } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import type { EvidenceDecision, EvidenceTicket } from "./producer-evidence.js";
 import { recordSha256 } from "./producer-evidence.js";
 
@@ -223,55 +224,179 @@ export function describeLedgerRow(row: LedgerRow): string {
 export function artifactDigest(path: string | undefined): string | undefined {
   if (path === undefined || path === "") return undefined;
   try {
-    const hash = createHash("sha256");
-    // THE BYTES, not the names and sizes. Hashing paths and sizes made two
-    // different files of the same size identical — measured on two real
-    // 26 648-byte files, whose digests matched exactly (Codex 2026-09-13
-    // AH#8). A player artifact is what a person would run; a same-size
-    // replacement is a different game.
-    hash.update(`${ARTIFACT_DIGEST_VERSION}\n`);
-    // WHICH artifact in that layout, so two executables shipped side by side
-    // are not one artifact.
-    hash.update(`${basename(path)}\n`);
-    // THE FILES THE BUILD SAID IT SHIPPED, when it said: the layout walk picks
-    // up whatever is written beside the executable afterwards (AJ#4).
-    const manifest = artifactManifest(path);
-    if (manifest !== undefined) {
-      // The listed files, each by name, size and bytes: dropping one from the
-      // list drops its line, so the manifest's own formatting is not part of
-      // the artifact's identity (a reformatted manifest is the same game).
-      const base = dirname(path);
-      for (const rel of [...manifest.files].sort()) {
-        const at = join(base, rel);
-        const st = statSync(at);
-        hash.update(`${rel}:${st.size}\n`);
-        hash.update(readFileSync(at));
-      }
-      return hash.digest("hex");
-    }
-    const walk = (at: string, rel: string): void => {
-      const st = statSync(at);
-      if (st.isDirectory()) {
-        for (const entry of readdirSync(at).sort()) walk(join(at, entry), `${rel}/${entry}`);
-        return;
-      }
-      hash.update(`${rel}:${st.size}\n`);
-      hash.update(readFileSync(at));
-    };
-    walk(playerLayoutRoot(path), "");
-    // A single-file player (an .apk) with an expansion file beside it: the
-    // .obb is the game's data, and a manifest-less digest of the .apk alone
-    // left it out (round 3 #4).
-    if (playerLayoutRoot(path) === path && !statSync(path).isDirectory()) {
-      for (const entry of readdirSync(dirname(path)).sort()) {
-        if (isCompanionObb(entry, basename(path))) walk(join(dirname(path), entry), "/" + entry);
+    const files = artifactFiles(path);
+    const signature = digestSignature(files);
+    const cached = digestCache.get(path);
+    if (cached !== undefined && cached.signature === signature) return cached.digest;
+    const hash = digestHeader(path);
+    // IN CHUNKS, not one readFileSync per file: a player data file over 2 GiB
+    // made the read throw, and the artifact had no digest at all (CMP-11).
+    const chunk = Buffer.allocUnsafe(DIGEST_CHUNK_BYTES);
+    for (const file of files) {
+      hash.update(`${file.rel}:${file.size}\n`);
+      const fd = openSync(file.at, "r");
+      try {
+        for (let n = readSync(fd, chunk, 0, chunk.length, null); n > 0; n = readSync(fd, chunk, 0, chunk.length, null)) {
+          hash.update(chunk.subarray(0, n));
+        }
+      } finally {
+        closeSync(fd);
       }
     }
-    return hash.digest("hex");
+    return rememberDigest(path, signature, hash.digest("hex"));
   } catch {
     // An artifact that is not there has no digest, and saying so is the point.
     return undefined;
   }
+}
+
+/**
+ * The same digest, read without blocking the event loop (CMP-11).
+ *
+ * A player build is gigabytes, and the daemon hashed it synchronously several
+ * times per delivery round — every chat, the portal and the task executor
+ * stalled for the whole read. This walks and streams asynchronously; the
+ * bytes hashed and their order are exactly `artifactDigest`'s, so the two
+ * agree with each other and with the producer.
+ */
+export async function artifactDigestAsync(path: string | undefined): Promise<string | undefined> {
+  if (path === undefined || path === "") return undefined;
+  try {
+    const files = await artifactFilesAsync(path);
+    const signature = digestSignature(files);
+    const cached = digestCache.get(path);
+    if (cached !== undefined && cached.signature === signature) return cached.digest;
+    const hash = digestHeader(path);
+    for (const file of files) {
+      hash.update(`${file.rel}:${file.size}\n`);
+      for await (const piece of createReadStream(file.at, { highWaterMark: DIGEST_CHUNK_BYTES })) {
+        hash.update(piece as Buffer);
+      }
+    }
+    return rememberDigest(path, signature, hash.digest("hex"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** One file an artifact digest covers, in the order it is hashed. */
+interface DigestFile {
+  readonly at: string;
+  readonly rel: string;
+  readonly size: bigint;
+  /** What would change if the bytes did: size, mtime, ctime and inode, at nanosecond precision. */
+  readonly stamp: string;
+}
+
+const DIGEST_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * THE DIGEST OF AN UNCHANGED ARTIFACT IS NOT READ AGAIN. The same build was
+ * hashed before and after every run and again for session accounting — six
+ * to ten full reads a round (CMP-11). An entry is reused only while every
+ * file's size, mtime, ctime and inode are what they were: a same-size
+ * rewrite moves ctime even when mtime is put back, and a replaced file is a
+ * new inode.
+ */
+const digestCache = new Map<string, { readonly signature: string; readonly digest: string }>();
+const DIGEST_CACHE_MAX = 32;
+
+function digestSignature(files: readonly DigestFile[]): string {
+  const hash = createHash("sha256");
+  for (const file of files) hash.update(`${file.rel}\0${file.stamp}\n`);
+  return hash.digest("hex");
+}
+
+function rememberDigest(path: string, signature: string, digest: string): string {
+  digestCache.delete(path);
+  digestCache.set(path, { signature, digest });
+  if (digestCache.size > DIGEST_CACHE_MAX) {
+    const oldest = digestCache.keys().next().value;
+    if (oldest !== undefined) digestCache.delete(oldest);
+  }
+  return digest;
+}
+
+function digestHeader(path: string): Hash {
+  const hash = createHash("sha256");
+  // THE BYTES, not the names and sizes. Hashing paths and sizes made two
+  // different files of the same size identical — measured on two real
+  // 26 648-byte files, whose digests matched exactly (Codex 2026-09-13
+  // AH#8). A player artifact is what a person would run; a same-size
+  // replacement is a different game.
+  hash.update(`${ARTIFACT_DIGEST_VERSION}\n`);
+  // WHICH artifact in that layout, so two executables shipped side by side
+  // are not one artifact.
+  hash.update(`${basename(path)}\n`);
+  return hash;
+}
+
+function digestFile(at: string, rel: string, st: BigIntStats): DigestFile {
+  return { at, rel, size: st.size, stamp: `${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}` };
+}
+
+/**
+ * The files the digest covers, in order. Throws when any of them cannot be
+ * read: a partial walk is not the artifact.
+ */
+function artifactFiles(path: string): DigestFile[] {
+  const out: DigestFile[] = [];
+  // THE FILES THE BUILD SAID IT SHIPPED, when it said: the layout walk picks
+  // up whatever is written beside the executable afterwards (AJ#4).
+  const manifest = artifactManifest(path);
+  if (manifest !== undefined) {
+    // The listed files, each by name, size and bytes: dropping one from the
+    // list drops its line, so the manifest's own formatting is not part of
+    // the artifact's identity (a reformatted manifest is the same game).
+    const base = dirname(path);
+    for (const rel of [...manifest.files].sort()) out.push(digestFile(join(base, rel), rel, statSync(join(base, rel), { bigint: true })));
+    return out;
+  }
+  const walk = (at: string, rel: string): void => {
+    const st = statSync(at, { bigint: true });
+    if (st.isDirectory()) {
+      for (const entry of readdirSync(at).sort()) walk(join(at, entry), `${rel}/${entry}`);
+      return;
+    }
+    out.push(digestFile(at, rel, st));
+  };
+  walk(playerLayoutRoot(path), "");
+  // A single-file player (an .apk) with an expansion file beside it: the
+  // .obb is the game's data, and a manifest-less digest of the .apk alone
+  // left it out (round 3 #4).
+  if (playerLayoutRoot(path) === path && !statSync(path).isDirectory()) {
+    for (const entry of readdirSync(dirname(path)).sort()) {
+      if (isCompanionObb(entry, basename(path))) walk(join(dirname(path), entry), "/" + entry);
+    }
+  }
+  return out;
+}
+
+/** `artifactFiles`, walked without blocking; the same files in the same order. */
+async function artifactFilesAsync(path: string): Promise<DigestFile[]> {
+  const out: DigestFile[] = [];
+  const manifest = artifactManifest(path);
+  if (manifest !== undefined) {
+    const base = dirname(path);
+    for (const rel of [...manifest.files].sort()) out.push(digestFile(join(base, rel), rel, await stat(join(base, rel), { bigint: true })));
+    return out;
+  }
+  const walk = async (at: string, rel: string): Promise<void> => {
+    const st = await stat(at, { bigint: true });
+    if (st.isDirectory()) {
+      for (const entry of (await readdir(at)).sort()) await walk(join(at, entry), `${rel}/${entry}`);
+      return;
+    }
+    out.push(digestFile(at, rel, st));
+  };
+  const root = playerLayoutRoot(path);
+  await walk(root, "");
+  if (root === path && !(await stat(path)).isDirectory()) {
+    for (const entry of (await readdir(dirname(path))).sort()) {
+      if (isCompanionObb(entry, basename(path))) await walk(join(dirname(path), entry), "/" + entry);
+    }
+  }
+  return out;
 }
 
 /**
