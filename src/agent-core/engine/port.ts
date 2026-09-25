@@ -76,7 +76,7 @@ export interface PortDeps extends ToolTurnDeps {
     primaryName: string,
     task?: TaskClassification,
     phase?: string,
-    options?: { modelId?: string; identityKey?: string; usesMultipleProviders?: boolean },
+    options?: { modelId?: string; identityKey?: string; pinned?: boolean },
   ): IAIProvider | null;
   maybeCompactSession(session: Session, providerName: string, modelId?: string, systemPrompt?: string, toolChars?: number): void;
   saveBudgetExceededCheckpoint(params: {
@@ -251,8 +251,8 @@ export function createAgentCorePort(
         c.lastProviderCapabilities = prepared.currentProvider.capabilities;
         // v1 parity (deletion-map risk catch): BOTH v1 loops wrap the assignment provider with
         // buildTaskAwareProvider before the LLM call (:3980 background / :5561 interactive) — a
-        // router-ranked multi-provider resilient chain (primary first), honoring a hard pin via
-        // usesMultipleProviders=false. The spine consumed prepared.currentProvider RAW, silently
+        // router-ranked multi-provider resilient chain (primary first), honoring a hard pin or a
+        // supervisor node pin via `pinned`. The spine consumed prepared.currentProvider RAW, silently
         // dropping the in-call fallback chain on the now-default v2 path. Wrap here so every
         // gateway call gets the identical resilient provider v1 used.
         const resilientProvider =
@@ -263,7 +263,9 @@ export function createAgentCorePort(
             {
               modelId: prepared.currentAssignment.modelId,
               identityKey: params.identityKey,
-              usesMultipleProviders: prepared.executionStrategy.usesMultipleProviders,
+              // The PIN, not "one provider in the strategy": a soft preference that routed every
+              // role to one provider must still fail over within the turn.
+              pinned: prepared.executionStrategy.providerPinned === true,
             },
           ) ?? prepared.currentProvider;
         return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]

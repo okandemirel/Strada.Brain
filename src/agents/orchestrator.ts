@@ -2014,7 +2014,7 @@ export class Orchestrator {
   /**
    * step5-parity (resurrected — deleted as "loop-only" but the CAPABILITY belongs to the engine):
    * a supervisor-assigned provider pin materializes a strategy with EVERY role on the pinned
-   * provider+model and usesMultipleProviders=false, so a vision-pinned image subtask can never
+   * provider+model and providerPinned=true, so a vision-pinned image subtask can never
    * silently run (and gate) on the identity default. Consumed by setupAgentCoreRun →
    * runCtx.fixedExecutionStrategy → prepareIteration's fixedExecutionStrategy param.
    */
@@ -2045,6 +2045,7 @@ export class Orchestrator {
       reviewer: buildAssignment("reviewer"),
       synthesizer: buildAssignment("synthesizer"),
       usesMultipleProviders: false,
+      providerPinned: true,
     };
   }
 
@@ -4755,19 +4756,22 @@ export class Orchestrator {
     primaryName: string,
     task?: import("../agent-core/routing/routing-types.js").TaskClassification,
     phase?: string,
-    options?: { modelId?: string; identityKey?: string; usesMultipleProviders?: boolean },
+    options?: { modelId?: string; identityKey?: string; pinned?: boolean },
   ): import("./providers/provider.interface.js").IAIProvider | null {
     const modelId = options?.modelId;
 
-    // Honor a single-provider / hard-pinned strategy exactly: materialize the BARE pinned
-    // provider AND model (getPrimaryProviderByName → buildPrimaryProvider, the same strict
-    // materialization ProviderManager.getProvider uses for hard pins). getProviderByName would
-    // build a resilient FALLBACK CHAIN over the pin — which both ignores the pin and, worse,
-    // can silently re-send a PRIVATE/local-pinned conversation to a cloud sibling when the
-    // pinned model stalls (trio-review HIGH). `?? null` (NOT the chain) on a missing method:
-    // the caller's `?? currentProvider` then uses the assignment provider, which for a hard
-    // pin IS the strictly-materialized pin.
-    if (options?.usesMultipleProviders === false) {
+    // Honor a PINNED strategy (user hard pin, supervisor node pin) exactly: materialize the
+    // BARE pinned provider AND model (getPrimaryProviderByName → buildPrimaryProvider, the same
+    // strict materialization ProviderManager.getProvider uses for hard pins). getProviderByName
+    // would build a resilient FALLBACK CHAIN over the pin — which both ignores the pin and,
+    // worse, can silently re-send a PRIVATE/local-pinned conversation to a cloud sibling when
+    // the pinned model stalls (trio-review HIGH). `?? null` (NOT the chain) on a missing
+    // method: the caller's `?? currentProvider` then uses the assignment provider, which for a
+    // hard pin IS the strictly-materialized pin.
+    // Keyed on the pin, not on `usesMultipleProviders === false`: a soft `/model` preference
+    // routes every role to one provider too, and taking this branch for it left the turn on the
+    // bare preferred provider — a 503 blocked the task while a healthy sibling sat idle.
+    if (options?.pinned === true) {
       return (
         this.providerManager as {
           getPrimaryProviderByName?: (name: string, model?: string) => import("./providers/provider.interface.js").IAIProvider | null;

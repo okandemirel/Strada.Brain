@@ -46,6 +46,13 @@ export interface SupervisorExecutionStrategy {
   reviewer: SupervisorAssignment;
   synthesizer: SupervisorAssignment;
   usesMultipleProviders: boolean;
+  /**
+   * Every role is bound to ONE provider that must serve the turn alone: the user's hard pin,
+   * or a supervisor-assigned node pin. Only this may run on the bare provider. A soft
+   * preference that happens to route every role to one provider (`usesMultipleProviders`
+   * false) is not a pin, and still fails over to a healthy sibling within the turn.
+   */
+  providerPinned?: boolean;
 }
 
 /**
@@ -369,6 +376,7 @@ export function buildSupervisorExecutionStrategy(
         "honored the explicit user hard pin for synthesis",
       ),
       usesMultipleProviders: false,
+      providerPinned: true,
     };
   }
   const fallbackProviderName =
