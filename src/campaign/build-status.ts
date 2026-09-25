@@ -72,8 +72,8 @@ export async function buildBuildStatus(input: {
   readonly measure: boolean;
   /** The stored delivery packages, as the campaign layer reads them. */
   readonly deliveryPackages?: DeliveryPackageView;
-  /** Test seam; defaults to assessBuiltAsSpecified. */
-  readonly measurer?: (projectRoot: string) => BuiltAsSpecifiedReport;
+  /** Test seam; defaults to assessBuiltAsSpecifiedAsync (the walk must not block the event loop). */
+  readonly measurer?: (projectRoot: string) => BuiltAsSpecifiedReport | Promise<BuiltAsSpecifiedReport>;
   readonly now?: number;
 }): Promise<BuildStatus> {
   const now = input.now ?? Date.now();
@@ -84,8 +84,8 @@ export async function buildBuildStatus(input: {
       measurementError = "No project path is configured — nothing to measure.";
     } else {
       try {
-        const measurer = input.measurer ?? (await import("../agents/autonomy/built-as-specified.js")).assessBuiltAsSpecified;
-        measurement = summarizeMeasurement(measurer(input.projectRoot), now);
+        const measurer = input.measurer ?? (await import("../agents/autonomy/built-as-specified.js")).assessBuiltAsSpecifiedAsync;
+        measurement = summarizeMeasurement(await measurer(input.projectRoot), now);
       } catch (err) {
         measurementError = err instanceof Error ? err.message : String(err);
       }

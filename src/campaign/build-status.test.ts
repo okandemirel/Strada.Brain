@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import os from "node:os";
 import { buildBuildStatus, summarizeMeasurement } from "./build-status.js";
 import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
 
@@ -82,5 +85,36 @@ describe("buildBuildStatus", () => {
     // as "no package block" rather than as an empty package.
     const none = await buildBuildStatus({ campaign: undefined, guardian: undefined, measure: false });
     expect(none.deliveryPackages).toBeNull();
+  });
+
+  it("measures a real project without holding the event loop (CHN-8)", async () => {
+    // The default measurer walked Assets/ synchronously: the dashboard's
+    // measure=1 stalled every channel for the length of the walk.
+    const root = mkdtempSync(join(os.tmpdir(), "build-status-measure-"));
+    try {
+      for (let d = 0; d < 20; d++) {
+        const dir = join(root, "Assets", "Pack", `D${d}`);
+        mkdirSync(dir, { recursive: true });
+        for (let f = 0; f < 15; f++) writeFileSync(join(dir, `m${f}.mat.meta`), `guid: ${String(d * 100 + f).padStart(32, "0")}\n`);
+      }
+      // Once first, so the measurer's module is loaded and only the
+      // measurement itself is timed below.
+      await buildBuildStatus({ campaign: undefined, guardian: undefined, projectRoot: root, measure: true });
+      let ticks = 0;
+      let running = true;
+      const beat = (): void => {
+        if (!running) return;
+        ticks++;
+        setImmediate(beat);
+      };
+      setImmediate(beat);
+      const status = await buildBuildStatus({ campaign: undefined, guardian: undefined, projectRoot: root, measure: true });
+      running = false;
+      expect(status.measurementError).toBeUndefined();
+      expect(status.measurement).not.toBeNull();
+      expect(ticks).toBeGreaterThan(20);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

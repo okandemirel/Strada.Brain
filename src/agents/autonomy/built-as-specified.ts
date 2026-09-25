@@ -33,17 +33,25 @@
  * look can legitimately be built in ways this file cannot see.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, promises as fsp, readFileSync, readdirSync, statSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import type { SceneWiringIo } from "./scene-wiring.js";
 import { stripCsComments } from "./csharp-source.js";
+import { forEachFileText, snapshotTree, type TreeSnapshot } from "./project-walk.js";
 
 // ─── I/O ───────────────────────────────────────────────────────────────────
 
-/** Same injectable shape the sibling scene checks use, so tests need no disk. */
-export type BuiltAsSpecifiedIo = SceneWiringIo;
+/**
+ * Same injectable shape the sibling scene checks use, so tests need no disk.
+ * The two optional measurers let a caller that read the art ahead of time
+ * (assessBuiltAsSpecifiedAsync) answer them without touching the disk again.
+ */
+export type BuiltAsSpecifiedIo = SceneWiringIo & {
+  readonly classifyPng?: (absPath: string) => PngGrade;
+  readonly measureAudioClip?: (absPath: string) => AudioClipMeasure;
+};
 
 /**
  * How many matching files one walk may return. Hitting it is REPORTED, never
@@ -191,6 +199,10 @@ const SPRITE_EXT_RE = /\.(?:png|jpg|jpeg|psd|tga|exr|tif|tiff)$/iu;
 /** Movie files: a video-driven game's visible content (Codex 2026-09-11 D#27). */
 const VIDEO_EXT_RE = /\.(?:mp4|mov|webm|m4v|avi)$/iu;
 const AUDIO_EXT_RE = /\.(?:wav|ogg|mp3|aif|aiff|flac)$/iu;
+/** What the scene-and-script walk lists: sidecars, Unity YAML and runtime code. */
+const MEASURED_FILE_RE = /\.(?:meta|prefab|asset|unity|cs|mat|controller|overrideController|playable|spriteatlas|anim)$/iu;
+/** What the art walk lists: prefabs, models, textures and audio. */
+const ART_FILE_RE = /\.(?:prefab|fbx|obj|blend|dae|gltf|glb|png|jpg|jpeg|psd|tga|exr|wav|ogg|mp3|aif|aiff|flac)$/iu;
 /** A clip shorter than this is a blip, whatever it is named. */
 const SHORT_AUDIO_SECONDS = 0.5;
 const FOLLOWABLE_EXT_RE = /\.(?:prefab|asset|unity|mat|controller|overrideController|playable|spriteatlas|anim)$/iu;
@@ -865,7 +877,7 @@ export function assessBuiltAsSpecified(
 
   // One walk, reused by every rule below.
   const files = io
-    .listFiles(assetsRoot, (f) => /\.(?:meta|prefab|asset|unity|cs|mat|controller|overrideController|playable|spriteatlas|anim)$/iu.test(f))
+    .listFiles(assetsRoot, (f) => MEASURED_FILE_RE.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"));
   const fileSet = new Set(files);
   if (lastWalkVisitCapHit) {
@@ -1170,7 +1182,7 @@ export function assessBuiltAsSpecified(
 
   // ── Art inventory and what nothing binds ──────────────────────────────
   const artFiles = io
-    .listFiles(assetsRoot, (f) => /\.(?:prefab|fbx|obj|blend|dae|gltf|glb|png|jpg|jpeg|psd|tga|exr|wav|ogg|mp3|aif|aiff|flac)$/iu.test(f))
+    .listFiles(assetsRoot, (f) => ART_FILE_RE.test(f))
     .map((f) => relative(projectRoot, f).split(sep).join("/"))
     // A fixture under Tests/ or Editor/ is not the game's unshipped art.
     .filter((rel) => !/(^|\/)(Tests?|Editor)\//i.test(rel));
@@ -1220,7 +1232,7 @@ export function assessBuiltAsSpecified(
       // accepts (jpg, psd, tga, exr, tiff) are not readable by this decoder,
       // and calling every one of them unreadable would report a project's real
       // artwork as broken (Codex 2026-09-11 O#9).
-      const grade = /\.png$/iu.test(rel) ? classifyPng(join(projectRoot, rel)) : "art";
+      const grade = /\.png$/iu.test(rel) ? (io.classifyPng ?? classifyPng)(join(projectRoot, rel)) : "art";
       if (grade === "invalid") {
         // NOT real art and not a placeholder either: an empty, truncated or
         // unreadable file. Counting it as art told the sprint there was
@@ -1236,7 +1248,7 @@ export function assessBuiltAsSpecified(
       } else realSpritePaths.push(rel);
     } else if (AUDIO_EXT_RE.test(rel)) {
       audio++;
-      const clip = measureAudioClip(join(projectRoot, rel));
+      const clip = (io.measureAudioClip ?? measureAudioClip)(join(projectRoot, rel));
       if (clip.hash !== undefined) {
         const twin = audioHashes.get(clip.hash);
         if (twin !== undefined) duplicateAudioPaths.push(`${rel} = ${twin}`);
@@ -1414,6 +1426,83 @@ export function assessBuiltAsSpecified(
 }
 
 /**
+ * assessBuiltAsSpecified, with its disk work awaited first.
+ *
+ * The measurement walks Assets/ twice, reads every .meta and runtime script,
+ * decodes every PNG and hashes every audio clip. Done synchronously, that
+ * stalled the whole daemon — every channel, socket and agent loop — for each
+ * dashboard measurement (audited 2026-09-25). Here the walk and those bulk
+ * reads go through fs.promises, and the synchronous measurement then runs over
+ * what was read; the few scenes and prefabs it follows by guid are still read
+ * when it reaches them. The report is the same one the synchronous call gives.
+ */
+export async function assessBuiltAsSpecifiedAsync(
+  projectRoot: string,
+  opts: { walkBudget?: number; runtime?: RuntimeSceneEvidence; artDirection?: string } = {},
+): Promise<BuiltAsSpecifiedReport> {
+  const assetsRoot = join(projectRoot, "Assets");
+  try {
+    await fsp.access(assetsRoot);
+  } catch {
+    // Nothing to walk; the synchronous call reports the missing folder.
+    return assessBuiltAsSpecified(projectRoot, defaultIo, opts);
+  }
+  const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
+  const snapshot: TreeSnapshot = await snapshotTree(assetsRoot, WALK_VISIT_CAP);
+  const listFiles = (dir: string, match?: (file: string) => boolean): string[] => {
+    const walked = snapshot.replay(dir, match, { budget: walkBudget, visitCap: WALK_VISIT_CAP, followLinks: true });
+    lastWalkVisitCapHit = walked.visitCapHit;
+    return walked.files;
+  };
+  const relOf = (file: string): string => relative(projectRoot, file).split(sep).join("/");
+
+  const texts = new Map<string, string>();
+  const bulk = listFiles(assetsRoot, (f) => MEASURED_FILE_RE.test(f)).filter(
+    (f) => f.endsWith(".meta") || (f.endsWith(".cs") && isRuntimeScript(relOf(f))),
+  );
+  await forEachFileText(bulk, (file, text) => {
+    if (text !== null) texts.set(file, text);
+  });
+
+  const pngGrades = new Map<string, PngGrade>();
+  const clips = new Map<string, AudioClipMeasure>();
+  const art = listFiles(assetsRoot, (f) => ART_FILE_RE.test(f)).filter((f) => !/(^|\/)(Tests?|Editor)\//i.test(relOf(f)));
+  for (const file of art) {
+    const png = /\.png$/iu.test(file);
+    if (!png && !AUDIO_EXT_RE.test(file)) continue;
+    let bytes: Buffer;
+    try {
+      bytes = await fsp.readFile(file);
+    } catch {
+      if (png) pngGrades.set(file, "invalid");
+      else clips.set(file, {});
+      continue;
+    }
+    if (!png) {
+      clips.set(file, measureAudioBytes(bytes));
+      continue;
+    }
+    try {
+      pngGrades.set(file, classifyPngBytes(bytes));
+    } catch {
+      pngGrades.set(file, "invalid");
+    }
+  }
+
+  return assessBuiltAsSpecified(
+    projectRoot,
+    {
+      listFiles,
+      readFile: (p) => texts.get(p) ?? readFileSync(p, "utf-8"),
+      exists: (p) => existsSync(p),
+      classifyPng: (p) => pngGrades.get(p) ?? classifyPng(p),
+      measureAudioClip: (p) => clips.get(p) ?? measureAudioClip(p),
+    },
+    opts,
+  );
+}
+
+/**
  * The cases where refusing to deliver is the right answer.
  *
  * A. The shipped scenes place NO renderer at all, and either
@@ -1585,14 +1674,23 @@ export function readPngDimensions(bytes: Uint8Array): { width: number; height: n
   return width > 0 && height > 0 ? { width, height } : null;
 }
 
+export interface AudioClipMeasure {
+  readonly hash?: string;
+  readonly seconds?: number;
+}
+
 /** Content hash and, for a WAV, the duration its header declares. Unreadable → both undefined. */
-export function measureAudioClip(absPath: string): { hash?: string; seconds?: number } {
+export function measureAudioClip(absPath: string): AudioClipMeasure {
   let bytes: Buffer;
   try {
     bytes = readFileSync(absPath);
   } catch {
     return {};
   }
+  return measureAudioBytes(bytes);
+}
+
+function measureAudioBytes(bytes: Buffer): AudioClipMeasure {
   const hash = createHash("sha1").update(bytes).digest("hex");
   if (bytes.length < 44 || bytes.toString("ascii", 0, 4) !== "RIFF" || bytes.toString("ascii", 8, 12) !== "WAVE") {
     return { hash };
