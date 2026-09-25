@@ -25,6 +25,21 @@ describe("checkGates", () => {
   // No requirements
   // -------------------------------------------------------------------------
 
+  // SEC-22: `bins: gh` (a YAML scalar) threw inside checkGates, and
+  // `env: API_TOKEN` gated on the variables A, P, I, ...
+  it.each([
+    [{ bins: "gh" }, "requires.bins must be an array of strings"],
+    [{ env: "API_TOKEN" }, "requires.env must be an array of strings"],
+    [{ config: "llm.apiKey" }, "requires.config must be an array of strings"],
+    [{ skills: "other" }, "requires.skills must be an array of strings"],
+    [{ bins: ["gh", 3] }, "requires.bins must be an array of strings (got a list with non-string entries)"],
+  ])("gates a malformed requirement %j with a clear reason instead of throwing", async (requires, reason) => {
+    const result = await checkGates(requires as unknown as SkillRequirements, {}, new Set());
+    expect(result.passed).toBe(false);
+    expect(result.reasons).toEqual([expect.stringContaining(reason)]);
+    expect(mockExecFileNoThrow).not.toHaveBeenCalled();
+  });
+
   it("returns passed when requirements are undefined", async () => {
     const result = await checkGates(undefined);
     expect(result.passed).toBe(true);

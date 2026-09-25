@@ -382,11 +382,17 @@ export function registerSkillCommands(program: Command): void {
         console.log(`Capabilities: ${skill.manifest.capabilities.join(", ")}`);
       }
       if (skill.manifest.requires) {
-        const req = skill.manifest.requires;
-        if (req.bins?.length) console.log(`Requires bins: ${req.bins.join(", ")}`);
-        if (req.env?.length) console.log(`Requires env: ${req.env.join(", ")}`);
-        if (req.config?.length) console.log(`Requires config: ${req.config.join(", ")}`);
-        if (req.skills?.length) console.log(`Requires skills: ${req.skills.join(", ")}`);
+        // SEC-22: frontmatter may hold a scalar where a list belongs; the
+        // gate above already reported it, so print whatever is there.
+        const req = skill.manifest.requires as Record<string, unknown>;
+        const show = (label: string, value: unknown): void => {
+          if (value === undefined || (Array.isArray(value) && value.length === 0)) return;
+          console.log(`${label}: ${Array.isArray(value) ? value.join(", ") : JSON.stringify(value)}`);
+        };
+        show("Requires bins", req["bins"]);
+        show("Requires env", req["env"]);
+        show("Requires config", req["config"]);
+        show("Requires skills", req["skills"]);
       }
 
       // Print SKILL.md body content

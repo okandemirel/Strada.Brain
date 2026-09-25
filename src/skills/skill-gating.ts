@@ -2,6 +2,7 @@
 // Skill gating — checks whether a skill's declared requirements are met.
 // ---------------------------------------------------------------------------
 
+import { z } from "zod";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
 import type { SkillRequirements } from "./types.js";
 
@@ -32,6 +33,14 @@ export async function checkGates(
 ): Promise<GateResult> {
   if (!requires) {
     return { passed: true, reasons: [] };
+  }
+
+  // SEC-22: `requires` comes straight from SKILL.md frontmatter. A YAML scalar
+  // where a list belongs (`bins: gh`) used to throw below (and abort
+  // `strada skill list` for every skill) or be read per character (`env`).
+  const shapeProblems = requirementShapeProblems(requires);
+  if (shapeProblems.length > 0) {
+    return { passed: false, reasons: shapeProblems };
   }
 
   const reasons: string[] = [];
@@ -113,6 +122,21 @@ export async function checkGates(
     reasons,
     ...(unevaluated.length > 0 ? { unevaluated } : {}),
   };
+}
+
+const REQUIREMENT_LISTS = ["bins", "env", "config", "skills"] as const;
+const requirementList = z.array(z.string());
+
+/** SEC-22: every `requires.<list>` that is present but not an array of strings, as a gate reason. */
+export function requirementShapeProblems(requires: SkillRequirements): string[] {
+  const problems: string[] = [];
+  for (const key of REQUIREMENT_LISTS) {
+    const value: unknown = (requires as Record<string, unknown>)[key];
+    if (value === undefined || requirementList.safeParse(value).success) continue;
+    const got = Array.isArray(value) ? "a list with non-string entries" : `${typeof value} ${JSON.stringify(value)}`;
+    problems.push(`requires.${key} must be an array of strings (got ${got})`);
+  }
+  return problems;
 }
 
 /**
