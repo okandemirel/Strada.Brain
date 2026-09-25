@@ -78,10 +78,17 @@ function createStreamCapture(maxOutput: number): {
   let head = "";
   let tail = "";
   let dropped = 0;
+  // Neither cut may split a surrogate pair: half an emoji or CJK extension
+  // character is a lone surrogate the model reads as garbage (review TLS-14).
+  const lastChars = (text: string): string => {
+    const kept = tailCap > 0 ? text.slice(-tailCap) : "";
+    return /^[\uDC00-\uDFFF]/.test(kept) ? kept.slice(1) : kept;
+  };
   return {
     push(chunk) {
       if (head.length < headCap) {
-        const room = headCap - head.length;
+        let room = headCap - head.length;
+        if (room < chunk.length && /[\uD800-\uDBFF]/.test(chunk[room - 1] ?? "")) room -= 1;
         head += chunk.slice(0, room);
         chunk = chunk.slice(room);
       }
@@ -90,16 +97,18 @@ function createStreamCapture(maxOutput: number): {
       // Trim in batches, not per chunk: slicing a 16K string on every 64K
       // read would be quadratic on a chatty command.
       if (tail.length > tailCap * 2) {
-        dropped += tail.length - tailCap;
-        tail = tailCap > 0 ? tail.slice(-tailCap) : "";
+        const kept = lastChars(tail);
+        dropped += tail.length - kept.length;
+        tail = kept;
       }
     },
     finish(stream) {
       let kept = tail;
       let total = dropped;
       if (kept.length > tailCap) {
-        total += kept.length - tailCap;
-        kept = tailCap > 0 ? kept.slice(-tailCap) : "";
+        const last = lastChars(kept);
+        total += kept.length - last.length;
+        kept = last;
       }
       if (total === 0) return { text: head + kept, dropped: 0 };
       const marker =

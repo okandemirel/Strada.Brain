@@ -242,6 +242,22 @@ describe("output past the capture cap", () => {
     expect(result.stdout).toBe("ş");
   });
 
+  it("never cuts an astral character in half at the capture limit (TLS-14)", async () => {
+    // Odd head and tail budgets land both cuts inside a surrogate pair.
+    const result = await runProcess({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('\\u{1F600}'.repeat(20))"],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      maxOutput: 10,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdoutDropped).toBeGreaterThan(0);
+    expect(result.stdout).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(result.stdout.startsWith("\u{1F600}\u{1F600}")).toBe(true);
+    expect(result.stdout.endsWith("\u{1F600}\u{1F600}")).toBe(true);
+  });
+
   it("leaves output within the cap untouched and unmarked", async () => {
     const result = await runProcess({
       command: "/bin/bash",
