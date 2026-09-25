@@ -151,7 +151,7 @@ export function getProviderByNameOrFallback(
   fallbackProviderName: string,
   fallbackProvider: IAIProvider,
   modelId?: string,
-): { providerName: string; provider: IAIProvider } {
+): { providerName: string; provider: IAIProvider; usedFallback: boolean } {
   const normalizedName = canonicalizeProviderName(providerName) ?? providerName?.trim().toLowerCase();
   const normalizedFallbackName =
     canonicalizeProviderName(fallbackProviderName)
@@ -161,13 +161,14 @@ export function getProviderByNameOrFallback(
   // instead of its static default — matching buildTaskAwareProvider, which passes
   // getProviderByName(primaryName, modelId). Without it the synthesis /
   // visibility-review / null-fallback paths silently carry the provider's default.
-  const resolved =
-    (normalizedName ? ctx.providerManager.getProviderByName?.(normalizedName, modelId) : null) ??
-    fallbackProvider;
-  return {
-    providerName: normalizedName || normalizedFallbackName,
-    provider: resolved,
-  };
+  const byName = normalizedName ? ctx.providerManager.getProviderByName?.(normalizedName, modelId) : null;
+  // ORC-20: when the named provider cannot be built, the FALLBACK runs — so the
+  // assignment carries the fallback's name. Keeping the requested name made
+  // usage, cost, telemetry and consensus reviewer choice describe a provider
+  // that was never called.
+  return byName
+    ? { providerName: normalizedName!, provider: byName, usedFallback: false }
+    : { providerName: normalizedFallbackName, provider: fallbackProvider, usedFallback: true };
 }
 
 export function resolveProviderModelId(
@@ -280,14 +281,17 @@ export function resolveSupervisorAssignment(
       fallbackProvider,
       routedModel,
     );
-    const modelId = routedModel
+    // ORC-20: the routed model belongs to the routed provider; a fallback runs its own.
+    const modelId = (resolved.usedFallback ? undefined : routedModel)
       ?? resolveProviderModelId(ctx, resolved.providerName, identityKey);
     return buildStaticSupervisorAssignment(
       role,
       resolved.providerName,
       modelId,
       resolved.provider,
-      routed.reason,
+      resolved.usedFallback && routed.provider
+        ? `${routed.reason}; routed provider '${routed.provider}' is unavailable, reusing the current worker`
+        : routed.reason,
       undefined,
       buildCatalogAssignmentMetadata(
         ctx,
@@ -627,6 +631,11 @@ export function resolveConsensusReviewAssignment(
     currentAssignment.provider,
     fallbackReviewModelId,
   );
+  // ORC-20: the alternate reviewer could not be built, so "cross-provider"
+  // review would be the current provider checking itself under another name.
+  if (fallbackReviewProvider.usedFallback) {
+    return null;
+  }
   return buildStaticSupervisorAssignment(
     "reviewer",
     fallbackReviewProvider.providerName,

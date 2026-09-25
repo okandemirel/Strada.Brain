@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getProviderByNameOrFallback,
   recordProviderUsage,
+  resolveConsensusReviewAssignment,
   resolveSupervisorAssignment,
 } from "./orchestrator-supervisor-routing.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
@@ -131,6 +132,62 @@ describe("resolveSupervisorAssignment hard-pin fallback", () => {
     expect(assignment.providerName).toBe("openai");
     expect(assignment.provider).toBe(fallbackProvider);
     expect(assignment.reason).toBe("hard-pinned provider unavailable, reusing the current worker");
+  });
+});
+
+describe("a routed provider that cannot be built (ORC-20)", () => {
+  const task: TaskClassification = { type: "code_generation", complexity: "simple", criticality: "medium" };
+
+  it("names the assignment after the fallback that actually runs, with the fallback's model", () => {
+    const fallbackProvider = makeProvider("qwen");
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue({ providerName: "qwen", model: "qwen3-coder" }),
+        getProviderByName: vi.fn().mockReturnValue(null),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([]),
+      },
+      providerRouter: {
+        resolve: vi.fn().mockReturnValue({ provider: "openai", model: "gpt-x", reason: "best coder" }),
+      },
+    } as any;
+
+    const assignment = resolveSupervisorAssignment(
+      ctx, "executor", task, "executing", "chat:web:1", "qwen", fallbackProvider as any,
+    );
+
+    expect(assignment.provider).toBe(fallbackProvider);
+    expect(assignment.providerName).toBe("qwen");
+    expect(assignment.modelId).toBe("qwen3-coder");
+    expect(assignment.reason).toContain("'openai' is unavailable");
+  });
+
+  it("the lookup reports the fallback's name when it falls back", () => {
+    const fallbackProvider = makeProvider("qwen");
+    const resolved = getProviderByNameOrFallback(
+      { providerManager: { getProviderByName: vi.fn().mockReturnValue(null) } } as any,
+      "openai",
+      "qwen",
+      fallbackProvider as any,
+      "gpt-x",
+    );
+
+    expect(resolved).toEqual({ providerName: "qwen", provider: fallbackProvider, usedFallback: true });
+  });
+
+  it("consensus does not pass the current provider off as the alternate reviewer", () => {
+    const current = makeProvider("qwen");
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue(undefined),
+        getProviderByName: vi.fn().mockReturnValue(null),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([{ name: "qwen" }, { name: "openai" }]),
+      },
+    } as any;
+    const currentAssignment = { role: "executor", providerName: "qwen", provider: current } as any;
+
+    expect(resolveConsensusReviewAssignment(ctx, currentAssignment, currentAssignment, "chat:web:1")).toBeNull();
   });
 });
 
