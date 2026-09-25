@@ -40,9 +40,15 @@ describe("POST /api/vaults concurrent registration (CHN-14)", () => {
     };
     const first = post();
     const second = post();
-    await vi.waitFor(() => expect(second.end).toHaveBeenCalled());
+    // Each response waits on a streamed body plus realpath/stat; with the
+    // other test files of a batch running in parallel processes (many of
+    // them fsync-heavy) a loaded CI runner took just over vi.waitFor's
+    // default 1 s. What this test checks is the outcome (one 201, one 409),
+    // not how fast it arrives.
+    const settle = { timeout: 10_000 };
+    await vi.waitFor(() => expect(second.end).toHaveBeenCalled(), settle);
     release();
-    await vi.waitFor(() => expect(first.end).toHaveBeenCalled());
+    await vi.waitFor(() => expect(first.end).toHaveBeenCalled(), settle);
 
     expect([first.statusCode, second.statusCode].sort()).toEqual([201, 409]);
     expect(factory.create).toHaveBeenCalledTimes(1);
