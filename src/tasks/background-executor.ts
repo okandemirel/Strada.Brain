@@ -434,6 +434,9 @@ export class BackgroundExecutor {
           listRecoverableTasks?: (limit?: number) => Array<Task>;
         }) | null;
         const candidates = manager?.listRecoverableTasks?.(50) ?? [];
+        // The sweep runs once; nothing reads the record after it.
+        const armedHere = this.keepAliveArmedHere ?? new Set<string>();
+        this.keepAliveArmedHere = null;
         const seenLineages = new Set<string>();
         // Dedupe by the mission's PROMPT identity too, not only lineage id:
         // every campaign revive minted a fresh lineage for the same sprint,
@@ -494,6 +497,24 @@ export class BackgroundExecutor {
             getLoggerSafe().info("Keep-alive re-arm skipped — its goal tree is already completed", {
               taskId: task.id,
               goalRootId: task.goalRootId,
+            });
+            continue;
+          }
+          // Not orphaned by a restart: this process armed its keep-alive, which is still
+          // pending or has already fired and resubmitted the mission. Measured in the release
+          // smoke: a task blocked on a provider outage was re-armed 90 s after boot although
+          // its keep-alive retry had completed a minute earlier.
+          if (armedHere.has(String(task.id))) {
+            getLoggerSafe().info("Keep-alive re-arm skipped — this process already armed it", { taskId: task.id });
+            continue;
+          }
+          // …and the same after a real restart: a tree-less mission whose retry COMPLETED is
+          // done, whatever the ancestor row still says.
+          const tip = this.lineageTipOf(task);
+          if (tip?.id && tip.id !== task.id && tip.status === "completed") {
+            getLoggerSafe().info("Keep-alive re-arm skipped — a later attempt in its lineage completed", {
+              taskId: task.id,
+              completedTaskId: tip.id,
             });
             continue;
           }
@@ -2357,6 +2378,13 @@ export class BackgroundExecutor {
   private readonly missionRetries = new Map<string, number>();
 
   /**
+   * Tasks whose keep-alive THIS process armed. The boot re-arm is for keep-alives that died
+   * with the previous process; one armed here is pending or has already fired, and arming it
+   * a second time resubmits a mission whose retry may already have finished.
+   */
+  private keepAliveArmedHere: Set<string> | null = new Set<string>();
+
+  /**
    * Task ids a reaper aborted THIS tick. The reaper writes the honest terminal
    * (fail + the keep-alive's "Auto-retry N/10" block) synchronously; the
    * aborted run then rejects on a later microtask and reaches executeTask's
@@ -2706,6 +2734,7 @@ export class BackgroundExecutor {
             `Mission parked on the budget window. ${BUDGET_WAIT_MARKER} Last blocker: ${reason.slice(0, 160)}`,
           );
         } catch { /* the notice above still stands */ }
+        this.keepAliveArmedHere?.add(String(task.id));
         this.schedule(() => {
           try {
             // EVERY probe on this path can throw — the budget predicate reads
@@ -2798,6 +2827,7 @@ export class BackgroundExecutor {
         `Transient failure — ${saidReason}. Auto-retry ${shown}/${MAX_MISSION_RETRIES} in ~${Math.round(effectiveBackoffMs / 1000)}s.${carry}`,
       );
     } catch { /* block-marking is cosmetic here */ }
+    this.keepAliveArmedHere?.add(String(task.id));
     this.schedule(() => {
       // Someone else may have already resubmitted this mission while the
       // backoff ran — the campaign layer reacts to the same settlement on its
