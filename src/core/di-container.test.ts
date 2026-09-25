@@ -146,6 +146,29 @@ describe("DIContainer", () => {
       const scope = container.createScope();
       expect(scope.resolve("Empty")).toBe("");
     });
+
+    // COR-24: a singleton first resolved inside a scope was cached there only.
+    it("is one instance across the root and its scopes whichever resolves it first", () => {
+      container.registerSingleton("Counting", CountingService);
+      const scopeA = container.createScope();
+      const scopeB = container.createScope();
+      const nested = scopeA.createScope();
+
+      const fromScope = scopeA.resolve<CountingService>("Counting");
+      expect(container.resolve<CountingService>("Counting")).toBe(fromScope);
+      expect(scopeB.resolve<CountingService>("Counting")).toBe(fromScope);
+      expect(nested.resolve<CountingService>("Counting")).toBe(fromScope);
+      expect(CountingService.instanceCount).toBe(1);
+    });
+
+    it("keeps scoped services per scope", () => {
+      container.registerScoped("Counting", CountingService);
+      const scopeA = container.createScope();
+      const scopeB = container.createScope();
+
+      expect(scopeA.resolve("Counting")).toBe(scopeA.resolve("Counting"));
+      expect(scopeA.resolve("Counting")).not.toBe(scopeB.resolve("Counting"));
+    });
   });
 
   // ========================================================================

@@ -27,6 +27,8 @@ export class DIContainer {
   private readonly registrations = new Map<string, Registration<unknown>>();
   private readonly singletons = new Map<string, unknown>();
   private readonly resolutionStack: string[] = [];
+  /** The container a scope was created from (the root, for nested scopes). */
+  private root: DIContainer | undefined;
 
   /**
    * Register a service with transient lifecycle (new instance each time)
@@ -113,6 +115,17 @@ export class DIContainer {
       throw new ServiceNotFoundError(interfaceName);
     }
 
+    // COR-24: a singleton belongs to the root. Built inside a scope, it was
+    // cached in that scope only, so the root and every scope made their own.
+    // A registration the scope added itself stays scope-local.
+    if (
+      registration.lifecycle === "singleton" &&
+      this.root &&
+      this.root.registrations.get(interfaceName) === registration
+    ) {
+      return this.root.resolve<T>(interfaceName);
+    }
+
     // Return existing singleton or scoped instance. Use presence (has), not
     // truthiness: an instance legitimately resolved/registered as a falsy value
     // (0, "", false) must not be treated as absent and re-created. Scoped
@@ -196,7 +209,8 @@ export class DIContainer {
    */
   createScope(): DIContainer {
     const scope = new DIContainer();
-    
+    scope.root = this.root ?? this;
+
     // Copy registrations but not singleton instances
     for (const [name, reg] of this.registrations) {
       if (reg.lifecycle === "scoped") {
