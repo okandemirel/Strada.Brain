@@ -5,29 +5,49 @@
  * line never names (`grep -r x .`, a build script, a pipe into xargs) and
  * only an OS boundary could stop that. What it does do: every word is read
  * the way the shell reads it (the shared shell-lexer: quotes, escapes,
- * operators, redirections), and a word the shell would still EXPAND — a
- * glob, a brace list, a variable, a tilde — fails closed: it is refused when
- * some expansion of it could name a file the path-guard blocklist protects.
- * The whitespace-token check this replaces compared the text as written, so
- * any expansion walked past it (review TLS-7).
+ * operators, redirections) and expanded the way the shell will expand it —
+ * variables from the child's real environment and the command's own literal
+ * assignments, globs against the files actually on disk (bash's leading-dot
+ * rule included). Only what cannot be known before the command runs (a
+ * `read`, an `eval`, an indirect expansion, a glob too large to walk) is
+ * judged conservatively: refused when some value of it could name a file the
+ * path-guard blocklist protects. The whitespace-token check this replaces
+ * compared the text as written, so any expansion walked past it (TLS-7).
  */
-import { isAbsolute, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
+import { lstatSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { isSensitivePath } from "../../security/path-guard.js";
 import { lexShell, type ShellLex, type ShellWord } from "../../security/shell-lexer.js";
 
-/** any: unknown text (a variable); deep: `**`; star: `*`; one: `?` or `[…]`. */
+/** any: unknown text (an opaque variable); deep: `**`; star: `*`; one: `?` or `[…]`. */
 type Wild = "any" | "deep" | "star" | "one";
 /** A word as a sequence of known text and parts only the shell can fill in. */
-type Part = { readonly text: string } | { readonly wild: Wild };
+type Part =
+  | { readonly text: string }
+  | { readonly wild: Wild; readonly raw: string; readonly cls?: string };
 type Pattern = readonly Part[];
 
 export interface SensitiveScanOptions {
-  /** The child's environment: an unassigned `$NAME` set here reads as its value; any other is unknown. */
+  /** The environment the child will get (shell_exec passes buildShellEnv's output). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly home?: string;
   /** Also read the words as cmd.exe would. Defaults to running on Windows. */
   readonly cmd?: boolean;
+  /** Directory entries a glob may examine before it is judged conservatively instead. */
+  readonly globEntryBudget?: number;
+}
+
+/** What the command itself does to its variables. */
+interface Bindings {
+  /** Literal assignments and `for` lists: every value a name is given. */
+  readonly assigned: ReadonlyMap<string, readonly ShellWord[]>;
+  /** Names set by something this reader cannot evaluate (`read`, `printf -v`, `let`…). */
+  readonly opaque: ReadonlySet<string>;
+  /** `eval`/`source` can set any variable. */
+  readonly everything: boolean;
+  /** `set --`, `shift` or a function body: the positional parameters are unknown. */
+  readonly positional: boolean;
 }
 
 interface Scope {
@@ -35,12 +55,12 @@ interface Scope {
   readonly home: string;
   readonly cmd: boolean;
   readonly env: Readonly<Record<string, string | undefined>>;
-  /** Every identifier the command writes outside a `$` reference, with its count. */
-  readonly bound: ReadonlyMap<string, number>;
-  /** `for NAME in WORDS`: the words NAME takes. */
-  readonly loops: ReadonlyMap<string, readonly ShellWord[]>;
+  readonly vars: Bindings;
   /** A leading `*`/`?` can match a leading dot (dotglob, GLOBIGNORE, cmd.exe programs). */
   readonly dotMatches: boolean;
+  readonly globstar: boolean;
+  readonly nocase: boolean;
+  readonly globEntryBudget: number;
 }
 
 // The lexer reads `{`/`}` as grouping and ends the word there, so a brace
@@ -62,12 +82,24 @@ function shownAs(raw: string): string {
   return out;
 }
 const MAX_VARIANTS = 64;
+const MAX_VARIABLE_DEPTH = 3;
+const DEFAULT_GLOB_ENTRY_BUDGET = 10_000;
 const ONE_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789._-";
+const ANY: Pattern = [{ wild: "any", raw: "" }];
+
+/** Variables the shell itself sets from what the command did (a match, a `read`, a `cd`). */
+const SHELL_SET = new Set([
+  "BASH_REMATCH", "REPLY", "OPTARG", "MAPFILE", "OLDPWD", "_", "BASH_COMMAND", "BASH_ARGV",
+  "FUNCNAME", "DIRSTACK", "COPROC", "READLINE_LINE", "PIPESTATUS",
+]);
+const DECLARERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+const READERS = new Set(["read", "mapfile", "readarray", "getopts", "let", "select"]);
+const PREFIXES = new Set(["builtin", "command", "exec", "time", "nohup", "!", "if", "then", "else", "elif", "do", "while", "until"]);
 
 /**
- * Names a protected path can take below some directory. Membership is not
- * what refuses — the blocklist still decides for the whole path — these are
- * what an expansion is tried against (`.git/c*g` is `config` under `.git`).
+ * Names a protected path can take below some directory — used only when an
+ * expansion cannot be evaluated. Membership is not what refuses; the
+ * blocklist still decides for the whole path (`.git/c*g` is `config` there).
  */
 const SAMPLE_NAMES = [
   ".env", ".env.local", ".env.production", "x.env", ".strada-lease-owner.json", ".strada-lease-seed.json",
@@ -79,7 +111,7 @@ const SAMPLE_NAMES = [
 const SAMPLE_TAILS = [...SAMPLE_NAMES, ...SAMPLE_NAMES.map((name) => `x/${name}`)];
 
 /**
- * Words of a shell command that name, or could expand to, a path the
+ * Words of a shell command that name, or expand to, a path the
  * sensitive-file blocklist refuses, resolved against `cwd`. Returned as
  * written. Flags are skipped but their `=value` (and a short option's
  * attached value) is read.
@@ -97,23 +129,18 @@ function scanCommand(command: string, cwd: string, options: SensitiveScanOptions
   const prepared = text.replace(/\$\{[^}]*\}|[{}]|[<>]+[&|]?\s*/g, (m) =>
     m === "{" ? OPEN : m === "}" ? CLOSE : /^[<>]/.test(m) ? ` ; ${TARGET}` : m);
   const read = lexShell(prepared, { cmd });
-  const bound = new Map<string, number>();
-  for (const name of prepared.replace(/\$\{[^}]*\}|\$[A-Za-z_]\w*|\$./g, " ").match(/[A-Za-z_]\w*/g) ?? []) {
-    bound.set(name, (bound.get(name) ?? 0) + 1);
-  }
-  const loops = new Map<string, readonly ShellWord[]>();
-  for (const words of read.commands) {
-    const [head, name, keyword] = words;
-    if (head?.value === "for" && keyword?.value === "in" && name) loops.set(name.value, words.slice(3));
-  }
+  const flags = new Set(prepared.match(/[A-Za-z_]\w*/g) ?? []);
+  const env = options.env ?? {};
   const scope: Scope = {
     cwd,
-    home: options.home ?? homedir(),
+    home: options.home ?? env["HOME"] ?? homedir(),
     cmd,
-    env: options.env ?? {},
-    bound,
-    loops,
-    dotMatches: cmd || bound.has("dotglob") || bound.has("GLOBIGNORE"),
+    env,
+    vars: bindings(read.commands, prepared),
+    dotMatches: cmd || flags.has("dotglob") || flags.has("GLOBIGNORE"),
+    globstar: flags.has("globstar"),
+    nocase: cmd || flags.has("nocaseglob"),
+    globEntryBudget: options.globEntryBudget ?? DEFAULT_GLOB_ENTRY_BUDGET,
   };
 
   const hits: string[] = [];
@@ -134,6 +161,56 @@ function scanCommand(command: string, cwd: string, options: SensitiveScanOptions
     if (scanCommand(shownAs(line), cwd, options, evalDepth + 1).length > 0) hits.push(shownAs(words.slice(at).map((w) => w.raw).join(" ")));
   }
   return hits;
+}
+
+/**
+ * Every value the command gives its variables. Order-insensitive on purpose:
+ * a loop or a function can run an assignment before a use written above it,
+ * so a name holds the union of its environment value and every assignment.
+ */
+function bindings(commands: readonly (readonly ShellWord[])[], command: string): Bindings {
+  const assigned = new Map<string, ShellWord[]>();
+  const opaque = new Set<string>();
+  let everything = false;
+  let positional = /\bfunction\s|[A-Za-z_][\w-]*\s*\(\s*\)/.test(command);
+  const assignment = (word: ShellWord | undefined, into: Set<string> | undefined): boolean => {
+    const m = word ? /^([A-Za-z_]\w*)(\+?)=/.exec(word.value) : null;
+    if (!word || !m) return false;
+    const name = m[1] ?? "";
+    if (into || m[2]) (into ?? opaque).add(name);
+    // No pathname expansion happens in an assignment; it happens at the use.
+    else assigned.set(name, [...(assigned.get(name) ?? []), { ...word, value: word.value.slice(m[0].length), glob: false }]);
+    return true;
+  };
+  for (const words of commands) {
+    let at = 0;
+    while (PREFIXES.has(words[at]?.value ?? "") || assignment(words[at], undefined)) at += 1;
+    const verb = words[at]?.value ?? "";
+    const args = words.slice(at + 1);
+    const names = args.map((w) => w.value).filter((v) => /^[A-Za-z_]\w*$/.test(v));
+    if (DECLARERS.has(verb)) {
+      const nameref = args.some((w) => /^-\w*n/.test(w.value));
+      for (const w of args) assignment(w, nameref ? opaque : undefined);
+      if (nameref) names.forEach((n) => opaque.add(n));
+    } else if (READERS.has(verb)) {
+      names.forEach((n) => opaque.add(n));
+      for (const w of args) assignment(w, opaque);
+    } else if (verb === "printf") {
+      const v = args.findIndex((w) => w.value === "-v");
+      if (v >= 0) opaque.add(args[v + 1]?.value ?? "");
+    } else if (verb === "for") {
+      const name = args[0]?.value ?? "";
+      if (args[1]?.value === "in") assigned.set(name, [...(assigned.get(name) ?? []), ...args.slice(2)]);
+      else opaque.add(name);
+    } else if (verb === "eval" || verb === "source" || verb === ".") {
+      everything = true;
+    } else if (verb === "set" || verb === "shift") {
+      positional = true;
+    } else if (verb === "cd" || verb === "pushd" || verb === "popd") {
+      opaque.add("PWD");
+    }
+  }
+  return { assigned, opaque, everything, positional };
 }
 
 /** With extglob on (a line after `shopt -s extglob`), `!(…)` and friends are one pattern. */
@@ -173,13 +250,13 @@ function cmdReading(word: ShellWord): ShellWord {
 /** Every form the word can take, as patterns. Too many forms is one unknown. */
 function wordPatterns(word: ShellWord, scope: Scope, depth: number): Pattern[] {
   // ANSI-C and locale quoting decode escapes the lexer leaves as written.
-  if (/\$['"]/.test(word.raw)) return [[{ wild: "any" }]];
+  if (/\$['"]/.test(word.raw)) return [ANY];
   const text = word.value;
   let variants: Part[][] = [[]];
   const append = (options: readonly Pattern[]) => {
     const next: Part[][] = [];
     for (const v of variants) for (const o of options) next.push([...v, ...o]);
-    variants = next.length > MAX_VARIANTS ? [[{ wild: "any" }]] : next;
+    variants = next.length > MAX_VARIANTS ? [[...ANY]] : next;
   };
   let i = 0;
   while (i < text.length) {
@@ -188,11 +265,10 @@ function wordPatterns(word: ShellWord, scope: Scope, depth: number): Pattern[] {
     const param = word.expands.some((name) => name !== "%") ? /^\$(?:\{([^}]*)\}|([A-Za-z_]\w*|[0-9?#$!@*-]))/.exec(rest) : null;
     const percent = scope.cmd && word.expands.includes("%") ? /^%[^%\s]+%/.exec(rest) : null;
     if (param) {
-      const name = param[1] ?? param[2] ?? "";
-      append(/^(?:[A-Za-z_]\w*|[0-9?#$!@*-])$/.test(name) ? variable(name, scope, depth) : [[{ wild: "any" }]]);
+      append(param[2] !== undefined ? variable(param[2], scope, depth) : braced(param[1] ?? "", word, scope, depth));
       i += param[0].length;
     } else if (percent) {
-      append([[{ wild: "any" }]]);
+      append([ANY]);
       i += percent[0].length;
     } else if (EXT_OPENS.includes(c)) {
       // `@(a|b)` is one of its alternatives and `?(a|b)` one or none; `!(x)`
@@ -204,23 +280,16 @@ function wordPatterns(word: ShellWord, scope: Scope, depth: number): Pattern[] {
         const alternatives = body.split(EXT_BAR).flatMap((alt) => wordPatterns({ ...word, value: alt }, scope, depth));
         append(kind === "?" ? [...alternatives, []] : alternatives);
       } else {
-        append([[{ wild: "star" }]]);
+        append([[{ wild: "star", raw: shownAs(text.slice(i, close < 0 ? text.length : close + 1)) }]]);
       }
       i = close < 0 ? text.length : close + 1;
-    } else if (word.glob && c === "*") {
-      const run = /^\*+/.exec(rest)?.[0].length ?? 1;
-      append([[{ wild: run > 1 ? "deep" : "star" }]]);
-      i += run;
-    } else if (word.glob && (c === "?" || (c === "[" && text.indexOf("]", i + 2) > 0))) {
-      append([[{ wild: "one" }]]);
-      i = c === "[" ? text.indexOf("]", i + 2) + 1 : i + 1;
+    } else if (word.glob && (c === "*" || c === "?" || c === "[")) {
+      const glob = globPart(rest);
+      append([[glob.part]]);
+      i += glob.length;
     } else if (c === OPEN && braceEnd(text, i) > 0) {
       const end = braceEnd(text, i);
-      const body = text.slice(i + 1, end);
-      if (body.includes(OPEN)) append([[{ wild: "any" }]]);
-      else if (body.includes(",")) append(body.split(",").flatMap((alt) => wordPatterns({ ...word, value: alt }, scope, depth)));
-      else if (/^[^.]+\.\.[^.]+$/.test(body)) append([[{ wild: "star" }]]);
-      else append([[{ text: `{${body}}` }]]);
+      append(braceAlternatives(text.slice(i + 1, end), word, scope, depth));
       i = end + 1;
     } else {
       append([[{ text: c === OPEN ? "{" : c === CLOSE ? "}" : c }]]);
@@ -228,6 +297,34 @@ function wordPatterns(word: ShellWord, scope: Scope, depth: number): Pattern[] {
     }
   }
   return variants.map(merge);
+}
+
+/** The glob construct at the start of `text` (`*`, `**`, `?`, `[…]`), or a literal `[`. */
+function globPart(text: string): { part: Part; length: number } {
+  if (text[0] === "*") {
+    const run = /^\*+/.exec(text)?.[0] ?? "*";
+    return { part: { wild: run.length > 1 ? "deep" : "star", raw: run }, length: run.length };
+  }
+  if (text[0] === "?") return { part: { wild: "one", raw: "?" }, length: 1 };
+  const end = text.indexOf("]", 2);
+  if (end < 0) return { part: { text: "[" }, length: 1 };
+  return { part: { wild: "one", raw: text.slice(0, end + 1), cls: text.slice(1, end) }, length: end + 1 };
+}
+
+/** `{a,b}` lists and `{1..3}`/`{a..e}` ranges; anything else is literal text. */
+function braceAlternatives(body: string, word: ShellWord, scope: Scope, depth: number): Pattern[] {
+  if (body.includes(OPEN)) return [ANY];
+  if (body.includes(",")) return body.split(",").flatMap((alt) => wordPatterns({ ...word, value: alt }, scope, depth));
+  const numeric = /^(-?\d+)\.\.(-?\d+)$/.exec(body);
+  const letters = /^([A-Za-z])\.\.([A-Za-z])$/.exec(body);
+  const [from, to] = numeric ? [Number(numeric[1]), Number(numeric[2])]
+    : letters ? [(letters[1] ?? "a").charCodeAt(0), (letters[2] ?? "a").charCodeAt(0)] : [NaN, NaN];
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return [[{ text: `{${body}}` }]];
+  if (Math.abs(to - from) >= MAX_VARIANTS) return [[{ wild: "star", raw: `{${body}}` }]];
+  const step = from <= to ? 1 : -1;
+  const out: Pattern[] = [];
+  for (let n = from; n !== to + step; n += step) out.push([{ text: numeric ? String(n) : String.fromCharCode(n) }]);
+  return out;
 }
 
 /** Index of the close matching the opener at `start`, or -1. */
@@ -246,19 +343,57 @@ function braceEnd(text: string, open: number): number {
 }
 
 /**
- * What `$NAME` can hold. Known only when the child's environment sets it and
- * the command never writes the name (assignment, `read`, `for`, `export`…);
- * a `for` variable holds its list's words.
+ * What `$NAME` expands to: its value in the child's environment (empty when
+ * unset) together with every literal value the command assigns it, each read
+ * as an unquoted expansion is (globbed, split into fields). Only a name set
+ * by something not evaluated here is unknown.
  */
 function variable(name: string, scope: Scope, depth: number): Pattern[] {
   if (/^[?#$!]$/.test(name)) return [[{ text: "0" }]];
-  const list = scope.loops.get(name);
-  if (list && scope.bound.get(name) === 1 && depth < 2) {
-    return list.flatMap((word) => wordPatterns(word, scope, depth + 1));
+  if (name === "-") return [[{ text: "hB" }]];
+  if (name === "0") return [[{ text: "bash" }]];
+  if (/^[1-9@*]$/.test(name)) return scope.vars.positional ? [ANY] : [[]];
+  const { vars } = scope;
+  if (vars.everything || vars.opaque.has(name) || SHELL_SET.has(name) || depth >= MAX_VARIABLE_DEPTH) return [ANY];
+  const envValue = name === "PWD" ? scope.cwd : scope.env[name];
+  const values: Pattern[] = [envValue === undefined ? [] : [{ text: envValue }]];
+  for (const word of vars.assigned.get(name) ?? []) values.push(...wordPatterns(word, scope, depth + 1));
+  return values.flatMap(unquotedExpansion);
+}
+
+/** `${NAME}` and the default-value forms; any other operation is not evaluated. */
+function braced(inner: string, word: ShellWord, scope: Scope, depth: number): Pattern[] {
+  if (/^(?:[A-Za-z_]\w*|[0-9?#$!@*-])$/.test(inner)) return variable(inner, scope, depth);
+  if (/^#[A-Za-z_]\w*$/.test(inner)) return [[{ text: "0" }]];
+  const m = /^([A-Za-z_]\w*):?([-=+])(.*)$/.exec(inner);
+  if (!m || depth >= MAX_VARIABLE_DEPTH) return [ANY];
+  const alternative = wordPatterns({ ...word, value: m[3] ?? "", glob: false }, scope, depth + 1).flatMap(unquotedExpansion);
+  return m[2] === "+" ? [[], ...alternative] : [...variable(m[1] ?? "", scope, depth), ...alternative];
+}
+
+/** An unquoted expansion's value is globbed and split into fields; each field is also a candidate. */
+function unquotedExpansion(p: Pattern): Pattern[] {
+  const globbed = merge(p.flatMap((part) => ("text" in part ? globParts(part.text) : [part])));
+  if (!p.every((part) => "text" in part)) return [globbed];
+  const fields = leadText(p).split(/\s+/).filter(Boolean);
+  return fields.length > 1 ? [globbed, ...fields.map((field) => merge(globParts(field)))] : [globbed];
+}
+
+function globParts(text: string): Part[] {
+  const out: Part[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === "*" || c === "?" || c === "[") {
+      const glob = globPart(text.slice(i));
+      out.push(glob.part);
+      i += glob.length;
+    } else {
+      out.push({ text: c });
+      i += 1;
+    }
   }
-  if (name === "PWD" && !["cd", "pushd", "popd"].some((verb) => scope.bound.has(verb))) return [[{ text: scope.cwd }]];
-  const value = scope.env[name];
-  return value !== undefined && !scope.bound.has(name) ? [[{ text: value }]] : [[{ wild: "any" }]];
+  return out;
 }
 
 function merge(parts: readonly Part[]): Pattern {
@@ -304,23 +439,171 @@ function judge(p: Pattern, scope: Scope, isFile: boolean): boolean {
     // `~` and `~/…` are this user's home; `~name`, `~+`, `~-` are not known here.
     const end = lead.search(/[/\\]/);
     const prefix = end < 0 ? lead : lead.slice(0, end);
-    pattern = merge([prefix === "~" ? { text: scope.home } : { wild: "any" }, { text: lead.slice(prefix.length) }, ...p.slice(1)]);
+    pattern = merge([prefix === "~" ? { text: scope.home } : ANY[0]!, { text: lead.slice(prefix.length) }, ...p.slice(1)]);
   }
-  if (pattern.every((part) => "text" in part)) {
-    // Only names shaped like paths (or redirection targets): `environment`
-    // is not `.env`, `grep process.env` names a pattern, not a file.
-    const text = leadText(pattern);
-    if (!(isFile || /[/\\]/.test(text) || lead.startsWith(".") || lead.startsWith("~"))) return false;
-    return isSensitivePath(isAbsolute(text) ? text : resolve(scope.cwd, text));
+  if (pattern.every((part) => "text" in part)) return judgeLiteral(leadText(pattern), lead, scope, isFile);
+  if (pattern.some((part) => "wild" in part && part.wild === "any")) return couldBeSensitive(pattern, scope);
+  // A glob is expanded by the shell against the disk: judge what it matches.
+  // One that matches nothing stays as written (bash's default), so judge that.
+  const matches = expandGlob(pattern, scope);
+  if (matches === undefined) return couldBeSensitive(pattern, scope);
+  if (matches.length === 0) {
+    const literal = pattern.map((part) => ("text" in part ? part.text : part.raw)).join("");
+    return judgeLiteral(literal, lead, scope, isFile);
   }
-  return couldBeSensitive(pattern, scope);
+  return matches.some((path) => isSensitivePath(path));
+}
+
+function judgeLiteral(text: string, lead: string, scope: Scope, isFile: boolean): boolean {
+  // Only names shaped like paths (or redirection targets): `environment`
+  // is not `.env`, `grep process.env` names a pattern, not a file.
+  if (!(isFile || /[/\\]/.test(text) || lead.startsWith(".") || lead.startsWith("~"))) return false;
+  return isSensitivePath(isAbsolute(text) ? text : resolve(scope.cwd, text));
 }
 
 /**
- * Could some expansion of the pattern be a protected path? Three views, each
- * decided by the blocklist itself: the fixed directory the expansion happens
- * in, the sample names the expansion can take there, and the shortest text
- * each wildcard can supply (the literal parts may carry the name: `q*.env`).
+ * The paths a glob matches now, walked the way bash walks it: segment by
+ * segment, no leading-dot match unless the pattern or dotglob allows it, `**`
+ * recursive only under globstar. Undefined when the walk would exceed the
+ * entry budget — the caller then judges the pattern conservatively.
+ */
+function expandGlob(p: Pattern, scope: Scope): string[] | undefined {
+  const separators = scope.cmd || sep === "\\" ? /[/\\]/ : /\//;
+  const segments: Part[][] = [[]];
+  for (const part of p) {
+    if (!("text" in part)) {
+      segments[segments.length - 1]!.push(part);
+      continue;
+    }
+    part.text.split(separators).forEach((piece, k) => {
+      if (k > 0) segments.push([]);
+      if (piece) segments[segments.length - 1]!.push({ text: piece });
+    });
+  }
+  const lead = leadText(p);
+  const root = isAbsolute(lead) ? resolve(lead.slice(0, lead.search(separators) + 1) || lead) : resolve(scope.cwd);
+  // An absolute pattern's first segment is its root (`""` on POSIX, `C:` on Windows).
+  if (isAbsolute(lead)) segments.shift();
+
+  let budget = scope.globEntryBudget;
+  const list = (dir: string): Dirent[] | undefined => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    budget -= entries.length + 1;
+    return budget < 0 ? undefined : entries;
+  };
+  const isDir = (path: string, entry: Dirent): boolean => {
+    if (entry.isDirectory()) return true;
+    if (!entry.isSymbolicLink()) return false;
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  let current = [root];
+  let globbed = false;
+  for (let k = 0; k < segments.length; k += 1) {
+    const segment = segments[k]!;
+    const last = k === segments.length - 1;
+    if (segment.length === 0) continue;
+    if (segment.every((part) => "text" in part)) {
+      const name = leadText(segment);
+      current = current.map((dir) => join(dir, name));
+      if (globbed) current = current.filter((path) => exists(path));
+      continue;
+    }
+    globbed = true;
+    const deep = scope.globstar && segment.length === 1 && "wild" in segment[0]! && segment[0].wild === "deep";
+    const matcher = segmentRegex(segment, scope);
+    const next: string[] = [];
+    const walk = (dir: string, recursive: boolean): boolean => {
+      const entries = list(dir);
+      if (!entries) return false;
+      for (const entry of entries) {
+        const path = join(dir, entry.name);
+        const directory = isDir(path, entry);
+        if (!matcher.test(entry.name)) continue;
+        if (last || directory) next.push(path);
+        if (recursive && directory && !entry.isSymbolicLink() && !walk(path, true)) return false;
+      }
+      return true;
+    };
+    for (const dir of current) {
+      // `**/` also matches zero directories.
+      if (deep && !last) next.push(dir);
+      if (!walk(dir, deep)) return undefined;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function exists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** One path segment of a glob as an anchored regex over a directory entry name. */
+function segmentRegex(segment: readonly Part[], scope: Scope): RegExp {
+  let out = "";
+  segment.forEach((part, index) => {
+    if ("text" in part) {
+      out += part.text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+      return;
+    }
+    // A glob does not match a leading dot unless the shell was told to.
+    if (index === 0 && !scope.dotMatches) out += "(?!\\.)";
+    out += part.wild === "one" ? classRegex(part.cls) : part.wild === "any" ? ".*" : "[^/]*";
+  });
+  try {
+    return new RegExp(`^${out}$`, scope.nocase ? "iu" : "u");
+  } catch {
+    // A class JavaScript cannot express: widen it to any character.
+    return segmentRegex(segment.map((part) => ("wild" in part && part.cls !== undefined ? { wild: "one", raw: part.raw } : part)), scope);
+  }
+}
+
+const POSIX_CLASSES: Readonly<Record<string, string>> = {
+  alpha: "a-zA-Z", digit: "0-9", alnum: "a-zA-Z0-9", upper: "A-Z", lower: "a-z", xdigit: "0-9a-fA-F", space: "\\s",
+};
+
+/** A bash bracket expression as a JavaScript character class (`[!a-c]`, `[[:digit:]]`). */
+function classRegex(body: string | undefined): string {
+  if (body === undefined) return "[^/]";
+  const negate = body.startsWith("!") || body.startsWith("^");
+  let out = "";
+  for (let i = negate ? 1 : 0; i < body.length; i += 1) {
+    const named = /^\[:(\w+):\]/.exec(body.slice(i));
+    if (named) {
+      const cls = POSIX_CLASSES[named[1] ?? ""];
+      if (cls === undefined) return "[^/]";
+      out += cls;
+      i += named[0].length - 1;
+      continue;
+    }
+    const ch = body[i] ?? "";
+    const range = ch === "-" && i > (negate ? 1 : 0) && i < body.length - 1;
+    out += range ? "-" : ch.replace(/[\\\]\[^/-]/, "\\$&");
+  }
+  return negate ? `[^/${out}]` : `(?!/)[${out}]`;
+}
+
+/**
+ * Could some expansion of the pattern be a protected path? The conservative
+ * judgement for what cannot be expanded here. Three views, each decided by
+ * the blocklist itself: the fixed directory the expansion happens in, the
+ * sample names the expansion can take there, and the shortest text each
+ * wildcard can supply (the literal parts may carry the name: `q*.env`).
  */
 function couldBeSensitive(p: Pattern, scope: Scope): boolean {
   const firstWild = p.findIndex((part) => "wild" in part);

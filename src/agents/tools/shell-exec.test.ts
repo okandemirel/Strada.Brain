@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ShellExecTool } from "./shell-exec.js";
@@ -286,6 +286,38 @@ describe("the shell applies the same sensitive-path blocklist as the file tools 
     const ordinary = await tool.execute({ command: "cat *.cs && ls -a" }, ctx);
     expect(ordinary.isError).toBeFalsy();
     expect(ordinary.content).toContain("class Player");
+  });
+
+  it("judges globs by what is on disk and variables by the child's real environment (TLS-7)", async () => {
+    await writeFile(join(tempDir, ".env"), "SECRET_TOKEN=do-not-print\n");
+    await mkdir(join(tempDir, "Packages"));
+    await writeFile(join(tempDir, "Packages", "manifest.json"), '{"dependencies":{}}\n');
+    for (const command of ["ls *", "cat Packages/*.json", 'echo "n: $n"', "echo $STRADA_TEST_WITHHELD_FILE"]) {
+      const result = await tool.execute({ command }, ctx);
+      expect(result.isError, command).toBeFalsy();
+    }
+
+    await mkdir(join(tempDir, "Keys"));
+    await writeFile(join(tempDir, "Keys", "server.pem"), "-----BEGIN PRIVATE KEY-----\n");
+    const saved = { ...process.env };
+    // Forwarded to the child through the operator passthrough, so it is in buildShellEnv's output.
+    process.env["SHELL_EXEC_ENV_PASSTHROUGH"] = "STRADA_TEST_KEY_FILE";
+    process.env["STRADA_TEST_KEY_FILE"] = join(tempDir, "Keys", "server.pem");
+    process.env["STRADA_TEST_WITHHELD_FILE"] = join(tempDir, "Keys", "server.pem");
+    try {
+      for (const command of ["ls Keys/*", "cat */*.pem", "cat .e*", "n=.env; cat $n", "cat $STRADA_TEST_KEY_FILE"]) {
+        const result = await tool.execute({ command }, ctx);
+        expect(result.isError, command).toBe(true);
+        expect(result.content, command).toContain("sensitive path");
+        expect(result.content, command).not.toContain("do-not-print");
+      }
+      // Withheld from the child, so it expands to nothing there.
+      const withheld = await tool.execute({ command: "echo [$STRADA_TEST_WITHHELD_FILE]" }, ctx);
+      expect(withheld.isError).toBeFalsy();
+      expect(withheld.content).toContain("[]");
+    } finally {
+      process.env = saved;
+    }
   });
 
   it("the tool refuses the command before running it", async () => {

@@ -91,7 +91,7 @@ export class ShellExecTool implements ITool {
     "(bash on macOS/Linux, cmd.exe on Windows). " +
     "Dangerous commands (rm -rf /, shutdown, etc.) and process-execution escapes " +
     "(find -exec, awk system(), xargs-to-shell, nested sh -c, sudo) are blocked, and so is a command " +
-    "that names a secret file or has a glob/variable that could expand to one. These are best-effort " +
+    "that names a secret file or has a glob/variable that expands to one. These are best-effort " +
     "guards, not a sandbox.";
 
   readonly inputSchema = {
@@ -245,10 +245,11 @@ export class ShellExecTool implements ITool {
     // The same sensitive-path blocklist the file tools apply. Audited
     // 2026-09-10: `file_read .env` was refused while `cat .env` succeeded —
     // the blocklist was never consulted for a command's arguments, only for
-    // working_directory. Every word is read as the shell reads it, and one
-    // that could expand to a protected name refuses the command (see
-    // shell-sensitive-paths.ts). A best-effort name check, not a sandbox: a
-    // program can still open files its command line never names.
+    // working_directory. Every word is read and expanded as the shell will
+    // (globs against the disk, variables from childEnv) and one that names a
+    // protected file refuses the command (see shell-sensitive-paths.ts). A
+    // best-effort name check, not a sandbox: a program can still open files
+    // its command line never names.
     const sensitive = sensitiveCommandPaths(command, cwd, { env: childEnv });
     if (sensitive.length > 0) {
       return {
