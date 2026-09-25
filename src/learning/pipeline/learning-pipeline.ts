@@ -1249,10 +1249,9 @@ export class LearningPipeline {
       // linked. It is evicted by the stale sweep or at session end.
     }
 
-    if (!event.success && event.errorDetails) {
-      this.recordErrorPattern(event.errorDetails as ErrorDetails, event.toolName);
-    }
-
+    // The error pattern is recorded by processObservation (the "error" case),
+    // the same place the startup drain records it: recording it here as well
+    // counted every failure twice (LRN-19).
     await this.processObservation(observation);
     // Ensure the observation is flushed to DB before marking it processed,
     // since markObservationsProcessed runs a direct SQL UPDATE.
