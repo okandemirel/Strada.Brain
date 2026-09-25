@@ -346,6 +346,20 @@ describe("DelegationManager", () => {
       expect(constructedOrchestrators.at(-1)?.dispose).toHaveBeenCalledTimes(1);
     });
 
+    it("hands STREAMING_ENABLED to the delegate's orchestrator (N-3)", async () => {
+      const streamingOff = new DelegationManager(buildManagerOpts({ delegationLog, streamingEnabled: false }));
+      await streamingOff.delegate({
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(orchestratorOpts.streamingEnabled).toBe(false);
+    });
+
     it("spawns a sub-agent and returns captured result", async () => {
       const request: DelegationRequest = {
         type: "code_review",

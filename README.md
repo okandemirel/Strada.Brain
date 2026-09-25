@@ -986,6 +986,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket dashboard server port |
 | `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (unset) | Optional bearer token for WebSocket dashboard auth; when present it also protects dashboard APIs, and when absent the embedded same-origin dashboard bootstraps a process-scoped token automatically |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra allowed origins for the WebSocket dashboard |
+| `STREAMING_ENABLED` | `true` | Call providers with streaming for the agent's model turns, so the stall watchdog can see a slow model is alive. `false` uses non-streaming calls (e.g. behind a proxy that breaks SSE). Replies reach the chat once complete either way |
 | `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Max time to wait for a streaming response to start before treating it as stalled |
 | `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Max gap between streaming chunks before treating an in-progress response as stalled |
 | `ENABLE_PROMETHEUS` | `false` | Enable Prometheus metrics endpoint (port 9090) |
@@ -1160,7 +1161,7 @@ The RAG (Retrieval-Augmented Generation) pipeline indexes your C# source code fo
 
 ### Streaming
 
-All channels implement edit-in-place streaming. The agent's response appears progressively as the LLM generates it. Updates are throttled per platform to avoid rate limits (Discord: 1/sec, Slack: 2/sec).
+All channels implement edit-in-place messages, which carry live task progress. Updates are throttled per platform to avoid rate limits (Discord: 1/sec, Slack: 2/sec). The agent's reply itself is sent once it is complete: provider streaming (`STREAMING_ENABLED`, default `true`) is used internally so a slow model is seen to be alive, not to show partial text.
 
 ### Authentication
 

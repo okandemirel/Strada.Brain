@@ -39,7 +39,7 @@ const EXACT_RULES: Record<string, ConfigDescriptor> = {
   streamingEnabled: {
     category: "Core",
     tier: "core",
-    description: "Streaming responses on the default chat surfaces.",
+    description: "Call providers with streaming for the agent's model turns; replies reach the chat once complete either way.",
   },
   shellEnabled: {
     category: "Core",

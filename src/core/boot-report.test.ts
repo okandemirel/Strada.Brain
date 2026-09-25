@@ -260,6 +260,15 @@ describe("boot report", () => {
       );
     });
 
+    it("the provider stage says when STREAMING_ENABLED=false turned provider streaming off (N-3)", () => {
+      const detailFor = (streamingEnabled: boolean) =>
+        buildBootReport({ config: makeConfig({ streamingEnabled }), channelType: "web" })
+          .stages.find((stage) => stage.id === "providers")?.detail;
+
+      expect(detailFor(false)).toContain("Provider streaming is off (STREAMING_ENABLED=false)");
+      expect(detailFor(true)).not.toContain("streaming");
+    });
+
     it("does not warn about streaming when streaming is disabled", () => {
       const warnings = collectConfigWarnings({
         config: makeConfig({ streamingEnabled: false }),

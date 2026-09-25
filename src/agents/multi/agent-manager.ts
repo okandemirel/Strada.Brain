@@ -110,6 +110,8 @@ export interface AgentManagerOptions {
   readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
   readonly streamInitialTimeoutMs?: number;
   readonly streamStallTimeoutMs?: number;
+  /** STREAMING_ENABLED, for the per-agent orchestrators that run chat turns. */
+  readonly streamingEnabled?: boolean;
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly instinctRetriever?: InstinctRetriever;
@@ -738,6 +740,7 @@ export class AgentManager {
       defaultLanguage: this.opts.defaultLanguage,
       streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
+      streamingEnabled: this.opts.streamingEnabled,
       stradaDeps: this.opts.stradaDeps,
       stradaConfig: this.opts.stradaConfig,
       instinctRetriever: this.opts.instinctRetriever,

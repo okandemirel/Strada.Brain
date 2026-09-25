@@ -235,6 +235,53 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     const options = createAgentManager.mock.calls[0]![0] as { providerRouter?: unknown };
     expect(options.providerRouter).toBe(providerRouter);
   });
+
+  it("hands STREAMING_ENABLED to the agent and delegation managers (N-3)", async () => {
+    type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
+    const createAgentManager = vi.fn((_options: unknown) => ({
+      setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn(),
+      getDefaultAgentCapUsd: () => 5,
+    }));
+    const createDelegationManager = vi.fn((_options: unknown) => ({ delegate: vi.fn() }));
+    await initializeMultiAgentDelegationStage(
+      {
+        config: makeConfig({
+          streamingEnabled: false,
+          agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"],
+          delegation: {
+            enabled: true, maxDepth: 2, maxConcurrentPerParent: 2,
+            tiers: { local: "o:l3", cheap: "d:d-chat", standard: "g:g-pro", premium: "c:sonnet" },
+            types: [{ name: "code_review", tier: "cheap", timeoutMs: 60000, maxIterations: 10 }],
+            verbosity: "normal",
+          } as Config["delegation"],
+        }),
+        logger: createMockLogger(),
+        daemonMode: false,
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as StageParams["daemonStorage"],
+        daemonContext: {} as unknown as StageParams["daemonContext"],
+        taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
+        orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
+        providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
+        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        channel: {} as unknown as StageParams["channel"],
+        metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
+        soulLoader: {} as unknown as StageParams["soulLoader"],
+        dmPolicy: {} as unknown as StageParams["dmPolicy"],
+        stradaDeps: { coreInstalled: false } as unknown as StageParams["stradaDeps"],
+      },
+      {
+        createAgentRegistry: vi.fn(() => ({ initialize: vi.fn(), getById: vi.fn(() => undefined) })),
+        createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentManager,
+        createDelegationLog: vi.fn(() => ({})),
+        createTierRouter: vi.fn(() => ({})),
+        createDelegationManager,
+      } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+    );
+
+    expect((createAgentManager.mock.calls[0]![0] as { streamingEnabled?: boolean }).streamingEnabled).toBe(false);
+    expect((createDelegationManager.mock.calls[0]![0] as { streamingEnabled?: boolean }).streamingEnabled).toBe(false);
+  });
 });
 
 describe("initializeMultiAgentDelegationStage — the root orchestrator's delegations", () => {

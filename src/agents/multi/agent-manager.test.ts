@@ -436,6 +436,14 @@ describe("AgentManager", () => {
       }
     });
 
+    it("passes STREAMING_ENABLED into per-agent orchestrators (N-3)", async () => {
+      // The suite's manager is built with streamingEnabled: false.
+      await manager.routeMessage(makeMsg());
+      const { Orchestrator } = await import("../orchestrator.js");
+      const opts = (Orchestrator as unknown as Mock).mock.calls.at(-1)?.[0];
+      expect(opts?.streamingEnabled).toBe(false);
+    });
+
     it("passes the shared provider router into per-agent orchestrators (N-2)", async () => {
       // Without it a chat turn in multi-agent mode never routed and never
       // recorded a decision, so `/routing info` stayed empty.

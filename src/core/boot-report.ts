@@ -626,9 +626,13 @@ export function buildBootReport(
     id: "providers",
     label: "Response Workers",
     status: options.providerHealthy === false ? "degraded" : "ready",
-    detail: options.providerHealthy === false
+    detail: (options.providerHealthy === false
       ? "Provider chain booted but the runtime health probe failed."
-      : "Primary provider chain booted successfully.",
+      : "Primary provider chain booted successfully.")
+      // Say which call mode the engine runs in, now that the flag decides it.
+      + (options.config.streamingEnabled === false
+        ? " Provider streaming is off (STREAMING_ENABLED=false): model turns use non-streaming calls."
+        : ""),
   };
   const knowledgeStage: BootStageReport = {
     id: "knowledge",

@@ -1517,6 +1517,7 @@ async function bootstrapImpl(
     defaultLanguage: config.language,
     streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
+    streamingEnabled: config.streamingEnabled,
     stradaDeps,
     stradaConfig: config.strada,
     instinctRetriever,

@@ -861,6 +861,12 @@ export class Orchestrator {
   private readonly streamInitialTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
   /**
+   * STREAMING_ENABLED. When false the engine calls providers with `chat()`
+   * instead of `chatStream()` (see {@link silentStream}). Replies reach the
+   * channel once complete either way.
+   */
+  private readonly streamingEnabled: boolean;
+  /**
    * Agent Core v2 resolved flag set (Phase 1a). When `failureLedger === true`, the four
    * provider-failure decision sites consult the {@link FailureLedger} instead of v1's
    * inline `consecutiveProviderFailures`/`iterationHealth` logic. Undefined or `false`
@@ -1097,6 +1103,8 @@ export class Orchestrator {
     defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
     streamInitialTimeoutMs?: number;
     streamStallTimeoutMs?: number;
+    /** STREAMING_ENABLED; default true (stream whenever the provider can). */
+    streamingEnabled?: boolean;
     stradaDeps?: StradaDepsStatus;
     stradaConfig?: Partial<StradaDependencyConfig>;
     instinctRetriever?: InstinctRetriever;
@@ -1199,6 +1207,7 @@ export class Orchestrator {
     this.streamInitialTimeoutMs =
       opts.streamInitialTimeoutMs ?? DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS;
     this.streamStallTimeoutMs = opts.streamStallTimeoutMs ?? DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS;
+    this.streamingEnabled = opts.streamingEnabled ?? true;
     this.stradaConfig = opts.stradaConfig;
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.trajectoryReplayRetriever = opts.trajectoryReplayRetriever ?? null;
@@ -4166,6 +4175,10 @@ export class Orchestrator {
       this.classifySilentStreamResponse(fallbackResponse, provider);
       return fallbackResponse;
     } catch (fallbackErr) {
+      // A cancel is not a provider failure (audit #6): rethrow it for the loop's
+      // cancellation path. With STREAMING_ENABLED=false this is the turn's only
+      // call, so a /cancel lands here.
+      if (externalSignal?.aborted) throw fallbackErr;
       const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
       recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
@@ -4219,6 +4232,16 @@ export class Orchestrator {
       : undefined;
     this.normalizeSessionForCall(session, chatId);
     const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
+
+    // STREAMING_ENABLED=false: the operator asked for no provider streaming (a
+    // proxy that breaks SSE, say). Run the non-streaming path the engine already
+    // uses after a streaming error — `chat()` under the same per-call deadline —
+    // instead of opening a stream first.
+    if (!this.streamingEnabled) {
+      return await this.silentStreamFallback(
+        provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+      );
+    }
 
     // ── Agent Core v2 — Phase 1b: RunClock-governed streaming (flag-ON). ──────────────────
     // The CallScope token replaces the createStreamingProgressTimeout watchdog + Promise.race:
