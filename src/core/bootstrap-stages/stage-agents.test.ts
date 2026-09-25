@@ -198,6 +198,43 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     expect(fakeAgentRegistry.initialize).toHaveBeenCalledTimes(1);
     expect(fakeAgentBudgetTracker.initialize).toHaveBeenCalledTimes(1);
   });
+
+  it("hands the process's provider router to the agent manager (N-2)", async () => {
+    type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
+    // Chat turns in multi-agent mode run on the manager's orchestrators; without
+    // the router they never routed and `/routing info` stayed empty.
+    const providerRouter = { setTierRouter: vi.fn() };
+    const createAgentManager = vi.fn((_options: unknown) => ({
+      setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn(),
+    }));
+    await initializeMultiAgentDelegationStage(
+      {
+        config: makeConfig({ agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"] }),
+        logger: createMockLogger(),
+        daemonMode: false,
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as StageParams["daemonStorage"],
+        daemonContext: {} as unknown as StageParams["daemonContext"],
+        taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
+        orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
+        providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
+        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        channel: {} as unknown as StageParams["channel"],
+        metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
+        soulLoader: {} as unknown as StageParams["soulLoader"],
+        dmPolicy: {} as unknown as StageParams["dmPolicy"],
+        stradaDeps: { coreInstalled: false } as unknown as StageParams["stradaDeps"],
+        providerRouter,
+      },
+      {
+        createAgentRegistry: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentManager,
+      } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+    );
+
+    const options = createAgentManager.mock.calls[0]![0] as { providerRouter?: unknown };
+    expect(options.providerRouter).toBe(providerRouter);
+  });
 });
 
 describe("initializeMultiAgentDelegationStage — the root orchestrator's delegations", () => {

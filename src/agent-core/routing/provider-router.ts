@@ -413,6 +413,19 @@ export class ProviderRouter {
   }
 
   /**
+   * Record a routing decision. Public so a caller that selects a provider
+   * WITHOUT scoring it here (an explicit hard pin, or falling back to its
+   * current worker when the routed pick cannot run) still leaves the
+   * selection in the history `/routing info` and the dashboard read.
+   */
+  recordDecision(decision: RoutingDecision): void {
+    this.decisions.push(decision);
+    if (this.decisions.length > MAX_DECISIONS) {
+      this.decisions.shift();
+    }
+  }
+
+  /**
    * Return the last N routing decisions for diagnostics.
    */
   getRecentDecisions(n: number, identityKey?: string): RoutingDecision[] {
@@ -754,13 +767,6 @@ export class ProviderRouter {
       ? `; replay score ${replaySignal.score.toFixed(2)} from ${replaySignal.sampleSize} persisted trajectories${replaySignal.sameWorldMatches > 0 ? ` (${replaySignal.sameWorldMatches} same-world)` : ""}${replaySignal.verdictSampleSize > 0 ? `, verdict ${replaySignal.verdictScore.toFixed(2)}` : ""}`
       : "";
     return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}${replayNote}`;
-  }
-
-  private recordDecision(decision: RoutingDecision): void {
-    this.decisions.push(decision);
-    if (this.decisions.length > MAX_DECISIONS) {
-      this.decisions.shift();
-    }
   }
 
   private phaseReliabilityBias(

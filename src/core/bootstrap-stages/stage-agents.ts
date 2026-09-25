@@ -135,6 +135,9 @@ export async function initializeMultiAgentDelegationStage(
     goalStorage: params.goalStorage,
     vaultRegistry: params.vaultRegistry,
     vaultWriteHookBudgetMs: params.vaultWriteHookBudgetMs,
+    // Chat turns run on per-agent orchestrators: without the shared router they
+    // never routed, and `/routing info` had nothing to read.
+    providerRouter: params.providerRouter as ConstructorParameters<typeof AgentManager>[0]["providerRouter"],
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)

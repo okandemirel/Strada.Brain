@@ -5,6 +5,7 @@ import type { MetricsCollector } from "../dashboard/metrics.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import type {
   ExecutionTraceSource,
+  RoutingDecision,
   TaskClassification,
 } from "../agent-core/routing/routing-types.js";
 import type { TaskUsageEvent } from "../tasks/types.js";
@@ -72,6 +73,7 @@ export interface SupervisorRoutingContext {
       phase: string | undefined,
       opts: { identityKey: string; taskDescription?: string; projectWorldFingerprint?: string },
     ): { provider: string; reason: string; model?: string; assignmentVersion?: number };
+    recordDecision?(decision: RoutingDecision): void;
   };
   readonly modelIntelligence?: ModelIntelligenceLookup;
   readonly metrics?: MetricsCollector;
@@ -85,6 +87,22 @@ const INTERNAL_DECISION_LINE_RE =
   /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
 
 // ─── Functions ────────────────────────────────────────────────────────────────
+
+/**
+ * Record a selection the router did not score — an explicit hard pin, or a
+ * fallback to the current worker — so the routing history (`/routing info`,
+ * the dashboard) names the provider that actually runs, not only the ones the
+ * router picked.
+ */
+function recordUnscoredSelection(
+  ctx: SupervisorRoutingContext,
+  task: TaskClassification,
+  identityKey: string,
+  provider: string,
+  reason: string,
+): void {
+  ctx.providerRouter?.recordDecision?.({ provider, reason, task, timestamp: Date.now(), identityKey });
+}
 
 export function buildStaticSupervisorAssignment(
   role: SupervisorRole,
@@ -223,7 +241,7 @@ export function resolveSupervisorAssignment(
     // throw must not escape resolveSupervisorAssignment — degrade to the fallback
     // worker with an explanatory reason instead.
     try {
-      return buildStaticSupervisorAssignment(
+      const pinned = buildStaticSupervisorAssignment(
         role,
         pinnedProviderName,
         activeInfo.model,
@@ -237,8 +255,17 @@ export function resolveSupervisorAssignment(
           identityKey,
         ),
       );
+      recordUnscoredSelection(ctx, task, identityKey, pinned.providerName, pinned.reason);
+      return pinned;
     } catch {
       const modelId = resolveProviderModelId(ctx, fallbackName, identityKey);
+      recordUnscoredSelection(
+        ctx,
+        task,
+        identityKey,
+        canonicalFallbackName,
+        "hard-pinned provider unavailable, reusing the current worker",
+      );
       return buildStaticSupervisorAssignment(
         role,
         canonicalFallbackName,
@@ -291,14 +318,19 @@ export function resolveSupervisorAssignment(
     // ORC-20: the routed model belongs to the routed provider; a fallback runs its own.
     const modelId = (resolved.usedFallback ? undefined : routedModel)
       ?? resolveProviderModelId(ctx, resolved.providerName, identityKey);
+    const reason = resolved.usedFallback && routed.provider
+      ? `${routed.reason}; routed provider '${routed.provider}' is unavailable, reusing the current worker`
+      : routed.reason;
+    // The router recorded its pick; when that pick cannot run, record the worker that will.
+    if (resolved.usedFallback) {
+      recordUnscoredSelection(ctx, task, identityKey, resolved.providerName, reason);
+    }
     return buildStaticSupervisorAssignment(
       role,
       resolved.providerName,
       modelId,
       resolved.provider,
-      resolved.usedFallback && routed.provider
-        ? `${routed.reason}; routed provider '${routed.provider}' is unavailable, reusing the current worker`
-        : routed.reason,
+      reason,
       undefined,
       buildCatalogAssignmentMetadata(
         ctx,
@@ -315,6 +347,13 @@ export function resolveSupervisorAssignment(
   }
 
   const modelId = resolveProviderModelId(ctx, fallbackName, identityKey);
+  recordUnscoredSelection(
+    ctx,
+    task,
+    identityKey,
+    canonicalFallbackName,
+    "routing fallback, reusing the current worker",
+  );
   return buildStaticSupervisorAssignment(
     role,
     canonicalFallbackName,
@@ -343,6 +382,8 @@ export function buildSupervisorExecutionStrategy(
       activeInfo.model,
       identityKey,
     );
+    // Every role runs on the pin; one entry per turn says so.
+    recordUnscoredSelection(ctx, task, identityKey, pinnedProviderName, "honored the explicit user hard pin");
     const buildPinnedAssignment = (
       role: SupervisorRole,
       reason: string,

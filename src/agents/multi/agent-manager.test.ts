@@ -436,6 +436,36 @@ describe("AgentManager", () => {
       }
     });
 
+    it("passes the shared provider router into per-agent orchestrators (N-2)", async () => {
+      // Without it a chat turn in multi-agent mode never routed and never
+      // recorded a decision, so `/routing info` stayed empty.
+      const sharedRouter = { resolve: vi.fn(), recordDecision: vi.fn() } as never;
+      const routedManager = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        stradaDeps: { installed: false, version: undefined } as never,
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        providerRouter: sharedRouter,
+      });
+
+      try {
+        await routedManager.routeMessage(makeMsg());
+        const { Orchestrator } = await import("../orchestrator.js");
+        const opts = (Orchestrator as unknown as Mock).mock.calls.at(-1)?.[0];
+        expect(opts?.providerRouter).toBe(sharedRouter);
+      } finally {
+        await routedManager.shutdown();
+      }
+    });
+
     it("wires the shared workspace runtime into existing and future per-agent orchestrators", async () => {
       await manager.routeMessage(makeMsg());
 

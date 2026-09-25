@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildSupervisorExecutionStrategy,
   getProviderByNameOrFallback,
   recordProviderUsage,
   resolveConsensusReviewAssignment,
   resolveSupervisorAssignment,
 } from "./orchestrator-supervisor-routing.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
+import { ProviderRouter, type ProviderManagerRef } from "../agent-core/routing/provider-router.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 
 // RateLimiter.recordTokenUsage logs through getLogger(), which throws outside a
@@ -188,6 +190,108 @@ describe("a routed provider that cannot be built (ORC-20)", () => {
     const currentAssignment = { role: "executor", providerName: "qwen", provider: current } as any;
 
     expect(resolveConsensusReviewAssignment(ctx, currentAssignment, currentAssignment, "chat:web:1")).toBeNull();
+  });
+});
+
+describe("the routing history names the provider each turn runs on (N-2)", () => {
+  const task: TaskClassification = { type: "code-generation", complexity: "simple", criticality: "medium" };
+
+  it("a soft preference is routed, and the router records every role's decision for the identity", () => {
+    const kimi = makeProvider("kimi");
+    const qwen = makeProvider("qwen");
+    const providerManager = {
+      getActiveInfo: () => ({ providerName: "kimi", model: "kimi-model", selectionMode: "strada-preference-bias" }),
+      getProviderByName: (name: string) => (name === "kimi" ? kimi : name === "qwen" ? qwen : null),
+      listAvailable: () => [
+        { name: "kimi", label: "Kimi", defaultModel: "kimi-model" },
+        { name: "qwen", label: "Qwen", defaultModel: "qwen-model" },
+      ],
+      isAvailable: () => true,
+    };
+    const router = new ProviderRouter(providerManager as unknown as ProviderManagerRef, "balanced");
+    const ctx = { providerManager, providerRouter: router, taskClassifier: { classify: () => task } } as any;
+
+    buildSupervisorExecutionStrategy(ctx, "write the module", "user-1", kimi as any);
+
+    const decisions = router.getRecentDecisions(10, "user-1");
+    expect(decisions.map((d) => d.task.type)).toEqual(["planning", "code-generation", "code-review", "simple-question"]);
+  });
+
+  it("an explicit hard pin is recorded once per turn, without asking the router", () => {
+    const pinned = makeProvider("kimi");
+    const recordDecision = vi.fn();
+    const resolve = vi.fn();
+    const ctx = {
+      providerManager: {
+        getActiveInfo: () => ({ providerName: "kimi", model: "kimi-max", selectionMode: "strada-hard-pin" }),
+      },
+      providerRouter: { resolve, recordDecision },
+      taskClassifier: { classify: () => task },
+    } as any;
+
+    buildSupervisorExecutionStrategy(ctx, "write the module", "user-1", pinned as any);
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(recordDecision).toHaveBeenCalledTimes(1);
+    expect(recordDecision).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "kimi",
+      identityKey: "user-1",
+      reason: "honored the explicit user hard pin",
+      task,
+    }));
+  });
+
+  it("a routed pick that cannot be built records the fallback worker that runs instead", () => {
+    const fallbackProvider = makeProvider("qwen");
+    const recordDecision = vi.fn();
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue({ providerName: "qwen", model: "qwen3-coder" }),
+        getProviderByName: vi.fn().mockReturnValue(null),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([]),
+      },
+      providerRouter: {
+        resolve: vi.fn().mockReturnValue({ provider: "openai", model: "gpt-x", reason: "best coder" }),
+        recordDecision,
+      },
+    } as any;
+
+    resolveSupervisorAssignment(ctx, "executor", task, "executing", "user-1", "qwen", fallbackProvider as any);
+
+    expect(recordDecision).toHaveBeenCalledTimes(1);
+    const [decision] = recordDecision.mock.calls[0]!;
+    expect(decision).toMatchObject({ provider: "qwen", identityKey: "user-1", task });
+    expect(decision.reason).toContain("'openai' is unavailable");
+  });
+
+  it("a router failure records the fallback worker", () => {
+    const fallbackProvider = makeProvider("qwen");
+    const recordDecision = vi.fn();
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue(undefined),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([]),
+      },
+      providerRouter: {
+        resolve: vi.fn(() => {
+          throw new Error("catalog unavailable");
+        }),
+        recordDecision,
+      },
+    } as any;
+
+    const assignment = resolveSupervisorAssignment(
+      ctx, "executor", task, "executing", "user-1", "qwen", fallbackProvider as any,
+    );
+
+    expect(assignment.providerName).toBe("qwen");
+    expect(recordDecision).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "qwen",
+      identityKey: "user-1",
+      reason: "routing fallback, reusing the current worker",
+    }));
   });
 });
 

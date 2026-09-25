@@ -128,6 +128,15 @@ export interface AgentManagerOptions {
   readonly goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
   readonly vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
   readonly vaultWriteHookBudgetMs?: number;
+  /**
+   * The process's one ProviderRouter, shared like DelegationManager shares it.
+   *
+   * With multi-agent on (the default) every chat turn runs on a per-agent
+   * orchestrator, and those were built without a router: provider routing and
+   * the routing preset did nothing, and `/routing info` read a router that no
+   * run ever recorded a decision or execution trace into.
+   */
+  readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -745,6 +754,7 @@ export class AgentManager {
       supervisorBrain: this.opts.supervisorBrain,
       vaultRegistry: this.opts.vaultRegistry,
       vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
+      providerRouter: this.opts.providerRouter,
       onUsage: (usage) => {
         // Cache-aware pricing + concrete model attribution (see buildUsageRecorder
         // in background-executor for the full rationale).
