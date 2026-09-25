@@ -9,6 +9,10 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK_PATH = join(ROOT, "scripts", "release", "mock-kimi-hook.mjs");
+const ENTRY = join(ROOT, "src", "index.ts");
+// Resolved here: a bare `--import tsx` resolves from the child's cwd, which is
+// the sandbox, not the checkout.
+const TSX_LOADER = import.meta.resolve("tsx");
 const PAOR_RECOVERY_PROMPT =
   "Run the PAOR recovery smoke: let the initial approach fail, then replan and create Assets/paor-proof.txt with exact content 'paor ok'.";
 const PROVIDER_FALLBACK_PROMPT = "Run the provider fallback smoke and say exactly: provider fallback ok.";
@@ -36,18 +40,22 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * How a smoke child is started. Everything is absolute so the child can run
+ * from the sandbox instead of the checkout (OPS-16).
+ */
+export function smokeChildArgs(args) {
+  return ["--import", HOOK_PATH, "--import", TSX_LOADER, ENTRY, ...args];
+}
+
 class CliSession {
-  constructor(args, env) {
+  constructor(args, sandbox, env) {
     this.output = "";
-    this.child = spawn(
-      process.execPath,
-      ["--import", HOOK_PATH, "--import", "tsx", "src/index.ts", ...args],
-      {
-        cwd: ROOT,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    this.child = spawn(process.execPath, smokeChildArgs(args), {
+      cwd: sandbox.home,
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 
     const append = (chunk) => {
       this.output += chunk.toString("utf8");
@@ -223,7 +231,16 @@ async function createSmokeProject(projectDir) {
   );
 }
 
-function buildBaseEnv(memoryDir, projectDir) {
+/**
+ * The HOME, Strada home and install root a smoke child gets instead of the
+ * developer's (OPS-16). The directories are created by main().
+ */
+export function createSmokeSandbox(tempRoot) {
+  const home = join(tempRoot, "home");
+  return { home, stradaHome: join(home, ".strada"), installRoot: join(tempRoot, "install") };
+}
+
+export function buildBaseEnv(memoryDir, projectDir, sandbox) {
   const providerEnv = {
     GEMINI_API_KEY: undefined,
     OPENAI_API_KEY: undefined,
@@ -246,6 +263,18 @@ function buildBaseEnv(memoryDir, projectDir) {
   return {
     ...process.env,
     ...providerEnv,
+    // Isolation (OPS-16). Run from the checkout, the child took the repository
+    // as its config root: dotenv refilled every key cleared above from the
+    // developer's .env, and its logs, runtime lock and a full index of the
+    // repository's own source landed in the checkout.
+    HOME: sandbox.home,
+    USERPROFILE: sandbox.home,
+    STRADA_HOME: sandbox.stradaHome,
+    STRADA_INSTALL_ROOT: sandbox.installRoot,
+    STRADA_SOURCE_CHECKOUT: "false",
+    // Only the mock providers named in PROVIDER_CHAIN, never an appended real one.
+    PROVIDER_CHAIN_STRICT: "1",
+    AUTO_UPDATE_ENABLED: "false",
     UNITY_PROJECT_PATH: projectDir,
     MEMORY_DB_PATH: memoryDir,
     STRADA_MOCK_LOG_PATH: join(memoryDir, "mock-provider.log"),
@@ -262,10 +291,10 @@ function buildBaseEnv(memoryDir, projectDir) {
   };
 }
 
-async function runInteractiveMemorySmoke(memoryDir, projectDir) {
+async function runInteractiveMemorySmoke(memoryDir, projectDir, sandbox) {
   console.log("1. Interactive memory smoke");
-  const session = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const session = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
   });
@@ -281,8 +310,8 @@ async function runInteractiveMemorySmoke(memoryDir, projectDir) {
     await session.close();
   }
 
-  const recallSession = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const recallSession = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
   });
@@ -306,10 +335,10 @@ async function runInteractiveMemorySmoke(memoryDir, projectDir) {
   assert.equal(row?.display_name, "CodexTester", "interactive CLI should persist the captured display name");
 }
 
-async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
+async function runPreferencePersistenceSmoke(memoryDir, projectDir, sandbox) {
   console.log("2. Natural-language preference persistence smoke");
-  const session = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const session = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
   });
@@ -340,8 +369,8 @@ async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
     "preference smoke should persist the custom response format instruction",
   );
 
-  const recallSession = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const recallSession = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
   });
@@ -361,10 +390,10 @@ async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
   }
 }
 
-async function runExactOutputSmoke(memoryDir, projectDir) {
+async function runExactOutputSmoke(memoryDir, projectDir, sandbox) {
   console.log("3. Exact-output discipline smoke");
-  const session = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const session = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
   });
@@ -390,10 +419,10 @@ async function runExactOutputSmoke(memoryDir, projectDir) {
   }
 }
 
-async function runProviderFallbackSmoke(memoryDir, projectDir) {
+async function runProviderFallbackSmoke(memoryDir, projectDir, sandbox) {
   console.log("4. Provider routing and fallback smoke");
-  const session = new CliSession(["cli"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const session = new CliSession(["cli"], sandbox, {
+    ...buildBaseEnv(memoryDir, projectDir, sandbox),
     PROVIDER_CHAIN: "kimi,qwen",
     QWEN_API_KEY: "smoke-qwen-key",
     READ_ONLY_MODE: "true",
@@ -469,7 +498,7 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
   }
 }
 
-async function runDaemonSmoke(memoryDir, projectDir) {
+async function runDaemonSmoke(memoryDir, projectDir, sandbox) {
   console.log("5. Daemon autonomy, delegation, multi-agent and metrics smoke");
   const projectRoot = dirname(projectDir);
   const autonomyProjectDir = join(projectRoot, "daemon-autonomy-project");
@@ -485,7 +514,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
   await createSmokeProject(delegationProjectDir);
 
   const buildDaemonEnv = (daemonMemoryDir, daemonProjectDir) => ({
-    ...buildBaseEnv(daemonMemoryDir, daemonProjectDir),
+    ...buildBaseEnv(daemonMemoryDir, daemonProjectDir, sandbox),
     READ_ONLY_MODE: "false",
     REQUIRE_EDIT_CONFIRMATION: "true",
     STRADA_DAEMON_DAILY_BUDGET: "1",
@@ -496,7 +525,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     TASK_MESSAGE_BURST_WINDOW_MS: "700",
   });
 
-  const autonomySession = new CliSession(["start", "--channel", "cli", "--daemon"], buildDaemonEnv(autonomyMemoryDir, autonomyProjectDir));
+  const autonomySession = new CliSession(["start", "--channel", "cli", "--daemon"], sandbox, buildDaemonEnv(autonomyMemoryDir, autonomyProjectDir));
   try {
     await autonomySession.waitFor(/you> /, { timeoutMs: 20_000 });
 
@@ -523,7 +552,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     await autonomySession.close();
   }
 
-  const delegationSession = new CliSession(["start", "--channel", "cli", "--daemon"], buildDaemonEnv(delegationMemoryDir, delegationProjectDir));
+  const delegationSession = new CliSession(["start", "--channel", "cli", "--daemon"], sandbox, buildDaemonEnv(delegationMemoryDir, delegationProjectDir));
   try {
     await delegationSession.waitFor(/you> /, { timeoutMs: 20_000 });
 
@@ -703,22 +732,25 @@ async function main() {
   const projectDir = join(tempRoot, "unity-project");
   const memoryDir = join(tempRoot, "memory");
   const daemonMemoryDir = join(tempRoot, "daemon-memory");
+  const sandbox = createSmokeSandbox(tempRoot);
 
   await mkdir(projectDir, { recursive: true });
   await mkdir(memoryDir, { recursive: true });
   await mkdir(daemonMemoryDir, { recursive: true });
+  await mkdir(sandbox.home, { recursive: true });
+  await mkdir(sandbox.installRoot, { recursive: true });
   await createSmokeProject(projectDir);
 
   try {
-    await runInteractiveMemorySmoke(memoryDir, projectDir);
+    await runInteractiveMemorySmoke(memoryDir, projectDir, sandbox);
     await wait(200);
-    await runPreferencePersistenceSmoke(memoryDir, projectDir);
+    await runPreferencePersistenceSmoke(memoryDir, projectDir, sandbox);
     await wait(200);
-    await runExactOutputSmoke(memoryDir, projectDir);
+    await runExactOutputSmoke(memoryDir, projectDir, sandbox);
     await wait(200);
-    await runProviderFallbackSmoke(memoryDir, projectDir);
+    await runProviderFallbackSmoke(memoryDir, projectDir, sandbox);
     await wait(200);
-    await runDaemonSmoke(daemonMemoryDir, projectDir);
+    await runDaemonSmoke(daemonMemoryDir, projectDir, sandbox);
     console.log("6. Release smoke passed");
   } finally {
     if (process.env.STRADA_SMOKE_KEEP_TEMP === "true") {
@@ -729,4 +761,7 @@ async function main() {
   }
 }
 
-await main();
+// Imported by its test for the environment it builds; run only when executed.
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  await main();
+}
