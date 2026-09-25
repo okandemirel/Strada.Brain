@@ -48,6 +48,9 @@ export type Permission =
   | "audit:read"
   | "agents:manage";
 
+/** What a JWT is good for: an access token, or an MFA-pending token (SEC-14). */
+export type JwtPurpose = "access" | "mfa";
+
 export interface JwtPayload {
   sub: string; // User ID
   username: string;
@@ -165,6 +168,8 @@ function resolveAuthConfig(config: Partial<AuthConfig> = {}): AuthConfig {
   return { ...DEFAULT_CONFIG, ...configuredAuthDefaults, ...config };
 }
 
+/** SEC-14: lifetime of an MFA-pending token (it only buys the chance to enter a code). */
+const MFA_TOKEN_TTL_SECONDS = 5 * 60;
 const TOTP_STEP_SECONDS = 30;
 const TOTP_WINDOW_STEPS = 1;
 const TOTP_DIGITS = 6;
@@ -290,20 +295,32 @@ export class JwtManager {
   }
 
   /**
-   * Generate JWT access token
+   * SEC-14: the audience a token of this purpose carries. An MFA-pending
+   * token gets its own, so it never verifies as an access token.
    */
-  generateToken(user: User): string {
+  private audienceFor(purpose: JwtPurpose): string {
+    return purpose === "mfa" ? `${this.config.audience}#mfa-pending` : this.config.audience;
+  }
+
+  /**
+   * Generate a JWT: an access token, or (purpose "mfa") a short-lived
+   * MFA-pending token that only verifyToken(token, "mfa") accepts.
+   */
+  generateToken(user: User, purpose: JwtPurpose = "access"): string {
     const now = Math.floor(Date.now() / 1000);
+    const ttl = purpose === "mfa"
+      ? Math.min(MFA_TOKEN_TTL_SECONDS, this.config.jwtExpiresIn)
+      : this.config.jwtExpiresIn;
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
       role: user.role,
       permissions: user.permissions,
       iat: now,
-      exp: now + this.config.jwtExpiresIn,
+      exp: now + ttl,
       jti: randomBytes(16).toString("hex"),
       iss: this.config.issuer,
-      aud: this.config.audience,
+      aud: this.audienceFor(purpose),
     };
 
     // Simple JWT implementation (header.payload.signature)
@@ -320,9 +337,9 @@ export class JwtManager {
   }
 
   /**
-   * Verify JWT token
+   * Verify a JWT of the given purpose (an access token by default).
    */
-  verifyToken(token: string): { valid: boolean; payload?: JwtPayload; error?: string } {
+  verifyToken(token: string, purpose: JwtPurpose = "access"): { valid: boolean; payload?: JwtPayload; error?: string } {
     try {
       const parts = token.split(".");
       if (parts.length !== 3) {
@@ -362,7 +379,7 @@ export class JwtManager {
       if (payload.iss !== this.config.issuer) {
         return { valid: false, error: "Invalid issuer" };
       }
-      if (payload.aud !== this.config.audience) {
+      if (payload.aud !== this.audienceFor(purpose)) {
         return { valid: false, error: "Invalid audience" };
       }
 
@@ -463,11 +480,16 @@ export class MfaManager {
    * Verify MFA code with rate limiting
    */
   verifyMfa(userId: string, secret: string, code: string): MfaVerifyResult {
-    // Check rate limit
-    const attempts = this.verifyAttempts.get(userId);
+    // Check rate limit. SEC-14: a record whose window has passed starts a new
+    // window; reusing it (with its old resetTime) switched the limit off.
+    let attempts = this.verifyAttempts.get(userId);
     const now = Date.now();
+    if (attempts && now >= attempts.resetTime) {
+      this.verifyAttempts.delete(userId);
+      attempts = undefined;
+    }
 
-    if (attempts && now < attempts.resetTime && attempts.count >= this.maxAttempts) {
+    if (attempts && attempts.count >= this.maxAttempts) {
       return {
         success: false,
         error: "Too many attempts. Please try again later.",
@@ -950,7 +972,7 @@ export class HardenedAuthManager {
       const mfaToken = this.jwt.generateToken({
         ...user,
         permissions: [] as Permission[], // No permissions until MFA verified
-      });
+      }, "mfa");
 
       return {
         success: false, // Not fully authenticated yet
@@ -973,11 +995,12 @@ export class HardenedAuthManager {
     ipAddress: string,
     userAgent: string,
   ): AuthResult {
-    const tokenResult = this.jwt.verifyToken(mfaToken);
+    const tokenResult = this.jwt.verifyToken(mfaToken, "mfa");
 
     if (!tokenResult.valid || !tokenResult.payload) {
       return { success: false, error: "Invalid MFA token" };
     }
+    const { jti, exp } = tokenResult.payload;
 
     const user = this.users.get(tokenResult.payload.sub);
 
@@ -994,6 +1017,8 @@ export class HardenedAuthManager {
       };
     }
 
+    // SEC-14: an MFA-pending token completes one login, never a second.
+    this.jwt.revokeToken(jti, exp * 1000);
     return this.createAuthenticatedSession(user, ipAddress, userAgent);
   }
 

@@ -511,6 +511,22 @@ describe("MfaManager", () => {
     expect(result.remainingAttempts).toBe(0);
   });
 
+  it("limits attempts again in every later window, not only the first (SEC-14)", () => {
+    vi.useFakeTimers();
+    try {
+      const userId = "user-windows";
+      for (let window = 0; window < 3; window++) {
+        for (let i = 0; i < 5; i++) {
+          expect(mfa.verifyMfa(userId, "secret", "000000").error).toBe("Invalid code");
+        }
+        expect(mfa.verifyMfa(userId, "secret", "000000").error).toContain("Too many attempts");
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("should report remaining attempts on failure", () => {
     const userId = "user-attempts";
     const result = mfa.verifyMfa(userId, "secret", "INVALID!");
@@ -922,6 +938,37 @@ describe("HardenedAuthManager", () => {
 
       expect(completed.success).toBe(false);
       expect(completed.error).toBe("Invalid code");
+    });
+
+    it("issues an MFA-pending token that is not an access token, expires soon and completes one login only (SEC-14)", async () => {
+      vi.useFakeTimers();
+      try {
+        const reg = await auth.registerUser("totp-once", "once@example.com", "correct-password", "developer", {
+          allowPrivilegedRoleAssignment: true,
+        });
+        const { secret } = auth.enableMfa(reg.user!.id);
+        const login = () => auth.authenticate("totp-once", "correct-password", "127.0.0.1", "TestAgent");
+
+        const first = await login();
+        // Same secret, issuer and audience as the manager: still not an access token.
+        const accessVerifier = new JwtManager({ jwtSecret: TEST_JWT_SECRET });
+        expect(accessVerifier.verifyToken(first.mfaToken!).valid).toBe(false);
+        expect(accessVerifier.verifyToken(first.mfaToken!, "mfa").valid).toBe(true);
+
+        const code = generateTotp(secret!, Date.now());
+        expect(auth.verifyMfaAndAuthenticate(first.mfaToken!, code, "127.0.0.1", "TestAgent").success).toBe(true);
+        const replay = auth.verifyMfaAndAuthenticate(first.mfaToken!, code, "127.0.0.1", "TestAgent");
+        expect(replay.success).toBe(false);
+        expect(replay.error).toBe("Invalid MFA token");
+
+        const second = await login();
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1_000);
+        const late = auth.verifyMfaAndAuthenticate(second.mfaToken!, generateTotp(secret!, Date.now()), "127.0.0.1", "TestAgent");
+        expect(late.success).toBe(false);
+        expect(late.error).toBe("Invalid MFA token");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
