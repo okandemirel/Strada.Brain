@@ -1,6 +1,7 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { validatePath } from "../../security/path-guard.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
+import { writeFileInsideRoot } from "./file-write.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 export class FileEditTool implements ITool {
@@ -79,6 +80,7 @@ export class FileEditTool implements ITool {
       return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
+    const release = await lockPathForEdit(pathCheck.fullPath);
     try {
       let content: string;
       try {
@@ -138,7 +140,9 @@ export class FileEditTool implements ITool {
         replacementCount = 1;
       }
 
-      await writeFile(pathCheck.fullPath, newContent, "utf-8");
+      // The same contained write file_write uses: a plain writeFile followed
+      // whatever was swapped in at the path after validation (review TLS-12).
+      await writeFileInsideRoot(context.projectPath, pathCheck.fullPath, newContent);
 
       return {
         content: `File edited: ${relPath} (${replacementCount} replacement${replacementCount > 1 ? "s" : ""} made)`,
@@ -157,8 +161,30 @@ export class FileEditTool implements ITool {
         content: `Error: could not edit file (path="${relPath}", code=${err.code ?? "unknown"}): ${msg}`,
         isError: true,
       };
+    } finally {
+      release();
     }
   }
+}
+
+/**
+ * One edit of a file at a time. Parallel tool calls (or batch_execute) that
+ * edit one file each read it before either wrote, so the later write dropped
+ * the earlier edit while both reported success (review TLS-12).
+ */
+const editLocks = new Map<string, Promise<void>>();
+
+async function lockPathForEdit(fullPath: string): Promise<() => void> {
+  const previous = editLocks.get(fullPath) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const tail = previous.then(() => held);
+  editLocks.set(fullPath, tail);
+  await previous;
+  return () => {
+    release();
+    if (editLocks.get(fullPath) === tail) editLocks.delete(fullPath);
+  };
 }
 
 // ─── Input validation helpers ─────────────────────────────────────────────────
