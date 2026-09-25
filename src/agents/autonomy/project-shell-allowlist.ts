@@ -62,6 +62,11 @@ function pathPieces(text: string): string[] {
   return text.split(/[=,;]/).flatMap((part) => part.match(/[A-Za-z]:[^:]*|[^:]+/g) ?? []);
 }
 
+/** A word as cmd.exe passes it: `^` escapes the next character, quotes are dropped, `\` is literal. */
+function cmdView(word: ShellWord): string {
+  return word.raw.replace(/\^(.)/g, "$1").replace(/"/g, "");
+}
+
 /**
  * An argument that reads or writes only inside the project. It is checked as
  * bash passes it and as cmd.exe would (no backslash escapes there), with
@@ -74,7 +79,7 @@ function boundedWord(word: ShellWord, scope: Scope): boolean {
   // `-delete`), and a `.`-led glob component can match `..`.
   if (word.glob && (/^[-*?[]/.test(word.value) || /(?:^|[\\/])\.[^\\/]*[*?[]/.test(word.value))) return false;
   const pwd = (text: string) => text.replace(/\$\{PWD\}|\$PWD(?!\w)/g, scope.root);
-  const views = [word.value, word.raw.replace(/\^(.)/g, "$1").replace(/"/g, "")];
+  const views = [word.value, cmdView(word)];
   return views.every((view) => pathPieces(pwd(view)).every((piece) => inside(piece, scope)));
 }
 
@@ -170,6 +175,24 @@ function readOnlyStage(stage: Invocation): boolean {
 }
 
 const UNITY_MAC = /^\/Applications\/Unity\/\S*\/Unity\.app\/Contents\/MacOS\/Unity$/;
+/** Unity Hub's Linux layout (~/Unity/Hub/Editor/<version>/Editor/Unity) and the CI images' /opt/unity. */
+const UNITY_LINUX = /^(?:\/home\/[^/\s]+|\/root)\/Unity\/Hub\/Editor\/[^/\s]+\/Editor\/Unity$|^\/opt\/unity\/Editor\/Unity$/;
+/** Unity Hub's Windows layout: <drive>:\Program Files\Unity\Hub\Editor\<version>\Editor\Unity.exe. */
+const UNITY_WINDOWS = /^[A-Za-z]:\\Program Files\\Unity\\Hub\\Editor\\[^\\]+\\Editor\\Unity\.exe$/i;
+
+/**
+ * Is this the Unity editor binary, at an install location, for the project's
+ * platform? Only the macOS path was known, so on Windows and Linux the rule
+ * never matched and the GAME NEVER RUN deadlock this file exists to break came
+ * back (audited 2026-09-25). A path that normalizes to something else (`..`)
+ * is not an install location.
+ */
+function isUnityEditor(program: string, scope: Scope): boolean {
+  if (scope.paths === path.win32) {
+    return UNITY_WINDOWS.test(program) && path.win32.normalize(program) === program;
+  }
+  return (UNITY_MAC.test(program) || UNITY_LINUX.test(program)) && path.posix.normalize(program) === program;
+}
 
 /** dotnet build/test options that take a value; anything outside these and the switches goes to the reviewer. */
 const DOTNET_VALUED = new Set(["-c", "--configuration", "-f", "--framework", "-v", "--verbosity", "-r", "--runtime", "-a", "--arch", "--os"]);
@@ -248,10 +271,10 @@ const RULES: readonly AllowlistRule[] = [
       // returned true, so it pre-approved the WHOLE line. It approves ONE
       // Unity invocation whose every path stays inside the project.
       const [stage] = stages;
-      const program = stage?.[0];
-      if (stages.length !== 1 || !stage || !program) return false;
-      if (!UNITY_MAC.test(program.value) || path.posix.normalize(program.value) !== program.value) return false;
-      const flags = argValues(stage);
+      if (stages.length !== 1 || !stage || stage.length === 0) return false;
+      // Under a Windows root cmd.exe runs the line, and it reads `\` literally.
+      const [program, ...flags] = stage.map((word) => (scope.paths === path.win32 ? cmdView(word) : word.value));
+      if (program === undefined || !isUnityEditor(program, scope)) return false;
       if (!flags.includes("-batchmode")) return false;
       // One of the three bounded purposes: open-and-quit, run tests, run a method.
       if (!flags.some((f) => f === "-quit" || f === "-runTests" || f === "-executeMethod")) return false;

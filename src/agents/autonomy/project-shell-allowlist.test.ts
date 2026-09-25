@@ -232,3 +232,46 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
     });
   });
 });
+
+describe("the Unity batchmode rule on Windows and Linux (AUT-17)", () => {
+  // Only the macOS editor path was recognised, so the GAME NEVER RUN deadlock
+  // this rule exists to break came back on every Windows and Linux machine.
+  const winRoot = "C:\\Users\\dev\\Game";
+  const winUnity = '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.0.1f1\\Editor\\Unity.exe"';
+  const linuxRoot = "/home/dev/Game";
+  const linuxUnity = "/home/dev/Unity/Hub/Editor/6000.0.1f1/Editor/Unity";
+
+  it("approves the Hub editor on Windows against this project", () => {
+    const cmd = `${winUnity} -batchmode -quit -projectPath C:\\Users\\dev\\Game -runTests`;
+    expect(matchProjectScopedAllowlist(cmd, winRoot)?.rule).toContain("unity-batchmode");
+  });
+
+  it("approves the Hub editor and the CI image's editor on Linux", () => {
+    expect(
+      matchProjectScopedAllowlist(`${linuxUnity} -batchmode -nographics -quit -projectPath "$PWD"`, linuxRoot)?.rule,
+    ).toContain("unity-batchmode");
+    expect(
+      matchProjectScopedAllowlist(`/opt/unity/Editor/Unity -batchmode -runTests -projectPath ${linuxRoot}`, linuxRoot)?.rule,
+    ).toContain("unity-batchmode");
+  });
+
+  it.each([
+    `${winUnity} -batchmode -quit -projectPath C:\\Users\\dev\\Game & del C:\\Users\\dev\\x`,
+    `${winUnity} -batchmode -quit -projectPath C:\\Users\\dev\\Other`,
+    `${winUnity} -projectPath C:\\Users\\dev\\Game`,
+    '"C:\\Program Files\\Unity\\Hub\\Editor\\..\\..\\..\\..\\Temp\\Editor\\Unity.exe" -batchmode -quit -projectPath C:\\Users\\dev\\Game',
+    '"C:\\Temp\\Unity\\Hub\\Editor\\6000\\Editor\\Unity.exe" -batchmode -quit -projectPath C:\\Users\\dev\\Game',
+  ])("does not approve %j on Windows", (cmd) => {
+    expect(matchProjectScopedAllowlist(cmd, winRoot)).toBeNull();
+  });
+
+  it.each([
+    `${linuxUnity} -batchmode -quit -projectPath "$PWD"; rm -rf ~`,
+    `${linuxUnity} -batchmode -quit -projectPath "$PWD" | sh`,
+    `${linuxUnity} -batchmode -quit -projectPath /home/dev/Other`,
+    `/home/dev/Unity/Hub/Editor/../../../../tmp/Editor/Unity -batchmode -quit -projectPath "$PWD"`,
+    `/tmp/Unity/Hub/Editor/6000/Editor/Unity -batchmode -quit -projectPath "$PWD"`,
+  ])("does not approve %j on Linux", (cmd) => {
+    expect(matchProjectScopedAllowlist(cmd, linuxRoot)).toBeNull();
+  });
+});
