@@ -27,6 +27,8 @@ interface SmokeModule {
   buildBaseEnv: (memoryDir: string, projectDir: string, sandbox: SmokeSandbox) => Record<string, string | undefined>;
   smokeChildArgs: (args: string[]) => string[];
   OFFLINE_GIT_CONFIG: string;
+  PROVIDER_FALLBACK_PROMPT: string;
+  PROVIDER_FALLBACK_ANSWER: string;
 }
 
 const ROOT = process.cwd();
@@ -144,3 +146,15 @@ describe("cli-release-smoke stays offline", () => {
   }, 30_000);
 });
 
+describe("cli-release-smoke provider fallback wait", () => {
+  it("waits for the fallback's answer, which the echoed prompt does not contain", async () => {
+    // The CLI echoes the prompt (the plan-progress "Current focus" line). A
+    // prompt carrying the answer let the wait match that echo, so the step
+    // passed while no provider had answered at all.
+    const smoke = await loadSmoke();
+    expect(smoke.PROVIDER_FALLBACK_ANSWER).toBe("provider fallback ok");
+    expect(smoke.PROVIDER_FALLBACK_PROMPT.toLowerCase()).not.toContain(smoke.PROVIDER_FALLBACK_ANSWER);
+    // The mock recognises the scenario by this phrase.
+    expect(smoke.PROVIDER_FALLBACK_PROMPT.toLowerCase()).toContain("provider fallback smoke");
+  });
+});

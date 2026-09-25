@@ -15,7 +15,14 @@ const ENTRY = join(ROOT, "src", "index.ts");
 const TSX_LOADER = import.meta.resolve("tsx");
 const PAOR_RECOVERY_PROMPT =
   "Run the PAOR recovery smoke: let the initial approach fail, then replan and create Assets/paor-proof.txt with exact content 'paor ok'.";
-const PROVIDER_FALLBACK_PROMPT = "Run the provider fallback smoke and say exactly: provider fallback ok.";
+/**
+ * The fallback provider's answer (the mock's reply), and a prompt that does not
+ * contain it. The CLI echoes the prompt back (the plan-progress "Current
+ * focus" line), and a wait on text the echo carries matched before any
+ * provider had answered, so a failover that never happened still passed.
+ */
+export const PROVIDER_FALLBACK_ANSWER = "provider fallback ok";
+export const PROVIDER_FALLBACK_PROMPT = "Run the provider fallback smoke and reply with its one-line confirmation.";
 const ANALYSIS_CONTINUATION_PROMPT =
   "Run the analysis continuation smoke: inspect Assets/Resources/Levels, do not hand the next step back to the user, directly inspect Level_031 if needed, and say exactly: analysis continuation ok.";
 const RAPID_MESSAGE_PART_ONE = "Rapid message smoke part 1: keep this request together.";
@@ -504,7 +511,7 @@ async function runProviderFallbackSmoke(memoryDir, projectDir, sandbox) {
 
     cursor = session.output.length;
     session.sendLine(PROVIDER_FALLBACK_PROMPT);
-    await session.waitFor("provider fallback ok", {
+    await session.waitFor(PROVIDER_FALLBACK_ANSWER, {
       fromIndex: cursor,
       timeoutMs: 30_000,
     });
@@ -551,11 +558,11 @@ async function runProviderFallbackSmoke(memoryDir, projectDir, sandbox) {
     entry.type === "chat" &&
     typeof entry.url === "string" &&
     entry.url.includes("dashscope-intl.aliyuncs.com") &&
-    entry.response?.choices?.[0]?.message?.content === "provider fallback ok",
+    entry.response?.choices?.[0]?.message?.content === PROVIDER_FALLBACK_ANSWER,
   );
   const successfulProviderResponse = promptEntries.some((entry) =>
     entry.type === "chat" &&
-    entry.response?.choices?.[0]?.message?.content === "provider fallback ok",
+    entry.response?.choices?.[0]?.message?.content === PROVIDER_FALLBACK_ANSWER,
   );
 
   assert(successfulProviderResponse, "provider routing smoke should complete with a real provider response");
