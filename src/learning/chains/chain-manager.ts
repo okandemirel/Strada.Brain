@@ -128,8 +128,10 @@ export class ChainManager {
           continue;
         }
 
-        // Build description -- append [rollback-capable] for fully reversible V2 chains
-        let description = instinct.triggerPattern;
+        // Build description -- append [rollback-capable] for fully reversible V2 chains.
+        // The synthesized description when stored; chains stored before it was
+        // kept fall back to their sequence key.
+        let description = v2Metadata.description ?? instinct.triggerPattern;
         if (v2Metadata.isFullyReversible && !description.includes("[rollback-capable]")) {
           description = `${description} [rollback-capable]`;
         }

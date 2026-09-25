@@ -44,6 +44,11 @@ export const ChainMetadataSchema = z.object({
   occurrences: z.number().int().min(1),
   /** Trajectory IDs that sourced this chain */
   sourceTrajectoryIds: z.array(z.string()).optional(),
+  /**
+   * The synthesized tool description (LRN-8): without it a reloaded chain
+   * described itself by its tool-sequence key, a different tool after restart.
+   */
+  description: z.string().optional(),
 });
 
 /**
@@ -256,6 +261,11 @@ export const ChainMetadataV2Schema = z.object({
   occurrences: z.number().int().min(1),
   /** Trajectory IDs that sourced this chain */
   sourceTrajectoryIds: z.array(z.string()).optional(),
+  /**
+   * The synthesized tool description (LRN-8): without it a reloaded chain
+   * described itself by its tool-sequence key, a different tool after restart.
+   */
+  description: z.string().optional(),
 });
 
 /**
@@ -352,6 +362,7 @@ export function migrateV1toV2(v1: ChainMetadata): ChainMetadataV2 {
     successRate: v1.successRate,
     occurrences: v1.occurrences,
     sourceTrajectoryIds: v1.sourceTrajectoryIds,
+    ...(v1.description === undefined ? {} : { description: v1.description }),
   };
 }
 

@@ -188,6 +188,7 @@ export class ChainSynthesizer {
       isFullyReversible,
       successRate,
       occurrences: candidate.occurrences,
+      description: llmOutput.description,
     };
 
     // Append [rollback-capable] if fully reversible
@@ -218,6 +219,7 @@ export class ChainSynthesizer {
       parameterMappings: llmOutput.parameterMappings,
       successRate,
       occurrences: candidate.occurrences,
+      description: llmOutput.description,
     };
 
     return this.createAndRegisterChain(

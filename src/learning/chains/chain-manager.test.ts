@@ -19,7 +19,9 @@ import { CompositeTool } from "./composite-tool.js";
 import type { CandidateChain, ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import { DEFAULT_RESILIENCE_CONFIG } from "./chain-types.js";
 import type { ChainDetector } from "./chain-detector.js";
-import type { ChainSynthesizer } from "./chain-synthesizer.js";
+import { ChainSynthesizer } from "./chain-synthesizer.js";
+import type { IAIProvider } from "../../agents/providers/provider.interface.js";
+import type { Instinct } from "../types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
@@ -894,5 +896,61 @@ describe("ChainManager", () => {
       expect(DEFAULT_RESILIENCE_CONFIG.maxParallelBranches).toBe(4);
       expect(DEFAULT_RESILIENCE_CONFIG.compensationTimeoutMs).toBe(5000);
     });
+  });
+});
+
+// LRN-8: a reloaded chain described itself by its tool-sequence key, so the
+// same composite tool had a different description after every restart.
+describe("a chain keeps its synthesized description across a restart (LRN-8)", () => {
+  it("the reloaded tool describes itself as the synthesized one did", async () => {
+    const created: Instinct[] = [];
+    const storage = {
+      getInstincts: vi.fn(() => created.map((i) => ({ ...i, status: "active" }))),
+      createInstinct: vi.fn((instinct: Instinct) => { created.push(instinct); }),
+    } as unknown as LearningStorage;
+    const registry = createMockToolRegistry();
+    (registry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const provider = {
+      name: "mock",
+      capabilities: {},
+      chat: vi.fn(async () => ({
+        text: JSON.stringify({
+          name: "read_then_write",
+          description: "Reads a file and writes the edited copy back",
+          parameterMappings: [],
+          steps: [
+            { stepId: "step_0", toolName: "file_read", dependsOn: [] },
+            { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"] },
+          ],
+          isFullyReversible: false,
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 0, outputTokens: 0 },
+      })),
+    } as unknown as IAIProvider;
+    const synthesizer = new ChainSynthesizer(storage, registry, createMockEventBus(), createMockConfig());
+    synthesizer.setProvider(provider);
+    const [synthesized] = await synthesizer.synthesize([
+      { toolNames: ["file_read", "file_write"], occurrences: 5, successCount: 5, sampleSteps: [], key: "file_read,file_write" },
+    ]);
+    expect(synthesized).toBeDefined();
+
+    // A restart: a fresh manager rebuilds the chain from what was stored.
+    const reloadRegistry = createMockToolRegistry();
+    (reloadRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const manager = new ChainManager(
+      createMockDetector(),
+      createMockSynthesizer(),
+      reloadRegistry,
+      storage,
+      createMockOrchestrator(),
+      createMockEventBus(),
+      createMockConfig(),
+    );
+    await manager.start();
+    const reloaded = (reloadRegistry.registerOrUpdate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ITool;
+    expect(reloaded.description).toBe(synthesized!.description);
+    manager.stop();
   });
 });
