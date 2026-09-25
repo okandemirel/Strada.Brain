@@ -138,14 +138,18 @@ export class ControlLoopTracker {
       };
     }
 
-    // Read-only stall: agent executes many verification/read tools without any mutations
-    if (this.consecutiveReadOnlyToolCalls >= ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
+    // Read-only stall, judged by the same rule readOnlyStall() applies. This
+    // used the raw count (8 reads of anything), which called reading a long
+    // document in order "stuck" — the case readOnlyStall() was changed to
+    // tell apart from repeating one call.
+    const stall = this.readOnlyStall();
+    if (stall !== null) {
       return {
         fingerprint: "read_only_stall",
-        sameFingerprintCount: this.consecutiveReadOnlyToolCalls,
+        sameFingerprintCount: stall.calls,
         recentGateCount: liveEvents.length,
         recoveryEpisode: this.recoveryEpisodes.get("read_only_stall") ?? 0,
-        reason: `Agent executed ${this.consecutiveReadOnlyToolCalls} consecutive read-only/verification tool calls without any file mutations. This suggests the agent is stuck analyzing without making progress.`,
+        reason: `${stall.reason} This suggests the agent is stuck analyzing without making progress.`,
       };
     }
 
@@ -311,7 +315,7 @@ export class ControlLoopTracker {
     this.events.length = 0;
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
-    this.consecutiveReadOnlyToolCalls = 0;
+    this.resetReadOnlyStreak();
     this.mutationsSinceLastReset = false;
     // Verified progress is the one thing that earns a fresh start.
     this.stallEpisodes = 0;
@@ -331,6 +335,18 @@ export class ControlLoopTracker {
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
     this.consecutiveReadOnlyToolCalls = 0;
+  }
+
+  /**
+   * A fresh read-only streak: the count, the repeated-call counter and the
+   * clock together. Resetting the count alone let the 15-minute timer carry
+   * over a recovery, so the next three reads after it were a "stall".
+   */
+  private resetReadOnlyStreak(): void {
+    this.consecutiveReadOnlyToolCalls = 0;
+    this.lastReadOnlyFingerprint = null;
+    this.sameReadOnlyFingerprintCount = 0;
+    this.readOnlySince = null;
   }
 
   /**
@@ -355,7 +371,7 @@ export class ControlLoopTracker {
     this.events.length = 0;
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
-    this.consecutiveReadOnlyToolCalls = 0;
+    this.resetReadOnlyStreak();
     return next;
   }
 

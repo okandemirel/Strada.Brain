@@ -407,7 +407,30 @@ describe("ControlLoopTracker", () => {
     expect(trigger).not.toBeNull();
     expect(trigger?.fingerprint).toBe("read_only_stall");
     expect(trigger?.sameFingerprintCount).toBe(ControlLoopTracker.READ_ONLY_STALL_THRESHOLD);
-    expect(trigger?.reason).toContain("read-only/verification tool calls");
+    // The gate now speaks readOnlyStall()'s rule (AUT-21): the same call repeated.
+    expect(trigger?.reason).toContain(`repeated the same read-only call ${ControlLoopTracker.READ_ONLY_STALL_THRESHOLD} times`);
+  });
+
+  it("does not call eight DISTINCT reads a stall when a gate is recorded (AUT-21)", () => {
+    // recordGate() used the raw count, so reading a document in eight pieces
+    // and then hitting any verifier gate was treated as a read-only stall.
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD; i++) {
+      tracker.markToolExecution("file_read", `file_read:{"path":"docs/GDD.md","offset":${i * 200}}`);
+    }
+    const trigger = tracker.recordGate({ kind: "verifier_continue", reason: "Still checking files", iteration: 10 });
+    expect(trigger?.fingerprint).not.toBe("read_only_stall");
+  });
+
+  it("a recovery restarts the read-only clock as well as the count (AUT-21)", () => {
+    let now = 0;
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => now });
+    for (let i = 0; i < 3; i++) tracker.markToolExecution("file_read", `file_read:a${i}`);
+    tracker.markRecoveryAttempt("verifier_continue:x");
+    now += ControlLoopTracker.READ_ONLY_STALL_MS + 60_000;
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_TIME_MIN_CALLS; i++) tracker.markToolExecution("file_read", `file_read:b${i}`);
+    // Three reads just now, after the recovery: not fifteen minutes of reading.
+    expect(tracker.readOnlyStall()).toBeNull();
   });
 
   it("a streak of DISTINCT read-only calls is reported at READ_ONLY_STREAK_LIMIT and re-arms for the next streak (measured 2026-09-08: 14 turns of reads, no gate)", () => {
