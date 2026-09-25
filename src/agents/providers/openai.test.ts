@@ -249,6 +249,23 @@ describe("OpenAIProvider", () => {
       }
     });
 
+    it("gives a reasoning model on the official endpoint room to reason, and nothing else more than before (PRV-6)", async () => {
+      mockFetch.mockResolvedValue(okResponse);
+      // GPT-5.x spends reasoning tokens out of this cap before answering.
+      const reasoning = new OpenAIProvider("sk-test", "gpt-5.2");
+      expect(reasoning.capabilities.maxTokens).toBe(32_768);
+      await reasoning.chat("system", [{ role: "user", content: "Hi" }], []);
+      expect(sentBody(0)).toHaveProperty("max_completion_tokens", 32_768);
+      expect(new OpenAIProvider("sk-test", "o4-mini").capabilities.maxTokens).toBe(32_768);
+
+      // gpt-4o rejects a cap above 16,384; compatible endpoints may reject any larger cap.
+      expect(new OpenAIProvider("sk-test", "gpt-4o").capabilities.maxTokens).toBe(4096);
+      expect(new OpenAIProvider("sk-test", "gpt-5.2", "https://compat.example.test/v1").capabilities.maxTokens).toBe(4096);
+      // The subscription path sends no cap at all.
+      expect(new OpenAIProvider({ mode: "chatgpt-subscription", accessToken: "t", accountId: "a" }, "gpt-5.2")
+        .capabilities.maxTokens).toBe(4096);
+    });
+
     it("keeps max_tokens for an OpenAI-compatible endpoint", async () => {
       mockFetch.mockResolvedValue(okResponse);
       const provider = new OpenAIProvider("sk-test", "some-model", "https://compat.example.test/v1");

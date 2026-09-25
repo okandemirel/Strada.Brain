@@ -105,7 +105,10 @@ describe("Feature: Streaming (chatStream)", () => {
 
 describe("Feature: max_tokens from capabilities", () => {
   const providerConfigs = [
-    { name: "OpenAI", cls: OpenAIProvider, args: ["key"], expected: 4096 },
+    // The default gpt-5.2 on the official endpoint reasons out of its output
+    // cap, so it gets the reasoning allowance (PRV-6); other models keep 4096.
+    { name: "OpenAI", cls: OpenAIProvider, args: ["key"], expected: 32_768 },
+    { name: "OpenAI (gpt-4o)", cls: OpenAIProvider, args: ["key", "gpt-4o"], expected: 4096 },
     { name: "DeepSeek", cls: DeepSeekProvider, args: ["key"], expected: 8192 },
     { name: "Groq", cls: GroqProvider, args: ["key"], expected: 8192 },
     { name: "Mistral", cls: MistralProvider, args: ["key"], expected: 8192 },

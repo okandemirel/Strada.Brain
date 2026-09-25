@@ -76,6 +76,18 @@ function isOfficialOpenAiEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Output cap for reasoning models on the official OpenAI API. GPT-5.x and the
+ * o-series spend reasoning tokens out of max_completion_tokens before writing
+ * any answer, and OpenAI's reasoning guide asks for at least 25,000 tokens of
+ * room for reasoning plus output; at 4096 a hard request can end at the cap
+ * with nothing written. Every model this matches allows 32,768 or more.
+ * Compatible endpoints and older models keep 4096: several reject a cap above
+ * their own limit (gpt-4o stops at 16,384).
+ */
+const OFFICIAL_REASONING_MAX_TOKENS = 32_768;
+const OFFICIAL_REASONING_MODEL_RE = /^(?:o[1-9]|gpt-[5-9])/iu;
+
 /** A fetchWithRetry error for an HTTP 401/403 (its message is "<name> API error <status>: …"). */
 function isAuthStatusError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -295,6 +307,16 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       ? process.env["OPENAI_MODEL"]?.trim()
       : undefined;
     this.chatGptModel = envModel && envModel.length > 0 ? envModel : model;
+    // Only here, where both the host and the model are known (see
+    // OFFICIAL_REASONING_MAX_TOKENS). A subclass declares its own capabilities,
+    // which replace these after this constructor returns.
+    if (
+      !this.isChatGptSubscriptionMode()
+      && isOfficialOpenAiEndpoint(this.baseUrl)
+      && OFFICIAL_REASONING_MODEL_RE.test(model)
+    ) {
+      this.capabilities = { ...this.capabilities, maxTokens: OFFICIAL_REASONING_MAX_TOKENS };
+    }
     // The codex-shaped User-Agent is resolved lazily on first request via
     // getCodexUserAgent() — only in subscription mode — so construction stays
     // pure and api-key mode never pays the version lookup.
