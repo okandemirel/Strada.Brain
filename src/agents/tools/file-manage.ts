@@ -1,5 +1,5 @@
-import { unlink, rename, stat, readdir, rm, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { unlink, rename, stat, readdir, rm, realpath, mkdir } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
@@ -162,8 +162,9 @@ export class FileDeleteTool implements ITool {
 export class FileRenameTool implements ITool {
   readonly name = "file_rename";
   readonly description =
-    "Rename or move a file within the Unity project. " +
-    "Can move files between directories. Parent directories are NOT created automatically.";
+    "Rename or move a file within the Unity project (not a directory). " +
+    "Can move files between directories; missing parent directories are created. " +
+    "An existing destination is only replaced with overwrite: true.";
 
   readonly inputSchema = {
     type: "object",
@@ -174,7 +175,11 @@ export class FileRenameTool implements ITool {
       },
       new_path: {
         type: "string",
-        description: "New relative path from project root.",
+        description: "New relative path from project root (the full file path, not a directory).",
+      },
+      overwrite: {
+        type: "boolean",
+        description: "Replace new_path if a file already exists there. Default: false.",
       },
     },
     required: ["old_path", "new_path"],
@@ -214,20 +219,52 @@ export class FileRenameTool implements ITool {
       return { content: GIT_INTERNALS_ERROR, isError: true };
     }
 
+    // Review TLS-16: a missing destination directory surfaced as "source file
+    // not found", POSIX rename replaced an existing destination silently, and
+    // a directory could be moved although the tool (and the delete guard)
+    // assume files only. Each case is now named before anything moves.
+    const source = await stat(oldCheck.fullPath).catch(() => undefined);
+    if (!source) return { content: `Error: source file not found: ${oldPath}`, isError: true };
+    if (source.isDirectory()) {
+      return { content: `Error: ${oldPath} is a directory — file_rename moves one file at a time`, isError: true };
+    }
+    const existing = await stat(newCheck.fullPath).catch(() => undefined);
+    // Same file (a case-only rename on a case-insensitive disk) is not a clash.
+    const sameFile = existing !== undefined && existing.ino === source.ino && existing.dev === source.dev;
+    if (existing?.isDirectory()) {
+      return { content: `Error: ${newPath} is an existing directory — give the destination file's full path`, isError: true };
+    }
+    if (existing && !sameFile && input["overwrite"] !== true) {
+      return { content: `Error: ${newPath} already exists — pass overwrite: true to replace it`, isError: true };
+    }
+
     try {
+      const parent = dirname(newCheck.fullPath);
+      await mkdir(parent, { recursive: true });
+      // Re-derived after mkdir, as file_write does: the parent must still be inside the project.
+      const [realParent, realRoot] = await Promise.all([realpath(parent), realpath(context.projectPath)]);
+      if (realParent !== realRoot && !realParent.startsWith(realRoot + sep)) {
+        return { content: "Error (new_path): destination directory resolves outside the project", isError: true };
+      }
       await rename(oldCheck.fullPath, newCheck.fullPath);
 
-      // Also rename the companion .meta file if it exists
+      // The companion .meta follows only while the file stays a Unity asset;
+      // moved out of Assets it is left for Unity to clean up.
+      let metaNote = "";
       if (shouldGenerateMeta(oldCheck.fullPath, context.projectPath)) {
-        try {
-          await rename(metaPathFor(oldCheck.fullPath), metaPathFor(newCheck.fullPath));
-        } catch {
-          // .meta may not exist — non-fatal
+        if (shouldGenerateMeta(newCheck.fullPath, context.projectPath)) {
+          try {
+            await rename(metaPathFor(oldCheck.fullPath), metaPathFor(newCheck.fullPath));
+          } catch {
+            // .meta may not exist — non-fatal
+          }
+        } else {
+          metaNote = " (its .meta was left in place: the destination is outside Assets)";
         }
       }
 
       return {
-        content: `Renamed: ${oldPath} → ${newPath}`,
+        content: `Renamed: ${oldPath} → ${newPath}${metaNote}`,
         metadata: { oldPath, newPath },
       };
     } catch (error) {

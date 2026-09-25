@@ -158,17 +158,50 @@ describe("FileRenameTool", () => {
     expect(result.content).toContain("not found");
   });
 
-  it("overwrites destination on rename (POSIX behavior)", async () => {
+  it("replaces an existing destination only with overwrite: true (TLS-16)", async () => {
+    // Was: POSIX rename silently replaced b.txt and the tool said "Renamed".
     await writeFile(join(tempDir, "a.txt"), "a");
     await writeFile(join(tempDir, "b.txt"), "b");
-    const result = await tool.execute(
-      { old_path: "a.txt", new_path: "b.txt" },
-      ctx,
-    );
-    // POSIX rename overwrites the destination
-    expect(result.content).toContain("Renamed");
-    const content = await readFile(join(tempDir, "b.txt"), "utf-8");
-    expect(content).toBe("a");
+    const refused = await tool.execute({ old_path: "a.txt", new_path: "b.txt" }, ctx);
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("already exists");
+    expect(await readFile(join(tempDir, "b.txt"), "utf-8")).toBe("b");
+
+    const replaced = await tool.execute({ old_path: "a.txt", new_path: "b.txt", overwrite: true }, ctx);
+    expect(replaced.content).toContain("Renamed");
+    expect(await readFile(join(tempDir, "b.txt"), "utf-8")).toBe("a");
+  });
+
+  it("creates a missing destination directory instead of blaming the source (TLS-16)", async () => {
+    await writeFile(join(tempDir, "a.txt"), "a");
+    const result = await tool.execute({ old_path: "a.txt", new_path: "Docs/Notes/a.txt" }, ctx);
+    expect(result.isError).toBeFalsy();
+    expect(await readFile(join(tempDir, "Docs", "Notes", "a.txt"), "utf-8")).toBe("a");
+  });
+
+  it("refuses to move a directory, and a destination that is a directory (TLS-16)", async () => {
+    await mkdir(join(tempDir, "Assets", "Scripts"), { recursive: true });
+    await writeFile(join(tempDir, "a.txt"), "a");
+    const dir = await tool.execute({ old_path: "Assets", new_path: "Moved" }, ctx);
+    expect(dir.isError).toBe(true);
+    expect(dir.content).toContain("is a directory");
+    await expect(stat(join(tempDir, "Assets", "Scripts"))).resolves.toBeDefined();
+
+    const into = await tool.execute({ old_path: "a.txt", new_path: "Assets" }, ctx);
+    expect(into.isError).toBe(true);
+    expect(into.content).toContain("existing directory");
+  });
+
+  it("moves the .meta only while the file stays under Assets (TLS-16)", async () => {
+    await mkdir(join(tempDir, "Assets", "Scripts"), { recursive: true });
+    await writeFile(join(tempDir, "Assets", "Scripts", "A.cs"), "class A {}");
+    await writeFile(join(tempDir, "Assets", "Scripts", "A.cs.meta"), "guid: 1");
+    await tool.execute({ old_path: "Assets/Scripts/A.cs", new_path: "Assets/Game/A.cs" }, ctx);
+    await expect(stat(join(tempDir, "Assets", "Game", "A.cs.meta"))).resolves.toBeDefined();
+
+    const out = await tool.execute({ old_path: "Assets/Game/A.cs", new_path: "Docs/A.cs" }, ctx);
+    expect(out.content).toContain(".meta was left in place");
+    await expect(stat(join(tempDir, "Docs", "A.cs.meta"))).rejects.toThrow();
   });
 
   it("requires both paths", async () => {
