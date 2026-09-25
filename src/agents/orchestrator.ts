@@ -336,6 +336,20 @@ interface TaskExecutionContext {
   readonly taskRunId?: string;
 }
 
+/** Whose answer an install prompt is waiting for: this chat, this person (ORC-19). */
+function setupPromptKey(msg: Pick<IncomingMessage, "chatId" | "userId">): string {
+  return `${msg.chatId}\u0000${msg.userId}`;
+}
+
+/**
+ * A reply that says yes to installing a dependency: it must START with the
+ * answer word, as a whole word (ORC-19). A substring test read "yesterday",
+ * "eyes" and "okur" as consent and added a submodule to the project.
+ */
+export function isInstallConsent(text: string): boolean {
+  return /^\s*(?:evet|yes|kur)(?![\p{L}\p{N}_])/iu.test(text);
+}
+
 export type SupervisorAdmissionPath = "supervisor" | "direct_worker";
 
 export type SupervisorAdmissionReason =
@@ -907,8 +921,13 @@ export class Orchestrator {
   private stradaDeps: StradaDepsStatus | undefined;
   private readonly stradaConfig?: Partial<StradaDependencyConfig>;
   private depsSetupComplete: boolean = false;
-  private readonly pendingDepsPrompt = new Map<string, boolean>();
-  private readonly pendingModulesPrompt = new Map<string, boolean>();
+  /**
+   * Install prompts awaiting an answer, keyed by {@link setupPromptKey}: the
+   * chat AND the person who was asked (ORC-19) — in a shared channel another
+   * member's message is not the answer.
+   */
+  private readonly pendingDepsPrompt = new Set<string>();
+  private readonly pendingModulesPrompt = new Set<string>();
   private readonly interactionPolicy = new InteractionPolicyStateMachine();
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly trajectoryReplayRetriever: TrajectoryReplayRetriever | null;
@@ -3270,26 +3289,23 @@ export class Orchestrator {
       taskRunId,
     };
 
-    // Intercept messages if Strada.Core is missing and setup not complete
-    if (!this.depsSetupComplete && this.stradaDeps && !this.stradaDeps.coreInstalled) {
-      await this.withTaskExecutionContext(taskContext, async () => {
-        await this.handleDepsSetup(msg);
-      });
-      return;
-    }
-
-    // Handle pending modules prompt after core installation
-    if (this.pendingModulesPrompt.get(chatId)) {
-      await this.withTaskExecutionContext(taskContext, async () => {
-        await this.handleModulesPrompt(msg);
-      });
-      return;
-    }
-
-    // Per-session concurrency lock: queue messages for the same chat
+    // Per-session concurrency lock: queue messages for the same chat. The
+    // setup prompts are answered inside it too (ORC-19): they used to run
+    // before the lock, so two quick messages raced on the pending prompts, and
+    // whether one is pending is only known once the previous message is done.
     const prev = this.sessionManager.sessionLocks.get(chatId) ?? Promise.resolve();
     const current = prev.then(() =>
-      this.withTaskExecutionContext(taskContext, async () => this.processMessage(msg)),
+      this.withTaskExecutionContext(taskContext, async () => {
+        // Intercept messages if Strada.Core is missing and setup not complete
+        if (!this.depsSetupComplete && this.stradaDeps && !this.stradaDeps.coreInstalled) {
+          return this.handleDepsSetup(msg);
+        }
+        // Handle pending modules prompt after core installation
+        if (this.pendingModulesPrompt.has(setupPromptKey(msg))) {
+          return this.handleModulesPrompt(msg);
+        }
+        return this.processMessage(msg);
+      }),
     );
     const tracked = current.catch((err) => {
       getLogger().error("Session lock error", {
@@ -3319,9 +3335,10 @@ export class Orchestrator {
     const session = this.sessionManager.getOrCreateSession(chatId);
     this.sessionManager.appendVisibleUserMessage(session, msg.text ?? "");
 
-    if (this.pendingDepsPrompt.get(chatId)) {
+    const promptKey = setupPromptKey(msg);
+    if (this.pendingDepsPrompt.has(promptKey)) {
       // User is responding to our install prompt
-      if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
+      if (isInstallConsent(text)) {
         await this.sessionManager.sendVisibleAssistantText(chatId, session, "Strada.Core kuruluyor...");
         const result = await installStradaDep(this.projectPath, "core", this.stradaConfig);
         if (result.kind === "ok") {
@@ -3335,7 +3352,7 @@ export class Orchestrator {
           );
 
           if (!this.stradaDeps.modulesInstalled) {
-            this.pendingModulesPrompt.set(chatId, true);
+            this.pendingModulesPrompt.add(promptKey);
             await this.sessionManager.sendVisibleAssistantText(
               chatId,
               session,
@@ -3363,7 +3380,7 @@ export class Orchestrator {
     }
 
     // First message — send the install prompt
-    this.pendingDepsPrompt.set(chatId, true);
+    this.pendingDepsPrompt.add(promptKey);
     await this.sessionManager.sendVisibleAssistantText(
       chatId,
       session,
@@ -3382,9 +3399,9 @@ export class Orchestrator {
     const text = msg.text?.toLowerCase() ?? "";
     const session = this.sessionManager.getOrCreateSession(chatId);
     this.sessionManager.appendVisibleUserMessage(session, msg.text ?? "");
-    this.pendingModulesPrompt.delete(chatId);
+    this.pendingModulesPrompt.delete(setupPromptKey(msg));
 
-    if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
+    if (isInstallConsent(text)) {
       await this.sessionManager.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruluyor...");
       const result = await installStradaDep(this.projectPath, "modules", this.stradaConfig);
       if (result.kind === "ok") {
