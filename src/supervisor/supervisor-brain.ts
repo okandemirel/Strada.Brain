@@ -43,7 +43,7 @@ import {
 /** Minimal interface for the GoalDecomposer dependency */
 export interface SupervisorDecomposer {
   shouldDecompose(prompt: string): boolean;
-  decomposeProactive(sessionId: string, taskDescription: string): Promise<GoalTree>;
+  decomposeProactive(sessionId: string, taskDescription: string, opts?: { signal?: AbortSignal }): Promise<GoalTree>;
 }
 
 // =============================================================================
@@ -391,10 +391,12 @@ export class SupervisorBrain {
       // Step 3: Decompose the task into a GoalTree
       // Planning is a model call of minutes; the task's watchdog must keep
       // hearing from it (measured 2026-09-09 17:45: aborted at 20 min of
-      // "no progress" during two decomposition calls).
+      // "no progress" during two decomposition calls). It gets the run's own
+      // signal, so a cancel also stops the planner's retry ladder (TSK-16).
+      const planningSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
       const decomposedGoalTree = context.goalTree ?? await withLivenessHeartbeat(
         context.chatId,
-        () => this.decomposer.decomposeProactive(context.chatId, planningTask),
+        () => this.decomposer.decomposeProactive(context.chatId, planningTask, { signal: planningSignal }),
         context.onLiveness,
       );
       const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);
@@ -406,8 +408,9 @@ export class SupervisorBrain {
       // while the Kanban updates. buildAlignedDagTree guarantees that.
       const dagTree = this.buildAlignedDagTree(decomposedGoalTree, visibleGoalTree);
 
-      // Check abort BEFORE publishing: decomposeProactive cannot be cancelled,
-      // so a lineage cancelled mid-plan (the time box at 13:04:18 on
+      // Check abort BEFORE publishing: a cancelled decomposeProactive stops
+      // calling the provider but still returns a (single-node) tree, and before
+      // it took a signal a lineage cancelled mid-plan (the time box at 13:04:18 on
       // 2026-09-08) used to finish minutes later and still publish its tree —
       // attachGoalRoot, goalStorage, and the monitor episode re-rooted onto a
       // task that was already gone, beside the resubmission's own plan.

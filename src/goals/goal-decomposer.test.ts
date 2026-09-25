@@ -800,3 +800,59 @@ describe("what the decomposer is told about the task's own deliverables", () => 
     expect(await promptSentToModel()).toMatch(/may not be dropped/i);
   });
 });
+
+// TSK-16: decomposition had no signal, so after /cancel its retry ladder kept
+// sleeping and calling the provider, outside any budget reservation.
+describe("decomposition stops when its task is cancelled (TSK-16)", () => {
+  function streamingProvider(chatStream: IStreamingProvider["chatStream"]): IStreamingProvider {
+    return {
+      name: "mock-cancel",
+      capabilities: { streaming: true, vision: false, functionCalling: true },
+      chat: vi.fn(async () => { throw new Error("chat() must not be called"); }),
+      chatStream: vi.fn(chatStream),
+    } as unknown as IStreamingProvider;
+  }
+
+  it("makes no further provider call once cancelled during the outage backoff", { timeout: 3_000 }, async () => {
+    const controller = new AbortController();
+    const provider = streamingProvider(async () => {
+      // Cancelled while the ladder waits out a transient outage.
+      setTimeout(() => controller.abort(), 20);
+      throw new Error("503 Service Unavailable");
+    });
+    const decomposer = new GoalDecomposer(provider, 3, [0, 60_000, 60_000, 60_000]);
+
+    const tree = await decomposer.decomposeProactive(
+      "s",
+      "Build auth with database schema and middleware",
+      { signal: controller.signal },
+    );
+
+    expect(provider.chatStream).toHaveBeenCalledTimes(1);
+    expect(tree.nodes.size).toBe(2); // the single-node fallback: root + one step
+  });
+
+  it("aborts the call in flight and neither retries nor throws", { timeout: 3_000 }, async () => {
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | undefined> = [];
+    const provider = streamingProvider(async (_s, _m, _t, _onChunk, options) => {
+      const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+      seen.push(signal);
+      setTimeout(() => controller.abort(), 20);
+      return new Promise<ProviderResponse>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("This operation was aborted")));
+      });
+    });
+    const decomposer = new GoalDecomposer(provider, 3, [0, 0, 0, 0]);
+
+    const tree = await decomposer.decomposeProactive(
+      "s",
+      "Build auth with database schema and middleware",
+      { signal: controller.signal },
+    );
+
+    expect(seen[0]).toBe(controller.signal);
+    expect(provider.chatStream).toHaveBeenCalledTimes(1);
+    expect(tree.nodes.size).toBe(2); // the single-node fallback: root + one step
+  });
+});

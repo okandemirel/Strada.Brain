@@ -183,6 +183,22 @@ export function isProviderOutageError(err: unknown): boolean {
   );
 }
 
+/** Sleep that ends early (without throwing) when `signal` aborts. */
+function abortableDelay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 // =============================================================================
 // GOAL DECOMPOSER CLASS
 // =============================================================================
@@ -222,9 +238,16 @@ export class GoalDecomposer {
   async decomposeProactive(
     sessionId: string,
     taskDescription: string,
+    opts: { readonly signal?: AbortSignal } = {},
   ): Promise<GoalTree> {
+    // TSK-16: a cancelled task's planning stops here. The retry ladder (up to
+    // four rounds with slow sleeps, a second attempt, depth-2 expansions) used
+    // to keep calling the provider after /cancel. A cancelled plan returns the
+    // single-node tree without another call; callers check their own signal
+    // after planning and discard it.
+    const { signal } = opts;
     // No provider -- return single-node tree
-    if (!this.provider) {
+    if (!this.provider || signal?.aborted) {
       return this.buildSingleNodeTree(sessionId, taskDescription);
     }
 
@@ -257,8 +280,11 @@ export class GoalDecomposer {
     let llmOutput = await this.callLLMForDecomposition(
       proactivePrompt,
       `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-      { rejectExplorationOnly },
+      { rejectExplorationOnly, signal },
     );
+    if (signal?.aborted) {
+      return this.buildSingleNodeTree(sessionId, taskDescription);
+    }
 
     // If first attempt fails, retry with error feedback
     if (!llmOutput) {
@@ -275,12 +301,12 @@ export class GoalDecomposer {
         `${why}${carried}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-        { rejectExplorationOnly },
+        { rejectExplorationOnly, signal },
       );
     }
 
-    // If both attempts fail, fall back to single-node tree
-    if (!llmOutput) {
+    // If both attempts fail (or planning was cancelled), fall back to single-node tree
+    if (!llmOutput || signal?.aborted) {
       return this.buildSingleNodeTree(sessionId, taskDescription);
     }
 
@@ -310,6 +336,7 @@ export class GoalDecomposer {
         (n) => n.needsFurtherDecomposition,
       );
       for (const [flaggedIndex, flagged] of flaggedNodes.entries()) {
+        if (signal?.aborted) break;
         // Enforce total node cap — stop expanding if we're at/near the limit.
         // audited 2026-09-02: this break was silent; say which sub-goals the
         // cap left unexpanded so the plan's shape is never a mystery.
@@ -364,6 +391,7 @@ export class GoalDecomposer {
           subOutput = await this.callLLMForDecomposition(
             subPrompt,
             `Further decompose this sub-goal (max ${remainingSlots} sub-goals):\n\n<task>${flagged.task}</task>`,
+            { signal },
           );
         } catch (err) {
           if (err instanceof GoalDecompositionProviderError) break;
@@ -481,9 +509,10 @@ export class GoalDecomposer {
   private async callLLMForDecomposition(
     systemPrompt: string,
     userMessage: string,
-    opts: { readonly rejectExplorationOnly?: boolean } = {},
+    opts: { readonly rejectExplorationOnly?: boolean; readonly signal?: AbortSignal } = {},
   ): Promise<LLMDecompositionOutput | null> {
     if (!this.provider) return null;
+    const { signal } = opts;
 
     try {
       // STREAM the decomposition call (mirrors the orchestrator's silentStream path).
@@ -508,12 +537,19 @@ export class GoalDecomposer {
       let maxTokens: number | undefined;
       for (let round = 0; round < rounds; round++) {
         if ((this.outageBackoffMs[round] ?? 0) > 0) {
-          await new Promise((r) => setTimeout(r, this.outageBackoffMs[round]));
+          await abortableDelay(this.outageBackoffMs[round] ?? 0, signal);
         }
+        // Cancelled (TSK-16): no further round, and no sleep outlives the cancel.
+        if (signal?.aborted) return null;
         try {
-          response = await streamOrChatText(this.provider, systemPrompt, userMessage, maxTokens ? { maxTokens } : undefined);
+          const callOptions = maxTokens || signal
+            ? { ...(maxTokens ? { maxTokens } : {}), ...(signal ? { signal } : {}) }
+            : undefined;
+          response = await streamOrChatText(this.provider, systemPrompt, userMessage, callOptions);
           break;
         } catch (err) {
+          // The cancel aborted the call in flight: that is not a provider failure.
+          if (signal?.aborted) return null;
           const msg = err instanceof Error ? err.message : String(err);
           if (MID_STREAM_DROP_RE.test(msg) && round < rounds - 1) {
             const base = maxTokens ?? this.provider.capabilities?.maxTokens ?? 16_384;

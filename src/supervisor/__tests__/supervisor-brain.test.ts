@@ -62,6 +62,34 @@ describe("SupervisorBrain", () => {
     expect(executeNode).toHaveBeenCalledTimes(2);
   });
 
+  // TSK-16: a cancel during planning reaches the decomposer, whose retry ladder
+  // used to keep calling the provider until it finished on its own.
+  it("hands decomposition a signal that the run's cancel aborts", async () => {
+    const cancel = new AbortController();
+    let planningSignal: AbortSignal | undefined;
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn(async (_s: string, _t: string, opts?: { signal?: AbortSignal }) => {
+        planningSignal = opts?.signal;
+        cancel.abort();
+        return makeGoalTree([{ id: "root", task: "Build auth" }, { id: "s1", task: "Create DB schema" }]);
+      }),
+    };
+    const executeNode = vi.fn();
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    await brain.execute("Build auth system", { chatId: "test", signal: cancel.signal });
+
+    expect(planningSignal?.aborted).toBe(true);
+    expect(executeNode).not.toHaveBeenCalled();
+  });
+
   // audited 2026-09-02: a depth-1 node the planner flagged needsFurtherDecomposition
   // stays "pending" with depth-2 children under it. extractLeafNodes filtered only
   // the root and completed nodes, so the scaffolding parent was dispatched as a
@@ -505,9 +533,11 @@ describe("SupervisorBrain", () => {
     expect(decomposer.shouldDecompose).toHaveBeenCalledWith(
       planningTask,
     );
+    // TSK-16: planning now also receives the run's signal so a cancel stops it.
     expect(decomposer.decomposeProactive).toHaveBeenCalledWith(
       "test",
       planningTask,
+      { signal: expect.any(AbortSignal) },
     );
     const visibleGoalTree = onGoalDecomposed.mock.calls[0]?.[0];
     expect(visibleGoalTree).toMatchObject({
