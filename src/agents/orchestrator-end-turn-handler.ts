@@ -54,6 +54,7 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import { notDeliveredReport } from "./not-delivered-report.js";
+import { extractExactResponseLiteral } from "./orchestrator-text-utils.js";
 
 // ─── Localized Fallbacks ─────────────────────────────────────────────────────
 
@@ -558,7 +559,9 @@ export async function handleBgEndTurn(
         systemPrompt: ctx.systemPrompt,
         usageHandler: ctx.usageHandler,
       })
-    : draft;
+    // Synthesis applies the exact-output contract; the bypass must too, or a
+    // "reply with only X" request surfaced the model's whole draft.
+    : (extractExactResponseLiteral(ctx.prompt) ?? draft);
   // (Step 5: the collector's lastAssignment write died with its only reader, v1 runWorkerTask —
   // the v2 result projection attributes provider/model from runCtx.lastAssignment instead.)
 
