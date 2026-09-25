@@ -101,9 +101,25 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
 
 export class SelfVault extends UnityProjectVault {
   override readonly kind = 'self' as const;
+  /**
+   * Boot runs the first index in the background (it walks the whole install
+   * root), so dispose() and other callers can arrive while it is still running.
+   */
+  private initInFlight: Promise<void> | null = null;
+  private disposed = false;
 
   constructor(deps: UnityVaultDeps) {
     super(deps);
+  }
+
+  /**
+   * Stops an in-flight index pass at its next file before the store closes.
+   * Closing under it made every remaining file fail against a closed database.
+   */
+  override async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.initInFlight?.catch(() => undefined);
+    await super.dispose();
   }
 
   /** Every reindex path ends here: a path discovery would skip is dropped, never indexed. */
@@ -120,10 +136,10 @@ export class SelfVault extends UnityProjectVault {
    * only watches the source/test/doc directories that matter.
    */
   override async startWatch(debounceMs = 800): Promise<void> {
-    if (this.watcher) return;
+    if (this.watcher || this.disposed) return;
     const { VaultWatcher } = await import('./watcher.js');
     // Double-check after async import to prevent race conditions
-    if (this.watcher) return;
+    if (this.watcher || this.disposed) return;
     // SelfVault watches multiple roots; we create one watcher per root
     // and merge their updates through a shared emitter.
     const watchers: Array<{ start(): Promise<void>; stop(): Promise<void> }> = [];
@@ -161,7 +177,10 @@ export class SelfVault extends UnityProjectVault {
       });
       watchers.push(watcher);
     }
-    
+    // The root probes above awaited: a dispose() in that window must not be
+    // followed by watchers nothing will ever stop.
+    if (this.watcher || this.disposed) return;
+
     // Composite watcher that starts/stops all underlying watchers
     this.watcher = {
       start: async () => {
@@ -176,6 +195,9 @@ export class SelfVault extends UnityProjectVault {
 
   // Override sync: use curated discovery roots (same as init) rather than Unity's file walker.
   override async sync(): Promise<{ changed: number; durationMs: number }> {
+    // A sync during boot's background index waits for it rather than walking
+    // the same tree concurrently.
+    await this.initInFlight?.catch(() => undefined);
     const started = Date.now();
     const found = await this.discoverFiles();
     const before = new Set(this.store.listFiles().map((f) => f.path));
@@ -185,22 +207,37 @@ export class SelfVault extends UnityProjectVault {
 
   // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
   override async init(): Promise<void> {
+    // A vault_init while the background index runs joins it instead of
+    // starting a second full walk.
+    if (this.initInFlight) return this.initInFlight;
+    const run = this.initOnce();
+    this.initInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.initInFlight === run) this.initInFlight = null;
+    }
+  }
+
+  private async initOnce(): Promise<void> {
     // Same contract as UnityProjectVault.init() (audited 2026-09-02 — this
     // override had dropped both halves): idempotent only while a watcher owns
     // freshness, so a repeated vault_init does not re-walk the tree; and a
     // startup pass reconciles the index against disk, so a file deleted while
     // the daemon was down stops being served with a citation to a path that
     // no longer exists.
-    if (this.initialized && this.watcher) return;
+    if (this.disposed || (this.initialized && this.watcher)) return;
     const { mkdir } = await import('node:fs/promises');
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
     this.reconcileEmbeddingMode();
 
     const found = await this.discoverFiles();
+    if (this.disposed) return;
     const before = new Set(this.store.listFiles().map((f) => f.path));
     await this.processFiles(found, before, 'init');
-    this.initialized = true;
+    // A pass cut short by dispose() did not index the tree.
+    if (!this.disposed) this.initialized = true;
   }
 
   /** Discover files from SELF_INCLUDE_ROOTS. */
@@ -240,6 +277,9 @@ export class SelfVault extends UnityProjectVault {
   ): Promise<string[]> {
     const changed: string[] = [];
     for (const f of found) {
+      // dispose() waits for this pass: stop at the next file instead of
+      // indexing the rest of the tree first. The next init reconciles.
+      if (this.disposed) return changed;
       try {
         if (await this.reindexFile(f.path)) changed.push(f.path);
       } catch (err) {

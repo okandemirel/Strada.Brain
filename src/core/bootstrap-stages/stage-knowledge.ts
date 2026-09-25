@@ -173,6 +173,7 @@ export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<v
 
 import { SelfVault } from "../../vault/self-vault.js";
 import { ObsidianVault } from "../../vault/obsidian-vault.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export interface InitSelfVaultInput {
   config: {
@@ -189,23 +190,51 @@ export interface InitSelfVaultInput {
   repoRoot: string;
 }
 
-export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Promise<void> {
+export interface SelfVaultStartup {
+  vault: SelfVault;
+  /**
+   * Settles once the initial index and the watchers are up: true when they
+   * are, false when the index failed or the vault was disposed first. Never
+   * rejects.
+   */
+  ready: Promise<boolean>;
+}
+
+export async function initSelfVaultFromBootstrap(
+  input: InitSelfVaultInput,
+): Promise<SelfVaultStartup | undefined> {
   // SelfVault is always initialized regardless of vault.enabled flag,
   // because it indexes Strada.Brain's own source code which is always useful.
   // Only explicit opt-out via self.enabled === false skips it.
-  if (input.config.vault?.self?.enabled === false) return;
+  if (input.config.vault?.self?.enabled === false) return undefined;
   const vault = new SelfVault({
     id: "self:strada-brain",
     rootPath: input.repoRoot,
     embedding: input.embedding,
     vectorStore: input.vectorStore,
   });
-  await vault.init();
-  // Register BEFORE startWatch: if any per-root watcher start rejects, the
-  // already-started watchers would otherwise be unreachable — the bootstrap
-  // catch drops this object, leaving their fds pinned for process lifetime.
+  // Register first and index in the background, like the framework vaults:
+  // the initial walk of the install root took minutes on a cold checkout and
+  // held up startup. Registered, the vault is reachable by shutdown's
+  // disposeAll (which stops the walk) and reports "indexing" until it is done;
+  // queries meanwhile see what is indexed so far.
   input.vaultRegistry.register(vault);
-  await vault.startWatch(input.config.vault?.debounceMs ?? 800);
+  const init = vault.init();
+  input.vaultRegistry.trackInit(vault, init);
+  const ready = (async () => {
+    await init;
+    // Disposed or replaced while indexing: watchers started now would never be stopped.
+    if (input.vaultRegistry.get(vault.id) !== vault) return false;
+    await vault.startWatch(input.config.vault?.debounceMs ?? 800);
+    getLoggerSafe().info(`[vault] async init complete for ${vault.id}`);
+    return true;
+  })().catch((err: unknown) => {
+    getLoggerSafe().warn(`[vault] SelfVault initialization failed for ${vault.id}`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  });
+  return { vault, ready };
 }
 
 export interface InitObsidianVaultInput {

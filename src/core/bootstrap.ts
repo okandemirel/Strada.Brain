@@ -1030,6 +1030,8 @@ async function bootstrapImpl(
 
       // Phase 2: SelfVault for Strada.Brain's own source. This is controlled
       // by vault.self.enabled, not by vault.enabled (which gates project auto-discovery).
+      // It registers now and indexes in the background, so boot does not wait
+      // on a walk of the whole install root; disposeAll stops it mid-index.
       try {
         const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
         // installRoot, not cwd (round 13 #36): runtime-paths chdirs this
