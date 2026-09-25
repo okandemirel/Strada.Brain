@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
   StreamCallback,
   ProviderCapabilities,
+  ProviderCallOptions,
 } from "./provider.interface.js";
 import type { AssistantMessage } from "./provider-core.interface.js";
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP, MAX_SSE_BUFFER_BYTES } from "./openai.js";
@@ -127,7 +128,7 @@ export class GeminiProvider extends OpenAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const openaiMessages = this.buildMessages(systemPrompt, messages);
@@ -138,13 +139,17 @@ export class GeminiProvider extends OpenAIProvider {
       messageCount: openaiMessages.length,
     });
 
-    const body = this.buildRequestBody(openaiMessages, openaiTools);
-    body["stream"] = true;
-    body["stream_options"] = { include_usage: true };
-
-    const response = await this.fetchWithRetry(
-      `${this.baseUrl}/chat/completions`,
-      { method: "POST", headers: await this.buildHeaders(), body: JSON.stringify(body), signal: options?.signal },
+    // Same request path as the base stream: the per-call cap and schema go into
+    // the body, and onBackoff reaches the retry wrapper, so a 429 backoff is not
+    // mistaken by the chain for an endpoint that went silent.
+    const response = await this.postChatCompletion(
+      () => {
+        const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema, options?.maxTokens);
+        body["stream"] = true;
+        body["stream_options"] = { include_usage: true };
+        return body;
+      },
+      { signal: options?.signal, onBackoff: options?.onBackoff },
     );
 
     let text = "";

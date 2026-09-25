@@ -3,6 +3,7 @@ import type {
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
+  ResponseSchema,
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse, StreamParseState } from "./openai.js";
@@ -98,14 +99,19 @@ export class MiniMaxProvider extends OpenAIProvider {
   protected override buildRequestBody(
     messages: OpenAIMessage[],
     tools: unknown,
+    responseSchema?: ResponseSchema,
+    maxTokens?: number,
   ): Record<string, unknown> {
-    const body = super.buildRequestBody(messages, tools);
+    // Every argument goes to the base: dropping them lost a caller's per-call
+    // output cap (a retry after a mid-stream drop asks for less) and its schema.
+    const body = super.buildRequestBody(messages, tools, responseSchema, maxTokens);
     if (this.disableThinking) {
       // Cap output tokens to discourage extended internal reasoning that
       // caused the previous timeout.  4096 is enough for a useful answer
       // but short enough to avoid CDN/proxy timeout on long reasoning chains.
-      body["max_tokens"] = Math.min(
-        (body["max_tokens"] as number) ?? this.capabilities.maxTokens,
+      const capKey = this.maxTokensParam();
+      body[capKey] = Math.min(
+        (body[capKey] as number) ?? this.capabilities.maxTokens,
         4096,
       );
     }

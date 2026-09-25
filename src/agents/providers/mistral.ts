@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   ConversationMessage,
   ProviderCapabilities,
+  ResponseSchema,
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage } from "./openai.js";
@@ -71,8 +72,12 @@ export class MistralProvider extends OpenAIProvider {
   protected override buildRequestBody(
     messages: OpenAIMessage[],
     tools: unknown,
+    responseSchema?: ResponseSchema,
+    maxTokens?: number,
   ): Record<string, unknown> {
-    const body = super.buildRequestBody(messages, tools);
+    // Every argument goes to the base: dropping them lost a caller's per-call
+    // output cap (a retry after a mid-stream drop asks for less) and its schema.
+    const body = super.buildRequestBody(messages, tools, responseSchema, maxTokens);
     // Mistral's safe_prompt prepends a safety system prompt for content moderation.
     // Default to false to preserve the user's system prompt unchanged.
     body["safe_prompt"] = false;

@@ -6,6 +6,7 @@ import type {
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
+  ProviderCallOptions,
 } from "./provider.interface.js";
 import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
@@ -41,7 +42,7 @@ export class OllamaProvider implements IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -58,7 +59,13 @@ export class OllamaProvider implements IAIProvider {
       model: this.model,
       messages: ollamaMessages,
       stream: false,
-      options: { num_predict: 4096 },
+      // The per-call cap (a retry after a mid-stream drop asks for less) is
+      // honoured under Ollama's name for it, never above the configured cap.
+      options: {
+        num_predict: options?.maxTokens !== undefined && options.maxTokens > 0
+          ? Math.min(Math.floor(options.maxTokens), this.capabilities.maxTokens)
+          : this.capabilities.maxTokens,
+      },
     };
     if (ollamaTools) {
       body["tools"] = ollamaTools;

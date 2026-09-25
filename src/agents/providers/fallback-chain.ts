@@ -15,6 +15,7 @@ import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep, parseResetDurationMs } from "../../common/fetch-with-retry.js";
+import type { BackoffInfo } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
 import { stripLeakedReasoning } from "../leaked-reasoning.js";
 
@@ -399,7 +400,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     return this.tryWithFallback("chat", (provider, safeMessages, ctl) =>
       provider.chat(systemPrompt, safeMessages, tools, {
         ...this.withTimeoutSignal(options, ctl.timeoutSignal),
-        onBackoff: ctl.onBackoff,
+        onBackoff: withCallerBackoff(ctl.onBackoff, options?.onBackoff),
       }),
       messages,
       options?.externalSignal,
@@ -422,7 +423,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     // re-executes the whole turn cleanly against whichever provider answers.
     let emittedAny = false;
     return this.tryWithFallback("streaming", (provider, safeMessages, ctl) => {
-      const opts = { ...this.withTimeoutSignal(options, ctl.timeoutSignal), onBackoff: ctl.onBackoff };
+      const opts = {
+        ...this.withTimeoutSignal(options, ctl.timeoutSignal),
+        onBackoff: withCallerBackoff(ctl.onBackoff, options?.onBackoff),
+      };
       const attempt = supportsStreaming(provider)
         ? provider.chatStream(
             systemPrompt,
@@ -1187,6 +1191,17 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     }
     throw attachLost(new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined }));
   }
+}
+
+/**
+ * The attempt's backoff handler, then the caller's own when it passed one: the
+ * chain listening for a 429 wait must not silence a caller that listens too.
+ */
+function withCallerBackoff(
+  own: (info: BackoffInfo) => void,
+  caller: ((info: BackoffInfo) => void) | undefined,
+): (info: BackoffInfo) => void {
+  return caller ? (info) => { own(info); caller(info); } : own;
 }
 
 /** Rejects when the signal aborts; never resolves otherwise. */

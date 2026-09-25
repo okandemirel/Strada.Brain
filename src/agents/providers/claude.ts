@@ -96,7 +96,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema);
+    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema, options?.maxTokens);
 
     logger.debug("Claude API call", {
       model: this.model,
@@ -121,7 +121,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema);
+    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema, options?.maxTokens);
 
     logger.debug("Claude streaming API call", {
       model: this.model,
@@ -203,6 +203,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     responseSchema?: ResponseSchema,
+    maxTokens?: number,
   ): Anthropic.MessageCreateParamsNonStreaming {
     const anthropicTools: Anthropic.ToolUnion[] = tools.map((t, i) => ({
       name: t.name,
@@ -221,7 +222,11 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
 
     return {
       model: this.model,
-      max_tokens: this.capabilities.maxTokens,
+      // A caller may ask for less (a retry after a mid-stream drop does), never
+      // more than the configured cap.
+      max_tokens: maxTokens !== undefined && maxTokens > 0
+        ? Math.min(Math.floor(maxTokens), this.capabilities.maxTokens)
+        : this.capabilities.maxTokens,
       system,
       messages: this.buildMessages(messages),
       tools: anthropicTools.length > 0 ? anthropicTools : undefined,

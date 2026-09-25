@@ -308,7 +308,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(
-        systemPrompt, messages, tools, undefined, options?.signal, options?.responseSchema,
+        systemPrompt, messages, tools, undefined, options?.signal, options?.responseSchema, options,
       );
     }
 
@@ -344,7 +344,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(
-        systemPrompt, messages, tools, onChunk, options?.signal, options?.responseSchema,
+        systemPrompt, messages, tools, onChunk, options?.signal, options?.responseSchema, options,
       );
     }
 
@@ -519,16 +519,18 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     onChunk?: StreamCallback,
     signal?: AbortSignal,
     responseSchema?: ResponseSchema,
+    hooks?: ProviderCallHooks,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     // Headers are rebuilt per send so a retry after a token refresh carries the
-    // new token.
+    // new token. The hooks go to the retry wrapper so a 429 backoff here reaches
+    // the chain as a backoff, not as an endpoint that went silent.
     const send = async (): Promise<Response> => this.fetchWithRetry(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: await this.buildHeaders(),
       body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
       signal,
-    });
+    }, { onBackoff: hooks?.onBackoff });
     let response: Response;
     try {
       try {
@@ -1315,6 +1317,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       reasoning: { summary: "auto" },
       store: false,
       stream: true,
+      // No output cap, not even a per-call maxTokens: the subscription backend
+      // does not take `max_output_tokens` (the health probe stopped sending it
+      // for that reason), so a cap here would fail the request, not shorten it.
     };
 
     if (tools.length > 0) {
