@@ -73,7 +73,15 @@ function Install-StradaNode {
       ForEach-Object { $fields = $_.Trim() -split '\s+'; if ($fields.Count -eq 2 -and $fields[1] -eq $zipName) { $fields[0] } } |
       Select-Object -First 1
     if (-not $expectedHash) { throw "SHASUMS256.txt lists no $zipName" }
-    $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+    # .NET rather than Get-FileHash: that cmdlet comes from a script module
+    # Windows PowerShell 5.1 fails to load when it inherits a PowerShell 7
+    # PSModulePath (this script started from a pwsh terminal).
+    $zipStream = [System.IO.File]::OpenRead($zipPath)
+    try {
+      $actualHash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($zipStream)).Replace('-', '')
+    } finally {
+      $zipStream.Dispose()
+    }
     if ($actualHash -ne $expectedHash) { throw "SHA-256 mismatch for ${zipName}: expected $expectedHash, got $actualHash" }
 
     Write-Host "Extracting..."

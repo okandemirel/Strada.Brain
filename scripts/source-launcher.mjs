@@ -497,6 +497,10 @@ exec "$NODE_BIN" ${quotePosixSingle(path.join(ROOT_DIR, "scripts", "source-launc
  * single-quoted PowerShell string early. The archive must match the official
  * SHASUMS256.txt of that exact release before anything is extracted. One line,
  * because cmd cannot continue a quoted argument onto the next line.
+ *
+ * The hash is computed with .NET, not Get-FileHash: that cmdlet lives in a
+ * script module Windows PowerShell 5.1 fails to load when it inherits a
+ * PowerShell 7 PSModulePath (strada.cmd started from a pwsh terminal).
  */
 export const CMD_NODE_DOWNLOAD_POWERSHELL = [
   "$ErrorActionPreference='Stop';",
@@ -510,7 +514,7 @@ export const CMD_NODE_DOWNLOAD_POWERSHELL = [
   "$expected=$null;",
   "foreach($line in Get-Content -LiteralPath $sumsPath){$fields=$line.Trim() -split '\\s+'; if($fields.Count -eq 2 -and $fields[1] -eq $zip){$expected=$fields[0]}};",
   "if(-not $expected){throw ('SHASUMS256.txt lists no '+$zip)};",
-  "$actual=(Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash;",
+  "$fs=[IO.File]::OpenRead($zipPath); try{$actual=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($fs)).Replace('-','')}finally{$fs.Dispose()};",
   "if($actual -ne $expected){throw ('SHA-256 mismatch for '+$zip)};",
   "Expand-Archive -LiteralPath $zipPath -DestinationPath $dir -Force",
 ].join(" ");
@@ -548,7 +552,9 @@ if (-not $nodePath) {
     Invoke-WebRequest -Uri "https://nodejs.org/dist/$nodeVer/SHASUMS256.txt" -OutFile $sums -UseBasicParsing
     $expected = Get-Content -LiteralPath $sums | ForEach-Object { $f = $_.Trim() -split '\\s+'; if ($f.Count -eq 2 -and $f[1] -eq $zip) { $f[0] } } | Select-Object -First 1
     if (-not $expected) { throw "SHASUMS256.txt lists no $zip" }
-    if ((Get-FileHash -LiteralPath (Join-Path $tmp $zip) -Algorithm SHA256).Hash -ne $expected) { throw "SHA-256 mismatch for $zip" }
+    # .NET rather than Get-FileHash, which is missing when PowerShell 5.1 inherits a PowerShell 7 PSModulePath.
+    $fs = [IO.File]::OpenRead((Join-Path $tmp $zip)); try { $actual = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($fs)).Replace('-', '') } finally { $fs.Dispose() }
+    if ($actual -ne $expected) { throw "SHA-256 mismatch for $zip" }
     Expand-Archive -LiteralPath (Join-Path $tmp $zip) -DestinationPath $tmp -Force
     $ex = Join-Path $tmp "node-$nodeVer-win-$arch"
     Copy-Item (Join-Path $ex 'node.exe') $nodeDir -Force
