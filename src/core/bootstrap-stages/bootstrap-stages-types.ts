@@ -451,7 +451,7 @@ export interface MultiAgentDelegationStageDeps {
   createDelegationTools?: (
     delegationTypes: Config["delegation"]["types"],
     delegationManager: import("../../agents/multi/delegation/delegation-manager.js").DelegationManager,
-    parentAgentId: string,
+    parentAgentId: import("../../agents/multi/delegation/delegation-tool.js").DelegationParent,
     depth: number,
     maxDepth: number,
   ) => ITool[];

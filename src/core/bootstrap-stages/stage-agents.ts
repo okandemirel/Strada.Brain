@@ -24,7 +24,6 @@ import { DaemonStorage } from "../../daemon/daemon-storage.js";
 import { ApprovalQueue } from "../../daemon/security/approval-queue.js";
 import { TriggerRegistry } from "../../daemon/trigger-registry.js";
 import { MetricsRecorder } from "../../metrics/metrics-recorder.js";
-import { createAgentId } from "../../agents/multi/agent-types.js";
 import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
@@ -166,7 +165,12 @@ export async function initializeMultiAgentDelegationStage(
     const { TierRouter } = await import("../../agents/multi/delegation/tier-router.js");
     const { DelegationLog } = await import("../../agents/multi/delegation/delegation-log.js");
     const { DelegationManager } = await import("../../agents/multi/delegation/delegation-manager.js");
-    const { createDelegationTools, DEFAULT_DELEGATION_TYPES } = await import("../../agents/multi/delegation/index.js");
+    const {
+      createDelegationTools,
+      DEFAULT_DELEGATION_TYPES,
+      rootDelegationParentId,
+      isRootDelegationParentId,
+    } = await import("../../agents/multi/delegation/index.js");
 
     const delegationLog = deps.createDelegationLog?.(params.daemonStorage.getDatabase())
       ?? new DelegationLog(params.daemonStorage.getDatabase());
@@ -245,8 +249,11 @@ export async function initializeMultiAgentDelegationStage(
       // Resolve the live per-agent budget cap so DelegationManager can reject a
       // delegation before spawn when the parent has already exceeded its cap.
       // Looked up fresh from the registry to honor runtime cap changes; returns
-      // undefined for unknown agents so the budget gate stays a no-op there.
-      getAgentBudgetCap: (agentId: AgentId) => agentRegistry.getById(agentId)?.budgetCapUsd,
+      // undefined for unknown agents so the budget gate stays a no-op there. The root
+      // orchestrator's per-chat parent ids run under the default agent cap.
+      getAgentBudgetCap: (agentId: AgentId) =>
+        agentRegistry.getById(agentId)?.budgetCapUsd
+        ?? (isRootDelegationParentId(agentId) ? agentManager.getDefaultAgentCapUsd() : undefined),
     };
     delegationManager = deps.createDelegationManager?.(delegationManagerOptions)
       ?? new DelegationManager(delegationManagerOptions);
@@ -273,11 +280,11 @@ export async function initializeMultiAgentDelegationStage(
       ),
     ]);
 
-    const rootDelegationAgentId = createAgentId();
+    // The root orchestrator's delegations are booked per chat (see rootDelegationParentId).
     const rootDelegationTools = createDelegationToolsFn(
       delegationTypes,
       delegationManager,
-      rootDelegationAgentId,
+      rootDelegationParentId,
       0,
       params.config.delegation.maxDepth,
     );
@@ -287,7 +294,7 @@ export async function initializeMultiAgentDelegationStage(
     for (const tool of createSwarmTool(
       delegationTypes,
       delegationManager,
-      rootDelegationAgentId,
+      rootDelegationParentId,
       0,
       params.config.delegation.maxDepth,
       params.config.delegation.maxConcurrentPerParent,

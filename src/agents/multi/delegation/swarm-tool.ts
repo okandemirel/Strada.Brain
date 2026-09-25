@@ -14,8 +14,8 @@
  */
 
 import type { ITool, ToolContext, ToolExecutionResult, ToolInputSchema, ToolMetadata } from "../../tools/tool.interface.js";
-import type { AgentId } from "../agent-types.js";
 import type { DelegationManager } from "./delegation-manager.js";
+import { resolveDelegationParent, type DelegationParent } from "./delegation-tool.js";
 import type { DelegationResult, DelegationTypeConfig } from "./delegation-types.js";
 
 interface SwarmTaskSpec {
@@ -64,7 +64,7 @@ export class SwarmTool implements ITool {
   constructor(
     private readonly types: DelegationTypeConfig[],
     private readonly delegationManager: DelegationManager,
-    private readonly parentAgentId: AgentId,
+    private readonly parentAgentId: DelegationParent,
     private readonly depth: number,
     /** Pool width — the manager's own per-parent concurrency limit. */
     private readonly maxConcurrent: number = 3,
@@ -90,6 +90,7 @@ export class SwarmTool implements ITool {
     }
 
     const defaultType = this.types[0]?.name ?? "general";
+    const parentAgentId = resolveDelegationParent(this.parentAgentId, context);
 
     // BOUNDED POOL, not a burst. delegate() rejects (it does not queue) past
     // the parent's concurrency limit, so firing every task in one tick
@@ -115,7 +116,7 @@ export class SwarmTool implements ITool {
         }
         try {
           const value = await this.delegationManager.delegate({
-            parentAgentId: this.parentAgentId,
+            parentAgentId,
             type: this.types.find((t) => t.name === spec.type)?.name ?? defaultType,
             task: spec.context ? `${spec.task}\n\nContext: ${spec.context}` : spec.task,
             depth: this.depth,
@@ -183,7 +184,7 @@ export class SwarmTool implements ITool {
 export function createSwarmTool(
   types: DelegationTypeConfig[],
   delegationManager: DelegationManager,
-  parentAgentId: AgentId,
+  parentAgentId: DelegationParent,
   currentDepth: number,
   maxDepth: number,
   maxConcurrent = 3,

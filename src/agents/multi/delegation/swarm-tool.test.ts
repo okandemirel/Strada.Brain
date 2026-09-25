@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SwarmTool, createSwarmTool } from "./swarm-tool.js";
 import type { DelegationResult } from "./delegation-types.js";
 import { createBudget } from "../../../agent-core/control/budget.js";
+import { isRootDelegationParentId, rootDelegationParentId } from "./delegation-tool.js";
 
 const TYPES = [{ name: "implement" }, { name: "review" }] as never[];
 
@@ -245,5 +246,18 @@ describe("SwarmTool inside a run", () => {
 
     expect(slices).toHaveLength(4);
     for (const slice of slices) expect(slice).toEqual({ outputTokens: Number.POSITIVE_INFINITY, costUsd: 0.25 });
+  });
+
+  it("the root orchestrator's swarm is booked under the calling chat's parent id", async () => {
+    const delegate = vi.fn(async (_req: { parentAgentId: string }) => delegationResult("ok"));
+    const tool = new SwarmTool(TYPES, managerWith(delegate as never), rootDelegationParentId, 1, 2);
+
+    await tool.execute({ tasks: [{ task: "A" }, { task: "B" }] }, { chatId: "chat-A" } as never);
+
+    expect(delegate.mock.calls.map(([req]) => req.parentAgentId)).toEqual([
+      rootDelegationParentId({ chatId: "chat-A" } as never),
+      rootDelegationParentId({ chatId: "chat-A" } as never),
+    ]);
+    expect(isRootDelegationParentId(delegate.mock.calls[0]![0].parentAgentId)).toBe(true);
   });
 });

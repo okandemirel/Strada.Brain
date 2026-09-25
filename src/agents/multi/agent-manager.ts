@@ -257,6 +257,11 @@ export class AgentManager {
     return this.config.defaultBudgetUsd;
   }
 
+  /** The live default agent cap — also the cap the root orchestrator's per-chat delegations run under. */
+  getDefaultAgentCapUsd(): number {
+    return this.resolveDefaultAgentCapUsd();
+  }
+
   /** Set the command handler so prefix commands bypass the LLM pipeline */
   setCommandHandler(handler: CommandHandler): void {
     this.commandHandler = handler;

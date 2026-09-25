@@ -33,7 +33,13 @@ export { DelegationLog } from "./delegation-log.js";
 export type { DelegationLogEntry, DelegationStats } from "./delegation-log.js";
 
 // Delegation Tool
-export { DelegationTool, createDelegationTools } from "./delegation-tool.js";
+export {
+  DelegationTool,
+  createDelegationTools,
+  rootDelegationParentId,
+  isRootDelegationParentId,
+} from "./delegation-tool.js";
+export type { DelegationParent } from "./delegation-tool.js";
 
 // Delegation Manager
 export { DelegationManager } from "./delegation-manager.js";

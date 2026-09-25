@@ -18,6 +18,37 @@ import type { DelegationManager } from "./delegation-manager.js";
 import type { AgentId } from "../agent-types.js";
 
 // =============================================================================
+// PARENT IDENTITY
+// =============================================================================
+
+/**
+ * Who a delegation is booked and limited under: a fixed agent id, or an id resolved per call
+ * from the calling tool context.
+ */
+export type DelegationParent = AgentId | ((context: ToolContext) => AgentId);
+
+export function resolveDelegationParent(parent: DelegationParent, context: ToolContext): AgentId {
+  return typeof parent === "function" ? parent(context) : parent;
+}
+
+/** Prefix of the parent ids the root orchestrator's delegations carry, one per chat. */
+const ROOT_DELEGATION_PARENT_PREFIX = "root-chat:";
+
+/**
+ * The root orchestrator serves every chat, and its delegations used one random id minted per
+ * boot: no registered agent matched it, so no per-parent budget cap or reservation applied, and
+ * every chat shared one concurrency pool. Its delegations now belong to the chat that asked for
+ * them, under an id that is stable across restarts.
+ */
+export function rootDelegationParentId(context: ToolContext): AgentId {
+  return `${ROOT_DELEGATION_PARENT_PREFIX}${context.chatId ?? "default"}` as AgentId;
+}
+
+export function isRootDelegationParentId(agentId: string): boolean {
+  return agentId.startsWith(ROOT_DELEGATION_PARENT_PREFIX);
+}
+
+// =============================================================================
 // DELEGATION TOOL
 // =============================================================================
 
@@ -30,7 +61,7 @@ export class DelegationTool implements ITool {
   constructor(
     private readonly typeConfig: DelegationTypeConfig,
     private readonly delegationManager: DelegationManager,
-    private readonly parentAgentId: AgentId,
+    private readonly parentAgentId: DelegationParent,
     private readonly currentDepth: number,
   ) {
     this.name = `delegate_${typeConfig.name}`;
@@ -77,7 +108,7 @@ export class DelegationTool implements ITool {
         type: this.typeConfig.name,
         task: input.task as string,
         context: input.context as string | undefined,
-        parentAgentId: this.parentAgentId,
+        parentAgentId: resolveDelegationParent(this.parentAgentId, context),
         depth: this.currentDepth,
         mode: "sync",
         toolContext: context,
@@ -118,7 +149,7 @@ export class DelegationTool implements ITool {
 export function createDelegationTools(
   types: DelegationTypeConfig[],
   delegationManager: DelegationManager,
-  parentAgentId: AgentId,
+  parentAgentId: DelegationParent,
   currentDepth: number,
   maxDepth: number,
 ): DelegationTool[] {

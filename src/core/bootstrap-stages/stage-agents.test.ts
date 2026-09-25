@@ -200,6 +200,74 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
   });
 });
 
+describe("initializeMultiAgentDelegationStage — the root orchestrator's delegations", () => {
+  type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
+  type ExecutableTool = { name: string; execute: (input: Record<string, unknown>, context: object) => Promise<unknown> };
+
+  /** One boot of the stage; the delegation manager is a fake that records each request. */
+  async function boot() {
+    const delegate = vi.fn(async (_request: { parentAgentId: string }) => ({ content: "ok", metadata: {} }));
+    const createDelegationManager = vi.fn((_options: unknown) => ({ delegate }));
+    const addTool = vi.fn();
+    await initializeMultiAgentDelegationStage(
+      {
+        config: makeConfig({
+          agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"],
+          delegation: {
+            enabled: true, maxDepth: 2, maxConcurrentPerParent: 2,
+            tiers: { local: "o:l3", cheap: "d:d-chat", standard: "g:g-pro", premium: "c:sonnet" },
+            types: [{ name: "code_review", tier: "cheap", timeoutMs: 60000, maxIterations: 10 }],
+            verbosity: "normal",
+          } as Config["delegation"],
+        }),
+        logger: createMockLogger(),
+        daemonMode: false,
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as StageParams["daemonStorage"],
+        daemonContext: {} as unknown as StageParams["daemonContext"],
+        taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
+        orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool } as unknown as StageParams["orchestrator"],
+        providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
+        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        channel: {} as unknown as StageParams["channel"],
+        metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
+        soulLoader: {} as unknown as StageParams["soulLoader"],
+        dmPolicy: {} as unknown as StageParams["dmPolicy"],
+        stradaDeps: { coreInstalled: false, modulesInstalled: false } as unknown as StageParams["stradaDeps"],
+      },
+      {
+        createAgentRegistry: vi.fn(() => ({ initialize: vi.fn(), getById: vi.fn(() => undefined) })),
+        createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentManager: vi.fn(() => ({
+          setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn(),
+          getDefaultAgentCapUsd: () => 5,
+        })),
+        createDelegationLog: vi.fn(() => ({})),
+        createTierRouter: vi.fn(() => ({})),
+        createDelegationManager,
+      } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+    );
+    const tool = addTool.mock.calls.map(([t]) => t as ExecutableTool).find((t) => t.name === "delegate_code_review")!;
+    const options = createDelegationManager.mock.calls[0]![0] as { getAgentBudgetCap: (id: string) => number | undefined };
+    const parentFor = async (chatId: string): Promise<string> => {
+      await tool.execute({ task: "review Board.cs" }, { chatId, projectPath: "/tmp/game", workingDirectory: "/tmp/game", readOnly: false });
+      return delegate.mock.calls.at(-1)![0].parentAgentId;
+    };
+    return { parentFor, options };
+  }
+
+  it("books each chat's delegations under one parent id that survives a restart, under the default agent cap", async () => {
+    const first = await boot();
+    const chatA = await first.parentFor("chat-A");
+    const chatB = await first.parentFor("chat-B");
+    const restarted = await boot();
+
+    expect(await restarted.parentFor("chat-A")).toBe(chatA);
+    // Each chat has its own concurrency pool and cap instead of one shared, uncapped one.
+    expect(chatB).not.toBe(chatA);
+    expect(first.options.getAgentBudgetCap(chatA)).toBe(5);
+  });
+});
+
 // =============================================================================
 // MODULE: initializeMemoryConsolidationStage
 // =============================================================================
