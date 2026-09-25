@@ -52,6 +52,8 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import { notDeliveredReport } from "./not-delivered-report.js";
+import { getResilienceMessage } from "./resilience-messages.js";
+import { detectLanguageFromText } from "./orchestrator-text-utils.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1112,10 +1114,37 @@ export async function handleInteractiveReflectionContinue(
         pushContinuationMessages(ctx, visibilityDecision.gate);
         return { flow: "continue", newState };
       }
+      // ORC-17: mirror end-turn 4b. The model reported a terminal failure, so
+      // the run settles failed (blocked for a gate that waits on the user), not
+      // completed; and an empty boundary text still answers the turn.
+      const status =
+        visibilityDecision.kind === "plan_review" ||
+        visibilityDecision.kind === "blocked" ||
+        visibilityDecision.kind === "ask_user"
+          ? "blocked"
+          : "failed";
+      ctx.recordPhaseOutcome({
+        chatId: ctx.chatId,
+        identityKey: ctx.identityKey,
+        assignment: ctx.currentAssignment,
+        phase: "reflecting",
+        status,
+        task: ctx.executionStrategy.task,
+        reason: visibilityDecision.reason,
+        telemetry: ctx.buildPhaseOutcomeTelemetry({
+          state: newState,
+          usage: ctx.responseUsage,
+          verifierDecision: "approve",
+          ...(status === "failed" ? { failureReason: visibilityDecision.reason } : {}),
+        }),
+      });
       return {
         flow: "done",
-        visibleText: visibilityDecision.visibleText ?? "",
+        visibleText:
+          visibilityDecision.visibleText?.trim() ||
+          getResilienceMessage("task_stuck", detectLanguageFromText(ctx.prompt) ?? "en"),
         newState,
+        status,
       };
     }
 

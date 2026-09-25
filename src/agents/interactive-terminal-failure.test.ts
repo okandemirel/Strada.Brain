@@ -14,7 +14,12 @@
 
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { handleInteractiveEndTurn, type InteractiveEndTurnContext } from "./orchestrator-end-turn-handler.js";
-import { handleInteractiveReflectionDone, type InteractiveReflectionContext } from "./orchestrator-reflection-handler.js";
+import {
+  handleInteractiveReflectionContinue,
+  handleInteractiveReflectionDone,
+  type InteractiveReflectionContext,
+} from "./orchestrator-reflection-handler.js";
+import type { ProviderResponse } from "./providers/provider.interface.js";
 import { createInitialState, AgentPhase, transitionPhase } from "./agent-state.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -125,5 +130,45 @@ describe("interactive reflection DONE on a terminal blocker", () => {
     if (result.flow !== "done") throw new Error("expected done");
     expect(result.status).toBe("failed");
     expect(ctx.recordPhaseOutcome).not.toHaveBeenCalledWith(expect.objectContaining({ status: "approved" }));
+  });
+});
+
+describe("interactive reflection CONTINUE on a terminal blocker (ORC-17)", () => {
+  const endTurnResponse = (text: string) =>
+    ({ text, toolCalls: [], stopReason: "end_turn", usage: undefined }) as unknown as ProviderResponse;
+  // BLOCKER ends "I will retry", which reads as the run carrying on; this one
+  // is a terminal failure report outright, the input this arm exists for.
+  const TERMINAL =
+    "I could not finish: the deployment requires approval from an account owner. " +
+    "Please grant access, then rerun the deploy.";
+
+  it("settles as failed with the blocker as the visible text", async () => {
+    const ctx = { ...core(), responseText: TERMINAL } as unknown as InteractiveReflectionContext;
+    const result = await handleInteractiveReflectionContinue(reflecting(), ctx, endTurnResponse(TERMINAL));
+
+    expect(result.flow).toBe("done");
+    if (result.flow !== "done") throw new Error("expected done");
+    expect(result.status).toBe("failed");
+    expect(result.visibleText).toContain("requires approval");
+    expect(ctx.recordPhaseOutcome).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("still answers the turn when the boundary surfaces no text", async () => {
+    const pipeline = await import("./orchestrator-intervention-pipeline.js");
+    const spy = vi.spyOn(pipeline, "resolveVisibleDraftDecision").mockResolvedValueOnce({
+      kind: "terminal_failure",
+      reason: "nothing surfaceable",
+    });
+    try {
+      const ctx = { ...core(), responseText: TERMINAL } as unknown as InteractiveReflectionContext;
+      const result = await handleInteractiveReflectionContinue(reflecting(), ctx, endTurnResponse(TERMINAL));
+
+      expect(result.flow).toBe("done");
+      if (result.flow !== "done") throw new Error("expected done");
+      expect(result.visibleText.trim()).not.toBe("");
+      expect(result.status).toBe("failed");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
