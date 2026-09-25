@@ -2603,7 +2603,12 @@ describe("CampaignManager", () => {
     for (let i = 0; i < 8 && storage.get(campaign.id)!.state === "executing"; i++) {
       const before = tasks.submitted.length;
       settleMilestone(`integrated, all 42 tests pass (round ${i})`);
-      await new Promise((r) => setTimeout(r, 120));
+      // The gates measure the tree with async I/O before the next bounce is
+      // submitted, so wait for that bounce or for the campaign to settle —
+      // a fixed pause read a slow bounce as "no bounce" and stopped early.
+      await waitFor(() =>
+        expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true),
+      );
       if (tasks.submitted.length === before) break;
     }
 
