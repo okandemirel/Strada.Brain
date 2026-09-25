@@ -670,14 +670,34 @@ export class SessionManager {
 // BRUTE FORCE PROTECTION
 // =============================================================================
 
+/** Largest lockout multiplier (2^n escalation is capped here). */
+const MAX_LOCKOUT_ESCALATION = 32;
+/** Default cap on tracked keys (source IPs); stale and then oldest entries go first. */
+const DEFAULT_MAX_TRACKED_KEYS = 10_000;
+
+export interface BruteForceOptions {
+  /**
+   * How long after its last failure an unlocked key is forgotten. Defaults to
+   * the longest lockout (base × 32), so the count survives lock expiry and
+   * the escalation can build up.
+   */
+  readonly forgetAfterMs?: number;
+  /** Maximum number of keys held at once. */
+  readonly maxTrackedKeys?: number;
+}
+
 export class BruteForceProtection {
-  private readonly attempts = new Map<string, { count: number; lockUntil: number }>();
+  private readonly attempts = new Map<string, { count: number; lockUntil: number; lastFailureAt: number }>();
   private readonly maxAttempts: number;
   private readonly lockoutDuration: number;
+  private readonly forgetAfterMs: number;
+  private readonly maxTrackedKeys: number;
 
-  constructor(maxAttempts = 5, lockoutDuration = 30 * 60 * 1000) {
-    this.maxAttempts = maxAttempts;
+  constructor(maxAttempts = 5, lockoutDuration = 30 * 60 * 1000, options: BruteForceOptions = {}) {
+    this.maxAttempts = Math.max(1, maxAttempts);
     this.lockoutDuration = lockoutDuration;
+    this.forgetAfterMs = options.forgetAfterMs ?? lockoutDuration * MAX_LOCKOUT_ESCALATION;
+    this.maxTrackedKeys = Math.max(1, options.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS);
   }
 
   /**
@@ -698,31 +718,62 @@ export class BruteForceProtection {
       };
     }
 
-    // Evict only if a lock actually existed and expired (not pre-lockout accumulation)
-    if (record.lockUntil > 0) {
+    // SEC-13: an expired lock no longer resets the count (that kept every
+    // lockout at 1x); the key is forgotten only once it has been quiet long.
+    if (this.isStale(record, now)) {
       this.attempts.delete(key);
     }
     return { allowed: true };
   }
 
   /**
-   * Record failed attempt with escalating lockout
+   * Record failed attempt with escalating lockout: at `maxAttempts` failures
+   * the key locks for the base duration, and the lock doubles every further
+   * `maxAttempts` failures (up to 32x). After the first lockout every failure
+   * re-locks at once.
    */
   recordFailure(key: string): void {
     const now = Date.now();
-    const record = this.attempts.get(key);
+    const existing = this.attempts.get(key);
+    const record = existing && !this.isStale(existing, now)
+      ? existing
+      : { count: 0, lockUntil: 0, lastFailureAt: now };
+    record.count++;
+    record.lastFailureAt = now;
+    // Re-insert so Map order is least-recently-failed first (eviction order).
+    this.attempts.delete(key);
+    this.attempts.set(key, record);
+    if (record.count >= this.maxAttempts) {
+      const escalation = Math.min(
+        Math.pow(2, Math.floor(record.count / this.maxAttempts) - 1),
+        MAX_LOCKOUT_ESCALATION,
+      );
+      record.lockUntil = now + this.lockoutDuration * escalation;
+    }
+    if (this.attempts.size > this.maxTrackedKeys) this.evict(now);
+  }
 
-    if (!record) {
-      this.attempts.set(key, { count: 1, lockUntil: 0 });
-    } else {
-      record.count++;
-      if (record.count >= this.maxAttempts) {
-        const escalation = Math.min(
-          Math.pow(2, Math.floor(record.count / this.maxAttempts) - 1),
-          32,
-        );
-        record.lockUntil = now + this.lockoutDuration * escalation;
-      }
+  /** Number of keys currently tracked (bounded by `maxTrackedKeys`). */
+  get trackedKeyCount(): number {
+    return this.attempts.size;
+  }
+
+  private isStale(record: { lockUntil: number; lastFailureAt: number }, now: number): boolean {
+    return now >= record.lockUntil && now - record.lastFailureAt >= this.forgetAfterMs;
+  }
+
+  /**
+   * SEC-13: drop stale keys, then the least recently failed ones, down to 90%
+   * of the cap (so a flood of new keys does not pay a full sweep per failure).
+   */
+  private evict(now: number): void {
+    for (const [key, record] of this.attempts) {
+      if (this.isStale(record, now)) this.attempts.delete(key);
+    }
+    const target = this.maxTrackedKeys - Math.floor(this.maxTrackedKeys / 10);
+    for (const key of this.attempts.keys()) {
+      if (this.attempts.size <= target) break;
+      this.attempts.delete(key);
     }
   }
 

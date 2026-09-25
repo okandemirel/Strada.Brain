@@ -62,7 +62,7 @@ Internal user authentication with JWT, sessions, MFA, and brute force protection
 - **Sessions:** `Map<string, Session>` with sliding window expiry. 7-day refresh token. Per-user session tracking.
 - **Password hashing:** `scryptSync` with `N=32768, r=8, p=1`. 32-byte random salt. Format: `scrypt:<saltHex>:<hashHex>`.
 - **MFA:** Backup codes work (10 one-time 8-hex codes). TOTP verification is implemented with a 30-second step and ±1 step skew window.
-- **Brute force:** 5 attempts per 30-minute window. Lockout escalates exponentially (2^n, capped at 32x). Count persists across lock periods until successful login.
+- **Brute force:** 5 attempts per 30-minute window. Lockout escalates exponentially (2^n, capped at 32x). Count persists across lock periods until successful login (or 32 lockout durations without a failure); at most 10,000 keys are tracked, least recently failed evicted first.
 
 **Note:** Sessions, revoked tokens, and brute force state are all in-memory. Server restart clears them.
 

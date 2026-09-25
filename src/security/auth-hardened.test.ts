@@ -401,6 +401,59 @@ describe("BruteForceProtection", () => {
     protection.reset(key);
     expect(protection.getAttemptCount(key)).toBe(0);
   });
+
+  // SEC-13: an expired lock used to delete the record, so every lockout was 1x.
+  it("escalates across lock cycles: 1x, 2x, then 4x, checked the way the dashboard calls it", () => {
+    vi.useFakeTimers();
+    try {
+      const key = "203.0.113.7";
+      const base = 1000;
+      const guard = new BruteForceProtection(2, base);
+      /** One dashboard auth attempt that fails; returns the lock it produced (s). */
+      const fail = (): number | undefined => {
+        expect(guard.canAttempt(key).allowed).toBe(true);
+        guard.recordFailure(key);
+        return guard.canAttempt(key).retryAfter;
+      };
+      expect(fail()).toBeUndefined();
+      expect(fail()).toBe(1); // 2 failures: 1x
+      vi.advanceTimersByTime(base + 1);
+      expect(fail()).toBe(1); // the count survived the lock: a failure re-locks at once
+      vi.advanceTimersByTime(base + 1);
+      expect(fail()).toBe(2); // 4 failures: 2x
+      vi.advanceTimersByTime(2 * base + 1);
+      expect(fail()).toBe(2);
+      vi.advanceTimersByTime(2 * base + 1);
+      expect(fail()).toBe(4); // 6 failures: 4x
+      expect(guard.getAttemptCount(key)).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("locks on the first failure when maxAttempts is 1", () => {
+    const guard = new BruteForceProtection(1, 60_000);
+    guard.recordFailure("k");
+    expect(guard.canAttempt("k").allowed).toBe(false);
+  });
+
+  it("forgets a key after a long quiet period, and keeps the map bounded", () => {
+    vi.useFakeTimers();
+    try {
+      const guard = new BruteForceProtection(5, 1000, { maxTrackedKeys: 100 });
+      guard.recordFailure("quiet");
+      vi.advanceTimersByTime(32 * 1000);
+      expect(guard.canAttempt("quiet").allowed).toBe(true);
+      expect(guard.getAttemptCount("quiet")).toBe(0);
+
+      for (let i = 0; i < 10_000; i++) guard.recordFailure(`2001:db8::${i.toString(16)}`);
+      expect(guard.trackedKeyCount).toBeLessThanOrEqual(100);
+      // The most recent offender is still tracked.
+      expect(guard.getAttemptCount(`2001:db8::${(9_999).toString(16)}`)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // =============================================================================
