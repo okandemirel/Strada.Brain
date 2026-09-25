@@ -324,6 +324,14 @@ export function frameMediaType(path: string, bytes?: Uint8Array): "image/png" | 
   return /\.jpe?g$/i.test(path) ? "image/jpeg" : "image/png";
 }
 
+/**
+ * The largest frame sent to a vision provider (CMP-18). Anthropic refuses an
+ * image over 5 MB, and a frame that size is also read whole into memory and
+ * base64-inflated by a third. A larger capture is reported as not measured,
+ * by its size, instead of failing inside the provider call.
+ */
+export const MAX_VISION_FRAME_BYTES = 5 * 1024 * 1024;
+
 const VISION_SYSTEM =
   "You are shown one frame captured from a running game, and the game design document's own " +
   "description of how that game should look. Answer in ONE sentence: does the frame plausibly " +
@@ -365,6 +373,17 @@ export async function judgeVisualConformance(params: {
   let imageBase64: string;
   let mediaType: "image/png" | "image/jpeg";
   try {
+    const size = statSync(frame.path).size;
+    if (size > MAX_VISION_FRAME_BYTES) {
+      return {
+        status: "not-checked",
+        reason: "frame-too-large",
+        detail:
+          `visual conformance not checked — the frame is ${(size / 1024 / 1024).toFixed(1)} MB, over the ` +
+          `${MAX_VISION_FRAME_BYTES / 1024 / 1024} MB a vision provider accepts (capture at a smaller resolution)`,
+        framePath: frame.path,
+      };
+    }
     const bytes = readFileSync(frame.path);
     imageBase64 = bytes.toString("base64");
     mediaType = frameMediaType(frame.path, bytes);
@@ -467,6 +486,7 @@ export type VisualNotMeasuredReason =
   | "no-frame"
   | "no-vision-provider"
   | "frame-unreadable"
+  | "frame-too-large"
   | "provider-failed"
   | "no-answer"
   | "no-verdict-line"

@@ -6,7 +6,7 @@ import {
   extractLookDescription,
   judgeVisualConformance,
   renderVisualConformance,
-  selectGameplayFrame, artDirectionText, frameMediaType } from "./visual-conformance.js";
+  selectGameplayFrame, artDirectionText, frameMediaType, MAX_VISION_FRAME_BYTES } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 
 const dirs: string[] = [];
@@ -133,6 +133,31 @@ describe("the judgement", () => {
     expect(frameMediaType("frame.png", Buffer.from([0xff, 0xd8, 0xff]))).toBe("image/jpeg");
     expect(frameMediaType("frame.jpeg")).toBe("image/jpeg");
     expect(frameMediaType("frame.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe("image/png");
+  });
+
+  it("a frame over the provider's image limit is not sent, and says so by its size (CMP-18)", async () => {
+    const root = tmp();
+    const frame = join(root, "huge.png");
+    const limit = 5 * 1024 * 1024; // Anthropic's per-image limit
+    const bytes = Buffer.alloc(limit + 1);
+    bytes.set([0x89, 0x50, 0x4e, 0x47]);
+    writeFileSync(frame, bytes);
+    const chat = vi.fn(async () => ({ text: "Pigs.\nMATCH: yes" }));
+    const result = await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
+    });
+    expect(chat).not.toHaveBeenCalled();
+    expect(result.status).toBe("not-checked");
+    expect(result.reason).toBe("frame-too-large");
+    expect(result.detail).toContain("MB");
+    expect(MAX_VISION_FRAME_BYTES).toBe(limit);
+    // Guard: a frame at the limit is still asked about.
+    writeFileSync(frame, bytes.subarray(0, limit));
+    expect((await judgeVisualConformance({
+      look, frame: { path: frame },
+      visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
+    })).status).toBe("checked");
   });
 
   it("reads the MATCH line as the verdict and renders it; no line, no verdict (2026-09-10)", async () => {
