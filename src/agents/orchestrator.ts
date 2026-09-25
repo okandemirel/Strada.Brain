@@ -1041,6 +1041,12 @@ export class Orchestrator {
   private readonly progressAssessmentEnabled: boolean;
   /** Hard cap on iterations for delegated sub-agents (overrides config if lower). */
   private readonly maxIterations?: number;
+  /**
+   * Open {@link withTaskExecutionContext} scopes per chat+run. The route, the
+   * message handler and the run nest scopes with the same taskRunId, so
+   * run-scoped state is released only when the outermost one ends (ORC-18).
+   */
+  private readonly activeRunScopes = new Map<string, number>();
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -1398,7 +1404,34 @@ export class Orchestrator {
     context: TaskExecutionContext,
     run: () => Promise<T>,
   ): Promise<T> {
-    return await this.taskContext.run(context, run);
+    const runKey = context.taskRunId ? `${context.chatId}\u0000${context.taskRunId}` : undefined;
+    if (runKey) this.activeRunScopes.set(runKey, (this.activeRunScopes.get(runKey) ?? 0) + 1);
+    try {
+      return await this.taskContext.run(context, run);
+    } finally {
+      if (runKey) {
+        const remaining = (this.activeRunScopes.get(runKey) ?? 1) - 1;
+        if (remaining > 0) {
+          this.activeRunScopes.set(runKey, remaining);
+        } else {
+          this.activeRunScopes.delete(runKey);
+          this.releaseRunScopedState(context.chatId, context.taskRunId!);
+        }
+      }
+    }
+  }
+
+  /**
+   * ORC-18: drop what one task run keyed by its taskRunId once the run is over.
+   * These were swept only when an in-memory interactive session expired, and a
+   * chat used only for background/worker/node runs never has one, so every run
+   * left its entries behind for the life of the daemon.
+   */
+  private releaseRunScopedState(chatId: string, taskRunId: string): void {
+    const scopeKey = `${chatId}\u0000${taskRunId}`;
+    this.toolConsecutiveErrors.delete(scopeKey);
+    this.askUserBlockCounts.delete(scopeKey);
+    this.runtimeArtifactMatches.delete(taskRunId);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1504,19 +1537,24 @@ export class Orchestrator {
 
   /** Update consecutive error counter for a tool in a breaker scope. Resets on success. */
   private trackToolError(scope: string, toolName: string, isError: boolean, target?: string): void {
-    if (!this.toolConsecutiveErrors.has(scope)) this.toolConsecutiveErrors.set(scope, new Map());
-    const errs = this.toolConsecutiveErrors.get(scope)!;
     const repeatKey = `${toolName}\u0000${target ?? ""}`;
+    let errs = this.toolConsecutiveErrors.get(scope);
 
     if (isError) {
+      if (!errs) {
+        errs = new Map();
+        this.toolConsecutiveErrors.set(scope, errs);
+      }
       for (const key of [toolName, repeatKey]) {
         const prev = errs.get(key);
         errs.set(key, { count: (prev?.count ?? 0) + 1, trippedAtMs: prev?.trippedAtMs });
       }
-    } else {
+    } else if (errs) {
       // A success clears both: the tool works, and it works on this target.
       errs.delete(toolName);
       errs.delete(repeatKey);
+      // ORC-18: an empty scope is not kept (a success used to create one).
+      if (errs.size === 0) this.toolConsecutiveErrors.delete(scope);
     }
   }
 
@@ -5689,6 +5727,13 @@ export class Orchestrator {
 
   cleanupSessions(maxAgeMs: number = 3_600_000): void {
     const expired = this.sessionManager.cleanupSessions(maxAgeMs);
+    // ORC-18: profile-touch debounce stamps are keyed by identity, not chat, so
+    // no session expiry reached them. One older than the session window is past
+    // its 60s debounce anyway.
+    const now = Date.now();
+    for (const [key, at] of this.sessionManager.persistTimeMap) {
+      if (key.startsWith("touch:") && now - at > maxAgeMs) this.sessionManager.persistTimeMap.delete(key);
+    }
     // Only clear block counts for expired sessions, not all active ones
     for (const chatId of expired) {
       this.askUserBlockCounts.delete(chatId);

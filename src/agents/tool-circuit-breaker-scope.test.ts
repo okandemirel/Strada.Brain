@@ -102,3 +102,66 @@ describe("breaker scope", () => {
     expect(refusal).toContain("in this conversation");
   });
 });
+
+describe("run-scoped state ends with the run (ORC-18)", () => {
+  type Internals = {
+    toolConsecutiveErrors: Map<string, unknown>;
+    runtimeArtifactMatches: Map<string, unknown>;
+    sessionManager: { persistTimeMap: Map<string, number> };
+  };
+  const internals = (orch: Orchestrator) => orch as unknown as Internals;
+  const runKeys = (orch: Orchestrator, taskRunId: string) =>
+    [...internals(orch).toolConsecutiveErrors.keys()].filter((k) => k.endsWith(`\u0000${taskRunId}`));
+
+  it("a background run leaves no breaker or artifact-match entries behind", async () => {
+    const tool = failingTool("file_read");
+    const orch = orchestratorWith(tool);
+
+    await inRun(orch, "bg-run-1", async () => {
+      await call(orch, "file_read", "a.cs");
+      internals(orch).runtimeArtifactMatches.set("bg-run-1", {
+        activeGuidanceIds: ["artifact-1"],
+        shadowIds: [],
+        exposedIds: [],
+      });
+      expect(runKeys(orch, "bg-run-1")).toHaveLength(1);
+    });
+
+    expect(runKeys(orch, "bg-run-1")).toEqual([]);
+    expect(internals(orch).runtimeArtifactMatches.has("bg-run-1")).toBe(false);
+  });
+
+  it("a nested scope for the same run does not release the outer run's state", async () => {
+    const tool = failingTool("file_read");
+    const orch = orchestratorWith(tool);
+
+    await inRun(orch, "route-run", async () => {
+      await inRun(orch, "route-run", () => call(orch, "file_read", "a.cs"));
+      expect(runKeys(orch, "route-run"), "released while the outer scope was still open").toHaveLength(1);
+    });
+
+    expect(runKeys(orch, "route-run")).toEqual([]);
+  });
+
+  it("a successful call does not create a breaker scope", async () => {
+    const tool = failingTool("file_read");
+    tool.execute.mockResolvedValue({ content: "ok" });
+    const orch = orchestratorWith(tool);
+
+    await call(orch, "file_read", "a.cs");
+
+    expect(internals(orch).toolConsecutiveErrors.size).toBe(0);
+  });
+
+  it("session cleanup drops stale profile-touch stamps", () => {
+    const orch = orchestratorWith(failingTool("file_read"));
+    const stamps = internals(orch).sessionManager.persistTimeMap;
+    stamps.set("touch:user-old", Date.now() - 10 * 3_600_000);
+    stamps.set("touch:user-recent", Date.now());
+
+    orch.cleanupSessions(3_600_000);
+
+    expect(stamps.has("touch:user-old")).toBe(false);
+    expect(stamps.has("touch:user-recent")).toBe(true);
+  });
+});

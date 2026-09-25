@@ -139,19 +139,37 @@ describe("ask_user clarification loop-breaker scope", () => {
   it("an expired session takes its run-scoped counters with it", async () => {
     const tool = askUserTool();
     const orch = makeOrchestrator(tool);
-
-    await inRun(orch, "run-d", () => ask(orch, "d1"));
     const counts = (orch as unknown as { askUserBlockCounts: Map<string, number> })
       .askUserBlockCounts;
-    expect(counts.size, "the block was not recorded at all").toBe(1);
 
-    const sessions = (
-      orch as unknown as { sessionManager: { sessions: Map<string, { lastActivity: Date }> } }
-    ).sessionManager.sessions;
-    sessions.set(CHAT, { lastActivity: new Date(Date.now() - 10 * 3_600_000) } as never);
-    orch.cleanupSessions(3_600_000);
+    // Swept while the run is still open: since ORC-18 a run that ENDS releases
+    // its own counters, so only a live run's key is left for expiry to sweep.
+    await inRun(orch, "run-d", async () => {
+      await ask(orch, "d1");
+      expect(counts.size, "the block was not recorded at all").toBe(1);
 
-    expect([...counts.keys()], "the run-scoped key outlived the conversation").toEqual([]);
+      const sessions = (
+        orch as unknown as { sessionManager: { sessions: Map<string, { lastActivity: Date }> } }
+      ).sessionManager.sessions;
+      sessions.set(CHAT, { lastActivity: new Date(Date.now() - 10 * 3_600_000) } as never);
+      orch.cleanupSessions(3_600_000);
+
+      expect([...counts.keys()], "the run-scoped key outlived the conversation").toEqual([]);
+    });
+  });
+
+  it("a run that ends releases its counters (ORC-18)", async () => {
+    const tool = askUserTool();
+    const orch = makeOrchestrator(tool);
+    const counts = (orch as unknown as { askUserBlockCounts: Map<string, number> })
+      .askUserBlockCounts;
+
+    await inRun(orch, "run-e", async () => {
+      await ask(orch, "e1");
+      expect(counts.size).toBe(1);
+    });
+
+    expect([...counts.keys()]).toEqual([]);
   });
 
   it("outside a run the counter is still the conversation's", async () => {
