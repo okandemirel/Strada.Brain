@@ -25,8 +25,7 @@ import type { TaskExecutionStore } from "../memory/unified/task-execution-store.
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
-import { writeFile, mkdir, rename, unlink } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
@@ -37,10 +36,14 @@ import {
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
+import { writeFileAtomic } from "../common/atomic-file.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_SESSIONS = 100;
+
+/** One startup notice per process, not one per SessionManager (one per agent and delegation). */
+let sessionPersistenceOffNoticeLogged = false;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -734,6 +737,17 @@ export class SessionManager {
   constructor(deps: SessionManagerDeps) {
     this.deps = deps;
 
+    if (!deps.memoryManager && deps.sessionsDir && !sessionPersistenceOffNoticeLogged) {
+      try {
+        getLogger().info("Session persistence is off because memory is disabled; conversations are not saved to disk", {
+          sessionsDir: deps.sessionsDir,
+        });
+        sessionPersistenceOffNoticeLogged = true;
+      } catch {
+        // No process logger yet (a manager built outside bootstrap): a later one announces it.
+      }
+    }
+
     // Clean up stale sessions on startup and every 6 hours
     this.cleanupStaleSessions();
     // A SessionManager is built per Orchestrator — per agent and per delegation — and nothing
@@ -871,15 +885,7 @@ export class SessionManager {
     }
     // ORC-16: temp file + rename, so a crash mid-write leaves the previous file
     // instead of truncated JSON (which restore silently discards).
-    const filePath = this.sessionFilePath(chatId);
-    const tmpPath = `${filePath}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(tmpPath, json, { encoding: "utf-8", mode: 0o600 });
-      await rename(tmpPath, filePath);
-    } catch (error) {
-      await unlink(tmpPath).catch(() => undefined);
-      throw error;
-    }
+    await writeFileAtomic(this.sessionFilePath(chatId), json, { mode: 0o600 });
   }
 
   /** Fire-and-forget {@link persistSessionToDisk}; a failure is logged, never thrown. */
@@ -1224,6 +1230,9 @@ export class SessionManager {
      */
     session: Session | undefined = this.sessions.get(chatId),
   ): Promise<void> {
+    // Memory disabled means no persistence at all, the session file included: a user who
+    // turned memory off must not get transcripts under <project>/.strada-memory. Deliberate,
+    // and announced once at startup (see the constructor).
     if (!this.deps.memoryManager) return;
     if (messages.length < 2) return;
 

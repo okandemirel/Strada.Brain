@@ -20,6 +20,9 @@
 import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { DEFAULT_TASK_CONFIG } from "../config/config.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   selectAgentRunner,
   type RunnerHostOrchestrator,
@@ -27,6 +30,12 @@ import {
   type AgentRunResult,
   type IOStrategy,
 } from "../agent-core/runner/index.js";
+
+// Orchestrators given a memory manager also write session files; keep them in a
+// per-run temp dir, not under /tmp/test-project/.strada-memory where they leaked
+// across runs and were restored into later ones.
+const TEST_MEMORY_DB_PATH = mkdtempSync(join(tmpdir(), "strada-orch-test-memory-"));
+afterAll(() => rmSync(TEST_MEMORY_DB_PATH, { recursive: true, force: true }));
 
 // ─── Logger mock (must match existing test pattern) ──────────────────────────
 
@@ -415,6 +424,7 @@ describe("Orchestrator Integration", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: true,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
       });
 
@@ -688,6 +698,7 @@ describe("Orchestrator Integration", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         ragPipeline: mockRag as any,
         reRetrievalConfig,
@@ -753,6 +764,7 @@ describe("Orchestrator Integration", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         ragPipeline: mockRag as any,
         reRetrievalConfig,
@@ -801,6 +813,7 @@ describe("Orchestrator Integration", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         // No reRetrievalConfig => disabled
       });

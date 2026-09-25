@@ -34,6 +34,12 @@ import type { MessageContent } from "./providers/provider.interface.js";
 import type { GoalContext } from "../tasks/types.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 
+// Orchestrators given a memory manager also write session files; keep them in a
+// per-run temp dir, not under /tmp/test-project/.strada-memory where they leaked
+// across runs and were restored into later ones.
+const TEST_MEMORY_DB_PATH = mkdtempSync(join(tmpdir(), "strada-orch-test-memory-"));
+afterAll(() => rmSync(TEST_MEMORY_DB_PATH, { recursive: true, force: true }));
+
 const mockLogRingBuffer: Array<{
   timestamp: string;
   level: string;
@@ -549,6 +555,7 @@ describe("Orchestrator", () => {
       projectPath: "/tmp/test-project",
       readOnly: false,
       requireConfirmation: false,
+      memoryDbPath: TEST_MEMORY_DB_PATH,
       memoryManager: { storeConversation } as any,
     });
 
@@ -2543,6 +2550,7 @@ describe("Orchestrator", () => {
       projectPath: "/tmp/test-project",
       readOnly: false,
       requireConfirmation: true,
+      memoryDbPath: TEST_MEMORY_DB_PATH,
       memoryManager: mockMemMgr as any,
     });
 
@@ -2729,6 +2737,7 @@ describe("Orchestrator", () => {
       readOnly: false,
       requireConfirmation: true,
       runtimeArtifactManager,
+      memoryDbPath: TEST_MEMORY_DB_PATH,
       memoryManager: {
         getCachedAnalysis: vi.fn().mockResolvedValue({
           kind: "ok",
@@ -2817,6 +2826,7 @@ describe("Orchestrator", () => {
       toolMetadataByName: {
         bridge_tool: { readOnly: true, requiresBridge: true, available: false },
       },
+      memoryDbPath: TEST_MEMORY_DB_PATH,
       memoryManager: {
         getCachedAnalysis: vi.fn().mockResolvedValue({
           kind: "ok",
@@ -2947,6 +2957,7 @@ describe("Orchestrator", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: true,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         taskExecutionStore,
         trajectoryReplayRetriever: replayRetriever,
@@ -3185,6 +3196,7 @@ describe("Orchestrator", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: true,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         taskExecutionStore,
         trajectoryReplayRetriever: replayRetriever,
@@ -7878,6 +7890,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         ragPipeline: mockRag as any,
         reRetrievalConfig,
@@ -7976,6 +7989,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         ragPipeline: mockRag as any,
         reRetrievalConfig,
@@ -8033,6 +8047,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         reRetrievalConfig,
       });
@@ -8076,6 +8091,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         instinctRetriever: mockRetriever as any,
       });
@@ -8139,6 +8155,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         embeddingProvider: mockEmbedding as any,
         reRetrievalConfig,
@@ -8197,6 +8214,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
         memoryManager: mockMemMgr as any,
         reRetrievalConfig,
       });

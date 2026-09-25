@@ -19,13 +19,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
-    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
-      if (!fsControl.failWrites) return actual.writeFile(...args);
-      // A write that dies part-way: some bytes land, then the error.
-      const [target, data, options] = args;
-      await actual.writeFile(target, String(data).slice(0, 16), options);
-      fsControl.failedWrites++;
-      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    // The session file goes through the shared atomic writer, which writes via a FileHandle.
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      if (!fsControl.failWrites) return handle;
+      const writeFile = handle.writeFile.bind(handle);
+      return Object.assign(handle, {
+        // A write that dies part-way: some bytes land, then the error.
+        writeFile: async (data: string | Uint8Array) => {
+          await writeFile(String(data).slice(0, 16));
+          fsControl.failedWrites++;
+          throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+        },
+      });
     },
   };
 });
@@ -110,5 +116,53 @@ describe("session disk persistence (ORC-16)", () => {
     new SessionManager(deps(dir)).cleanupStaleSessions();
 
     expect(existsSync(stale)).toBe(false);
+  });
+});
+
+describe("session disk persistence with memory disabled (ORC-16)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "strada-session-nomem-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A fresh module graph, so the once-per-process notice has not been logged yet. */
+  async function freshModules() {
+    vi.resetModules();
+    const logger = await import("../utils/logger.js");
+    logger.createLogger("error", "test.log");
+    const info = vi.spyOn(logger.getLogger(), "info");
+    const { SessionManager: FreshSessionManager } = await import("./orchestrator-session-manager.js");
+    return { info, FreshSessionManager };
+  }
+
+  it("writes no session file and says so once at startup", async () => {
+    const { info, FreshSessionManager } = await freshModules();
+    const noMemory = { ...deps(dir), memoryManager: undefined };
+
+    const sm = new FreshSessionManager(noMemory);
+    new FreshSessionManager(noMemory).dispose(); // a second agent's manager: no second notice
+    const session = sm.getOrCreateSession("chat-private");
+    sm.appendVisibleUserMessage(session, "keep this between us");
+    sm.appendVisibleAssistantMessage(session, "understood");
+    await sm.persistSessionToMemory("chat-private", session.messages, true);
+    await new Promise((resolve) => setTimeout(resolve, 20)); // the disk write is fire-and-forget
+
+    expect(readdirSync(dir)).toEqual([]);
+    const notices = info.mock.calls.filter(([message]) => /session persistence is off/i.test(String(message)));
+    expect(notices).toHaveLength(1);
+    expect(String(notices[0]?.[0])).toMatch(/memory is disabled/i);
+    sm.dispose();
+  });
+
+  it("with memory enabled there is no such notice", async () => {
+    const { info, FreshSessionManager } = await freshModules();
+    new FreshSessionManager(deps(dir)).dispose();
+    expect(info.mock.calls.some(([message]) => /session persistence is off/i.test(String(message)))).toBe(false);
   });
 });
