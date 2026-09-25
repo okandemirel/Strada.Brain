@@ -167,4 +167,27 @@ describe("a config that holds prefabs and was never instantiated", () => {
       "last time",
     );
   });
+
+  it("does not demand an .asset for a MonoBehaviour's prefab field (AUT-18)", () => {
+    // A MonoBehaviour is bound on the scene or prefab it sits in; only a
+    // ScriptableObject config lives in an .asset. The rule asked three times
+    // for an asset instance of a view component.
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
+    writeFileSync(
+      configPath,
+      "public class PlayerView : MonoBehaviour {\n    [SerializeField] private GameObject _muzzleFlash;\n}",
+    );
+
+    expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA PREFABS UNBOUND]");
+  });
+
+  it("still asks for a config deriving from a Strada config base", () => {
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
+    writeFileSync(
+      configPath,
+      "public sealed class PresentationPrefabsConfig : ModuleConfig {\n    [SerializeField] private GameObject _pigPrefab;\n}",
+    );
+
+    expect(promptFor(root, configPath)).toContain("[STRADA PREFABS UNBOUND]");
+  });
 });

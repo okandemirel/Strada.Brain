@@ -433,6 +433,8 @@ const NOTHING_DRAWN_GATE_LIMIT = 3;
  * recovery blocked the run (audited 2026-09-24).
  */
 const GATE_ASK_LIMIT = 3;
+/** A class declared as a ScriptableObject, a Strada ModuleConfig, or another *Config base. */
+const CONFIG_CLASS_RE = /\bclass\s+\w+(?:<[^>{]*>)?\s*:\s*(?:[\w.]+\.)?(?:ScriptableObject|\w*Config)\b/u;
 /**
  * How long a census stays good with no tool call in between: long enough to
  * cover one verifier intervention and the delivery check after it, short
@@ -1233,7 +1235,13 @@ export class StradaConformanceGuard {
         }
 
         // A commented-out field declares nothing.
-        const prefabFields = stripCsComments(source).match(
+        const code = stripCsComments(source);
+        // Only a config (a ScriptableObject) is instantiated as an .asset. A
+        // MonoBehaviour's fields are bound on the scene or prefab it sits in,
+        // so demanding an .asset for one steered runs into creating a bogus
+        // asset (audited 2026-09-25).
+        if (!CONFIG_CLASS_RE.test(code)) continue;
+        const prefabFields = code.match(
           /\[SerializeField\][^;]{0,120}\bGameObject\b[^;]{0,80};/gu,
         );
         if (!prefabFields || prefabFields.length === 0) continue;
