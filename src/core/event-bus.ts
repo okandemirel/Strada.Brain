@@ -43,6 +43,14 @@ export interface ToolResultEvent {
   readonly input: Record<string, unknown>;
   readonly output: string;
   readonly success: boolean;
+  /**
+   * Feeds error-pattern learning (`error_patterns` rows and "recurring error"
+   * instincts). Intentionally OFF in production (LRN-19): the orchestrator's
+   * emitToolResult leaves it unset (and the agent-core learning bridge is not
+   * wired), because it would be built from raw tool output — recovery text
+   * included — and learned instincts reach prompts. Enabling it is a design
+   * decision, not a wiring gap.
+   */
   readonly errorDetails?: {
     readonly code?: string;
     readonly category: string;

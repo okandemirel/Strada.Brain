@@ -632,6 +632,7 @@ The learning system observes agent behavior and learns from errors through an ev
 - Tool results flow through `TypedEventBus` to a serial `LearningQueue` for immediate processing
 - No timer-based batching -- patterns are detected and stored as they occur
 - The `LearningQueue` uses bounded FIFO with error isolation (learning failures never crash the agent)
+- Error-pattern learning is intentionally off: tool results carry no structured error details, so raw tool output never becomes a "recurring error" instinct (error→fix instincts still come from a failure followed by a repair)
 
 **Bayesian confidence scoring:**
 - Confidence = Beta posterior mean alpha / (alpha + beta); this stored value is what lifecycle, ranking and intervention tiers read

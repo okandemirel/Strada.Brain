@@ -186,9 +186,16 @@ export class LearningPipeline {
   private static readonly MAX_NOTED_IDS = 5_000;
   private static readonly STALE_RESOLUTION_THRESHOLD_MS = 10 * 60 * 1000;
 
-  private recentObservations: Array<{
+  /**
+   * Inline-detection windows, one per session (LRN-19). A single shared window
+   * let a "repeated tool sequence" or "recurring error" be stitched together
+   * from unrelated chats. Insertion order is recency order (touched entries are
+   * re-inserted), so the oldest session is evicted past MAX_INLINE_WINDOWS.
+   */
+  private readonly recentObservations = new Map<string, Array<{
     toolName: string; errorPattern?: string; timestamp: number;
-  }> = [];
+  }>>();
+  private static readonly MAX_INLINE_WINDOWS = 256;
 
   /** Tracks pending error resolutions: `${sessionId}:${toolName}` → error observation data */
   private pendingResolutions = new Map<string, {
@@ -1272,8 +1279,14 @@ export class LearningPipeline {
     //    travel the event bus (round 13 #22 — see noteAppliedInstinctCredit).
     this.noteAppliedInstinctCredit(event);
 
-    // 4. Inline pattern detection
-    this.detectPatternInline({
+    // 4. Inline pattern detection. Awaited, so any instinct it creates is stored
+    //    before the serial queue hands over the next event: fired and forgotten,
+    //    two queued events could both pass the duplicate check (LRN-19).
+    //    `errorDetails` is intentionally never set by the production tool:result
+    //    producers, so only the tool-sequence branch runs there (see
+    //    ToolResultEvent.errorDetails).
+    await this.detectPatternInline({
+      sessionId: event.sessionId,
       toolName: event.toolName,
       success: event.success,
       errorDetails: event.errorDetails as ErrorDetails | undefined,
@@ -1935,56 +1948,77 @@ export class LearningPipeline {
 
   // ─── Inline Detection ────────────────────────────────────────────────────────
 
-  private detectPatternInline(obs: {
+  private async detectPatternInline(obs: {
+    sessionId: string;
     toolName: string; success: boolean;
     errorDetails?: { message?: string };
-  }): void {
+  }): Promise<void> {
     const windowSize = this.config?.batchSize ? this.config.batchSize * 2 : 20;
 
-    this.recentObservations.push({
+    const window = this.recentObservations.get(obs.sessionId) ?? [];
+    this.recentObservations.delete(obs.sessionId);
+    this.recentObservations.set(obs.sessionId, window);
+    if (this.recentObservations.size > LearningPipeline.MAX_INLINE_WINDOWS) {
+      const oldest = this.recentObservations.keys().next().value;
+      if (oldest !== undefined) this.recentObservations.delete(oldest);
+    }
+
+    window.push({
       toolName: obs.toolName,
       errorPattern: obs.errorDetails?.message
         ? this.sanitizePattern(obs.errorDetails.message) : undefined,
       timestamp: Date.now(),
     });
 
-    if (this.recentObservations.length > windowSize) {
-      this.recentObservations.splice(0, this.recentObservations.length - windowSize);
+    if (window.length > windowSize) {
+      window.splice(0, window.length - windowSize);
     }
 
     const minObs = this.config?.minObservationsBeforeLearning ?? 5;
-    if (this.recentObservations.length < minObs) return;
+    if (window.length < minObs) return;
 
     // Same error pattern 3+ times
     if (obs.errorDetails?.message) {
       const pattern = this.sanitizePattern(obs.errorDetails.message);
-      const count = this.recentObservations.filter(o => o.errorPattern === pattern).length;
+      const count = window.filter(o => o.errorPattern === pattern).length;
       if (count >= 3) {
-        this.considerInstinctCreation({
+        await this.createInlineInstinct({
           type: "error_pattern",
           triggerPattern: pattern,
           action: JSON.stringify({ description: 'Recurring error: ' + pattern }),
           toolName: obs.toolName,
-        }).catch(() => {});
+        });
       }
     }
 
     // Same tool sequence 3+ times
-    if (this.recentObservations.length >= 9) {
+    if (window.length >= 9) {
       const seqLen = 3;
-      const recent = this.recentObservations.slice(-seqLen).map(o => o.toolName).join('->');
+      const recent = window.slice(-seqLen).map(o => o.toolName).join('->');
       let seqCount = 0;
-      for (let i = 0; i <= this.recentObservations.length - seqLen; i++) {
-        const seq = this.recentObservations.slice(i, i + seqLen).map(o => o.toolName).join('->');
+      for (let i = 0; i <= window.length - seqLen; i++) {
+        const seq = window.slice(i, i + seqLen).map(o => o.toolName).join('->');
         if (seq === recent) seqCount++;
       }
       if (seqCount >= 3) {
-        this.considerInstinctCreation({
+        await this.createInlineInstinct({
           type: "workflow_pattern",
           triggerPattern: recent,
           action: JSON.stringify({ description: 'Common workflow: ' + recent }),
-        }).catch(() => {});
+        });
       }
+    }
+  }
+
+  /** Inline detection is best-effort: a failed creation must not fail the event. */
+  private async createInlineInstinct(params: Parameters<LearningPipeline["considerInstinctCreation"]>[0]): Promise<void> {
+    try {
+      await this.considerInstinctCreation(params);
+    } catch (error) {
+      getLoggerSafe().debug("inline instinct creation failed", {
+        type: params.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
