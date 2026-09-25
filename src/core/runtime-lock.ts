@@ -10,6 +10,13 @@
  * Scope is the INSTALL ROOT (matches `strada status/kill/restart` semantics):
  * two separate installs may run side by side; one install gets one runtime.
  *
+ * Location (COR-21): the lock lives under the writable CONFIG root, keyed by a
+ * short hash of the install root, because the install root itself may be
+ * read-only (a root-owned global npm install, a read_only container) and a
+ * lock there stopped startup. Versions before this change look only at
+ * `<installRoot>/.strada/runtime.lock`, so a live lock there still blocks, and
+ * where that directory is writable the claim is mirrored there too.
+ *
  * Takeover semantics: a lock whose PID is no longer alive is stale and is
  * claimed automatically, so a SIGKILLed previous instance never wedges the
  * next start. Known limitation: PID reuse within the staleness window can
@@ -24,8 +31,8 @@
 
 import { link, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
 import type { Logger } from "winston";
 import { removeLockIfUnchanged } from "./setup-env-persistence.js";
 
@@ -47,6 +54,28 @@ export interface RuntimeLockPauses {
 
 /** Hard links are the atomic publish; these codes mean the filesystem has none. */
 const NO_HARD_LINK_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"]);
+
+/** A directory nobody may write to: the legacy mirror is skipped, never forced. */
+const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOTDIR"]);
+
+/**
+ * Where an install's `kind` lock lives: `<configRoot>/.strada/locks/`, named by
+ * a short hash of the install root so several installs can share one config
+ * root (COR-21). Windows paths are case-insensitive, so they hash lowercased.
+ */
+export function installLockPath(configRoot: string, installRoot: string, kind: "runtime" | "update"): string {
+  const root = resolve(installRoot);
+  const key = createHash("sha256")
+    .update(process.platform === "win32" ? root.toLowerCase() : root)
+    .digest("hex")
+    .slice(0, 16);
+  return join(configRoot, ".strada", "locks", `${key}.${kind}.lock`);
+}
+
+/** Where versions before COR-21 keep the runtime lock; they look nowhere else. */
+export function legacyRuntimeLockPath(installRoot: string): string {
+  return join(installRoot, ".strada", LOCK_FILE_NAME);
+}
 
 export type AcquireResult =
   | { acquired: true; release: () => Promise<void> }
@@ -126,6 +155,11 @@ async function claim(path: string, body: string, pauses?: RuntimeLockPauses): Pr
   }
 }
 
+/** The holder of `lock` when it is a LIVE process other than this one. */
+function liveForeignHolder(lock: LockPayload | null): LockPayload | null {
+  return lock && lock.pid !== process.pid && isProcessAlive(lock.pid) ? lock : null;
+}
+
 /**
  * Try to become THE runtime for this install. Returns `{ acquired: false, holder }`
  * when a live instance already holds the lock. The returned `release()` removes the
@@ -133,11 +167,12 @@ async function claim(path: string, body: string, pauses?: RuntimeLockPauses): Pr
  */
 export async function acquireRuntimeLock(opts: {
   installRoot: string;
+  /** The writable config root the lock lives under (COR-21). */
+  configRoot: string;
   channelType: string;
   logger?: Logger;
   pauses?: RuntimeLockPauses;
 }): Promise<AcquireResult> {
-  const lockPath = join(opts.installRoot, ".strada", LOCK_FILE_NAME);
   const payload: LockPayload & { token: string } = {
     pid: process.pid,
     startedAtIso: new Date().toISOString(),
@@ -147,6 +182,54 @@ export async function acquireRuntimeLock(opts: {
   };
   const body = JSON.stringify(payload);
 
+  // A runtime from before COR-21 holds only the legacy lock. Reading it needs
+  // nothing writable, so a read-only install root still gets this check.
+  const legacyPath = legacyRuntimeLockPath(opts.installRoot);
+  const legacyHolder = liveForeignHolder(await readLock(legacyPath));
+  if (legacyHolder) return { acquired: false, holder: legacyHolder };
+
+  const primary = await claimLock(installLockPath(opts.configRoot, opts.installRoot, "runtime"), body, opts);
+  if (!primary.acquired) return primary;
+
+  // Mirror the claim where older versions look, so they see this runtime too.
+  // An unwritable install root skips the mirror; it never blocks the start.
+  let mirror: AcquireResult | undefined;
+  try {
+    mirror = await claimLock(legacyPath, body, { logger: opts.logger });
+  } catch (e) {
+    if (!UNWRITABLE_CODES.has((e as NodeJS.ErrnoException).code ?? "")) {
+      await primary.release();
+      throw e;
+    }
+    opts.logger?.debug("Install root is not writable; runtime lock kept under the config root only", {
+      legacyPath,
+      code: (e as NodeJS.ErrnoException).code,
+    });
+  }
+  if (mirror && !mirror.acquired) {
+    // An older version claimed the legacy lock between our check and now.
+    await primary.release();
+    return mirror;
+  }
+
+  let released = false;
+  return {
+    acquired: true,
+    release: async () => {
+      if (released) return;
+      released = true;
+      await primary.release();
+      if (mirror?.acquired) await mirror.release();
+    },
+  };
+}
+
+/** Claim `lockPath` with stale takeover (the single-path algorithm, COR-6). */
+async function claimLock(
+  lockPath: string,
+  body: string,
+  opts: { logger?: Logger; pauses?: RuntimeLockPauses },
+): Promise<AcquireResult> {
   const existingRaw = await readLockRaw(lockPath);
   const existing = parseLock(existingRaw);
   if (existing && isProcessAlive(existing.pid) && existing.pid !== process.pid) {

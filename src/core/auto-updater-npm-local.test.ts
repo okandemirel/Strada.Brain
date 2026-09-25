@@ -104,6 +104,8 @@ function makeUpdater(opts: {
     { hasRunningTasks: () => false },
     {
       installRoot: opts.installRoot,
+      // The update lock's state root (COR-21): a temp dir, not the real ~/.strada.
+      stateRoot: makeTmpDir(),
       commandRunner,
       // Force the npm-local branch: the global root is somewhere else entirely.
       globalNpmRootResolver: () => path.join(os.tmpdir(), "definitely-not-here"),
@@ -251,6 +253,9 @@ describe("npm-local update runs in the owning package", () => {
     const updater = makeUpdater({ installRoot, calls, notices, latest: "2.0.0" });
 
     await expect(updater.performUpdate()).resolves.toBe(false);
+    // Nothing to install is not lock contention: the CLI must not say
+    // "another update is already running" (COR-21).
+    expect(updater.wasLockedOut()).toBe(false);
 
     expect(
       calls.filter((c) => c.cmd === "npm" && c.args[0] === "install"),

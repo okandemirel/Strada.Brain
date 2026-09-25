@@ -317,10 +317,16 @@ program
     if (opts.check) return;
 
     console.log("Updating...");
+    // The updater explains a skipped update (local changes, nothing newer to
+    // install) through its notices; print them instead of guessing.
+    updater.setNotifyFn((message) => console.log(`ℹ️ ${message}`));
     try {
       const updated = await updater.performUpdate();
       if (!updated) {
-        console.error("⚠️ Another Strada update is already running for this install. Try again after it finishes.");
+        // "Already running" only when a live update really holds the lock (COR-21).
+        console.error(updater.wasLockedOut()
+          ? "⚠️ Another Strada update is already running for this install. Try again after it finishes."
+          : "⚠️ The update was not applied.");
         process.exit(1);
       }
       console.log(`✅ Updated successfully at ${updater.getInstallRoot()}.`);
@@ -625,6 +631,8 @@ async function startApp(
     // (daemon trigger firing, budget entries) would double-apply.
     lock = await acquireRuntimeLock({
       installRoot: runtimePaths.installRoot,
+      // The install root may be read-only; the config root is always writable (COR-21).
+      configRoot: runtimePaths.configRoot,
       channelType,
       logger,
     });

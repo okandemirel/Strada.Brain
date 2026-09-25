@@ -7,6 +7,8 @@ import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { recordUpdateEvent } from "./update-history.js";
 import { planTreeKill } from "../utils/process-runner.js";
+import { resolveRuntimePaths } from "../common/runtime-paths.js";
+import { installLockPath } from "./runtime-lock.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
@@ -119,7 +121,12 @@ interface AutoUpdaterOptions {
   isDaemonProcess?: () => boolean;
   healthChecker?: () => Promise<void>;
   runtimeInspector?: () => Promise<RuntimeProcessInfo[]>;
+  /** Writable config root the update lock lives under (COR-21). Default: this install's config root. */
+  stateRoot?: string;
 }
+
+/** An install root nobody may write to: the legacy lock mirror is skipped, never forced. */
+const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOTDIR", "ENOENT"]);
 
 export class AutoUpdater {
   private readonly config: AutoUpdateConfig;
@@ -137,6 +144,7 @@ export class AutoUpdater {
   private readonly isDaemonProcess: () => boolean;
   private readonly healthChecker?: () => Promise<void>;
   private readonly runtimeInspector?: () => Promise<RuntimeProcessInfo[]>;
+  private stateRoot: string | undefined;
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
@@ -201,6 +209,7 @@ export class AutoUpdater {
     this.isDaemonProcess = options.isDaemonProcess ?? (() => process.env["STRADA_DAEMON"] === "1");
     this.healthChecker = options.healthChecker;
     this.runtimeInspector = options.runtimeInspector;
+    this.stateRoot = options.stateRoot;
   }
 
   static resolveInstallRoot(moduleUrl: string = import.meta.url): string {
@@ -1206,76 +1215,126 @@ export class AutoUpdater {
     return Date.now() - content.timestamp > STALE_LOCK_MAX_AGE;
   }
 
+  /**
+   * The update lock lives under the writable config root, keyed by the install
+   * root (COR-21): a root-owned or read-only install root made the lock
+   * uncreatable, and the failure was reported as "another update is running".
+   */
   private getLockPath(): string {
+    this.stateRoot ??= resolveRuntimePaths({ installRoot: this.installRoot }).configRoot;
+    return installLockPath(this.stateRoot, this.installRoot, "update");
+  }
+
+  /** Where updaters before COR-21 keep the lock; they look nowhere else. */
+  private getLegacyLockPath(): string {
     return path.join(this.installRoot, ".strada-update.lock");
   }
 
   /** Exactly what this updater wrote, so release only ever removes OUR lock. */
   private heldLockBody: string | null = null;
+  private heldLegacyLockBody: string | null = null;
+  /** The last acquireLock() found another live update holding the lock. */
+  private lockedOut = false;
 
-  private tryCreateLock(lockPath: string): boolean {
+  /** Whether the last update attempt stopped because another live update holds the lock. */
+  wasLockedOut(): boolean {
+    return this.lockedOut;
+  }
+
+  private lockOut(): false {
+    this.lockedOut = true;
+    return false;
+  }
+
+  /** A lock file a live updater still holds. Read-only: judging it writes nothing. */
+  private isLiveLock(lockPath: string): boolean {
+    try {
+      return !this.isLockStale(JSON.parse(fs.readFileSync(lockPath, "utf-8")) as LockContent);
+    } catch {
+      return false; // absent, unreadable or corrupt: nobody holds it through this file
+    }
+  }
+
+  /**
+   * Claim `lockPath` for `body` (atomic "wx" write), taking over a stale or
+   * corrupt lock once. "held" means a live updater owns it; any other failure
+   * (EACCES, EROFS, ...) throws instead of passing for contention.
+   */
+  private claimLockAt(lockPath: string, body: string): "claimed" | "held" {
+    const create = (): boolean => {
+      try {
+        fs.writeFileSync(lockPath, body, { encoding: "utf-8", flag: "wx" });
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw err;
+      }
+    };
+    if (create()) return "claimed";
+    if (this.isLiveLock(lockPath)) return "held";
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    return create() ? "claimed" : "held";
+  }
+
+  acquireLock(): boolean {
+    this.lockedOut = false;
     const body = JSON.stringify({
       pid: process.pid,
       timestamp: Date.now(),
       startTime: getProcessStartTime(),
       token: randomBytes(8).toString("hex"),
     } satisfies LockContent);
-    fs.writeFileSync(lockPath, body, { encoding: "utf-8", flag: "wx" });
+
+    // An updater from before COR-21 holds only the legacy lock.
+    const legacyPath = this.getLegacyLockPath();
+    if (this.isLiveLock(legacyPath)) return this.lockOut();
+
+    const lockPath = this.getLockPath();
+    try {
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      if (this.claimLockAt(lockPath, body) === "held") return this.lockOut();
+    } catch (err) {
+      throw new Error(`Cannot take the update lock at ${lockPath}: ${(err as Error).message}`, { cause: err });
+    }
     this.heldLockBody = body;
+
+    // Mirror the claim where older updaters look, when the install root is
+    // writable; a read-only one skips the mirror and never blocks the update.
+    try {
+      if (this.claimLockAt(legacyPath, body) === "held") {
+        this.releaseLock();
+        return this.lockOut();
+      }
+      this.heldLegacyLockBody = body;
+    } catch (err) {
+      if (!UNWRITABLE_CODES.has((err as NodeJS.ErrnoException).code ?? "")) {
+        this.releaseLock();
+        throw new Error(`Cannot take the update lock at ${legacyPath}: ${(err as Error).message}`, { cause: err });
+      }
+    }
     return true;
   }
 
-  acquireLock(): boolean {
-    const lockPath = this.getLockPath();
-
-    // Atomic write attempt first — eliminates TOCTOU race
-    try {
-      return this.tryCreateLock(lockPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-        return false;
-      }
-    }
-
-    // Lock exists — check if it's stale
-    try {
-      const content: LockContent = JSON.parse(
-        fs.readFileSync(lockPath, "utf-8"),
-      ) as LockContent;
-
-      if (this.isLockStale(content)) {
-        fs.unlinkSync(lockPath);
-      } else {
-        return false;
-      }
-    } catch {
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {
-        // Lock file unreadable and undeletable
-        return false;
-      }
-    }
-
-    // Retry after removing stale lock
-    try {
-      return this.tryCreateLock(lockPath);
-    } catch {
-      return false;
-    }
-  }
-
   releaseLock(): void {
-    const body = this.heldLockBody;
+    const held: Array<[string, string | null]> = [
+      [this.getLockPath(), this.heldLockBody],
+      [this.getLegacyLockPath(), this.heldLegacyLockBody],
+    ];
     this.heldLockBody = null;
-    if (!body) return;
-    try {
-      const lockPath = this.getLockPath();
-      // A lock that is no longer ours (broken as stale and re-taken by
-      // another updater) is theirs to release, not ours.
-      if (fs.readFileSync(lockPath, "utf-8") === body) fs.unlinkSync(lockPath);
-    } catch {
-      // Best-effort cleanup
+    this.heldLegacyLockBody = null;
+    for (const [lockPath, body] of held) {
+      if (!body) continue;
+      try {
+        // A lock that is no longer ours (broken as stale and re-taken by
+        // another updater) is theirs to release, not ours.
+        if (fs.readFileSync(lockPath, "utf-8") === body) fs.unlinkSync(lockPath);
+      } catch {
+        // Best-effort cleanup
+      }
     }
   }
 

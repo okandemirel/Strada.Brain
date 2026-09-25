@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -14,6 +14,7 @@ describe("AutoUpdater", () => {
     }
     tmpDirs.length = 0;
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   function makeTmpDir(): string {
@@ -21,6 +22,12 @@ describe("AutoUpdater", () => {
     tmpDirs.push(dir);
     return dir;
   }
+
+  // The update lock lives under the config root (COR-21), which for these
+  // non-checkout temp installs is STRADA_HOME: keep it off the real ~/.strada.
+  beforeEach(() => {
+    vi.stubEnv("STRADA_HOME", makeTmpDir());
+  });
 
   describe("detectInstallMethod", () => {
     it("should detect git when .git directory exists", async () => {
