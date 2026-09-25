@@ -678,21 +678,63 @@ describe("HeartbeatLoop", () => {
   // Circuit breaker success/failure recording
   // =========================================================================
 
-  it("on trigger fire success, circuit breaker recordSuccess() is tracked", async () => {
+  // TSK-13: this used to assert a persisted success right after submission.
+  // Submitting is not succeeding: the breaker now records the TASK's outcome
+  // when it settles, so the success is persisted on task:completed.
+  it("on trigger task completion, circuit breaker recordSuccess() is tracked", async () => {
     const trigger = makeTrigger("success-cb", { shouldFire: true });
     registry.register(trigger);
 
     loop.start();
     await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+    expect(storage.upsertCircuitState).not.toHaveBeenCalledWith("success-cb", expect.anything(), expect.anything(), expect.anything(), expect.anything());
+
+    const taskId = taskManager.submit.mock.results[0]!.value.id;
+    taskManager._setTaskStatus(taskId, "completed");
+    taskManager.emit("task:completed", taskId, "done");
 
     // Circuit state should have been persisted after success
     expect(storage.upsertCircuitState).toHaveBeenCalledWith(
       "success-cb",
-      expect.any(String),
-      expect.any(Number),
+      "CLOSED",
+      0,
       expect.anything(),
       expect.any(Number),
     );
+  });
+
+  it("opens a trigger's circuit after its tasks fail failureThreshold times in a row (TSK-13)", async () => {
+    const trigger = makeTrigger("always-fails", { shouldFire: true });
+    registry.register(trigger);
+    loop.start();
+
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+      const taskId = taskManager.submit.mock.results[i]!.value.id;
+      taskManager._setTaskStatus(taskId, "failed");
+      taskManager.emit("task:failed", taskId, "provider quota exceeded");
+    }
+
+    expect(loop.getCircuitBreaker("always-fails")!.getState()).toBe("OPEN");
+    // An open circuit stops the next fire.
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+    expect(taskManager.submit).toHaveBeenCalledTimes(3);
+  });
+
+  it("records a failure for a task that failed inside submit (queue overflow) (TSK-13)", async () => {
+    const trigger = makeTrigger("overflowing", { shouldFire: true });
+    registry.register(trigger);
+    const submit = taskManager.submit.getMockImplementation()!;
+    taskManager.submit.mockImplementation((...args: Parameters<typeof submit>) => {
+      const task = submit(...args);
+      taskManager._setTaskStatus(task.id, "failed");
+      return task;
+    });
+
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+    expect(storage.upsertCircuitState).toHaveBeenCalledWith("overflowing", "CLOSED", 1, expect.any(Number), expect.any(Number));
   });
 
   it("on trigger fire failure, circuit breaker recordFailure() is called", async () => {

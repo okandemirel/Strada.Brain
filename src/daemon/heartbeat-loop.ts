@@ -70,6 +70,14 @@ export class HeartbeatLoop {
    */
   private generation = 0;
   private readonly activeTriggerTasks = new Map<string, TaskId>();
+  /**
+   * A trigger's submitted task, until it settles (TSK-13). The circuit breaker
+   * is fed by the task's OUTCOME: it used to record success at submission, so a
+   * trigger whose task failed every time kept firing and spending forever.
+   * At most one entry per trigger (a new fire replaces the old one).
+   */
+  private readonly triggerByTask = new Map<TaskId, string>();
+  private taskOutcomeListeners: Array<[string, (taskId: TaskId) => void]> | null = null;
   private readonly circuitBreakers = new Map<string, CircuitBreaker>();
   /** Triggers that already received their durable state store. */
   private readonly triggersWithState = new WeakSet<ITrigger>();
@@ -147,6 +155,8 @@ export class HeartbeatLoop {
         this.logger.warn("Failed to deserialize circuit breaker, using fresh state", { name, error: String(err) });
       }
     }
+
+    this.subscribeTaskOutcomes();
 
     // Persist daemon running state for crash recovery
     this.storage.setDaemonState("daemon_was_running", "true");
@@ -232,6 +242,10 @@ export class HeartbeatLoop {
    */
   async shutdown(): Promise<void> {
     this.stop();
+    for (const [event, listener] of this.taskOutcomeListeners ?? []) {
+      this.taskManager.off?.(event, listener);
+    }
+    this.taskOutcomeListeners = null;
     const triggers = this.registry.getAll();
     if (triggers.length === 0) return;
     const results = await Promise.allSettled(triggers.map((t) => t.dispose?.()));
@@ -590,9 +604,17 @@ export class HeartbeatLoop {
           // Update with real task ID now that submission succeeded
           this.activeTriggerTasks.set(name, task.id);
 
-          // Record circuit breaker success
-          cb.recordSuccess();
-          this.persistCircuitState(name, cb);
+          // The circuit learns this fire's result when the task settles
+          // (TSK-13), not now: submitting is not succeeding.
+          for (const [taskId, trigger] of this.triggerByTask) {
+            if (trigger === name) this.triggerByTask.delete(taskId);
+          }
+          this.triggerByTask.set(task.id, name);
+          // A submit that could not enqueue returns a task that already failed,
+          // before this mapping existed to hear it.
+          if (this.taskManager.getStatus(task.id)?.status === TaskStatus.failed) {
+            this.recordTaskOutcome(task.id, false);
+          }
 
           // Record activity in identity manager
           this.identityManager?.recordActivity();
@@ -882,6 +904,38 @@ export class HeartbeatLoop {
       snap.lastFailureTime,
       snap.cooldownMs,
     );
+  }
+
+  /**
+   * Feed each trigger task's outcome to its trigger's circuit breaker (TSK-13).
+   * Subscribed once and kept across stop()/start(), so a task that settles
+   * while the loop is paused still counts.
+   */
+  private subscribeTaskOutcomes(): void {
+    if (this.taskOutcomeListeners) return;
+    this.taskOutcomeListeners = [
+      ["task:completed", (taskId) => this.recordTaskOutcome(taskId, true)],
+      ["task:failed", (taskId) => this.recordTaskOutcome(taskId, false)],
+      // A cancel says nothing about whether the trigger's work is viable.
+      ["task:cancelled", (taskId) => { this.triggerByTask.delete(taskId); }],
+    ];
+    for (const [event, listener] of this.taskOutcomeListeners) {
+      this.taskManager.on?.(event, listener);
+    }
+  }
+
+  private recordTaskOutcome(taskId: TaskId, succeeded: boolean): void {
+    const name = this.triggerByTask.get(taskId);
+    if (name === undefined) return;
+    this.triggerByTask.delete(taskId);
+    const cb = this.getOrCreateCircuitBreaker(name);
+    if (succeeded) {
+      cb.recordSuccess();
+    } else {
+      cb.recordFailure();
+      this.logger.warn("Trigger task failed", { trigger: name, taskId, circuitState: cb.getState() });
+    }
+    this.persistCircuitState(name, cb);
   }
 
   private getOrCreateCircuitBreaker(triggerName: string): CircuitBreaker {
