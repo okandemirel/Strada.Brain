@@ -85,6 +85,8 @@ export async function runProactiveGoalDecomposition(
     agentState: AgentState;
     /** Resolved user language for the outage notice (defaults to "en"). */
     language?: string;
+    /** The run's cancel signal: a /cancel stops the decomposer's retry ladder (TSK-16). */
+    signal?: AbortSignal;
   },
 ): Promise<AgentState> {
   if (!deps.goalDecomposer || !deps.goalDecomposer.shouldDecompose(opts.userMessage)) {
@@ -92,7 +94,7 @@ export async function runProactiveGoalDecomposition(
   }
   try {
     const goalTree = await withLivenessHeartbeat(opts.chatId, () =>
-      deps.goalDecomposer!.decomposeProactive(opts.conversationScope, opts.userMessage),
+      deps.goalDecomposer!.decomposeProactive(opts.conversationScope, opts.userMessage, { signal: opts.signal }),
     );
     deps.activeGoalTrees.set(opts.conversationScope, goalTree);
     emitGoalEvent(deps.eventEmitter, goalTree.rootId, goalTree.rootId, "pending", 0);

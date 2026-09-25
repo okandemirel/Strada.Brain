@@ -157,3 +157,31 @@ describe("runProactiveGoalDecomposition — provider-outage surfacing (FIX 2)", 
     expect(requestEnd).not.toHaveBeenCalled();
   });
 });
+
+describe("runProactiveGoalDecomposition — cancellation (TSK-16)", () => {
+  it("hands the run's cancel signal to the decomposer so /cancel stops its retry ladder", async () => {
+    const controller = new AbortController();
+    const { deps } = buildDeps({
+      decomposeProactive: async () => ({
+        rootId: "root-1",
+        nodes: new Map(),
+        sessionId: "scope-1",
+        taskDescription: "x",
+        createdAt: Date.now(),
+      }),
+    });
+
+    await runProactiveGoalDecomposition(deps, {
+      conversationScope: "scope-1",
+      userMessage: "Build a complex multi-step feature that requires decomposition into goals",
+      chatId: "chat-1",
+      session: buildSession(),
+      agentState: createInitialState("Build a complex multi-step feature"),
+      signal: controller.signal,
+    }).catch(() => undefined);
+
+    const decomposeProactive = deps.goalDecomposer!.decomposeProactive as unknown as ReturnType<typeof vi.fn>;
+    expect(decomposeProactive).toHaveBeenCalledTimes(1);
+    expect(decomposeProactive.mock.calls[0]?.[2]).toEqual({ signal: controller.signal });
+  });
+});

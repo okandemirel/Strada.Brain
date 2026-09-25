@@ -729,6 +729,7 @@ export class V2AgentRunner implements AgentRunner {
               agentState: state,
               responseText,
               chatId: request.chatId,
+              signal: runScope.signal,
             });
             // A planning turn's tool calls reached handlePlanPhase as a COUNT and
             // went no further: the branch continued, and whatever the model asked

@@ -368,6 +368,7 @@ export function createAgentCorePort(
           chatId: params.chatId,
           session: c.session,
           agentState: params.agentState,
+          signal: params.signal,
         });
       },
 

@@ -104,6 +104,7 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
     chatId: string;
     session: Session;
     agentState: AgentState;
+    signal?: AbortSignal;
   }) => Promise<AgentState>;
   readonly runReactiveGoalDecomposition: (opts: {
     conversationScope: string;

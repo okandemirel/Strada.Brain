@@ -6088,6 +6088,7 @@ export class Orchestrator {
     chatId: string;
     session: Session;
     agentState: AgentState;
+    signal?: AbortSignal;
   }): Promise<AgentState> {
     // Thread the resolved user language so a provider-outage notice surfaced from the
     // helper (all-providers-failed during decomposition) is localized, not hardcoded EN.

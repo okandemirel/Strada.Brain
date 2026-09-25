@@ -303,6 +303,8 @@ export interface GoalDecompositionParams {
   readonly agentState: AgentState;
   readonly responseText: string | undefined;
   readonly chatId: string;
+  /** The run's cancel signal; a cancelled run stops planning (TSK-16). */
+  readonly signal?: AbortSignal;
 }
 
 export interface SynthesizedFinal {
