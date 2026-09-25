@@ -544,3 +544,14 @@ describe("Git argument injection", () => {
     expect(result.content).toContain("must not start with '-'");
   });
 });
+
+describe("git path arguments accept the Windows separator (TLS-15)", () => {
+  it("a backslash in a path is a separator, not an invalid character; in a ref it is still refused", async () => {
+    const diff = await new GitDiffTool().execute({ path: "Assets\\Scripts\\Player.cs" }, ctx);
+    const log = await new GitLogTool().execute({ path: "Assets\\Scripts\\Player.cs" }, ctx);
+    const commit = await new GitCommitTool().execute({ message: "m", files: ["Assets\\Player.cs"] }, ctx);
+    for (const result of [diff, log, commit]) expect(result.content).not.toContain("invalid characters");
+    const ref = await new GitDiffTool().execute({ ref: "HEAD\\x" }, ctx);
+    expect(ref.content).toContain("invalid characters");
+  });
+});

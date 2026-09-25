@@ -15,7 +15,11 @@ const CREDENTIAL_URL_PATTERN = /(:\/\/[^:@\s]+:)[^@\s]+(@)/g;
  * Rejects values that start with `-` to prevent argument injection,
  * and rejects shell metacharacters.
  */
-function sanitizeGitArg(value: string, label: string): { valid: true; value: string } | { valid: false; error: string } {
+function sanitizeGitArg(
+  value: string,
+  label: string,
+  opts: { isPath?: boolean } = {},
+): { valid: true; value: string } | { valid: false; error: string } {
   const trimmed = value.trim();
   if (!trimmed) {
     return { valid: false, error: `${label} is required` };
@@ -23,8 +27,9 @@ function sanitizeGitArg(value: string, label: string): { valid: true; value: str
   if (trimmed.startsWith("-")) {
     return { valid: false, error: `${label} must not start with '-'` };
   }
-  // Reject shell metacharacters that could be exploited
-  if (/[;|&$`\\!\x00-\x1f\x7f]/.test(trimmed)) {
+  // Reject shell metacharacters that could be exploited. A path may hold `\`:
+  // it is the Windows separator (review TLS-15), and git runs without a shell.
+  if ((opts.isPath ? /[;|&$`!\x00-\x1f\x7f]/ : /[;|&$`\\!\x00-\x1f\x7f]/).test(trimmed)) {
     return { valid: false, error: `${label} contains invalid characters` };
   }
   return { valid: true, value: trimmed };
@@ -126,7 +131,7 @@ export class GitDiffTool implements ITool {
       args.push(ref.value);
     }
     if (input["path"]) {
-      const path = sanitizeGitArg(String(input["path"]), "path");
+      const path = sanitizeGitArg(String(input["path"]), "path", { isPath: true });
       if (!path.valid) return { content: `Error: ${path.error}`, isError: true };
       args.push("--");
       args.push(path.value);
@@ -184,7 +189,7 @@ export class GitLogTool implements ITool {
     }
 
     if (input["path"]) {
-      const path = sanitizeGitArg(String(input["path"]), "path");
+      const path = sanitizeGitArg(String(input["path"]), "path", { isPath: true });
       if (!path.valid) return { content: `Error: ${path.error}`, isError: true };
       args.push("--");
       args.push(path.value);
@@ -255,7 +260,7 @@ export class GitCommitTool implements ITool {
       // Validate each file path and use -- to prevent flag injection
       const staged: string[] = [];
       for (const f of files) {
-        const check = sanitizeGitArg(String(f), "file path");
+        const check = sanitizeGitArg(String(f), "file path", { isPath: true });
         if (!check.valid) return { content: `Error: ${check.error}`, isError: true };
         staged.push(check.value);
       }

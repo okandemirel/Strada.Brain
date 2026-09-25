@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import { readFileSync, statSync } from "node:fs";
-import { resolve, sep, normalize, isAbsolute, join, relative } from "node:path";
+import path, { resolve, sep, isAbsolute, join, relative } from "node:path";
 
 /**
  * Sensitive file patterns that should never be accessed through tools,
@@ -127,19 +127,19 @@ export function pathGuardCacheSizes(): { realRoots: number; leaseOwners: number 
 export function normalizeToolPathInput(
   projectPath: string,
   rawInput: string,
+  pathApi: path.PlatformPath = path,
 ): { ok: true; relativePath: string } | { ok: false; error: string } {
-  let cleaned = normalize(rawInput);
+  const cleaned = pathApi.normalize(rawInput);
+  if (!pathApi.isAbsolute(cleaned)) return { ok: true, relativePath: cleaned };
 
-  if (isAbsolute(cleaned)) {
-    const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
-    if (cleaned === projectPath || cleaned.startsWith(root)) {
-      cleaned = cleaned.slice(projectPath.length).replace(/^\/+/, "") || ".";
-    } else {
-      return { ok: false, error: "Absolute path is outside the project directory" };
-    }
+  // path.relative, not a "/" prefix test: on Windows the root is `C:\proj`
+  // (and may differ in case), so a hardcoded "/" refused every absolute
+  // in-project path (review SEC-17).
+  const inside = pathApi.relative(pathApi.resolve(projectPath), pathApi.resolve(cleaned));
+  if (inside === ".." || inside.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(inside)) {
+    return { ok: false, error: "Absolute path is outside the project directory" };
   }
-
-  return { ok: true, relativePath: cleaned };
+  return { ok: true, relativePath: inside || "." };
 }
 
 export interface ValidatePathOptions {

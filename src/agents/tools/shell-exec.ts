@@ -1,5 +1,5 @@
-import { isAbsolute, resolve } from "node:path";
-import { validatePath } from "../../security/path-guard.js";
+import { isAbsolute } from "node:path";
+import { normalizeToolPathInput, validatePath } from "../../security/path-guard.js";
 import { lexShell, type ShellLex, type ShellWord } from "../../security/shell-lexer.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { buildShellEnv } from "./shell-env-policy.js";
@@ -222,11 +222,9 @@ export class ShellExecTool implements ITool {
     // delivery sprint a turn.
     const sourceRoot = context.sourceProjectPath;
     if (relWd && sourceRoot && sourceRoot !== context.projectPath && isAbsolute(relWd)) {
-      const normalizedWd = resolve(relWd);
-      const normalizedSource = resolve(sourceRoot);
-      if (normalizedWd === normalizedSource || normalizedWd.startsWith(`${normalizedSource}/`)) {
-        relWd = normalizedWd.slice(normalizedSource.length).replace(/^\/+/, "") || ".";
-      }
+      // Separator-agnostic (a "/" prefix test never matched on Windows).
+      const mapped = normalizeToolPathInput(sourceRoot, relWd);
+      if (mapped.ok) relWd = mapped.relativePath;
     }
     let cwd = context.projectPath;
     if (relWd) {
