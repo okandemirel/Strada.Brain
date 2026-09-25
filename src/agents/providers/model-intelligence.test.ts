@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 vi.mock("../../utils/logger.js", () => ({
@@ -321,13 +322,17 @@ describe("ModelIntelligenceService", () => {
   });
 
   it("refresh integrates models.dev data when LiteLLM fails", async () => {
+    // models.dev's real shape: provider -> models (PRV-15).
     const modelsDevData = {
-      "exotic-model-xyz": {
-        name: "exotic-model-xyz",
-        provider: "testprovider",
-        context_length: 16384,
-        max_output: 4096,
-        vision: true,
+      testprovider: {
+        name: "Test Provider",
+        models: {
+          "exotic-model-xyz": {
+            id: "exotic-model-xyz",
+            limit: { context: 16384, output: 4096 },
+            modalities: { input: ["text", "image"] },
+          },
+        },
       },
     };
 
@@ -341,9 +346,14 @@ describe("ModelIntelligenceService", () => {
     const result = await service.refresh();
     expect(result.source).toBe("models.dev");
     expect(result.modelsUpdated).toBeGreaterThan(0);
+    expect(service.getModelInfo("exotic-model-xyz")).toMatchObject({
+      provider: "testprovider",
+      contextWindow: 16384,
+      supportsVision: true,
+    });
   });
 
-  it("LiteLLM data overrides hardcoded entries via merge", async () => {
+  it("LiteLLM data fills a model the static catalog does not declare", async () => {
     const litellmData = {
       "claude-sonnet-4-6-20250514": {
         max_tokens: 64000,
@@ -401,7 +411,9 @@ describe("ModelIntelligenceService", () => {
     expect(result).toBeDefined();
   });
 
-  it("handles models.dev returning array format", async () => {
+  it("ignores a models.dev feed that is not keyed by provider", async () => {
+    // models.dev is { [provider]: { models } }. An array or a flat list of
+    // models is not that feed, and must not enter the registry as models.
     const arrayData = [
       { name: "array-model-1", context_length: 8192, max_output: 2048 },
       { name: "array-model-2", context_length: 16384, max_output: 4096 },
@@ -412,11 +424,8 @@ describe("ModelIntelligenceService", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => arrayData });
 
     const result = await service.refresh();
-    expect(result.source).toBe("models.dev");
-
-    const info = service.getModelInfo("array-model-1");
-    expect(info).toBeDefined();
-    expect(info!.contextWindow).toBe(8192);
+    expect(result.source).toBe("hardcoded");
+    expect(service.getModelInfo("array-model-1")).toBeUndefined();
   });
 
   it("reports HTTP errors with status code", async () => {
@@ -732,5 +741,199 @@ describe("ModelIntelligenceService", () => {
     } catch {
       // ignore temp cleanup failures
     }
+  });
+});
+
+// ============================================================================
+// 4. Static catalog precedence and remote keying (PRV-15)
+// ============================================================================
+
+describe("ModelIntelligenceService — static catalog precedence and feed keying (PRV-15)", () => {
+  let service: ModelIntelligenceService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: "/tmp/strada-test-missing-provider-sources.json",
+    });
+  });
+
+  afterEach(() => {
+    service.shutdown();
+  });
+
+  /** LiteLLM answers with `litellm`, models.dev with `modelsDev` (or is offline). */
+  function feeds(litellm: unknown, modelsDev?: unknown): void {
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("litellm")) return { ok: true, json: async () => litellm };
+      if (url.includes("models.dev") && modelsDev !== undefined) return { ok: true, json: async () => modelsDev };
+      throw new Error("offline");
+    });
+  }
+
+  it("a feed row never overwrites a model the static catalog declares", async () => {
+    const declared = HARDCODED_MODELS.get("claude-sonnet-5")!;
+    feeds(
+      {
+        "claude-sonnet-5": {
+          max_input_tokens: 2_000_000,
+          max_output_tokens: 1,
+          input_cost_per_token: 0.001,
+          litellm_provider: "openai",
+          mode: "chat",
+        },
+      },
+      {
+        anthropic: {
+          models: {
+            "claude-sonnet-5": { id: "claude-sonnet-5", limit: { context: 3, output: 3 }, tool_call: false },
+          },
+        },
+      },
+    );
+
+    await service.refresh();
+
+    expect(service.getModelInfo("claude-sonnet-5")).toEqual(declared);
+    expect(service.getAllModels().find((m) => m.id === "claude-sonnet-5")).toEqual(declared);
+    expect(service.getProviderModels("claude").map((m) => m.id)).toContain("claude-sonnet-5");
+    expect(service.getProviderModels("openai").map((m) => m.id)).not.toContain("claude-sonnet-5");
+  });
+
+  it("a cache written by an older build cannot override the static catalog either", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-mi-"));
+    const dbPath = join(dir, "models.db");
+    try {
+      mockFetch.mockRejectedValue(new Error("offline"));
+      await service.initialize(dbPath, { refreshOnInitialize: false });
+      service.shutdown();
+
+      const Database = (await import("better-sqlite3")).default;
+      const db = new Database(dbPath);
+      const insert = db.prepare(
+        "INSERT OR REPLACE INTO model_info (id, provider, context_window, max_output_tokens, input_price_per_million, output_price_per_million, supports_vision, supports_thinking, supports_tool_calling, supports_streaming, last_updated) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 1, ?)",
+      );
+      insert.run("claude-sonnet-5", "anthropic", 5, 5, 0, 0, Date.now());
+      insert.run("claude-legacy-gap", "anthropic", 100_000, 4096, 1, 2, Date.now());
+      db.close();
+
+      const reloaded = new ModelIntelligenceService({
+        providerSourcesPath: "/tmp/strada-test-missing-provider-sources.json",
+      });
+      await reloaded.initialize(dbPath, { refreshOnInitialize: false });
+      expect(reloaded.getModelInfo("claude-sonnet-5")!.contextWindow).toBe(1_000_000);
+      // A gap row is kept, and read under Strada's provider key.
+      expect(reloaded.getProviderModels("claude").map((m) => m.id)).toContain("claude-legacy-gap");
+      reloaded.shutdown();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("files LiteLLM rows under Strada's provider names", async () => {
+    feeds({
+      "claude-gap-1": { max_input_tokens: 200_000, litellm_provider: "anthropic", mode: "chat" },
+      "together_ai/meta-llama/Llama-gap": { max_input_tokens: 128_000, litellm_provider: "together_ai", mode: "chat" },
+      "fireworks_ai/accounts/fireworks/models/gap": { max_input_tokens: 128_000, litellm_provider: "fireworks_ai", mode: "chat" },
+      "moonshot/kimi-gap": { max_input_tokens: 128_000, litellm_provider: "moonshot", mode: "chat" },
+      "dashscope/qwen-gap": { max_input_tokens: 128_000, litellm_provider: "dashscope", mode: "chat" },
+    });
+
+    await service.refresh();
+
+    expect(service.getProviderModels("claude").map((m) => m.id)).toContain("claude-gap-1");
+    // Any accepted spelling of a provider finds the same rows.
+    expect(service.getProviderModels("anthropic").map((m) => m.id)).toContain("claude-gap-1");
+    expect(service.getProviderModels("together").map((m) => m.id)).toEqual(["meta-llama/Llama-gap"]);
+    expect(service.getProviderModels("fireworks").map((m) => m.id)).toEqual(["accounts/fireworks/models/gap"]);
+    expect(service.getProviderModels("kimi").map((m) => m.id)).toContain("kimi-gap");
+    expect(service.getProviderModels("qwen").map((m) => m.id)).toContain("qwen-gap");
+  });
+
+  it("keeps LiteLLM's non-chat models out of a provider's list", async () => {
+    feeds({
+      "gpt-gap-chat": { max_input_tokens: 128_000, litellm_provider: "openai", mode: "chat" },
+      "text-embedding-gap": { max_input_tokens: 8191, litellm_provider: "openai", mode: "embedding" },
+      "tts-gap": { max_input_tokens: 4096, litellm_provider: "openai", mode: "audio_speech" },
+    });
+
+    await service.refresh();
+
+    const ids = service.getProviderModels("openai").map((m) => m.id);
+    expect(ids).toContain("gpt-gap-chat");
+    expect(ids).not.toContain("text-embedding-gap");
+    expect(ids).not.toContain("tts-gap");
+  });
+
+  it("gives a shared model id to its maker's row, whichever the feed lists first", async () => {
+    feeds({
+      // LiteLLM lists Vertex's row under the bare id, before Google's own.
+      "gemini-gap-pro": { max_input_tokens: 1_000_000, litellm_provider: "vertex_ai-language-models", mode: "chat" },
+      "gemini/gemini-gap-pro": { max_input_tokens: 1_048_576, litellm_provider: "gemini", mode: "chat" },
+    });
+
+    await service.refresh();
+
+    expect(service.getModelInfo("gemini-gap-pro")).toMatchObject({ provider: "gemini", contextWindow: 1_048_576 });
+    expect(service.getProviderModels("gemini").map((m) => m.id)).toContain("gemini-gap-pro");
+  });
+
+  it("skips malformed LiteLLM rows instead of casting them in", async () => {
+    feeds({
+      sample_spec: { max_tokens: "LEGACY parameter", litellm_provider: "one of https://docs.litellm.ai/docs/providers" },
+      "negative-gap": { max_input_tokens: -5, litellm_provider: "openai", mode: "chat" },
+      "good-gap": { max_input_tokens: 32_000, litellm_provider: "openai", mode: "chat" },
+    });
+
+    await service.refresh();
+
+    expect(service.getModelInfo("sample_spec")).toBeUndefined();
+    expect(service.getModelInfo("negative-gap")).toBeUndefined();
+    expect(service.getModelInfo("good-gap")?.contextWindow).toBe(32_000);
+  });
+
+  it("parses models.dev as provider -> models, never as provider-named models", async () => {
+    feeds(
+      { "seed-gap": { max_input_tokens: 32_000, litellm_provider: "openai", mode: "chat" } },
+      {
+        anthropic: {
+          id: "anthropic",
+          name: "Anthropic",
+          models: {
+            "claude-devgap-1": {
+              id: "claude-devgap-1",
+              reasoning: true,
+              tool_call: true,
+              modalities: { input: ["text", "image"], output: ["text"] },
+              cost: { input: 3, output: 15 },
+              limit: { context: 200_000, output: 64_000 },
+            },
+          },
+        },
+        moonshotai: {
+          name: "Moonshot AI",
+          models: {
+            "kimi-devgap": { id: "kimi-devgap", tool_call: true, limit: { context: 262_144, output: 16_384 } },
+          },
+        },
+      },
+    );
+
+    await service.refresh();
+
+    expect(service.getModelInfo("anthropic")).toBeUndefined();
+    expect(service.getModelInfo("moonshotai")).toBeUndefined();
+    expect(service.getModelInfo("claude-devgap-1")).toMatchObject({
+      provider: "claude",
+      contextWindow: 200_000,
+      maxOutputTokens: 64_000,
+      inputPricePerMillion: 3,
+      outputPricePerMillion: 15,
+      supportsVision: true,
+      supportsThinking: true,
+      supportsToolCalling: true,
+    });
+    expect(service.getProviderModels("kimi").map((m) => m.id)).toContain("kimi-devgap");
   });
 });

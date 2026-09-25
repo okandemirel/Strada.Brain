@@ -5,13 +5,16 @@
  * external sources (LiteLLM, models.dev), caches in SQLite, and provides
  * a hardcoded fallback registry for offline operation.
  *
- * Merge strategy: LiteLLM (primary) -> models.dev (enrichment) -> SQLite cache -> hardcoded fallback.
+ * Merge strategy: LiteLLM (primary) -> models.dev (enrichment) -> SQLite cache, with the
+ * hardcoded static catalog laid over all of it: a model it declares is always the static
+ * entry, and remote data only adds models it does not declare.
  * Refresh interval: 24h by default (configured by runtime config).
  */
 
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
+import { z } from "zod";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { getLogger } from "../../utils/logger.js";
 import {
@@ -23,6 +26,7 @@ import {
 } from "./provider-source-registry.js";
 import type { ProviderCatalogHealth, RefreshResult } from "./provider-types.js";
 import { releaseStreamReader } from "../../common/stream-reader.js";
+import { providerRecordKey } from "./provider-identity.js";
 
 // Re-export RefreshResult so existing consumers of this module are unaffected
 export type { RefreshResult } from "./provider-types.js";
@@ -482,28 +486,142 @@ async function safeTextParse(response: Response, label: string): Promise<string>
 }
 
 // ---------------------------------------------------------------------------
+// Feed provider names
+// ---------------------------------------------------------------------------
+
+/**
+ * Feed spellings of providers Strada knows under another name. LiteLLM and
+ * models.dev each name providers their own way, and a row filed under
+ * "together_ai" or "anthropic" was invisible to a lookup for "together" or
+ * "claude", so those providers looked catalog-less.
+ */
+const FEED_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  anthropic: "claude",
+  together_ai: "together",
+  togetherai: "together",
+  fireworks_ai: "fireworks",
+  "fireworks-ai": "fireworks",
+  moonshot: "kimi",
+  moonshotai: "kimi",
+  "moonshotai-cn": "kimi",
+  dashscope: "qwen",
+  alibaba: "qwen",
+  google: "gemini",
+  ollama_chat: "ollama",
+};
+
+/** A feed's provider name as the key Strada stores and looks provider rows up by. */
+function feedProviderKey(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  return providerRecordKey(FEED_PROVIDER_ALIASES[lower] ?? lower);
+}
+
+/**
+ * Whether `candidate` should take an id slot `existing` already holds.
+ *
+ * Feeds list one model id under several providers (a bare "gemini-2.5-pro" is
+ * Vertex's row in LiteLLM; "gemini/gemini-2.5-pro" is Google's), and the
+ * registry keeps one row per id. The row from the model's own maker wins;
+ * otherwise the first row seen keeps the slot.
+ */
+function preferFeedRow(existing: { provider?: string } | undefined, candidate: { provider?: string }, id: string): boolean {
+  if (!existing) return true;
+  const maker = inferProvider(id);
+  return existing.provider !== maker && candidate.provider === maker;
+}
+
+/** Finite and not negative: a feed's limit or price, or nothing. */
+const feedNumber = z.number().nonnegative().nullish();
+
+// ---------------------------------------------------------------------------
 // LiteLLM fetcher
 // ---------------------------------------------------------------------------
 
 const LITELLM_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
-interface LiteLLMEntry {
-  max_tokens?: number;
-  max_input_tokens?: number;
-  max_output_tokens?: number;
-  input_cost_per_token?: number;
-  output_cost_per_token?: number;
-  supports_vision?: boolean;
-  supports_function_calling?: boolean;
-  supports_tool_choice?: boolean;
-  mode?: string;
-  litellm_provider?: string;
+/**
+ * One LiteLLM row. Validated per row, so a malformed row (or the feed's own
+ * "sample_spec", whose values are prose) is skipped instead of cast into the
+ * registry.
+ */
+const LiteLLMEntrySchema = z.object({
+  max_tokens: feedNumber,
+  max_input_tokens: feedNumber,
+  max_output_tokens: feedNumber,
+  input_cost_per_token: feedNumber,
+  output_cost_per_token: feedNumber,
+  supports_vision: z.boolean().nullish(),
+  supports_function_calling: z.boolean().nullish(),
+  supports_tool_choice: z.boolean().nullish(),
+  mode: z.string().nullish(),
+  litellm_provider: z.string().min(1).nullish(),
+});
+
+/**
+ * LiteLLM modes a chat request can use. The feed also lists embedding, speech,
+ * image and rerank models, and those flooded the model picker for "openai".
+ */
+const LITELLM_CHAT_MODES = new Set(["chat", "responses"]);
+
+function parseLiteLLMFeed(data: unknown, now: number): Map<string, ModelInfo> {
+  const map = new Map<string, ModelInfo>();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return map;
+
+  for (const [key, raw] of Object.entries(data)) {
+    const parsed = LiteLLMEntrySchema.safeParse(raw);
+    if (!parsed.success) continue;
+    const entry = parsed.data;
+    if (!entry.max_tokens && !entry.max_input_tokens && !entry.max_output_tokens) continue;
+    if (entry.mode && !LITELLM_CHAT_MODES.has(entry.mode)) continue;
+
+    const maxOutputTokens = entry.max_output_tokens ?? entry.max_tokens ?? 0;
+    // Some catalog entries (often provider aliases) omit context-window
+    // metadata but are still valid, selectable models. Dropping them here
+    // starved the model picker (e.g. only the default OpenAI model showed up
+    // even though the catalog had 2000+ models). Keep them with a
+    // conservative fallback context window instead of discarding them.
+    const contextWindow =
+      (entry.max_input_tokens ?? entry.max_tokens)
+      ?? (maxOutputTokens > 0 ? maxOutputTokens : 8000);
+
+    // Prices in LiteLLM are per-token; convert to per-million
+    const inputPricePerMillion = (entry.input_cost_per_token ?? 0) * 1_000_000;
+    const outputPricePerMillion = (entry.output_cost_per_token ?? 0) * 1_000_000;
+
+    // Strip the route prefix: "groq/llama-3.3-70b-versatile" is Groq's
+    // "llama-3.3-70b-versatile", "openrouter/anthropic/x" is OpenRouter's "anthropic/x".
+    const slashIdx = key.indexOf("/");
+    const id = slashIdx >= 0 ? key.slice(slashIdx + 1) : key;
+    if (!id) continue;
+
+    const provider = entry.litellm_provider
+      ? feedProviderKey(entry.litellm_provider)
+      : inferProvider(id, key);
+
+    if (!preferFeedRow(map.get(id), { provider }, id)) continue;
+
+    map.set(id, {
+      id,
+      provider,
+      contextWindow,
+      maxOutputTokens,
+      inputPricePerMillion: Math.round(inputPricePerMillion * 100) / 100,
+      outputPricePerMillion: Math.round(outputPricePerMillion * 100) / 100,
+      supportsVision: entry.supports_vision ?? false,
+      supportsThinking: /claude-(opus|sonnet)|deepseek|kimi-k2|o[34]-|qwen.*thinking/i.test(id),
+      supportsToolCalling:
+        entry.supports_function_calling ?? entry.supports_tool_choice ?? false,
+      supportsStreaming: true, // Assume true for API-based models
+      lastUpdated: now,
+    });
+  }
+  return map;
 }
 
 async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
   const logger = getLogger();
-  const map = new Map<string, ModelInfo>();
+  let map = new Map<string, ModelInfo>();
 
   try {
     const response = await fetch(LITELLM_URL, {
@@ -515,51 +633,8 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
       return map;
     }
 
-    const data = await safeJsonParse<Record<string, LiteLLMEntry>>(response, "LiteLLM");
-    const now = Date.now();
-
-    for (const [key, entry] of Object.entries(data)) {
-      // Skip metadata keys (e.g. "sample_spec")
-      if (!entry || typeof entry !== "object" || (!entry.max_tokens && !entry.max_input_tokens && !entry.max_output_tokens)) continue;
-
-      const maxOutputTokens = entry.max_output_tokens ?? entry.max_tokens ?? 0;
-      // Some catalog entries (often provider aliases) omit context-window
-      // metadata but are still valid, selectable models. Dropping them here
-      // starved the model picker (e.g. only the default OpenAI model showed up
-      // even though the catalog had 2000+ models). Keep them with a
-      // conservative fallback context window instead of discarding them.
-      const contextWindow =
-        (entry.max_input_tokens ?? entry.max_tokens)
-        ?? (maxOutputTokens > 0 ? maxOutputTokens : 8000);
-
-      // Prices in LiteLLM are per-token; convert to per-million
-      const inputPricePerMillion = (entry.input_cost_per_token ?? 0) * 1_000_000;
-      const outputPricePerMillion = (entry.output_cost_per_token ?? 0) * 1_000_000;
-
-      // Strip provider prefix (e.g. "anthropic/claude-3-5-sonnet" -> "claude-3-5-sonnet")
-      const slashIdx = key.indexOf("/");
-      const id = slashIdx >= 0 ? key.slice(slashIdx + 1) : key;
-
-      const provider =
-        entry.litellm_provider?.toLowerCase() ?? inferProvider(id, key);
-
-      if (map.has(id)) continue;
-
-      map.set(id, {
-        id,
-        provider,
-        contextWindow,
-        maxOutputTokens,
-        inputPricePerMillion: Math.round(inputPricePerMillion * 100) / 100,
-        outputPricePerMillion: Math.round(outputPricePerMillion * 100) / 100,
-        supportsVision: entry.supports_vision ?? false,
-        supportsThinking: /claude-(opus|sonnet)|deepseek|kimi-k2|o[34]-|qwen.*thinking/i.test(id),
-        supportsToolCalling:
-          entry.supports_function_calling ?? entry.supports_tool_choice ?? false,
-        supportsStreaming: true, // Assume true for API-based models
-        lastUpdated: now,
-      });
-    }
+    const data = await safeJsonParse<unknown>(response, "LiteLLM");
+    map = parseLiteLLMFeed(data, Date.now());
 
     logger.info("LiteLLM fetch complete", { modelCount: map.size });
   } catch (error) {
@@ -577,20 +652,65 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
-interface ModelsDevEntry {
-  name?: string;
-  provider?: string;
-  context_length?: number;
-  max_output?: number;
-  input_price?: number;
-  output_price?: number;
-  vision?: boolean;
-  tool_use?: boolean;
+/**
+ * models.dev is keyed by provider, and each provider holds its models:
+ * `{ [providerId]: { name, models: { [modelId]: { limit, cost, tool_call, … } } } }`.
+ * Reading the top level as models turned every provider into a bogus model
+ * with no limits and enriched nothing.
+ */
+const ModelsDevProviderSchema = z.object({
+  models: z.record(z.string(), z.unknown()),
+});
+
+const ModelsDevModelSchema = z.object({
+  id: z.string().min(1).nullish(),
+  reasoning: z.boolean().nullish(),
+  tool_call: z.boolean().nullish(),
+  attachment: z.boolean().nullish(),
+  modalities: z.object({ input: z.array(z.string()).nullish() }).nullish(),
+  // Already per million tokens, unlike LiteLLM's per-token prices.
+  cost: z.object({ input: feedNumber, output: feedNumber }).nullish(),
+  limit: z.object({ context: feedNumber, output: feedNumber }).nullish(),
+});
+
+function parseModelsDevFeed(data: unknown, now: number): Map<string, Partial<ModelInfo>> {
+  const map = new Map<string, Partial<ModelInfo>>();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return map;
+
+  for (const [providerId, rawProvider] of Object.entries(data)) {
+    const providerEntry = ModelsDevProviderSchema.safeParse(rawProvider);
+    if (!providerEntry.success) continue;
+    const provider = feedProviderKey(providerId);
+
+    for (const [modelKey, rawModel] of Object.entries(providerEntry.data.models)) {
+      const parsed = ModelsDevModelSchema.safeParse(rawModel);
+      if (!parsed.success) continue;
+      const model = parsed.data;
+      const id = model.id ?? modelKey;
+      if (!id) continue;
+      if (!preferFeedRow(map.get(id), { provider }, id)) continue;
+
+      const inputs = model.modalities?.input;
+      map.set(id, {
+        id,
+        provider,
+        lastUpdated: now,
+        ...(model.limit?.context ? { contextWindow: model.limit.context } : {}),
+        ...(model.limit?.output ? { maxOutputTokens: model.limit.output } : {}),
+        ...(model.cost?.input != null ? { inputPricePerMillion: model.cost.input } : {}),
+        ...(model.cost?.output != null ? { outputPricePerMillion: model.cost.output } : {}),
+        ...(inputs ? { supportsVision: inputs.includes("image") } : {}),
+        ...(model.tool_call != null ? { supportsToolCalling: model.tool_call } : {}),
+        ...(model.reasoning != null ? { supportsThinking: model.reasoning } : {}),
+      });
+    }
+  }
+  return map;
 }
 
 async function fetchModelsDev(): Promise<Map<string, Partial<ModelInfo>>> {
   const logger = getLogger();
-  const map = new Map<string, Partial<ModelInfo>>();
+  let map = new Map<string, Partial<ModelInfo>>();
 
   try {
     const response = await fetch(MODELS_DEV_URL, {
@@ -602,31 +722,8 @@ async function fetchModelsDev(): Promise<Map<string, Partial<ModelInfo>>> {
       return map;
     }
 
-    const data = await safeJsonParse<Record<string, ModelsDevEntry> | ModelsDevEntry[]>(response, "models.dev");
-    const now = Date.now();
-
-    const entries: Array<[string, ModelsDevEntry]> = Array.isArray(data)
-      ? data.map((e, i) => [e.name ?? String(i), e])
-      : Object.entries(data);
-
-    for (const [key, entry] of entries) {
-      if (!entry || typeof entry !== "object") continue;
-
-      const id = entry.name ?? key;
-      const partial: Partial<ModelInfo> = {
-        id,
-        lastUpdated: now,
-        ...(entry.provider ? { provider: entry.provider.toLowerCase() } : {}),
-        ...(entry.context_length ? { contextWindow: entry.context_length } : {}),
-        ...(entry.max_output ? { maxOutputTokens: entry.max_output } : {}),
-        ...(entry.input_price != null ? { inputPricePerMillion: entry.input_price } : {}),
-        ...(entry.output_price != null ? { outputPricePerMillion: entry.output_price } : {}),
-        ...(entry.vision != null ? { supportsVision: entry.vision } : {}),
-        ...(entry.tool_use != null ? { supportsToolCalling: entry.tool_use } : {}),
-      };
-
-      map.set(id, partial);
-    }
+    const data = await safeJsonParse<unknown>(response, "models.dev");
+    map = parseModelsDevFeed(data, Date.now());
 
     logger.info("models.dev fetch complete", { modelCount: map.size });
   } catch (error) {
@@ -639,7 +736,7 @@ async function fetchModelsDev(): Promise<Map<string, Partial<ModelInfo>>> {
 }
 
 // ---------------------------------------------------------------------------
-// Merge helper
+// Merge helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -659,22 +756,37 @@ function mergeEnrichment(
         supportsVision: existing.supportsVision || (partial.supportsVision ?? false),
         supportsToolCalling: existing.supportsToolCalling || (partial.supportsToolCalling ?? false),
       });
-    } else {
-      // New model from enrichment — fill in defaults for missing fields
+    } else if (partial.contextWindow) {
+      // New model from enrichment — only with a real context window: a row
+      // without one would enter the registry claiming a window of 0.
       primary.set(id, {
         id: partial.id ?? id,
         provider: partial.provider ?? inferProvider(id),
-        contextWindow: partial.contextWindow ?? 0,
+        contextWindow: partial.contextWindow,
         maxOutputTokens: partial.maxOutputTokens ?? 0,
         inputPricePerMillion: partial.inputPricePerMillion ?? 0,
         outputPricePerMillion: partial.outputPricePerMillion ?? 0,
         supportsVision: partial.supportsVision ?? false,
-        supportsThinking: false,
+        supportsThinking: partial.supportsThinking ?? false,
         supportsToolCalling: partial.supportsToolCalling ?? false,
         supportsStreaming: true,
         lastUpdated: partial.lastUpdated ?? Date.now(),
       });
     }
+  }
+}
+
+/**
+ * Lay the static catalog over remote data. The static catalog is the single
+ * source of truth for the models it declares — their identity and declared
+ * limits — and remote feeds only fill in models it does not know. A feed row
+ * for a declared id is replaced, never merged: a feed's context window or
+ * provider for a model Strada has pinned must not change what Strada plans
+ * against.
+ */
+function overlayStaticCatalog(models: Map<string, ModelInfo>): void {
+  for (const [id, model] of HARDCODED_MODELS) {
+    models.set(id, model);
   }
 }
 
@@ -753,6 +865,7 @@ export class ModelIntelligenceService {
 
   private stmtUpsert!: Database.Statement;
   private stmtGetAll!: Database.Statement;
+  private stmtClearModels!: Database.Statement;
   private stmtUpsertProviderSnapshot!: Database.Statement;
   private stmtGetProviderSnapshots!: Database.Statement;
   private stmtClearProviderSnapshots!: Database.Statement;
@@ -865,14 +978,8 @@ export class ModelIntelligenceService {
     // 3. Merge enrichment into primary
     if (fetched.size > 0) {
       mergeEnrichment(fetched, enrichment);
+      overlayStaticCatalog(fetched);
       this.models = fetched;
-
-      // Ensure hardcoded entries are always present (future/custom models not in LiteLLM)
-      for (const [id, model] of HARDCODED_MODELS) {
-        if (!this.models.has(id)) {
-          this.models.set(id, model);
-        }
-      }
 
       this.saveToDb();
       this.setLastRefresh(Date.now());
@@ -894,12 +1001,7 @@ export class ModelIntelligenceService {
           this.models.set(id, model);
         }
       }
-
-      for (const [id, model] of HARDCODED_MODELS) {
-        if (!this.models.has(id)) {
-          this.models.set(id, model);
-        }
-      }
+      overlayStaticCatalog(this.models);
 
       this.saveToDb();
       this.setLastRefresh(Date.now());
@@ -936,14 +1038,15 @@ export class ModelIntelligenceService {
    * first, then the prefix-stripped tail, against both the live and hardcoded maps.
    */
   getModelInfo(modelId: string): ModelInfo | undefined {
-    const exact = this.models.get(modelId) ?? HARDCODED_MODELS.get(modelId);
+    // Static catalog first: it is the source of truth for the models it declares.
+    const exact = HARDCODED_MODELS.get(modelId) ?? this.models.get(modelId);
     if (exact) return exact;
 
     const slashIdx = modelId.lastIndexOf("/");
     if (slashIdx >= 0) {
       const stripped = modelId.slice(slashIdx + 1);
       if (stripped && stripped !== modelId) {
-        return this.models.get(stripped) ?? HARDCODED_MODELS.get(stripped);
+        return HARDCODED_MODELS.get(stripped) ?? this.models.get(stripped);
       }
     }
     return undefined;
@@ -951,10 +1054,12 @@ export class ModelIntelligenceService {
 
   /** Return all models for a given provider name. */
   getProviderModels(provider: string): ModelInfo[] {
-    const lowerProvider = provider.toLowerCase();
+    // Rows are stored under Strada's provider key (see feedProviderKey), so a
+    // lookup by any accepted spelling ("anthropic", "Kimi (Moonshot)") folds too.
+    const key = providerRecordKey(provider);
     const results: ModelInfo[] = [];
     for (const model of this.models.values()) {
-      if (model.provider.toLowerCase() === lowerProvider) {
+      if (model.provider === key) {
         results.push(model);
       }
     }
@@ -1065,6 +1170,8 @@ export class ModelIntelligenceService {
 
     this.stmtGetAll = this.db!.prepare("SELECT * FROM model_info");
 
+    this.stmtClearModels = this.db!.prepare("DELETE FROM model_info");
+
     this.stmtUpsertProviderSnapshot = this.db!.prepare(`
       INSERT OR REPLACE INTO provider_official_snapshot
         (provider, last_updated, source_urls_json, signals_json, feature_tags_json)
@@ -1094,8 +1201,12 @@ export class ModelIntelligenceService {
     try {
       const rows = this.stmtGetAll.all() as ModelRow[];
       for (const row of rows) {
-        this.models.set(row.id, rowToModelInfo(row));
+        // A cache written before feed names were mapped holds rows under
+        // "anthropic", "together_ai", …; read them under Strada's key.
+        const model = rowToModelInfo(row);
+        this.models.set(row.id, { ...model, provider: feedProviderKey(model.provider) });
       }
+      if (this.models.size > 0) overlayStaticCatalog(this.models);
     } catch {
       // DB might be empty on first run
     }
@@ -1128,6 +1239,10 @@ export class ModelIntelligenceService {
 
     try {
       const upsertMany = this.db.transaction((models: ModelInfo[]) => {
+        // The in-memory map is the whole registry, so the table is replaced
+        // rather than upserted: rows a refresh no longer produces (non-chat
+        // models, rows under a feed's own provider name) must not reload.
+        this.stmtClearModels.run();
         for (const m of models) {
           this.stmtUpsert.run(
             m.id,
