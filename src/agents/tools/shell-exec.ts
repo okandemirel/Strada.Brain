@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { lexShell, type ShellLex, type ShellWord } from "../../security/shell-lexer.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { buildShellEnv } from "./shell-env-policy.js";
 import { sensitiveCommandPaths } from "./shell-sensitive-paths.js";
@@ -19,12 +20,6 @@ const BLOCKED_COMMANDS = [
   "dd if=",
   ":(){",
   "fork bomb",
-  "shutdown",
-  "reboot",
-  "halt",
-  "poweroff",
-  "init 0",
-  "init 6",
   "chmod -R 777 /",
   "chown -R",
   "wget|sh",
@@ -400,6 +395,41 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
     }
   }
 
+  const power = powerStateCommand(command);
+  if (power) {
+    return { safe: false, reason: `blocked command pattern: ${power}` };
+  }
+
   return { safe: true };
+}
+
+const POWER_VERBS = new Set(["shutdown", "reboot", "halt", "poweroff"]);
+const POWER_SUBCOMMANDS = new Set(["poweroff", "reboot", "halt", "kexec"]);
+/** Words that put the NEXT word in command position (wrappers and shell keywords). */
+const COMMAND_PREFIXES = new Set([
+  "sudo", "doas", "nohup", "exec", "command", "builtin", "eval", "env", "nice", "ionice", "timeout", "time",
+  "xargs", "watch", "setsid", "stdbuf", "busybox", "if", "then", "else", "elif", "do", "while", "until", "!",
+]);
+
+/**
+ * A power-state command (shutdown, reboot, halt, poweroff, init 0/6,
+ * systemctl poweroff…) in COMMAND position, read with the shared lexer. These
+ * were substring matches over the whole line, so `grep -rn OnShutdown Assets`
+ * and `grep Asphalt` were refused as dangerous (review TLS-18).
+ */
+function powerStateCommand(command: string): string | undefined {
+  const simple = (read: ShellLex): (readonly ShellWord[])[] => [...read.commands, ...read.nested.flatMap(simple)];
+  for (const words of simple(lexShell(command))) {
+    const names = words.map((w) => (w.value.split(/[/\\]/).pop() ?? "").toLowerCase().replace(/\.exe$/, ""));
+    // Assignments, wrapper options and wrapper arguments (`timeout 5`, `nice -n 10`) before the verb.
+    let at = 0;
+    while (at < names.length && (COMMAND_PREFIXES.has(names[at] ?? "") || /^(?:[a-z_]\w*=|-)|^\d+(?:\.\d+)?[smhd]?$/.test(names[at] ?? ""))) at += 1;
+    const verb = names[at] ?? "";
+    const arg = names.slice(at + 1).find((name) => !name.startsWith("-")) ?? "";
+    if (POWER_VERBS.has(verb)) return verb;
+    if ((verb === "init" || verb === "telinit") && (arg === "0" || arg === "6")) return `${verb} ${arg}`;
+    if ((verb === "systemctl" || verb === "loginctl") && POWER_SUBCOMMANDS.has(arg)) return `${verb} ${arg}`;
+  }
+  return undefined;
 }
 
