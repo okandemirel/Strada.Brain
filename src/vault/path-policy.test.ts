@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createTempDirTracker } from '../test-helpers.js';
@@ -9,6 +9,7 @@ import {
   isLikelyBinaryFile,
   isVaultRootAllowed,
   MAX_INDEXABLE_FILE_BYTES,
+  prepareSafeVaultWritePath,
   resolveExistingVaultRoot,
   resolveSafeVaultReadPath,
   validateSafeVaultWriteRelPath,
@@ -95,6 +96,24 @@ describe('path-policy', () => {
 
     it('throws when content exceeds MAX_INDEXABLE_FILE_BYTES', () => {
       expect(() => validateSafeVaultWriteRelPath('notes/a.md', MAX_INDEXABLE_FILE_BYTES + 1)).toThrow(/not allowed/);
+    });
+  });
+
+  describe('prepareSafeVaultWritePath', () => {
+    it('creates missing directories inside the vault', async () => {
+      const root = makeTempDir('strada-path-policy-');
+      const abs = await prepareSafeVaultWritePath(root, 'notes/deep/x.md', 10);
+      expect(abs).toBe(join(root, 'notes', 'deep', 'x.md'));
+      expect(existsSync(join(root, 'notes', 'deep'))).toBe(true);
+    });
+
+    it('rejects a symlinked ancestor without creating anything outside the vault (MEM-23)', async () => {
+      const root = makeTempDir('strada-path-policy-');
+      const outside = makeTempDir('strada-path-policy-outside-');
+      symlinkSync(outside, join(root, 'link'), 'dir');
+
+      await expect(prepareSafeVaultWritePath(root, 'link/new/deep/x.md', 10)).rejects.toThrow(/symlink|escapes/);
+      expect(existsSync(join(outside, 'new'))).toBe(false);
     });
   });
 

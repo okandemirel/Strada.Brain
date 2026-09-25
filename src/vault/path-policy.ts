@@ -260,6 +260,12 @@ export async function prepareSafeVaultWritePath(
 ): Promise<string> {
   const normalized = validateSafeVaultWriteRelPath(relPath, contentBytes);
   const absPath = resolveInsideVault(rootPath, normalized);
+  // Check the existing ancestors BEFORE mkdir: a recursive mkdir through a
+  // symlinked directory creates directories outside the vault, and the
+  // realpath check below only rejected the write after that (MEM-23).
+  if (await hasSymlinkAncestor(rootPath, absPath)) {
+    throw new Error(`vault path uses a symlink: ${relPath}`);
+  }
   await mkdir(dirname(absPath), { recursive: true });
   await assertRealpathInside(rootPath, dirname(absPath));
   try {
