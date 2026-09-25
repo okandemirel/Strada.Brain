@@ -1317,6 +1317,9 @@ async function decideBackgroundLoopRecovery(
   };
 }
 
+/** Visibility reviews that returned no usable verdict (error or unreadable output), process-wide. */
+let visibilityReviewUnavailable = 0;
+
 /**
  * Runs the full verifier pipeline: plans checks, evaluates the interaction
  * boundary, optionally calls the completion-review provider, and returns
@@ -1477,7 +1480,18 @@ export async function resolveVerifierIntervention(
         usageHandler: params.usageHandler,
       });
 
-      if (visibilityReview.decision?.decision !== "internal_continue") {
+      if (visibilityReview.decision?.decision === undefined) {
+        // No usable verdict: the deterministic boundary (final_answer) stands,
+        // but not silently (AUT-19).
+        visibilityReviewUnavailable += 1;
+        getLogger().warn("Visibility review gave no usable decision; keeping the deterministic boundary result", {
+          chatId: params.chatId,
+          provider: params.strategy.reviewer.providerName,
+          unavailableCount: visibilityReviewUnavailable,
+        });
+        return null;
+      }
+      if (visibilityReview.decision.decision !== "internal_continue") {
         return null;
       }
 
@@ -1501,10 +1515,12 @@ export async function resolveVerifierIntervention(
         },
       };
     } catch (error) {
+      visibilityReviewUnavailable += 1;
       getLogger().warn("Visibility review provider failed", {
         chatId: params.chatId,
         provider: params.strategy.reviewer.providerName,
         error: error instanceof Error ? error.message : String(error),
+        unavailableCount: visibilityReviewUnavailable,
       });
       return null;
     }

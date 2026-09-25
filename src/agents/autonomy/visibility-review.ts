@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { CompletionReviewEvidence } from "./completion-review.js";
 
@@ -82,6 +83,26 @@ export function buildVisibilityReviewRequest(
   ].join("\n");
 }
 
+const DecisionKindSchema = z.enum(["allow", "internal_continue"]);
+const DecisionObjectSchema = z.object({
+  decision: z.unknown().optional(),
+  reason: z.unknown().optional(),
+  recommendedNextAction: z.unknown().optional(),
+});
+
+/**
+ * The reviewer's verdict, or undefined when it named none of the two.
+ *
+ * The raw value used to pass straight through, and the caller only continues
+ * on the exact string "internal_continue" — so "INTERNAL_CONTINUE" or
+ * "internal-continue" surfaced an internal memo as the final result.
+ */
+function decisionKind(value: unknown): VisibilityReviewDecisionKind | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = DecisionKindSchema.safeParse(value.trim().toLowerCase().replace(/[\s-]+/g, "_"));
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function parseVisibilityReviewDecision(
   text: string,
 ): VisibilityReviewDecision | null {
@@ -98,14 +119,28 @@ export function parseVisibilityReviewDecision(
 
   for (const candidate of candidates) {
     if (!candidate) continue;
+    let parsed: unknown;
     try {
-      return JSON.parse(candidate) as VisibilityReviewDecision;
+      parsed = JSON.parse(candidate);
     } catch {
-      // Try next candidate.
+      continue; // Try next candidate.
+    }
+    // A bare JSON string is a verdict with no reason; anything else must be the object shape.
+    if (typeof parsed === "string") return { decision: decisionKind(parsed) };
+    const shaped = DecisionObjectSchema.safeParse(parsed);
+    if (shaped.success) {
+      const { decision, reason, recommendedNextAction } = shaped.data;
+      return {
+        decision: decisionKind(decision),
+        reason: typeof reason === "string" ? reason : undefined,
+        recommendedNextAction: typeof recommendedNextAction === "string" ? recommendedNextAction : undefined,
+      };
     }
   }
 
-  return null;
+  // No JSON at all: a reply that plainly leads with one verdict still says it.
+  const lead = /^\W*(internal[\s_-]continue|allow)\b/i.exec(trimmed)?.[1];
+  return lead === undefined ? null : { decision: decisionKind(lead) };
 }
 
 export function sanitizeVisibilityReviewDecision(
@@ -116,7 +151,7 @@ export function sanitizeVisibilityReviewDecision(
   }
 
   return {
-    decision: decision.decision,
+    decision: decisionKind(decision.decision),
     reason: typeof decision.reason === "string" ? decision.reason.trim().slice(0, 220) : undefined,
     recommendedNextAction:
       typeof decision.recommendedNextAction === "string"
