@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatherStatusReport, readProviderBenches, renderStatusReport, snapshotOf } from "./status-report.js";
 import { recordUpdateEvent, readUpdateHistory, HISTORY_LIMIT, describeUpdateEvent } from "./update-history.js";
+import Database from "better-sqlite3";
 import { CampaignStorage } from "../campaign/campaign-storage.js";
 import type { Campaign } from "../campaign/types.js";
 
@@ -92,6 +93,32 @@ describe("strada status read-out", () => {
     expect(lines).toContain("Campaign cmp_failed: failed, auto-revive in 15 min — NOT DELIVERED — proofs missing");
     // an active campaign exists, so the terminal one is not repeated as "last"
     expect(lines.some((l) => l.startsWith("Last campaign"))).toBe(false);
+  });
+
+  // COR-22: status ran the schema DDL and migrations against the live database.
+  it("reads the campaign database without migrating it", async () => {
+    const d = dir();
+    const dbPath = join(d, "campaigns.db");
+    const storage = new CampaignStorage(dbPath);
+    storage.save(campaign({ id: "cmp_active" }));
+    storage.close();
+    // An older daemon's database: one migration not applied yet.
+    const older = new Database(dbPath);
+    older.exec("ALTER TABLE campaigns DROP COLUMN verified_sessions");
+    older.close();
+
+    const report = await gatherStatusReport({
+      memoryDbPath: d, installRoot: d, now: NOW,
+      healthUrl: "http://127.0.0.1:1/health",
+      fetchImpl: (async () => ({ ok: true, status: 200, json: async () => ({ status: "ok", uptime: 1 }) })) as unknown as typeof fetch,
+    });
+
+    expect(report.campaigns.readable).toBe(true);
+    expect(report.campaigns.active.map((c) => c.id)).toEqual(["cmp_active"]);
+    const check = new Database(dbPath, { readonly: true });
+    const columns = (check.prepare("PRAGMA table_info(campaigns)").all() as Array<{ name: string }>).map((c) => c.name);
+    check.close();
+    expect(columns).not.toContain("verified_sessions");
   });
 
   it("falls back to the last terminal campaign when nothing is active", () => {

@@ -131,7 +131,8 @@ function readCampaigns(path: string, load: NonNullable<GatherOptions["loadCampai
 }
 
 function loadCampaignsFromDb(dbPath: string): { active: CampaignSnapshot[]; awaitingRevive: CampaignSnapshot[]; lastTerminal?: CampaignSnapshot } {
-  const storage = new CampaignStorage(dbPath);
+  // Read-only: status must not migrate or lock a live daemon's database (COR-22).
+  const storage = new CampaignStorage(dbPath, { readOnly: true });
   try {
     const active = storage.listActive().map(snapshotOf);
     const awaitingRevive = storage.listAwaitingAutoRevive().map(snapshotOf);

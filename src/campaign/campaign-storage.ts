@@ -242,10 +242,25 @@ function parsePlanCoverage(raw: string): Campaign["planCoverage"] | undefined {
   }
 }
 
+export interface CampaignStorageOptions {
+  /**
+   * Open an existing database for reading only — no directory, no WAL/pragma
+   * writes, no schema or migrations. `strada status` reads a running daemon's
+   * database; it must neither take write locks on it nor migrate it from a
+   * newer checkout (COR-22).
+   */
+  readOnly?: boolean;
+}
+
 export class CampaignStorage {
   private readonly db: Database.Database;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: CampaignStorageOptions = {}) {
+    if (options.readOnly) {
+      this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      this.db.pragma("busy_timeout = 5000");
+      return;
+    }
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     configureSqlitePragmas(this.db, "tasks");
