@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ThreadChannel } from "discord.js";
+import { Events, ThreadChannel } from "discord.js";
 import { DiscordChannel } from "./bot.js";
 import { AuthManager } from "../../security/auth.js";
 
@@ -678,6 +678,59 @@ describe("DiscordChannel with auth checks", () => {
       userId: "unlisted-user",
       text: "Role gated question",
     });
+  });
+});
+
+// LRN-10: a thumbs reaction moves the confidence of the rules applied in the
+// channel, so it may only come from someone the channel accepts messages from.
+describe("DiscordChannel reaction feedback respects the allowlist (LRN-10)", () => {
+  type ReactionHandler = (reaction: unknown, user: unknown) => Promise<void>;
+
+  function setup() {
+    const auth = new AuthManager([], {
+      allowedDiscordIds: new Set(["listed-user"]),
+      allowedDiscordRoles: new Set(["trusted-role"]),
+    });
+    const channel = new DiscordChannel("fake-token", auth, { guildId: "guild123" });
+    const feedback = vi.fn();
+    channel.setFeedbackHandler(feedback);
+    channel.setAppliedInstinctIds("channel-1", ["instinct-a"]);
+    const on = (channel.getClient() as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = on.mock.calls.find(([event]) => event === Events.MessageReactionAdd)?.[1] as ReactionHandler;
+    const members = new Map<string, { roles: string[] }>();
+    const guild = {
+      members: {
+        cache: members,
+        fetch: vi.fn(async (id: string) => {
+          const member = members.get(id);
+          if (!member) throw new Error("Unknown Member");
+          return member;
+        }),
+      },
+    };
+    const react = (userId: string) =>
+      handler(
+        { partial: false, emoji: { name: "\uD83D\uDC4E" }, message: { channelId: "channel-1", guild } },
+        { id: userId, bot: false },
+      );
+    return { feedback, members, react };
+  }
+
+  it("ignores a reaction from a member the channel does not accept", async () => {
+    const { feedback, members, react } = setup();
+    members.set("stranger", { roles: ["everyone"] });
+    await react("stranger");
+    await react("not-a-member");
+    expect(feedback).not.toHaveBeenCalled();
+  });
+
+  it("counts a reaction from an allowlisted user or an allowlisted role", async () => {
+    const { feedback, members, react } = setup();
+    members.set("role-holder", { roles: ["trusted-role"] });
+    await react("listed-user");
+    await react("role-holder");
+    expect(feedback.mock.calls.map((call) => call[2])).toEqual(["listed-user", "role-holder"]);
+    expect(feedback).toHaveBeenCalledWith("thumbs_down", ["instinct-a"], "listed-user", "reaction");
   });
 });
 

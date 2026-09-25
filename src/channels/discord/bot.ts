@@ -14,6 +14,7 @@ import {
   type Interaction,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type Guild,
 } from "discord.js";
 import type {
   IChannelAdapter,
@@ -934,6 +935,10 @@ export class DiscordChannel implements IChannelAdapter {
         const instinctIds = this.appliedInstinctIds.get(channelId);
         if (!instinctIds || instinctIds.length === 0) return;
 
+        // A reaction moves learned confidence, so it counts only from someone
+        // this channel accepts messages from (LRN-10).
+        if (!(await this.isReactingUserAllowed(reaction.message.guild, user.id))) return;
+
         this.feedbackReactionCallback(feedbackType, instinctIds, user.id, "reaction");
       } catch (error) {
         logger.debug("Error handling reaction feedback", {
@@ -1214,6 +1219,23 @@ export class DiscordChannel implements IChannelAdapter {
           ephemeral: true,
         });
     }
+  }
+
+  /**
+   * The message allowlist, for a reaction. The event carries a user, not a
+   * member, so a role-based allowlist needs the member looked up.
+   */
+  private async isReactingUserAllowed(guild: Guild | null, userId: string): Promise<boolean> {
+    if (this.auth.isDiscordIdAllowed(userId)) return true;
+    let member: unknown = guild?.members.cache.get(userId) ?? null;
+    if (member === null && guild) {
+      try {
+        member = await guild.members.fetch(userId);
+      } catch {
+        member = null; // Unknown member: no roles to grant access.
+      }
+    }
+    return this.auth.isDiscordUserAllowed(userId, this.extractRoleIds({ member }));
   }
 
   private extractRoleIds(source: { member?: unknown }): string[] {
