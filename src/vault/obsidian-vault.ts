@@ -336,6 +336,7 @@ export class ObsidianVault implements IVault {
 
   async dispose(): Promise<void> {
     this.store.close();
+    await this.client.close();
   }
 
   /** Write a note to Obsidian via REST API. */
