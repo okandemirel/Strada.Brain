@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "Acciones",
   "skills.installed.enable": "Habilitar",
   "skills.installed.disable": "Deshabilitar",
+  "skills.installed.pendingEnable": "Se habilitará en el próximo reinicio",
+  "skills.installed.pendingDisable": "Se deshabilitará en el próximo reinicio",
   "skills.installed.failedTitle": "Error al Cargar Habilidades",
   "skills.installed.noSkillsTitle": "Sin Habilidades Cargadas",
   "skills.installed.noSkillsDescription": "No hay habilidades registradas actualmente. Consulta la pestana Marketplace para descubrir e instalar habilidades.",

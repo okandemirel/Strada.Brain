@@ -78,6 +78,8 @@
   "gate.description": "Aufgabe \"{{title}}\" steckt nach maximalen Review-Iterationen fest. Was möchtest du tun?",
   "gate.approve": "Trotzdem genehmigen",
   "gate.skip": "Aufgabe überspringen",
+  "gate.sending": "Wird gesendet…",
+  "gate.failed": "Entscheidung nicht angewendet: {{error}}",
 
   "supervisor.title": "Supervisor",
   "supervisor.completedWithErrors": "Mit Fehlern abgeschlossen",

@@ -38,6 +38,8 @@
   "budget.sevenDaySpending": "7일 지출",
   "budget.toastUpdated": "예산 설정이 업데이트되었습니다",
   "budget.toastFailed": "예산 설정 업데이트에 실패했습니다",
+  "budget.tokenLimit": "토큰 한도",
+  "budget.tokenLimitDescription": "작업당 최대 입력 토큰 수입니다. 무제한은 -1로 설정하세요.",
   "providers.title": "프로바이더",
   "providers.description": "AI 프로바이더 및 모델 구성",
   "providers.primaryWorker": "기본 워커",

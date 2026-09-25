@@ -78,6 +78,8 @@
   "gate.description": "任务 \"{{title}}\" 在达到最大审查迭代次数后卡住了。您想要怎么做？",
   "gate.approve": "仍然批准",
   "gate.skip": "跳过任务",
+  "gate.sending": "正在发送…",
+  "gate.failed": "决定未生效：{{error}}",
 
   "supervisor.title": "监督者",
   "supervisor.completedWithErrors": "完成但有错误",

@@ -38,6 +38,8 @@
   "budget.sevenDaySpending": "Ausgaben der letzten 7 Tage",
   "budget.toastUpdated": "Budgeteinstellungen aktualisiert",
   "budget.toastFailed": "Budgeteinstellungen konnten nicht aktualisiert werden",
+  "budget.tokenLimit": "Token-Limit",
+  "budget.tokenLimitDescription": "Maximale Eingabe-Token pro Aufgabe. -1 für unbegrenzt.",
   "providers.title": "Anbieter",
   "providers.description": "KI-Anbieter und Modelle konfigurieren",
   "providers.primaryWorker": "Primärer Worker",

@@ -16,6 +16,8 @@
   "providers.accessMode": "접근 모드",
   "providers.defaultModel": "기본 모델",
   "providers.modelPlaceholder": "모델 ID 입력",
+  "providers.modelSource.live": "실시간",
+  "providers.modelSource.static": "기본 목록",
   "providers.opencode.platform.label": "OpenCode 플랫폼",
   "providers.opencode.platform.zen": "Zen",
   "providers.opencode.platform.go": "Go",

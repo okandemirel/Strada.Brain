@@ -16,6 +16,8 @@
   "providers.accessMode": "Modo de Acceso",
   "providers.defaultModel": "Modelo Predeterminado",
   "providers.modelPlaceholder": "Ingresa el id del modelo",
+  "providers.modelSource.live": "en vivo",
+  "providers.modelSource.static": "lista predeterminada",
   "providers.opencode.platform.label": "Plataforma OpenCode",
   "providers.opencode.platform.zen": "Zen",
   "providers.opencode.platform.go": "Go",

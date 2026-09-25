@@ -78,6 +78,8 @@
   "gate.description": "タスク「{{title}}」がレビューの最大反復回数に達して停滞しています。どうしますか？",
   "gate.approve": "そのまま承認",
   "gate.skip": "タスクをスキップ",
+  "gate.sending": "送信中…",
+  "gate.failed": "決定は適用されませんでした: {{error}}",
 
   "supervisor.title": "スーパーバイザー",
   "supervisor.completedWithErrors": "エラーありで完了",

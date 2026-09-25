@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "작업",
   "skills.installed.enable": "활성화",
   "skills.installed.disable": "비활성화",
+  "skills.installed.pendingEnable": "다음 재시작 시 활성화",
+  "skills.installed.pendingDisable": "다음 재시작 시 비활성화",
   "skills.installed.failedTitle": "스킬 로드 실패",
   "skills.installed.noSkillsTitle": "로드된 스킬 없음",
   "skills.installed.noSkillsDescription": "현재 등록된 스킬이 없습니다. 마켓플레이스 탭에서 스킬을 검색하고 설치하세요.",

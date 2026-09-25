@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "Aktionen",
   "skills.installed.enable": "Aktivieren",
   "skills.installed.disable": "Deaktivieren",
+  "skills.installed.pendingEnable": "Wird beim nächsten Neustart aktiviert",
+  "skills.installed.pendingDisable": "Wird beim nächsten Neustart deaktiviert",
   "skills.installed.failedTitle": "Skills konnten nicht geladen werden",
   "skills.installed.noSkillsTitle": "Keine Skills geladen",
   "skills.installed.noSkillsDescription": "Derzeit sind keine Skills registriert. Besuche den Marktplatz-Tab, um Skills zu entdecken und zu installieren.",

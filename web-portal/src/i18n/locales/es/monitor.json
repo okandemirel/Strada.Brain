@@ -78,6 +78,8 @@
   "gate.description": "La tarea \"{{title}}\" esta atascada despues del maximo de iteraciones de revision. Que deseas hacer?",
   "gate.approve": "Aprobar de Todas Formas",
   "gate.skip": "Omitir Tarea",
+  "gate.sending": "Enviando…",
+  "gate.failed": "Decisión no aplicada: {{error}}",
 
   "supervisor.title": "Supervisor",
   "supervisor.completedWithErrors": "Completado con errores",

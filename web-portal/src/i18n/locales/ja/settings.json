@@ -38,6 +38,8 @@
   "budget.sevenDaySpending": "7日間の支出",
   "budget.toastUpdated": "予算設定が更新されました",
   "budget.toastFailed": "予算設定の更新に失敗しました",
+  "budget.tokenLimit": "トークン上限",
+  "budget.tokenLimitDescription": "タスクあたりの最大入力トークン数。-1 で無制限になります。",
   "providers.title": "プロバイダー",
   "providers.description": "AIプロバイダーとモデルの設定",
   "providers.primaryWorker": "プライマリワーカー",

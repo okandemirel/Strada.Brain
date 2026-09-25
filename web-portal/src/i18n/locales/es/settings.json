@@ -38,6 +38,8 @@
   "budget.sevenDaySpending": "Gasto de 7 Dias",
   "budget.toastUpdated": "Ajustes de presupuesto actualizados",
   "budget.toastFailed": "Error al actualizar los ajustes de presupuesto",
+  "budget.tokenLimit": "Límite de tokens",
+  "budget.tokenLimitDescription": "Máximo de tokens de entrada por tarea. Usa -1 para ilimitado.",
   "providers.title": "Proveedores",
   "providers.description": "Configura proveedores y modelos de IA",
   "providers.primaryWorker": "Worker Principal",

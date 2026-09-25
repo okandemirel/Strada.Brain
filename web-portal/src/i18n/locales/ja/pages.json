@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "アクション",
   "skills.installed.enable": "有効化",
   "skills.installed.disable": "無効化",
+  "skills.installed.pendingEnable": "次回の再起動で有効化",
+  "skills.installed.pendingDisable": "次回の再起動で無効化",
   "skills.installed.failedTitle": "スキルの読み込みに失敗しました",
   "skills.installed.noSkillsTitle": "スキルが読み込まれていません",
   "skills.installed.noSkillsDescription": "現在登録されているスキルはありません。マーケットプレイスタブでスキルを見つけてインストールしてください。",

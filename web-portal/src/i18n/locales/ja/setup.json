@@ -16,6 +16,8 @@
   "providers.accessMode": "アクセスモード",
   "providers.defaultModel": "デフォルトモデル",
   "providers.modelPlaceholder": "モデルIDを入力",
+  "providers.modelSource.live": "ライブ",
+  "providers.modelSource.static": "デフォルトリスト",
   "providers.opencode.platform.label": "OpenCode プラットフォーム",
   "providers.opencode.platform.zen": "Zen",
   "providers.opencode.platform.go": "Go",

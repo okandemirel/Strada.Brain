@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "操作",
   "skills.installed.enable": "启用",
   "skills.installed.disable": "禁用",
+  "skills.installed.pendingEnable": "下次重启时启用",
+  "skills.installed.pendingDisable": "下次重启时禁用",
   "skills.installed.failedTitle": "技能加载失败",
   "skills.installed.noSkillsTitle": "未加载技能",
   "skills.installed.noSkillsDescription": "当前没有注册的技能。查看市场标签以发现和安装技能。",

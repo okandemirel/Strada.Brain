@@ -78,6 +78,8 @@
   "gate.description": "La tache \"{{title}}\" est bloquee apres le nombre maximum d'iterations de revue. Que souhaitez-vous faire ?",
   "gate.approve": "Approuver quand meme",
   "gate.skip": "Ignorer la tache",
+  "gate.sending": "Envoi…",
+  "gate.failed": "Décision non appliquée : {{error}}",
 
   "supervisor.title": "Superviseur",
   "supervisor.completedWithErrors": "Termine avec des erreurs",

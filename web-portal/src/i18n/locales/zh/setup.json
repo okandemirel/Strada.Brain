@@ -16,6 +16,8 @@
   "providers.accessMode": "访问模式",
   "providers.defaultModel": "默认模型",
   "providers.modelPlaceholder": "输入模型 ID",
+  "providers.modelSource.live": "实时",
+  "providers.modelSource.static": "默认列表",
   "providers.opencode.platform.label": "OpenCode 平台",
   "providers.opencode.platform.zen": "Zen",
   "providers.opencode.platform.go": "Go",

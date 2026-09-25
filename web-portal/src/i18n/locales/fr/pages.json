@@ -155,6 +155,8 @@
   "skills.installed.columnActions": "Actions",
   "skills.installed.enable": "Activer",
   "skills.installed.disable": "Desactiver",
+  "skills.installed.pendingEnable": "Activée au prochain redémarrage",
+  "skills.installed.pendingDisable": "Désactivée au prochain redémarrage",
   "skills.installed.failedTitle": "Echec du chargement des competences",
   "skills.installed.noSkillsTitle": "Aucune competence chargee",
   "skills.installed.noSkillsDescription": "Aucune competence n'est actuellement enregistree. Consultez l'onglet Marketplace pour decouvrir et installer des competences.",

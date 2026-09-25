@@ -38,6 +38,8 @@
   "budget.sevenDaySpending": "7 天支出",
   "budget.toastUpdated": "预算设置已更新",
   "budget.toastFailed": "预算设置更新失败",
+  "budget.tokenLimit": "Token 上限",
+  "budget.tokenLimitDescription": "每个任务的最大输入 Token 数。设为 -1 表示无限制。",
   "providers.title": "提供商",
   "providers.description": "配置 AI 提供商和模型",
   "providers.primaryWorker": "主工作器",

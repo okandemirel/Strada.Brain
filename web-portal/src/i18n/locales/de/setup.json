@@ -16,6 +16,8 @@
   "providers.accessMode": "Zugriffsmodus",
   "providers.defaultModel": "Standardmodell",
   "providers.modelPlaceholder": "Modell-ID eingeben",
+  "providers.modelSource.live": "live",
+  "providers.modelSource.static": "Standardliste",
   "providers.opencode.platform.label": "OpenCode-Plattform",
   "providers.opencode.platform.zen": "Zen",
   "providers.opencode.platform.go": "Go",
