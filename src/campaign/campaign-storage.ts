@@ -252,6 +252,59 @@ export interface CampaignStorageOptions {
   readOnly?: boolean;
 }
 
+/**
+ * Columns added after the first schema, oldest first. `backfill` runs once,
+ * in the same transaction as the ALTER that adds the column.
+ */
+const ADDED_COLUMNS: ReadonlyArray<{ readonly name: string; readonly type: string; readonly backfill?: string }> = [
+  { name: "auto_revive_at", type: "INTEGER" },
+  { name: "coverage_audit_note", type: "TEXT" },
+  // The approved GDD's hash (plan 1.9); rows from before carry null and
+  // take the text they hold as approved on first read.
+  { name: "gdd_sha256", type: "TEXT" },
+  { name: "gdd_revision", type: "INTEGER" },
+  // Self-revivals spent on a proof this machine cannot produce (Codex 2026-09-11 C#2).
+  { name: "unmeasurable_revives", type: "INTEGER" },
+  // Self-revivals spent on an ordinary implementation failure (F#1).
+  { name: "implementation_revives", type: "INTEGER" },
+  // Gaps the audit named and no round has scheduled yet (F#9).
+  { name: "pending_coverage_gaps", type: "TEXT" },
+  // Delivery rounds spent on the same missing proofs (H#1).
+  { name: "delivery_revives", type: "INTEGER" },
+  // A person's stop, recorded when it is SEEN (Codex 2026-09-11 L#3).
+  { name: "stop_requested_at", type: "INTEGER" },
+  { name: "stop_generation", type: "INTEGER" },
+  // Every delivery round, whatever its identity (Codex 2026-09-11 O#5).
+  { name: "delivery_rounds_total", type: "INTEGER" },
+  { name: "delivery_proofs_signature", type: "TEXT" },
+  // Audited 2026-09-02: the draft path's deferral clock (24h bound).
+  { name: "draft_deferred_since", type: "INTEGER" },
+  // Audited 2026-09-02: the delivery report is sent after state=done is
+  // persisted, so a crash in that window lost it silently. The backfill runs
+  // only with the ALTER that actually adds the column: campaigns that were
+  // already `done` reported under the old path, and must not be re-announced.
+  {
+    name: "delivery_reported",
+    type: "INTEGER NOT NULL DEFAULT 0",
+    backfill: "UPDATE campaigns SET delivery_reported = 1 WHERE state = 'done'",
+  },
+  // 2026-09-10: how the plan covers the GDD's measured section inventory.
+  { name: "plan_coverage", type: "TEXT" },
+  // 2026-09-12: the independent opinion on the delivery. It was gathered,
+  // rendered and thrown away, while the boot resend assumed it was there
+  // (Codex 2026-09-12 X).
+  { name: "independent_review", type: "TEXT" },
+  // 2026-09-13: an unreadable requirement queue was derived at load and lost
+  // at save — the very next save wrote NULL over the damaged row and the
+  // obligation was gone for good (Codex 2026-09-13 AF#2). It is a column now,
+  // so the flag survives until an audit re-establishes the requirements.
+  { name: "coverage_queue_unreadable", type: "INTEGER" },
+  // 2026-09-13: one play run verifies a BATCH of sessions, so a game bigger
+  // than one batch is only fully played across several runs — and nothing
+  // remembered which ones had been played (Codex AJ#11).
+  { name: "verified_sessions", type: "TEXT" },
+];
+
 export class CampaignStorage {
   private readonly db: Database.Database;
 
@@ -264,123 +317,42 @@ export class CampaignStorage {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     configureSqlitePragmas(this.db, "tasks");
-    this.db.exec(SCHEMA_SQL);
     try {
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN auto_revive_at INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
+      this.db.exec(SCHEMA_SQL);
+      this.addMissingColumns();
+    } catch (err) {
+      this.db.close();
+      throw err;
     }
-    try {
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN coverage_audit_note TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // The approved GDD's hash (plan 1.9); rows from before carry null and
-      // take the text they hold as approved on first read.
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN gdd_sha256 TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN gdd_revision INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Self-revivals spent on a proof this machine cannot produce (Codex 2026-09-11 C#2).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN unmeasurable_revives INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Self-revivals spent on an ordinary implementation failure (F#1).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN implementation_revives INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Gaps the audit named and no round has scheduled yet (F#9).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN pending_coverage_gaps TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Delivery rounds spent on the same missing proofs (H#1).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_revives INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // A person's stop, recorded when it is SEEN (Codex 2026-09-11 L#3).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN stop_requested_at INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN stop_generation INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Every delivery round, whatever its identity (Codex 2026-09-11 O#5).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_rounds_total INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_proofs_signature TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Audited 2026-09-02: the draft path's deferral clock (24h bound).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN draft_deferred_since INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // Audited 2026-09-02: the delivery report is sent after state=done is
-      // persisted, so a crash in that window lost it silently. Backfill runs
-      // only on the ALTER that actually adds the column: campaigns that were
-      // already `done` reported under the old path, and must not be
-      // re-announced by this migration.
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN delivery_reported INTEGER NOT NULL DEFAULT 0");
-      this.db.exec("UPDATE campaigns SET delivery_reported = 1 WHERE state = 'done'");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // 2026-09-10: how the plan covers the GDD's measured section inventory.
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN plan_coverage TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // 2026-09-12: the independent opinion on the delivery. It was gathered,
-      // rendered and thrown away, while the boot resend assumed it was there
-      // (Codex 2026-09-12 X).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN independent_review TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // 2026-09-13: an unreadable requirement queue was derived at load and
-      // lost at save — the very next save wrote NULL over the damaged row and
-      // the obligation was gone for good (Codex 2026-09-13 AF#2). It is a
-      // column now, so the flag survives until an audit re-establishes the
-      // requirements.
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN coverage_queue_unreadable INTEGER");
-    } catch {
-      // Column already exists — migration is idempotent.
-    }
-    try {
-      // 2026-09-13: one play run verifies a BATCH of sessions, so a game
-      // bigger than one batch is only fully played across several runs — and
-      // nothing remembered which ones had been played (Codex AJ#11).
-      this.db.exec("ALTER TABLE campaigns ADD COLUMN verified_sessions TEXT");
-    } catch {
-      // Column already exists — migration is idempotent.
+  }
+
+  /**
+   * Bring an older database up to ADDED_COLUMNS (CMP-15).
+   *
+   * Each ALTER used to sit in a `catch {}` that read every failure as "the
+   * column already exists": a busy or read-only database left the column
+   * missing and every later save threw "no such column". The columns present
+   * are now read from the table itself, only the missing ones are added, and
+   * a failure that did not leave the column behind is thrown. A column and
+   * its backfill are one transaction: a crash between them used to leave the
+   * column added and the backfill never run.
+   */
+  private addMissingColumns(): void {
+    const present = (): Set<string> =>
+      new Set((this.db.prepare("PRAGMA table_info(campaigns)").all() as Array<{ name: string }>).map((c) => c.name));
+    const have = present();
+    for (const column of ADDED_COLUMNS) {
+      if (have.has(column.name)) continue;
+      try {
+        this.db.transaction(() => {
+          this.db.exec(`ALTER TABLE campaigns ADD COLUMN ${column.name} ${column.type}`);
+          if (column.backfill !== undefined) this.db.exec(column.backfill);
+        })();
+      } catch (err) {
+        // Another process sharing the database added it first: that is done.
+        if (present().has(column.name)) continue;
+        throw err;
+      }
     }
   }
 

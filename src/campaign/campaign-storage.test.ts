@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import Database from "better-sqlite3";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -297,4 +298,54 @@ describe("findLatestRevivable", () => {
     expect(storage.findAwaitingApproval("cli-local", ours)?.id).toBe("b_gate");
   });
 
+});
+
+describe("schema migrations (CMP-15)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "campaign-migrate-")); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }); });
+
+  /** A database from before any added column, holding one delivered campaign. */
+  const legacyDatabase = (path: string): void => {
+    const db = new Database(path);
+    db.exec(`CREATE TABLE campaigns (
+      id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, channel_type TEXT NOT NULL, user_id TEXT NOT NULL,
+      conversation_id TEXT, project_root TEXT NOT NULL, state TEXT NOT NULL, idea_text TEXT, gdd_path TEXT,
+      gdd_text TEXT, draft_task_id TEXT, draft_attempts INTEGER NOT NULL DEFAULT 0,
+      milestones_json TEXT NOT NULL DEFAULT '[]', current_milestone INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_error TEXT)`);
+    db.prepare(`INSERT INTO campaigns (id, chat_id, channel_type, user_id, project_root, state, created_at, updated_at)
+      VALUES ('c_old', 'chat', 'cli', 'u', '/p', 'done', 1, 1)`).run();
+    db.close();
+  };
+
+  it("a migration that fails is not read as 'already there', and its backfill lands with its column", () => {
+    const path = join(dir, "campaigns.db");
+    legacyDatabase(path);
+    // The process fails between adding delivery_reported and backfilling it.
+    const exec = Database.prototype.exec;
+    vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
+      if (sql.includes("SET delivery_reported = 1")) throw new Error("disk I/O error");
+      return exec.call(this, sql);
+    });
+    expect(() => new CampaignStorage(path)).toThrow(/disk I\/O error/);
+    vi.restoreAllMocks();
+    // The next start adds the column AND backfills it: an old delivered
+    // campaign is not re-announced at boot.
+    const storage = new CampaignStorage(path);
+    try {
+      expect(storage.get("c_old")?.deliveryReported).toBe(true);
+      expect(storage.get("c_old")?.state).toBe("done");
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("an up-to-date database opens again without altering anything", () => {
+    const path = join(dir, "campaigns.db");
+    new CampaignStorage(path).close();
+    const exec = vi.spyOn(Database.prototype, "exec");
+    new CampaignStorage(path).close();
+    expect(exec.mock.calls.some(([sql]) => /ALTER TABLE/i.test(String(sql)))).toBe(false);
+  });
 });
