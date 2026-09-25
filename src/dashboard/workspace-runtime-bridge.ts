@@ -2,6 +2,7 @@ import type { GoalStatus } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
+import { episodeGoalRootsFor } from "./episode-goal-roots.js";
 import { getLogger } from "../utils/logger.js";
 
 const GOAL_NODE_STATUSES = new Set<GoalStatus>([
@@ -55,6 +56,21 @@ export function createWorkspaceRuntimeBridge(params: {
 }): RuntimeBridge {
   const { workspaceBus, goalStorage, taskManager } = params;
   const listeners: Array<() => void> = [];
+  const episodeGoalRoots = episodeGoalRootsFor(workspaceBus);
+
+  /**
+   * The goal node a Kanban card stands for. The card's rootId is the board it
+   * sits on, which for a decomposed goal is the monitor EPISODE id, not the goal
+   * tree's own root (WEB-8): try the board id as a goal root first, then the goal
+   * trees that board shows. The node must belong to one of them either way.
+   */
+  const findBoardGoalNode = (store: GoalStorage, rootId: string, nodeId: string) => {
+    for (const goalRootId of [rootId, ...episodeGoalRoots.goalRootsOf(rootId)]) {
+      const node = store.getTree(goalRootId as never)?.nodes.get(nodeId as never);
+      if (node) return node;
+    }
+    return undefined;
+  };
 
   return {
     start() {
@@ -189,13 +205,20 @@ export function createWorkspaceRuntimeBridge(params: {
           return;
         }
 
-        const tree = goalStorage.getTree(action.rootId as never);
-        const node = tree?.nodes.get(action.nodeId as never);
-        if (!tree || !node) {
+        const node = findBoardGoalNode(goalStorage, action.rootId, action.nodeId);
+        if (!node) {
           getLogger().debug("monitor:move_task dropped — goal tree or node not found", {
             rootId: action.rootId,
             nodeId: action.nodeId,
           });
+          // Say why the card snaps back: only goal-plan steps have a stored
+          // status a move can change.
+          emitNotification(
+            workspaceBus,
+            "warning",
+            "Move not applied",
+            "This card is not a stored goal step, so its status cannot be changed from the board.",
+          );
           return;
         }
 
@@ -213,6 +236,9 @@ export function createWorkspaceRuntimeBridge(params: {
           node.reviewIterations ?? 0,
         );
 
+        // Confirm under the board id the portal sent (the episode id on a
+        // decomposed goal), which is where the card lives and whose origin the
+        // monitor bridge already knows.
         workspaceBus.emit("monitor:task_update", {
           rootId: action.rootId!,
           nodeId: action.nodeId!,

@@ -55,6 +55,7 @@ import type { WorkspaceBus } from './workspace-bus.js'
 import { getLoggerSafe } from '../utils/logger.js'
 import type { GoalTree } from '../goals/types.js'
 import { goalTreeToDagPayload, type DagNodeShape, type DagPayload } from './workspace-events.js'
+import { episodeGoalRootsFor } from './episode-goal-roots.js'
 
 export interface MonitorLifecycle {
   /**
@@ -231,6 +232,9 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
    * node to its owning bucket by node id, independent of the update's rootId.
    */
   function withEpisodeRoot(payload: DagPayload, episode: EpisodeState | undefined): DagPayload {
+    // Remember which goal tree this board now shows, so a Kanban move sent with
+    // the episode id can be applied to the goal tree in storage (WEB-8).
+    if (episode) episodeGoalRootsFor(workspaceBus).link(episode.episodeId, payload.rootId)
     return { ...payload, rootId: episode?.episodeId ?? payload.rootId }
   }
 
