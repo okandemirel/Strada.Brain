@@ -3,6 +3,13 @@ import { appendFileSync } from "node:fs";
 const originalFetch = globalThis.fetch?.bind(globalThis);
 const logPath = process.env.STRADA_MOCK_LOG_PATH;
 
+/**
+ * The PAOR scenario's verification: the smoke project's own `npm test`, which
+ * checks the proof file. A test run is what the verifier pipeline accepts as
+ * targeted verification of a failed path; `test -f` through a shell is not one.
+ */
+export const PAOR_VERIFY_COMMAND = "npm test";
+
 function log(entry) {
   if (!logPath) return;
   try {
@@ -118,6 +125,13 @@ function getLastToolResult(messages) {
     }
   }
   return "";
+}
+
+/** Every tool result in the conversation, lower-cased, oldest first. */
+function getToolResults(messages) {
+  return messages
+    .filter((message) => message?.role === "tool")
+    .map((message) => (typeof message.content === "string" ? message.content : extractText(message.content)).toLowerCase());
 }
 
 function getConversationText(messages) {
@@ -258,6 +272,21 @@ function buildResponse(body) {
     });
   }
 
+  // The shell safety review of a command the scripted agent runs. Answered
+  // with the JSON verdict it asks for; the scripted commands are bounded
+  // project checks.
+  if (normalizedSystemPrompt.includes("shell safety arbiter")) {
+    return buildChatCompletion({
+      text: JSON.stringify({ decision: "approve", reason: "Bounded project check.", taskAligned: true, bounded: true }),
+    });
+  }
+
+  // The supervisor's review of a finished node: a verdict, not prose, so the
+  // node is positively verified rather than flagged "not a verdict".
+  if (normalizedUserText.includes("review this supervisor worker result")) {
+    return buildChatCompletion({ text: JSON.stringify({ verdict: "approve" }) });
+  }
+
   if (normalizedUserText.includes("my name is codextester")) {
     return buildChatCompletion({
       text: "Nice to meet you, CodexTester.",
@@ -365,32 +394,43 @@ function buildResponse(body) {
     });
   }
 
-  const isPaorRecoveryTurn =
-    normalizedUserText.includes("paor recovery smoke") ||
-    normalizedUserText.includes("## reflection phase") ||
-    normalizedUserText.includes("please create a new plan.") ||
-    normalizedToolResult.includes("assets/paor-proof.txt") ||
-    normalizedToolResult.includes("assets/missing-proof.txt") ||
-    normalizedToolResult.includes("test -f assets/paor-proof.txt");
+  // The PAOR script. Every turn of the task carries the prompt in its
+  // conversation, so the step is read from the tool results so far rather
+  // than from the last message, which the verifier and loop-recovery prompts
+  // replace. The initial approach (reading a file that does not exist) fails
+  // twice, which is what sends the loop to reflection; the replan writes the
+  // proof and then runs the project's own check (PAOR_VERIFY_COMMAND, a real
+  // test run the verifier pipeline accepts as a targeted verification of
+  // the failed path) before claiming completion.
+  if (conversationText.includes("paor recovery smoke")) {
+    const toolResults = getToolResults(messages);
+    const failedReads = toolResults.filter((result) => result.includes("file not found: assets/missing-proof.txt")).length;
+    const proofWritten = toolResults.some((result) => result.includes("file written: assets/paor-proof.txt"));
+    const proofVerified = toolResults.some((result) =>
+      result.includes(`$ ${PAOR_VERIFY_COMMAND}`) && result.includes("exit code: 0"),
+    );
+    const inReflection =
+      normalizedUserText.includes("## reflection phase") || normalizedSystemPrompt.includes("## reflection phase");
 
-  if (isPaorRecoveryTurn) {
-    if (normalizedUserText.includes("## reflection phase")) {
+    if (inReflection) {
       return buildChatCompletion({
-        text: [
-          "The initial file-read approach failed because the target does not exist.",
-          "I should switch strategies and create the proof file directly.",
-          "",
-          "**REPLAN**",
-        ].join("\n"),
+        text: proofWritten
+          ? "The proof file is written; the check still has to run.\n\n**CONTINUE**"
+          : [
+            "The initial file-read approach failed twice because the target does not exist.",
+            "I should switch strategies and create the proof file directly.",
+            "",
+            "**REPLAN**",
+          ].join("\n"),
       });
     }
 
-    if (normalizedSystemPrompt.includes("## replanning phase")) {
+    if (normalizedSystemPrompt.includes("## replanning phase") && !proofWritten) {
       return buildChatCompletion({
         text: [
           "1. Stop retrying the missing file read.",
           "2. Create Assets/paor-proof.txt directly with the requested content.",
-          "3. Verify the proof file with a real command before concluding.",
+          `3. Verify the proof file with \`${PAOR_VERIFY_COMMAND}\` before concluding.`,
         ].join("\n"),
         toolCalls: [
           makeToolCall("tool-paor-write", "file_write", {
@@ -401,39 +441,34 @@ function buildResponse(body) {
       });
     }
 
-    if (
-      (normalizedToolResult.includes("file written: assets/paor-proof.txt") ||
-        conversationText.includes("file written: assets/paor-proof.txt")) &&
-      !conversationText.includes("test -f assets/paor-proof.txt")
-    ) {
-      return buildChatCompletion({
-        text: "The proof file exists. Running an explicit verification command now.",
-        toolCalls: [
-          makeToolCall("tool-paor-verify", "shell_exec", {
-            command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt",
-          }),
-        ],
-      });
-    }
-
-    if (
-      conversationText.includes("test -f assets/paor-proof.txt") &&
-      conversationText.includes("exit code: 0")
-    ) {
+    if (proofVerified) {
       return buildChatCompletion({
         text: "PAOR recovery completed after replanning.",
       });
     }
 
-    if (!lastToolResult) {
+    if (proofWritten) {
       return buildChatCompletion({
-        text: [
-          "1. Inspect the expected proof target.",
-          "2. Recover if the inspection fails.",
-          "3. Produce the requested proof file.",
-        ].join("\n"),
+        text: "The proof file is written. Running the project's check now.",
         toolCalls: [
-          makeToolCall("tool-paor-read", "file_read", {
+          makeToolCall("tool-paor-verify", "shell_exec", {
+            command: PAOR_VERIFY_COMMAND,
+          }),
+        ],
+      });
+    }
+
+    if (failedReads < 2) {
+      return buildChatCompletion({
+        text: failedReads === 0
+          ? [
+            "1. Inspect the expected proof target.",
+            "2. Recover if the inspection fails.",
+            "3. Produce the requested proof file.",
+          ].join("\n")
+          : "The read failed; trying the same target once more before changing approach.",
+        toolCalls: [
+          makeToolCall(`tool-paor-read-${failedReads + 1}`, "file_read", {
             path: "Assets/missing-proof.txt",
           }),
         ],

@@ -232,6 +232,39 @@ async function createSmokeProject(projectDir) {
 }
 
 /**
+ * The PAOR scenario's project check, run as `npm test` by the scripted agent
+ * once it has written the proof (PAOR_VERIFY_COMMAND in the mock). A test run
+ * is what the verifier pipeline accepts as targeted verification of the
+ * failed first approach; without one it never approves the recovery.
+ */
+async function addPaorProofCheck(projectDir) {
+  await writeFile(
+    join(projectDir, "package.json"),
+    JSON.stringify({
+      name: "paor-smoke-project",
+      version: "0.0.0",
+      private: true,
+      scripts: { test: "node verify-paor-proof.mjs" },
+    }, null, 2),
+  );
+  // npm must not look for its own update from inside an offline smoke.
+  await writeFile(join(projectDir, ".npmrc"), "update-notifier=false\nfund=false\naudit=false\n");
+  await writeFile(
+    join(projectDir, "verify-paor-proof.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const content = readFileSync("Assets/paor-proof.txt", "utf8");',
+      'if (content !== "paor ok\\n") {',
+      '  console.error(`Assets/paor-proof.txt holds ${JSON.stringify(content)}`);',
+      "  process.exit(1);",
+      "}",
+      'console.log("paor proof verified");',
+      "",
+    ].join("\n"),
+  );
+}
+
+/**
  * The HOME, Strada home and install root a smoke child gets instead of the
  * developer's (OPS-16). The directories are created by main().
  */
@@ -516,6 +549,7 @@ async function runDaemonSmoke(memoryDir, projectDir, sandbox) {
   await mkdir(delegationProjectDir, { recursive: true });
   await createSmokeProject(autonomyProjectDir);
   await createSmokeProject(delegationProjectDir);
+  await addPaorProofCheck(delegationProjectDir);
 
   const buildDaemonEnv = (daemonMemoryDir, daemonProjectDir) => ({
     ...buildBaseEnv(daemonMemoryDir, daemonProjectDir, sandbox),
@@ -664,15 +698,17 @@ async function runDaemonSmoke(memoryDir, projectDir, sandbox) {
     WHERE session_id = ?
     ORDER BY completed_at DESC
   `).all(CLI_CHAT_ID);
+  // The task runs as the single node of its goal, whose description is the
+  // prompt followed by the node's scope instructions.
   const paorMetric = learningDb.prepare(`
     SELECT completion_status, paor_iterations, tool_call_count
     FROM task_metrics
     WHERE session_id = ?
       AND task_type = 'background'
-      AND task_description = ?
+      AND substr(task_description, 1, length(?)) = ?
     ORDER BY completed_at DESC
     LIMIT 1
-  `).get(CLI_CHAT_ID, PAOR_RECOVERY_PROMPT);
+  `).get(CLI_CHAT_ID, PAOR_RECOVERY_PROMPT, PAOR_RECOVERY_PROMPT);
   learningDb.close();
 
   const backgroundRows = [
@@ -729,6 +765,12 @@ async function runDaemonSmoke(memoryDir, projectDir, sandbox) {
   assert(listedLevels, "analysis continuation smoke should begin with a directory inspection");
   assert(autonomyReopened, "analysis continuation smoke should reopen the loop after the provider deflects");
   assert(inspectedLevelAsset, "analysis continuation smoke should directly inspect the flagged asset before concluding");
+
+  // The recovery was verified by the project's check, and the check passed.
+  const paorCheckPassed = delegationEntries.some((entry) =>
+    typeof entry.lastToolResult === "string" && entry.lastToolResult.includes("paor proof verified"),
+  );
+  assert(paorCheckPassed, "PAOR recovery smoke should verify the proof with the project's own check before concluding");
 }
 
 async function main() {
