@@ -40,15 +40,17 @@ describe("POST /api/vaults concurrent registration (CHN-14)", () => {
     };
     const first = post();
     const second = post();
-    // Each response waits on a streamed body plus realpath/stat; with the
-    // other test files of a batch running in parallel processes (many of
-    // them fsync-heavy) a loaded CI runner took just over vi.waitFor's
-    // default 1 s. What this test checks is the outcome (one 201, one 409),
-    // not how fast it arrives.
+    // Either request can win the duplicate check: each first awaits its own
+    // body and realpath/stat, and those can finish in either order (they did
+    // flip under coverage instrumentation). The winner then waits on the
+    // gated factory, so wait for whichever request was refused, open the
+    // gate, then wait for the other. Waiting on `second` specifically
+    // deadlocked whenever `second` was the winner.
     const settle = { timeout: 10_000 };
-    await vi.waitFor(() => expect(second.end).toHaveBeenCalled(), settle);
+    const ended = (res: MockRes & ServerResponse): boolean => res.end.mock.calls.length > 0;
+    await vi.waitFor(() => expect(ended(first) || ended(second)).toBe(true), settle);
     release();
-    await vi.waitFor(() => expect(first.end).toHaveBeenCalled(), settle);
+    await vi.waitFor(() => expect(ended(first) && ended(second)).toBe(true), settle);
 
     expect([first.statusCode, second.statusCode].sort()).toEqual([201, 409]);
     expect(factory.create).toHaveBeenCalledTimes(1);
