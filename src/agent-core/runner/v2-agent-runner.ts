@@ -33,6 +33,7 @@ import type {
   AgentRunRequest,
   AgentRunResult,
   IOStrategy,
+  ParentRunScope,
   RunnerMode,
   TerminalStatus,
 } from "./agent-runner.js";
@@ -47,7 +48,7 @@ import type {
 } from "./orchestrator-port.js";
 import type { RunMode } from "../control/policy.js";
 import { resolveRunBudgetPolicy } from "../control/policy.js";
-import type { Budget, TokenUsage as BudgetTokenUsage } from "../control/budget.js";
+import type { Budget, ChildBudget, TokenUsage as BudgetTokenUsage } from "../control/budget.js";
 import type { RunClock, CallLimits } from "../control/run-clock.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { FailureLedger, RunVerdict, VerdictInput } from "../control/failure-ledger.js";
@@ -91,7 +92,8 @@ export interface OpenRunResult {
 }
 
 export interface ControlPlane {
-  openRun(mode: RunMode, parentClockView?: RunClockView): OpenRunResult;
+  /** `parentClockView` / `childBudget`: a delegated child opens inside its parent's clock and budget. */
+  openRun(mode: RunMode, parentClockView?: RunClockView, childBudget?: ChildBudget): OpenRunResult;
   openBus(runId: string, io: IOStrategy, parentRunId?: string): AgentRunEventBus;
 }
 
@@ -293,6 +295,7 @@ export class V2AgentRunner implements AgentRunner {
     const { clock: runClock, ledger, budget } = controlPlane.openRun(
       policy.mode,
       request.parentClockView,
+      request.childBudget,
     );
     const bus = controlPlane.openBus(runId, io, request.parentClockView ? runId : undefined);
     const emit = (e: Parameters<AgentRunEventBus["emit"]>[0]): number => bus.emit(e);
@@ -382,6 +385,17 @@ export class V2AgentRunner implements AgentRunner {
       // turns abort the run. Reset on every other path (v1 orchestrator.ts:5346 reset-on-any-non-
       // truncated-turn).
       let consecutiveMaxTokens = 0;
+
+      // What the run lends its tool turns: a sub-agent a tool starts is cancelled with this run,
+      // carved from this run's budget and bounded by this run's clock. Tool calls are NOT raced
+      // against the cancel — a tool may be writing into the run's workspace lease, which the
+      // caller releases once run() returns — so a cancel reaches tools through the signal and
+      // the next gate stops the run once the batch has settled.
+      const runScope: ParentRunScope = {
+        signal: runClock.taskToken.signal,
+        budget,
+        clockView: runClock.view,
+      };
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is
       // RunClock's own job — we pass the policy's per-call windows).
@@ -735,7 +749,7 @@ export class V2AgentRunner implements AgentRunner {
               for (const tc of outcome.response.toolCalls) {
                 emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
               }
-              const planned = await this.executeTools(setup, outcome.response, state, () =>
+              const planned = await this.executeTools(setup, outcome.response, state, runScope, () =>
                 emit({ type: "heartbeat", source: "tool-running" }),
               );
               for (const tr of planned.trace) {
@@ -854,7 +868,7 @@ export class V2AgentRunner implements AgentRunner {
             for (const tc of outcome.response.toolCalls) {
               emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
             }
-            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state, () =>
+            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state, runScope, () =>
               emit({ type: "heartbeat", source: "tool-running" }),
             );
             for (const tr of trace) {
@@ -1311,6 +1325,7 @@ export class V2AgentRunner implements AgentRunner {
     setup: RunSetup,
     response: ProviderResponse,
     state: AgentState,
+    runScope: ParentRunScope,
     keepalive?: () => void,
   ): Promise<{
     trace: {
@@ -1329,10 +1344,11 @@ export class V2AgentRunner implements AgentRunner {
     const port = this.deps.orchestratorPort;
     // The port's executeToolCalls is the existing ExecuteToolCallsFn seam (variadic). We pass the
     // tool calls, the session, the live AgentState (the real port reads the 3rd arg to drive
-    // recordStepResultsAndCheckReflection), AND response.text as the 4th arg (D2 fix: the port pushes
-    // it onto the session before the tool results, v1 parity); the mock ignores extra args.
+    // recordStepResultsAndCheckReflection), response.text as the 4th arg (D2 fix: the port pushes
+    // it onto the session before the tool results, v1 parity), and the run's scope as the 5th (the
+    // tools' cancel signal + the budget/clock a sub-agent is opened inside); the mock ignores extra args.
     const raw = (await this.keepAliveWhile(
-      port.executeToolCalls(response.toolCalls, setup.session, state, response.text),
+      port.executeToolCalls(response.toolCalls, setup.session, state, response.text, runScope),
       keepalive,
     )) as
       | {

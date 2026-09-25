@@ -98,12 +98,21 @@ export class SwarmTool implements ITool {
     // 2026-09-01). Run a worker pool at the manager's own width instead.
     const width = Math.max(1, this.maxConcurrent);
     const results: Array<PromiseSettledResult<unknown>> = new Array(tasks.length);
+    // The members split the calling run's remaining budget up front, so together they spend it
+    // once. Seeded on their own, each saw the whole headroom and the swarm spent it per member.
+    const parentBudget = context.parentRun?.budget;
+    const slices = parentBudget ? tasks.map(() => parentBudget.carveChild(1, tasks.length)) : undefined;
     let next = 0;
     const runner = async (): Promise<void> => {
       for (;;) {
         const index = next++;
         const spec = tasks[index];
         if (!spec) return;
+        // A cancelled run launches no more members; the ones running stop through the signal.
+        if (context.signal?.aborted) {
+          results[index] = { status: "rejected", reason: new Error("not started: the run was cancelled") };
+          continue;
+        }
         try {
           const value = await this.delegationManager.delegate({
             parentAgentId: this.parentAgentId,
@@ -114,6 +123,7 @@ export class SwarmTool implements ITool {
             // The sub-agent inherits the caller's authorized paths; without
             // it a swarm member is refused files the user explicitly named.
             toolContext: context,
+            ...(slices ? { budgetSlice: slices[index] } : {}),
           } as never);
           results[index] = { status: "fulfilled", value };
         } catch (reason) {

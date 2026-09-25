@@ -18,6 +18,7 @@ import { createCancelToken } from "./cancel-token.js";
 import { createBudget } from "./budget.js";
 import { resolveRunBudgetPolicy, type RunBudgetPolicy } from "./policy.js";
 import { openRunClock } from "./run-clock.js";
+import { createControlPlane } from "./control-plane.js";
 import {
   createFailureLedger,
   type HealthCore,
@@ -228,6 +229,67 @@ describe("Budget", () => {
     // Raising to unbounded (∞, the -1 config sentinel) lifts the gate entirely.
     expect(b.raiseOutputCap(Number.POSITIVE_INFINITY)).toBe(true);
     expect(b.remainingOutputTokens()).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("a child's debits propagate up to its parent", () => {
+    const parent = createBudget(1000, 1);
+    const child = createBudget(500, 0.5, parent);
+    child.debit({ inputTokens: 10, outputTokens: 100, costUsd: 0.25 });
+    expect(child.remainingCostUsd()).toBe(0.25);
+    expect(parent.remainingCostUsd()).toBe(0.75);
+    expect(parent.remainingOutputTokens()).toBe(900);
+  });
+});
+
+// ── ControlPlane.openRun: a delegated child opens inside its parent ────────
+
+describe("ControlPlane.openRun for a delegated child", () => {
+  const seed = {
+    streamInitialTimeoutMs: 600_000,
+    streamStallTimeoutMs: 300_000,
+    providerFirstResponseMs: 90_000,
+    taskInactivityMs: 600_000,
+    minInactivityOverStreamRatio: 2,
+    outputTokenCap: 100_000,
+    costCapUsd: 1, // the global headroom every run is seeded with
+  };
+  const plane = () => createControlPlane({ clock: new FakeClock(0), seed, createHealthCore: () => fakeHealth() });
+
+  it("gates on its slice, not the whole headroom, and debits its spend to the parent", () => {
+    const parent = createBudget(Number.POSITIVE_INFINITY, 1);
+    const { budget } = plane().openRun("delegate", undefined, { slice: parent.carveChild(1, 2), parent });
+    expect(budget.remainingCostUsd()).toBe(0.5);
+    budget.debit({ inputTokens: 0, outputTokens: 10, costUsd: 0.6 });
+    expect(budget.remainingCostUsd()).toBeLessThanOrEqual(0);
+    expect(parent.remainingCostUsd()).toBeCloseTo(0.4);
+  });
+
+  it("two concurrent children against $1 of headroom spend about $1, not $1 each", () => {
+    // The review's scenario: $0.6 a turn; each child takes turns while its gate shows headroom.
+    const parent = createBudget(Number.POSITIVE_INFINITY, 1);
+    const cp = plane();
+    const children = [0, 1].map(() => cp.openRun("delegate", undefined, { slice: parent.carveChild(1, 2), parent }).budget);
+    let spent = 0;
+    for (const child of children) {
+      while (child.remainingCostUsd() > 0) {
+        child.debit({ inputTokens: 0, outputTokens: 10, costUsd: 0.6 });
+        spent += 0.6;
+      }
+    }
+    expect(spent).toBeLessThanOrEqual(1 + 2 * 0.6); // at most one overshooting turn per child
+    expect(spent).toBeCloseTo(1.2);
+    expect(parent.remainingCostUsd()).toBeCloseTo(1 - spent);
+  });
+
+  it("never outlives its parent's task ceiling", () => {
+    const { clock } = plane().openRun("delegate", { now: () => 0, remainingTaskMs: () => 30_000 });
+    expect(clock.remainingTaskMs()).toBe(30_000);
+  });
+
+  it("a top-level run is still seeded from the policy alone", () => {
+    const { budget, clock } = plane().openRun("background");
+    expect(budget.remainingCostUsd()).toBe(1);
+    expect(clock.remainingTaskMs()).toBe(Number.POSITIVE_INFINITY);
   });
 });
 

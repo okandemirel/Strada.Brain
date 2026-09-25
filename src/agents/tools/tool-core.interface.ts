@@ -79,6 +79,17 @@ export interface ToolContext {
    * `requestConfirmation`. Optional — tools degrade gracefully.
    */
   channel?: unknown;
+  /**
+   * Aborts when the run that called this tool is cancelled (a /cancel, its task ceiling, a
+   * parent's wind-down). Work a tool starts that outlives a quick call — a sub-agent — links
+   * here so it stops with the run. Optional — absent outside an agent run.
+   */
+  signal?: AbortSignal;
+  /**
+   * The calling run's budget and wall clock, lent to the sub-agents a tool starts: a child is
+   * carved a slice and debits its spend back. Optional — absent outside an agent run.
+   */
+  parentRun?: import("../../agent-core/runner/agent-runner.js").ParentRunScope;
 
   // ── Dynamic tool registration (provided by orchestrator) ─────────────
 

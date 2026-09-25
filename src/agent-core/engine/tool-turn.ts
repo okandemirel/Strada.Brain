@@ -36,6 +36,7 @@ import {
 } from "../../agents/orchestrator-loop-utils.js";
 import { recordExecutionTrace, recordPhaseOutcome, consensusUsageSink } from "./accounting.js";
 import type { EngineRunContext } from "./engine-deps.js";
+import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
 
@@ -176,6 +177,8 @@ export async function portExecuteToolTurn(
     // D2 fix: the spine threads the assistant's pre-tool text as the 4th positional arg; v1 pushes
     // response.text onto the session before the tool results (executeAndTrackTools does the push).
     const responseText = (args[3] as string | undefined) ?? "";
+    // The spine's 5th arg: the run's cancel signal + the budget/clock its sub-agents open inside.
+    const runScope = args[4] as ParentRunScope | undefined;
     const { toolResults } = await executeAndTrackTools({
       chatId,
       responseText,
@@ -207,6 +210,10 @@ export async function portExecuteToolTurn(
         touchedFiles: [...runCtx.selfVerification.getState().touchedFiles],
         workspaceLease: runCtx.workspaceLease, // #1: scopes tools to the worktree (v1 parity @ :7175)
         goalContext: runCtx.goalContext, // supervisor-tree linkage for delegated child tasks
+        // A /cancel reached the spine and stopped there: a delegate or swarm call kept its
+        // sub-agents running to their own timeouts. Tools now carry the run's signal and scope.
+        signal: runScope?.signal,
+        parentRun: runScope,
       },
       trackingParams: {
         taskPlanner: runCtx.taskPlanner,

@@ -20,6 +20,15 @@ export interface BudgetSlice {
   readonly costUsd: number;
 }
 
+/**
+ * What a delegated child run is opened with: the slice carved for it and the parent Budget its
+ * own debits propagate up to. The child gates on the slice; the parent sees the child's spend.
+ */
+export interface ChildBudget {
+  readonly slice: BudgetSlice;
+  readonly parent: Budget;
+}
+
 export interface Budget {
   remainingOutputTokens(): number;
   remainingCostUsd(): number;
@@ -51,7 +60,11 @@ class BudgetImpl implements Budget {
   /** Tracked separately from cap-minus-remaining so an Infinity cap still yields a finite spend. */
   private outputSpent = 0;
 
-  constructor(outputCap: number, costCapUsd: number) {
+  constructor(
+    outputCap: number,
+    costCapUsd: number,
+    private readonly parent?: Budget,
+  ) {
     this.outputRemaining = outputCap;
     this.outputCap = outputCap;
     this.costRemaining = costCapUsd;
@@ -74,6 +87,9 @@ class BudgetImpl implements Budget {
     this.outputRemaining -= Math.max(0, usage.outputTokens);
     this.outputSpent += Math.max(0, usage.outputTokens);
     this.costRemaining -= Math.max(0, usage.costUsd ?? 0);
+    // A child's spend is the parent's spend too: without this a sub-agent spent off the books and
+    // the parent (and its siblings) gated on headroom that was already gone.
+    this.parent?.debit(usage);
   }
 
   outputTokenCap(): number {
@@ -100,6 +116,7 @@ class BudgetImpl implements Budget {
   }
 }
 
-export function createBudget(outputCap: number, costCapUsd: number): Budget {
-  return new BudgetImpl(outputCap, costCapUsd);
+/** `parent`: a delegated child's budget — every debit here is also debited there. */
+export function createBudget(outputCap: number, costCapUsd: number, parent?: Budget): Budget {
+  return new BudgetImpl(outputCap, costCapUsd, parent);
 }

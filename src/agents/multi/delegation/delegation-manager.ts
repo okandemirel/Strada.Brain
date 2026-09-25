@@ -47,6 +47,7 @@ import {
   toWorkerRunResult,
   type RunnerHostOrchestrator,
 } from "../../../agent-core/runner/index.js";
+import { createBudget, type Budget } from "../../../agent-core/control/budget.js";
 
 /** How long an aborted sub-agent run may take to settle before its lease is committed and released. */
 export const DELEGATION_ABORT_GRACE_MS = 90_000;
@@ -242,23 +243,23 @@ export class DelegationManager {
    * Synchronous delegation: spawn a sub-agent, wait for result, return it.
    */
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
-    const { typeConfig, effectiveTier, reservationId } = this.prepareRequest(request);
+    const { typeConfig, effectiveTier, reservationId, runBudget } = this.prepareRequest(request);
     // The concurrency slot reserved by prepareRequest is released inside
     // executeWithEscalation's per-attempt finally, so no compensation is needed
     // here (and adding any would double-release). The budget reservation is
     // released by executeWithEscalation's outer finally for the same reason.
-    return await this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId);
+    return await this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId, runBudget);
   }
 
   /**
    * Asynchronous delegation: fire-and-forget, emits events when done.
    */
   async delegateAsync(request: DelegationRequest): Promise<void> {
-    const { typeConfig, effectiveTier, reservationId } = this.prepareRequest(request);
+    const { typeConfig, effectiveTier, reservationId, runBudget } = this.prepareRequest(request);
 
     // Events are already emitted inside executeSingleDelegation with correct subAgentId.
     // Only swallow rejection to prevent unhandled promise rejection.
-    this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId).catch(() => {
+    this.executeWithEscalation(request, typeConfig, effectiveTier, reservationId, runBudget).catch(() => {
       // Already logged and emitted inside executeSingleDelegation
     });
   }
@@ -369,8 +370,14 @@ export class DelegationManager {
     typeConfig: DelegationTypeConfig;
     effectiveTier: ModelTier;
     reservationId?: string;
+    /** This delegation's share of the calling run's budget, spanning its escalation attempts. */
+    runBudget?: Budget;
   } {
     const configured = this.resolveTypeConfig(request.type);
+    // A cancelled run starts no more sub-agents: no slot, no reservation, no lease.
+    if (request.toolContext?.signal?.aborted) {
+      throw new Error(`Delegation ${request.type} not started: the calling run was cancelled`);
+    }
     // The budget learns from the log (see delegation-budget.ts): a type that
     // keeps timing out gets more time, and one that times out at the cap is
     // refused here, before a slot, a reservation or a lease is taken.
@@ -429,6 +436,20 @@ export class DelegationManager {
       }
     }
 
+    // The sub-agent spends inside the calling run's budget: it gates on the slice carved for it
+    // (the whole remaining budget, or the share a fan-out carved up front) and its spend is
+    // debited back to the run. Before, every sub-agent was seeded with the full global headroom
+    // and spent off the parent's books, so N concurrent ones could spend it N times over.
+    const parentRun = request.toolContext?.parentRun;
+    let runBudget: Budget | undefined;
+    if (parentRun) {
+      const slice = request.budgetSlice ?? parentRun.budget.carveChild(1, 1);
+      if (!(slice.costUsd > 0) || !(slice.outputTokens > 0)) {
+        throw new Error(`Delegation ${request.type} not started: the calling run's budget is exhausted`);
+      }
+      runBudget = createBudget(slice.outputTokens, slice.costUsd, parentRun.budget);
+    }
+
     // Budget gate: reject before spawning if the parent has already exceeded its
     // per-agent cap. Mirrors AgentManager.isAgentExceeded(id, cap). Optional — when
     // no cap is resolvable (no resolver wired or agent unknown) this is a no-op so
@@ -483,7 +504,7 @@ export class DelegationManager {
       throw error;
     }
 
-    return { typeConfig, effectiveTier, reservationId };
+    return { typeConfig, effectiveTier, reservationId, runBudget };
   }
 
   // ===========================================================================
@@ -495,9 +516,10 @@ export class DelegationManager {
     typeConfig: DelegationTypeConfig,
     tier: ModelTier,
     reservationId?: string,
+    runBudget?: Budget,
   ): Promise<DelegationResult> {
     try {
-      return await this.runEscalation(request, typeConfig, tier, reservationId);
+      return await this.runEscalation(request, typeConfig, tier, reservationId, runBudget);
     } finally {
       // Whatever the outcome, the work is no longer in flight, so its headroom
       // must go back: a reservation that outlives its delegation is a silent cap.
@@ -512,6 +534,7 @@ export class DelegationManager {
     typeConfig: DelegationTypeConfig,
     tier: ModelTier,
     reservationId?: string,
+    runBudget?: Budget,
   ): Promise<DelegationResult> {
     // Attempt 1 — slot reserved by prepareRequest. The inner finally releases it
     // exactly once whether the attempt returns, throws during execution, or
@@ -520,7 +543,7 @@ export class DelegationManager {
     // needed to compensate.
     try {
       try {
-        return await this.executeSingleDelegation(request, typeConfig, tier, undefined, reservationId);
+        return await this.executeSingleDelegation(request, typeConfig, tier, undefined, reservationId, runBudget);
       } finally {
         this.decrementConcurrency(request.parentAgentId);
       }
@@ -537,6 +560,14 @@ export class DelegationManager {
       ) {
         throw error;
       }
+      // Nor one whose calling run was cancelled (a pricier retry is exactly the work the cancel
+      // stopped), nor one whose share of the run's budget the first attempt already spent.
+      if (
+        request.toolContext?.signal?.aborted ||
+        (runBudget && !(runBudget.remainingCostUsd() > 0 && runBudget.remainingOutputTokens() > 0))
+      ) {
+        throw error;
+      }
 
       const nextTier = this.opts.tierRouter.getEscalationTier(tier);
       if (!nextTier) {
@@ -547,7 +578,7 @@ export class DelegationManager {
       // by its own finally regardless of outcome.
       this.acquireConcurrencySlot(request.parentAgentId);
       try {
-        return await this.executeSingleDelegation(request, typeConfig, nextTier, tier, reservationId);
+        return await this.executeSingleDelegation(request, typeConfig, nextTier, tier, reservationId, runBudget);
       } finally {
         this.decrementConcurrency(request.parentAgentId);
       }
@@ -565,6 +596,8 @@ export class DelegationManager {
     escalatedFrom?: ModelTier,
     /** Budget headroom held for this delegation by prepareRequest, if any. */
     reservationId?: string,
+    /** This delegation's share of the calling run's budget (prepareRequest), if it ran inside one. */
+    runBudget?: Budget,
   ): Promise<DelegationResult> {
     const { delegationLog, eventBus, budgetTracker } = this.opts;
     const subAgentId = randomUUID();
@@ -620,6 +653,19 @@ export class DelegationManager {
       settled,
     };
     this.activeDelegations.set(subAgentId, active);
+
+    // The calling run's cancel reaches its sub-agent. It stops as cancelled, not timed out, and
+    // settles through the same bounded grace as a timeout, so its lease is not released under a
+    // tool that is still writing into it. Unlinked in the finally.
+    const parentSignal = request.toolContext?.signal;
+    const onParentAbort = (): void => {
+      if (abortController.signal.aborted) return; // already timed out or cancelled
+      active.cancelled = true;
+      delegationLog.cancel(logId);
+      abortController.abort();
+    };
+    parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+    if (parentSignal?.aborted) onParentAbort();
 
     eventBus.emit("delegation:started", {
       parentAgentId: request.parentAgentId,
@@ -746,7 +792,9 @@ export class DelegationManager {
       // The timeout is armed before the lease, and acquisition can wait on orphan salvage and
       // the project write lock: a delegation already out of time must not start its run.
       if (abortController.signal.aborted) {
-        throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
+        throw new Error(active.cancelled
+          ? `Delegation ${request.type} cancelled with its calling run`
+          : `Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
       }
       const orchestrator = new Orchestrator({
         providerManager,
@@ -819,6 +867,12 @@ export class DelegationManager {
               // The type's maxIterations is the sub-agent's whole budget (it is the
               // epoch's iteration limit): one epoch, no background auto-continue.
               maxEpochs: 1,
+              // Opened inside the calling run: bounded by its clock, gated on this
+              // delegation's remaining slice, and debiting its spend back up.
+              parentClockView: request.toolContext?.parentRun?.clockView,
+              childBudget: runBudget
+                ? { slice: runBudget.carveChild(1, 1), parent: runBudget }
+                : undefined,
             },
             {
               mode,
@@ -994,6 +1048,7 @@ export class DelegationManager {
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      parentSignal?.removeEventListener("abort", onParentAbort);
       // Commit BEFORE release, same as the two lease sites in
       // background-executor. Without this a delegated sub-agent's file writes
       // go into its lease and are deleted with it — the identical defect, one

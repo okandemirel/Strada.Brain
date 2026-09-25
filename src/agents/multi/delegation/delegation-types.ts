@@ -10,6 +10,7 @@
 import type { AgentId } from "../agent-types.js";
 import type { ToolContext } from "../../tools/tool-core.interface.js";
 import type { WorkerRunResult } from "../../supervisor/supervisor-types.js";
+import type { BudgetSlice } from "../../../agent-core/control/budget.js";
 
 // =============================================================================
 // CORE TYPES
@@ -60,6 +61,12 @@ export interface DelegationRequest {
   readonly depth: number;
   readonly mode: DelegationMode;
   readonly toolContext: ToolContext;
+  /**
+   * The share of the calling run's budget this sub-agent may spend, carved up front by a caller
+   * that starts several at once (swarm_tasks) so concurrent children split the headroom instead
+   * of each seeing all of it. Absent ⇒ the manager carves the whole remaining parent budget.
+   */
+  readonly budgetSlice?: BudgetSlice;
 }
 
 /** Result returned by a sub-agent after delegation completes */

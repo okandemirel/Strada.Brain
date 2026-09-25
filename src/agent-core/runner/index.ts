@@ -12,6 +12,7 @@ export type {
   AgentRunResult,
   AgentRunEvent,
   IOStrategy,
+  ParentRunScope,
   VisibleChunk,
   RunnerMode,
   TerminalStatus,

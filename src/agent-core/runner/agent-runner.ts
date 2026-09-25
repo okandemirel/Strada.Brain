@@ -28,6 +28,19 @@ import type {
 } from "../../agents/supervisor/supervisor-types.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { RunClockView } from "../control/run-clock.js";
+import type { Budget, ChildBudget } from "../control/budget.js";
+
+/**
+ * What a run lends the tools it calls, so a sub-agent a tool starts stays inside the run: the
+ * run's cancel signal (its task token — a /cancel, the task ceiling or the run's own end aborts
+ * it), its live Budget (a child is carved a slice of it and debits its spend back to it), and a
+ * read-only view of its wall clock.
+ */
+export interface ParentRunScope {
+  readonly signal: AbortSignal;
+  readonly budget: Budget;
+  readonly clockView: RunClockView;
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // AgentEvent — the one typed stream (ARCHITECTURE §5.1).
@@ -220,11 +233,16 @@ export interface AgentRunRequest {
   readonly maxEpochs?: number;
 
   /**
-   * Phase 1+ only: parent `RunClock` view for delegated/supervisor-node runs (shared clock,
-   * read-only — ARCHITECTURE §1.1). Undefined in Phase 0 (no control plane in the loop yet).
-   * Present in the contract now so the field is stable when Phase 1 threads it.
+   * Parent `RunClock` view for delegated runs (shared clock, read-only — ARCHITECTURE §1.1): the
+   * child's task ceiling is clamped to the parent's remaining time.
    */
   readonly parentClockView?: RunClockView;
+
+  /**
+   * A delegated run's share of its parent's budget: the slice it gates on and the parent Budget its
+   * spend is debited to. Absent ⇒ the run is seeded from the global headroom alone.
+   */
+  readonly childBudget?: ChildBudget;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

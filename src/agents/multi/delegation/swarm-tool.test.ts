@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SwarmTool, createSwarmTool } from "./swarm-tool.js";
 import type { DelegationResult } from "./delegation-types.js";
+import { createBudget } from "../../../agent-core/control/budget.js";
 
 const TYPES = [{ name: "implement" }, { name: "review" }] as never[];
 
@@ -205,5 +206,44 @@ describe("SwarmTool", () => {
 
     expect(createSwarmTool(TYPES, managerWith(vi.fn()), "a" as never, 2, 2)).toHaveLength(0);
     expect(createSwarmTool(TYPES, managerWith(vi.fn()), "a" as never, 0, 2)).toHaveLength(1);
+  });
+});
+
+describe("SwarmTool inside a run", () => {
+  it("launches no more members once the calling run is cancelled", async () => {
+    const controller = new AbortController();
+    const delegate = vi.fn(async () => {
+      controller.abort(); // the user cancels while the first member runs
+      return delegationResult("partial");
+    });
+    const tool = new SwarmTool(TYPES, managerWith(delegate), "agent-1" as never, 1, 1);
+
+    const result = await tool.execute(
+      { tasks: [{ task: "A" }, { task: "B" }, { task: "C" }] },
+      { signal: controller.signal } as never,
+    );
+
+    expect(delegate).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain("not started: the run was cancelled");
+    expect(result.content).toContain("2 of 3 subtasks failed");
+  });
+
+  it("splits the run's remaining budget between its members up front", async () => {
+    const budget = createBudget(Number.POSITIVE_INFINITY, 1);
+    const slices: unknown[] = [];
+    const delegate = vi.fn(async (req: { budgetSlice?: unknown }) => {
+      slices.push(req.budgetSlice);
+      return delegationResult("ok");
+    });
+    const tool = new SwarmTool(TYPES, managerWith(delegate as never), "agent-1" as never, 1, 4);
+    const clockView = { now: () => 0, remainingTaskMs: () => Number.POSITIVE_INFINITY };
+
+    await tool.execute(
+      { tasks: [{ task: "A" }, { task: "B" }, { task: "C" }, { task: "D" }] },
+      { parentRun: { budget, signal: new AbortController().signal, clockView } } as never,
+    );
+
+    expect(slices).toHaveLength(4);
+    for (const slice of slices) expect(slice).toEqual({ outputTokens: Number.POSITIVE_INFINITY, costUsd: 0.25 });
   });
 });

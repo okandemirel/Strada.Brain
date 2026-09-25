@@ -6,8 +6,8 @@
  * wraps io's onEvent sink + the learning bridge as run-scoped BoundedSinks behind
  * ControlPlane.openBus. PURELY ADDITIVE — new file, nothing in v1 routes here yet.
  *
- * openRun takes only (mode, parentClockView?) per the FROZEN ControlPlane interface
- * (v2-agent-runner.ts:78-81), so the clock / seed / health are captured HERE at construction and
+ * openRun takes (mode, parentClockView?, childBudget?) per the ControlPlane interface
+ * (v2-agent-runner.ts), so the clock / seed / health are captured HERE at construction and
  * the policy is resolved per call. resolveRunBudgetPolicy is pure+deterministic on (mode, seed),
  * so the policy backing these primitives === the one the spine already logged in its prologue.
  *
@@ -20,7 +20,7 @@
 import type { Clock } from "./clock.js";
 import { openRunClock } from "./run-clock.js";
 import type { RunClockView } from "./run-clock.js";
-import { createBudget } from "./budget.js";
+import { createBudget, type ChildBudget } from "./budget.js";
 import { createFailureLedger, type HealthCore } from "./failure-ledger.js";
 import { resolveRunBudgetPolicy, type PolicySeed, type RunMode } from "./policy.js";
 
@@ -78,7 +78,7 @@ export function createControlPlane(deps: ControlPlaneDeps): ControlPlane {
   const { clock, seed, createHealthCore, learning, ringCapacity } = deps;
 
   return {
-    openRun(mode: RunMode, _parentClockView?: RunClockView): OpenRunResult {
+    openRun(mode: RunMode, parentClockView?: RunClockView, childBudget?: ChildBudget): OpenRunResult {
       // Policy is resolved per run from the captured seed. Warnings are the SPINE's to log (it
       // already calls resolveRunBudgetPolicy in its prologue for callLimits + warning logging);
       // both calls are pure + deterministic on the same (mode, seed), so the policy the spine
@@ -86,15 +86,23 @@ export function createControlPlane(deps: ControlPlaneDeps): ControlPlane {
       // double-log, so they are intentionally dropped on this path.
       const { policy } = resolveRunBudgetPolicy(mode, seed);
       const health = createHealthCore();
+      // A delegated child lives inside its parent: it never outlives the parent's task ceiling,
+      // and it gates on the slice carved for it — not on the whole global headroom, which every
+      // concurrent child used to be seeded with — while its spend is debited up to the parent.
+      const taskHardMs = parentClockView
+        ? Math.min(policy.taskHardMs, parentClockView.remainingTaskMs())
+        : policy.taskHardMs;
       return {
-        clock: openRunClock(clock, policy),
+        clock: openRunClock(clock, taskHardMs === policy.taskHardMs ? policy : { ...policy, taskHardMs }),
         ledger: createFailureLedger(health, { pauseRetryBudget: policy.pauseRetryBudget }),
-        budget: createBudget(policy.outputTokenCap, policy.costCapUsd),
+        budget: childBudget
+          ? createBudget(
+              Math.min(policy.outputTokenCap, childBudget.slice.outputTokens),
+              Math.min(policy.costCapUsd, childBudget.slice.costUsd),
+              childBudget.parent,
+            )
+          : createBudget(policy.outputTokenCap, policy.costCapUsd),
       };
-      // parentClockView: a delegated child shares the PARENT's wall-clock ceiling
-      // (min(child.taskHardMs, parent.remainingTaskMs)). openRunClock has no "open under a parent
-      // view" constructor yet, so that shared-clock wiring is deferred to the worker-route-flip
-      // increment — the same deferral the spine header documents. Accepted + ignored for now.
     },
 
     openBus(runId: string, io: IOStrategy, parentRunId?: string): AgentRunEventBus {

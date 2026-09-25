@@ -29,6 +29,11 @@ import type { ToolContext } from "../../tools/tool-core.interface.js";
 import type { ITool } from "../../tools/tool.interface.js";
 import type { LearningEventMap } from "../../../core/event-bus.js";
 import type { IEventBus } from "../../../core/event-bus.js";
+import { SwarmTool } from "./swarm-tool.js";
+import { createBudget } from "../../../agent-core/control/budget.js";
+import { createControlPlane } from "../../../agent-core/control/control-plane.js";
+import { FakeClock } from "../../../agent-core/control/clock.js";
+import type { AgentRunRequest, ParentRunScope } from "../../../agent-core/runner/agent-runner.js";
 
 // =============================================================================
 // MOCKS
@@ -1921,5 +1926,124 @@ describe("a delegation whose budget expires while it waits for its lease", () =>
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a delegation runs inside its calling run", () => {
+  const finished = {
+    status: "completed", finalText: "done", finalSummary: "done", provider: "p", catalogVersion: "p:m",
+    assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [], reviewFindings: [], artifacts: [],
+  };
+  const clockView = { now: () => 0, remainingTaskMs: () => Number.POSITIVE_INFINITY };
+  const scope = (signal: AbortSignal, budget = createBudget(Number.POSITIVE_INFINITY, 1)): ParentRunScope =>
+    ({ signal, budget, clockView });
+  const request = (toolContext: ToolContext): DelegationRequest => ({
+    type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
+  });
+
+  it("a cancel of the calling run stops the sub-agent at once, recorded as a cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      orchestratorHasAgentCore = true;
+      const childCancelled: boolean[] = [];
+      scriptedRunnerRun = vi.fn((_req: unknown, io: { externalSignal: AbortSignal }) => new Promise((resolve) => {
+        io.externalSignal.addEventListener("abort", () => {
+          childCancelled.push(true);
+          resolve(finished);
+        }, { once: true });
+      }));
+      const log = new DelegationLog(new Database(":memory:"));
+      const mgr = new DelegationManager(buildManagerOpts({ delegationLog: log }));
+      const parent = new AbortController();
+      let outcome: unknown = "still running";
+      void mgr.delegate(request({ ...TEST_TOOL_CONTEXT, signal: parent.signal, parentRun: scope(parent.signal) }))
+        .then((v) => { outcome = v; }, (e: unknown) => { outcome = e; });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      parent.abort(); // the user cancels the parent run one second in (the type's budget is 60 s)
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect(childCancelled).toEqual([true]);
+      expect(scriptedRunnerRun).toHaveBeenCalledTimes(1); // not escalated to a pricier tier
+      expect(log.getHistory(1)[0]!.status).toBe("cancelled");
+    } finally {
+      await vi.advanceTimersByTimeAsync(60_000 + DELEGATION_ABORT_GRACE_MS + 5);
+      vi.useRealTimers();
+    }
+  });
+
+  it("a run that is already cancelled starts no sub-agent: no slot, no reservation, no run", async () => {
+    orchestratorHasAgentCore = true;
+    scriptedRunnerRun = vi.fn(async () => finished);
+    const tracker = createMockBudgetTracker();
+    const mgr = new DelegationManager(buildManagerOpts({ budgetTracker: tracker as never, getAgentBudgetCap: () => 10 }));
+    const signal = AbortSignal.abort();
+
+    await expect(mgr.delegate(request({ ...TEST_TOOL_CONTEXT, signal, parentRun: scope(signal) }))).rejects.toThrow(/not started/);
+
+    expect(scriptedRunnerRun).not.toHaveBeenCalled();
+    expect(tracker.reserve).not.toHaveBeenCalled();
+    expect(mgr.getActiveDelegations()).toHaveLength(0);
+  });
+
+  it("opens the sub-agent on the run's remaining budget and clock, and debits its spend back", async () => {
+    orchestratorHasAgentCore = true;
+    const parentBudget = createBudget(Number.POSITIVE_INFINITY, 1);
+    parentBudget.debit({ inputTokens: 0, outputTokens: 0, costUsd: 0.25 }); // the parent already spent some
+    let seen: AgentRunRequest | undefined;
+    scriptedRunnerRun = vi.fn(async (req: AgentRunRequest) => {
+      seen = req;
+      // The child's run debits the Budget the control plane opens from its grant.
+      const grant = req.childBudget!;
+      createBudget(grant.slice.outputTokens, grant.slice.costUsd, grant.parent)
+        .debit({ inputTokens: 0, outputTokens: 10, costUsd: 0.5 });
+      return finished;
+    });
+    const signal = new AbortController().signal;
+
+    await new DelegationManager(buildManagerOpts())
+      .delegate(request({ ...TEST_TOOL_CONTEXT, signal, parentRun: scope(signal, parentBudget) }));
+
+    expect(seen?.childBudget?.slice.costUsd).toBeCloseTo(0.75);
+    expect(seen?.parentClockView).toBe(clockView);
+    expect(parentBudget.remainingCostUsd()).toBeCloseTo(0.25);
+  });
+
+  it("two concurrent swarm members against $1 of headroom spend about $1 together, not $1 each", async () => {
+    orchestratorHasAgentCore = true;
+    // The real control plane, seeded with $1 of global headroom — what every run used to gate on.
+    const controlPlane = createControlPlane({
+      clock: new FakeClock(0),
+      seed: {
+        streamInitialTimeoutMs: 600_000, streamStallTimeoutMs: 300_000, providerFirstResponseMs: 90_000,
+        taskInactivityMs: 600_000, minInactivityOverStreamRatio: 2, outputTokenCap: 100_000, costCapUsd: 1,
+      },
+      createHealthCore: () => ({
+        recordSuccess: () => {}, recordFailure: () => {}, shouldAbort: () => false, shouldAskUser: () => false,
+        backoffMs: () => 0, statusLevel: "healthy", failureRate: 0, consecutive: 0,
+      }),
+    });
+    let spentUsd = 0;
+    scriptedRunnerRun = vi.fn(async (req: AgentRunRequest) => {
+      const { budget } = controlPlane.openRun("delegate", req.parentClockView, req.childBudget);
+      // $0.60 a turn; the member takes turns while its gate shows headroom.
+      while (budget.remainingCostUsd() > 0) {
+        budget.debit({ inputTokens: 0, outputTokens: 10, costUsd: 0.6 });
+        spentUsd += 0.6;
+      }
+      return finished;
+    });
+    const parentBudget = createBudget(Number.POSITIVE_INFINITY, 1);
+    const signal = new AbortController().signal;
+    const swarm = new SwarmTool(TEST_CONFIG.types, new DelegationManager(buildManagerOpts()), PARENT_AGENT_ID, 1, 2);
+
+    await swarm.execute(
+      { tasks: [{ task: "Audit module A" }, { task: "Audit module B" }] },
+      { ...TEST_TOOL_CONTEXT, signal, parentRun: scope(signal, parentBudget) },
+    );
+
+    expect(spentUsd).toBeLessThanOrEqual(1 + 0.6); // at most one turn over the run's headroom
+    expect(parentBudget.remainingCostUsd()).toBeCloseTo(1 - spentUsd); // and all of it on the run's books
   });
 });

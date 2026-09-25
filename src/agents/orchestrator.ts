@@ -536,6 +536,9 @@ interface ToolExecutionOptions {
   goalContext?: import("../tasks/types.js").GoalContext;
   /** Project root for the deterministic shell-review allowlist (review.ts). */
   projectPath?: string;
+  /** The calling run's cancel signal and budget/clock scope, handed on to the tools (ToolContext). */
+  signal?: AbortSignal;
+  parentRun?: import("../agent-core/runner/agent-runner.js").ParentRunScope;
 }
 
 /** What one call's gate chain reads from its batch (see executeSingleToolCall). */
@@ -4903,6 +4906,8 @@ export class Orchestrator {
       lookupTool: (name) => this.tools.get(name),
       onSkillCreated: this.onSkillCreated,
       vaultRegistry: this.vaultRegistry,
+      signal: options.signal,
+      parentRun: options.parentRun,
     };
 
     // SPEED (intelligence-neutral): the LLM frequently batches several INDEPENDENT read-only tool

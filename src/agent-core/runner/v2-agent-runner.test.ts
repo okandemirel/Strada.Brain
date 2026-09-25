@@ -28,7 +28,7 @@ import type { ProviderResponse } from "../../agents/providers/provider-core.inte
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
 import type { AgentEvent } from "../events/agent-event.js";
-import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
+import type { AgentRunRequest, IOStrategy, ParentRunScope, RunnerMode } from "./agent-runner.js";
 import {
   V2AgentRunner,
   type ControlPlane,
@@ -765,13 +765,14 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
 
     await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
 
-    // D2: executeToolCalls receives (toolCalls, session, agentState, response.text) — the 4th arg
-    // is the assistant's pre-tool text the port pushes onto the session before the tool results.
+    // D2: executeToolCalls receives (toolCalls, session, agentState, response.text, runScope) — the
+    // 4th arg is the assistant's pre-tool text the port pushes onto the session before the tool results.
     expect(port.spies.executeToolCalls).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ name: "edit_file" })]),
       expect.anything(), // session
       expect.anything(), // agentState
       "thinking before the tools", // ← response.text (D2 — was dropped before the fix)
+      expect.objectContaining({ signal: expect.any(AbortSignal) }), // the run's scope for its tools
     );
   });
 });
@@ -966,6 +967,58 @@ describe("V2AgentRunner — a signal already aborted when the run opens", () => 
     await drive(handles.clock, runner.run(mkRequest(), { ...mkIO("background"), externalSignal: controller.signal }));
 
     expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+});
+
+describe("V2AgentRunner — tools and sub-agents run inside the run's scope", () => {
+  const toolTurn = () => [
+    mkResponse({ text: "plan", stopReason: "end_turn" }),
+    mkResponse({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "swarm_tasks", input: {} }] }),
+    mkResponse({ text: "DONE", stopReason: "end_turn" }),
+  ];
+
+  it("a tool turn carries the run's cancel signal: a /cancel mid-tool reaches the tool, and no further turn runs", async () => {
+    const handles = mkPlane();
+    const controller = new AbortController();
+    const gateway = new ModelGateway(scriptedStream(toolTurn()));
+    const port = mkPort(mkProvider(), { planTransitionTo: AgentPhase.EXECUTING });
+    let toolSawCancel: boolean | undefined;
+    port.spies.executeToolCalls.mockImplementation(async (...args: unknown[]) => {
+      const scope = args[4] as ParentRunScope | undefined;
+      controller.abort(); // the user cancels while the tool (a sub-agent fan-out) runs
+      toolSawCancel = scope?.signal.aborted;
+      return [{ toolName: "swarm_tasks", toolCallId: "tc-1", success: true }];
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), { ...mkIO("background"), externalSignal: controller.signal }));
+
+    expect(toolSawCancel).toBe(true);
+    expect(result.cancelReason).toEqual({ kind: "user-cancel" });
+    // The plan turn and the tool turn; the gate after the tool batch stops the run.
+    expect(handles.events().filter((e) => e.type === "model.call.started")).toHaveLength(2);
+  });
+
+  it("opens a delegated run inside its parent's clock and budget, and lends its own to its tools", async () => {
+    const handles = mkPlane();
+    const openRun = vi.spyOn(handles.plane, "openRun");
+    const gateway = new ModelGateway(scriptedStream(toolTurn()));
+    const port = mkPort(mkProvider(), {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "swarm_tasks", toolCallId: "tc-1", success: true }],
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    const parentClockView = { now: () => 0, remainingTaskMs: () => 60_000 };
+    const childBudget = { slice: { outputTokens: 500, costUsd: 0.5 }, parent: createBudget(1_000, 1) };
+
+    await drive(handles.clock, runner.run(mkRequest({ parentClockView, childBudget }), mkIO("worker")));
+
+    expect(openRun).toHaveBeenCalledWith("delegate", parentClockView, childBudget);
+    const opened = openRun.mock.results[0]!.value as OpenRunResult;
+    const scope = port.spies.executeToolCalls.mock.calls[0]![4] as ParentRunScope;
+    expect(scope.budget).toBe(opened.budget);
+    expect(scope.signal).toBe(opened.clock.taskToken.signal);
+    expect(scope.clockView.remainingTaskMs()).toBe(opened.clock.remainingTaskMs());
   });
 });
 
