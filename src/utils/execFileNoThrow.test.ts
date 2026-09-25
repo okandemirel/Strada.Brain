@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { execFileNoThrow } from "./execFileNoThrow.js";
 
 // Node reports the exit code in `error.code`; the wrapper read a nonexistent
@@ -27,5 +29,11 @@ describe("execFileNoThrow", () => {
   it("reports a missing binary as 127", async () => {
     const result = await execFileNoThrow("strada-no-such-binary-xyz", []);
     expect(result.exitCode).toBe(127);
+  });
+
+  it("runs in the given working directory", async () => {
+    const dir = realpathSync(tmpdir());
+    const result = await execFileNoThrow(node, ["-e", "process.stdout.write(process.cwd())"], 5000, undefined, { cwd: dir });
+    expect(result.stdout).toBe(dir);
   });
 });

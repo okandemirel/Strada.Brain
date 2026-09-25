@@ -26,10 +26,11 @@ export function execFileNoThrow(
   args: string[],
   timeoutMs = 5000,
   extraEnv?: Record<string, string>,
+  options: { cwd?: string } = {},
 ): Promise<ExecFileResult> {
   return new Promise((resolve) => {
     const env = extraEnv ? { ...process.env, ...extraEnv } : undefined;
-    execFile(command, args, { timeout: timeoutMs, encoding: "utf-8", env }, (error, stdout, stderr) => {
+    execFile(command, args, { timeout: timeoutMs, encoding: "utf-8", env, cwd: options.cwd }, (error, stdout, stderr) => {
       if (error && typeof (error as NodeJS.ErrnoException).code === "string" && (error as NodeJS.ErrnoException).code === "ENOENT") {
         // The command binary itself was not found
         resolve({ exitCode: 127, stdout: "", stderr: error.message });
