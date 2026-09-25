@@ -1,8 +1,8 @@
 import { isAbsolute, resolve } from "node:path";
-import { homedir } from "node:os";
-import { isSensitivePath, validatePath } from "../../security/path-guard.js";
+import { validatePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { buildShellEnv } from "./shell-env-policy.js";
+import { sensitiveCommandPaths } from "./shell-sensitive-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
@@ -85,6 +85,8 @@ const INJECTION_PATTERNS: [RegExp, string][] = [
   [/(?:^|[;&|(]\s*)sudo\b/, "privilege escalation via sudo"],
 ];
 
+export { sensitiveCommandPaths };
+
 export class ShellExecTool implements ITool {
   readonly name = "shell_exec";
   readonly description =
@@ -93,7 +95,9 @@ export class ShellExecTool implements ITool {
     "Commands run with a timeout and output is captured, using the platform shell " +
     "(bash on macOS/Linux, cmd.exe on Windows). " +
     "Dangerous commands (rm -rf /, shutdown, etc.) and process-execution escapes " +
-    "(find -exec, awk system(), xargs-to-shell, nested sh -c, sudo) are blocked.";
+    "(find -exec, awk system(), xargs-to-shell, nested sh -c, sudo) are blocked, and so is a command " +
+    "that names a secret file or has a glob/variable that could expand to one. These are best-effort " +
+    "guards, not a sandbox.";
 
   readonly inputSchema = {
     type: "object",
@@ -241,23 +245,29 @@ export class ShellExecTool implements ITool {
       cwd = pathCheck.fullPath;
     }
 
+    // Default-deny environment: the command is model-authored, so it must
+    // not inherit this process's credentials. See shell-env-policy.ts.
+    const { env: childEnv } = buildShellEnv(process.env);
+
     // The same sensitive-path blocklist the file tools apply. Audited
     // 2026-09-10: `file_read .env` was refused while `cat .env` succeeded —
     // the blocklist was never consulted for a command's arguments, only for
-    // working_directory. Every path-shaped argument is resolved against the
-    // command's cwd and checked; one hit refuses the whole command by name.
-    const sensitive = sensitiveCommandPaths(command, cwd);
+    // working_directory. Every word is read as the shell reads it, and one
+    // that could expand to a protected name refuses the command (see
+    // shell-sensitive-paths.ts). A best-effort name check, not a sandbox: a
+    // program can still open files its command line never names.
+    const sensitive = sensitiveCommandPaths(command, cwd, { env: childEnv });
     if (sensitive.length > 0) {
       return {
-        content: `Error: command names a sensitive path (${sensitive.join(", ")}) — refused. Secrets and lease sidecars are not readable from the shell either.`,
+        content:
+          `Error: command names, or could expand to, a sensitive path (${sensitive.join(", ")}) — refused. ` +
+          "Name the files you need explicitly (narrow a glob by extension, avoid unknown variables) " +
+          "and leave secrets and lease sidecars alone.",
         isError: true,
       };
     }
     const startedAt = Date.now();
     try {
-      // Default-deny environment: the command is model-authored, so it must
-      // not inherit this process's credentials. See shell-env-policy.ts.
-      const { env: childEnv } = buildShellEnv(process.env);
       const shell = resolvePlatformShell();
       const result = await runProcess({
         command: shell.command,
@@ -391,27 +401,5 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
   }
 
   return { safe: true };
-}
-
-/**
- * Path-shaped arguments of a shell command that the blocklist refuses,
- * resolved against `cwd`. Tokens are split on whitespace with quotes
- * stripped; flags are skipped; `~` expands to the home directory. Only names
- * that look like paths (a separator, a leading dot, a dotenv family name)
- * are checked, so a word like `environment` is never mistaken for `.env`.
- */
-export function sensitiveCommandPaths(command: string, cwd: string): string[] {
-  const hits: string[] = [];
-  const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-  for (const raw of tokens) {
-    const token = raw.replace(/^["']|["']$/g, "");
-    if (token.startsWith("-") || token.length === 0) continue;
-    const pathLike = token.includes("/") || token.includes("\\") || token.startsWith(".") || token.startsWith("~");
-    if (!pathLike) continue;
-    const expanded = token.startsWith("~") ? `${homedir()}${token.slice(1)}` : token;
-    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-    if (isSensitivePath(absolute) && !hits.includes(token)) hits.push(token);
-  }
-  return hits;
 }
 

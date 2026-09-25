@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ShellExecTool } from "./shell-exec.js";
@@ -251,6 +251,20 @@ describe("the shell applies the same sensitive-path blocklist as the file tools 
     expect(sensitiveCommandPaths("cat README.md && ls Assets/Scripts", "/p")).toEqual([]);
     expect(sensitiveCommandPaths("echo environment --env=prod", "/p")).toEqual([]);
     expect(sensitiveCommandPaths("dotnet build ./src/Game.csproj", "/p")).toEqual([]);
+  });
+
+  it("a glob, brace list, variable or redirection that reaches a secret is refused before it runs (TLS-7)", async () => {
+    await writeFile(join(tempDir, ".env"), "SECRET_TOKEN=do-not-print\n");
+    await writeFile(join(tempDir, "Player.cs"), "class Player {}\n");
+    for (const command of ["cat .e*", "cat .en{v,x}", "F=.e; cat ${F}nv", "cat < .env", 'cat .e"n"v']) {
+      const result = await tool.execute({ command }, ctx);
+      expect(result.isError, command).toBe(true);
+      expect(result.content, command).toContain("sensitive path");
+      expect(result.content, command).not.toContain("do-not-print");
+    }
+    const ordinary = await tool.execute({ command: "cat *.cs && ls -a" }, ctx);
+    expect(ordinary.isError).toBeFalsy();
+    expect(ordinary.content).toContain("class Player");
   });
 
   it("the tool refuses the command before running it", async () => {
