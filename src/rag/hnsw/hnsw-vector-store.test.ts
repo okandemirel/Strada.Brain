@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import { createLogger } from "../../utils/logger.js";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { createLogger, getLogger } from "../../utils/logger.js";
 
 // Initialize logger for tests
 beforeAll(() => {
@@ -485,6 +485,60 @@ describeIfHnsw("HNSWVectorStore", () => {
     it("should report memory usage", () => {
       const usage = store.getMemoryUsage();
       expect(usage).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe("embedding size changes", () => {
+    const entry = (id: string, dim: number): VectorEntry => ({
+      id,
+      vector: createRandomVector(dim),
+      chunk: createMockChunk(id, `content ${id}`),
+      addedAt: Date.now(),
+      accessCount: 0,
+    });
+
+    it("a query of another size returns no hits and is logged once, not as a failed search per call", async () => {
+      await store.upsert([entry("a", dimensions), entry("b", dimensions)]);
+      const logger = getLogger();
+      const warn = vi.spyOn(logger, "warn");
+      const error = vi.spyOn(logger, "error");
+      try {
+        for (let i = 0; i < 3; i++) {
+          expect(await store.search(createRandomVector(dimensions / 2), 2)).toEqual([]);
+        }
+        expect(error.mock.calls.filter(([m]) => /Search failed/.test(String(m)))).toHaveLength(0);
+        expect(warn.mock.calls.filter(([m]) => /Query vector size does not match/.test(String(m)))).toHaveLength(1);
+        // Right-size queries still work.
+        expect((await store.search(createRandomVector(dimensions), 2)).length).toBeGreaterThan(0);
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    });
+
+    it("resetDimensions empties the index at the new size, which then stores, searches and persists", async () => {
+      await store.upsert([entry("a", dimensions), entry("b", dimensions)]);
+      store.resetDimensions(dimensions / 2);
+
+      expect(store.count()).toBe(0);
+      expect(store.dimensions).toBe(dimensions / 2);
+      await store.upsert([entry("c", dimensions / 2), entry("d", dimensions / 2)]);
+      expect((await store.search(createRandomVector(dimensions / 2), 2)).map((h) => h.id).sort()).toEqual(["c", "d"]);
+
+      await store.saveIndex(tempDir);
+      const reopened = await createHNSWVectorStore(tempDir, { dimensions: dimensions / 2, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32 });
+      try {
+        expect(reopened.count()).toBe(2);
+        expect(reopened.has("c")).toBe(true);
+      } finally {
+        await reopened.shutdown();
+      }
+    });
+
+    it("resetDimensions refuses a size that is not a positive integer", () => {
+      expect(() => store.resetDimensions(0)).toThrow(/Invalid vector dimensions/);
+      expect(() => store.resetDimensions(1.5)).toThrow(/Invalid vector dimensions/);
+      expect(store.dimensions).toBe(dimensions);
     });
   });
 

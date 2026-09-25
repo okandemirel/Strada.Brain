@@ -408,6 +408,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private rebuildScheduled = false;
   /** True when hnswlib-node is missing and the exact fallback index is in use. */
   private usingExactIndex = false;
+  /** "<query>:<index>" sizes of the last query-size mismatch logged (one line per mismatch, not per search). */
+  private warnedQueryDimensions: string | null = null;
 
   constructor(storePath: string, config: Partial<HNSWConfig> = {}) {
     this.storePath = storePath;
@@ -750,6 +752,22 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       return [];
     }
 
+    // A query of another size was made by another embedder than the one that
+    // filled this index; hnswlib rejects it, and logging that as a failed
+    // search on every call hid the cause. Say it once per mismatch: the owner
+    // has to rebuild the index for the new size.
+    if (queryVector.length !== this.config.dimensions) {
+      const mismatch = `${queryVector.length}:${this.config.dimensions}`;
+      if (this.warnedQueryDimensions !== mismatch) {
+        this.warnedQueryDimensions = mismatch;
+        getLoggerSafe().warn(
+          "[HNSWVectorStore] Query vector size does not match the index; no vector hits until the index is rebuilt for the new embedding size",
+          { queryDimensions: queryVector.length, indexDimensions: this.config.dimensions, path: this.storePath },
+        );
+      }
+      return [];
+    }
+
     const startTime = performance.now();
 
     try {
@@ -834,6 +852,41 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   count(): number {
     return this.chunks.size;
+  }
+
+  /** Size of the vectors this index holds. */
+  get dimensions(): number {
+    return this.config.dimensions;
+  }
+
+  /**
+   * Discard every vector and restart the index, empty, at `dimensions`.
+   *
+   * For an owner whose embedder changed size: vectors of two sizes cannot
+   * share one index, so the owner resets it and adds its entries again at the
+   * new size (AgentDB re-embeds them). The store object stays the same, so
+   * everything holding a reference to it keeps a live index. The caller
+   * serializes this with its other writes.
+   */
+  resetDimensions(dimensions: number): void {
+    if (!this.isInitialized || !this.hnswIndex) {
+      throw new Error("HNSWVectorStore not initialized");
+    }
+    if (!Number.isInteger(dimensions) || dimensions <= 0) {
+      throw new Error(`Invalid vector dimensions: ${dimensions}`);
+    }
+    if (this.writesInFlight > 0) {
+      throw new Error("HNSWVectorStore cannot reset its dimensions while a write is in flight");
+    }
+    getLoggerSafe().info("[HNSWVectorStore] Resetting index for a new vector size", {
+      from: this.config.dimensions,
+      to: dimensions,
+      discarded: this.chunks.size,
+      path: this.storePath,
+    });
+    this.config = { ...this.config, dimensions };
+    this.recreateIndex(this.config.maxElements);
+    this.warnedQueryDimensions = null;
   }
 
   has(id: string): boolean {
