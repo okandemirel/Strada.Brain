@@ -477,6 +477,13 @@ export interface Trajectory {
   readonly chatId?: ChatId;
   /** Correlation ID for the specific task run that produced this trajectory */
   readonly taskRunId?: string;
+  /**
+   * Whose task this was, and in which project. Replay retrieval puts prior
+   * task text into a system prompt, so it is scoped to this owner; a row
+   * written before the owner was recorded has neither and reaches nobody.
+   */
+  readonly userId?: string;
+  readonly projectId?: string;
   /** Description of the task */
   readonly taskDescription: string;
   /** Sequence of steps */
@@ -496,6 +503,9 @@ export interface Trajectory {
     readonly patternsDetected: string[];
   };
 }
+
+/** What replay retrieval reads of a trajectory: everything it scores, not its steps. */
+export type TrajectoryReplayCandidate = Pick<Trajectory, "id" | "taskDescription" | "outcome" | "createdAt">;
 
 // =============================================================================
 // VERDICT TYPES

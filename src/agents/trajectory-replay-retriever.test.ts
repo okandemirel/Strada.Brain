@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
+import { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
+import { TaskPlanner } from "./autonomy/task-planner.js";
 import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
+import { buildContextLayers, type ContextBuilderDeps } from "./orchestrator-context-builder.js";
 import type { Trajectory } from "../learning/types.js";
 import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
+
+const OWNER = { userId: "user-a", projectId: "/projects/arrows" } as const;
 
 describe("TrajectoryReplayRetriever", () => {
   let tempDir: string;
@@ -34,6 +40,7 @@ describe("TrajectoryReplayRetriever", () => {
       learnedInsights: ["Verify runtime import behavior, not just serialized YAML."],
       projectWorldFingerprint: "root tiki arrows modules castle systems 9",
       createdAt: Date.now() - 3_000,
+      ...OWNER,
     }));
     storage.createTrajectoryImmediate(createTrajectory({
       id: "traj_failure",
@@ -46,6 +53,7 @@ describe("TrajectoryReplayRetriever", () => {
       learnedInsights: ["Do not trust asset text alone for runtime crash analysis."],
       projectWorldFingerprint: "root tiki arrows modules castle systems 9",
       createdAt: Date.now() - 2_000,
+      ...OWNER,
     }));
     storage.createTrajectoryImmediate(createTrajectory({
       id: "traj_other_world",
@@ -58,6 +66,7 @@ describe("TrajectoryReplayRetriever", () => {
       learnedInsights: ["Back off reconnect timing before opening a new socket."],
       projectWorldFingerprint: "root strada brain modules dashboard systems 3",
       createdAt: Date.now() - 1_000,
+      ...OWNER,
     }));
 
     const retriever = new TrajectoryReplayRetriever(storage);
@@ -65,6 +74,7 @@ describe("TrajectoryReplayRetriever", () => {
       taskDescription: "Fix the Unity editor crash during level generation",
       projectWorldFingerprint: "root tiki arrows modules castle systems 9",
       maxInsights: 2,
+      ...OWNER,
     });
 
     expect(result.matchedTrajectoryIds).toContain("traj_success");
@@ -115,6 +125,176 @@ describe("TrajectoryReplayRetriever", () => {
     expect(scoped.replayContext?.verifierSummary).toContain("current chat");
     expect(unscoped.replayContext?.branchSummary).toContain("foreign branch");
   });
+
+  describe("owner scoping (ORC-9)", () => {
+    const TASK = "Fix the Unity editor crash during level generation";
+
+    function record(id: string, owner: { userId?: string; projectId?: string }): void {
+      storage.createTrajectoryImmediate(createTrajectory({
+        id,
+        chatId: `chat-${id}`,
+        taskRunId: `taskrun-${id}`,
+        taskDescription: `Fix Unity editor crash in level generation (${id})`,
+        success: true,
+        branchSummary: `branch of ${id}`,
+        verifierSummary: `verifier of ${id}`,
+        learnedInsights: [`insight of ${id}`],
+        projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+        createdAt: Date.now() - 1_000,
+        ...owner,
+      }));
+    }
+
+    function insightsFor(owner: { userId?: string; projectId?: string }) {
+      return new TrajectoryReplayRetriever(storage).getInsightsForTask({
+        taskDescription: TASK,
+        maxInsights: 5,
+        ...owner,
+      });
+    }
+
+    it("does not return a trajectory recorded for user A to user B", () => {
+      record("traj_alice", OWNER);
+
+      const forB = insightsFor({ userId: "user-b", projectId: OWNER.projectId });
+      expect(forB.matchedTrajectoryIds).toEqual([]);
+      expect(forB.insights.join("\n")).not.toContain("traj_alice");
+
+      const forA = insightsFor(OWNER);
+      expect(forA.matchedTrajectoryIds).toEqual(["traj_alice"]);
+      expect(forA.insights[0]).toContain("branch of traj_alice");
+    });
+
+    it("keeps the same user's trajectories to the project they were recorded in", () => {
+      record("traj_arrows", OWNER);
+      record("traj_other_project", { userId: OWNER.userId, projectId: "/projects/other" });
+
+      expect(insightsFor(OWNER).matchedTrajectoryIds).toEqual(["traj_arrows"]);
+    });
+
+    it("returns nothing when the turn carries no user", () => {
+      record("traj_alice", OWNER);
+
+      expect(insightsFor({ projectId: OWNER.projectId }).matchedTrajectoryIds).toEqual([]);
+    });
+
+    it("does not let another user's newer rows crowd out the owner's within the limit", () => {
+      record("traj_alice_old", OWNER);
+      for (let i = 0; i < 5; i++) {
+        storage.createTrajectoryImmediate(createTrajectory({
+          id: `traj_bob_${i}`,
+          chatId: "chat-bob",
+          taskRunId: `taskrun-bob-${i}`,
+          taskDescription: TASK,
+          success: true,
+          branchSummary: "bob branch",
+          verifierSummary: "bob verifier",
+          learnedInsights: [],
+          projectWorldFingerprint: "x",
+          createdAt: Date.now() - 100 + i,
+          userId: "user-b",
+          projectId: OWNER.projectId,
+        }));
+      }
+
+      const result = new TrajectoryReplayRetriever(storage, { maxTrajectories: 3 })
+        .getInsightsForTask({ taskDescription: TASK, maxInsights: 5, ...OWNER });
+      expect(result.matchedTrajectoryIds).toEqual(["traj_alice_old"]);
+    });
+
+    it("reads replay candidates without their steps", () => {
+      record("traj_alice", OWNER);
+
+      const [candidate] = storage.getReplayTrajectoriesForOwner({ ...OWNER, limit: 5 });
+      expect(candidate?.id).toBe("traj_alice");
+      expect(candidate).not.toHaveProperty("steps");
+    });
+
+    it("shows a legacy row with no recorded owner to nobody, without rewriting it", () => {
+      storage.close();
+      const legacyPath = join(tempDir, "legacy-learning.db");
+      const legacyDb = new Database(legacyPath);
+      legacyDb.exec(`
+        CREATE TABLE trajectories (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          chat_id TEXT,
+          task_run_id TEXT,
+          task_description TEXT NOT NULL,
+          steps TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          applied_instinct_ids TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          processed INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      const legacy = createTrajectory({
+        id: "traj_legacy",
+        chatId: "chat-legacy",
+        taskRunId: "taskrun-legacy",
+        taskDescription: TASK,
+        success: true,
+        branchSummary: "legacy branch",
+        verifierSummary: "legacy verifier",
+        learnedInsights: [],
+        projectWorldFingerprint: "x",
+        createdAt: Date.now() - 1_000,
+      });
+      legacyDb.prepare(
+        "INSERT INTO trajectories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        legacy.id, legacy.sessionId, legacy.chatId, legacy.taskRunId, legacy.taskDescription,
+        JSON.stringify(legacy.steps), JSON.stringify(legacy.outcome), "[]", legacy.createdAt, 0,
+      );
+      legacyDb.close();
+
+      storage = new LearningStorage(legacyPath);
+      storage.initialize();
+
+      // The migration is additive: the row is still there, owner still unrecorded.
+      const kept = storage.getTrajectory("traj_legacy");
+      expect(kept?.taskDescription).toBe(TASK);
+      expect(kept?.userId).toBeUndefined();
+      expect(kept?.projectId).toBeUndefined();
+
+      expect(insightsFor(OWNER).matchedTrajectoryIds).toEqual([]);
+      expect(insightsFor({ userId: "user-b" }).matchedTrajectoryIds).toEqual([]);
+    });
+
+    it("the per-turn context build asks for the turn's own user and project", async () => {
+      record("traj_alice", OWNER);
+      const deps = {
+        systemPrompt: "base",
+        defaultLanguage: "en",
+        projectPath: OWNER.projectId,
+        taskClassifier: { classify: () => ({ type: "general", confidence: 1 }) },
+        toolDefinitions: [],
+        toolMetadataByName: new Map(),
+        trajectoryReplayRetriever: new TrajectoryReplayRetriever(storage),
+      } as unknown as ContextBuilderDeps;
+      const build = (userId: string) =>
+        buildContextLayers(deps, "goal", "exec", TASK, null, undefined, { userId });
+
+      expect((await build(OWNER.userId)).context).toContain("branch of traj_alice");
+      expect((await build("user-b")).context).not.toContain("traj_alice");
+    });
+
+    it("records the route-level owner so it reaches that owner and nobody else", () => {
+      const pipeline = new LearningPipeline(storage);
+      const planner = new TaskPlanner();
+      planner.startTask({
+        sessionId: "session-a",
+        chatId: "chat-a",
+        ...OWNER,
+        taskDescription: "Fix Unity editor crash during level generation",
+        learningPipeline: pipeline,
+      });
+      planner.endTask({ success: true, hadErrors: false, errorCount: 0 });
+
+      expect(insightsFor(OWNER).matchedTrajectoryIds).toHaveLength(1);
+      expect(insightsFor({ userId: "user-b", projectId: OWNER.projectId }).matchedTrajectoryIds).toEqual([]);
+    });
+  });
 });
 
 function createTrajectory(params: {
@@ -128,12 +308,16 @@ function createTrajectory(params: {
   learnedInsights: string[];
   projectWorldFingerprint: string;
   createdAt: number;
+  userId?: string;
+  projectId?: string;
 }): Trajectory {
   return {
     id: params.id as `traj_${string}`,
     sessionId: "session-1" as SessionId,
     chatId: params.chatId,
     taskRunId: params.taskRunId,
+    userId: params.userId,
+    projectId: params.projectId,
     taskDescription: params.taskDescription,
     steps: [{
       stepNumber: 1,

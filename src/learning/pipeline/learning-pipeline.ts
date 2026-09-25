@@ -1286,6 +1286,9 @@ export class LearningPipeline {
     sessionId: string;
     chatId?: string;
     taskRunId?: string;
+    /** ORC-9: the owner replay retrieval is scoped to (see Trajectory.userId). */
+    userId?: string;
+    projectId?: string;
     taskDescription: string;
     steps: TrajectoryStep[];
     outcome: TrajectoryOutcome;
@@ -1313,6 +1316,8 @@ export class LearningPipeline {
       sessionId: createBrand(params.sessionId, "SessionId" as const),
       chatId: params.chatId ? createBrand(params.chatId, "ChatId" as const) : undefined,
       taskRunId: params.taskRunId,
+      userId: params.userId,
+      projectId: params.projectId,
       taskDescription: params.taskDescription,
       steps: params.steps,
       outcome: params.outcome,

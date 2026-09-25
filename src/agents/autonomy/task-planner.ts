@@ -119,6 +119,8 @@ export class TaskPlanner {
   private errorHistory: string[] = [];
   private sessionId = "";
   private chatId: string | undefined;
+  /** ORC-9: the trajectory's owner, which replay retrieval is scoped to. */
+  private owner: { userId?: string; projectId?: string } = {};
   private taskDescription = "";
   private taskRunId = "";
   private isTaskActive = false;
@@ -149,6 +151,7 @@ export class TaskPlanner {
     this.errorHistory = [];
     this.sessionId = "";
     this.chatId = undefined;
+    this.owner = {};
     this.taskDescription = "";
     this.taskRunId = "";
     this.isTaskActive = false;
@@ -163,12 +166,15 @@ export class TaskPlanner {
   startTask(params: {
     sessionId: string;
     chatId?: string;
+    userId?: string;
+    projectId?: string;
     taskDescription: string;
     learningPipeline?: LearningPipeline;
   }): void {
     this.reset();
     this.sessionId = params.sessionId;
     this.chatId = params.chatId;
+    this.owner = { userId: params.userId, projectId: params.projectId };
     this.taskDescription = params.taskDescription;
     this.taskRunId = `taskrun_${randomUUID()}`;
     this.isTaskActive = true;
@@ -232,6 +238,7 @@ export class TaskPlanner {
         sessionId: this.sessionId,
         chatId: this.chatId,
         taskRunId: this.taskRunId || undefined,
+        ...this.owner,
         taskDescription: this.taskDescription,
         steps: this.trajectorySteps,
         outcome,

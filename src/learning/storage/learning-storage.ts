@@ -28,6 +28,7 @@ import type {
   RuntimeArtifactStats,
   Trajectory,
   TrajectoryId,
+  TrajectoryReplayCandidate,
   TrajectoryStep,
   TrajectoryOutcome,
   ErrorPattern,
@@ -187,6 +188,9 @@ CREATE TABLE IF NOT EXISTS trajectories (
   session_id TEXT NOT NULL,
   chat_id TEXT,
   task_run_id TEXT,
+  -- ORC-9: the owner replay retrieval is scoped to. NULL on legacy rows.
+  user_id TEXT,
+  project_id TEXT,
   task_description TEXT NOT NULL,
   steps TEXT NOT NULL, -- JSON array of TrajectoryStep
   outcome TEXT NOT NULL, -- JSON object
@@ -509,6 +513,10 @@ export class LearningStorage {
     const trajectoryColumns = [
       "ALTER TABLE trajectories ADD COLUMN chat_id TEXT",
       "ALTER TABLE trajectories ADD COLUMN task_run_id TEXT",
+      // ORC-9: additive and nullable — existing rows keep NULL (no recorded
+      // owner) and are not rewritten; replay retrieval shows them to nobody.
+      "ALTER TABLE trajectories ADD COLUMN user_id TEXT",
+      "ALTER TABLE trajectories ADD COLUMN project_id TEXT",
     ];
     for (const sql of trajectoryColumns) {
       try {
@@ -522,6 +530,9 @@ export class LearningStorage {
     ).run();
     this.db.prepare(
       "CREATE INDEX IF NOT EXISTS idx_trajectories_chat_task_run_id ON trajectories(chat_id, task_run_id, created_at DESC)",
+    ).run();
+    this.db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_trajectories_owner ON trajectories(user_id, project_id, created_at DESC)",
     ).run();
 
     // Phase 13: instinct_scopes table for project-scope filtering
@@ -1152,8 +1163,8 @@ export class LearningStorage {
       listInstincts: `SELECT * FROM instincts WHERE status = ? ORDER BY confidence DESC`,
       insertTrajectory: `
         INSERT INTO trajectories 
-        (id, session_id, chat_id, task_run_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, chat_id, task_run_id, user_id, project_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       insertJunction: `INSERT OR IGNORE INTO trajectory_instincts (trajectory_id, instinct_id) VALUES (?, ?)`,
       getUnprocessedTrajectories: `SELECT * FROM trajectories WHERE processed = 0 ORDER BY created_at ASC LIMIT ?`,
@@ -1274,6 +1285,8 @@ export class LearningStorage {
           item.sessionId,
           item.chatId ?? null,
           item.taskRunId ?? null,
+          item.userId ?? null,
+          item.projectId ?? null,
           sanitizeSecrets(item.taskDescription),
           stringifyRedacted(item.steps),
           stringifyRedacted(item.outcome),
@@ -1845,6 +1858,8 @@ export class LearningStorage {
       trajectory.sessionId,
       trajectory.chatId ?? null,
       trajectory.taskRunId ?? null,
+      trajectory.userId ?? null,
+      trajectory.projectId ?? null,
       sanitizeSecrets(trajectory.taskDescription),
       stringifyRedacted(trajectory.steps),
       stringifyRedacted(trajectory.outcome),
@@ -1966,6 +1981,41 @@ export class LearningStorage {
 
     const rows = this.db!.prepare(sql).all(...params) as TrajectoryRow[];
     return this.parseRows(rows, (r) => this.rowToTrajectory(r), "trajectory").items;
+  }
+
+  /**
+   * ORC-9 — replay candidates recorded by ONE owner, newest first.
+   *
+   * Replay retrieval puts a prior task's description and verifier notes into a
+   * system prompt, so it reads only what `userId` recorded in `projectId`
+   * (`IS`, so "no project" matches only "no project"). A row with no recorded
+   * owner — every row written before the columns existed — reaches nobody, the
+   * rule an ownerless private instinct and an 'unknown' runtime artifact follow.
+   * The gate is in SQL so another person's rows cannot eat the LIMIT, and
+   * `steps` (the bulk of a row, unused by replay scoring) is not read.
+   */
+  getReplayTrajectoriesForOwner(options: {
+    userId: string;
+    projectId?: string;
+    limit: number;
+  }): TrajectoryReplayCandidate[] {
+    this.ensureConnection();
+    if (!options.userId.trim()) return [];
+    const rows = this.db!.prepare(
+      `SELECT id, task_description, outcome, created_at FROM trajectories
+       WHERE user_id = ? AND project_id IS ?
+       ORDER BY created_at DESC LIMIT ?`,
+    ).all(options.userId, options.projectId ?? null, options.limit) as TrajectoryReplayRow[];
+    return this.parseRows(
+      rows,
+      (r): TrajectoryReplayCandidate => ({
+        id: r.id as TrajectoryId,
+        taskDescription: r.task_description,
+        outcome: JSON.parse(r.outcome) as TrajectoryOutcome,
+        createdAt: r.created_at as TimestampMs,
+      }),
+      "trajectory",
+    ).items;
   }
 
   /** Mark trajectories as processed (batched) */
@@ -3447,6 +3497,8 @@ export class LearningStorage {
       sessionId: row.session_id as SessionId,
       chatId: row.chat_id ? row.chat_id as ChatId : undefined,
       taskRunId: row.task_run_id ?? undefined,
+      userId: row.user_id ?? undefined,
+      projectId: row.project_id ?? undefined,
       taskDescription: row.task_description,
       steps: JSON.parse(row.steps) as TrajectoryStep[],
       outcome: JSON.parse(row.outcome) as TrajectoryOutcome,
@@ -3681,6 +3733,8 @@ interface TrajectoryRow {
   session_id: string;
   chat_id: string | null;
   task_run_id: string | null;
+  user_id: string | null;
+  project_id: string | null;
   task_description: string;
   steps: string;
   outcome: string;
@@ -3688,6 +3742,9 @@ interface TrajectoryRow {
   created_at: number;
   processed: number;
 }
+
+/** The columns {@link LearningStorage.getReplayTrajectoriesForOwner} reads. */
+type TrajectoryReplayRow = Pick<TrajectoryRow, "id" | "task_description" | "outcome" | "created_at">;
 
 interface ErrorPatternRow {
   id: string;

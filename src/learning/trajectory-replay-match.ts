@@ -28,7 +28,7 @@ export function tokenSimilarity(left: string, right: string): number {
 }
 
 export function buildTrajectoryReplayMatch(
-  trajectory: Trajectory,
+  trajectory: Pick<Trajectory, "taskDescription" | "outcome" | "createdAt">,
   normalizedTask: string,
   currentWorldFingerprint?: string,
   options?: {

@@ -102,6 +102,9 @@ export function wireMessageHandler(
       taskPlanner.startTask({
         sessionId: normalizedMsg.chatId ?? generateSessionId(),
         chatId: normalizedMsg.chatId,
+        // ORC-9: replay retrieval reads a trajectory back only for its owner.
+        userId: normalizedMsg.userId,
+        projectId: projectPath,
         taskDescription: normalizedMsg.text.slice(0, 200),
         learningPipeline,
       });

@@ -81,6 +81,9 @@ export interface ContextBuilderDeps {
       taskDescription: string;
       projectWorldFingerprint?: string;
       maxInsights: number;
+      /** ORC-9: replay quotes prior task text — only this owner's trajectories. */
+      userId?: string;
+      projectId?: string;
     }): { insights: string[] };
   } | null;
   readonly getTaskExecutionContext?: () =>
@@ -172,7 +175,8 @@ function buildTaskExecutionMemoryLayer(
 function buildTrajectoryReplayMemoryLayer(
   ctx: ContextBuilderDeps,
   userMessage: string,
-  projectWorldFingerprint?: string,
+  projectWorldFingerprint: string | undefined,
+  owner: { readonly userId?: string; readonly projectId?: string },
 ): { content: string; contentHashes: string[] } | null {
   if (!ctx.trajectoryReplayRetriever || !userMessage.trim()) {
     return null;
@@ -183,6 +187,7 @@ function buildTrajectoryReplayMemoryLayer(
       taskDescription: userMessage,
       projectWorldFingerprint,
       maxInsights: 2,
+      ...owner,
     });
 
     if (replay.insights.length === 0) {
@@ -429,6 +434,9 @@ export async function buildContextLayers(
     ctx,
     userMessage,
     projectWorldFingerprint,
+    // ORC-9: the same owner the trajectory was recorded under (TaskPlanner /
+    // recordInRunTrajectoryCredit write the user and this project path).
+    { userId: identity?.userId, projectId: identity?.projectId ?? ctx.projectPath },
   );
   if (trajectoryReplayLayer) {
     layers.push(trajectoryReplayLayer.content);

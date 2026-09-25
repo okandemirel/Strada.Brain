@@ -1,5 +1,5 @@
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
-import type { Trajectory, TrajectoryReplayContext } from "../learning/types.js";
+import type { TrajectoryReplayCandidate, TrajectoryReplayContext } from "../learning/types.js";
 import {
   buildTrajectoryReplayMatch,
   normalizeTrajectoryReplayText,
@@ -16,7 +16,7 @@ export interface TaskRunReplayContextResult {
 }
 
 interface ReplayCandidate {
-  readonly trajectory: Trajectory;
+  readonly trajectory: TrajectoryReplayCandidate;
   readonly score: number;
   readonly sameWorld: boolean;
 }
@@ -35,13 +35,24 @@ export class TrajectoryReplayRetriever {
     taskDescription: string;
     projectWorldFingerprint?: string;
     maxInsights?: number;
+    /**
+     * ORC-9: whose turn this is. The insights quote prior task text into the
+     * system prompt, so only this user's trajectories in this project are
+     * candidates; with no user there is no owner to match and nothing returns.
+     */
+    userId?: string;
+    projectId?: string;
   }): TrajectoryReplayInsightResult {
     const normalizedTask = normalizeTrajectoryReplayText(params.taskDescription);
-    if (!normalizedTask) {
+    if (!normalizedTask || !params.userId) {
       return { insights: [], matchedTrajectoryIds: [] };
     }
 
-    const trajectories = this.storage.getTrajectories({ limit: this.maxTrajectories });
+    const trajectories = this.storage.getReplayTrajectoriesForOwner({
+      userId: params.userId,
+      projectId: params.projectId,
+      limit: this.maxTrajectories,
+    });
     const candidates = trajectories
       .map((trajectory) => this.scoreTrajectory(trajectory, normalizedTask, params.projectWorldFingerprint))
       .filter((candidate): candidate is ReplayCandidate => candidate !== null)
@@ -93,7 +104,7 @@ export class TrajectoryReplayRetriever {
   }
 
   private scoreTrajectory(
-    trajectory: Trajectory,
+    trajectory: TrajectoryReplayCandidate,
     normalizedTask: string,
     currentWorldFingerprint?: string,
   ): ReplayCandidate | null {

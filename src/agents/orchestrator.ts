@@ -3847,11 +3847,15 @@ export class Orchestrator {
       durationMs: 0 as TrajectoryOutcome["durationMs"],
       completionRate: 1 as TrajectoryOutcome["completionRate"],
     };
+    const taskContext = this.getTaskExecutionContext();
     pipeline.recordTrajectory({
       sessionId: params.sessionId,
       chatId: params.chatId,
       // The run's OWN minted taskRunId (T2), not the route-level T1.
-      taskRunId: this.getTaskExecutionContext()?.taskRunId,
+      taskRunId: taskContext?.taskRunId,
+      // ORC-9: the owner replay retrieval reads it back under.
+      userId: taskContext?.userId,
+      projectId: this.projectPath,
       taskDescription: params.taskDescription,
       steps,
       outcome,
