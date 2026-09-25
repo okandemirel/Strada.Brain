@@ -11,6 +11,7 @@
 
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../memory/unified/sqlite-pragmas.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
@@ -55,7 +56,63 @@ CREATE TABLE IF NOT EXISTS retrieval_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_retrieval_metrics_recorded ON retrieval_metrics(recorded_at DESC);
+
+-- FND-23: raw rows older than the retention period are folded into these
+-- per-UTC-day totals before they are deleted, so every aggregate still covers
+-- all time. Sums, not averages, so rolled and raw rows combine exactly.
+CREATE TABLE IF NOT EXISTS task_metrics_rollup (
+  day_start INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  completion_status TEXT NOT NULL,
+  task_count INTEGER NOT NULL,
+  paor_iterations_sum INTEGER NOT NULL,
+  tool_call_sum INTEGER NOT NULL,
+  tasks_with_instincts INTEGER NOT NULL,
+  instinct_count_sum INTEGER NOT NULL,
+  PRIMARY KEY (day_start, session_id, task_type, completion_status)
+);
+
+CREATE TABLE IF NOT EXISTS instinct_usage_rollup (
+  instinct_id TEXT PRIMARY KEY,
+  usage_count INTEGER NOT NULL,
+  success_count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS retrieval_metrics_rollup (
+  day_start INTEGER PRIMARY KEY,
+  retrievals INTEGER NOT NULL,
+  retrieval_time_sum INTEGER NOT NULL,
+  instincts_scanned_sum INTEGER NOT NULL,
+  insights_returned_sum INTEGER NOT NULL
+);
 `;
+
+const DAY_MS = 86_400_000;
+
+/** How long raw metric rows are kept before they are folded into the rollups. */
+export const DEFAULT_METRICS_RETENTION_DAYS = 90;
+
+export interface MetricsStorageOptions {
+  /** Raw-row retention; older rows survive only in the all-time rollups. */
+  retentionDays?: number;
+}
+
+/** Start of the UTC day containing `ms`. */
+function dayStart(ms: number): number {
+  return Math.floor(ms / DAY_MS) * DAY_MS;
+}
+
+interface TaskSums {
+  total: number | null;
+  success_count: number | null;
+  failure_count: number | null;
+  partial_count: number | null;
+  iterations_sum: number | null;
+  tool_calls_sum: number | null;
+  tasks_with_instincts: number | null;
+  instinct_count_sum: number | null;
+}
 
 // ─── Row Type ────────────────────────────────────────────────────────────────
 
@@ -80,6 +137,8 @@ interface TaskMetricRow {
 export class MetricsStorage {
   private db: Database.Database | null = null;
   private readonly dbPath: string;
+  private readonly retentionDays: number;
+  private lastRetentionAt = 0;
 
   // Prepared statement cache
   private stmts: {
@@ -88,8 +147,9 @@ export class MetricsStorage {
     instinctLeaderboard?: Database.Statement;
   } = {};
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: MetricsStorageOptions = {}) {
     this.dbPath = dbPath;
+    this.retentionDays = options.retentionDays ?? DEFAULT_METRICS_RETENTION_DAYS;
   }
 
   /** Initialize the database connection and create the task_metrics table */
@@ -118,19 +178,99 @@ export class MetricsStorage {
     `);
     this.stmts.instinctLeaderboard = this.db.prepare(`
       SELECT
-        j.value as instinct_id,
-        COUNT(*) as usage_count,
-        AVG(CASE WHEN tm.completion_status = 'success' THEN 1.0 ELSE 0.0 END) as task_success_rate
-      FROM task_metrics tm, json_each(tm.instinct_ids) j
-      GROUP BY j.value
+        instinct_id,
+        SUM(usage_count) as usage_count,
+        SUM(success_count) * 1.0 / SUM(usage_count) as task_success_rate
+      FROM (
+        SELECT j.value as instinct_id, COUNT(*) as usage_count,
+          SUM(CASE WHEN tm.completion_status = 'success' THEN 1 ELSE 0 END) as success_count
+        FROM task_metrics tm, json_each(tm.instinct_ids) j
+        GROUP BY j.value
+        UNION ALL
+        SELECT instinct_id, usage_count, success_count FROM instinct_usage_rollup
+      )
+      GROUP BY instinct_id
       ORDER BY usage_count DESC
       LIMIT ?
     `);
+
+    this.applyRetention();
+  }
+
+  /**
+   * Fold raw rows older than the retention period into the all-time rollups
+   * and delete them (FND-23): every task and every retrieval added a row
+   * forever. The cutoff is a UTC day boundary, so each rollup day is complete
+   * and a query window inside the retention period never touches a rollup.
+   * Runs at initialize() and then at most once a day from the record paths.
+   */
+  applyRetention(now: number = Date.now()): void {
+    this.ensureConnection();
+    this.lastRetentionAt = now;
+    const cutoff = dayStart(now - this.retentionDays * DAY_MS);
+    const db = this.db!;
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO task_metrics_rollup
+          (day_start, session_id, task_type, completion_status, task_count,
+           paor_iterations_sum, tool_call_sum, tasks_with_instincts, instinct_count_sum)
+        SELECT (CAST(completed_at AS INTEGER) / ${DAY_MS}) * ${DAY_MS}, session_id, task_type, completion_status, COUNT(*),
+          SUM(paor_iterations), SUM(tool_call_count),
+          SUM(CASE WHEN instinct_count > 0 THEN 1 ELSE 0 END),
+          SUM(CASE WHEN instinct_count > 0 THEN instinct_count ELSE 0 END)
+        FROM task_metrics WHERE completed_at < ?
+        GROUP BY 1, 2, 3, 4
+        ON CONFLICT(day_start, session_id, task_type, completion_status) DO UPDATE SET
+          task_count = task_count + excluded.task_count,
+          paor_iterations_sum = paor_iterations_sum + excluded.paor_iterations_sum,
+          tool_call_sum = tool_call_sum + excluded.tool_call_sum,
+          tasks_with_instincts = tasks_with_instincts + excluded.tasks_with_instincts,
+          instinct_count_sum = instinct_count_sum + excluded.instinct_count_sum
+      `).run(cutoff);
+      db.prepare(`
+        INSERT INTO instinct_usage_rollup (instinct_id, usage_count, success_count)
+        SELECT j.value, COUNT(*), SUM(CASE WHEN tm.completion_status = 'success' THEN 1 ELSE 0 END)
+        FROM task_metrics tm, json_each(tm.instinct_ids) j WHERE tm.completed_at < ?
+        GROUP BY j.value
+        ON CONFLICT(instinct_id) DO UPDATE SET
+          usage_count = usage_count + excluded.usage_count,
+          success_count = success_count + excluded.success_count
+      `).run(cutoff);
+      db.prepare("DELETE FROM task_metrics WHERE completed_at < ?").run(cutoff);
+
+      db.prepare(`
+        INSERT INTO retrieval_metrics_rollup
+          (day_start, retrievals, retrieval_time_sum, instincts_scanned_sum, insights_returned_sum)
+        SELECT (CAST(recorded_at AS INTEGER) / ${DAY_MS}) * ${DAY_MS}, COUNT(*), SUM(retrieval_time_ms),
+          SUM(instincts_scanned), SUM(insights_returned)
+        FROM retrieval_metrics WHERE recorded_at < ?
+        GROUP BY 1
+        ON CONFLICT(day_start) DO UPDATE SET
+          retrievals = retrievals + excluded.retrievals,
+          retrieval_time_sum = retrieval_time_sum + excluded.retrieval_time_sum,
+          instincts_scanned_sum = instincts_scanned_sum + excluded.instincts_scanned_sum,
+          insights_returned_sum = insights_returned_sum + excluded.insights_returned_sum
+      `).run(cutoff);
+      db.prepare("DELETE FROM retrieval_metrics WHERE recorded_at < ?").run(cutoff);
+    })();
+  }
+
+  /** The daily retention pass; a failure is logged, never lost with the metric. */
+  private maybeApplyRetention(): void {
+    if (Date.now() - this.lastRetentionAt < DAY_MS) return;
+    try {
+      this.applyRetention();
+    } catch (error) {
+      getLoggerSafe().warn("Metrics retention pass failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Record a task metric row (synchronous, fire-and-forget) */
   recordTaskMetric(metric: TaskMetric): void {
     this.ensureConnection();
+    this.maybeApplyRetention();
     this.stmts.insert!.run(
       metric.id,
       metric.sessionId,
@@ -155,6 +295,7 @@ export class MetricsStorage {
    */
   recordRetrievalMetric(metric: RetrievalMetric): void {
     this.ensureConnection();
+    this.maybeApplyRetention();
     this.stmts.insertRetrieval!.run(
       metric.id,
       metric.retrievalTimeMs,
@@ -188,21 +329,32 @@ export class MetricsStorage {
     }));
   }
 
-  /** Aggregate over retrievals recorded at or after `since` (all time when omitted) */
+  /**
+   * Aggregate over retrievals recorded at or after `since` (all time when
+   * omitted). Rolled-up days (older than the retention period) count whole.
+   */
   getRetrievalAggregation(since?: number): RetrievalAggregation {
     this.ensureConnection();
-    const where = since !== undefined ? "WHERE recorded_at >= ?" : "";
-    const params = since !== undefined ? [since] : [];
+    const rawWhere = since !== undefined ? "WHERE recorded_at >= ?" : "";
+    const rollWhere = since !== undefined ? "WHERE day_start >= ?" : "";
+    const params = since !== undefined ? [since, dayStart(since)] : [];
     const row = this.db!
-      .prepare(`SELECT COUNT(*) as total, AVG(retrieval_time_ms) as avg_ms,
-        AVG(instincts_scanned) as avg_scanned, AVG(insights_returned) as avg_returned
-        FROM retrieval_metrics ${where}`)
-      .get(...params) as { total: number; avg_ms: number | null; avg_scanned: number | null; avg_returned: number | null };
+      .prepare(`SELECT SUM(n) as total, SUM(time_sum) as time_sum, SUM(scanned_sum) as scanned_sum,
+        SUM(returned_sum) as returned_sum FROM (
+          SELECT COUNT(*) as n, SUM(retrieval_time_ms) as time_sum, SUM(instincts_scanned) as scanned_sum,
+            SUM(insights_returned) as returned_sum FROM retrieval_metrics ${rawWhere}
+          UNION ALL
+          SELECT SUM(retrievals), SUM(retrieval_time_sum), SUM(instincts_scanned_sum), SUM(insights_returned_sum)
+            FROM retrieval_metrics_rollup ${rollWhere}
+        )`)
+      .get(...params) as { total: number | null; time_sum: number | null; scanned_sum: number | null; returned_sum: number | null };
+    const total = row.total ?? 0;
+    const avg = (sum: number | null): number => (total > 0 ? (sum ?? 0) / total : 0);
     return {
-      retrievals: row.total ?? 0,
-      avgRetrievalTimeMs: row.avg_ms ?? 0,
-      avgInstinctsScanned: row.avg_scanned ?? 0,
-      avgInsightsReturned: row.avg_returned ?? 0,
+      retrievals: total,
+      avgRetrievalTimeMs: avg(row.time_sum),
+      avgInstinctsScanned: avg(row.scanned_sum),
+      avgInsightsReturned: avg(row.returned_sum),
     };
   }
 
@@ -218,47 +370,55 @@ export class MetricsStorage {
     return rows.map((r) => this.rowToMetric(r));
   }
 
-  /** Get aggregated metrics matching the filter */
+  /**
+   * Get aggregated metrics matching the filter: the retained raw rows plus the
+   * rollup of the pruned ones, so "all time" still means all time (FND-23).
+   * A window reaching past the retention period counts rolled-up days whole.
+   */
   getAggregation(filter: MetricsFilter): MetricsAggregation {
     this.ensureConnection();
 
-    const { sql, params } = this.buildWhereClause(filter);
+    const raw = this.buildWhereClause(filter);
+    const rolled = this.buildWhereClause(filter, "day_start");
 
-    const query = `SELECT
+    const rawSums = this.db!.prepare(`SELECT
       COUNT(*) as total,
       SUM(CASE WHEN completion_status = 'success' THEN 1 ELSE 0 END) as success_count,
       SUM(CASE WHEN completion_status = 'failure' THEN 1 ELSE 0 END) as failure_count,
       SUM(CASE WHEN completion_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-      AVG(paor_iterations) as avg_iterations,
-      AVG(tool_call_count) as avg_tool_calls,
+      SUM(paor_iterations) as iterations_sum,
+      SUM(tool_call_count) as tool_calls_sum,
       SUM(CASE WHEN instinct_count > 0 THEN 1 ELSE 0 END) as tasks_with_instincts,
-      AVG(CASE WHEN instinct_count > 0 THEN instinct_count ELSE NULL END) as avg_instincts_per_informed
-    FROM task_metrics ${sql}`;
+      SUM(CASE WHEN instinct_count > 0 THEN instinct_count ELSE 0 END) as instinct_count_sum
+    FROM task_metrics ${raw.sql}`).get(...raw.params) as TaskSums;
 
-    const row = this.db!.prepare(query).get(...params) as {
-      total: number;
-      success_count: number;
-      failure_count: number;
-      partial_count: number;
-      avg_iterations: number | null;
-      avg_tool_calls: number | null;
-      tasks_with_instincts: number;
-      avg_instincts_per_informed: number | null;
-    };
+    const rolledSums = this.db!.prepare(`SELECT
+      SUM(task_count) as total,
+      SUM(CASE WHEN completion_status = 'success' THEN task_count ELSE 0 END) as success_count,
+      SUM(CASE WHEN completion_status = 'failure' THEN task_count ELSE 0 END) as failure_count,
+      SUM(CASE WHEN completion_status = 'partial' THEN task_count ELSE 0 END) as partial_count,
+      SUM(paor_iterations_sum) as iterations_sum,
+      SUM(tool_call_sum) as tool_calls_sum,
+      SUM(tasks_with_instincts) as tasks_with_instincts,
+      SUM(instinct_count_sum) as instinct_count_sum
+    FROM task_metrics_rollup ${rolled.sql}`).get(...rolled.params) as TaskSums;
 
-    const total = row.total ?? 0;
+    const add = (key: keyof TaskSums): number => (rawSums[key] ?? 0) + (rolledSums[key] ?? 0);
+    const total = add("total");
+    const successCount = add("success_count");
+    const tasksWithInstincts = add("tasks_with_instincts");
 
     return {
       totalTasks: total,
-      successCount: row.success_count ?? 0,
-      failureCount: row.failure_count ?? 0,
-      partialCount: row.partial_count ?? 0,
-      completionRate: total > 0 ? (row.success_count ?? 0) / total : 0,
-      avgIterations: row.avg_iterations ?? 0,
-      avgToolCalls: row.avg_tool_calls ?? 0,
-      tasksWithInstincts: row.tasks_with_instincts ?? 0,
-      instinctReusePct: total > 0 ? ((row.tasks_with_instincts ?? 0) / total) * 100 : 0,
-      avgInstinctsPerInformedTask: row.avg_instincts_per_informed ?? 0,
+      successCount,
+      failureCount: add("failure_count"),
+      partialCount: add("partial_count"),
+      completionRate: total > 0 ? successCount / total : 0,
+      avgIterations: total > 0 ? add("iterations_sum") / total : 0,
+      avgToolCalls: total > 0 ? add("tool_calls_sum") / total : 0,
+      tasksWithInstincts,
+      instinctReusePct: total > 0 ? (tasksWithInstincts / total) * 100 : 0,
+      avgInstinctsPerInformedTask: tasksWithInstincts > 0 ? add("instinct_count_sum") / tasksWithInstincts : 0,
     };
   }
 
@@ -294,7 +454,14 @@ export class MetricsStorage {
     }
   }
 
-  private buildWhereClause(filter: MetricsFilter): { sql: string; params: (string | number)[] } {
+  /**
+   * WHERE clause for the raw table, or (timeColumn "day_start") for the daily
+   * rollup, where `since` selects from the day that contains it.
+   */
+  private buildWhereClause(
+    filter: MetricsFilter,
+    timeColumn: "completed_at" | "day_start" = "completed_at",
+  ): { sql: string; params: (string | number)[] } {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
@@ -311,11 +478,11 @@ export class MetricsStorage {
       params.push(filter.completionStatus);
     }
     if (filter.since !== undefined) {
-      conditions.push("completed_at >= ?");
-      params.push(filter.since);
+      conditions.push(`${timeColumn} >= ?`);
+      params.push(timeColumn === "day_start" ? dayStart(filter.since) : filter.since);
     }
     if (filter.until !== undefined) {
-      conditions.push("completed_at <= ?");
+      conditions.push(`${timeColumn} <= ?`);
       params.push(filter.until);
     }
 

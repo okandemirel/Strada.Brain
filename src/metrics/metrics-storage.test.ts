@@ -260,4 +260,69 @@ describe("MetricsStorage", () => {
       expect(() => storage.close()).not.toThrow();
     });
   });
+
+  // FND-23: raw rows grew forever; old ones are now folded into an all-time
+  // rollup before they are deleted.
+  describe("retention", () => {
+    const DAY = 86_400_000;
+
+    function seedAndReopen(): MetricsStorage {
+      const now = Date.now();
+      const old = now - 100 * DAY;
+      storage.recordTaskMetric(createMetric({ id: "old1", sessionId: "chat_old", completionStatus: "success", paorIterations: 2, toolCallCount: 4, instinctIds: ["inst_a"], instinctCount: 1, startedAt: old - 10, completedAt: old }));
+      storage.recordTaskMetric(createMetric({ id: "old2", sessionId: "chat_old", completionStatus: "failure", paorIterations: 4, toolCallCount: 6, instinctIds: ["inst_a", "inst_b"], instinctCount: 2, startedAt: old - 10, completedAt: old + 1000 }));
+      storage.recordTaskMetric(createMetric({ id: "new1", sessionId: "chat_new", completionStatus: "success", paorIterations: 6, toolCallCount: 2, instinctIds: ["inst_a"], instinctCount: 3, completedAt: now - DAY }));
+      storage.recordRetrievalMetric({ id: "r_old", retrievalTimeMs: 10, instinctsScanned: 4, scopeFiltered: 0, insightsReturned: 2, recordedAt: old });
+      storage.recordRetrievalMetric({ id: "r_new", retrievalTimeMs: 30, instinctsScanned: 8, scopeFiltered: 0, insightsReturned: 4, recordedAt: now - DAY });
+      storage.close();
+
+      const reopened = new MetricsStorage(join(tempDir, "learning.db"));
+      reopened.initialize();
+      storage = reopened;
+      return reopened;
+    }
+
+    it("prunes raw rows older than 90 days at initialize", () => {
+      const s = seedAndReopen();
+      expect(s.getTaskMetrics({}).map((m) => m.id)).toEqual(["new1"]);
+      expect(s.getRetrievalMetrics().map((m) => m.id)).toEqual(["r_new"]);
+    });
+
+    it("keeps all-time aggregates exact across the pruned rows", () => {
+      const s = seedAndReopen();
+      const all = s.getAggregation({});
+      expect(all.totalTasks).toBe(3);
+      expect(all.successCount).toBe(2);
+      expect(all.failureCount).toBe(1);
+      expect(all.avgIterations).toBeCloseTo(4, 10);
+      expect(all.avgToolCalls).toBeCloseTo(4, 10);
+      expect(all.tasksWithInstincts).toBe(3);
+      expect(all.avgInstinctsPerInformedTask).toBeCloseTo(2, 10);
+
+      expect(s.getAggregation({ sessionId: "chat_old" }).totalTasks).toBe(2);
+      expect(s.getAggregation({ completionStatus: "failure" }).totalTasks).toBe(1);
+      // A window inside the retention period sees only the raw rows.
+      expect(s.getAggregation({ since: Date.now() - 7 * DAY }).totalTasks).toBe(1);
+      expect(s.getAggregation({ since: Date.now() - 365 * DAY }).totalTasks).toBe(3);
+
+      const retrievals = s.getRetrievalAggregation();
+      expect(retrievals.retrievals).toBe(2);
+      expect(retrievals.avgRetrievalTimeMs).toBeCloseTo(20, 10);
+      expect(retrievals.avgInsightsReturned).toBeCloseTo(3, 10);
+
+      const board = s.getInstinctLeaderboard();
+      const a = board.find((e) => e.instinctId === "inst_a")!;
+      expect(a.usageCount).toBe(3);
+      expect(a.taskSuccessRate).toBeCloseTo(2 / 3, 10);
+      expect(board.find((e) => e.instinctId === "inst_b")!.usageCount).toBe(1);
+    });
+
+    it("does not count a pruned row twice when retention runs again", () => {
+      const s = seedAndReopen();
+      s.applyRetention();
+      s.applyRetention(Date.now() + DAY);
+      expect(s.getAggregation({}).totalTasks).toBe(3);
+      expect(s.getRetrievalAggregation().retrievals).toBe(2);
+    });
+  });
 });
