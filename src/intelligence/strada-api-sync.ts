@@ -10,7 +10,8 @@
 
 import { resolve, basename, join } from "node:path";
 import { stat, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createLogger } from "../utils/logger.js";
 import { StradaCoreExtractor } from "./strada-core-extractor.js";
@@ -39,11 +40,17 @@ const PACKAGE_PATH_ENV: Record<LegacyFrameworkPackageId, string> = {
   mcp: "STRADA_MCP_PATH",
 };
 
-const GIT_CACHE_DIR = join(
-  process.env["HOME"] ?? "/tmp",
-  ".strada",
-  "framework-cache",
-);
+/**
+ * Where fallback clones are cached: the same directory the daemon's framework
+ * sync uses. `HOME ?? "/tmp"` put it in a shared temp directory when HOME was
+ * unset (services, CI) and on the current drive's \tmp on Windows (LRN-21).
+ */
+export function stradaGitCacheRoot(): string {
+  return join(homedir(), ".strada", "framework-cache");
+}
+
+/** A cached clone older than this is refreshed (the daemon's default age). */
+const GIT_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Run the sync command.
@@ -243,38 +250,70 @@ function resolvePackagePath(
 /**
  * Shallow clone a package repo to the local cache directory.
  * Uses HTTPS-only protocol restriction (same pattern as skill-installer.ts).
+ *
+ * A cached clone is reused only while it is a checkout with a resolvable HEAD
+ * and younger than a day (LRN-21): whatever sat in the directory, including a
+ * clone cut off by the timeout, used to be read for ever. A new clone lands in
+ * a temporary directory that replaces the cache only once it succeeded, and a
+ * failed refresh keeps serving the older, still valid clone.
  */
-async function gitFallbackClone(
+export async function gitFallbackClone(
   pkgId: FrameworkPackageId,
   repoUrl: string,
   displayName: string,
+  cacheRoot: string = stradaGitCacheRoot(),
 ): Promise<string | null> {
-  const cacheDir = join(GIT_CACHE_DIR, pkgId);
+  const cacheDir = join(cacheRoot, pkgId);
+  const usable = isUsableClone(cacheDir);
 
-  // Use existing cache if present
-  if (existsSync(cacheDir)) {
+  if (usable && Date.now() - statSync(cacheDir).mtimeMs < GIT_CACHE_MAX_AGE_MS) {
     console.log(`  Using cached clone: ${cacheDir}`);
     return cacheDir;
   }
 
+  const cloneDir = `${cacheDir}.clone-${process.pid}-${Date.now()}`;
   try {
-    await mkdir(GIT_CACHE_DIR, { recursive: true });
+    await mkdir(cacheRoot, { recursive: true });
 
     console.log(`  Cloning ${displayName} (shallow)...`);
     execFileSync(
       "git",
-      ["clone", "--depth", "1", "--", repoUrl, cacheDir],
+      ["clone", "--depth", "1", "--", repoUrl, cloneDir],
       {
         timeout: 60_000,
         env: { ...process.env, GIT_ALLOW_PROTOCOL: "https" },
         stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
       },
     );
 
+    // Only now is the old cache replaced.
+    rmSync(cacheDir, { recursive: true, force: true });
+    renameSync(cloneDir, cacheDir);
     console.log(`  Cloned to: ${cacheDir}`);
     return cacheDir;
   } catch (err) {
+    rmSync(cloneDir, { recursive: true, force: true });
+    if (usable) {
+      console.error(`  Git fallback failed for ${displayName}; using the older clone at ${cacheDir}: ${(err as Error).message}`);
+      return cacheDir;
+    }
     console.error(`  Git fallback failed for ${displayName}: ${(err as Error).message}`);
     return null;
+  }
+}
+
+/** A git checkout of its own (not a directory inside some other repo) whose HEAD resolves. */
+function isUsableClone(dir: string): boolean {
+  if (!existsSync(join(dir, ".git"))) return false;
+  try {
+    execFileSync("git", ["-C", dir, "rev-parse", "--verify", "--quiet", "HEAD"], {
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
