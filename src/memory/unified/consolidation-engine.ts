@@ -511,7 +511,7 @@ export class MemoryConsolidationEngine {
    * insert summary entry, log the operation. All in a single SQLite transaction.
    * @throws if embedding generation fails (caller should catch and skip)
    */
-  async processCluster(cluster: MemoryCluster): Promise<{ cost: number }> {
+  async processCluster(cluster: MemoryCluster): Promise<{ cost: number; skipped?: true }> {
     // Gather content from entries
     const memberEntries = cluster.memberIds
       .map((id) => this.entries.get(id))
@@ -533,12 +533,25 @@ export class MemoryConsolidationEngine {
     }
 
     const contents = memberEntries.map((e) => e.content);
+    const versions = memberEntries.map((e) => e.version);
 
     // Summarize via LLM
     const llmResult = await this.summarizeWithLLM(contents);
 
     // Generate embedding for summary text (throws on failure)
     const summaryEmbedding = await this.generateEmbedding(llmResult.summary);
+
+    // Both calls take seconds. A member deleted, expired or rewritten in the
+    // meantime must not live on inside a new summary (MEM-16): drop this
+    // cluster, and the next cycle re-clusters whatever is still stored.
+    const stale = cluster.memberIds.length !== memberEntries.length
+      || memberEntries.some((e, i) => this.entries.get(e.id) !== e || e.content !== contents[i] || e.version !== versions[i]);
+    if (stale) {
+      this.logger.debug("[Consolidation] Cluster changed while it was being summarized — not consolidated", {
+        clusterId: cluster.seedId,
+      });
+      return { cost: llmResult.cost, skipped: true };
+    }
 
     // Calculate depth and importance
     const maxDepth = Math.max(...memberEntries.map((e) => this.getDepth(e)));
@@ -788,7 +801,7 @@ export class MemoryConsolidationEngine {
       try {
         const result = await this.processCluster(allClusters[i]!);
         totalCost += result.cost;
-        processed++;
+        if (!result.skipped) processed++;
       } catch (error) {
         // Embedding or other failure: skip cluster, log warning
         this.logger.warn("[Consolidation] Skipped cluster due to error", {

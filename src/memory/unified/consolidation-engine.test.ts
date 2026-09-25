@@ -688,6 +688,60 @@ describe("runCycle", () => {
 // ---------------------------------------------------------------------------
 
 describe("processCluster", () => {
+  it("does not resurrect a member deleted while the summary was being generated (MEM-16)", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("d1", makeMemEntry("d1", "keep this note", { tier: MemoryTier.Ephemeral }));
+    entries.set("d2", makeMemEntry("d2", "forget this note", { tier: MemoryTier.Ephemeral }));
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+    // The user says "forget d2" while the LLM is still summarizing.
+    const summarizeWithLLM = vi.fn(async (contents: string[]) => {
+      entries.delete("d2");
+      return { summary: contents.join(" + "), cost: 0.002, model: "test-model" };
+    });
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, hnswStore, summarizeWithLLM }));
+
+    const result = await engine.processCluster({
+      seedId: "d1",
+      memberIds: ["d1", "d2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(result).toEqual({ cost: 0.002, skipped: true });
+    expect([...entries.keys()]).toEqual(["d1"]);
+    for (const entry of entries.values()) expect((entry as { content: string }).content).not.toContain("forget this note");
+    expect(hnswStore.upsert).not.toHaveBeenCalled();
+    expect(hnswStore.remove).not.toHaveBeenCalled();
+  });
+
+  it("does not consolidate a member rewritten while the summary was being generated (MEM-16)", async () => {
+    const entries = new Map<string, unknown>();
+    const e1 = makeMemEntry("u1", "first", { tier: MemoryTier.Ephemeral });
+    const e2 = makeMemEntry("u2", "second", { tier: MemoryTier.Ephemeral });
+    entries.set("u1", e1);
+    entries.set("u2", e2);
+    const generateEmbedding = vi.fn(async () => {
+      e2.version = 2;
+      e2.content = "second, edited";
+      return [0.1, 0.2, 0.3, 0.4];
+    });
+    const engine = new MemoryConsolidationEngine(makeOpts({ entries, generateEmbedding }));
+
+    const result = await engine.processCluster({
+      seedId: "u1",
+      memberIds: ["u1", "u2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(result.skipped).toBe(true);
+    expect([...entries.keys()].sort()).toEqual(["u1", "u2"]);
+  });
+
   it("should create summary entry and remove original entries from memory", async () => {
     const entries = new Map<string, unknown>();
     entries.set("pc1", makeMemEntry("pc1", "content A", {
