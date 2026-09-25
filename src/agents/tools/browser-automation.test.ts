@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 
 // DNS is mocked so the resolved-target policy (plan 0-B.6 / 4.6) runs without
 // the network. Unknown hosts resolve to a public address. undici is mocked so
@@ -802,6 +802,53 @@ describe("BrowserAutomationTool.fallbackDownload — Codex round 6 #12", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("blocked pattern");
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// TLS-13: containment was lexical, so a symlink inside the project sent a download outside it.
+describe("BrowserAutomationTool download containment follows symlinks (TLS-13)", () => {
+  let tool: BrowserAutomationTool;
+  let root: string;
+  let outside: string;
+
+  beforeEach(async () => {
+    const { mkdtemp, symlink } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    tool = new BrowserAutomationTool();
+    root = await mkdtemp(`${tmpdir()}/strada-dl-root-`);
+    outside = await mkdtemp(`${tmpdir()}/strada-dl-outside-`);
+    await symlink(outside, `${root}/link`);
+  });
+
+  afterEach(async () => {
+    const { rm } = await import("node:fs/promises");
+    await tool.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("refuses a download path whose directory is a symlink out of the project, and a protected name", async () => {
+    const context: ToolContext = { projectPath: root, workingDirectory: root, readOnly: false };
+    for (const downloadPath of ["link/payload.bin", "config/.env"]) {
+      const result = await tool.execute({ action: "download", url: "https://files.example/a.bin", downloadPath }, context);
+      expect(result.isError, downloadPath).toBe(true);
+      expect(result.content, downloadPath).toContain("Download path refused");
+    }
+  });
+
+  it("the fallback writer does not follow a symlinked final component", async () => {
+    const { readFile, symlink, writeFile } = await import("node:fs/promises");
+    await writeFile(`${outside}/victim.txt`, "original");
+    await symlink(`${outside}/victim.txt`, `${root}/out.bin`);
+    dnsTable.set("files.example", [{ address: PUBLIC_V4, family: 4 }]);
+    mockFetch.mockResolvedValueOnce(okResponse("payload-bytes"));
+
+    const result = await (tool as unknown as {
+      fallbackDownload(u: string, t: string, r: string): Promise<{ content: string; isError?: boolean }>;
+    }).fallbackDownload("https://files.example/a.bin", `${root}/out.bin`, root);
+
+    expect(result.isError).toBe(true);
+    expect(await readFile(`${outside}/victim.txt`, "utf-8")).toBe("original");
   });
 });
 

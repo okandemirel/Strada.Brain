@@ -1,4 +1,4 @@
-import { mkdir, stat, open, realpath } from "node:fs/promises";
+import { mkdir, stat, open, realpath, type FileHandle } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { sameNameElsewhere } from "./nearby-names.js";
 import { dirname, extname, sep } from "node:path";
@@ -153,6 +153,20 @@ export async function writeFileInsideRoot(
   content: string,
   opts?: { exclusive?: boolean },
 ): Promise<void> {
+  const handle = await openFileInsideRoot(rootPath, targetPath, opts);
+  try {
+    await handle.writeFile(content, "utf-8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The open half of writeFileInsideRoot, for a caller that streams (a download). */
+export async function openFileInsideRoot(
+  rootPath: string,
+  targetPath: string,
+  opts?: { exclusive?: boolean },
+): Promise<FileHandle> {
   const [realParent, realRoot] = await Promise.all([
     realpath(dirname(targetPath)),
     realpath(rootPath),
@@ -162,10 +176,5 @@ export async function writeFileInsideRoot(
   }
   const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | NOFOLLOW_FLAG
     | (opts?.exclusive ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
-  const handle = await open(targetPath, flags, 0o644);
-  try {
-    await handle.writeFile(content, "utf-8");
-  } finally {
-    await handle.close();
-  }
+  return open(targetPath, flags, 0o644);
 }

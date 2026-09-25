@@ -21,11 +21,12 @@ import {
   type TargetResolver,
 } from "../../security/browser-security.js";
 import { getLogger } from "../../utils/logger.js";
-import { createWriteStream } from "node:fs";
+import { validatePath } from "../../security/path-guard.js";
+import { openFileInsideRoot } from "./file-write.js";
 import type { FileHandle } from "node:fs/promises";
 import { mkdir, mkdtemp, open, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -2105,19 +2106,25 @@ export class BrowserAutomationTool implements ITool {
     const targetCheck = await this.checkResolvedTarget(input.url);
     if (targetCheck) return targetCheck;
 
-    const session = this.requireSession(sessionId);
-    const candidate = resolve(join(context.workingDirectory, input.downloadPath));
-    const safeRoot = resolve(context.workingDirectory);
-    if (!candidate.startsWith(safeRoot + sep) && candidate !== safeRoot) {
-      return { content: "Download path traversal blocked: path must be within working directory", isError: true };
+    // Review TLS-13: containment was lexical (resolve + startsWith), so a
+    // symlinked directory inside the project sent the file outside it.
+    // validatePath realpaths the deepest existing ancestor and applies the
+    // sensitive-file blocklist; the write re-checks the parent after mkdir and
+    // refuses a symlinked final component (openFileInsideRoot).
+    const root = context.workingDirectory;
+    const pathCheck = await validatePath(root, input.downloadPath, { allowMissingParents: true });
+    if (!pathCheck.valid) {
+      return { content: `Download path refused: ${pathCheck.error ?? "invalid path"}`, isError: true };
     }
-    const fullPath = candidate;
-    await mkdir(dirname(fullPath), { recursive: true });
+    const session = this.requireSession(sessionId);
+    const fullPath = pathCheck.fullPath;
+    const intoDirectory = /[/\\]$/.test(input.downloadPath);
 
     try {
-      return await this.downloadViaBrowser(session, input.url, fullPath);
+      return await this.downloadViaBrowser(session, input.url, fullPath, root, intoDirectory);
     } catch {
-      return this.fallbackDownload(input.url, fullPath);
+      await mkdir(dirname(fullPath), { recursive: true });
+      return this.fallbackDownload(input.url, fullPath, root);
     }
   }
 
@@ -2125,6 +2132,8 @@ export class BrowserAutomationTool implements ITool {
     session: SessionState,
     url: string,
     targetPath: string,
+    root: string,
+    intoDirectory: boolean,
   ): Promise<ToolExecutionResult> {
     const page = await session.context.newPage();
     try {
@@ -2140,13 +2149,20 @@ export class BrowserAutomationTool implements ITool {
         }, url),
       ]);
 
-      const suggestedFilename = download.suggestedFilename();
-      const finalPath =
-        targetPath.endsWith("/") || (await this.isDirectory(targetPath))
-          ? join(targetPath, suggestedFilename)
-          : targetPath;
+      // The site names the file: only its last component, never a path.
+      const named = download.suggestedFilename().split(/[/\\]/).pop() ?? "";
+      const suggestedFilename = named && named !== "." && named !== ".." ? named : "download";
+      let finalPath = targetPath;
+      if (intoDirectory || (await this.isDirectory(targetPath))) {
+        const check = await validatePath(root, join(targetPath, suggestedFilename), { allowMissingParents: true });
+        if (!check.valid) return { content: `Download path refused: ${check.error ?? "invalid path"}`, isError: true };
+        finalPath = check.fullPath;
+      }
 
-      await download.saveAs(finalPath);
+      const body = await download.createReadStream();
+      await mkdir(dirname(finalPath), { recursive: true });
+      const handle = await openFileInsideRoot(root, finalPath);
+      await pipeline(body, handle.createWriteStream());
 
       const stats = await stat(finalPath);
       const sizeMb = stats.size / MB_IN_BYTES;
@@ -2165,7 +2181,11 @@ export class BrowserAutomationTool implements ITool {
     }
   }
 
-  private async fallbackDownload(url: string, targetPath: string): Promise<ToolExecutionResult> {
+  private async fallbackDownload(
+    url: string,
+    targetPath: string,
+    root: string = dirname(targetPath),
+  ): Promise<ToolExecutionResult> {
     // Codex round 6 #12: the download goes through the SAME address-pinned,
     // hop-by-hop transport as web_fetch_url (fetchWithPolicy): every redirect
     // hop is re-validated against the block patterns (onHop) and the resolved-
@@ -2211,9 +2231,10 @@ export class BrowserAutomationTool implements ITool {
       const body = response.body;
       if (!body) return { content: "Download failed: No response body", isError: true };
 
+      const handle = await openFileInsideRoot(root, targetPath);
       await pipeline(
         Readable.fromWeb(body as import("stream/web").ReadableStream),
-        createWriteStream(targetPath),
+        handle.createWriteStream(),
       );
       const stats = await stat(targetPath);
 
