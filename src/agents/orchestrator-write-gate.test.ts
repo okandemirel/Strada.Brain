@@ -40,3 +40,42 @@ describe("requestWriteConfirmation: git_push", () => {
     expect(request.question).toContain("origin");
   });
 });
+
+describe("requestWriteConfirmation: batch_execute (ORC-22)", () => {
+  const request = (requestConfirmation: ReturnType<typeof vi.fn>) =>
+    requestConfirmation.mock.calls[0]![0] as { question: string; details: string };
+
+  it("names each operation's command or path, not only the tool counts", async () => {
+    const { channel, requestConfirmation } = interactiveChannel();
+
+    await requestWriteConfirmation(channel, "chat", "user", "batch_execute", {
+      operations: [
+        { tool: "shell_exec", input: { command: "rm -rf Assets/Art" } },
+        { tool: "file_write", input: { path: "Assets/Scripts/Player.cs", content: "class Player {}" } },
+        { tool: "file_rename", input: { old_path: "Assets/A.cs", new_path: "Assets/B.cs" } },
+      ],
+    });
+
+    const { question, details } = request(requestConfirmation);
+    expect(question).toContain("3 operations");
+    expect(details).toContain("shell_exec: rm -rf Assets/Art");
+    expect(details).toContain("file_write: Assets/Scripts/Player.cs");
+    expect(details).toContain("file_rename: Assets/A.cs → Assets/B.cs");
+    expect(details).not.toContain("class Player");
+  });
+
+  it("caps the list and the length of each target", async () => {
+    const { channel, requestConfirmation } = interactiveChannel();
+    const operations = Array.from({ length: 25 }, (_, i) => ({
+      tool: "file_write",
+      input: { path: `Assets/${"deep/".repeat(40)}File${i}.cs` },
+    }));
+
+    await requestWriteConfirmation(channel, "chat", "user", "batch_execute", { operations });
+
+    const { details } = request(requestConfirmation);
+    expect(details.split("\n").filter((line) => line.startsWith("- file_write"))).toHaveLength(10);
+    expect(details).toContain("…and 15 more");
+    expect(details.length).toBeLessThan(2_000);
+  });
+});

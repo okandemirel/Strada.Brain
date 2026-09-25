@@ -65,6 +65,30 @@ export function estimateWriteChangeLines(
   return { totalChanges: Math.max(newest, oldest), known: true };
 }
 
+/** How many batch operations a confirmation prompt names one by one (ORC-22). */
+const MAX_BATCH_OPERATIONS_LISTED = 10;
+const MAX_BATCH_TARGET_CHARS = 100;
+
+/** One batch operation as a prompt line: the tool and what it acts on. */
+function describeBatchOperation(op: unknown): string {
+  if (typeof op !== "object" || op === null) return "? (unreadable operation)";
+  const record = op as Record<string, unknown>;
+  const tool = String(record["tool"] ?? "?");
+  const rawInput = record["input"];
+  const input = typeof rawInput === "object" && rawInput !== null ? (rawInput as Record<string, unknown>) : {};
+  const text = (key: string): string | undefined =>
+    typeof input[key] === "string" ? (input[key] as string) : undefined;
+  const oldPath = text("old_path");
+  const target =
+    text("command")
+    ?? (oldPath !== undefined ? `${oldPath} → ${text("new_path") ?? "?"}` : undefined)
+    ?? text("path")
+    ?? text("message");
+  if (target === undefined) return tool;
+  const flat = target.replace(/\s+/g, " ").trim();
+  return `${tool}: ${flat.length > MAX_BATCH_TARGET_CHARS ? `${flat.slice(0, MAX_BATCH_TARGET_CHARS)}…` : flat}`;
+}
+
 /** Tri-state so callers can tell a human "No" from "no human was reachable". */
 export type WriteConfirmationOutcome = "approved" | "denied" | "unavailable";
 
@@ -128,7 +152,13 @@ export async function requestWriteConfirmation(
       for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
       const summary = Array.from(counts.entries()).map(([n, c]) => `${c}× ${n}`).join(", ");
       question = `Confirm batch of ${ops.length} operation${ops.length === 1 ? "" : "s"} (${summary || "unreadable"})?`;
-      details = `Running batch_execute: ${summary || "operations could not be read"}`;
+      // ORC-22: counts alone are not informed consent — name what each
+      // operation touches (its path or command), capped.
+      const listed = ops.slice(0, MAX_BATCH_OPERATIONS_LISTED).map((op) => `- ${describeBatchOperation(op)}`);
+      if (ops.length > MAX_BATCH_OPERATIONS_LISTED) {
+        listed.push(`- …and ${ops.length - MAX_BATCH_OPERATIONS_LISTED} more`);
+      }
+      details = [`Running batch_execute: ${summary || "operations could not be read"}`, ...listed].join("\n");
       break;
     }
     default: {
