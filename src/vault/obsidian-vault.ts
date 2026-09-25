@@ -7,7 +7,7 @@ import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
-import { rrfFuse, packByBudget } from './query-pipeline.js';
+import { rrfFuse, packByBudget, candidateFetchK } from './query-pipeline.js';
 import { listIndexableFiles } from './discovery.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
@@ -202,19 +202,23 @@ export class ObsidianVault implements IVault {
 
   async query(q: VaultQuery): Promise<VaultQueryResult> {
     const topK = q.topK ?? 20;
+    // Same as UnityProjectVault: langFilter/pathGlob constrain the candidates,
+    // so over-fetch while one is active and cut to topK only after filtering
+    // (MEM-18: the cut used to come first and a filtered query came back empty).
+    const fetchK = candidateFetchK(topK, q);
     // Fix P2: escapeFtsQuery throws VaultQueryError on whitespace-only input;
     // bubble it up so the route handler can return HTTP 400.
-    const fts = this.store.searchFts(escapeFtsQuery(q.text), topK);
+    const fts = this.store.searchFts(escapeFtsQuery(q.text), fetchK);
     // Embeddings only ENHANCE retrieval. Skip the embed + vector-search
     // round-trip entirely when the backing store is non-semantic (no real
     // HNSW backend) so a placeholder/unwired store can't fuse noise vectors
     // into the lexical (BM25) ranking. When semantic, fuse via RRF as before.
     const hnswRanked: Array<{ chunkId: string; score: number }> = this.adapter.isSemantic()
-      ? (await this.adapter.search(q.text, topK))
+      ? (await this.adapter.search(q.text, fetchK))
           .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
           .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null)
       : [];
-    const fused = rrfFuse(fts, hnswRanked, 60).slice(0, topK);
+    const fused = rrfFuse(fts, hnswRanked, 60);
 
     let rankedChunkIds = fused.map((f) => f.chunkId);
     if (q.focusFiles?.length) {
@@ -253,6 +257,8 @@ export class ObsidianVault implements IVault {
       const matches = compilePathGlob(q.pathGlob);
       chunks = chunks.filter((c) => matches(c.path));
     }
+
+    chunks = chunks.slice(0, topK);
 
     const budget = q.budgetTokens ?? Number.POSITIVE_INFINITY;
     const { kept, dropped } = packByBudget(chunks, budget);

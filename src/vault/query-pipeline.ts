@@ -29,6 +29,28 @@ export function rrfFuse(fts: Ranked[], hnsw: Ranked[], k: number): Fused[] {
 }
 
 /**
+ * How many extra candidates to retrieve per requested result when a
+ * langFilter/pathGlob is active. Filtering happens after retrieval, so the
+ * candidate pool must be wider than topK or a selective filter starves the
+ * result set. 5x covers a filter that matches ~20% of the corpus.
+ */
+const FILTER_OVERFETCH = 5;
+
+/** Hard ceiling on the over-fetch, so a large topK cannot turn one query into
+ *  an unbounded scan. */
+const MAX_FETCH_K = 200;
+
+/**
+ * Candidates to retrieve for a query. Shared by every vault's query so the
+ * over-fetch cannot drift between copies again (MEM-18): the cut to topK must
+ * happen after langFilter/pathGlob, never before.
+ */
+export function candidateFetchK(topK: number, q: { langFilter?: readonly unknown[]; pathGlob?: string }): number {
+  const filtersActive = Boolean(q.langFilter?.length || q.pathGlob);
+  return filtersActive ? Math.min(topK * FILTER_OVERFETCH, MAX_FETCH_K) : topK;
+}
+
+/**
  * Greedily pick items in order until budget exhausted; remaining go to `dropped`.
  * Items are processed in input order — caller is responsible for pre-sorting by relevance.
  */

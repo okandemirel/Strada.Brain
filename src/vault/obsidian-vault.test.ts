@@ -118,6 +118,23 @@ describe('ObsidianVault', () => {
     await expect(vault.query({ text: '   ' })).rejects.toThrowError(VaultQueryError);
   });
 
+  it('applies pathGlob before the topK cut, like UnityProjectVault (MEM-18)', async () => {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'Archive'));
+    mkdirSync(join(root, 'Projects'));
+    // The strongest lexical matches all live outside the glob.
+    for (let i = 0; i < 6; i++) {
+      writeFileSync(join(root, 'Archive', `old-${i}.md`), `# Old ${i}\n\ninventory inventory inventory damping ${i}`);
+    }
+    writeFileSync(join(root, 'Projects', 'current.md'), '# Current\n\ninventory notes for this sprint');
+    const vault = makeVault(root);
+    await vault.init();
+
+    const result = await vault.query({ text: 'inventory', topK: 3, pathGlob: 'Projects/**' });
+
+    expect(result.hits.map((h) => h.chunk.path)).toEqual(['Projects/current.md']);
+  });
+
   describe('redactPathsInMessage', () => {
     it('replaces the vault root path with <vault>', () => {
       expect(redactPathsInMessage('rename failed at /lex/vault/graph.canvas', '/lex/vault'))

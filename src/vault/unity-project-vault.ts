@@ -6,7 +6,7 @@ import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
-import { rrfFuse, packByBudget } from './query-pipeline.js';
+import { rrfFuse, packByBudget, candidateFetchK } from './query-pipeline.js';
 import { listIndexableFiles } from './discovery.js';
 import {
   getIndexableFileInfo,
@@ -25,18 +25,6 @@ import type {
   VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
 import { compilePathGlob } from './glob-match.js';
-
-/**
- * How many extra candidates to retrieve per requested result when a
- * langFilter/pathGlob is active. Filtering happens after retrieval, so the
- * candidate pool must be wider than topK or a selective filter starves the
- * result set. 5x covers a filter that matches ~20% of the corpus.
- */
-const FILTER_OVERFETCH = 5;
-
-/** Hard ceiling on the over-fetch, so a large topK cannot turn one query into
- *  an unbounded scan. */
-const MAX_FETCH_K = 200;
 
 export interface UnityVaultDeps {
   id: VaultId;
@@ -169,8 +157,7 @@ export class UnityProjectVault implements IVault {
     // was discarded and the query came back empty. Over-fetch while a filter
     // is active so there is still a full result set left after filtering, and
     // apply the topK cut at the end.
-    const filtersActive = Boolean(q.langFilter?.length || q.pathGlob);
-    const fetchK = filtersActive ? Math.min(topK * FILTER_OVERFETCH, MAX_FETCH_K) : topK;
+    const fetchK = candidateFetchK(topK, q);
     const fts = this.store.searchFts(escapeFtsQuery(q.text), fetchK);
     // Embeddings only ENHANCE retrieval. Skip the embed + vector-search
     // round-trip entirely when the backing store is non-semantic (no real
