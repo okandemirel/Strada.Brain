@@ -9,6 +9,26 @@ import {
 } from '../../src/vault/obsidian-vault.js';
 import type { EmbeddingProvider, VectorStore } from '../../src/vault/embedding-adapter.js';
 
+// graph.canvas is written through the shared atomic writer, whose temp file is
+// uniquely named per write (MEM-15), so a test can no longer block "the" tmp
+// path on disk. This switch makes the next canvas writes fail the way a real
+// write error does (an errno error naming an absolute path).
+const canvasWriteFault = vi.hoisted(() => ({ fail: false }));
+vi.mock('../../src/common/atomic-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/common/atomic-file.js')>();
+  return {
+    ...actual,
+    writeFileAtomic: async (...args: Parameters<typeof actual.writeFileAtomic>) => {
+      if (canvasWriteFault.fail) {
+        throw Object.assign(new Error(`EISDIR: illegal operation on a directory, open '${args[0]}.tmp'`), {
+          code: 'EISDIR',
+        });
+      }
+      return actual.writeFileAtomic(...args);
+    },
+  };
+});
+
 class StubEmbedding implements EmbeddingProvider {
   readonly model = 'stub';
   readonly dim = 4;
@@ -65,6 +85,7 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
   });
 
   afterEach(async () => {
+    canvasWriteFault.fail = false;
     fetchSpy.mockRestore();
     await vault.dispose().catch(() => undefined);
     rmSync(dir, { recursive: true, force: true });
@@ -254,15 +275,9 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       expect(existsSync(canvasPath)).toBe(true);
       const beforeBytes = readFileSync(canvasPath, 'utf8');
 
-      // Make the .tmp path a non-empty directory: writeFile() to that path
-      // throws EISDIR before we ever reach fs.rename(). (Note: this exercises
-      // the *writeFile* failure path, not the rename path — Node's ESM rules
-      // make it awkward to spy on fsp.rename directly. The end-to-end
-      // invariant we care about is the same: any failure inside
-      // regenerateCanvasWithStatus must leave the live file untouched.)
-      const tmpPath = `${canvasPath}.tmp`;
-      mkdirSync(tmpPath, { recursive: true });
-      writeFileSync(join(tmpPath, 'block.txt'), 'blocker');
+      // Make the canvas write fail. The end-to-end invariant: any failure
+      // inside regenerateCanvasWithStatus must leave the live file untouched.
+      canvasWriteFault.fail = true;
 
       writeFileSync(join(dir, 'Y.md'), '# Y');
       const r = await vault.sync();
@@ -279,11 +294,9 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       await vault.init();
 
       const canvasPath = join(dir, '.strada/vault/graph.canvas');
-      const tmpPath = `${canvasPath}.tmp`;
 
-      // Block the tmp path so the next canvas regen fails.
-      mkdirSync(tmpPath, { recursive: true });
-      writeFileSync(join(tmpPath, 'block.txt'), 'blocker');
+      // Fail the next canvas regen.
+      canvasWriteFault.fail = true;
 
       // Edit a file → sync indexes it but the canvas regen fails (latch set).
       writeFileSync(join(dir, 'Y.md'), '# Y');
@@ -291,9 +304,9 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       expect(failed.canvas?.ok).toBe(false);
       const staleBytes = readFileSync(canvasPath, 'utf8');
 
-      // Unblock the tmp path but do NOT touch any source file: with the old
+      // Let writes succeed again but do NOT touch any source file: with the old
       // code the count===0 sync skips regen and the canvas stays stale forever.
-      rmSync(tmpPath, { recursive: true, force: true });
+      canvasWriteFault.fail = false;
       const healed = await vault.sync();
 
       expect(healed.changed).toBe(0);        // no files changed this sync
@@ -439,11 +452,8 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       ({ vault, store: vectorStore } = newVault(dir));
       await vault.init();
 
-      // Force a tmp-write failure to populate canvas.error from a real error.
-      const canvasPath = join(dir, '.strada/vault/graph.canvas');
-      const tmpPath = `${canvasPath}.tmp`;
-      mkdirSync(tmpPath, { recursive: true });
-      writeFileSync(join(tmpPath, 'block.txt'), 'blocker');
+      // Force a write failure whose message names the absolute canvas path.
+      canvasWriteFault.fail = true;
 
       writeFileSync(join(dir, 'Z2.md'), '# Z2');
       const r = await vault.sync();
