@@ -104,6 +104,17 @@ export function parseRateLimitValue(
 /** What the limiter is told to enforce. Every value has passed the table above. */
 export type RateLimitPatch = Partial<Record<RateLimitSettingField, number>>;
 
+/**
+ * The durable spend ledger the cost counters are seeded from
+ * (UnifiedBudgetManager satisfies it). Every channel message runs as a task
+ * whose usage the ledger books at the same cache-aware, per-model price this
+ * limiter uses, so its rows are the spend these caps measure.
+ */
+export interface SpendLedgerReader {
+  /** Recorded USD spend at or after `windowStart` (epoch ms). */
+  recordedSpendSince(windowStart: number): number;
+}
+
 /** The least a stored-override source has to offer (DaemonStorage satisfies it). */
 export interface RateLimitOverrideSource {
   getSettingsOverride(key: string, scope?: string): string | undefined;
@@ -164,7 +175,7 @@ export class RateLimiter {
 
   private messagesToday = 0;
 
-  constructor(config: Partial<RateLimitConfig> = {}) {
+  constructor(config: Partial<RateLimitConfig> = {}, opts: { spendLedger?: SpendLedgerReader } = {}) {
     this.config = {
       messagesPerMinute: config.messagesPerMinute ?? 0,
       messagesPerHour: config.messagesPerHour ?? 0,
@@ -176,6 +187,33 @@ export class RateLimiter {
     const now = new Date();
     this.dayStart = startOfDayUTC(now);
     this.monthStart = startOfMonthUTC(now);
+    if (opts.spendLedger) this.seedSpend(opts.spendLedger);
+  }
+
+  /**
+   * Seed the daily/monthly cost counters from the durable ledger (SEC-21).
+   * They lived in memory only, so every restart (a crash loop, a deploy)
+   * zeroed the spend caps while the money stayed spent. Takes the LARGER of
+   * what this process already counted and what the ledger holds for the
+   * current UTC day/month, so seeding never lowers a counter and never counts
+   * a cost twice. An unreadable ledger leaves the counters as they are.
+   */
+  seedSpend(ledger: SpendLedgerReader): void {
+    const now = Date.now();
+    this.rotatePeriods(now);
+    let daily: number;
+    let monthly: number;
+    try {
+      daily = ledger.recordedSpendSince(this.dayStart);
+      monthly = ledger.recordedSpendSince(this.monthStart);
+    } catch (error) {
+      getLogger().warn("Rate limiter could not read the spend ledger; cost counters not seeded", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (Number.isFinite(daily) && daily > 0) this.dailyCost = Math.max(this.dailyCost, daily);
+    if (Number.isFinite(monthly) && monthly > 0) this.monthlyCost = Math.max(this.monthlyCost, monthly);
   }
 
   /** What this limiter is enforcing right now (a copy — callers cannot poke it). */

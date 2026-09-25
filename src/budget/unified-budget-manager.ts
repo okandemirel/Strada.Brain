@@ -679,6 +679,15 @@ export class UnifiedBudgetManager {
     return true;
   }
 
+  /**
+   * Spend the ledger has RECORDED since `windowStart` (epoch ms): booked costs
+   * only, no in-flight reservations. The rate limiter seeds its UTC day/month
+   * cost counters from this, so a restart no longer zeroes its caps (SEC-21).
+   */
+  recordedSpendSince(windowStart: number): number {
+    return this.storage.sumBudgetSince(windowStart);
+  }
+
   getDailyHistory(days: number): DailyHistoryEntry[] {
     const windowStart = Date.now() - days * 24 * 60 * 60 * 1000;
     const raw = this.storage.getDailyHistory(windowStart);

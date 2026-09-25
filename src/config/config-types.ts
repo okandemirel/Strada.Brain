@@ -431,14 +431,17 @@ export interface ReRetrievalConfig {
   readonly ragTopK: number;
 }
 
-/** Rate limit configuration */
+/**
+ * Rate limit configuration. `undefined` means the operator left the limit
+ * unset (the built-in default applies); 0 means unlimited (SEC-21).
+ */
 export interface RateLimitConfig {
   readonly enabled: boolean;
-  readonly messagesPerMinute: number;
-  readonly messagesPerHour: number;
-  readonly tokensPerDay: number;
-  readonly dailyBudgetUsd: number;
-  readonly monthlyBudgetUsd: number;
+  readonly messagesPerMinute?: number;
+  readonly messagesPerHour?: number;
+  readonly tokensPerDay?: number;
+  readonly dailyBudgetUsd?: number;
+  readonly monthlyBudgetUsd?: number;
 }
 
 /** Memory backend type */

@@ -1232,14 +1232,15 @@ describe("loadConfig snapshot (plan-028 guard)", () => {
     expect(cfg.llmStreamInitialTimeoutMs).toBe(10 * 60 * 1000);
     expect(cfg.llmStreamStallTimeoutMs).toBe(5 * 60 * 1000);
 
-    // Rate limit defaults
+    // Rate limit defaults: unset stays unset so the runtime applies its
+    // built-in caps; 0 would mean unlimited (SEC-21).
     expect(cfg.rateLimit).toEqual({
       enabled: false,
-      messagesPerMinute: 0,
-      messagesPerHour: 0,
-      tokensPerDay: 0,
-      dailyBudgetUsd: 0,
-      monthlyBudgetUsd: 0,
+      messagesPerMinute: undefined,
+      messagesPerHour: undefined,
+      tokensPerDay: undefined,
+      dailyBudgetUsd: undefined,
+      monthlyBudgetUsd: undefined,
     });
 
     // Routing & consensus defaults
@@ -1260,6 +1261,29 @@ describe("loadConfig snapshot (plan-028 guard)", () => {
 
     // Unity project path (normalized by realpathSync mock — returns as-is)
     expect(cfg.unityProjectPath).toBe("/snapshot/project");
+  });
+
+  it("RATE_LIMIT_*: an explicit 0 is kept, and unset or empty stays unset (SEC-21)", () => {
+    const cfg = loadConfig({
+      ...FIXED_ENV,
+      RATE_LIMIT_ENABLED: "true",
+      RATE_LIMIT_DAILY_BUDGET_USD: "0",
+      RATE_LIMIT_MESSAGES_PER_MINUTE: "0",
+      RATE_LIMIT_TOKENS_PER_DAY: "",
+      RATE_LIMIT_MONTHLY_BUDGET_USD: "12.5",
+    });
+    expect(cfg.rateLimit).toEqual({
+      enabled: true,
+      messagesPerMinute: 0,
+      messagesPerHour: undefined,
+      tokensPerDay: undefined,
+      dailyBudgetUsd: 0,
+      monthlyBudgetUsd: 12.5,
+    });
+  });
+
+  it("RATE_LIMIT_*: a negative limit is still refused", () => {
+    expect(() => loadConfig({ ...FIXED_ENV, RATE_LIMIT_DAILY_BUDGET_USD: "-1" })).toThrow(/rateLimitDailyBudgetUsd/);
   });
 });
 

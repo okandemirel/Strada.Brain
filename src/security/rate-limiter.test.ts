@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RateLimiter, estimateCost, applyStoredRateLimitOverrides } from "./rate-limiter.js";
+import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -331,5 +336,84 @@ describe("updateConfig + stored overrides (item 2.7)", () => {
     });
     expect(applied).toEqual({ tokensPerDay: 500 });
     expect(limiter.getConfig()).toMatchObject({ messagesPerMinute: 3, tokensPerDay: 500 });
+  });
+});
+
+describe("spend caps survive a restart (SEC-21)", () => {
+  // The durable ledger the limiter seeds from: the same daemon.db the budget
+  // manager books every task's cost into.
+  let dir: string;
+  const open = () => {
+    const storage = new DaemonStorage(join(dir, "daemon.db"));
+    storage.initialize();
+    storage.migrateBudgetSource();
+    return { storage, ledger: new UnifiedBudgetManager(storage, { emit: () => {} }, {}) };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date("2026-03-10T12:00:00Z"), toFake: ["Date"] });
+    dir = mkdtempSync(join(tmpdir(), "rate-limiter-ledger-"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a restart with today's spend already recorded keeps the daily cap blocking", () => {
+    const before = open();
+    before.ledger.recordCost(1.5, "chat", { model: "claude-sonnet" });
+    before.storage.close();
+
+    // New process: nothing in memory, only what the ledger kept.
+    const after = open();
+    const limiter = new RateLimiter({ dailyBudgetUsd: 1 }, { spendLedger: after.ledger });
+    const result = limiter.checkMessageRate("u");
+    after.storage.close();
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/Daily budget exceeded/);
+  });
+
+  it("spend from earlier this month keeps the monthly cap blocking, but not today's", () => {
+    const before = open();
+    vi.setSystemTime(new Date("2026-03-02T09:00:00Z"));
+    before.ledger.recordCost(30, "agent", { agentId: "a1" });
+    vi.setSystemTime(new Date("2026-02-27T09:00:00Z")); // last month: not counted
+    before.ledger.recordCost(500, "chat", {});
+    vi.setSystemTime(new Date("2026-03-10T12:00:00Z"));
+    before.storage.close();
+
+    const after = open();
+    const limiter = new RateLimiter({ dailyBudgetUsd: 10, monthlyBudgetUsd: 25 }, { spendLedger: after.ledger });
+    const snapshot = limiter.getSnapshot();
+    const result = limiter.checkMessageRate("u");
+    after.storage.close();
+
+    expect(snapshot.costToday).toBe(0);
+    expect(snapshot.costThisMonth).toBeCloseTo(30, 6);
+    expect(result.reason).toMatch(/Monthly budget exceeded/);
+  });
+
+  it("seeding never lowers what this process already counted", () => {
+    const limiter = new RateLimiter({ dailyBudgetUsd: 100 });
+    limiter.recordTokenUsage(1_000_000, 0, "claude", "claude-sonnet-4-6");
+    const counted = limiter.getSnapshot().costToday;
+    expect(counted).toBeGreaterThan(0);
+    limiter.seedSpend({ recordedSpendSince: () => counted / 2 });
+    expect(limiter.getSnapshot().costToday).toBe(counted);
+  });
+
+  it("an unreadable ledger leaves the counters alone instead of failing startup", () => {
+    const limiter = new RateLimiter({ dailyBudgetUsd: 1 });
+    expect(() =>
+      limiter.seedSpend({
+        recordedSpendSince: () => {
+          throw new Error("database is locked");
+        },
+      }),
+    ).not.toThrow();
+    expect(limiter.getSnapshot().costToday).toBe(0);
+    expect(limiter.checkMessageRate("u").allowed).toBe(true);
   });
 });

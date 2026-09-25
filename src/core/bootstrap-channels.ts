@@ -169,17 +169,20 @@ export function initializeRateLimiter(config: Config, logger: winston.Logger): R
     return undefined;
   }
 
-  const rateLimiter = new RateLimiter({
-    messagesPerMinute: config.rateLimit.messagesPerMinute || DEFAULT_RATE_LIMITS.messagesPerMinute,
-    messagesPerHour: config.rateLimit.messagesPerHour || DEFAULT_RATE_LIMITS.messagesPerHour,
-    tokensPerDay: config.rateLimit.tokensPerDay || DEFAULT_RATE_LIMITS.tokensPerDay,
-    dailyBudgetUsd: config.rateLimit.dailyBudgetUsd || DEFAULT_RATE_LIMITS.dailyBudgetUsd,
-    monthlyBudgetUsd: config.rateLimit.monthlyBudgetUsd || DEFAULT_RATE_LIMITS.monthlyBudgetUsd,
-  });
+  // `??`, not `||`: an explicit 0 is "unlimited" and must survive; only an
+  // unset limit falls back to the built-in default (SEC-21).
+  const effective = {
+    messagesPerMinute: config.rateLimit.messagesPerMinute ?? DEFAULT_RATE_LIMITS.messagesPerMinute,
+    messagesPerHour: config.rateLimit.messagesPerHour ?? DEFAULT_RATE_LIMITS.messagesPerHour,
+    tokensPerDay: config.rateLimit.tokensPerDay ?? DEFAULT_RATE_LIMITS.tokensPerDay,
+    dailyBudgetUsd: config.rateLimit.dailyBudgetUsd ?? DEFAULT_RATE_LIMITS.dailyBudgetUsd,
+    monthlyBudgetUsd: config.rateLimit.monthlyBudgetUsd ?? DEFAULT_RATE_LIMITS.monthlyBudgetUsd,
+  };
+  const rateLimiter = new RateLimiter(effective);
 
   logger.info("Rate limiter initialized", {
-    messagesPerMinute: config.rateLimit.messagesPerMinute,
-    dailyBudgetUsd: config.rateLimit.dailyBudgetUsd,
+    messagesPerMinute: effective.messagesPerMinute,
+    dailyBudgetUsd: effective.dailyBudgetUsd,
   });
 
   return rateLimiter;

@@ -1836,6 +1836,9 @@ async function bootstrapImpl(
   if (rateLimiter) {
     const { applyStoredRateLimitOverrides } = await import("../security/rate-limiter.js");
     applyStoredRateLimitOverrides(rateLimiter, sharedDaemonStorage, logger);
+    // The spend caps count from the durable ledger, not from zero, so a
+    // restart does not hand out a fresh day's budget (SEC-21).
+    rateLimiter.seedSpend(sharedUnifiedBudgetManager);
     dashboard?.setRateLimiter(rateLimiter);
   }
 

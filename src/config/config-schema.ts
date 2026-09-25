@@ -75,6 +75,18 @@ const boolFromString = (defaultValue: boolean) =>
     })
     .prefault(String(defaultValue));
 
+/**
+ * A number from an env string that stays `undefined` when unset (absent or
+ * empty), so the consumer can tell "use the default" apart from an explicit
+ * value such as 0.
+ */
+const optionalNumber = (parse: (s: string) => number, schema: z.ZodNumber) =>
+  z
+    .string()
+    .optional()
+    .transform((s) => (s === undefined || s.trim() === "" ? undefined : parse(s)))
+    .pipe(schema.optional());
+
 /** Comma-separated list schema */
 const commaSeparatedList = z
   .string()
@@ -395,32 +407,15 @@ export const configSchema = z
       .prefault(String(DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS)),
 
     // Rate Limiting
+    // UNSET IS THE BUILT-IN DEFAULT; "0" IS UNLIMITED (SEC-21): these used to
+    // prefault to "0" and bootstrap read them with `||`, so an explicit 0 was
+    // indistinguishable from unset and silently became the default cap.
     rateLimitEnabled: boolFromString(false),
-    rateLimitMessagesPerMinute: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(0))
-      .prefault("0"),
-    rateLimitMessagesPerHour: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(0))
-      .prefault("0"),
-    rateLimitTokensPerDay: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(0))
-      .prefault("0"),
-    rateLimitDailyBudgetUsd: z
-      .string()
-      .transform((s) => parseFloat(s))
-      .pipe(z.number().min(0))
-      .prefault("0"),
-    rateLimitMonthlyBudgetUsd: z
-      .string()
-      .transform((s) => parseFloat(s))
-      .pipe(z.number().min(0))
-      .prefault("0"),
+    rateLimitMessagesPerMinute: optionalNumber((s) => parseInt(s, 10), z.number().int().min(0)),
+    rateLimitMessagesPerHour: optionalNumber((s) => parseInt(s, 10), z.number().int().min(0)),
+    rateLimitTokensPerDay: optionalNumber((s) => parseInt(s, 10), z.number().int().min(0)),
+    rateLimitDailyBudgetUsd: optionalNumber(parseFloat, z.number().min(0)),
+    rateLimitMonthlyBudgetUsd: optionalNumber(parseFloat, z.number().min(0)),
 
     // Unified Budget System
     // ABSENT IS NO LIMIT; "0" IS A LIMIT OF ZERO (plan 2.1b): the default

@@ -27,10 +27,12 @@ A token-bucket rate limiter enforces per-user and global limits to prevent abuse
 - **Global**: daily token quota, daily spend cap (USD), monthly spend cap (USD).
 - **Cost model**: built-in cost estimates for Claude, OpenAI, DeepSeek, Groq, Mistral, and Ollama.
 - **Auto-rotation**: counters reset at UTC day/month boundaries.
+- **Durable spend**: at startup the daily and monthly spend counters are seeded from the budget ledger in `daemon.db` (the spend the unified budget manager recorded for the current UTC day and month), so a restart does not reset the spend caps. The daily token quota and the per-user message windows are kept in memory only and start from zero after a restart.
+- **Unset vs `0`**: a limit left unset uses the built-in default (see the table under Configuration Reference); an explicit `0` means unlimited.
 
 When any limit is hit, the request is rejected with a reason string and optional `retryAfterMs`.
 
-Implementation: `src/security/rate-limiter.ts`
+Implementation: `src/security/rate-limiter.ts`, `src/budget/unified-budget-manager.ts` (spend ledger)
 
 ### 3. Path Guard
 
@@ -243,11 +245,11 @@ Security-related environment variables:
 | `READ_ONLY_MODE` | Disable all write tools | `false` |
 | `SHELL_ENABLED` | Allow shell command execution | `true` |
 | `RATE_LIMIT_ENABLED` | Enable rate limiting | `false` |
-| `RATE_LIMIT_MESSAGES_PER_MINUTE` | Max messages per user per minute | `0` (unlimited) |
-| `RATE_LIMIT_MESSAGES_PER_HOUR` | Max messages per user per hour | `0` (unlimited) |
-| `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `0` (unlimited) |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `0` (unlimited) |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `0` (unlimited) |
+| `RATE_LIMIT_MESSAGES_PER_MINUTE` | Max messages per user per minute (`0` = unlimited) | unset: unlimited |
+| `RATE_LIMIT_MESSAGES_PER_HOUR` | Max messages per user per hour (`0` = unlimited) | unset: unlimited |
+| `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day, all users (`0` = unlimited) | unset: `500000` |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend, survives restarts (`0` = unlimited) | unset: `5` |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend, survives restarts (`0` = unlimited) | unset: `100` |
 | `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `false` (setup writes `true`) |
 | `TASK_DELEGATION_ENABLED` | Enable task delegation | `false` (setup writes `true`) |
 | `AGENT_MAX_DELEGATION_DEPTH` | Maximum delegation chain depth | `2` |

@@ -86,6 +86,8 @@ vi.mock("../security/rate-limiter.js", () => ({
 import { initializeChannel, initializeDashboard, initializeRateLimiter } from "./bootstrap-channels.js";
 import type { Config } from "../config/config.js";
 import { DashboardServer } from "../dashboard/server.js";
+import { RateLimiter } from "../security/rate-limiter.js";
+import { DEFAULT_RATE_LIMITS } from "../common/constants.js";
 import type * as winston from "winston";
 
 // ---------------------------------------------------------------------------
@@ -315,5 +317,49 @@ describe("initializeRateLimiter", () => {
         dailyBudgetUsd: 5,
       }),
     );
+  });
+
+  // SEC-21: an explicit 0 is "unlimited" (RateLimiter's contract), and only an
+  // UNSET limit takes the built-in default. `||` turned 0 into the default.
+  const limiterOptions = (): unknown => {
+    const calls = vi.mocked(RateLimiter).mock.calls;
+    return calls[calls.length - 1]?.[0];
+  };
+
+  it("an unset limit takes the built-in default", () => {
+    initializeRateLimiter(makeConfig({ rateLimit: { enabled: true } }), logger);
+    expect(limiterOptions()).toEqual({ ...DEFAULT_RATE_LIMITS });
+  });
+
+  it("an explicit 0 stays 0 (unlimited) instead of becoming the default", () => {
+    initializeRateLimiter(
+      makeConfig({
+        rateLimit: {
+          enabled: true,
+          messagesPerMinute: 0,
+          messagesPerHour: 0,
+          tokensPerDay: 0,
+          dailyBudgetUsd: 0,
+          monthlyBudgetUsd: 0,
+        },
+      }),
+      logger,
+    );
+    expect(limiterOptions()).toEqual({
+      messagesPerMinute: 0,
+      messagesPerHour: 0,
+      tokensPerDay: 0,
+      dailyBudgetUsd: 0,
+      monthlyBudgetUsd: 0,
+    });
+  });
+
+  it("an unset limit next to an explicit one: each keeps its own meaning", () => {
+    initializeRateLimiter(makeConfig({ rateLimit: { enabled: true, dailyBudgetUsd: 0, tokensPerDay: 42 } }), logger);
+    expect(limiterOptions()).toMatchObject({
+      dailyBudgetUsd: 0,
+      tokensPerDay: 42,
+      monthlyBudgetUsd: DEFAULT_RATE_LIMITS.monthlyBudgetUsd,
+    });
   });
 });

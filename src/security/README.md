@@ -88,7 +88,9 @@ Sliding window per-user throttle:
 - Daily USD budget ceiling
 - Monthly USD budget ceiling
 
-Cost estimation uses provider cost tables for: Claude, OpenAI, DeepSeek, Groq, Mistral, Ollama. All limits default to 0 (unlimited). Counters reset at UTC midnight/month boundary.
+Cost estimation uses provider cost tables for: Claude, OpenAI, DeepSeek, Groq, Mistral, Ollama. Counters reset at UTC midnight/month boundary.
+
+When rate limiting is enabled, an unset limit takes the built-in default (`DEFAULT_RATE_LIMITS` in `src/common/constants.ts`: no message limits, 500,000 tokens/day, $5/day, $100/month) and an explicit 0 means unlimited. The daily and monthly spend counters are seeded at startup from the budget ledger (`UnifiedBudgetManager.recordedSpendSince` in `src/budget/unified-budget-manager.ts`), so a restart does not reset the spend caps. The token quota and message windows are in memory only.
 
 ## Path Guard (`path-guard.ts`)
 
