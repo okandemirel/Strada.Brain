@@ -1291,8 +1291,18 @@ export class DeliveryPackageStore {
     const json = JSON.stringify(pkg);
     const sha = createHash("sha256").update(json).digest("hex");
     const current = this.latest(pkg.campaignId);
-    if (current !== undefined && current.documentSha256 === sha) return current;
-    const revision = (current?.revision ?? 0) + 1;
+    // THE SAME REPORT ASSEMBLED AGAIN is not a new revision (CMP-14). Every
+    // production assembly stamps `assembledAt` from the clock, so comparing
+    // whole documents made each re-sent report a new revision and a new
+    // history row; the comparison leaves the stamp out.
+    if (current !== undefined && (current.documentSha256 === sha || sameReport(current.package, pkg))) return current;
+    // …and the next revision is counted from the rows, not from the newest
+    // one that still parses: an unreadable newest row made every later put
+    // collide with the revision it had already taken.
+    const top = this.db
+      .prepare("SELECT MAX(revision) AS revision FROM delivery_packages WHERE campaign_id = ?")
+      .get(pkg.campaignId) as { revision: number | null } | undefined;
+    const revision = (top?.revision ?? 0) + 1;
     this.db
       .prepare(
         `INSERT INTO delivery_packages (
@@ -1371,6 +1381,11 @@ export class DeliveryPackageStore {
   close(): void {
     this.db.close();
   }
+}
+
+/** Two assemblies of one report: identical but for when they were assembled. */
+function sameReport(a: DeliveryPackage, b: DeliveryPackage): boolean {
+  return JSON.stringify({ ...a, assembledAt: 0 }) === JSON.stringify({ ...b, assembledAt: 0 });
 }
 
 /**

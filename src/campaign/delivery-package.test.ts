@@ -563,6 +563,22 @@ describe("DeliveryPackageStore — it survives the process that wrote it", () =>
     expect(store.history("campaign_1").map((h) => h.revision)).toEqual([2, 1]);
   });
 
+  it("a report assembled again at another moment is the same revision (CMP-14)", () => {
+    // Production never passes `now`: each assembly carries its own clock.
+    expect(store.put(assembleDeliveryPackage({ campaign: campaign(), now: 1_000 }), 1_000).revision).toBe(1);
+    expect(store.put(assembleDeliveryPackage({ campaign: campaign(), now: 2_000 }), 2_000).revision).toBe(1);
+    expect(store.history("campaign_1")).toHaveLength(1);
+  });
+
+  it("an unreadable newest row does not stop the next package from being stored (CMP-14)", () => {
+    store.put(assembleDeliveryPackage({ campaign: campaign(), now: 10 }), 10);
+    const db = (store as unknown as { db: { prepare: (sql: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.prepare("UPDATE delivery_packages SET document_json = ? WHERE campaign_id = ?").run("{truncated", "campaign_1");
+    const next = store.put(assembleDeliveryPackage({ campaign: campaign({ state: "failed" }), now: 20 }), 20);
+    expect(next.revision).toBe(2);
+    expect(store.latest("campaign_1")?.revision).toBe(2);
+  });
+
   it("has nothing to say about a campaign it never stored", () => {
     expect(store.latest("campaign_missing")).toBeUndefined();
     expect(store.get("campaign_missing", 1)).toBeUndefined();
