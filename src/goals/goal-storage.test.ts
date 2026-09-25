@@ -418,3 +418,56 @@ describe("GoalStorage", () => {
     });
   });
 });
+
+// TSK-20: pruneOldTrees reclaims settled trees only, so trees a crash left
+// `executing` or a pause left `paused` were never removed.
+describe("GoalStorage.pruneStaleActiveTrees (TSK-20)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  let storage: GoalStorage;
+  let dbPath: string;
+
+  beforeEach(() => {
+    dbPath = createTempDbPath();
+    storage = new GoalStorage(dbPath);
+    storage.initialize();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(join(dbPath, ".."), { recursive: true, force: true });
+  });
+
+  function seed(status: string, ageMs: number, nodeAgeMs = ageMs): GoalTree {
+    const tree = buildTestTree();
+    storage.saveTree(tree);
+    const raw = new Database(dbPath);
+    const at = Date.now() - ageMs;
+    raw.prepare("UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?").run(status, at, tree.rootId);
+    raw.prepare("UPDATE goal_nodes SET updated_at = ? WHERE root_id = ?").run(Date.now() - nodeAgeMs, tree.rootId);
+    raw.close();
+    return tree;
+  }
+
+  it("prunes old executing and paused trees, keeping recent, retained and settled ones", () => {
+    const stuckExecuting = seed("executing", 120 * DAY);
+    const stuckPaused = seed("paused", 120 * DAY);
+    const recent = seed("executing", 5 * DAY);
+    const recentNode = seed("executing", 120 * DAY, 5 * DAY);
+    const campaign = seed("paused", 120 * DAY);
+    const settled = seed("completed", 120 * DAY);
+
+    const pruned = storage.pruneStaleActiveTrees(90 * DAY, new Set([String(campaign.rootId)]));
+
+    expect(pruned).toBe(2);
+    expect(storage.getTree(stuckExecuting.rootId)).toBeNull();
+    expect(storage.getTree(stuckPaused.rootId)).toBeNull();
+    for (const kept of [recent, recentNode, campaign, settled]) {
+      expect(storage.getTree(kept.rootId)).not.toBeNull();
+    }
+    const raw = new Database(dbPath);
+    const orphans = raw.prepare("SELECT COUNT(*) AS n FROM goal_nodes WHERE root_id IN (?, ?)")
+      .get(stuckExecuting.rootId, stuckPaused.rootId) as { n: number };
+    raw.close();
+    expect(orphans.n).toBe(0);
+  });
+});

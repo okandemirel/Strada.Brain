@@ -315,6 +315,17 @@ export class TaskStorage {
     })();
   }
 
+  /**
+   * Goal roots whose trees retention must keep (TSK-20): every root campaign
+   * work references, whatever its age, and every root a task touched at or
+   * after `since` references.
+   */
+  goalRootsToRetain(since: number): Set<string> {
+    this.ensureConnection();
+    const rows = this.getStmt("goalRootsToRetain").all(since) as Array<{ goal_root_id: string }>;
+    return new Set(rows.map((r) => r.goal_root_id));
+  }
+
   findLatestByGoalRoot(goalRootId: string): Task | null {
     this.ensureConnection();
     const row = this.getStmt("findLatestByGoalRoot").get(goalRootId) as TaskRow | undefined;
@@ -633,6 +644,10 @@ export class TaskStorage {
             AND SUM(CASE WHEN t.campaign_id IS NULL THEN 0 ELSE 1 END) = 0
         )
         SELECT id FROM tree WHERE root IN (SELECT root FROM stale)
+      `,
+      goalRootsToRetain: `
+        SELECT DISTINCT goal_root_id FROM tasks
+        WHERE goal_root_id IS NOT NULL AND (campaign_id IS NOT NULL OR updated_at >= ?)
       `,
       deleteProgressForTask: `DELETE FROM task_progress WHERE task_id = ?`,
       deleteTask: `DELETE FROM tasks WHERE id = ?`,

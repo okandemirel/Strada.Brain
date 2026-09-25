@@ -1123,3 +1123,54 @@ describe("every budget schema change is decided under the write lock (round 15 #
     expect(secondConnectionVerdict).toBe("write lock held");
   });
 });
+
+// TSK-20: notification_history, deployment_log and budget_entries were only
+// ever appended to.
+describe("daemon ledger retention (TSK-20)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  let storage: DaemonStorage;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "daemon-ledgers-test-"));
+    storage = new DaemonStorage(join(tmpDir, "daemon.db"));
+    storage.initialize();
+    storage.migrateBudgetSource();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("prunes old ledger rows and keeps recent ones, live deployments and campaign spend", () => {
+    const now = Date.now();
+    const old = now - 200 * DAY;
+    const db = storage.getDatabase();
+    storage.insertNotificationHistory({ urgency: "low" as UrgencyLevel, title: "old", message: "m", deliveredTo: [], createdAt: old });
+    storage.insertNotificationHistory({ urgency: "low" as UrgencyLevel, title: "new", message: "m", deliveredTo: [], createdAt: now });
+    const insertDeployment = db.prepare("INSERT INTO deployment_log (id, proposed_at, status) VALUES (?, ?, ?)");
+    insertDeployment.run("old-done", old, "completed");
+    insertDeployment.run("old-proposed", old, "proposed");
+    insertDeployment.run("old-running", old, "executing");
+    insertDeployment.run("new-done", now, "completed");
+    storage.insertBudgetEntryWithSource({ costUsd: 1, timestamp: old, source: "daemon" });
+    storage.insertBudgetEntryWithSource({ costUsd: 2, timestamp: old, source: "daemon", campaignId: "camp-1" });
+    storage.insertBudgetEntryWithSource({ costUsd: 3, timestamp: now, source: "daemon" });
+
+    const pruned = storage.pruneLedgers({
+      notificationRetentionMs: 30 * DAY,
+      deploymentRetentionMs: 90 * DAY,
+      budgetRetentionMs: 90 * DAY,
+      now,
+    });
+
+    expect(pruned).toEqual({ notifications: 1, deployments: 2, budgetEntries: 1 });
+    expect(storage.getNotificationHistory(10).map((n) => n.title)).toEqual(["new"]);
+    const deployments = (db.prepare("SELECT id FROM deployment_log ORDER BY id").all() as Array<{ id: string }>).map((r) => r.id);
+    expect(deployments).toEqual(["new-done", "old-running"]);
+    // A campaign's lifetime spend is summed from its rows: none may go.
+    expect(storage.sumBudgetForCampaign("camp-1")).toEqual({ totalUsd: 2, entries: 1 });
+    expect(storage.sumBudgetSince(0)).toBe(5);
+  });
+});

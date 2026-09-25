@@ -197,6 +197,26 @@ describe("TaskManager", () => {
     expect(storage.pruneHistory).toHaveBeenCalledTimes(1);
   });
 
+  // TSK-20: goal trees stuck executing/paused were never pruned; boot recovery
+  // now prunes them, keeping the roots the task table says are still needed.
+  it("prunes stale executing/paused goal trees at boot, keeping retained roots", () => {
+    const keep = new Set(["goal_campaign"]);
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([]),
+      pruneHistory: vi.fn().mockReturnValue({ tasks: 0, progress: 0 }),
+      goalRootsToRetain: vi.fn().mockReturnValue(keep),
+    } as any;
+    const goalStorage = { pruneStaleActiveTrees: vi.fn().mockReturnValue(1) } as any;
+    const manager = new TaskManager(storage, {} as any, goalStorage);
+
+    manager.recoverOnStartup();
+
+    const ninetyDays = 90 * 24 * 60 * 60 * 1000;
+    expect(goalStorage.pruneStaleActiveTrees).toHaveBeenCalledWith(ninetyDays, keep);
+    const since = storage.goalRootsToRetain.mock.calls[0][0] as number;
+    expect(Math.abs(Date.now() - ninetyDays - since)).toBeLessThan(60_000);
+  });
+
   it("stores the user-facing summary when structured progress is provided", () => {
     const storage = {
       addProgress: vi.fn(),

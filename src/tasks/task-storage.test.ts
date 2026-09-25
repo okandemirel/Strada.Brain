@@ -332,4 +332,15 @@ describe("task history retention and light listings (TSK-12)", () => {
     expect(storage.loadIncomplete()[0]!.progress).toHaveLength(1);
     expect(storage.loadIncomplete({ withProgress: false })[0]!.progress).toHaveLength(0);
   });
+
+  // TSK-20: stale goal-tree pruning keeps campaign roots at any age and roots a
+  // recently touched task references.
+  it("names the goal roots goal-tree retention must keep", () => {
+    const stale = makeTask(TaskStatus.paused, { createdAt: old, updatedAt: old, goalRootId: "goal_stale" });
+    const recent = makeTask(TaskStatus.paused, { createdAt: now - DAY, updatedAt: now - DAY, goalRootId: "goal_recent" });
+    const campaign = makeTask(TaskStatus.completed, { createdAt: old, updatedAt: old, goalRootId: "goal_campaign", campaignId: "camp_1" });
+    for (const t of [stale, recent, campaign]) storage.save(t);
+
+    expect([...storage.goalRootsToRetain(now - 30 * DAY)].sort()).toEqual(["goal_campaign", "goal_recent"]);
+  });
 });

@@ -1462,6 +1462,37 @@ export class DaemonStorage {
   }
 
   /**
+   * Retention for the append-only daemon ledgers (TSK-20), which nothing
+   * pruned: notification history, settled (or long-abandoned proposed)
+   * deployment log rows, and budget entries older than every reporting window.
+   * Budget rows attributed to a campaign are kept at any age: a campaign's
+   * lifetime spend is summed from them.
+   */
+  pruneLedgers(opts: {
+    notificationRetentionMs: number;
+    deploymentRetentionMs: number;
+    budgetRetentionMs: number;
+    now?: number;
+  }): { notifications: number; deployments: number; budgetEntries: number } {
+    this.assertOpen();
+    const db = this.db!;
+    const now = opts.now ?? Date.now();
+    const hasCampaignColumn = (db.prepare(`PRAGMA table_info(budget_entries)`).all() as Array<{ name: string }>)
+      .some((c) => c.name === "campaign_id");
+    return db.transaction(() => ({
+      notifications: db.prepare(`DELETE FROM notification_history WHERE created_at < ?`)
+        .run(now - opts.notificationRetentionMs).changes,
+      deployments: db.prepare(
+        `DELETE FROM deployment_log WHERE proposed_at < ? AND status IN
+           ('proposed', 'completed', 'failed', 'rollback_completed', 'rollback_failed', 'cancelled', 'post_verify_failed')`,
+      ).run(now - opts.deploymentRetentionMs).changes,
+      budgetEntries: db.prepare(
+        `DELETE FROM budget_entries WHERE timestamp < ?${hasCampaignColumn ? " AND campaign_id IS NULL" : ""}`,
+      ).run(now - opts.budgetRetentionMs).changes,
+    }))();
+  }
+
+  /**
    * @deprecated Use pruneTriggerFireHistoryByAge for time-based pruning.
    * Prune trigger fire history, keeping only the most recent entries per trigger.
    */

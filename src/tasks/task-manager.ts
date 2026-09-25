@@ -37,6 +37,12 @@ export function isReplayPrompt(prompt: string): boolean {
 const TASK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** Progress rows kept per task (the newest). */
 const MAX_PROGRESS_ROWS_PER_TASK = 500;
+/**
+ * A goal tree still `executing` or `paused` after this long without a change
+ * is a leftover, not a run (TSK-20). Generous on purpose: three times the task
+ * history window.
+ */
+const STALE_GOAL_TREE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -963,6 +969,19 @@ export class TaskManager extends EventEmitter {
       }
     } catch (err) {
       getLogger().warn("Task history pruning failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+    // Goal trees stuck executing or paused (TSK-20): only the goal store's own
+    // prune ran, and it reclaims settled trees alone. Campaign work and trees a
+    // recently touched task references are kept.
+    if (!this.goalStorage) return;
+    try {
+      const keep = this.storage.goalRootsToRetain(Date.now() - STALE_GOAL_TREE_MS);
+      const trees = this.goalStorage.pruneStaleActiveTrees(STALE_GOAL_TREE_MS, keep);
+      if (trees > 0) {
+        getLogger().info("Pruned stale executing/paused goal trees", { trees });
+      }
+    } catch (err) {
+      getLogger().warn("Goal tree pruning failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

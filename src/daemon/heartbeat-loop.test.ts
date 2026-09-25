@@ -146,6 +146,7 @@ function makeStorage() {
     getAllCircuitStates: vi.fn(() => circuitStates),
     deleteCircuitState: vi.fn(),
     insertTriggerFireHistory: vi.fn(),
+    pruneLedgers: vi.fn(() => ({ notifications: 0, deployments: 0, budgetEntries: 0 })),
     initialize: vi.fn(),
     close: vi.fn(),
   };
@@ -735,6 +736,21 @@ describe("HeartbeatLoop", () => {
     await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
 
     expect(storage.upsertCircuitState).toHaveBeenCalledWith("overflowing", "CLOSED", 1, expect.any(Number), expect.any(Number));
+  });
+
+  it("prunes the daemon ledgers on the first tick and then at most daily (TSK-20)", async () => {
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs);
+    expect(storage.pruneLedgers).toHaveBeenCalledTimes(1);
+    expect(storage.pruneLedgers.mock.calls[0]![0]).toMatchObject({
+      notificationRetentionMs: 30 * 24 * 60 * 60 * 1000,
+      budgetRetentionMs: 90 * 24 * 60 * 60 * 1000,
+    });
+
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs);
+    expect(storage.pruneLedgers).toHaveBeenCalledTimes(2);
   });
 
   it("on trigger fire failure, circuit breaker recordFailure() is called", async () => {

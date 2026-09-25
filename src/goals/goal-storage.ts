@@ -445,4 +445,33 @@ export class GoalStorage {
     const result = this.getStatement("pruneOldTrees").run(cutoff);
     return result.changes;
   }
+
+  /**
+   * TSK-20: pruneOldTrees only reclaims settled trees, so a tree left
+   * `executing` by a crash, or `paused` and never resumed, stayed forever and
+   * crowded getInterruptedTrees. Deletes such trees and their nodes when
+   * neither the tree nor any of its nodes changed within `maxAgeMs`, except
+   * the roots in `keepRootIds` (campaign work, and trees a recent task still
+   * references). A later resume of a pruned root replays from its prompt.
+   */
+  pruneStaleActiveTrees(maxAgeMs: number, keepRootIds: ReadonlySet<string>, now: number = Date.now()): number {
+    this.ensureConnection();
+    const cutoff = now - maxAgeMs;
+    const db = this.db!;
+    const stale = db.prepare(`
+      SELECT t.root_id FROM goal_trees t
+      WHERE t.status IN ('executing', 'paused') AND t.updated_at <= ?
+        AND NOT EXISTS (SELECT 1 FROM goal_nodes n WHERE n.root_id = t.root_id AND n.updated_at > ?)
+    `).all(cutoff, cutoff) as Array<{ root_id: string }>;
+    const remove = db.prepare(`DELETE FROM goal_trees WHERE root_id = ?`);
+    return db.transaction(() => {
+      let pruned = 0;
+      for (const { root_id } of stale) {
+        if (keepRootIds.has(root_id)) continue;
+        this.getStatement("deleteNodesByRoot").run(root_id);
+        pruned += remove.run(root_id).changes;
+      }
+      return pruned;
+    })();
+  }
 }

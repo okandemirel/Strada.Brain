@@ -42,6 +42,14 @@ import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
  */
 const BUDGET_WARN_DEAD_BAND = 0.05;
 
+/**
+ * Ledger retention (TSK-20). Budget entries outlive every reporting window
+ * (the longest is 30 days) three times over; campaign spend is never pruned.
+ */
+const NOTIFICATION_HISTORY_RETENTION_DAYS = 30;
+const DEPLOYMENT_LOG_RETENTION_DAYS = 90;
+const BUDGET_ENTRY_RETENTION_DAYS = 90;
+
 /** Identity manager interface -- only the subset HeartbeatLoop uses */
 interface IdentityActivity {
   recordActivity(): void;
@@ -85,6 +93,8 @@ export class HeartbeatLoop {
   /** Track budget exceeded/warning state to emit events only once per state change */
   private budgetExceededEmitted = false;
   private budgetWarningEmitted = false;
+  /** When the daemon ledgers were last pruned (TSK-20); unset until the first tick. */
+  private lastLedgerPruneAt: number | undefined;
   /**
    * Same latch for the unified daemon sub-limit. Audited 2026-09-02: that emit
    * was unlatched, and its gate returns before the trigger loop, so the same
@@ -287,6 +297,26 @@ export class HeartbeatLoop {
       this.logger.warn("Failed to prune trigger fire history", {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    // The other append-only ledgers (TSK-20): on the first tick, then daily.
+    if (this.lastLedgerPruneAt === undefined || now.getTime() - this.lastLedgerPruneAt >= MS_PER_DAY) {
+      this.lastLedgerPruneAt = now.getTime();
+      try {
+        const pruned = this.storage.pruneLedgers({
+          notificationRetentionMs: NOTIFICATION_HISTORY_RETENTION_DAYS * MS_PER_DAY,
+          deploymentRetentionMs: DEPLOYMENT_LOG_RETENTION_DAYS * MS_PER_DAY,
+          budgetRetentionMs: BUDGET_ENTRY_RETENTION_DAYS * MS_PER_DAY,
+          now: now.getTime(),
+        });
+        if (pruned.notifications + pruned.deployments + pruned.budgetEntries > 0) {
+          this.logger.info("Daemon ledgers pruned", pruned);
+        }
+      } catch (error) {
+        this.logger.warn("Failed to prune daemon ledgers", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Idle-driven memory consolidation (Phase 25, MEM-12, MEM-13)
