@@ -374,11 +374,19 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
       });
     }
 
-    // Recreate HNSW store with correct dimensions
-    ctx.hnswStore = await createHNSWVectorStore(vectorStorePath, agentDbHnswConfig(ctx.config));
-    // Gate the store's background compaction behind the shared write mutex (M1).
-    // Optional: best-effort wiring, must not abort rebuild if the store lacks it.
-    ctx.hnswStore.setWriteSerializer?.(ctx.writeMutex);
+    const live = ctx.hnswStore;
+    if (live && typeof live.resetDimensions === "function") {
+      // Reset the live store in place, under the write mutex: whatever holds
+      // a reference to it (the consolidation engine) keeps a working index
+      // instead of one at the old size.
+      await ctx.writeMutex.withLock(async () => live.resetDimensions(ctx.config.dimensions));
+    } else {
+      // Recreate HNSW store with correct dimensions
+      ctx.hnswStore = await createHNSWVectorStore(vectorStorePath, agentDbHnswConfig(ctx.config));
+      // Gate the store's background compaction behind the shared write mutex (M1).
+      // Optional: best-effort wiring, must not abort rebuild if the store lacks it.
+      ctx.hnswStore.setWriteSerializer?.(ctx.writeMutex);
+    }
 
     // Load entries from SQLite (entries map may be empty at this point during init)
     const hadEntries = ctx.entries.size > 0;
@@ -395,9 +403,27 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
     let succeeded = 0;
     let failed = 0;
     const store = ctx.hnswStore;
+    if (!store) return;
 
     for (const entry of ctx.entries.values()) {
       try {
+        // A row the provider already embedded at this size needs no new call;
+        // one a concurrent write already indexed needs nothing at all.
+        if (canEnterIndex(ctx.config, entry)) {
+          if (!store.has(entry.id as string)) {
+            const vectorEntry = toVectorEntry({
+              id: entry.id as string,
+              content: entry.content,
+              chatId: entry.chatId as string | undefined,
+              embedding: entry.embedding as number[],
+              createdAt: entry.createdAt as number,
+              accessCount: entry.accessCount,
+            });
+            await ctx.writeMutex.withLock(() => store.upsert([vectorEntry]));
+          }
+          succeeded++;
+          continue;
+        }
         // Re-embed the entry content — the provenance travels with the vector
         const { embedding: newEmbedding, provenance } = await embedWithProvenance(ctx.config, entry.content);
         (entry as unknown as { embedding: Vector<number>; embeddingProvenance: EmbeddingProvenance }).embedding = newEmbedding;

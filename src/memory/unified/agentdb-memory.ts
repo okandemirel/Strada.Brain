@@ -69,6 +69,8 @@ import {
   inferProvenance,
   isHashBasedEmbedding,
   openAgentDbHnswStore,
+  providerProvenance,
+  rebuildHnswIndex,
   reEmbedHashEntries,
   type ReEmbedResult,
 } from "./agentdb-vector.js";
@@ -180,6 +182,10 @@ export class AgentDBMemory implements IUnifiedMemory {
   private userProfileStore: UserProfileStore | null = null;
   private taskExecutionStore: TaskExecutionStore | null = null;
   private rebuildInProgress = false;
+  /** Rebuild of the index for a new embedding size, while it runs (shutdown waits for it). */
+  private sizeRebuild: Promise<void> | null = null;
+  /** The ignored caller-supplied query vector warning was logged (once per memory, not per search). */
+  private callerVectorWarned = false;
   private cacheHits = 0;
   private cacheMisses = 0;
 
@@ -284,7 +290,61 @@ export class AgentDBMemory implements IUnifiedMemory {
       get textIndex() { return self.textIndex; },
       get searchTimes() { return self.searchTimes; },
       sqlitePersistEntry: (entry: UnifiedMemoryEntry) => sqlitePersistEntry(self.getSqliteCtx(), entry),
+      onQueryVectorMismatch: (source: "caller" | "provider", dimensions: number) =>
+        self.onQueryVectorMismatch(source, dimensions),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Embedding size changes
+  // ---------------------------------------------------------------------------
+
+  private onQueryVectorMismatch(source: "caller" | "provider", dimensions: number): void {
+    if (source === "provider") {
+      this.adoptEmbeddingSize(dimensions);
+      return;
+    }
+    if (this.callerVectorWarned) return;
+    this.callerVectorWarned = true;
+    getLoggerSafe().warn(
+      "[AgentDBMemory] Ignoring caller-supplied query vectors that do not fit this memory's index; queries are embedded with the memory's own embedder",
+      {
+        dbPath: this.dbPath,
+        callerDimensions: dimensions,
+        indexDimensions: this.config.dimensions,
+        indexProvenance: indexProvenance(this.config),
+      },
+    );
+  }
+
+  /**
+   * The embedding provider answered at a size the index was not built for: it
+   * returns another size than it declared, or its model changed under it.
+   * Vectors of two sizes cannot share one index, and leaving it at the old
+   * size kept every new entry out of it and failed every search. Adopt the new
+   * size and rebuild the index for it in the background — rebuildHnswIndex
+   * resets the store in place and re-embeds every entry; until it finishes,
+   * rows the index cannot serve yet are found through text. Logged once per
+   * change.
+   */
+  private adoptEmbeddingSize(dimensions: number): void {
+    if (!this.config.embeddingProvider || this.rebuildInProgress) return;
+    if (!Number.isInteger(dimensions) || dimensions <= 0 || dimensions === this.config.dimensions) return;
+    getLoggerSafe().warn(
+      `[AgentDBMemory] Embedding size changed from ${this.config.dimensions} to ${dimensions}; rebuilding the memory index for the new size`,
+      { dbPath: this.dbPath, entries: this.entries.size },
+    );
+    this.config = { ...this.config, dimensions };
+    this.sizeRebuild = rebuildHnswIndex(this.getVectorCtx())
+      .catch((error: unknown) => {
+        getLoggerSafe().error("[AgentDBMemory] Rebuilding the memory index for the new embedding size failed", {
+          dbPath: this.dbPath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.sizeRebuild = null;
+      });
   }
 
   // ---------------------------------------------------------------------------
@@ -358,6 +418,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!this.isInitialized) return ok(undefined);
 
       getLoggerSafe().info("[AgentDBMemory] Shutting down");
+
+      // A rebuild for a new embedding size writes SQLite and the index and
+      // restarts auto-tiering when done; let it finish before closing them.
+      if (this.sizeRebuild) await this.sizeRebuild;
 
       // Stop auto-tiering timer before saving to prevent sweep during shutdown
       this.stopAutoTiering();
@@ -670,6 +734,11 @@ export class AgentDBMemory implements IUnifiedMemory {
         const embedded = await embedWithProvenance(this.config, entry.content);
         embedding = embedded.embedding;
         embeddingProvenance = embedded.provenance;
+        // The provider answered at another size than the index's: adopt it
+        // (the index is rebuilt) so this entry and the next ones are indexed.
+        if (embeddingProvenance === providerProvenance(this.config) && embedding.length !== this.config.dimensions) {
+          this.adoptEmbeddingSize(embedding.length);
+        }
       }
 
       // Determine expiration for ephemeral entries

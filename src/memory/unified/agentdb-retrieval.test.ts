@@ -956,6 +956,9 @@ describe("text fallback serves rows the provider index cannot hold yet (Codex ro
     expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "provider" }, "provider")).toBe(false);
     expect(awaitingMigration({ embedding: [], embeddingProvenance: "unknown" }, "provider")).toBe(false);
     expect(awaitingMigration({ embedding: realVec }, "provider")).toBe(false);
+    // A vector of another size than the index's waits for the rebuild at the new size.
+    expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "provider" }, "provider", 8)).toBe(true);
+    expect(awaitingMigration({ embedding: realVec, embeddingProvenance: "provider" }, "provider", 4)).toBe(false);
   });
 
   it("returns the index hit plus the unknown/foreign rows through text; a row with no vector is left to the text-only paths", async () => {

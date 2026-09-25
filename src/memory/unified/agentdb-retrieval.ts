@@ -44,6 +44,13 @@ export interface AgentDBRetrievalContext {
   readonly searchTimes: number[];
   /** Optional callback to persist an entry after access stats update. */
   readonly sqlitePersistEntry?: (entry: UnifiedMemoryEntry) => void;
+  /**
+   * Told when a query vector does not fit the index, so the owner can log it
+   * once and act: "caller" — a supplied vector was set aside (see
+   * callerVectorFits); "provider" — the memory's own embedder answered at a
+   * size the index was not built for.
+   */
+  readonly onQueryVectorMismatch?: (source: "caller" | "provider", dimensions: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,14 +230,25 @@ export async function retrieveSemantic(
   const startTime = performance.now();
 
   // Generate query embedding. A caller-supplied vector is taken to be the
-  // index's provenance (retrieveByEmbedding / pre-computed recall vectors).
+  // index's provenance (retrieveByEmbedding / pre-computed recall vectors)
+  // when it can be; otherwise the memory embeds the query itself.
   const expectedProvenance: EmbeddingProvenance = indexProvenance(ctx.config);
+  const width = indexDimensions(ctx);
   let queryEmbedding: number[];
   let queryProvenance: EmbeddingProvenance;
-  if (options.embedding) {
+  let setAside: readonly number[] | undefined;
+  if (options.embedding && callerVectorFits(ctx, options.embedding, width)) {
     queryEmbedding = options.embedding;
     queryProvenance = expectedProvenance;
   } else {
+    if (options.embedding) {
+      setAside = options.embedding;
+      // retrieveByEmbedding: there is no text to embed instead.
+      if (query.length === 0) {
+        ctx.onQueryVectorMismatch?.("caller", setAside.length);
+        return retrieveTFIDF(ctx, query, options);
+      }
+    }
     const embedded = await embedWithProvenance(ctx.config, query);
     queryEmbedding = embedded.embedding;
     queryProvenance = embedded.provenance;
@@ -246,6 +264,17 @@ export async function retrieveSemantic(
     );
     return retrieveTFIDF(ctx, query, options);
   }
+
+  if (queryEmbedding.length !== width) {
+    // The memory's own embedder answered at a size the index was not built
+    // for, and hnswlib cannot compare the two. The owner adopts the new size
+    // and rebuilds the index; the text path serves this query meanwhile.
+    ctx.onQueryVectorMismatch?.("provider", queryEmbedding.length);
+    return retrieveTFIDF(ctx, query, options);
+  }
+  // Reported only once the memory's own query fits: a caller vector that was
+  // merely ahead of a size change above is not a foreign one.
+  if (setAside) ctx.onQueryVectorMismatch?.("caller", setAside.length);
 
   const filters = toRetrievalFilters(options);
   const now = Date.now();
@@ -303,9 +332,9 @@ export async function retrieveSemantic(
   // are cosine similarities in [0, 1] — so a 50k-row migration does not
   // blank out recall for hours. Rows with no vector at all are not "awaiting
   // migration" and are left to the text-only paths as before.
-  const awaiting = (entry: UnifiedMemoryEntry): boolean => awaitingMigration(entry, expectedProvenance);
+  const awaiting = (entry: UnifiedMemoryEntry): boolean => awaitingMigration(entry, expectedProvenance, width);
   const textHits: RetrievalResult<MemoryEntry>[] = [];
-  if (query.length > 0 && hasAwaitingMigration(ctx, expectedProvenance)) {
+  if (query.length > 0 && hasAwaitingMigration(ctx, expectedProvenance, width)) {
     for (const hit of retrieveTFIDF(ctx, query, { ...options, limit }, awaiting)) {
       const id = hit.entry.id as string;
       if (seen.has(id)) continue;
@@ -349,23 +378,57 @@ export async function retrieveSemantic(
 
 /**
  * True when the row carries a vector the provider index cannot hold
- * (Codex round 7 #21): a provenance other than the index's. Such a row is
- * queued for `reEmbedHashEntries` and, until then, is served by text.
+ * (Codex round 7 #21): a provenance other than the index's, or — when
+ * `dimensions` is given — a size other than the index's (its embedder changed
+ * size and the index is being rebuilt). Such a row is queued for re-embedding
+ * and, until then, is served by text.
  */
 export function awaitingMigration(
   entry: { embedding?: readonly number[] | null; embeddingProvenance?: EmbeddingProvenance },
   expected: EmbeddingProvenance,
+  dimensions?: number,
 ): boolean {
   if (!entry.embedding || entry.embedding.length === 0) return false;
+  if (dimensions !== undefined && entry.embedding.length !== dimensions) return true;
   return entry.embeddingProvenance !== undefined && entry.embeddingProvenance !== expected;
 }
 
 /** True when the provider index holds fewer eligible rows than the store. */
-function hasAwaitingMigration(ctx: AgentDBRetrievalContext, expected: EmbeddingProvenance): boolean {
+function hasAwaitingMigration(
+  ctx: AgentDBRetrievalContext,
+  expected: EmbeddingProvenance,
+  dimensions: number,
+): boolean {
   for (const entry of ctx.entries.values()) {
-    if (awaitingMigration(entry, expected)) return true;
+    if (awaitingMigration(entry, expected, dimensions)) return true;
   }
   return false;
+}
+
+/**
+ * Size of the vectors the index holds: the store's own when it reports one
+ * (it lags the config while the index is being rebuilt for a new size).
+ */
+function indexDimensions(ctx: AgentDBRetrievalContext): number {
+  const reported = (ctx.hnswStore as { dimensions?: unknown } | undefined)?.dimensions;
+  return typeof reported === "number" && reported > 0 ? reported : ctx.config.dimensions;
+}
+
+/**
+ * A caller-supplied query vector is searched with as-is only when it can be
+ * one of the index's: the memory embeds with a provider and the vector has
+ * the index's size. Anything else came from another embedder — typically the
+ * orchestrator's provider against a memory opened without one (each agent's
+ * memory in multi-agent mode) — and comparing it with the index is an hnswlib
+ * error on every search (other size) or a meaningless score (same size, other
+ * embedder).
+ */
+function callerVectorFits(
+  ctx: AgentDBRetrievalContext,
+  vector: readonly number[],
+  width: number,
+): boolean {
+  return ctx.config.embeddingProvider !== undefined && vector.length === width;
 }
 
 /**
