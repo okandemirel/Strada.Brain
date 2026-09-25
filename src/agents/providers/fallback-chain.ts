@@ -770,7 +770,6 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     // flight used to be reported as "in cooldown" — the measured 401s were dropped
     // and the caller was told to wait out a cooldown that was not the cause.
     let probeFailed = 0;
-    let probeInFlight = 0;
 
     // Transient all-cooled guard: when EVERY provider is currently on cooldown but the
     // soonest is about to recover (within the bounded recovery window), wait once rather
@@ -812,38 +811,49 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       // Lightweight probe for providers that just exited cooldown but haven't proven healthy yet.
       // The probing guard prevents thundering-herd concurrent probes to the same provider.
       if (health.isRecovering(provider.name) && !this.probing.has(provider.name)) {
+        // The probe is shared with every call that arrives while it runs, so it
+        // records its own verdict and keeps its own budget. Cancelling THIS call
+        // stops it waiting, as it does a waiter; aborting the probe itself would
+        // hand the waiters a failure the provider never made.
         const probe = (async () => {
-          await provider.chat(
-            "Reply with OK",
-            [{ role: "user", content: "health check" }] as ConversationMessage[],
-            [], // no tools
-            { signal: AbortSignal.timeout(this.probeBudgetFor(provider)) },
-          );
+          try {
+            await provider.chat(
+              "Reply with OK",
+              [{ role: "user", content: "health check" }] as ConversationMessage[],
+              [], // no tools
+              { signal: AbortSignal.timeout(this.probeBudgetFor(provider)) },
+            );
+          } catch (probeErr) {
+            const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
+            // audited 2026-09-02: this used to be the generic recordFailure() for every
+            // probe error, which replaced an expired 8h quota/credential bench with a
+            // 30s → ≤10min ladder and re-probed the dead provider every expiry. A probe
+            // failure earns the same cooldown class a real attempt would.
+            if (isCredentialRejection(probeErr)) {
+              health.recordCredentialRejected(provider.name, probeMsg);
+            } else {
+              this.recordClassifiedFailure(health, provider, probeErr, probeMsg);
+            }
+            logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: sanitizeSecrets(probeMsg) });
+            throw probeErr;
+          }
           health.recordSuccess(provider.name, "probe");
           logger.info("Provider health probe succeeded (probe-only recovery)", { provider: provider.name });
         })();
         this.probing.set(provider.name, probe);
-        // Waiters observe the outcome through the registry; the rejection is handled below.
-        probe.catch(() => undefined);
+        const clearProbe = (): void => {
+          if (this.probing.get(provider.name) === probe) this.probing.delete(provider.name);
+        };
+        probe.then(clearProbe, clearProbe);
         try {
-          await probe;
+          await (externalSignal ? Promise.race([probe, abortedPromise(externalSignal)]) : probe);
         } catch (probeErr) {
-          const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
-          // audited 2026-09-02: this used to be the generic recordFailure() for every
-          // probe error, which replaced an expired 8h quota/credential bench with a
-          // 30s → ≤10min ladder and re-probed the dead provider every expiry. A probe
-          // failure earns the same cooldown class a real attempt would.
-          if (isCredentialRejection(probeErr)) {
-            health.recordCredentialRejected(provider.name, probeMsg);
-          } else {
-            this.recordClassifiedFailure(health, provider, probeErr, probeMsg);
+          if (externalSignal?.aborted) {
+            throw new Error(`Aborted during the recovery probe of "${provider.name}" (${label})`);
           }
-          logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: sanitizeSecrets(probeMsg) });
           probeFailed++;
-          lastError = probeErr instanceof Error ? probeErr : new Error(probeMsg);
+          lastError = probeErr instanceof Error ? probeErr : new Error(String(probeErr));
           continue;
-        } finally {
-          this.probing.delete(provider.name);
         }
       } else if (health.isRecovering(provider.name) && this.probing.has(provider.name)) {
         // Another concurrent call is already probing this provider: wait for
@@ -1178,14 +1188,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     if (attempted > 0) {
       detail = `Last error: ${sanitizeSecrets(lastError?.message ?? "")}`;
     } else if (probeFailed > 0) {
-      const cooled = this.providers.length - probeFailed - probeInFlight;
+      // A call that finds a probe in flight waits for its verdict, so every
+      // probed provider lands here as failed or goes on to real traffic.
+      const cooled = this.providers.length - probeFailed;
       detail = `${probeFailed} provider(s) failed the recovery probe`
         + (cooled > 0 ? `, ${cooled} still in cooldown` : "")
-        + (probeInFlight > 0 ? `, ${probeInFlight} being probed by another call` : "")
         + `. Last probe error: ${sanitizeSecrets(lastError?.message ?? "")}`;
-    } else if (probeInFlight > 0) {
-      detail = `A recovery probe was already in flight for ${probeInFlight} provider(s); `
-        + "this call measured nothing. Retry shortly.";
     } else {
       detail = "All providers are in cooldown. Try again later.";
     }

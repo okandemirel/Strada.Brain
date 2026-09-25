@@ -1288,6 +1288,37 @@ describe("FallbackChainProvider — recovery probe failures keep their cooldown 
     await expect(waiter).rejects.toThrow(/Aborted while waiting for the recovery probe/);
   });
 
+  it("the call running the probe stops waiting when it is aborted, and the probe still gives its verdict (PRV-17)", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = {
+      ...createMockProvider(),
+      name: "solo-prober-abort",
+      // A probe budget far longer than the test: the old prober waited it out.
+      capabilities: { ...createMockProvider().capabilities, firstResponseTimeoutMs: 5_000 },
+    };
+    let releaseProbe!: (value: unknown) => void;
+    const gate = new Promise((resolve) => { releaseProbe = resolve; });
+    (p1.chat as ReturnType<typeof vi.fn>).mockImplementation(() => gate);
+    const chain = new FallbackChainProvider([p1]);
+    for (let i = 0; i < 5; i++) health.recordFailure("solo-prober-abort", "timeout");
+    Object.assign(health.getEntry("solo-prober-abort")!, { cooldownUntil: Date.now() - 1000 });
+
+    const ac = new AbortController();
+    const startedAt = Date.now();
+    const prober = chain.chat("sys", [], [], { externalSignal: ac.signal });
+    setTimeout(() => ac.abort(), 20);
+    await expect(prober).rejects.toThrow(/Aborted during the recovery probe/);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    // A cancel is not the provider's failure: nothing new was recorded against it.
+    expect(health.isRecovering("solo-prober-abort")).toBe(true);
+    expect(health.getEntry("solo-prober-abort")!.status).toBe("down");
+
+    // The shared probe keeps running for anyone else, and its answer counts.
+    releaseProbe({ text: "OK", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+    await new Promise((r) => setImmediate(r));
+    expect(health.getEntry("solo-prober-abort")!.status).toBe("degraded");
+  });
+
   it("a probe that fails on a hard quota stop honors the provider's Retry-After", async () => {
     const { chain } = recoveringChain(
       new QuotaExhaustedError("quota-dead", 3 * 24 * 60 * 60 * 1000, "usage quota exhausted; resets in ~3d"),
