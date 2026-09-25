@@ -19,12 +19,14 @@ interface SmokeSandbox {
   home: string;
   stradaHome: string;
   installRoot: string;
+  gitConfig: string;
 }
 
 interface SmokeModule {
   createSmokeSandbox: (tempRoot: string) => SmokeSandbox;
   buildBaseEnv: (memoryDir: string, projectDir: string, sandbox: SmokeSandbox) => Record<string, string | undefined>;
   smokeChildArgs: (args: string[]) => string[];
+  OFFLINE_GIT_CONFIG: string;
 }
 
 const ROOT = process.cwd();
@@ -54,12 +56,13 @@ describe("cli-release-smoke isolation (OPS-16)", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "from-developer-shell");
     const env = smoke.buildBaseEnv(path.join(tempRoot, "memory"), path.join(tempRoot, "project"), sandbox);
 
-    for (const key of ["HOME", "USERPROFILE", "STRADA_HOME", "STRADA_INSTALL_ROOT"]) {
+    for (const key of ["HOME", "USERPROFILE", "STRADA_HOME", "STRADA_INSTALL_ROOT", "GIT_CONFIG_GLOBAL"]) {
       const value = env[key] ?? "";
       expect(path.relative(tempRoot, value).startsWith(".."), `${key}=${value}`).toBe(false);
       expect(path.isAbsolute(value), key).toBe(true);
     }
     expect(env["STRADA_SOURCE_CHECKOUT"]).toBe("false");
+    expect(env["GIT_CONFIG_NOSYSTEM"]).toBe("1");
     expect(env["PROVIDER_CHAIN_STRICT"]).toBe("1");
     expect(env["AUTO_UPDATE_ENABLED"]).toBe("false");
     expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
@@ -107,3 +110,37 @@ describe("cli-release-smoke isolation (OPS-16)", () => {
     expect(result.dotenv).toBe(path.join(sandbox.stradaHome, ".env"));
   }, 90_000);
 });
+
+describe("cli-release-smoke stays offline", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a smoke child's git cannot reach a network remote", async () => {
+    // The framework sync clones a package the project does not ship (it
+    // cloned Strada.MCP from GitHub on every smoke run), and the runtime has no
+    // switch for it. The smoke's git configuration refuses the transport.
+    const smoke = await loadSmoke();
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "strada-cli-smoke-git-"));
+    tempDirs.push(tempRoot);
+    const sandbox = smoke.createSmokeSandbox(tempRoot);
+    writeFileSync(sandbox.gitConfig, smoke.OFFLINE_GIT_CONFIG);
+    const env = smoke.buildBaseEnv(path.join(tempRoot, "memory"), path.join(tempRoot, "project"), sandbox);
+
+    let stderr = "";
+    try {
+      execFileSync("git", ["ls-remote", "--", "https://github.com/okandemirel/Strada.MCP.git"], {
+        cwd: tempRoot,
+        env: { ...env, GIT_ALLOW_PROTOCOL: "https", GIT_TERMINAL_PROMPT: "0" },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 20_000,
+      });
+    } catch (err) {
+      stderr = String((err as { stderr?: unknown }).stderr ?? "");
+    }
+    expect(stderr).toMatch(/smoke-offline/);
+  }, 30_000);
+});
+

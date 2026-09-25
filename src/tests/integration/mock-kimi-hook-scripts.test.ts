@@ -2,8 +2,8 @@
  * The release smoke's mock provider scripts the agent's side of each scenario.
  * These pin the parts the current verifier flow depends on: the PAOR scenario
  * must end with a check the verifier pipeline accepts as targeted verification
- * (a shell `test -f` never was one, so the scenario could not pass), and
- * reviewers get the verdict format they parse.
+ * (a shell `test -f` never was one, so the scenario could not pass), reviewers
+ * get the verdict format they parse, and the smoke never reaches a real host.
  *
  * The hook replaces globalThis.fetch when imported, so this file restores it.
  */
@@ -141,3 +141,23 @@ describe("mock-kimi-hook reviewers", () => {
   });
 });
 
+describe("mock-kimi-hook keeps the smoke offline", () => {
+  it("answers an OpenAI-compatible embeddings request with one unit vector per input", async () => {
+    const response = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/embeddings", {
+      method: "POST",
+      body: JSON.stringify({ model: "text-embedding-v3", input: ["alpha", "beta"] }),
+    });
+    const body = (await response.json()) as { data: Array<{ index: number; embedding: number[] }> };
+    expect(response.status).toBe(200);
+    expect(body.data.map((item) => item.index)).toEqual([0, 1]);
+    for (const item of body.data) {
+      expect(item.embedding).toHaveLength(1024);
+      expect(Math.hypot(...item.embedding)).toBeCloseTo(1, 6);
+    }
+  });
+
+  it("fails a request to any other host the way an offline machine does", async () => {
+    await expect(fetch("https://raw.githubusercontent.com/example/prices.json")).rejects.toThrow(TypeError);
+    await expect(fetch("https://docs.example.com/page")).rejects.toThrow("fetch failed");
+  });
+});

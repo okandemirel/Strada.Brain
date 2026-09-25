@@ -36,6 +36,48 @@ function parseJsonBody(init) {
   }
 }
 
+function isLoopback(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/** Width of the vectors a model returns, for the embedding models a preset can pick. */
+const EMBEDDING_DIMENSIONS = {
+  "text-embedding-v3": 1024,
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+};
+
+/**
+ * An OpenAI-compatible embeddings answer: one deterministic unit vector per
+ * input, derived from its text, so equal texts embed equally.
+ */
+function embeddingResponse(body) {
+  const inputs = Array.isArray(body?.input) ? body.input : [body?.input ?? ""];
+  const dimensions = Number.isInteger(body?.dimensions)
+    ? body.dimensions
+    : (EMBEDDING_DIMENSIONS[body?.model] ?? 1024);
+  const data = inputs.map((text, index) => {
+    const vector = new Array(dimensions).fill(0);
+    const value = String(text);
+    for (let i = 0; i < value.length; i += 1) {
+      vector[(value.charCodeAt(i) + i) % dimensions] += 1;
+    }
+    const norm = Math.sqrt(vector.reduce((sum, x) => sum + x * x, 0)) || 1;
+    return { object: "embedding", index, embedding: vector.map((x) => x / norm) };
+  });
+  return {
+    object: "list",
+    data,
+    model: body?.model ?? "smoke-embedding",
+    usage: { prompt_tokens: inputs.length, total_tokens: inputs.length },
+  };
+}
+
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -557,9 +599,20 @@ globalThis.fetch = async function mockFetch(input, init) {
     return body.stream === true ? streamResponse(response) : jsonResponse(response);
   }
 
-  if (originalFetch) {
-    return originalFetch(input, init);
+  if (url.includes("/embeddings")) {
+    const body = parseJsonBody(init);
+    const response = embeddingResponse(body);
+    log({ type: "embeddings", url, model: body.model, inputs: response.data.length });
+    return jsonResponse(response);
   }
 
-  throw new Error(`No mock response configured for ${url}`);
+  // The smoke runs offline: a request nothing above answers fails the way it
+  // does on a machine with no network, instead of reaching a real host
+  // (the model catalog's provider docs and price lists).
+  // Loopback stays reachable for the process's own local services.
+  if (isLoopback(url) && originalFetch) {
+    return originalFetch(input, init);
+  }
+  log({ type: "blocked", url });
+  throw new TypeError("fetch failed", { cause: new Error(`release smoke is offline: ${url}`) });
 };

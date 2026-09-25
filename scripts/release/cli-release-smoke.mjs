@@ -265,12 +265,37 @@ async function addPaorProofCheck(projectDir) {
 }
 
 /**
+ * Git configuration for the smoke's children: every network remote is
+ * rewritten to a transport git refuses, so a clone (the framework sync's
+ * fallback for a package the project does not ship) fails at once instead of
+ * reaching GitHub. The runtime's switch for it (strada.frameworkSync.
+ * gitFallbackEnabled) is not settable from the environment, and the smoke
+ * must not depend on the network. Local git (the project's own repository)
+ * is unaffected.
+ */
+export const OFFLINE_GIT_CONFIG = [
+  '[url "smoke-offline://"]',
+  "\tinsteadOf = https://",
+  "\tinsteadOf = http://",
+  "\tinsteadOf = ssh://",
+  "\tinsteadOf = git://",
+  "\tinsteadOf = git@",
+  "",
+].join("\n");
+
+/**
  * The HOME, Strada home and install root a smoke child gets instead of the
- * developer's (OPS-16). The directories are created by main().
+ * developer's (OPS-16), and the git configuration it reads. The directories
+ * and the git configuration are created by main().
  */
 export function createSmokeSandbox(tempRoot) {
   const home = join(tempRoot, "home");
-  return { home, stradaHome: join(home, ".strada"), installRoot: join(tempRoot, "install") };
+  return {
+    home,
+    stradaHome: join(home, ".strada"),
+    installRoot: join(tempRoot, "install"),
+    gitConfig: join(tempRoot, "gitconfig"),
+  };
 }
 
 export function buildBaseEnv(memoryDir, projectDir, sandbox) {
@@ -305,6 +330,10 @@ export function buildBaseEnv(memoryDir, projectDir, sandbox) {
     STRADA_HOME: sandbox.stradaHome,
     STRADA_INSTALL_ROOT: sandbox.installRoot,
     STRADA_SOURCE_CHECKOUT: "false",
+    // Offline (see OFFLINE_GIT_CONFIG): the developer's own git configuration
+    // is not read, and no clone reaches the network.
+    GIT_CONFIG_GLOBAL: sandbox.gitConfig,
+    GIT_CONFIG_NOSYSTEM: "1",
     // Only the mock providers named in PROVIDER_CHAIN, never an appended real one.
     PROVIDER_CHAIN_STRICT: "1",
     AUTO_UPDATE_ENABLED: "false",
@@ -785,6 +814,7 @@ async function main() {
   await mkdir(daemonMemoryDir, { recursive: true });
   await mkdir(sandbox.home, { recursive: true });
   await mkdir(sandbox.installRoot, { recursive: true });
+  await writeFile(sandbox.gitConfig, OFFLINE_GIT_CONFIG);
   await createSmokeProject(projectDir);
 
   try {
