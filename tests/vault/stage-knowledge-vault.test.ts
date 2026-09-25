@@ -38,19 +38,29 @@ describe('stage-knowledge vault init', () => {
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src/a.ts'), 'export const a = 1;');
     const startWatch = vi.spyOn(SelfVault.prototype, 'startWatch').mockResolvedValue(undefined);
-    const registry = { register: vi.fn() } as any;
+    const registered = new Map<string, unknown>();
+    const registry = {
+      register: vi.fn((vault: { id: string }) => { registered.set(vault.id, vault); }),
+      trackInit: vi.fn(),
+      get: (id: string) => registered.get(id),
+    } as any;
     try {
-      await initSelfVaultFromBootstrap({
+      const startup = await initSelfVaultFromBootstrap({
         config: { vault: { enabled: false, self: { enabled: true } } },
         vaultRegistry: registry,
         embedding: { model: 'stub', dim: 4, embed: async (xs: string[]) => xs.map(() => new Float32Array(4)) },
         vectorStore: { add: () => 1, remove: () => {}, search: () => [] },
         repoRoot: dir,
       });
+      // Boot no longer waits for the initial index: the watcher starts once
+      // the background index settles.
+      await expect(startup?.ready).resolves.toBe(true);
+      await startup?.vault.dispose();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
     expect(registry.register).toHaveBeenCalledTimes(1);
+    expect(registry.trackInit).toHaveBeenCalledTimes(1);
     expect(startWatch).toHaveBeenCalled();
   });
 
