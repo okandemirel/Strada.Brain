@@ -8,6 +8,7 @@ import {
   isPlaceholderGradePng,
   classifyPng,
   classifyPngBytes,
+  decodePngRgba,
   isScaffoldingScene,
   measureAudioClip,
   measurePngContent,
@@ -1001,5 +1002,28 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const content = measurePngContent(flat)!;
     expect(content.colours).toBeLessThanOrEqual(2);
     expect(measurePngContent(png(64, 64, "noise"))!.colours).toBeGreaterThan(12);
+  });
+});
+
+describe("decodePngRgba bounds what it inflates (AUT-20)", () => {
+  it("refuses an IDAT that inflates far past what the header declares", () => {
+    // A 16×16 RGBA image needs (16*4+1)*16 = 1040 bytes of image data. This
+    // IDAT is a few KB and inflates to 32 MB: inflating it whole let one small
+    // file in a project spike the daemon's memory by gigabytes.
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(16, 0);
+    ihdr.writeUInt32BE(16, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    const bomb = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      pngChunk("IHDR", ihdr),
+      pngChunk("IDAT", deflateSync(Buffer.alloc(32 * 1024 * 1024))),
+      pngChunk("IEND", Buffer.alloc(0)),
+    ]);
+    expect(bomb.length).toBeLessThan(100_000);
+    expect(decodePngRgba(bomb)).toBeNull();
+    // An honest image of the same size still decodes.
+    expect(decodePngRgba(png(16, 16, "noise"))).not.toBeNull();
   });
 });

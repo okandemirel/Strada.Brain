@@ -1762,15 +1762,19 @@ export function decodePngRgba(bytes: Uint8Array): { width: number; height: numbe
     else if (type === "IEND") break;
     at += 12 + len;
   }
-  let raw: Uint8Array;
-  try {
-    raw = inflateSync(Buffer.concat(idat.map((c) => Buffer.from(c))));
-  } catch {
-    return null;
-  }
   const bytesPerSample = bitDepth / 8;
   const bpp = channels * bytesPerSample;
   const stride = dims.width * bpp;
+  let raw: Uint8Array;
+  try {
+    // Bounded by what the header says the image holds: a small IDAT can
+    // inflate to gigabytes, and nothing past this size is ever read.
+    raw = inflateSync(Buffer.concat(idat.map((c) => Buffer.from(c))), {
+      maxOutputLength: (stride + 1) * dims.height + 1,
+    });
+  } catch {
+    return null;
+  }
   if (raw.length < (stride + 1) * dims.height) return null;
   const rgba = new Uint8Array(dims.width * dims.height * 4);
   const prev = new Uint8Array(stride);
