@@ -463,10 +463,11 @@ describe("daemon memory:decay-status", () => {
     expect(stdout).toContain("MEMORY_DECAY_ENABLED=false");
   });
 
-  it("says it is not available from the CLI outside the runtime process (COR-13)", async () => {
-    const { stderr } = await runDaemonCommand(() => undefined, ["memory:decay-status"]);
+  it("outside the runtime process with no dashboard connection, says it cannot read it (COR-13)", async () => {
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["memory:decay-status"]);
 
-    expect(stderr).toContain("not available from the CLI");
+    expect(stderr).toContain("Cannot read the memory decay status");
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
     expect(process.exitCode).toBe(1);
   });
 
@@ -620,10 +621,11 @@ describe("daemon chain:status", () => {
     expect(stdout).toContain("75.0%");
   });
 
-  it("says it is not available from the CLI outside the runtime process (COR-13)", async () => {
-    const { stderr } = await runDaemonCommand(() => undefined, ["chain:status"]);
+  it("outside the runtime process with no dashboard connection, says it cannot read it (COR-13)", async () => {
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["chain:status"]);
 
-    expect(stderr).toContain("not available from the CLI");
+    expect(stderr).toContain("Cannot read the tool chain status");
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
     expect(process.exitCode).toBe(1);
   });
 
@@ -763,9 +765,12 @@ describe("daemon commands outside the runtime process (COR-13)", () => {
     [["reset", "nightly-build"], "daemon reset"],
     [["audit"], "daemon audit"],
     [["budget", "reset"], "daemon budget reset"],
-    [["agent", "list"], "daemon agent list"],
-    [["delegation:history"], "daemon delegation:history"],
-  ])("%j has no dashboard endpoint: says so and exits non-zero instead of 'not running'", async (args, name) => {
+    [["notifications"], "daemon notifications"],
+    [["memory:consolidation-preview"], "daemon memory:consolidation-preview"],
+    [["delegation:tier", "code_review", "cheap"], "daemon delegation:tier"],
+    [["agent", "stop", "123e4567-e89b-42d3-a456-426614174000"], "daemon agent stop"],
+    [["deploy:check"], "daemon deploy:check"],
+  ])("%j has no read endpoint or changes state: says so and exits non-zero instead of 'not running'", async (args, name) => {
     const { stdout, stderr } = await runDaemonCommand(() => undefined, args, () => ({
       kind: "ok",
       client: { baseUrl: "http://127.0.0.1:1", getJson: () => Promise.reject(new Error("must not be called")) },
@@ -773,6 +778,255 @@ describe("daemon commands outside the runtime process (COR-13)", () => {
     expect(stderr).toContain(`\`strada ${name}\` is not available from the CLI`);
     expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
     expect(`${stdout}\n${stderr}`).not.toContain("is not enabled");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+// =============================================================================
+// COR-13: read-only commands with a matching dashboard GET endpoint
+// =============================================================================
+
+describe("read-only daemon commands over the dashboard API (COR-13)", () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+    server = undefined;
+  });
+
+  /** A stub dashboard serving fixed JSON per GET path, to the right bearer only. */
+  async function startStub(token: string, routes: Record<string, unknown>): Promise<{ client: DashboardClientResolution; seen: string[] }> {
+    const seen: string[] = [];
+    server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      if (req.headers["authorization"] !== `Bearer ${token}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Authentication required" }));
+        return;
+      }
+      const body = req.method === "GET" && req.url ? routes[req.url] : undefined;
+      if (body === undefined) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not found" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    return { client: { kind: "ok", client: createDaemonDashboardClient({ baseUrl: `http://127.0.0.1:${port}`, token }) }, seen };
+  }
+
+  const run = (args: string[], client: DashboardClientResolution) => runDaemonCommand(() => undefined, args, () => client);
+
+  const AGENT_ID = "123e4567-e89b-42d3-a456-426614174000";
+  const agentsBody = {
+    enabled: true,
+    activeCount: 1,
+    agents: [{
+      id: AGENT_ID, key: "web:chat-12345678", channelType: "web", chatId: "chat-12345678", status: "active",
+      createdAt: Date.now() - 90_000, lastActivity: Date.now(), budgetCapUsd: 4, memoryEntryCount: 7, budgetUsed: 1,
+    }],
+    globalBudget: { usedUsd: 1, pct: 0.1 },
+  };
+  const delegationsBody = {
+    enabled: true,
+    active: [{ subAgentId: "sub-1", type: "code_review", startedAt: 1, elapsedMs: 125_000 }],
+    history: [
+      { id: 7, parentAgentId: "parent-agent-0001", subAgentId: "sub-1", type: "code_review", model: "claude-haiku", tier: "cheap", depth: 1, durationMs: 1500, costUsd: 0.0123, status: "completed", startedAt: 1 },
+      { id: 8, parentAgentId: "parent-agent-0002", subAgentId: "sub-2", type: "analysis", model: "gpt-mini", tier: "cheap", depth: 1, status: "running", startedAt: 2 },
+    ],
+    stats: [{ type: "code_review", count: 3, avgDurationMs: 1500.4, avgCostUsd: 0.01, successRate: 0.5, tierBreakdown: { cheap: 3 } }],
+  };
+
+  it("daemon config prints the running daemon's settings from GET /api/config", async () => {
+    const { client, seen } = await startStub("tok", {
+      "/api/config": {
+        config: {
+          "daemon.heartbeat.intervalMs": 45000,
+          "daemon.heartbeat.heartbeatFile": "HEARTBEAT.md",
+          "daemon.heartbeat.idlePause": true,
+          "daemon.security.approvalTimeoutMin": 15,
+          "daemon.security.autoApproveTools": ["file_read"],
+          "daemon.budget.dailyBudgetUsd": 3,
+          "daemon.budget.limitScope": "daemon",
+          "daemon.budget.warnPct": 0.8,
+          "daemon.backoff.baseCooldownMs": 60000,
+          "daemon.backoff.maxCooldownMs": 3600000,
+          "daemon.backoff.failureThreshold": 3,
+          "daemon.timezone": "Europe/Istanbul",
+        },
+      },
+    });
+
+    const { stdout, stderr } = await run(["config"], client);
+
+    expect(stderr).toBe("");
+    expect(seen).toEqual(["GET /api/config"]);
+    expect(stdout).toContain("45000");
+    expect(stdout).toContain("file_read [not enforced]");
+    expect(stdout).toContain("3 (daemon spend)");
+    expect(stdout).toContain("Europe/Istanbul");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("daemon config refuses a configuration with no daemon settings instead of printing blanks", async () => {
+    const { client } = await startStub("tok", { "/api/config": { config: {} } });
+    const { stderr } = await run(["config"], client);
+    expect(stderr).toContain("reported no daemon configuration");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon agent list and agent status read GET /api/agents", async () => {
+    const { client, seen } = await startStub("tok", { "/api/agents": agentsBody });
+
+    const list = await run(["agent", "list"], client);
+    expect(list.stderr).toBe("");
+    expect(list.stdout).toContain(AGENT_ID);
+    expect(list.stdout).toContain("$1.00 / $4.00 (25%)");
+
+    const status = await run(["agent", "status", AGENT_ID], client);
+    expect(status.stdout).toContain(`Agent: ${AGENT_ID}`);
+    expect(status.stdout).toContain("Budget:        $1.00 / $4.00 (25.0%)");
+    expect(status.stdout).toContain("Memory:        7 entries");
+
+    const missing = await run(["agent", "status", "00000000-0000-4000-8000-000000000000"], client);
+    expect(missing.stderr).toContain("not found");
+    expect(process.exitCode).toBe(1);
+    expect(seen.every((line) => line === "GET /api/agents")).toBe(true);
+  });
+
+  it("daemon agent list says multi-agent mode is off in the running Strada", async () => {
+    const { client } = await startStub("tok", { "/api/agents": { enabled: false } });
+    const { stdout, stderr } = await run(["agent", "list"], client);
+    expect(stderr).toContain("Multi-agent mode is not enabled in the running Strada");
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon delegation:history, :stats and :watch read GET /api/delegations", async () => {
+    const { client, seen } = await startStub("tok", { "/api/delegations": delegationsBody });
+
+    const history = await run(["delegation:history", "--type", "code_review"], client);
+    expect(history.stdout).toContain("claude-haiku");
+    expect(history.stdout).toContain("$0.0123");
+    expect(history.stdout).not.toContain("gpt-mini");
+
+    const stats = await run(["delegation:stats"], client);
+    expect(stats.stdout).toContain("code_review");
+    expect(stats.stdout).toContain("50.0%");
+    expect(stats.stdout).toContain("cheap:3");
+
+    const watch = await run(["delegation:watch"], client);
+    expect(watch.stdout).toContain("sub-1");
+    expect(watch.stdout).toContain("2m 5s");
+
+    expect(seen.every((line) => line === "GET /api/delegations")).toBe(true);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("daemon delegation:history says delegation is off when the runtime reports it disabled", async () => {
+    const { client } = await startStub("tok", { "/api/delegations": { enabled: false } });
+    const { stdout } = await run(["delegation:history"], client);
+    expect(stdout).toContain("Task delegation is not enabled in the running Strada");
+  });
+
+  it("daemon deploy:status and deploy:history read GET /api/deployment", async () => {
+    const { client } = await startStub("tok", {
+      "/api/deployment": {
+        enabled: true,
+        stats: { totalDeployments: 4, successful: 3, failed: 1, circuitBreakerState: "CLOSED" },
+        history: [
+          { id: "d1", proposedAt: Date.UTC(2026, 8, 1), status: "succeeded", duration: 1200, approvedBy: "okan" },
+          { id: "d2", proposedAt: Date.UTC(2026, 8, 2), status: "failed" },
+        ],
+      },
+    });
+
+    const status = await run(["deploy:status"], client);
+    expect(status.stdout).toContain("Total deployments: 4");
+    expect(status.stdout).toContain("Circuit breaker: CLOSED");
+
+    const history = await run(["deploy:history", "--limit", "1"], client);
+    expect(history.stdout).toContain("2026-09-01T00:00:00.000Z");
+    expect(history.stdout).toContain("okan");
+    expect(history.stdout).not.toContain("2026-09-02");
+  });
+
+  it("daemon chain:status reads GET /api/chain-resilience", async () => {
+    const { client } = await startStub("tok", {
+      "/api/chain-resilience": {
+        chains: [{ name: "build_then_test", steps: 3, rollbackCapable: true, parallelCapable: false, successRate: 0.9, occurrences: 12, lastRun: null }],
+        config: { rollbackEnabled: true, parallelEnabled: false, maxParallelBranches: 4, compensationTimeoutMs: 30000 },
+      },
+    });
+
+    const { stdout, stderr } = await run(["chain:status"], client);
+
+    expect(stderr).toBe("");
+    expect(stdout).toContain("build_then_test");
+    expect(stdout).toContain("90.0%");
+    expect(stdout).toContain("Rollback: enabled | Parallel: disabled | Max Branches: 4 | Timeout: 30000ms");
+  });
+
+  it("daemon memory:decay-status and memory:consolidation-status read GET /api/maintenance and /api/consolidation", async () => {
+    const { client } = await startStub("tok", {
+      "/api/maintenance": {
+        decay: {
+          enabled: true,
+          tiers: { working: { entries: 42, avgScore: 0.71, atFloor: 3, lambda: 0.1 } },
+          exemptDomains: ["instinct"],
+          totalExempt: 5,
+        },
+        pruning: { retentionDays: 30, lastPrunedCount: 0 },
+      },
+      "/api/consolidation": {
+        enabled: true,
+        perTier: { working: { clustered: 2, pending: 1, total: 10 } },
+        lifetimeSavings: 6,
+        totalRuns: 2,
+        totalCostUsd: 0.05,
+      },
+    });
+
+    const decay = await run(["memory:decay-status"], client);
+    expect(decay.stdout).toContain("Working");
+    expect(decay.stdout).toContain("0.71");
+    expect(decay.stdout).toContain("Exempt domains: instinct (5 entries)");
+
+    const consolidation = await run(["memory:consolidation-status", "--json"], client);
+    expect(JSON.parse(consolidation.stdout)).toEqual({
+      perTier: { working: { clustered: 2, pending: 1, total: 10 } },
+      lifetimeSavings: 6,
+      totalRuns: 2,
+      totalCostUsd: 0.05,
+    });
+  });
+
+  it("a wired read command names the dashboard it could not reach and exits non-zero", async () => {
+    const { client } = await startStub("tok", {});
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+
+    const { stdout, stderr } = await run(["agent", "list"], client);
+
+    expect(stderr).toContain("Cannot read the agent sessions: could not reach the daemon dashboard at http://127.0.0.1:");
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("a wired read command surfaces an auth refusal", async () => {
+    const { client: right } = await startStub("right", { "/api/deployment": { enabled: false } });
+    if (right.kind !== "ok") throw new Error("expected a client");
+    const wrong: DashboardClientResolution = {
+      kind: "ok",
+      client: createDaemonDashboardClient({ baseUrl: right.client.baseUrl, token: "wrong" }),
+    };
+
+    const { stderr } = await run(["deploy:status"], wrong);
+
+    expect(stderr).toContain("Authentication required");
     expect(process.exitCode).toBe(1);
   });
 });

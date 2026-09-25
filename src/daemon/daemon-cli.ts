@@ -16,9 +16,12 @@
  * Uses callback-based DI: getDaemonContext() returns the daemon context when
  * these commands run inside the runtime process. `strada daemon …` typed at a
  * shell runs in a separate CLI process where it is always undefined (COR-13):
- * there, `status` reads the running daemon over its dashboard API and every
- * command without an API says it is not available from the CLI — neither
- * claims the daemon is "not running", which that process cannot know.
+ * there, the read-only commands with a matching dashboard GET endpoint (status,
+ * config, agent list/status, delegation:history/stats/watch, deploy:status/
+ * history, chain:status, memory:decay-status, memory:consolidation-status) read
+ * the running runtime over that API, and every other command says it is not
+ * available from the CLI — none claims the daemon is "not running", which that
+ * process cannot know.
  *
  * Requirements: DAEMON-01, DAEMON-04, RPT-01, RPT-03
  */
@@ -290,50 +293,18 @@ export function registerDaemonCommands(
   daemon
     .command("config")
     .description("Show all daemon settings")
-    .action(() => {
+    .action(async () => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon config");
+        await printRemoteDaemonConfig(getDashboardClient);
         return;
       }
 
-      const c = ctx.config;
-
-      console.log("Daemon Configuration:");
-      console.log(
-        padRight("Setting", 35) +
-        padRight("Value", 20) +
-        padRight("Env Var", 40),
-      );
-      console.log("-".repeat(95));
-
-      const rows: Array<[string, string, string]> = [
-        ["heartbeat.intervalMs", String(c.heartbeat.intervalMs), "STRADA_DAEMON_INTERVAL_MS"],
-        ["heartbeat.heartbeatFile", c.heartbeat.heartbeatFile, "STRADA_DAEMON_HEARTBEAT_FILE"],
-        ["heartbeat.idlePause", String(c.heartbeat.idlePause), "STRADA_DAEMON_IDLE_PAUSE"],
-        ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
-        // Audited 2026-09-02: DaemonSecurityPolicy.checkPermission has no
-        // production caller, so this allowlist is parsed but applied by
-        // nothing — daemon writes are gated by the orchestrator's self-managed
-        // write review instead. Say so, rather than print it as live policy.
-        ["security.autoApproveTools", `${c.security.autoApproveTools.join(", ") || "(none)"} [not enforced]`, "STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
-        // Name what the cap measures: a dedicated daemon sub-limit counts daemon
-        // spend only; the shared-wallet fallback counts every source (audited 2026-09-02).
-        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? `${c.budget.dailyBudgetUsd} (${c.budget.limitScope ?? "system"} spend)` : "unlimited", "STRADA_DAEMON_DAILY_BUDGET"],
-        ["budget.warnPct", String(c.budget.warnPct), "STRADA_DAEMON_BUDGET_WARN_PCT"],
-        ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRADA_DAEMON_BACKOFF_BASE"],
-        ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRADA_DAEMON_BACKOFF_MAX"],
-        ["backoff.failureThreshold", String(c.backoff.failureThreshold), "STRADA_DAEMON_FAILURE_THRESHOLD"],
-        ["timezone", c.timezone, "STRADA_DAEMON_TIMEZONE"],
-      ];
-
-      for (const [setting, value, envVar] of rows) {
-        console.log(
-          padRight(setting, 35) +
-          padRight(value, 20) +
-          padRight(envVar, 40),
-        );
-      }
+      printDaemonConfig((settingPath) =>
+        settingPath.split(".").reduce<unknown>(
+          (node, key) => (node !== null && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
+          ctx.config,
+        ));
     });
 
   // =========================================================================
@@ -486,10 +457,10 @@ export function registerDaemonCommands(
     .command("memory:decay-status")
     .description("Show memory decay status per tier")
     .option("--json", "Output as JSON instead of table")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon memory:decay-status");
+        await printRemoteDecayStatus(opts, getDashboardClient);
         return;
       }
 
@@ -506,41 +477,7 @@ export function registerDaemonCommands(
         return;
       }
 
-      if (opts.json) {
-        console.log(JSON.stringify(stats, null, 2));
-        return;
-      }
-
-      // Table format
-      console.log("Memory Decay Status:");
-      console.log("");
-      console.log(
-        padRight("Tier", 14) +
-        padLeft("Entries", 10) +
-        padLeft("Avg Score", 12) +
-        padLeft("At Floor", 10) +
-        padLeft("Lambda", 10),
-      );
-      console.log("-".repeat(56));
-
-      const tierNames = ["working", "ephemeral", "persistent"];
-      for (const name of tierNames) {
-        const t = stats.tiers[name];
-        if (!t) continue;
-        const displayName = name.charAt(0).toUpperCase() + name.slice(1);
-        console.log(
-          padRight(displayName, 14) +
-          padLeft(String(t.entries), 10) +
-          padLeft(t.avgScore.toFixed(2), 12) +
-          padLeft(String(t.atFloor), 10) +
-          padLeft(t.lambda.toFixed(2), 10),
-        );
-      }
-
-      console.log("");
-      if (stats.exemptDomains.length > 0) {
-        console.log(`Exempt domains: ${stats.exemptDomains.join(", ")} (${stats.totalExempt} entries)`);
-      }
+      printDecayStats(stats, opts.json);
     });
 
   // =========================================================================
@@ -550,10 +487,10 @@ export function registerDaemonCommands(
     .command("chain:status")
     .description("Show tool chain resilience status")
     .option("--json", "Output as JSON instead of table")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon chain:status");
+        await printRemoteChainStatus(opts, getDashboardClient);
         return;
       }
 
@@ -674,12 +611,7 @@ export function registerDaemonCommands(
       }
 
       console.log("");
-      console.log(
-        `Rollback: ${resilienceConfig.rollbackEnabled ? "enabled" : "disabled"}` +
-        ` | Parallel: ${resilienceConfig.parallelEnabled ? "enabled" : "disabled"}` +
-        ` | Max Branches: ${resilienceConfig.maxParallelBranches}` +
-        ` | Timeout: ${resilienceConfig.compensationTimeoutMs}ms`,
-      );
+      printResilienceConfigLine(resilienceConfig);
     });
 
   // =========================================================================
@@ -692,10 +624,10 @@ export function registerDaemonCommands(
     .command("list")
     .description("List all agent sessions")
     .option("--json", "Output as JSON")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon agent list");
+        await printRemoteAgents(opts, getDashboardClient);
         return;
       }
       if (!ctx.agentManager) {
@@ -714,33 +646,7 @@ export function registerDaemonCommands(
       }
 
       const usages = ctx.agentBudgetTracker?.getAllAgentUsages();
-      const now = Date.now();
-
-      console.log("Agent Sessions:");
-      console.log(
-        padRight("ID", 38) +
-        padRight("Channel", 16) +
-        padRight("Status", 18) +
-        padRight("Budget", 22) +
-        padRight("Memory", 10) +
-        padRight("Uptime", 12),
-      );
-      console.log("-".repeat(116));
-
-      for (const a of agents) {
-        const used = usages?.get(a.id as AgentId) ?? 0;
-        const pct = a.budgetCapUsd > 0 ? ((used / a.budgetCapUsd) * 100).toFixed(0) : "0";
-        const budgetStr = `$${used.toFixed(2)} / $${a.budgetCapUsd.toFixed(2)} (${pct}%)`;
-        const uptimeMs = now - a.createdAt;
-        console.log(
-          padRight(a.id, 38) +
-          padRight(`${a.channelType}:${a.chatId.slice(0, 8)}`, 16) +
-          padRight(a.status, 18) +
-          padRight(budgetStr, 22) +
-          padRight(String(a.memoryEntryCount), 10) +
-          padRight(formatDuration(uptimeMs), 12),
-        );
-      }
+      printAgentTable(agents.map((a) => ({ ...a, budgetUsed: usages?.get(a.id as AgentId) ?? 0 })));
     });
 
   // agent status <id> -- detailed info for specific agent
@@ -748,11 +654,11 @@ export function registerDaemonCommands(
     .command("status <id>")
     .description("Show detailed agent status")
     .option("--json", "Output as JSON")
-    .action((id: string, opts: { json?: boolean }) => {
+    .action(async (id: string, opts: { json?: boolean }) => {
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon agent status");
+        await printRemoteAgentStatus(id, opts, getDashboardClient);
         return;
       }
       if (!ctx.agentManager) {
@@ -772,28 +678,7 @@ export function registerDaemonCommands(
         agentInstance.budgetCapUsd,
       );
 
-      const detail = {
-        ...agentInstance,
-        budgetUsed: usage?.usedUsd ?? 0,
-        budgetPct: usage?.pct ?? 0,
-        uptimeMs: Date.now() - agentInstance.createdAt,
-      };
-
-      if (opts.json) {
-        console.log(JSON.stringify(detail, null, 2));
-        return;
-      }
-
-      console.log(`Agent: ${agentInstance.id}`);
-      console.log(`  Key:           ${agentInstance.key}`);
-      console.log(`  Channel:       ${agentInstance.channelType}`);
-      console.log(`  Chat ID:       ${agentInstance.chatId}`);
-      console.log(`  Status:        ${agentInstance.status}`);
-      console.log(`  Budget:        $${(usage?.usedUsd ?? 0).toFixed(2)} / $${agentInstance.budgetCapUsd.toFixed(2)} (${((usage?.pct ?? 0) * 100).toFixed(1)}%)`);
-      console.log(`  Memory:        ${agentInstance.memoryEntryCount} entries`);
-      console.log(`  Created:       ${new Date(agentInstance.createdAt).toISOString()}`);
-      console.log(`  Last Activity: ${new Date(agentInstance.lastActivity).toISOString()}`);
-      console.log(`  Uptime:        ${formatDuration(Date.now() - agentInstance.createdAt)}`);
+      printAgentDetail(agentInstance, { usedUsd: usage?.usedUsd ?? 0, pct: usage?.pct ?? 0 }, opts.json);
     });
 
   // agent stop <id> -- graceful stop (--force for hard stop)
@@ -885,10 +770,16 @@ export function registerDaemonCommands(
     .option("--limit <n>", "Number of entries to show", "20")
     .option("--type <type>", "Filter by delegation type")
     .option("--json", "Output as JSON")
-    .action((opts: { limit: string; type?: string; json?: boolean }) => {
+    .action(async (opts: { limit: string; type?: string; json?: boolean }) => {
       const ctx = getDaemonContext();
+      const limit = parseInt(opts.limit, 10) || 20;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon delegation:history");
+        const read = await readDelegations(getDashboardClient);
+        if (!read) return;
+        if (read.history.length === DASHBOARD_DELEGATION_HISTORY && limit > DASHBOARD_DELEGATION_HISTORY) {
+          console.error(`The dashboard reports the ${DASHBOARD_DELEGATION_HISTORY} most recent delegations; showing those.`);
+        }
+        printDelegationHistory(read.history.slice(0, limit), opts);
         return;
       }
       if (!ctx.delegationLog) {
@@ -896,49 +787,7 @@ export function registerDaemonCommands(
         return;
       }
 
-      const limit = parseInt(opts.limit, 10) || 20;
-      const history = ctx.delegationLog.getHistory(limit);
-      const filtered = opts.type
-        ? history.filter((e) => e.type === opts.type)
-        : history;
-
-      if (opts.json) {
-        console.log(JSON.stringify(filtered, null, 2));
-        return;
-      }
-
-      if (filtered.length === 0) {
-        console.log("No delegation history found.");
-        return;
-      }
-
-      console.log("Delegation History:");
-      console.log(
-        padRight("ID", 6) +
-        padRight("Parent", 14) +
-        padRight("Type", 18) +
-        padRight("Tier", 10) +
-        padRight("Model", 28) +
-        padRight("Duration", 12) +
-        padRight("Cost", 10) +
-        padRight("Status", 12),
-      );
-      console.log("-".repeat(110));
-
-      for (const e of filtered) {
-        const durationStr = e.durationMs != null ? `${e.durationMs}ms` : "-";
-        const costStr = e.costUsd != null ? `$${e.costUsd.toFixed(4)}` : "-";
-        console.log(
-          padRight(String(e.id), 6) +
-          padRight(e.parentAgentId.slice(0, 12) + "..", 14) +
-          padRight(e.type, 18) +
-          padRight(e.tier, 10) +
-          padRight(e.model.length > 26 ? e.model.slice(0, 24) + ".." : e.model, 28) +
-          padRight(durationStr, 12) +
-          padRight(costStr, 10) +
-          padRight(e.status, 12),
-        );
-      }
+      printDelegationHistory(ctx.delegationLog.getHistory(limit), opts);
     });
 
   // delegation:stats -- show aggregate stats per delegation type
@@ -946,18 +795,19 @@ export function registerDaemonCommands(
     .command("delegation:stats")
     .description("Show aggregate delegation statistics")
     .option("--json", "Output as JSON")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
+      let stats: ReadonlyArray<DelegationStatsRow>;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon delegation:stats");
-        return;
-      }
-      if (!ctx.delegationLog) {
+        const read = await readDelegations(getDashboardClient);
+        if (!read) return;
+        stats = read.stats;
+      } else if (!ctx.delegationLog) {
         console.log("Task delegation is not enabled");
         return;
+      } else {
+        stats = ctx.delegationLog.getStats();
       }
-
-      const stats = ctx.delegationLog.getStats();
 
       if (opts.json) {
         console.log(JSON.stringify(stats, null, 2));
@@ -999,18 +849,19 @@ export function registerDaemonCommands(
   daemon
     .command("delegation:watch")
     .description("Show currently active delegations")
-    .action(() => {
+    .action(async () => {
       const ctx = getDaemonContext();
+      let active: ReadonlyArray<{ subAgentId: string; type: string; startedAt: number; elapsedMs?: number }>;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon delegation:watch");
-        return;
-      }
-      if (!ctx.delegationManager) {
+        const read = await readDelegations(getDashboardClient);
+        if (!read) return;
+        active = read.active;
+      } else if (!ctx.delegationManager) {
         console.log("Task delegation is not enabled");
         return;
+      } else {
+        active = ctx.delegationManager.getActiveDelegations();
       }
-
-      const active = ctx.delegationManager.getActiveDelegations();
 
       if (active.length === 0) {
         console.log("No active delegations");
@@ -1027,7 +878,8 @@ export function registerDaemonCommands(
       console.log("-".repeat(70));
 
       for (const d of active) {
-        const elapsed = formatDuration(now - d.startedAt);
+        // The runtime's own measure when it sent one: no cross-process clock skew.
+        const elapsed = formatDuration(d.elapsedMs ?? now - d.startedAt);
         console.log(
           padRight(d.subAgentId, 38) +
           padRight(d.type, 20) +
@@ -1069,19 +921,24 @@ export function registerDaemonCommands(
     .command("memory:consolidation-status")
     .description("Show memory consolidation status per tier")
     .option("--json", "Output as JSON instead of table")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
+      let stats: ConsolidationStatsRow;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon memory:consolidation-status");
-        return;
-      }
-
-      if (!ctx.consolidationEngine) {
+        const read = await readFromDashboard("the consolidation status", "/api/consolidation", RemoteConsolidationSchema, getDashboardClient);
+        if (!read) return;
+        if (!read.data.enabled) {
+          console.log("Memory consolidation is not active in the running Strada (MEMORY_CONSOLIDATION_ENABLED=false, or daemon mode is off)");
+          return;
+        }
+        const { perTier, lifetimeSavings, totalRuns, totalCostUsd } = read.data;
+        stats = { perTier, lifetimeSavings, totalRuns, totalCostUsd };
+      } else if (!ctx.consolidationEngine) {
         console.log("Memory consolidation is disabled (MEMORY_CONSOLIDATION_ENABLED=false)");
         return;
+      } else {
+        stats = ctx.consolidationEngine.getStats();
       }
-
-      const stats = ctx.consolidationEngine.getStats();
 
       if (opts.json) {
         console.log(JSON.stringify(stats, null, 2));
@@ -1230,19 +1087,19 @@ export function registerDaemonCommands(
     .command("deploy:status")
     .description("Show current deployment state, circuit breaker, last readiness check")
     .option("--json", "Output as JSON instead of table")
-    .action((opts: { json?: boolean }) => {
+    .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
+      let stats: DeploymentStatsRow;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon deploy:status");
-        return;
-      }
-
-      if (!ctx.deploymentExecutor) {
+        const read = await readDeployment(getDashboardClient);
+        if (!read) return;
+        stats = read.stats;
+      } else if (!ctx.deploymentExecutor) {
         console.log("Deployment is disabled (DEPLOY_ENABLED=false)");
         return;
+      } else {
+        stats = ctx.deploymentExecutor.getStats();
       }
-
-      const stats = ctx.deploymentExecutor.getStats();
 
       if (opts.json) {
         console.log(JSON.stringify(stats, null, 2));
@@ -1265,20 +1122,23 @@ export function registerDaemonCommands(
     .description("Show recent deployment history")
     .option("--limit <n>", "Number of entries to show", "10")
     .option("--json", "Output as JSON instead of table")
-    .action((opts: { limit: string; json?: boolean }) => {
+    .action(async (opts: { limit: string; json?: boolean }) => {
       const ctx = getDaemonContext();
+      const limit = parseInt(opts.limit, 10) || 10;
+      let history: ReadonlyArray<DeploymentHistoryRow>;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon deploy:history");
-        return;
-      }
-
-      if (!ctx.deploymentExecutor) {
+        const read = await readDeployment(getDashboardClient);
+        if (!read) return;
+        if (read.history.length === DASHBOARD_DEPLOYMENT_HISTORY && limit > DASHBOARD_DEPLOYMENT_HISTORY) {
+          console.error(`The dashboard reports the ${DASHBOARD_DEPLOYMENT_HISTORY} most recent deployments; showing those.`);
+        }
+        history = read.history.slice(0, limit);
+      } else if (!ctx.deploymentExecutor) {
         console.log("Deployment is disabled (DEPLOY_ENABLED=false)");
         return;
+      } else {
+        history = ctx.deploymentExecutor.getHistory(limit);
       }
-
-      const limit = parseInt(opts.limit, 10) || 10;
-      const history = ctx.deploymentExecutor.getHistory(limit);
 
       if (opts.json) {
         console.log(JSON.stringify(history, null, 2));
@@ -1395,7 +1255,8 @@ function isValidAgentId(id: string): boolean {
 /**
  * A command that only works inside the runtime process, run from a shell
  * (COR-13). It used to print "Daemon is not running" and exit 0 whether or not
- * a daemon was running; the dashboard API has no endpoint for these, so say so.
+ * a daemon was running; the dashboard API has no read endpoint for these (or
+ * they change state, which the CLI does not do remotely), so say so.
  */
 function reportNotAvailableFromCli(command: string): void {
   console.error(
@@ -1425,39 +1286,56 @@ const RemoteDaemonStatusSchema = z.object({
   approvalQueue: z.array(z.unknown()).default([]),
 });
 
-/** `daemon status` from a shell: read the running runtime over its dashboard API. */
-async function printRemoteDaemonStatus(getDashboardClient?: () => DashboardClientResolution): Promise<void> {
+/**
+ * GET `path` from the running runtime's dashboard for a read-only command run
+ * from a shell (COR-13). On any failure it says what could not be read and
+ * why, sets a non-zero exit code and returns undefined; it never guesses that
+ * the daemon is "not running", which this process cannot know.
+ */
+async function readFromDashboard<S extends z.ZodType>(
+  what: string,
+  path: string,
+  schema: S,
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<{ data: z.output<S>; baseUrl: string } | undefined> {
   const resolution: DashboardClientResolution = getDashboardClient?.()
     ?? { kind: "unavailable", message: "no dashboard connection is configured for this CLI" };
   if (resolution.kind === "unavailable") {
-    console.error(`Cannot read the daemon status: ${resolution.message}.`);
+    console.error(`Cannot read ${what}: ${resolution.message}.`);
     process.exitCode = 1;
-    return;
+    return undefined;
   }
 
-  const result = await resolution.client.getJson("/api/daemon");
+  const result = await resolution.client.getJson(path);
   if (result.kind !== "ok") {
-    console.error(`Cannot read the daemon status: ${result.message}`);
+    console.error(`Cannot read ${what}: ${result.message}`);
     process.exitCode = 1;
-    return;
+    return undefined;
   }
-  const parsed = RemoteDaemonStatusSchema.safeParse(result.body);
+  const parsed = schema.safeParse(result.body);
   if (!parsed.success) {
-    console.error(`Cannot read the daemon status: the dashboard at ${resolution.client.baseUrl} answered /api/daemon in an unexpected shape.`);
+    console.error(`Cannot read ${what}: the dashboard at ${resolution.client.baseUrl} answered ${path} in an unexpected shape.`);
     process.exitCode = 1;
-    return;
+    return undefined;
   }
+  return { data: parsed.data, baseUrl: resolution.client.baseUrl };
+}
 
-  const status = parsed.data;
+/** `daemon status` from a shell: read the running runtime over its dashboard API. */
+async function printRemoteDaemonStatus(getDashboardClient?: () => DashboardClientResolution): Promise<void> {
+  const read = await readFromDashboard("the daemon status", "/api/daemon", RemoteDaemonStatusSchema, getDashboardClient);
+  if (!read) return;
+
+  const status = read.data;
   if (status.configured === false) {
     // The runtime answered, so it IS running — just without the heartbeat.
     console.log("Daemon: not enabled (Strada is running without daemon mode; start it with --daemon)");
-    console.log(`Dashboard: ${resolution.client.baseUrl}`);
+    console.log(`Dashboard: ${read.baseUrl}`);
     return;
   }
 
   console.log(`Daemon: ${status.running ? "running" : "stopped"}`);
-  console.log(`Dashboard: ${resolution.client.baseUrl}`);
+  console.log(`Dashboard: ${read.baseUrl}`);
   if (status.intervalMs !== undefined) console.log(`Heartbeat interval: ${status.intervalMs}ms`);
   console.log("");
 
@@ -1488,6 +1366,534 @@ async function printRemoteDaemonStatus(getDashboardClient?: () => DashboardClien
       : `Budget: $${usedUsd.toFixed(2)} (no daily limit)`);
   }
   console.log(`Pending approvals: ${status.approvalQueue.length}`);
+}
+
+// -----------------------------------------------------------------------------
+// Read-only commands over the dashboard API (COR-13). Each one reads the GET
+// endpoint the dashboard already serves, and shares its printer with the
+// in-process path, so both print the same thing.
+// -----------------------------------------------------------------------------
+
+/** What `daemon config` prints, reading each setting through `get("heartbeat.intervalMs")`. */
+function printDaemonConfig(get: (settingPath: string) => unknown): void {
+  const text = (settingPath: string): string => {
+    const value = get(settingPath);
+    return value === undefined || value === null ? "-" : String(value);
+  };
+  const tools = get("security.autoApproveTools");
+  const toolList = Array.isArray(tools) ? tools.map(String).join(", ") : "";
+  const dailyBudget = get("budget.dailyBudgetUsd");
+  const limitScope = get("budget.limitScope");
+
+  console.log("Daemon Configuration:");
+  console.log(
+    padRight("Setting", 35) +
+    padRight("Value", 20) +
+    padRight("Env Var", 40),
+  );
+  console.log("-".repeat(95));
+
+  const rows: Array<[string, string, string]> = [
+    ["heartbeat.intervalMs", text("heartbeat.intervalMs"), "STRADA_DAEMON_INTERVAL_MS"],
+    ["heartbeat.heartbeatFile", text("heartbeat.heartbeatFile"), "STRADA_DAEMON_HEARTBEAT_FILE"],
+    ["heartbeat.idlePause", text("heartbeat.idlePause"), "STRADA_DAEMON_IDLE_PAUSE"],
+    ["security.approvalTimeoutMin", text("security.approvalTimeoutMin"), "STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
+    // Audited 2026-09-02: DaemonSecurityPolicy.checkPermission has no
+    // production caller, so this allowlist is parsed but applied by
+    // nothing — daemon writes are gated by the orchestrator's self-managed
+    // write review instead. Say so, rather than print it as live policy.
+    ["security.autoApproveTools", `${toolList || "(none)"} [not enforced]`, "STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
+    // Name what the cap measures: a dedicated daemon sub-limit counts daemon
+    // spend only; the shared-wallet fallback counts every source (audited 2026-09-02).
+    ["budget.dailyBudgetUsd", dailyBudget !== undefined && dailyBudget !== null ? `${String(dailyBudget)} (${typeof limitScope === "string" ? limitScope : "system"} spend)` : "unlimited", "STRADA_DAEMON_DAILY_BUDGET"],
+    ["budget.warnPct", text("budget.warnPct"), "STRADA_DAEMON_BUDGET_WARN_PCT"],
+    ["backoff.baseCooldownMs", text("backoff.baseCooldownMs"), "STRADA_DAEMON_BACKOFF_BASE"],
+    ["backoff.maxCooldownMs", text("backoff.maxCooldownMs"), "STRADA_DAEMON_BACKOFF_MAX"],
+    ["backoff.failureThreshold", text("backoff.failureThreshold"), "STRADA_DAEMON_FAILURE_THRESHOLD"],
+    ["timezone", text("timezone"), "STRADA_DAEMON_TIMEZONE"],
+  ];
+
+  for (const [setting, value, envVar] of rows) {
+    console.log(
+      padRight(setting, 35) +
+      padRight(value, 20) +
+      padRight(envVar, 40),
+    );
+  }
+}
+
+/** GET /api/config: the runtime's configuration, flattened to dotted keys and masked. */
+const RemoteConfigSchema = z.object({ config: z.record(z.string(), z.unknown()) });
+
+async function printRemoteDaemonConfig(getDashboardClient?: () => DashboardClientResolution): Promise<void> {
+  const read = await readFromDashboard("the daemon settings", "/api/config", RemoteConfigSchema, getDashboardClient);
+  if (!read) return;
+  const flat = read.data.config;
+  if (!Object.keys(flat).some((key) => key.startsWith("daemon."))) {
+    console.error(`Cannot read the daemon settings: the dashboard at ${read.baseUrl} reported no daemon configuration.`);
+    process.exitCode = 1;
+    return;
+  }
+  printDaemonConfig((settingPath) => flat[`daemon.${settingPath}`]);
+}
+
+interface DecayStatsView {
+  enabled: boolean;
+  tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }>;
+  exemptDomains: string[];
+  totalExempt: number;
+}
+
+function printDecayStats(stats: DecayStatsView, json: boolean | undefined): void {
+  if (json) {
+    console.log(JSON.stringify(stats, null, 2));
+    return;
+  }
+
+  // Table format
+  console.log("Memory Decay Status:");
+  console.log("");
+  console.log(
+    padRight("Tier", 14) +
+    padLeft("Entries", 10) +
+    padLeft("Avg Score", 12) +
+    padLeft("At Floor", 10) +
+    padLeft("Lambda", 10),
+  );
+  console.log("-".repeat(56));
+
+  const tierNames = ["working", "ephemeral", "persistent"];
+  for (const name of tierNames) {
+    const t = stats.tiers[name];
+    if (!t) continue;
+    const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+    console.log(
+      padRight(displayName, 14) +
+      padLeft(String(t.entries), 10) +
+      padLeft(t.avgScore.toFixed(2), 12) +
+      padLeft(String(t.atFloor), 10) +
+      padLeft(t.lambda.toFixed(2), 10),
+    );
+  }
+
+  console.log("");
+  if (stats.exemptDomains.length > 0) {
+    console.log(`Exempt domains: ${stats.exemptDomains.join(", ")} (${stats.totalExempt} entries)`);
+  }
+}
+
+/** GET /api/maintenance: `decay` is the memory manager's getDecayStats(). */
+const RemoteMaintenanceSchema = z.object({
+  decay: z.object({
+    enabled: z.boolean(),
+    tiers: z.record(z.string(), z.object({ entries: z.number(), avgScore: z.number(), atFloor: z.number(), lambda: z.number() })),
+    exemptDomains: z.array(z.string()).default([]),
+    totalExempt: z.number().default(0),
+  }),
+});
+
+async function printRemoteDecayStatus(
+  opts: { json?: boolean },
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<void> {
+  const read = await readFromDashboard("the memory decay status", "/api/maintenance", RemoteMaintenanceSchema, getDashboardClient);
+  if (!read) return;
+  if (!read.data.decay.enabled) {
+    // The API cannot tell "disabled" from "this memory backend reports no decay".
+    console.log("Memory decay is not active in the running Strada (MEMORY_DECAY_ENABLED=false, or its memory backend reports no decay)");
+    return;
+  }
+  printDecayStats(read.data.decay, opts.json);
+}
+
+function printResilienceConfigLine(config: {
+  rollbackEnabled: boolean;
+  parallelEnabled: boolean;
+  maxParallelBranches: number;
+  compensationTimeoutMs: number;
+}): void {
+  console.log(
+    `Rollback: ${config.rollbackEnabled ? "enabled" : "disabled"}` +
+    ` | Parallel: ${config.parallelEnabled ? "enabled" : "disabled"}` +
+    ` | Max Branches: ${config.maxParallelBranches}` +
+    ` | Timeout: ${config.compensationTimeoutMs}ms`,
+  );
+}
+
+/** GET /api/chain-resilience: per-chain summary (no step graph) and the resilience config. */
+const RemoteChainResilienceSchema = z.object({
+  chains: z.array(z.object({
+    name: z.string(),
+    steps: z.number(),
+    rollbackCapable: z.boolean(),
+    parallelCapable: z.boolean(),
+    successRate: z.number(),
+    occurrences: z.number(),
+  })).default([]),
+  config: z.object({
+    rollbackEnabled: z.boolean(),
+    parallelEnabled: z.boolean(),
+    maxParallelBranches: z.number(),
+    compensationTimeoutMs: z.number(),
+  }),
+});
+
+async function printRemoteChainStatus(
+  opts: { json?: boolean },
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<void> {
+  const read = await readFromDashboard("the tool chain status", "/api/chain-resilience", RemoteChainResilienceSchema, getDashboardClient);
+  if (!read) return;
+  const { chains, config } = read.data;
+  if (opts.json) {
+    console.log(JSON.stringify(read.data, null, 2));
+    return;
+  }
+  if (chains.length === 0) {
+    console.log("No active tool chains");
+    return;
+  }
+
+  // The API reports each chain's step count, not its graph, so there is no
+  // topology column here.
+  console.log("Tool Chain Resilience Status:");
+  console.log("");
+  console.log(
+    padRight("Name", 25) +
+    padRight("Steps", 7) +
+    padRight("Rollback", 10) +
+    padRight("Parallel", 10) +
+    padRight("Success", 10) +
+    padRight("Runs", 8),
+  );
+  console.log("-".repeat(70));
+  for (const c of chains) {
+    console.log(
+      padRight(c.name.length > 24 ? c.name.slice(0, 22) + ".." : c.name, 25) +
+      padRight(String(c.steps), 7) +
+      padRight(c.rollbackCapable ? "Yes" : "No", 10) +
+      padRight(c.parallelCapable ? "Yes" : "No", 10) +
+      padRight((c.successRate * 100).toFixed(1) + "%", 10) +
+      padRight(String(c.occurrences), 8),
+    );
+  }
+  console.log("");
+  printResilienceConfigLine(config);
+}
+
+/** One agent as both the in-process manager and GET /api/agents describe it. */
+interface AgentView {
+  id: string;
+  key: string;
+  channelType: string;
+  chatId: string;
+  status: string;
+  createdAt: number;
+  lastActivity: number;
+  budgetCapUsd: number;
+  memoryEntryCount: number;
+}
+
+function printAgentTable(agents: ReadonlyArray<AgentView & { budgetUsed: number }>): void {
+  const now = Date.now();
+
+  console.log("Agent Sessions:");
+  console.log(
+    padRight("ID", 38) +
+    padRight("Channel", 16) +
+    padRight("Status", 18) +
+    padRight("Budget", 22) +
+    padRight("Memory", 10) +
+    padRight("Uptime", 12),
+  );
+  console.log("-".repeat(116));
+
+  for (const a of agents) {
+    const used = a.budgetUsed;
+    const pct = a.budgetCapUsd > 0 ? ((used / a.budgetCapUsd) * 100).toFixed(0) : "0";
+    const budgetStr = `$${used.toFixed(2)} / $${a.budgetCapUsd.toFixed(2)} (${pct}%)`;
+    const uptimeMs = now - a.createdAt;
+    console.log(
+      padRight(a.id, 38) +
+      padRight(`${a.channelType}:${a.chatId.slice(0, 8)}`, 16) +
+      padRight(a.status, 18) +
+      padRight(budgetStr, 22) +
+      padRight(String(a.memoryEntryCount), 10) +
+      padRight(formatDuration(uptimeMs), 12),
+    );
+  }
+}
+
+function printAgentDetail(agent: AgentView, usage: { usedUsd: number; pct: number }, json: boolean | undefined): void {
+  const detail = {
+    ...agent,
+    budgetUsed: usage.usedUsd,
+    budgetPct: usage.pct,
+    uptimeMs: Date.now() - agent.createdAt,
+  };
+
+  if (json) {
+    console.log(JSON.stringify(detail, null, 2));
+    return;
+  }
+
+  console.log(`Agent: ${agent.id}`);
+  console.log(`  Key:           ${agent.key}`);
+  console.log(`  Channel:       ${agent.channelType}`);
+  console.log(`  Chat ID:       ${agent.chatId}`);
+  console.log(`  Status:        ${agent.status}`);
+  console.log(`  Budget:        $${usage.usedUsd.toFixed(2)} / $${agent.budgetCapUsd.toFixed(2)} (${(usage.pct * 100).toFixed(1)}%)`);
+  console.log(`  Memory:        ${agent.memoryEntryCount} entries`);
+  console.log(`  Created:       ${new Date(agent.createdAt).toISOString()}`);
+  console.log(`  Last Activity: ${new Date(agent.lastActivity).toISOString()}`);
+  console.log(`  Uptime:        ${formatDuration(Date.now() - agent.createdAt)}`);
+}
+
+/** GET /api/agents: every agent with its spend, or `enabled: false` without multi-agent mode. */
+const RemoteAgentsSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    // Loose: `--json` passes on every field the runtime sent.
+    agents: z.array(z.looseObject({
+      id: z.string(),
+      key: z.string().default(""),
+      channelType: z.string(),
+      chatId: z.string(),
+      status: z.string(),
+      createdAt: z.number(),
+      lastActivity: z.number(),
+      budgetCapUsd: z.number(),
+      memoryEntryCount: z.number(),
+      budgetUsed: z.number().default(0),
+    })).default([]),
+  }),
+]);
+
+async function readAgents(
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<ReadonlyArray<AgentView & { budgetUsed: number }> | undefined> {
+  const read = await readFromDashboard("the agent sessions", "/api/agents", RemoteAgentsSchema, getDashboardClient);
+  if (!read) return undefined;
+  if (!read.data.enabled) {
+    console.error("Multi-agent mode is not enabled in the running Strada.");
+    process.exitCode = 1;
+    return undefined;
+  }
+  return read.data.agents;
+}
+
+async function printRemoteAgents(
+  opts: { json?: boolean },
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<void> {
+  const agents = await readAgents(getDashboardClient);
+  if (!agents) return;
+  if (opts.json) {
+    console.log(JSON.stringify(agents, null, 2));
+    return;
+  }
+  if (agents.length === 0) {
+    console.log("No active agents.");
+    return;
+  }
+  printAgentTable(agents);
+}
+
+async function printRemoteAgentStatus(
+  id: string,
+  opts: { json?: boolean },
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<void> {
+  const agents = await readAgents(getDashboardClient);
+  if (!agents) return;
+  const agent = agents.find((a) => a.id === id);
+  if (!agent) {
+    console.error(`Agent '${id}' not found.`);
+    process.exitCode = 1;
+    return;
+  }
+  const pct = agent.budgetCapUsd > 0 ? agent.budgetUsed / agent.budgetCapUsd : 0;
+  printAgentDetail(agent, { usedUsd: agent.budgetUsed, pct }, opts.json);
+}
+
+/** How many entries GET /api/delegations and /api/deployment include (server-system-routes.ts). */
+const DASHBOARD_DELEGATION_HISTORY = 20;
+const DASHBOARD_DEPLOYMENT_HISTORY = 10;
+
+interface DelegationHistoryRow {
+  id: number;
+  parentAgentId: string;
+  type: string;
+  tier: string;
+  model: string;
+  durationMs?: number | null;
+  costUsd?: number | null;
+  status: string;
+}
+
+interface DelegationStatsRow {
+  type: string;
+  count: number;
+  avgDurationMs: number;
+  avgCostUsd: number;
+  successRate: number;
+  tierBreakdown: Record<string, number>;
+}
+
+function printDelegationHistory(history: ReadonlyArray<DelegationHistoryRow>, opts: { type?: string; json?: boolean }): void {
+  const filtered = opts.type
+    ? history.filter((e) => e.type === opts.type)
+    : history;
+
+  if (opts.json) {
+    console.log(JSON.stringify(filtered, null, 2));
+    return;
+  }
+
+  if (filtered.length === 0) {
+    console.log("No delegation history found.");
+    return;
+  }
+
+  console.log("Delegation History:");
+  console.log(
+    padRight("ID", 6) +
+    padRight("Parent", 14) +
+    padRight("Type", 18) +
+    padRight("Tier", 10) +
+    padRight("Model", 28) +
+    padRight("Duration", 12) +
+    padRight("Cost", 10) +
+    padRight("Status", 12),
+  );
+  console.log("-".repeat(110));
+
+  for (const e of filtered) {
+    const durationStr = e.durationMs != null ? `${e.durationMs}ms` : "-";
+    const costStr = e.costUsd != null ? `$${e.costUsd.toFixed(4)}` : "-";
+    console.log(
+      padRight(String(e.id), 6) +
+      padRight(e.parentAgentId.slice(0, 12) + "..", 14) +
+      padRight(e.type, 18) +
+      padRight(e.tier, 10) +
+      padRight(e.model.length > 26 ? e.model.slice(0, 24) + ".." : e.model, 28) +
+      padRight(durationStr, 12) +
+      padRight(costStr, 10) +
+      padRight(e.status, 12),
+    );
+  }
+}
+
+/** GET /api/delegations: active delegations, the recent history and per-type stats. */
+const RemoteDelegationsSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    active: z.array(z.object({
+      subAgentId: z.string(),
+      type: z.string(),
+      startedAt: z.number(),
+      elapsedMs: z.number().optional(),
+    })).default([]),
+    history: z.array(z.looseObject({
+      id: z.number(),
+      parentAgentId: z.string(),
+      type: z.string(),
+      tier: z.string(),
+      model: z.string(),
+      durationMs: z.number().nullable().optional(),
+      costUsd: z.number().nullable().optional(),
+      status: z.string(),
+    })).default([]),
+    stats: z.array(z.object({
+      type: z.string(),
+      count: z.number(),
+      avgDurationMs: z.number(),
+      avgCostUsd: z.number(),
+      successRate: z.number(),
+      tierBreakdown: z.record(z.string(), z.number()),
+    })).default([]),
+  }),
+]);
+
+async function readDelegations(
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<Extract<z.output<typeof RemoteDelegationsSchema>, { enabled: true }> | undefined> {
+  const read = await readFromDashboard("the delegations", "/api/delegations", RemoteDelegationsSchema, getDashboardClient);
+  if (!read) return undefined;
+  if (!read.data.enabled) {
+    console.log("Task delegation is not enabled in the running Strada");
+    return undefined;
+  }
+  return read.data;
+}
+
+interface ConsolidationStatsRow {
+  perTier: Record<string, { clustered: number; pending: number; total: number }>;
+  lifetimeSavings: number;
+  totalRuns: number;
+  totalCostUsd: number;
+}
+
+/** GET /api/consolidation: the engine's getStats(), or `enabled: false`. */
+const RemoteConsolidationSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    perTier: z.record(z.string(), z.object({ clustered: z.number(), pending: z.number(), total: z.number() })),
+    lifetimeSavings: z.number(),
+    totalRuns: z.number(),
+    totalCostUsd: z.number(),
+  }),
+]);
+
+interface DeploymentStatsRow {
+  totalDeployments: number;
+  successful: number;
+  failed: number;
+  lastDeployment?: unknown;
+  circuitBreakerState: string;
+}
+
+interface DeploymentHistoryRow {
+  proposedAt: number;
+  status: string;
+  duration?: number | null;
+  approvedBy?: string | null;
+}
+
+/** GET /api/deployment: the executor's getStats() and its recent history, or `enabled: false`. */
+const RemoteDeploymentSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    stats: z.object({
+      totalDeployments: z.number(),
+      successful: z.number(),
+      failed: z.number(),
+      lastDeployment: z.unknown().optional(),
+      circuitBreakerState: z.string(),
+    }),
+    history: z.array(z.looseObject({
+      proposedAt: z.number(),
+      status: z.string(),
+      duration: z.number().nullable().optional(),
+      approvedBy: z.string().nullable().optional(),
+    })).default([]),
+  }),
+]);
+
+async function readDeployment(
+  getDashboardClient?: () => DashboardClientResolution,
+): Promise<Extract<z.output<typeof RemoteDeploymentSchema>, { enabled: true }> | undefined> {
+  const read = await readFromDashboard("the deployment status", "/api/deployment", RemoteDeploymentSchema, getDashboardClient);
+  if (!read) return undefined;
+  if (!read.data.enabled) {
+    console.log("Deployment is not active in the running Strada (DEPLOY_ENABLED=false, or daemon mode is off)");
+    return undefined;
+  }
+  return read.data;
 }
 
 function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {
