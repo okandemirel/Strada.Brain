@@ -1,6 +1,7 @@
-import { create } from 'zustand'
+import { create, type StoreApi } from 'zustand'
 import type { ChatMessage, ConnectionStatus, ConfirmationState } from '../types/messages'
 import { type SupportedLanguage, SUPPORTED_LANGUAGES } from '../i18n'
+import { releaseDroppedPreviews } from '../utils/attachment-preview'
 
 // Re-export types for convenience
 export type { ChatMessage, ConnectionStatus, ConfirmationState }
@@ -112,31 +113,77 @@ const initialState: SessionState = {
   liveMessages: null,
 }
 
+/**
+ * How many messages the chat keeps in memory. A long-lived tab kept every
+ * message it ever saw (storage keeps only the newest 100), and every add and
+ * stream update walked all of them (WEB-19).
+ */
+export const MAX_IN_MEMORY_MESSAGES = 500
+
 /** Ids of the stored sessions' messages shown since leaving the live view. */
 let historicalIds = new Set<string>()
+
+/**
+ * id -> position in a messages array, built once per array. An update keeps
+ * every id where it was, so the new array reuses its predecessor's map and a
+ * stream update finds its message without scanning the history.
+ */
+const positions = new WeakMap<ChatMessage[], Map<string, number>>()
+
+function positionOf(messages: ChatMessage[], id: string): number {
+  let index = positions.get(messages)
+  if (!index) {
+    index = new Map(messages.map((m, i) => [m.id, i]))
+    positions.set(messages, index)
+  }
+  return index.get(id) ?? -1
+}
 
 function patchMessages(
   messages: ChatMessage[],
   id: string,
   updates: Partial<ChatMessage>,
 ): ChatMessage[] {
-  return messages.some((m) => m.id === id)
-    ? messages.map((m) => (m.id === id ? { ...m, ...updates } : m))
-    : messages
+  const at = positionOf(messages, id)
+  if (at < 0) return messages
+  const next = messages.slice()
+  next[at] = { ...messages[at]!, ...updates }
+  positions.set(next, positions.get(messages)!)
+  return next
 }
 
-export const useSessionStore = create<SessionState & SessionActions>()((set) => ({
+function keepNewest(messages: ChatMessage[]): ChatMessage[] {
+  return messages.length > MAX_IN_MEMORY_MESSAGES ? messages.slice(-MAX_IN_MEMORY_MESSAGES) : messages
+}
+
+type SessionStore = SessionState & SessionActions
+
+/** Apply a change to the message lists, then free the thumbnails it dropped. */
+function setLists(
+  set: StoreApi<SessionStore>['setState'],
+  get: StoreApi<SessionStore>['getState'],
+  change: (state: SessionState) => Partial<SessionState>,
+): void {
+  const before = get()
+  set(change(before))
+  const after = get()
+  releaseDroppedPreviews([before.messages, before.liveMessages], [after.messages, after.liveMessages])
+}
+
+export const useSessionStore = create<SessionStore>()((set, get) => ({
   ...initialState,
 
-  addMessage: (message) =>
-    set((state) => {
-      if (state.messages.some((m) => m.id === message.id)) {
-        return state
-      }
-      return { messages: [...state.messages, message] }
-    }),
+  addMessage: (message) => {
+    const { messages } = get()
+    if (positionOf(messages, message.id) >= 0) return
+    if (messages.length < MAX_IN_MEMORY_MESSAGES) {
+      set({ messages: [...messages, message] })
+      return
+    }
+    setLists(set, get, (state) => ({ messages: keepNewest([...state.messages, message]) }))
+  },
 
-  setMessages: (messages) => set({ messages: Array.isArray(messages) ? messages : [] }),
+  setMessages: (messages) => setLists(set, get, () => ({ messages: keepNewest(Array.isArray(messages) ? messages : []) })),
 
   updateMessage: (id, updates) =>
     set((state) => ({
@@ -145,7 +192,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
     })),
 
   removeMessage: (id) =>
-    set((state) => ({
+    setLists(set, get, (state) => ({
       messages: state.messages.filter((m) => m.id !== id),
       liveMessages: state.liveMessages && state.liveMessages.filter((m) => m.id !== id),
     })),
@@ -177,15 +224,16 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
       }
     }),
 
-  returnToLiveMessages: () =>
-    set((state) => {
-      if (!state.viewingHistorical) return state
+  returnToLiveMessages: () => {
+    if (!get().viewingHistorical) return
+    setLists(set, get, (state) => {
       const live = state.liveMessages ?? []
       const liveIds = new Set(live.map((m) => m.id))
       const arrived = state.messages.filter((m) => !liveIds.has(m.id) && !historicalIds.has(m.id))
       historicalIds = new Set()
-      return { messages: [...live, ...arrived], liveMessages: null, viewingHistorical: false }
-    }),
+      return { messages: keepNewest([...live, ...arrived]), liveMessages: null, viewingHistorical: false }
+    })
+  },
 
   endStreams: (streamIds) =>
     set((state) => {
@@ -199,7 +247,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
 
   reset: () => {
     historicalIds = new Set()
-    set(initialState)
+    setLists(set, get, () => initialState)
   },
 
   logout: () => {
@@ -212,7 +260,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
 
     // 2. Reset session store to initial state
     historicalIds = new Set()
-    set(initialState)
+    setLists(set, get, () => initialState)
 
     // 3. Invoke registered logout hooks (WebSocket disconnect, sibling store resets, etc.)
     for (const hook of logoutHooks) {

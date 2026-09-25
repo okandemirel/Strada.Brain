@@ -10,6 +10,7 @@ import { useSessionStore, onLogout } from '../stores/session-store'
 import { useCanvasStore } from '../stores/canvas-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
+import { toMessageAttachments } from '../utils/attachment-preview'
 import {
   WS_CLOSE_POLICY_VIOLATION,
   WS_CHAT_PATH,
@@ -195,8 +196,10 @@ export function useWebSocket(): UseWebSocketReturn {
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
 
-  // O(1) lookup for stream_update: maps streamId → message index in store.messages
-  const streamIdToIndexRef = useRef(new Map<string, number>())
+  // streamId → id of the message it writes to. An id stays valid when older
+  // messages are dropped or a stored session is on screen (an index did not),
+  // and the store finds a message by id without scanning (WEB-19).
+  const streamMessageIdsRef = useRef(new Map<string, string>())
 
   const acceptConnectedSession = useCallback((
     chatId: string,
@@ -434,6 +437,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (streamsRef.current.size > 0) {
         const orphanedStreamIds = new Set(streamsRef.current.keys())
         streamsRef.current.clear()
+        streamMessageIdsRef.current.clear()
         useSessionStore.getState().endStreams(orphanedStreamIds)
       }
 
@@ -621,10 +625,12 @@ export function useWebSocket(): UseWebSocketReturn {
           const ssStreamId = typeof data.streamId === 'string' ? data.streamId : ''
           if (!ssStreamId) break
           const ssText = typeof data.text === 'string' ? data.text : ''
+          const ssMessageId = generateId()
           useSessionStore.getState().setTyping(false)
           streamsRef.current.set(ssStreamId, ssText)
+          streamMessageIdsRef.current.set(ssStreamId, ssMessageId)
           useSessionStore.getState().addMessage({
-            id: generateId(),
+            id: ssMessageId,
             sender: 'assistant',
             text: ssText,
             isMarkdown: true,
@@ -632,30 +638,23 @@ export function useWebSocket(): UseWebSocketReturn {
             streamId: ssStreamId,
             timestamp: Date.now(),
           })
-          // Store index for O(1) lookup in stream_update
-          const storeAfterAdd = useSessionStore.getState()
-          streamIdToIndexRef.current.set(ssStreamId, storeAfterAdd.messages.length - 1)
           break
         }
 
         case 'stream_update': {
           const suStreamId = typeof data.streamId === 'string' ? data.streamId : ''
           if (!suStreamId) break
-          const store = useSessionStore.getState()
-          const msgIndex = streamIdToIndexRef.current.get(suStreamId)
-          const streamMsg = (msgIndex !== undefined && store.messages[msgIndex]?.streamId === suStreamId)
-            ? store.messages[msgIndex]
-            : findStreamMessage(suStreamId)
-          if (streamMsg) {
-            if (msgIndex === undefined || store.messages[msgIndex]?.streamId !== suStreamId) {
-              const correctIndex = store.messages.findIndex((m) => m.id === streamMsg.id)
-              if (correctIndex >= 0) streamIdToIndexRef.current.set(suStreamId, correctIndex)
-            }
-            // `text` replaces (a new status line), `delta` appends (WEB-2).
-            const newText = applyStreamUpdate(streamMsg.text, data)
-            streamsRef.current.set(suStreamId, newText)
-            store.updateMessage(streamMsg.id, { text: newText })
-          }
+          // A stream this socket did not start (one that outlived a reconnect)
+          // is looked up once, by scanning, and remembered.
+          const knownId = streamMessageIdsRef.current.get(suStreamId)
+          const found = knownId === undefined ? findStreamMessage(suStreamId) : undefined
+          const suMessageId = knownId ?? found?.id
+          if (!suMessageId) break
+          streamMessageIdsRef.current.set(suStreamId, suMessageId)
+          // `text` replaces (a new status line), `delta` appends (WEB-2).
+          const newText = applyStreamUpdate(streamsRef.current.get(suStreamId) ?? found?.text ?? '', data)
+          streamsRef.current.set(suStreamId, newText)
+          useSessionStore.getState().updateMessage(suMessageId, { text: newText })
           break
         }
 
@@ -663,26 +662,22 @@ export function useWebSocket(): UseWebSocketReturn {
           const seStreamId = typeof data.streamId === 'string' ? data.streamId : ''
           if (!seStreamId) break
           const seText = typeof data.text === 'string' ? data.text : ''
-          const endIndex = streamIdToIndexRef.current.get(seStreamId)
-          streamIdToIndexRef.current.delete(seStreamId)
+          const seMessageId = streamMessageIdsRef.current.get(seStreamId) ?? findStreamMessage(seStreamId)?.id
+          streamMessageIdsRef.current.delete(seStreamId)
           streamsRef.current.delete(seStreamId)
+          if (!seMessageId) break
           const store = useSessionStore.getState()
-          const streamMsg = (endIndex !== undefined && store.messages[endIndex]?.streamId === seStreamId)
-            ? store.messages[endIndex]
-            : findStreamMessage(seStreamId)
-          if (streamMsg) {
-            if (seText) {
-              const streamEndInstinctIds = Array.isArray(data.instinctIds)
-                ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
-                : undefined
-              store.updateMessage(streamMsg.id, {
-                text: seText,
-                isStreaming: false,
-                ...(streamEndInstinctIds && streamEndInstinctIds.length > 0 ? { instinctIds: streamEndInstinctIds } : {}),
-              })
-            } else {
-              store.removeMessage(streamMsg.id)
-            }
+          if (seText) {
+            const streamEndInstinctIds = Array.isArray(data.instinctIds)
+              ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
+              : undefined
+            store.updateMessage(seMessageId, {
+              text: seText,
+              isStreaming: false,
+              ...(streamEndInstinctIds && streamEndInstinctIds.length > 0 ? { instinctIds: streamEndInstinctIds } : {}),
+            })
+          } else {
+            store.removeMessage(seMessageId)
           }
           break
         }
@@ -837,14 +832,15 @@ export function useWebSocket(): UseWebSocketReturn {
     if (useSessionStore.getState().viewingHistorical) return false
     const clientMessageId = generateId()
 
-    // Add user message to display
+    // Add user message to display. Its attachments keep no base64: the
+    // payload below carries the bytes (WEB-19).
     useSessionStore.getState().addMessage({
       id: clientMessageId,
       sender: 'user',
       text,
       isMarkdown: false,
       timestamp: Date.now(),
-      attachments,
+      attachments: attachments && toMessageAttachments(attachments),
       deliveryState: 'pending',
     })
 

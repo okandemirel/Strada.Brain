@@ -211,6 +211,21 @@ export interface Attachment {
   size: number
 }
 
+/**
+ * An attachment as the chat history holds it. A message this page sent keeps
+ * no base64 (the frame carried it): images keep an object URL for their
+ * thumbnail, other files only their name (WEB-19).
+ */
+export interface MessageAttachment {
+  name: string
+  type: string
+  size: number
+  /** Object URL of an image's bytes; revoked when the message leaves memory. */
+  previewUrl?: string
+  /** base64, when a caller put a wire attachment in the history directly. */
+  data?: string
+}
+
 /** Chat message for display */
 export interface ChatMessage {
   id: string
@@ -220,7 +235,7 @@ export interface ChatMessage {
   isStreaming?: boolean
   streamId?: string
   timestamp: number
-  attachments?: Attachment[]
+  attachments?: MessageAttachment[]
   instinctIds?: string[]
   feedback?: 'thumbs_up' | 'thumbs_down'
   deliveryState?: 'pending' | 'failed'

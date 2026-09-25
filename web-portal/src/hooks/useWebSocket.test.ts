@@ -852,3 +852,53 @@ describe('useWebSocket chat socket URL (WEB-14)', () => {
     expect(MockWebSocket.instances[0]!.url).toBe(`ws://${window.location.host}/ws`)
   })
 })
+
+// WEB-19: the history kept every sent attachment's base64 (up to ~133 MB per
+// message) for as long as the tab lived; only images are ever shown.
+describe('useWebSocket sent attachments (WEB-19)', () => {
+  const originalCreate = URL.createObjectURL
+  const blobs: Blob[] = []
+
+  beforeEach(() => {
+    installTestEnvironment()
+    blobs.length = 0
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: (blob: Blob) => { blobs.push(blob); return `blob:thumb-${blobs.length}` },
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    restoreTestEnvironment()
+    Object.defineProperty(URL, 'createObjectURL', { value: originalCreate, configurable: true })
+  })
+
+  it('sends the bytes but keeps only a thumbnail URL for images in the history', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]!
+    act(() => {
+      socket.emit('open')
+      socket.emit('message', { type: 'connected', chatId: 'chat-att', reconnectToken: 'r', profileId: 'p' })
+    })
+    const png = btoa('\x89PNG-bytes')
+    const pdf = btoa('%PDF-1.7 a long report')
+    act(() => {
+      result.current.sendMessage('two files', [
+        { name: 'shot.png', type: 'image/png', data: png, size: 10 },
+        { name: 'report.pdf', type: 'application/pdf', data: pdf, size: 22 },
+      ])
+    })
+
+    const frame = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'message')
+    expect(frame.attachments.map((a: { data: string }) => a.data)).toEqual([png, pdf])
+
+    const shown = useSessionStore.getState().messages.at(-1)!.attachments
+    expect(shown).toEqual([
+      { name: 'shot.png', type: 'image/png', size: 10, previewUrl: 'blob:thumb-1' },
+      { name: 'report.pdf', type: 'application/pdf', size: 22 },
+    ])
+    expect(blobs).toHaveLength(1)
+    expect(blobs[0]!.type).toBe('image/png')
+    expect(blobs[0]!.size).toBe(atob(png).length)
+  })
+})

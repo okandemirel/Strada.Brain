@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach } from 'vitest'
-import { useSessionStore } from './session-store'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { MAX_IN_MEMORY_MESSAGES, useSessionStore } from './session-store'
 import type { ChatMessage, ConfirmationState } from '../types/messages'
 
 function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
@@ -147,5 +147,74 @@ describe('useSessionStore', () => {
     expect(state.sessionId).toBeNull()
     expect(state.profileId).toBeNull()
     expect(state.confirmation).toBeNull()
+  })
+})
+
+// WEB-19: memory kept every message a long-lived tab ever saw, each one a
+// thumbnail's worth of bytes or more.
+describe('useSessionStore in-memory history bound', () => {
+  const originalRevoke = URL.revokeObjectURL
+  const revoked: string[] = []
+
+  beforeEach(() => {
+    useSessionStore.getState().reset()
+    revoked.length = 0
+    Object.defineProperty(URL, 'revokeObjectURL', { value: (url: string) => { revoked.push(url) }, configurable: true })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevoke, configurable: true })
+  })
+
+  it('keeps only the newest messages', () => {
+    for (let i = 0; i < MAX_IN_MEMORY_MESSAGES + 20; i++) {
+      useSessionStore.getState().addMessage(makeMessage({ id: `m${i}` }))
+    }
+    const { messages } = useSessionStore.getState()
+    expect(MAX_IN_MEMORY_MESSAGES).toBeGreaterThan(100) // more than storage keeps
+    expect(messages).toHaveLength(MAX_IN_MEMORY_MESSAGES)
+    expect(messages[0]!.id).toBe('m20')
+    expect(messages.at(-1)!.id).toBe(`m${MAX_IN_MEMORY_MESSAGES + 19}`)
+  })
+
+  it('bounds a bulk restore the same way', () => {
+    const many = Array.from({ length: MAX_IN_MEMORY_MESSAGES + 5 }, (_, i) => makeMessage({ id: `r${i}` }))
+    useSessionStore.getState().setMessages(many)
+    expect(useSessionStore.getState().messages).toHaveLength(MAX_IN_MEMORY_MESSAGES)
+    expect(useSessionStore.getState().messages[0]!.id).toBe('r5')
+  })
+
+  it('still updates the right message after older ones were dropped', () => {
+    for (let i = 0; i < MAX_IN_MEMORY_MESSAGES + 3; i++) {
+      useSessionStore.getState().addMessage(makeMessage({ id: `m${i}`, text: 'before' }))
+    }
+    useSessionStore.getState().updateMessage('m10', { text: 'after' })
+    const { messages } = useSessionStore.getState()
+    expect(messages.find((m) => m.id === 'm10')!.text).toBe('after')
+    expect(messages.filter((m) => m.text === 'after')).toHaveLength(1)
+  })
+
+  it('frees the thumbnail of a message that leaves memory, and only then', () => {
+    const photo = { name: 'a.png', type: 'image/png', size: 3, previewUrl: 'blob:thumb-1' }
+    useSessionStore.getState().addMessage(makeMessage({ id: 'with-photo', attachments: [photo] }))
+    useSessionStore.getState().updateMessage('with-photo', { deliveryState: undefined })
+    for (let i = 0; i < MAX_IN_MEMORY_MESSAGES - 1; i++) {
+      useSessionStore.getState().addMessage(makeMessage({ id: `m${i}` }))
+    }
+    expect(revoked).toEqual([])
+
+    useSessionStore.getState().addMessage(makeMessage({ id: 'one-too-many' }))
+    expect(revoked).toEqual(['blob:thumb-1'])
+  })
+
+  it('keeps a thumbnail while its message is set aside for a stored session', () => {
+    const photo = { name: 'a.png', type: 'image/png', size: 3, previewUrl: 'blob:thumb-2' }
+    useSessionStore.getState().addMessage(makeMessage({ id: 'with-photo', attachments: [photo] }))
+    useSessionStore.getState().showHistoricalMessages([makeMessage({ id: 'old' })])
+    useSessionStore.getState().returnToLiveMessages()
+    expect(revoked).toEqual([])
+
+    useSessionStore.getState().reset()
+    expect(revoked).toEqual(['blob:thumb-2'])
   })
 })

@@ -2,7 +2,8 @@ import { memo, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
-import type { Attachment, ChatMessage as ChatMessageType } from '../types/messages'
+import type { ChatMessage as ChatMessageType, MessageAttachment } from '../types/messages'
+import { PREVIEWABLE_IMAGE_TYPES } from '../utils/attachment-preview'
 import VoiceOutput from './VoiceOutput'
 import { cn } from '@/lib/utils'
 import { REMARK_PLUGINS, REHYPE_PLUGINS } from '@/lib/markdown'
@@ -42,13 +43,18 @@ function formatRelativeTime(timestamp: number): string {
   return formatTimeAgo(timestamp)
 }
 
-const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
-
 function isImageType(type: string): boolean {
   return type.startsWith('image/')
 }
 
-function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
+/** A sent image carries an object URL; a wire attachment still has its base64. */
+function thumbnailSource(attachment: MessageAttachment): string | null {
+  if (!PREVIEWABLE_IMAGE_TYPES.has(attachment.type)) return null
+  if (attachment.previewUrl) return attachment.previewUrl
+  return attachment.data ? `data:${attachment.type};base64,${attachment.data}` : null
+}
+
+function AttachmentGallery({ attachments }: { attachments: MessageAttachment[] }) {
   const images = useMemo(() => attachments.filter((a) => isImageType(a.type)), [attachments])
   const others = useMemo(() => attachments.filter((a) => !isImageType(a.type)), [attachments])
 
@@ -58,17 +64,18 @@ function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
     <div className="mt-2.5">
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-1.5">
-          {images.map((img, i) =>
-            SAFE_IMAGE_TYPES.has(img.type) ? (
+          {images.map((img, i) => {
+            const src = thumbnailSource(img)
+            return src ? (
               <img
                 key={i}
-                src={`data:${img.type};base64,${img.data}`}
+                src={src}
                 alt={img.name}
                 className="max-w-[300px] max-h-[240px] rounded-[14px] object-contain border border-border cursor-pointer transition-all duration-200 hover:opacity-90 hover:scale-[1.01]"
                 loading="lazy"
               />
-            ) : null,
-          )}
+            ) : null
+          })}
         </div>
       )}
       {others.length > 0 && (
