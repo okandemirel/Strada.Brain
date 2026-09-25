@@ -1152,9 +1152,45 @@ function parseCliArgs(argv) {
   return { wrapperKind, wrapperPath, userArgs: args };
 }
 
+/** What a shell reports for a process killed by `signal`: 128 + its number. */
+function signalExitCode(signal) {
+  return 128 + (os.constants.signals[signal] ?? 0);
+}
+
+/**
+ * Leave the way the child left: its exit code, or death by the same signal so
+ * whoever started the launcher sees what happened to the app.
+ */
+function exitLikeChild(code, signal) {
+  if (!signal) {
+    process.exit(code ?? 1);
+  }
+  // The timer keeps the loop alive until the signal lands; it only fires when
+  // the signal does not end this process (ignored, or unsupported on Windows).
+  setTimeout(() => process.exit(signalExitCode(signal)), 1_000);
+  try {
+    process.kill(process.pid, signal);
+  } catch {
+    process.exit(signalExitCode(signal));
+  }
+}
+
+/**
+ * Run the app as a child and stand in for it until it exits (OPS-25).
+ *
+ * `spawnSync` left the launcher deaf to signals, so `kill <launcher pid>` (what
+ * a supervisor or script sends to the process it started) ended the launcher
+ * alone and orphaned the daemon on its ports. SIGTERM is forwarded now. SIGINT
+ * and SIGHUP are not: the terminal sends those to the whole foreground process
+ * group, child included, and a second copy would trip the app's "second signal
+ * means force shutdown". The launcher just outlives the child's shutdown.
+ * SIGBREAK is waited out on Windows for the same reason (Ctrl+Break reaches the
+ * whole console group), and `child.kill()` there is TerminateProcess, which
+ * would skip the app's shutdown entirely.
+ */
 function runNode(entryArgs, extraEnv = {}) {
   const launchCwd = resolveLaunchCwd(process.env, ROOT_DIR);
-  const result = spawnSync(process.execPath, entryArgs, {
+  const child = spawn(process.execPath, entryArgs, {
     cwd: ROOT_DIR,
     stdio: "inherit",
     env: {
@@ -1164,10 +1200,28 @@ function runNode(entryArgs, extraEnv = {}) {
       ...extraEnv,
     },
   });
-  if (result.error) {
-    throw result.error;
+  const waitForChild = () => {};
+  const handlers = [
+    ["SIGTERM", () => child.kill("SIGTERM")],
+    ["SIGINT", waitForChild],
+    ["SIGHUP", waitForChild],
+    ...(isWindows() ? [["SIGBREAK", waitForChild]] : []),
+  ];
+  for (const [signal, handler] of handlers) {
+    process.on(signal, handler);
   }
-  process.exit(result.status ?? 1);
+  child.on("error", (error) => {
+    // A failed kill of a live child changes nothing: its own exit decides.
+    if (child.pid !== undefined) return;
+    console.error(`Could not start Strada: ${error.message}`);
+    process.exit(1);
+  });
+  child.on("exit", (code, signal) => {
+    for (const [name, handler] of handlers) {
+      process.off(name, handler);
+    }
+    exitLikeChild(code, signal);
+  });
 }
 
 export function main(argv = process.argv.slice(2)) {

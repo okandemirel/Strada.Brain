@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 async function loadSourceLauncherModule() {
   return import(pathToFileURL(path.join(process.cwd(), "scripts", "source-launcher.mjs")).href);
@@ -712,6 +712,125 @@ describe("the flag the source child inherits (round 13 #35)", () => {
     expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "true" })).toBe("true");
     expect(sourceCheckoutFlagForChild({ STRADA_SOURCE_CHECKOUT: "maybe" })).toBe("true");
   });
+});
+
+/**
+ * OPS-25. The launcher ran the app through spawnSync and handled no signals, so
+ * `kill <launcher pid>` ended the launcher alone and orphaned the daemon. These
+ * run the real launcher from a throwaway root whose src/index.ts is a stand-in
+ * app that reports every signal it gets.
+ *
+ * POSIX only: Windows has no catchable SIGTERM (process.kill() there is
+ * TerminateProcess), and its console sends Ctrl+C/Ctrl+Break to the whole
+ * process group, so there is nothing for the launcher to forward.
+ */
+describe.skipIf(process.platform === "win32")("source launcher signal handling (OPS-25)", () => {
+  let fixtureRoot = "";
+  const running: Array<{ launcher: ChildProcess; childPid: number | null }> = [];
+
+  beforeAll(() => {
+    fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "strada-launcher-signals-"));
+    mkdirSync(path.join(fixtureRoot, "scripts"));
+    mkdirSync(path.join(fixtureRoot, "src"));
+    copyFileSync(
+      path.join(process.cwd(), "scripts", "source-launcher.mjs"),
+      path.join(fixtureRoot, "scripts", "source-launcher.mjs"),
+    );
+    writeFileSync(path.join(fixtureRoot, "package.json"), '{"name":"launcher-signal-fixture","private":true}\n');
+    // `--import tsx` resolves from the launcher's root.
+    symlinkSync(path.join(process.cwd(), "node_modules"), path.join(fixtureRoot, "node_modules"), "dir");
+    writeFileSync(path.join(fixtureRoot, "src", "index.ts"), [
+      "const say = (line: string): void => { process.stdout.write(`${line}\\n`); };",
+      "for (const signal of [\"SIGINT\", \"SIGHUP\"] as const) process.on(signal, () => say(`child got ${signal}`));",
+      "process.on(\"SIGTERM\", () => { say(\"child got SIGTERM\"); process.exit(7); });",
+      "setInterval(() => undefined, 60_000);",
+      "say(`child ready ${process.pid}`);",
+      "",
+    ].join("\n"));
+  });
+
+  afterEach(() => {
+    for (const { launcher, childPid } of running.splice(0)) {
+      // Whatever a failing run left behind, including an orphaned child.
+      for (const pid of [childPid, launcher.pid]) {
+        if (pid === null || pid === undefined) continue;
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  });
+
+  afterAll(() => {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function startLauncher() {
+    const launcher = spawn(process.execPath, [path.join(fixtureRoot, "scripts", "source-launcher.mjs"), "cli"], {
+      cwd: fixtureRoot,
+      env: { ...process.env, STRADA_SKIP_STALE_REBUILD: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const run = { launcher, childPid: null as number | null };
+    running.push(run);
+    let output = "";
+    launcher.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+    launcher.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      launcher.on("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const deadline = Date.now() + 45_000;
+    while (!/child ready (\d+)/.test(output)) {
+      if (launcher.exitCode !== null || launcher.signalCode !== null || Date.now() > deadline) {
+        throw new Error(`the stand-in app never started:\n${output}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    run.childPid = Number(/child ready (\d+)/.exec(output)?.[1]);
+    return { launcher, childPid: run.childPid, exited, output: () => output };
+  }
+
+  it("forwards SIGTERM to the app and exits with the app's code", async () => {
+    const { launcher, childPid, exited, output } = await startLauncher();
+    launcher.kill("SIGTERM");
+    // Was: the launcher died of the signal (code null) and the app kept running.
+    expect(await exited).toEqual({ code: 7, signal: null });
+    expect(output()).toContain("child got SIGTERM");
+    expect(isAlive(childPid)).toBe(false);
+  }, 60_000);
+
+  for (const signal of ["SIGINT", "SIGHUP"] as const) {
+    it(`does not forward ${signal} (the terminal already sent it to the app) and waits for the app to exit`, async () => {
+      const { launcher, childPid, exited, output } = await startLauncher();
+      launcher.kill(signal);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      // Was: the launcher exited at once, while the app was still shutting down.
+      expect(launcher.exitCode).toBeNull();
+      expect(launcher.signalCode).toBeNull();
+      expect(output()).not.toContain(`child got ${signal}`);
+      // The app finishing its shutdown is what ends the launcher.
+      process.kill(childPid, "SIGTERM");
+      expect(await exited).toEqual({ code: 7, signal: null });
+    }, 60_000);
+  }
+
+  it("dies of the same signal as the app", async () => {
+    const { childPid, exited } = await startLauncher();
+    process.kill(childPid, "SIGKILL");
+    // Was: exit code 1, which hid that the app had been killed.
+    expect(await exited).toEqual({ code: null, signal: "SIGKILL" });
+  }, 60_000);
 });
 
 describe("Windows .cmd launchers (OPS-17)", () => {
