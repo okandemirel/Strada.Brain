@@ -117,3 +117,65 @@ describe("findOutcome", () => {
     expect(findOutcome(outcomes, "Ns.Absent.Test")).toBeUndefined();
   });
 });
+
+describe("same-named tests in different classes", () => {
+  /** A TRX whose results carry only the method name, as MSTest and NUnit write it. */
+  function shortNameTrx(rows: string, definitions: string): string {
+    return `<TestRun><Results>${rows}</Results><TestDefinitions>${definitions}</TestDefinitions></TestRun>`;
+  }
+  function definition(id: string, className: string, name: string): string {
+    return (
+      `<UnitTest name="${name}" storage="t.dll" id="${id}"><Execution id="e-${id}" />` +
+      `<TestMethod codeBase="t.dll" adapterTypeName="executor://nunit" className="${className}" name="${name}" /></UnitTest>`
+    );
+  }
+
+  it("qualifies a short testName with its class from the test definitions", () => {
+    const { outcomes } = parseTrx(
+      shortNameTrx(
+        `<UnitTestResult testId="L" testName="Parse_ReturnsNull" outcome="Passed" />`,
+        definition("L", "Ns.LexerTests, Tests, Version=1.0.0.0", "Parse_ReturnsNull"),
+      ),
+    );
+    expect([...outcomes.keys()]).toEqual(["Ns.LexerTests.Parse_ReturnsNull"]);
+  });
+
+  it("does not let another class's test stand in for an absent required test", () => {
+    // ParserTests.Parse_ReturnsNull never ran (no row); LexerTests has a
+    // passing method of the same name. The required test did not pass.
+    const report = parseTrx(
+      shortNameTrx(
+        `<UnitTestResult testId="L" testName="Parse_ReturnsNull" outcome="Passed" />`,
+        definition("L", "Ns.LexerTests", "Parse_ReturnsNull"),
+      ),
+    );
+    expect(findOutcome(report.outcomes, "Ns.ParserTests.Parse_ReturnsNull")).toBeUndefined();
+    expect(findOutcome(report.outcomes, "Ns.LexerTests.Parse_ReturnsNull")).toBe("passed");
+  });
+
+  it("without class information, refuses a short name two required tests share", () => {
+    const shortOnly = new Map<string, "passed" | "failed" | "skipped">([["Parse_ReturnsNull", "passed"]]);
+    const requiredNames = ["Ns.ParserTests.Parse_ReturnsNull", "Ns.LexerTests.Parse_ReturnsNull"];
+    expect(findOutcome(shortOnly, "Ns.ParserTests.Parse_ReturnsNull", { requiredNames })).toBeUndefined();
+    // Unique among the required names, the short name still counts.
+    expect(
+      findOutcome(shortOnly, "Ns.ParserTests.Parse_ReturnsNull", { requiredNames: [requiredNames[0]!] }),
+    ).toBe("passed");
+  });
+
+  it("without class information, refuses a short name two distinct tests reported", () => {
+    const report = parseTrx(
+      `<TestRun><Results>
+        <UnitTestResult testId="A" testName="Parse_ReturnsNull" outcome="Passed" />
+        <UnitTestResult testId="B" testName="Parse_ReturnsNull" outcome="Passed" />
+        <UnitTestResult testId="C" testName="Case" outcome="Passed" />
+        <UnitTestResult testId="C" testName="Case" outcome="Passed" />
+      </Results></TestRun>`,
+    );
+    const { ambiguousNames } = report;
+    expect([...(ambiguousNames ?? [])]).toEqual(["Parse_ReturnsNull"]);
+    expect(findOutcome(report.outcomes, "Ns.ParserTests.Parse_ReturnsNull", { ambiguousNames })).toBeUndefined();
+    // Rows of one data-driven test share a testId, so they are not ambiguous.
+    expect(findOutcome(report.outcomes, "Ns.Data.Case", { ambiguousNames })).toBe("passed");
+  });
+});

@@ -22,6 +22,8 @@ export interface TestReport {
   readonly outcomes: ReadonlyMap<string, TestOutcome>;
   /** True when the project did not build. Every test is then unrun, not passed. */
   readonly buildFailed?: boolean;
+  /** Bare test names more than one distinct test reported; see `parseTrx`. */
+  readonly ambiguousNames?: ReadonlySet<string>;
 }
 
 export interface ResolutionInput {
@@ -47,11 +49,12 @@ export interface ResolutionResult {
  * a fix — which is exactly the behaviour a model under evaluation can stumble
  * into without meaning to cheat.
  */
-function passed(report: TestReport, name: string): boolean {
+function passed(report: TestReport, name: string, requiredNames: readonly string[]): boolean {
   // findOutcome, not a plain map lookup: the dataset lists fully-qualified
   // names while TRX may report a short name or one case per parameterised
-  // input. An exact-only lookup scores a correct run as a failure.
-  return findOutcome(report.outcomes, name) === "passed";
+  // input. An exact-only lookup scores a correct run as a failure. The full
+  // required list lets it refuse a short name two required tests share.
+  return findOutcome(report.outcomes, name, { requiredNames, ambiguousNames: report.ambiguousNames }) === "passed";
 }
 
 export function evaluateResolution(input: ResolutionInput): ResolutionResult {
@@ -66,8 +69,9 @@ export function evaluateResolution(input: ResolutionInput): ResolutionResult {
     };
   }
 
-  const failToPassMissing = failToPass.filter((t) => !passed(report, t));
-  const passToPassBroken = passToPass.filter((t) => !passed(report, t));
+  const required = [...failToPass, ...passToPass];
+  const failToPassMissing = failToPass.filter((t) => !passed(report, t, required));
+  const passToPassBroken = passToPass.filter((t) => !passed(report, t, required));
 
   // A task with no FAIL_TO_PASS tests cannot demonstrate anything was fixed.
   // This is not hypothetical: the dataset's test lists arrive as Python repr

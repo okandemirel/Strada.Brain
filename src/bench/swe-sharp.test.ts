@@ -217,6 +217,27 @@ describe("TRX to resolution, end to end", () => {
   });
 });
 
+describe("TRX to resolution, same-named tests", () => {
+  it("does not score an absent FAIL_TO_PASS test as passed by another class's namesake", async () => {
+    const { parseTrx } = await import("./trx-report.js");
+    // NUnit/MSTest write only the method name; the class lives in the test
+    // definitions. ParserTests.Parse_ReturnsNull produced no row at all.
+    const report = parseTrx(`<TestRun><Results>
+      <UnitTestResult testId="L" testName="Parse_ReturnsNull" outcome="Passed" />
+    </Results><TestDefinitions>
+      <UnitTest name="Parse_ReturnsNull" id="L"><TestMethod className="Ns.LexerTests" name="Parse_ReturnsNull" /></UnitTest>
+    </TestDefinitions></TestRun>`);
+    const result = evaluateResolution({
+      failToPass: ["Ns.ParserTests.Parse_ReturnsNull"],
+      passToPass: ["Ns.LexerTests.Parse_ReturnsNull"],
+      report,
+    });
+    expect(result.resolved).toBe(false);
+    expect(result.failToPassMissing).toEqual(["Ns.ParserTests.Parse_ReturnsNull"]);
+    expect(result.passToPassBroken).toEqual([]);
+  });
+});
+
 describe("summarize", () => {
   it("reports the resolved rate over attempted tasks", () => {
     const results = [

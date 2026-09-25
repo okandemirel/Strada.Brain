@@ -316,7 +316,10 @@ export function checkBaseline(
   const alreadyPassing: string[] = [];
   const failingBefore: string[] = [];
   for (const name of failToPass) {
-    const outcome: TestOutcome | undefined = findOutcome(report.outcomes, name);
+    const outcome: TestOutcome | undefined = findOutcome(report.outcomes, name, {
+      requiredNames: failToPass,
+      ambiguousNames: report.ambiguousNames,
+    });
     if (outcome === "passed") alreadyPassing.push(name);
     else failingBefore.push(name);
   }
@@ -612,6 +615,7 @@ export function renderRunReport(report: RunReport, attempts: readonly TaskAttemp
  */
 export function mergeTestReports(reports: readonly TrxParseResult[]): MergedReport {
   const outcomes = new Map<string, TestOutcome>();
+  const ambiguousNames = new Set<string>();
   let any = false;
   let total = 0;
   let passed = 0;
@@ -623,6 +627,7 @@ export function mergeTestReports(reports: readonly TrxParseResult[]): MergedRepo
       const existing = outcomes.get(name);
       outcomes.set(name, existing === undefined ? outcome : worst(existing, outcome));
     }
+    for (const name of r.ambiguousNames ?? []) ambiguousNames.add(name);
     if (r.counters) {
       sawCounters = true;
       total += r.counters.total;
@@ -634,6 +639,7 @@ export function mergeTestReports(reports: readonly TrxParseResult[]): MergedRepo
     outcomes,
     buildFailed: !any,
     ...(sawCounters ? { counters: { total, passed, failed } } : {}),
+    ...(ambiguousNames.size > 0 ? { ambiguousNames } : {}),
   };
 }
 
