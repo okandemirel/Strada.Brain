@@ -28,6 +28,13 @@ export class OllamaProvider implements IAIProvider {
     systemPrompt: true,
     contextWindow: 8_000,
     thinkingSupported: false,
+    // chat() does not stream, so nothing marks the call alive before the whole
+    // answer is back: the chain's first-response budget (90s by default) caps
+    // the entire local generation, and a CPU run or a long prompt was aborted
+    // as "unresponsive" and eventually auto-demoted. A local server that is
+    // down refuses the connection at once, so the longer budget mostly waits
+    // on one that is working. Matches the orchestrator's first-token window.
+    firstResponseTimeoutMs: 10 * 60 * 1000,
     specialFeatures: ["local_inference", "custom_models"],
   };
   private readonly baseUrl: string;

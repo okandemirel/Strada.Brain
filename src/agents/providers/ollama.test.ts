@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OllamaProvider } from "./ollama.js";
+import {
+  DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
+  DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
+} from "../../config/config-types.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -19,6 +23,14 @@ beforeEach(() => {
 });
 
 describe("OllamaProvider", () => {
+  it("declares a first-response budget that covers a whole non-streamed generation (PRV-21)", () => {
+    // Nothing marks a non-streaming call alive, so the chain's 90s default
+    // would bound the entire local generation.
+    const budget = new OllamaProvider().capabilities.firstResponseTimeoutMs;
+    expect(budget).toBeGreaterThanOrEqual(DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS);
+    expect(budget).toBeGreaterThan(DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS);
+  });
+
   it("sends correct request to Ollama API", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
