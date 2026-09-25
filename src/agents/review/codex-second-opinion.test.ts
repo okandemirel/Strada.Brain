@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, type CodexSpawn } from "./codex-second-opinion.js";
+import { join } from "node:path";
+import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, resolveCodexCommand, type CodexSpawn } from "./codex-second-opinion.js";
 
 describe("codex second opinion", () => {
   it("passes model, effort, read-only sandbox and the project dir, and keeps the answer after the footer", async () => {
@@ -92,5 +93,39 @@ describe("codex second opinion", () => {
     const p = deliveryReviewPrompt({ gddPath: "docs/G.md", measurements: ["0 renderers"], ladder: ["m1: green"] });
     expect(p).toContain("- 0 renderers");
     expect(p).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
+  });
+
+  describe("starting the CLI (PRV-20)", () => {
+    it("ends the options before the prompt, so a prompt starting with \"-\" stays the prompt", async () => {
+      let seen: string[] = [];
+      const spawn: CodexSpawn = async (args) => {
+        seen = args;
+        return { code: 0, stdout: "answer\n", stderr: "", timedOut: false };
+      };
+      await runCodexSecondOpinion({ projectRoot: "/tmp/p", prompt: "-h is not a flag here" }, spawn);
+      expect(seen.at(-1)).toBe("-h is not a flag here");
+      expect(seen.at(-2)).toBe("--");
+    });
+
+    it("runs the npm shim's script with Node on Windows, since a .cmd cannot be spawned without a shell", () => {
+      const npmDir = mkdtempSync(join(tmpdir(), "strada-codex-npm-"));
+      try {
+        const script = join(npmDir, "node_modules", "@openai", "codex", "bin", "codex.js");
+        mkdirSync(join(npmDir, "node_modules", "@openai", "codex", "bin"), { recursive: true });
+        writeFileSync(script, "");
+        writeFileSync(join(npmDir, "codex.cmd"), "");
+        const located = resolveCodexCommand("win32", (name) => (name === "codex.cmd" ? join(npmDir, "codex.cmd") : undefined));
+        expect(located).toEqual({ command: process.execPath, prefixArgs: [script] });
+      } finally {
+        rmSync(npmDir, { recursive: true, force: true });
+      }
+    });
+
+    it("prefers a native codex.exe on Windows, and runs plain codex elsewhere", () => {
+      expect(resolveCodexCommand("win32", (name) => (name === "codex.exe" ? "C:\\bin\\codex.exe" : undefined)))
+        .toEqual({ command: "C:\\bin\\codex.exe", prefixArgs: [] });
+      expect(resolveCodexCommand("linux", () => { throw new Error("PATH is not consulted off Windows"); }))
+        .toEqual({ command: "codex", prefixArgs: [] });
+    });
   });
 });

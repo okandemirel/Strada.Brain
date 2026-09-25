@@ -10,10 +10,10 @@
  * that did not happen is reported as such, never blended into a pass.
  */
 
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface SecondOpinion {
   readonly ok: boolean;
@@ -36,6 +36,49 @@ export type CodexSpawn = (
   opts: { cwd: string; timeoutMs: number },
 ) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>;
 
+/** How to start the Codex CLI: an executable and the arguments that precede ours. */
+export interface CodexCommand {
+  readonly command: string;
+  readonly prefixArgs: readonly string[];
+}
+
+/** First match for `name` on PATH (fixed-argv `where`, no shell), or undefined. */
+function locateOnWindowsPath(name: string): string | undefined {
+  try {
+    const located = spawnSync("where", [name], { encoding: "utf8", timeout: 5000 });
+    if (located.status !== 0 || typeof located.stdout !== "string") return undefined;
+    return located.stdout.split(/\r?\n/)[0]?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Codex CLI, startable without a shell.
+ *
+ * npm installs `codex` on Windows as a `codex.cmd` shim, which a shell-less
+ * spawn never finds and Node refuses to run without a shell (CVE-2024-27980),
+ * so every delivery on Windows reported "no second opinion". A shell is no
+ * way out: the prompt is multi-line, and cmd.exe cannot carry a newline in an
+ * argument. So Windows runs a native `codex.exe` when there is one, otherwise
+ * the script the shim itself runs, with this Node.
+ */
+export function resolveCodexCommand(
+  platform: NodeJS.Platform = process.platform,
+  locate: (name: string) => string | undefined = locateOnWindowsPath,
+): CodexCommand {
+  if (platform !== "win32") return { command: "codex", prefixArgs: [] };
+  const exe = locate("codex.exe");
+  if (exe) return { command: exe, prefixArgs: [] };
+  const shim = locate("codex.cmd");
+  if (shim) {
+    const script = join(dirname(shim), "node_modules", "@openai", "codex", "bin", "codex.js");
+    if (existsSync(script)) return { command: process.execPath, prefixArgs: [script] };
+  }
+  // Nothing better found: the spawn fails, and the review says it could not run.
+  return { command: "codex", prefixArgs: [] };
+}
+
 /**
  * Spawn `command` in its own process group and settle at the deadline no
  * matter what.
@@ -47,13 +90,16 @@ export type CodexSpawn = (
  * long as it lived. Now the whole process group is killed and the promise is
  * resolved by the timer itself, with whatever output had arrived.
  */
-export function makeCodexSpawn(command = "codex"): CodexSpawn {
+export function makeCodexSpawn(command?: string): CodexSpawn {
+  // Resolved on first use, not at import: on Windows it asks PATH.
+  let resolved: CodexCommand | undefined = command ? { command, prefixArgs: [] } : undefined;
   return (args, opts) =>
     new Promise((resolve) => {
       let stdout = "";
       let stderr = "";
       let settled = false;
-      const child = spawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+      resolved ??= resolveCodexCommand();
+      const child = spawn(resolved.command, [...resolved.prefixArgs, ...args], { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
       const settle = (result: { code: number | null; stdout: string; stderr: string; timedOut: boolean }): void => {
         if (settled) return;
         settled = true;
@@ -133,6 +179,8 @@ export async function runCodexSecondOpinion(opts: CodexRunOptions, spawnImpl: Co
     "--ephemeral",
     "-C", opts.projectRoot,
     ...(lastMessagePath ? ["-o", lastMessagePath] : []),
+    // End of options: a prompt that starts with "-" is still the prompt.
+    "--",
     opts.prompt,
   ];
   try {
