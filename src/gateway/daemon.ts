@@ -5,6 +5,7 @@ import { announceSupervisorDeath, describeSupervisorDeath, telegramChatIdsFromEn
 export const SUPERVISOR_DEATH_MARKER = "supervisor-dead.json";
 import { resolve } from "node:path";
 import { getLogger } from "../utils/logger.js";
+import { SHUTDOWN_IPC_MESSAGE } from "../core/shutdown-handlers.js";
 
 /**
  * Gateway daemon — keeps Strada Brain running as an always-on service.
@@ -26,6 +27,7 @@ export class Daemon {
   private readonly args: string[];
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private signalHandlersRegistered = false;
+  private readonly platform: NodeJS.Platform;
 
   constructor(opts: {
     entryPoint?: string;
@@ -33,7 +35,10 @@ export class Daemon {
     maxRestarts?: number;
     baseDelay?: number;
     maxDelay?: number;
+    /** For tests; the real platform otherwise. */
+    platform?: NodeJS.Platform;
   } = {}) {
+    this.platform = opts.platform ?? process.platform;
     this.entryPoint = opts.entryPoint ?? resolve(import.meta.dirname, "..", "index.js");
     this.args = opts.args ?? ["start"];
     this.maxRestarts = opts.maxRestarts ?? 10;
@@ -87,7 +92,18 @@ export class Daemon {
           resolve();
         });
 
-        this.child!.kill("SIGTERM");
+        // FND-25: on Windows every kill() is TerminateProcess, so the child's
+        // graceful shutdown (DB close, identity recordShutdown, queue flush)
+        // never ran and each stop read as a crash on the next boot. fork()'s
+        // IPC channel carries the request instead; the timer above still
+        // force-kills a child that does not exit.
+        if (this.platform === "win32" && this.child!.connected) {
+          this.child!.send(SHUTDOWN_IPC_MESSAGE, (error) => {
+            if (error) this.child?.kill("SIGTERM");
+          });
+        } else {
+          this.child!.kill("SIGTERM");
+        }
       });
     }
   }

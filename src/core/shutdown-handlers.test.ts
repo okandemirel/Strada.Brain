@@ -83,3 +83,18 @@ describe("setupShutdownHandlers (COR-19)", () => {
     expect(text).not.toContain("CANARYSECRETVALUE1234567890abcdefXYZ");
   });
 });
+
+describe("setupShutdownHandlers supervisor request (FND-25)", () => {
+  it("runs the graceful shutdown when the supervisor asks over IPC, and exits clean", async () => {
+    const { proc, shutdown, afterShutdown } = install(Promise.resolve());
+
+    proc.emit("message", { type: "unrelated" });
+    expect(shutdown).not.toHaveBeenCalled();
+
+    proc.emit("message", { type: "strada:shutdown" });
+    await settle();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(afterShutdown).toHaveBeenCalledTimes(1);
+    expect(proc.exits).toEqual([0]);
+  });
+});

@@ -9,11 +9,25 @@
  *  - uncaughtException: process state may be corrupt → full graceful shutdown.
  *  - unhandledRejection: log-and-continue, with a storm guard as the runaway
  *    backstop.
+ *  - A supervisor's IPC shutdown message (FND-25): the graceful path on
+ *    Windows, where every signal from the parent is an immediate
+ *    TerminateProcess that skips all of the above.
  */
 
 import { shutdownExitCode } from "./shutdown-exit-code.js";
 import { sanitizeSecretsQuiet } from "../security/secret-patterns.js";
 import { getLogger } from "../utils/logger.js";
+
+/** The IPC message a supervising parent sends to ask for a graceful shutdown. */
+export const SHUTDOWN_IPC_MESSAGE = { type: "strada:shutdown" } as const;
+
+export function isShutdownIpcMessage(message: unknown): boolean {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { type?: unknown }).type === SHUTDOWN_IPC_MESSAGE.type
+  );
+}
 
 /** The slice of `process` the handlers use; injectable for tests. */
 export interface ShutdownProcess {
@@ -36,7 +50,7 @@ export interface ShutdownHandlerOptions {
   out?: Pick<Console, "log" | "error">;
 }
 
-const SIGNALS = new Set(["SIGTERM", "SIGINT", "SIGHUP"]);
+const SIGNALS = new Set(["SIGTERM", "SIGINT", "SIGHUP", "supervisor-shutdown"]);
 const REJECTION_WINDOW_MS = 60_000;
 const MAX_REJECTIONS_PER_WINDOW = 20;
 
@@ -101,6 +115,9 @@ export function setupShutdownHandlers(options: ShutdownHandlerOptions): void {
   proc.on("SIGTERM", () => void handleShutdown("SIGTERM"));
   proc.on("SIGINT", () => void handleShutdown("SIGINT"));
   proc.on("SIGHUP", () => void handleShutdown("SIGHUP"));
+  proc.on("message", (message: unknown) => {
+    if (isShutdownIpcMessage(message)) void handleShutdown("supervisor-shutdown");
+  });
 
   proc.on("uncaughtException", (error: unknown) => {
     log().error(isShuttingDown ? "Uncaught exception during shutdown" : "Uncaught exception", describeFailure(error));
