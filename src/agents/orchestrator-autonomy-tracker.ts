@@ -60,6 +60,8 @@ export interface CreateAutonomyBundleParams {
   readonly loopStaleAnalysisThreshold?: number;
   readonly loopHardCapReplan?: number;
   readonly loopHardCapBlock?: number;
+  /** The tool registry's write metadata, so the stall counter knows an MCP writer (AUT-21). */
+  readonly toolMetadata?: (toolName: string) => { readonly readOnly?: boolean } | undefined;
   readonly progressAssessmentEnabled?: boolean;
 }
 
@@ -128,6 +130,7 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
         staleAnalysisThreshold: params.loopStaleAnalysisThreshold,
         hardCapReplan: params.loopHardCapReplan,
         hardCapBlock: params.loopHardCapBlock,
+        toolMetadata: params.toolMetadata,
       })
     : null;
 

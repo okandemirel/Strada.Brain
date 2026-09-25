@@ -90,6 +90,36 @@ export function isVerificationToolName(toolName: string): boolean {
 }
 
 /**
+ * Verification tools that inspect rather than run a check: a symbol search, a
+ * console read, an earlier test run's results, the list of tests. For the
+ * read-only stall they are reading.
+ */
+const INSPECTING_VERIFY_TOOLS: ReadonlySet<string> = new Set([
+  "csharp_symbol_search", "unity_console_read", "unity_console_analyze", "unity_test_results", "unity_test_list",
+]);
+
+export type StallClass = "progress" | "neutral" | "reading";
+
+/**
+ * How one tool call counts toward the read-only stall (AUT-21).
+ *  - progress: it changes the project. A PROGRESS_MUTATION_TOOLS writer, or a
+ *    Unity tool whose registry metadata declares it a writer (an MCP writer
+ *    such as unity_import_asset_package that no list here names).
+ *  - neutral: it runs a check (compile, tests, the game, a player build). A
+ *    run that spends fifteen minutes in playmode verification is not reading,
+ *    and a passing check is not a change either.
+ *  - reading: everything else, shell_exec included (`grep -r` through it is reading).
+ * Metadata is trusted for Unity tools only: memory, vault, version-control and
+ * shell tools declare writes too, and none of those changes the game.
+ */
+export function stallClassOf(toolName: string, metadata?: { readonly readOnly?: boolean }): StallClass {
+  if (PROGRESS_MUTATION_TOOLS.has(toolName)) return "progress";
+  if (isVerificationToolName(toolName) && !INSPECTING_VERIFY_TOOLS.has(toolName)) return "neutral";
+  if (toolName.startsWith("unity_") && metadata?.readOnly === false) return "progress";
+  return "reading";
+}
+
+/**
  * Names and shapes that mean a tool changes things.
  *
  * Used for tools registered at runtime, which cannot appear in WRITE_OPERATIONS

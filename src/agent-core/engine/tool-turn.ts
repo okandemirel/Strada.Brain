@@ -173,6 +173,9 @@ export async function portExecuteToolTurn(
     const strategy = runCtx.executionStrategy as SupervisorExecutionStrategy;
     const lastUserMessage = deps.sessionManager.extractLastUserMessage(session);
 
+    // Clean verdicts before this batch; SelfVerification.track counts them as the tools run.
+    const cleanVerdictsBefore = runCtx.selfVerification.getCleanVerdictCount();
+
     // STEP A — assistant-message push + executeToolCalls (CORRECT arg order) + autonomy tracking.
     // D2 fix: the spine threads the assistant's pre-tool text as the 4th positional arg; v1 pushes
     // response.text onto the session before the tool results (executeAndTrackTools does the push).
@@ -243,6 +246,15 @@ export async function portExecuteToolTurn(
           tc.name,
           `${tc.name}:${JSON.stringify(tc.input ?? {}).slice(0, 300)}`,
         );
+      }
+      // A clean verification of changes this run made is verified progress:
+      // the tracker's streak and stall episodes restart from it. It was only
+      // ever called at epoch rollover (AUT-21). A check with no change since
+      // the last reset earns nothing, or a periodic build would keep a
+      // reading run at level 1 forever.
+      const cleanVerdicts = runCtx.selfVerification.getCleanVerdictCount();
+      if (cleanVerdicts > cleanVerdictsBefore && runCtx.controlLoopTracker.hadMutationsSinceLastReset()) {
+        runCtx.controlLoopTracker.markVerificationClean(agentState.iteration);
       }
       // The tracker's own read-only-stall check sits inside recordGate(), which
       // runs only once something else raises a gate. A run that does nothing

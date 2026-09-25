@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stallClassOf } from "./constants.js";
 import { ControlLoopTracker, restrictToProgressTools } from "./control-loop-tracker.js";
 import { planVerifierPipeline } from "./verifier-pipeline.js";
 import { AgentPhase, type AgentState } from "../agent-state.js";
@@ -271,30 +272,6 @@ describe("ControlLoopTracker", () => {
     })).toBeNull();
   });
 
-  it("resets stale analysis counter on markMeaningfulFileEvidence with new files", () => {
-    const tracker = new ControlLoopTracker();
-
-    tracker.recordGate({
-      kind: "visibility_internal_continue",
-      reason: "test",
-      iteration: 1,
-    });
-    tracker.recordGate({
-      kind: "visibility_internal_continue",
-      reason: "test",
-      iteration: 2,
-    });
-
-    tracker.markMeaningfulFileEvidence(["src/foo.ts"], 3);
-
-    // Counter reset
-    expect(tracker.recordGate({
-      kind: "visibility_internal_continue",
-      reason: "test",
-      iteration: 4,
-    })).toBeNull();
-  });
-
   it("stale analysis triggers before fingerprint matching when threshold is lower", () => {
     // Default stale threshold is 3, fingerprint threshold is 3
     // Stale analysis is checked first in recordGate
@@ -480,10 +457,11 @@ describe("ControlLoopTracker", () => {
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
   });
 
-  it("fewer than READ_ONLY_TIME_MIN_CALLS reads are not a stall however long they take (a slow single verify is not a loop)", () => {
+  it("fewer than READ_ONLY_TIME_MIN_CALLS reads are not a stall however long they take (a slow single read is not a loop)", () => {
     let clock = 0;
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
-    tracker.markToolExecution("unity_verify_change", "unity_verify_change:{}");
+    // A verifier no longer counts as a read at all (AUT-21); the slow first call is a read here.
+    tracker.markToolExecution("file_read", "file_read:{\"path\":\"log.txt\"}");
     clock += 40 * 60_000;
     tracker.markToolExecution("file_read", "file_read:{\"path\":\"a.cs\"}");
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
@@ -572,17 +550,6 @@ describe("ControlLoopTracker", () => {
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
 
     tracker.markVerificationClean(10);
-    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
-  });
-
-  it("resets read-only counter on markMeaningfulFileEvidence with new files", () => {
-    const tracker = new ControlLoopTracker();
-    for (let i = 0; i < 5; i++) {
-      tracker.markToolExecution("list_directory");
-    }
-    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
-
-    tracker.markMeaningfulFileEvidence(["src/new.ts"], 10);
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
   });
 
@@ -842,5 +809,57 @@ describe("verifier gate fingerprints name the gate, not the generic summary (AUT
     }
     expect(trigger?.reason).toBe("same_fingerprint_repeated");
     expect(trigger?.sameFingerprintCount).toBe(3);
+  });
+});
+
+describe("ControlLoopTracker — verifiers and MCP writers in the read-only stall (AUT-21)", () => {
+  it("classifies checks as neutral, project writers as progress and inspections as reading", () => {
+    expect(stallClassOf("unity_scene_build")).toBe("progress");
+    expect(stallClassOf("file_write")).toBe("progress");
+    for (const verifier of ["unity_playmode_verify", "dotnet_test", "dotnet_build", "unity_verify_change", "unity_compile_status", "unity_test_run", "unity_build_player"]) {
+      expect(stallClassOf(verifier), verifier).toBe("neutral");
+    }
+    for (const inspection of ["unity_console_read", "unity_test_results", "csharp_symbol_search", "file_read", "shell_exec"]) {
+      expect(stallClassOf(inspection), inspection).toBe("reading");
+    }
+    // An MCP writer no list names is progress on the registry's word…
+    expect(stallClassOf("unity_import_asset_package", { readOnly: false })).toBe("progress");
+    expect(stallClassOf("unity_import_asset_package")).toBe("reading");
+    // …but only a Unity tool: memory or vault writes do not change the game.
+    expect(stallClassOf("memory_store", { readOnly: false })).toBe("reading");
+    expect(stallClassOf("vault_sync", { readOnly: false })).toBe("reading");
+  });
+
+  it("15+ minutes of scene building and playmode verification is not a read-only streak", () => {
+    let clock = 0;
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
+    tracker.markToolExecution("unity_scene_build", "unity_scene_build:{\"scene\":\"Main\"}");
+    tracker.markToolExecution("unity_scene_build", "unity_scene_build:{\"scene\":\"Menu\"}");
+    for (let i = 0; i < 10; i++) {
+      clock += 2 * 60_000;
+      tracker.markToolExecution("unity_playmode_verify", "unity_playmode_verify:{}");
+      expect(tracker.takeUnreportedReadOnlyStall(), `after ${clock / 60_000} min`).toBeNull();
+    }
+    expect(clock).toBeGreaterThanOrEqual(ControlLoopTracker.READ_ONLY_STALL_MS);
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+    expect(tracker.recordGate({ kind: "verifier_continue", reason: "verify", iteration: 12 })?.fingerprint).not.toBe("read_only_stall");
+  });
+
+  it("a verifier neither ends a real reading streak nor extends it", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < 5; i++) tracker.markToolExecution("file_read", `file_read:{"path":"a${i}"}`);
+    tracker.markToolExecution("dotnet_test", "dotnet_test:{}");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
+  });
+
+  it("an MCP writer the registry declares ends the streak", () => {
+    const tracker = new ControlLoopTracker({
+      staleAnalysisThreshold: 100,
+      toolMetadata: (name) => (name === "unity_import_asset_package" ? { readOnly: false } : undefined),
+    });
+    for (let i = 0; i < 5; i++) tracker.markToolExecution("file_read", `file_read:{"path":"a${i}"}`);
+    tracker.markToolExecution("unity_import_asset_package", "unity_import_asset_package:{}");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+    expect(tracker.hadMutationsSinceLastReset()).toBe(true);
   });
 });

@@ -285,6 +285,55 @@ describe("portExecuteToolTurn — a read-only streak is told to the model", () =
     expect(texts(messages).some((t) => t.startsWith("[READ-ONLY STREAK ×2]"))).toBe(true);
   });
 
+  it("a clean verification of the run's change restarts the stall level (AUT-21)", async () => {
+    // markVerificationClean was only called at epoch rollover, so a run that had
+    // stalled twice stayed at level 2 — tools taken away — after it wrote a fix
+    // and built it clean.
+    const deps = makeDeps({
+      executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+        toolCalls.map((tc) => ({
+          toolCallId: tc.id,
+          content: tc.name === "dotnet_build" ? "Build succeeded.\n    0 Warning(s)\n    0 Error(s)" : "ok",
+          isError: false,
+        }) as unknown as ToolResult),
+    } as Partial<ToolTurnDeps>);
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const runCtx = makeRunCtx({ controlLoopTracker: tracker });
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT; i++) tracker.markToolExecution("file_read", `file_read:{"path":"r${round}-${i}"}`);
+      expect(tracker.takeUnreportedReadOnlyStall()).not.toBeNull();
+    }
+    expect(tracker.getReadOnlyStreakReports()).toBe(2);
+
+    const fixAndBuild = [
+      { id: "tc-w", name: "file_write", input: { path: "Assets/Scripts/Player.cs", content: "class Player {}" } },
+      { id: "tc-b", name: "dotnet_build", input: {} },
+    ] as unknown as ToolCall[];
+    await portExecuteToolTurn(deps, [fixAndBuild, undefined, createInitialState("fix it"), ""], runCtx);
+
+    expect(runCtx.selfVerification.getCleanVerdictCount()).toBe(1);
+    expect(tracker.getStallEpisodes()).toBe(0);
+    expect(tracker.getReadOnlyStreakReports()).toBe(0);
+  });
+
+  it("a clean check with no change since the last reset earns nothing", async () => {
+    const deps = makeDeps({
+      executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+        toolCalls.map((tc) => ({ toolCallId: tc.id, content: "Build succeeded.\n    0 Error(s)", isError: false }) as unknown as ToolResult),
+    } as Partial<ToolTurnDeps>);
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const runCtx = makeRunCtx({ controlLoopTracker: tracker });
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT; i++) tracker.markToolExecution("file_read", `file_read:{"path":"q${round}-${i}"}`);
+      tracker.takeUnreportedReadOnlyStall();
+    }
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+    const buildOnly = [{ id: "tc-b", name: "dotnet_build", input: {} }] as unknown as ToolCall[];
+    await portExecuteToolTurn(deps, [buildOnly, undefined, createInitialState("check"), ""], runCtx);
+    expect(runCtx.selfVerification.getCleanVerdictCount()).toBe(1); // the build passed…
+    expect(tracker.getStallEpisodes()).toBe(2); // …but verified no change, so the level stands
+  });
+
   it("adds nothing while the streak is short", async () => {
     const deps = makeDeps();
     const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });

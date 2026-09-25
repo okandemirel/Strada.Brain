@@ -98,7 +98,7 @@ function bgContextThatApproves(unmet: readonly string[]): BgReflectionContext {
     ...coreThatApproves(unmet),
     progressAssessmentEnabled: false,
     controlLoopTracker: {
-      markVerificationClean: vi.fn(), markMeaningfulFileEvidence: vi.fn(),
+      markVerificationClean: vi.fn(),
     } as any,
     workerCollector: undefined,
     progressTitle: "T",

@@ -1,4 +1,4 @@
-import { MUTATION_TOOLS, PROGRESS_MUTATION_TOOLS } from "./constants.js";
+import { MUTATION_TOOLS, PROGRESS_MUTATION_TOOLS, stallClassOf } from "./constants.js";
 
 export type ControlLoopGateKind =
   | "clarification_internal_continue"
@@ -40,11 +40,12 @@ export interface ControlLoopConfig {
   readonly hardCapReplan?: number;
   /** Hard cap: force block after this many consecutive text-only gates. */
   readonly hardCapBlock?: number;
+  /** The tool registry's write metadata, for writers no list names (see stallClassOf). */
+  readonly toolMetadata?: (toolName: string) => { readonly readOnly?: boolean } | undefined;
 }
 
 export class ControlLoopTracker {
   private readonly events: StoredGateEvent[] = [];
-  private readonly seenEvidence = new Set<string>();
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
   private consecutiveReadOnlyToolCalls = 0;
@@ -64,6 +65,7 @@ export class ControlLoopTracker {
   /** When the current read-only streak began (epoch ms); null = no streak. */
   private readOnlySince: number | null = null;
   private readonly now: () => number;
+  private readonly toolMetadata: ControlLoopConfig["toolMetadata"];
   private pruneIndex = 0;
 
   static readonly READ_ONLY_STALL_THRESHOLD = 8;
@@ -104,6 +106,7 @@ export class ControlLoopTracker {
 
   constructor(config?: ControlLoopConfig) {
     this.now = config?.now ?? Date.now;
+    this.toolMetadata = config?.toolMetadata;
     this.fpThreshold = config?.sameFingerprintThreshold ?? 15;
     this.hasCustomFpThreshold = typeof config?.sameFingerprintThreshold === "number";
     this.fpWindow = config?.sameFingerprintWindow ?? 20;
@@ -203,11 +206,12 @@ export class ControlLoopTracker {
     // Only reset stale analysis counter on mutation tools, not read-only tools
     // like file_read, grep_search, list_directory. When no toolName is provided
     // (backward compat), assume mutation to preserve existing behavior.
-    const mutates = !toolName || MUTATION_TOOLS.has(toolName);
     // shell_exec may write, so it counts as a mutation for the gate rules —
     // but `grep -r` through it is reading, and it used to end a read-only
     // streak (measured 2026-09-08 16:07: four shell greps, streak reset).
-    const progresses = !toolName || PROGRESS_MUTATION_TOOLS.has(toolName);
+    const stallClass = toolName ? stallClassOf(toolName, this.toolMetadata?.(toolName)) : "progress";
+    const progresses = stallClass === "progress";
+    const mutates = !toolName || MUTATION_TOOLS.has(toolName) || progresses;
     if (mutates) {
       this.consecutiveNoToolGates = 0;
       this.mutationsSinceLastReset = true;
@@ -218,10 +222,13 @@ export class ControlLoopTracker {
       this.lastReadOnlyFingerprint = null;
       this.sameReadOnlyFingerprintCount = 0;
       this.readOnlySince = null;
-    } else {
+    } else if (stallClass === "reading") {
+      // A verifier run ("neutral") neither extends the streak nor ends it:
+      // scene building then fifteen minutes of playmode verification was told
+      // "Reading is not progress" (AUT-21).
       this.consecutiveReadOnlyToolCalls++;
       if (this.readOnlySince === null) this.readOnlySince = this.now();
-      const fingerprint = callFingerprint ?? toolName;
+      const fingerprint = callFingerprint ?? toolName ?? null;
       if (fingerprint === this.lastReadOnlyFingerprint) {
         this.sameReadOnlyFingerprintCount++;
       } else {
@@ -319,22 +326,6 @@ export class ControlLoopTracker {
     this.mutationsSinceLastReset = false;
     // Verified progress is the one thing that earns a fresh start.
     this.stallEpisodes = 0;
-  }
-
-  markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {
-    const newEvidence = files
-      .map((file) => file.trim())
-      .filter((file) => file.length > 0 && !this.seenEvidence.has(file));
-    if (newEvidence.length === 0) {
-      return;
-    }
-    for (const file of newEvidence) {
-      this.seenEvidence.add(file);
-    }
-    this.events.length = 0;
-    this.pruneIndex = 0;
-    this.consecutiveNoToolGates = 0;
-    this.consecutiveReadOnlyToolCalls = 0;
   }
 
   /**

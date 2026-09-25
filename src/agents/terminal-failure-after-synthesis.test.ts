@@ -89,7 +89,7 @@ function bgCore() {
     buildPhaseOutcomeTelemetry: vi.fn(),
     progressAssessmentEnabled: false,
     controlLoopTracker: {
-      markVerificationClean: vi.fn(), markMeaningfulFileEvidence: vi.fn(),
+      markVerificationClean: vi.fn(),
     } as any,
     workerCollector: undefined,
     progressTitle: "T",

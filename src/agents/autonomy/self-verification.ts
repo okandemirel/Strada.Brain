@@ -285,6 +285,8 @@ export class SelfVerification {
    */
   private buildGateEmissions = 0;
   private static readonly MAX_BUILD_GATE_EMISSIONS = 10;
+  /** Clean verdicts so far: a conclusive check that passed and left no verification debt. */
+  private cleanVerdicts = 0;
 
   /** Reset for new task. */
   reset(): void {
@@ -301,6 +303,7 @@ export class SelfVerification {
     // inherited an open failing-test gate (audited 2026-09-24).
     this.failingTestRun = false;
     this.buildGateEmissions = 0;
+    this.cleanVerdicts = 0;
     // The published state described the task that just ended, not the next.
     this.dispose();
   }
@@ -456,8 +459,18 @@ export class SelfVerification {
             this.failingTestRun = true;
           }
         }
+        if (ok && !this.needsVerification()) this.cleanVerdicts++;
       }
     }
+  }
+
+  /**
+   * How many clean verdicts this run has had: a verifier that ran, passed and
+   * left nothing unverified. The loop tracker's "since the last clean
+   * verification" is measured from these (AUT-21).
+   */
+  getCleanVerdictCount(): number {
+    return this.cleanVerdicts;
   }
 
   /**

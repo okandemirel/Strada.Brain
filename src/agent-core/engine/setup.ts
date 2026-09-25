@@ -429,6 +429,7 @@ export async function setupAgentCoreRun(
     // recovery exposure sits beside the guidance exposures of the same run
     // instead of under a scope nothing queries.
     const errorLearningHooks = deps.errorLearningHooks?.();
+    const toolMetadataByName = deps.getContextBuilderContext().toolMetadataByName;
     const bundle = createAutonomyBundle({
       prompt: lastUserMessage,
       ...(errorLearningHooks === undefined
@@ -475,6 +476,9 @@ export async function setupAgentCoreRun(
       loopStaleAnalysisThreshold: deps.loopStaleAnalysisThreshold,
       loopHardCapReplan: deps.loopHardCapReplan,
       loopHardCapBlock: deps.loopHardCapBlock,
+      // The live registry map: a writer the lists do not name (an MCP tool such
+      // as unity_import_asset_package) still ends a read-only streak.
+      toolMetadata: (toolName) => toolMetadataByName.get(toolName),
       progressAssessmentEnabled: deps.progressAssessmentEnabled,
     });
 
