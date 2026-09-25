@@ -49,7 +49,6 @@ function vin(overrides: Partial<VerdictInput> = {}): VerdictInput {
     hardTimeoutScope: "task",
     resourceExhausted: false,
     taskInactivityExceeded: false,
-    callStalled: false,
     lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
     modelProposedDone: false,
     reflectionWantsExtend: false,
@@ -67,7 +66,6 @@ const POLICY = (overrides: Partial<RunBudgetPolicy> = {}): RunBudgetPolicy => ({
   callHardMs: 5000,
   outputTokenCap: 100_000,
   costCapUsd: 10,
-  pauseRetryBudget: 3,
   ...overrides,
 });
 
@@ -312,7 +310,6 @@ describe("resolveRunBudgetPolicy", () => {
     expect(policy.callFirstResponseMs).toBe(90_000);
     // 600 s call ceiling → a run is inactive only after three fully silent calls.
     expect(policy.taskInactivityMs).toBe(1_800_000);
-    expect(policy.pauseRetryBudget).toBe(5);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("slow-but-answering");
     // A seed already above the floor: untouched, no warning.
@@ -424,7 +421,7 @@ describe("RunClock", () => {
       scopes.push(call);
     }
     expect(children.size).toBe(0);
-    // A stalled scope's carried reason survives the detach (failedCallReason semantics untouched).
+    // A stalled scope's carried reason survives the detach.
     const stalled = rc.enterCall({ firstResponseMs: 100, stallMs: 100, hardMs: 100_000 });
     clock.advance(101);
     expect(stalled.token.reason).toEqual({ kind: "provider-stall", scope: "call" });
@@ -465,8 +462,8 @@ describe("RunClock", () => {
 // ── FailureLedger verdict precedence ─────────────────────────────────────────
 
 describe("FailureLedger verdict precedence", () => {
-  const ledger = (health?: Partial<HealthCore>, pauseRetryBudget = 3): ReturnType<typeof createFailureLedger> =>
-    createFailureLedger(fakeHealth(health), { pauseRetryBudget });
+  const ledger = (health?: Partial<HealthCore>): ReturnType<typeof createFailureLedger> =>
+    createFailureLedger(fakeHealth(health));
 
   it("1. benign cancel → stop graceful", () => {
     const v = ledger().verdict(vin({ taskCancelReason: { kind: "user-cancel" } }));
@@ -493,14 +490,6 @@ describe("FailureLedger verdict precedence", () => {
   it("5. health abort → stop hard", () => {
     const v = ledger({ shouldAbort: () => true }).verdict(vin());
     expect(v).toEqual({ decision: "stop", reason: { kind: "verdict-stop", cause: "health" }, finalize: "hard" });
-  });
-
-  it("6. call stall → pause until the per-task retry budget is exhausted, then stop", () => {
-    const l = ledger({}, 2);
-    expect(l.verdict(vin({ callStalled: true })).decision).toBe("pause");
-    expect(l.verdict(vin({ callStalled: true })).decision).toBe("pause");
-    const third = l.verdict(vin({ callStalled: true }));
-    expect(third).toEqual({ decision: "stop", reason: { kind: "provider-stall", scope: "task" }, finalize: "graceful" });
   });
 
   it("7. health ask_user / retry", () => {
@@ -531,7 +520,7 @@ describe("FailureLedger verdict precedence", () => {
     const core = fakeHealth();
     const recordFailure = vi.spyOn(core, "recordFailure");
     const recordSuccess = vi.spyOn(core, "recordSuccess");
-    const l = createFailureLedger(core, { pauseRetryBudget: 3 });
+    const l = createFailureLedger(core);
     l.recordFailure("opencode", true); // benign
     expect(recordFailure).not.toHaveBeenCalled();
     l.recordFailure("opencode", false);
@@ -547,7 +536,7 @@ describe("FailureLedger verdict precedence", () => {
 
 describe("incident regressions", () => {
   it("3h27m runaway cannot recur: hard-timeout (rule 2) + loopDetectionBlocked (rule 8)", () => {
-    const l = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const l = createFailureLedger(fakeHealth());
     // Even if the model keeps proposing done+extend, a blown hard timeout stops it.
     const v1: RunVerdict = l.verdict(vin({ hardTimeoutBlown: true, modelProposedDone: true, reflectionWantsExtend: true }));
     expect(v1.decision).toBe("stop");
@@ -559,7 +548,7 @@ describe("incident regressions", () => {
   it("~70min stall / delegation livelock cannot recur: accumulator across fresh calls → stop", () => {
     const clock = new FakeClock(0);
     const rc = openRunClock(clock, POLICY({ taskInactivityMs: 2000, callFirstResponseMs: 100_000, callHardMs: 100_000 }));
-    const l = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
+    const l = createFailureLedger(fakeHealth());
     // A flaky provider across a deep chain: many fresh silent calls. The accumulator does
     // NOT reset on a fresh call, so the ledger eventually stops the task.
     let stopped = false;
@@ -577,7 +566,7 @@ describe("incident regressions", () => {
 
 describe("review hardening (P-A)", () => {
   it("HIGH-1: a non-benign task-token abort is authoritative even if the mirror boolean lags", () => {
-    const l = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const l = createFailureLedger(fakeHealth());
     // The hard-timeout timer aborted the task token, but the loop's derived hardTimeoutBlown
     // is still false (stale snapshot). The verdict must STILL stop — never fall to continue.
     const v = l.verdict(vin({ taskCancelReason: { kind: "hard-timeout", scope: "task" }, hardTimeoutBlown: false }));
@@ -585,13 +574,13 @@ describe("review hardening (P-A)", () => {
   });
 
   it("MEDIUM: a stale single failure does not preempt a model-proposed DONE", () => {
-    const honored = createFailureLedger(fakeHealth({ consecutive: 1 }), { pauseRetryBudget: 3 }).verdict(
+    const honored = createFailureLedger(fakeHealth({ consecutive: 1 })).verdict(
       vin({ modelProposedDone: true, reflectionWantsExtend: false }),
     );
     expect(honored).toEqual({ decision: "done", finalize: "graceful" });
     // Without a done proposal, the same stale failure still retries.
     expect(
-      createFailureLedger(fakeHealth({ consecutive: 1 }), { pauseRetryBudget: 3 }).verdict(vin()).decision,
+      createFailureLedger(fakeHealth({ consecutive: 1 })).verdict(vin()).decision,
     ).toBe("retry");
   });
 

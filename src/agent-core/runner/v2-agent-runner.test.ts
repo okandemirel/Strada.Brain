@@ -154,9 +154,7 @@ function mkPlane(opts: {
       });
       return {
         clock: openRunClock(clock, policy),
-        ledger: createFailureLedger(health, {
-          pauseRetryBudget: policy.pauseRetryBudget,
-        }),
+        ledger: createFailureLedger(health),
         budget: createBudget(policy.outputTokenCap, policy.costCapUsd),
       };
     },
@@ -281,7 +279,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     recordHealthSuccess: vi.fn(),
     classifyFailureForVerdict: vi.fn(() => {
       opts.onClassifyFailure?.(); // faithful: the real port records the failure into the tracker
-      return { callStalled: false, taskCancelReason: null, benign: false };
+      return { taskCancelReason: null, benign: false };
     }),
     onEpochRollover: vi.fn(),
     // Spied so a test can assert WHICH phase the spine handed to the plan
@@ -374,7 +372,7 @@ function mkRunner(plane: ControlPlane, gateway: ModelGateway, port: Orchestrator
 
 /**
  * Drive a run to completion under a FakeClock. The spine's only waits are guardedSleep timers
- * (intent-ack 2s fallback, retry/pause backoffs, epoch rollover) — none resolve until the fake
+ * (intent-ack 2s fallback, retry backoffs, epoch rollover) — none resolve until the fake
  * clock advances. We pump microtasks + advance the clock on a loop until the run promise settles,
  * so the run is fully deterministic with no real wall-clock dependency.
  */
@@ -1250,7 +1248,7 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
         rcRef = rc;
         return {
           clock: rc,
-          ledger: createFailureLedger(mkHealth(), { pauseRetryBudget: policy.pauseRetryBudget }),
+          ledger: createFailureLedger(mkHealth()),
           budget: createBudget(policy.outputTokenCap, policy.costCapUsd),
         };
       },
@@ -1380,7 +1378,7 @@ describe("V2AgentRunner — a free-tier model costs the run's budget nothing (au
         budgetRef = budget;
         return {
           clock: openRunClock(clock, policy),
-          ledger: createFailureLedger(mkHealth(), { pauseRetryBudget: policy.pauseRetryBudget }),
+          ledger: createFailureLedger(mkHealth()),
           budget,
         };
       },

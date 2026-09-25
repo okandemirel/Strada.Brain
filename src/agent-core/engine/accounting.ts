@@ -202,13 +202,7 @@ export function classifyAgentCoreFailure(
 ): FailureVerdictContribution {
   runCtx.healthAdapter.setProvider(params.provider);
   runCtx.healthAdapter.recordFailure(); // tracker-half; false=non-benign is the only path here
-  const reason = params.failedCallReason;
-  const callStalled = reason?.kind === "provider-stall" || reason?.kind === "hard-timeout";
-  // A task-scoped abort surfaces here only for the two scoped kinds; else null (the spine
-  // overrides taskCancelReason with runClock.taskToken.reason anyway).
-  const taskCancelReason =
-    reason && (reason.kind === "provider-stall" || reason.kind === "hard-timeout") && reason.scope === "task"
-      ? reason
-      : null;
-  return { callStalled, taskCancelReason, benign: false };
+  // A stalled or timed-out call is judged like any other failed call (ledger rule 7); a
+  // task-level abort is read by the spine from runClock.taskToken itself.
+  return { taskCancelReason: null, benign: false };
 }

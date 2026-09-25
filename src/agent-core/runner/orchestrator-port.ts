@@ -105,12 +105,10 @@ export interface RunSetup {
 /**
  * The HEALTH/FAILURE half of VerdictInput, produced by the port from a provider failure.
  * The spine merges this with the CLOCK/BUDGET half it owns. On a SUCCESSFUL step the spine
- * uses the NO-FAILURE default ({ callStalled:false, taskCancelReason:null, benign:false })
+ * uses the NO-FAILURE default ({ taskCancelReason:null, benign:false })
  * and calls port.recordHealthSuccess(provider) instead.
  */
 export interface FailureVerdictContribution {
-  /** Provider-stall on the call token → drives verdict rule 6 (pause/stop). */
-  readonly callStalled: boolean;
   /** Typed reason if the TASK token aborted because of this failure; else null. */
   readonly taskCancelReason: CancelReason | null;
   /** Whether the failure was benign (already recorded as such in the health tracker). */
@@ -124,8 +122,6 @@ export interface ClassifyFailureParams {
   readonly error?: unknown;
   /** The empty response (empty path). */
   readonly response?: ProviderResponse;
-  /** The CallScope token's reason if the call aborted; carried, never inferred (§2.2). */
-  readonly failedCallReason: CancelReason | null;
 }
 
 // ── Supporting param/result types (the exact shapes the impl binds) ────────────────────

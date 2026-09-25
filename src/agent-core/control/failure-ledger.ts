@@ -1,7 +1,7 @@
 /**
  * Agent Core v2 — Control Plane: FailureLedger + the verdict algorithm (ARCHITECTURE §2.4–§2.5).
  *
- * The single owner of "continue / retry / ask / pause / stop / done, and why." Subsumes v1's
+ * The single owner of "continue / retry / ask / stop / done, and why." Subsumes v1's
  * triplicated state: the loop's `consecutiveProviderFailures` (deleted), the kept
  * `IterationHealthTracker` (the implementation core, injected here as {@link HealthCore}), and
  * coordinates with the kept `ProviderHealthRegistry` (subordinate — per-provider recovery vs
@@ -38,13 +38,12 @@ export interface HealthCore {
  * refs makes the precedence trivially testable.
  */
 export interface VerdictInput {
-  /** The TASK token's reason if it is aborted; else null. (Call-level aborts arrive via `callStalled`.) */
+  /** The TASK token's reason if it is aborted; else null. */
   readonly taskCancelReason: CancelReason | null;
   readonly hardTimeoutBlown: boolean; // call OR task wall-clock ceiling reached
   readonly hardTimeoutScope: ScopeLevel;
   readonly resourceExhausted: false | "tokens" | "cost";
   readonly taskInactivityExceeded: boolean; // the §2.3 silence accumulator ceiling
-  readonly callStalled: boolean; // the last call ended on a provider-stall
   /**
    * True only on the verdict taken for a step whose provider call just FAILED (the failure
    * site). The tracker's ask-user/backoff state is a reaction to a failure; re-deriving it on
@@ -61,7 +60,6 @@ export type RunVerdict =
   | { decision: "continue" }
   | { decision: "retry"; backoffMs: number; guidance?: string }
   | { decision: "ask_user"; backoffMs: number; reason: string }
-  | { decision: "pause"; reason: CancelReason } // recoverable: drop this call, retry under a fresh scope
   | { decision: "stop"; reason: CancelReason; finalize: "graceful" | "hard" }
   // Clean, model-declared completion that the arbiter HONORED. Distinct from `stop`
   // (which carries a CancelReason) because a completion is not a cancellation.
@@ -75,12 +73,7 @@ export interface FailureLedger {
 }
 
 class FailureLedgerImpl implements FailureLedger {
-  private pauseRetryUsed = 0;
-
-  constructor(
-    private readonly core: HealthCore,
-    private readonly pauseRetryBudget: number,
-  ) {}
+  constructor(private readonly core: HealthCore) {}
 
   recordSuccess(_provider: string, kind: "real" | "probe"): void {
     // A REAL response resets the task failure run; a mere health PROBE success is the
@@ -139,18 +132,10 @@ class FailureLedgerImpl implements FailureLedger {
     if (this.core.shouldAbort()) {
       return { decision: "stop", reason: { kind: "verdict-stop", cause: "health" }, finalize: "hard" };
     }
-    // 6. Per-task pause→retry budget for call-level stalls (bounded; the livelock backstop).
-    if (input.callStalled) {
-      if (this.pauseRetryUsed < this.pauseRetryBudget) {
-        this.pauseRetryUsed += 1;
-        return { decision: "pause", reason: { kind: "provider-stall", scope: "call" } };
-      }
-      return {
-        decision: "stop",
-        reason: { kind: "provider-stall", scope: "task" },
-        finalize: "graceful",
-      };
-    }
+    // (There is no rule 6. A call-level stall pause budget used to sit here, but it read the
+    //  spine's call scope, which silentStream's own scope replaces, so it never ran. A stalled
+    //  call is a failed call: rule 7 backs off and asks, and rules 4/5 end a run that cannot
+    //  recover. The numbering is kept so references to rules 7-9 stay valid.)
     // 7. Health ask_user / retry. (Phase 1 routes the reason/guidance text through v1's
     //    centralized, i18n-aware message formatter; the literals here are placeholders.)
     //    Evaluated only for a fresh failure — v1 computed it inside recordFailure, never
@@ -190,9 +175,6 @@ class FailureLedgerImpl implements FailureLedger {
   }
 }
 
-export function createFailureLedger(
-  core: HealthCore,
-  opts: { pauseRetryBudget: number },
-): FailureLedger {
-  return new FailureLedgerImpl(core, opts.pauseRetryBudget);
+export function createFailureLedger(core: HealthCore): FailureLedger {
+  return new FailureLedgerImpl(core);
 }

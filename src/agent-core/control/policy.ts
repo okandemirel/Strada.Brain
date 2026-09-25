@@ -25,8 +25,6 @@ export interface RunBudgetPolicy {
   readonly callHardMs: number;
   readonly outputTokenCap: number;
   readonly costCapUsd: number;
-  /** Bounded pause→retry cycles per task before a stall escalates to stop (rule 6, §2.5). */
-  readonly pauseRetryBudget: number;
 }
 
 /** The v1 config defaults, threaded in by the caller (no direct config import here). */
@@ -40,8 +38,6 @@ export interface PolicySeed {
   readonly costCapUsd: number;
   /** Optional absolute task ceiling; defaults to none (Infinity). */
   readonly taskHardMs?: number;
-  /** Optional pause→retry budget; defaults to 5. */
-  readonly pauseRetryBudget?: number;
 }
 
 export interface PolicyResolution {
@@ -123,7 +119,6 @@ export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyR
       // stay bounded by the cost cap, their iteration/epoch limits and the loop guard.
       outputTokenCap: mode === "interactive" ? seed.outputTokenCap : Number.POSITIVE_INFINITY,
       costCapUsd: seed.costCapUsd,
-      pauseRetryBudget: seed.pauseRetryBudget ?? 5,
     },
     warnings,
   };

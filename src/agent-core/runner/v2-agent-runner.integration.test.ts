@@ -376,6 +376,66 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(provider.chat.mock.calls.length).toBeLessThan(10);
   });
 
+  it("D3 (provider stall): a stalled call is judged by the health rule — backoff, then the run recovers", async () => {
+    // The ledger's call-stall pause budget ("rule 6") was removed: it read the spine's own call
+    // scope, which silentStream's scope replaces, so it never ran. This pins the path a stall
+    // takes today: silentStream's call scope times out, the non-streaming fallback times out
+    // too, the step comes back empty, and rule 7 answers with a health backoff — no pause, no
+    // stop — before the next call recovers.
+    const provider = mkScriptedProvider();
+    provider.capabilities.streaming = true;
+    const stallReasons: unknown[] = [];
+    const stallUntilAborted = (signal: AbortSignal | undefined): Promise<ProviderResponse> =>
+      new Promise((_, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            stallReasons.push(signal.reason);
+            reject(new Error("stalled call aborted"));
+          },
+          { once: true },
+        );
+      });
+    let streamCalls = 0;
+    const chatStream = vi.fn(
+      async (
+        _system: string,
+        _messages: unknown,
+        _tools: unknown,
+        onChunk: (chunk: string) => void,
+        opts?: { signal?: AbortSignal },
+      ): Promise<ProviderResponse> => {
+        streamCalls += 1;
+        if (streamCalls === 2) return stallUntilAborted(opts?.signal); // no byte ever arrives
+        const text = streamCalls === 1 ? "the plan" : "recovered, done";
+        onChunk(text);
+        return resp({ text, stopReason: "end_turn" });
+      },
+    );
+    // The stalled turn's non-streaming fallback stalls as well.
+    provider.chat.mockImplementation(
+      (_system: string, _messages: unknown, _tools: unknown, opts?: { signal?: AbortSignal }) =>
+        stallUntilAborted(opts?.signal),
+    );
+    const h = buildHarness(Object.assign(provider, { chatStream }));
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("completed");
+    expect(chatStream).toHaveBeenCalledTimes(3); // plan, stall, recover
+    expect(provider.chat).toHaveBeenCalledTimes(1); // the stalled turn's fallback
+    // Both calls were ended by their call scope's stall timer, not by a task-level stop.
+    expect(stallReasons).toEqual([
+      { kind: "provider-stall", scope: "call" },
+      { kind: "provider-stall", scope: "call" },
+    ]);
+    const events = io.onEvent.mock.calls.map((c) => c[0] as { type?: string; reason?: string });
+    const backoffs = events.filter((e) => e.type === "backoff");
+    expect(backoffs).toHaveLength(1);
+    expect(backoffs[0]?.reason).toBe("Previous step failed; retrying with backoff."); // rule 7's retry
+  });
+
   it("H2 (decompose idempotency): proactive goal decomposition runs at most once per run", async () => {
     // The v2 spine re-enters PLANNING on each REPLAN cycle; without the per-run guard in the
     // decomposeGoalsIfPlanning binding, every re-entry re-runs decomposeProactive → a FRESH goal

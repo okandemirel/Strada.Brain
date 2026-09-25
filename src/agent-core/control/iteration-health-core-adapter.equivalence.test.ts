@@ -28,7 +28,6 @@ const INERT: VerdictInput = {
   hardTimeoutScope: "task",
   resourceExhausted: false,
   taskInactivityExceeded: false,
-  callStalled: false,
   lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
   modelProposedDone: false,
   reflectionWantsExtend: false,
@@ -48,7 +47,7 @@ function classifyVerdict(v: RunVerdict): ActionClass {
     case "retry":
       return "retry";
     default:
-      // continue/done/pause are not reachable for an empty-failure step in 1a.
+      // continue/done are not reachable for an empty-failure step in 1a.
       throw new Error(`unexpected verdict for a failure step: ${v.decision}`);
   }
 }
@@ -64,10 +63,7 @@ describe("Path B (EMPTY) flag-OFF vs flag-ON equivalence", () => {
     const offTracker = new IterationHealthTracker(0);
     // ON arm: ledger over an adapter wrapping its OWN identical tracker.
     const onTracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(onTracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(onTracker, "p"));
 
     // A scripted empty-failure sequence (success resets between bursts).
     const sequence: ("fail" | "success")[] = [
@@ -95,10 +91,7 @@ describe("Path B (EMPTY) flag-OFF vs flag-ON equivalence", () => {
   it("crosses to ask_user at the 3rd consecutive failure in both arms", () => {
     const offTracker = new IterationHealthTracker(0);
     const onTracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(onTracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(onTracker, "p"));
     const offClasses: ActionClass[] = [];
     const onClasses: ActionClass[] = [];
     for (let i = 0; i < 3; i++) {
@@ -116,10 +109,7 @@ describe("Path A (THROW) consolidation — INTENDED divergence under the rate-ga
     // 5 consecutive failures in a >=5 window → rate 1.0. v1 Path A aborts on consecutive>=5;
     // ledger rule 5 aborts on rate>=0.8 AND consecutive>=5. Same crossing for the all-fail case.
     const onTracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(onTracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(onTracker, "p"));
     let abortedAt = -1;
     for (let i = 1; i <= 5; i++) {
       ledger.recordFailure("p", false);
@@ -138,10 +128,7 @@ describe("Path A (THROW) consolidation — INTENDED divergence under the rate-ga
     // aborts purely on consecutive>=5 with NO rate gate. This is the deliberate consolidation:
     // throws now share the empty-path's rate semantics.
     const onTracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(onTracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(onTracker, "p"));
     for (let i = 0; i < 3; i++) ledger.recordSuccess("p", "real");
     let lastDecision: RunVerdict["decision"] = "continue";
     for (let i = 0; i < 5; i++) {

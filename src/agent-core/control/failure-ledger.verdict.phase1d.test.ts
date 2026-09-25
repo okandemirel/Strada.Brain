@@ -51,7 +51,6 @@ function vin(overrides: Partial<VerdictInput> = {}): VerdictInput {
     hardTimeoutScope: "task",
     resourceExhausted: false,
     taskInactivityExceeded: false,
-    callStalled: false,
     lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
     modelProposedDone: false,
     reflectionWantsExtend: false,
@@ -87,7 +86,7 @@ const DEFAULT_1B_SEED: PolicySeed = {
 describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
   it("rule 1: a BENIGN task abort (task-winddown) → stop/graceful and NEVER a health failure", () => {
     const stub = fakeHealth();
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(stub);
     const reason: CancelReason = { kind: "task-winddown" };
     expect(isBenign(reason)).toBe(true); // precondition: classifier agrees it is benign
 
@@ -100,7 +99,7 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
   });
 
   it("rule 1: user-cancel and first-success-satisfied are also benign stop/graceful", () => {
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     for (const reason of [
       { kind: "user-cancel" },
       { kind: "first-success-satisfied" },
@@ -117,7 +116,7 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
   it("rule 1b: a non-benign task abort (hard-timeout/task) → AUTHORITATIVE stop/graceful", () => {
     const reason: CancelReason = { kind: "hard-timeout", scope: "task" };
     expect(isBenign(reason)).toBe(false);
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     const v = ledger.verdict(vin({ taskCancelReason: reason }));
     expect(v.decision).toBe("stop");
     if (v.decision === "stop") {
@@ -128,16 +127,15 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
 
   it("rule 1b short-circuits AHEAD of the re-derived booleans (rules 2–4 not yet caught up)", () => {
     // The self-defending property: the token is aborted but the loop's derived booleans
-    // (hardTimeoutBlown / taskInactivityExceeded / callStalled) are all still false — a
+    // (hardTimeoutBlown / taskInactivityExceeded) are all still false — a
     // between-tick fire. Rule 1b must stop on the carried reason regardless.
     const reason: CancelReason = { kind: "hard-timeout", scope: "task" };
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     const v = ledger.verdict(
       vin({
         taskCancelReason: reason,
         hardTimeoutBlown: false,
         taskInactivityExceeded: false,
-        callStalled: false,
       }),
     );
     expect(v.decision).toBe("stop");
@@ -146,7 +144,7 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
 
   it("rule 1b: a budget-exhausted task reason stops authoritatively too", () => {
     const reason: CancelReason = { kind: "budget-exhausted", resource: "tokens" };
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     const v = ledger.verdict(vin({ taskCancelReason: reason }));
     expect(v.decision).toBe("stop");
     if (v.decision === "stop") expect(v.reason).toEqual(reason);
@@ -156,7 +154,7 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
     // Precedence proof: rule 1 sits ABOVE rule 5 (shouldAbort → hard). A benign cancel that
     // coincides with a poisoned health window must NOT be reclassified as a hard health stop.
     const stub = fakeHealth({ shouldAbort: () => true, consecutive: 5 });
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(stub);
     const reason: CancelReason = { kind: "user-cancel" };
     const v = ledger.verdict(vin({ taskCancelReason: reason }));
     expect(v.decision).toBe("stop");
@@ -171,7 +169,7 @@ describe("verdict() — Phase 1d typed taskCancelReason (rules 1 / 1b)", () => {
 
 describe("verdict() — Phase 1d flag-OFF: taskCancelReason null keeps rules 1/1b dead", () => {
   it("null taskCancelReason → verdict collapses to the 1c surface (continue when healthy)", () => {
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     // Exactly the inert field 1b/1c feed: rules 1/1b cannot match on null.
     expect(ledger.verdict(vin({ taskCancelReason: null })).decision).toBe("continue");
   });
@@ -179,7 +177,7 @@ describe("verdict() — Phase 1d flag-OFF: taskCancelReason null keeps rules 1/1
   it("with the field null, a benign-looking concurrent state is governed by the OTHER rules only", () => {
     // Even if a hard timeout HAS blown, with taskCancelReason null the stop comes from rule 2
     // (hard-timeout) — proving rule 1b is not what fired (it is dead while the field is null).
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
     const v = ledger.verdict(vin({ taskCancelReason: null, hardTimeoutBlown: true }));
     expect(v.decision).toBe("stop");
     if (v.decision === "stop") {
@@ -199,7 +197,7 @@ describe("Phase 1d orchestrator gate — buildPhase1bVerdictInput taskCancelReas
       // Give the task an explicit wall-clock ceiling so the RunClock writes a real reason.
     });
     const rc = openRunClock(clock, { ...policy, taskHardMs: 1000 });
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
 
     clock.advance(1001); // cross the task hard ceiling → token aborts, reason written
     expect(rc.taskToken.aborted).toBe(true);
@@ -217,7 +215,7 @@ describe("Phase 1d orchestrator gate — buildPhase1bVerdictInput taskCancelReas
     const clock = new FakeClock(0);
     const { policy } = resolveRunBudgetPolicy("background", DEFAULT_1B_SEED);
     const rc = openRunClock(clock, policy);
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
 
     rc.dispose(); // clean teardown aborts the task token as `task-winddown` (benign)
     expect(rc.taskToken.aborted).toBe(true);
@@ -236,7 +234,7 @@ describe("Phase 1d orchestrator gate — buildPhase1bVerdictInput taskCancelReas
     const clock = new FakeClock(0);
     const { policy } = resolveRunBudgetPolicy("background", DEFAULT_1B_SEED);
     const rc = openRunClock(clock, { ...policy, taskHardMs: 1000 });
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
 
     clock.advance(1001);
     // The token IS aborted with a real reason…

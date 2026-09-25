@@ -19,7 +19,6 @@ const INERT: VerdictInput = {
   hardTimeoutScope: "task",
   resourceExhausted: false,
   taskInactivityExceeded: false,
-  callStalled: false,
   lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
   modelProposedDone: false,
   reflectionWantsExtend: false,
@@ -66,7 +65,7 @@ describe("verdict() — Phase 1a health-only mapping", () => {
     const stub = new StubHealthCore();
     stub.abort = true;
     stub.consec = 5;
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     const v = ledger.verdict(INERT);
     expect(v.decision).toBe("stop");
     if (v.decision === "stop") {
@@ -80,7 +79,7 @@ describe("verdict() — Phase 1a health-only mapping", () => {
     stub.ask = true;
     stub.consec = 3;
     stub.backoff = 30_000;
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     const v = ledger.verdict(INERT);
     expect(v.decision).toBe("ask_user");
     if (v.decision === "ask_user") expect(v.backoffMs).toBe(30_000);
@@ -90,7 +89,7 @@ describe("verdict() — Phase 1a health-only mapping", () => {
     const stub = new StubHealthCore();
     stub.consec = 1;
     stub.backoff = 10_000;
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     const v = ledger.verdict(INERT);
     expect(v.decision).toBe("retry");
     if (v.decision === "retry") expect(v.backoffMs).toBe(10_000);
@@ -98,7 +97,7 @@ describe("verdict() — Phase 1a health-only mapping", () => {
 
   it("consecutive=0, all inert → continue", () => {
     const stub = new StubHealthCore();
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     expect(ledger.verdict(INERT).decision).toBe("continue");
   });
 
@@ -108,7 +107,7 @@ describe("verdict() — Phase 1a health-only mapping", () => {
     // and assert no stop regardless of the inert fields' (false/null) values.
     const stub = new StubHealthCore();
     stub.consec = 0;
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     expect(ledger.verdict(INERT).decision).toBe("continue");
     // And when health DOES abort, the reason is health — never a timeout/budget/inactivity kind.
     stub.abort = true;
@@ -116,21 +115,12 @@ describe("verdict() — Phase 1a health-only mapping", () => {
     expect(v.decision).toBe("stop");
     if (v.decision === "stop") expect(v.reason.kind).toBe("verdict-stop");
   });
-
-  it("rule 6 (pause) is dead in 1a: callStalled stays false so the pause budget is never touched", () => {
-    const stub = new StubHealthCore();
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 5 });
-    // Even with a budget available, the inert callStalled=false means no pause is ever produced.
-    for (let i = 0; i < 10; i++) {
-      expect(ledger.verdict(INERT).decision).not.toBe("pause");
-    }
-  });
 });
 
 describe("recordSuccess kind routing — E2-B unit proof (dormant in 1a)", () => {
   it('"real" success resets the core; "probe" success does NOT', () => {
     const stub = new StubHealthCore();
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
 
     ledger.recordSuccess("p", "probe");
     expect(stub.successes).toBe(0); // probe success is the registry's concern — ledger ignores it
@@ -141,7 +131,7 @@ describe("recordSuccess kind routing — E2-B unit proof (dormant in 1a)", () =>
 
   it("benign failures never poison health", () => {
     const stub = new StubHealthCore();
-    const ledger = createFailureLedger(stub, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(stub);
     ledger.recordFailure("p", true); // benign control-plane cancel
     expect(stub.failures).toBe(0);
     ledger.recordFailure("p", false);

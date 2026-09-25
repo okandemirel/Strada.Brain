@@ -467,18 +467,18 @@ export class V2AgentRunner implements AgentRunner {
             // verdict every iteration: no model call, one visible ask_user per iteration, a
             // frozen 30s sleep each, until the iteration budget ran out and the run was
             // reported "completed" / max-iterations. Fall through and TAKE the step — the
-            // same shape as retry/pause below; the step's outcome is the only thing that can
+            // same shape as retry below; the step's outcome is the only thing that can
             // change the verdict.
           }
-          if (gate.decision === "retry" || gate.decision === "pause") {
-            // Defensive: the gate passes lastStepFailed:false and callStalled:false, so the ledger
-            // returns neither — the failure site below owns the one backoff per failure. If it
+          if (gate.decision === "retry") {
+            // Defensive: the gate passes lastStepFailed:false, so the ledger does not return
+            // retry here — the failure site below owns the one backoff per failure. If it
             // ever does: back off (emitting the beat first), then FALL THROUGH to take the step — the step's success is what clears
             // the failure run. Re-looping to the gate here would spin (the failure state is not
             // cleared until a call succeeds), so the backoff-then-step is the correct shape.
             await this.handleYield(bus, clock, io, emit, gate, undefined, runClock.taskToken);
           }
-          // continue / (post-backoff) retry / pause fall through to the step.
+          // continue / (post-backoff) retry fall through to the step.
 
           // ══ enterCall: subtractive-min carve (gauntlet #6 prep) ══════════════════════════
           const call = runClock.enterCall(callLimits);
@@ -613,12 +613,10 @@ export class V2AgentRunner implements AgentRunner {
               provider: prepared.currentAssignment.providerName,
               error: outcome.kind === "threw" ? outcome.error : undefined,
               response: outcome.kind === "empty" ? outcome.response : undefined,
-              failedCallReason: call.token.reason, // carried, never inferred
             });
             const failVerdict = ledger.verdict({
               ...this.clockBudgetVerdict(runClock, budget, state),
               taskCancelReason: taskReason ?? contrib.taskCancelReason,
-              callStalled: contrib.callStalled,
               lastStepFailed: true, // the only verdict that may ask the user / back off on health
             });
             const action = mapVerdictToLoopAction(failVerdict, "break");
@@ -634,7 +632,7 @@ export class V2AgentRunner implements AgentRunner {
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
-            // retry / pause / ask_user → single owner: handleYield (emits before+after backoff).
+            // retry / ask_user → single owner: handleYield (emits before+after backoff).
             // The task token wakes the backoff early: a /cancel is seen at the next gate tick,
             // not after minutes of provider backoff.
             const yielded = await this.handleYield(bus, clock, io, emit, failVerdict, action.backoffMs, runClock.taskToken);
@@ -1078,7 +1076,7 @@ export class V2AgentRunner implements AgentRunner {
   /**
    * The CLOCK/BUDGET half of VerdictInput, queried every gate tick. The taskCancelReason is read
    * from clock.taskToken.reason (rule 1/1b — authoritative even between ticks). callers that
-   * carry a failure contribution override taskCancelReason/callStalled on top of this base.
+   * carry a failure contribution override taskCancelReason on top of this base.
    */
   private clockBudgetVerdict(clock: RunClock, budget: Budget, state: AgentState): VerdictInput {
     const tokensOut = budget.remainingOutputTokens() <= 0;
@@ -1089,7 +1087,6 @@ export class V2AgentRunner implements AgentRunner {
       hardTimeoutScope: "task", // call-scope hard fires via the token → taskCancelReason
       resourceExhausted: tokensOut ? "tokens" : costOut ? "cost" : false,
       taskInactivityExceeded: clock.silenceCeilingExceeded(),
-      callStalled: false,
       lastStepFailed: false,
       modelProposedDone: false,
       reflectionWantsExtend: false,
@@ -1120,12 +1117,6 @@ export class V2AgentRunner implements AgentRunner {
           ms,
           reason: verdict.guidance ?? "retry",
         }, cancel);
-        return "continue";
-      }
-      case "pause": {
-        // Recoverable: the call was already dropped (call.leave in the finally); retry under a
-        // fresh scope next iteration. Emit a heartbeat so there is no silent spin.
-        await guardedSleep(bus, clock, backoffMs ?? 0, { type: "heartbeat", source: "loop-yield" }, cancel);
         return "continue";
       }
       case "ask_user": {

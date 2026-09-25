@@ -65,8 +65,6 @@ export interface LoopAction {
  *  - `ask_user` is INFORMATIONAL: emit the notice, optionally back off, then `continue`. v1's
  *    ask_user never actually paused for the user (it only emitted a status message), so a real
  *    pause here would be a behavior change — deliberately deferred.
- *  - `pause` cannot occur in 1a (callStalled is always false → rule 6 dead). Mapped defensively
- *    to a back-off + `continue` so the function stays total; it is unreachable at the 1a sites.
  *  - `done` cannot occur from a failure site in 1a (modelProposedDone always false). Mapped to a
  *    plain `continue` for completeness; the model-done/reflection path is untouched by 1a.
  */
@@ -81,9 +79,6 @@ export function mapVerdictToLoopAction(
       return { control: "continue", notice: "ask_user", backoffMs: verdict.backoffMs };
     case "retry":
       return { control: "continue", notice: "retry", backoffMs: verdict.backoffMs };
-    case "pause":
-      // Unreachable in 1a (no run-clock); treat a recoverable pause as a retry-continue.
-      return { control: "continue", notice: "retry", backoffMs: 0 };
     case "done":
     case "continue":
       return { control: "continue", notice: "none", backoffMs: 0 };

@@ -40,7 +40,7 @@ import type { AgentEvent } from "../events/agent-event.js";
  * Everything the assembler captures once per RUNNER (not per run).
  *
  * The HealthCore is provided as a FACTORY, not an instance: FailureLedgerImpl holds one `core`
- * + `pauseRetryUsed` PER RUN (failure-ledger.ts:70-76, "One instance per run"), so every
+ * PER RUN (failure-ledger.ts, "One instance per run"), so every
  * openRun() must mint a fresh core or failure history leaks across runs. A caller that genuinely
  * wants single-run semantics passes `() => theCore`.
  */
@@ -94,7 +94,7 @@ export function createControlPlane(deps: ControlPlaneDeps): ControlPlane {
         : policy.taskHardMs;
       return {
         clock: openRunClock(clock, taskHardMs === policy.taskHardMs ? policy : { ...policy, taskHardMs }),
-        ledger: createFailureLedger(health, { pauseRetryBudget: policy.pauseRetryBudget }),
+        ledger: createFailureLedger(health),
         budget: childBudget
           ? createBudget(
               Math.min(policy.outputTokenCap, childBudget.slice.outputTokens),

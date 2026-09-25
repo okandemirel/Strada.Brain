@@ -29,7 +29,6 @@ const INERT: VerdictInput = {
   hardTimeoutScope: "task",
   resourceExhausted: false,
   taskInactivityExceeded: false,
-  callStalled: false,
   lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
   modelProposedDone: false,
   reflectionWantsExtend: false,
@@ -39,10 +38,7 @@ const INERT: VerdictInput = {
 describe("incident regression — consecutive-failure thresholds + bounded backoff", () => {
   it("crosses to ask_user at the 3rd and hard-aborts at the 5th consecutive empty failure", () => {
     const tracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(tracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(tracker, "p"));
 
     const decisions: string[] = [];
     for (let i = 1; i <= ABORT_CONSECUTIVE; i++) {
@@ -60,7 +56,7 @@ describe("incident regression — consecutive-failure thresholds + bounded backo
     const clock = new FakeClock(0);
     const tracker = new IterationHealthTracker(0);
     const adapter = new IterationHealthCoreAdapter(tracker, "p");
-    const ledger = createFailureLedger(adapter, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(adapter);
 
     // Drive the 4 PRE-abort failures (1-4): all retry/ask_user, all carry a real backoff rung.
     // The 5th failure aborts (covered by the threshold test) and carries no backoff, so it is
@@ -95,10 +91,7 @@ describe("incident regression — consecutive-failure thresholds + bounded backo
 describe("verdict→loop-action control mapping (the two helper terminal styles)", () => {
   it("a health-abort stop maps to RETURN for the background EMPTY site", () => {
     const tracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(tracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(tracker, "p"));
     for (let i = 0; i < ABORT_CONSECUTIVE; i++) ledger.recordFailure("p", false);
     const v = ledger.verdict(INERT);
     expect(v.decision).toBe("stop");
@@ -107,10 +100,7 @@ describe("verdict→loop-action control mapping (the two helper terminal styles)
 
   it("a health-abort stop maps to BREAK for interactive / bg THROW sites", () => {
     const tracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(tracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(tracker, "p"));
     for (let i = 0; i < ABORT_CONSECUTIVE; i++) ledger.recordFailure("p", false);
     const v = ledger.verdict(INERT);
     expect(mapVerdictToLoopAction(v, "break")).toMatchObject({ control: "break", notice: "abort" });
@@ -118,10 +108,7 @@ describe("verdict→loop-action control mapping (the two helper terminal styles)
 
   it("retry/ask_user always map to CONTINUE (informational, no real pause in 1a)", () => {
     const tracker = new IterationHealthTracker(0);
-    const ledger = createFailureLedger(
-      new IterationHealthCoreAdapter(tracker, "p"),
-      { pauseRetryBudget: 0 },
-    );
+    const ledger = createFailureLedger(new IterationHealthCoreAdapter(tracker, "p"));
     ledger.recordFailure("p", false); // retry
     expect(mapVerdictToLoopAction(ledger.verdict(INERT), "return").control).toBe("continue");
     ledger.recordFailure("p", false);
@@ -139,7 +126,7 @@ describe("health ask_user is a reaction to a failure, never to a success", () =>
   function ledgerAfter(sequence: readonly ("F" | "S")[]) {
     const tracker = new IterationHealthTracker(0);
     const adapter = new IterationHealthCoreAdapter(tracker, "p");
-    const ledger = createFailureLedger(adapter, { pauseRetryBudget: 0 });
+    const ledger = createFailureLedger(adapter);
     for (const r of sequence) {
       if (r === "F") ledger.recordFailure("p", false);
       else ledger.recordSuccess("p", "real");

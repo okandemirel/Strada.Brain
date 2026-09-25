@@ -39,7 +39,6 @@ function vin(overrides: Partial<VerdictInput> = {}): VerdictInput {
     hardTimeoutScope: "task",
     resourceExhausted: false,
     taskInactivityExceeded: false,
-    callStalled: false,
     lastStepFailed: true, // these suites drive the failure-site verdict; a gate tick passes false
     modelProposedDone: false,
     reflectionWantsExtend: false,
@@ -57,7 +56,6 @@ const POLICY = (overrides: Partial<RunBudgetPolicy> = {}): RunBudgetPolicy => ({
   callHardMs: 5000,
   outputTokenCap: 100_000,
   costCapUsd: 10,
-  pauseRetryBudget: 3,
   ...overrides,
 });
 
@@ -83,7 +81,7 @@ describe("Phase 1b incident regression — ~70min stall", () => {
     const { policy } = resolveRunBudgetPolicy("background", DEFAULT_1B_SEED);
     expect(policy.taskInactivityMs).toBe(1_800_000);
     const rc = openRunClock(clock, policy);
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
+    const ledger = createFailureLedger(fakeHealth());
 
     let stopped = false;
     // Deep delegated chain: many FRESH silent calls, each well under the per-call hard window
@@ -161,7 +159,7 @@ describe("Phase 1b incident regression — 3h27m runaway", () => {
     const clock = new FakeClock(0);
     const T = 3 * 60 * 60 * 1000; // an explicit wall-clock ceiling (the runClock-era addition)
     const rc = openRunClock(clock, POLICY({ taskHardMs: T }));
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    const ledger = createFailureLedger(fakeHealth());
 
     clock.advance(T - 1);
     expect(rc.taskToken.aborted).toBe(false);
@@ -255,7 +253,7 @@ describe("Phase 1c — cross-call silence accumulator (delegation livelock)", ()
         taskHardMs: Number.POSITIVE_INFINITY,
       }),
     );
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
+    const ledger = createFailureLedger(fakeHealth());
 
     let stopped = false;
     let stopVerdict: ReturnType<typeof ledger.verdict> | null = null;
@@ -282,7 +280,7 @@ describe("Phase 1c — cross-call silence accumulator (delegation livelock)", ()
     expect(stopped).toBe(true);
     expect(calls).toBe(5); // stopped on the 5th fresh call, not the 1st (cross-call accumulation)
     // Pin RULE 4 specifically (task-inactivity / graceful), distinct from rule 2 hard-timeout
-    // or rule 6 provider-stall — the only thing that can produce this is the accumulator.
+    // — the only thing that can produce this is the accumulator.
     expect(stopVerdict).not.toBeNull();
     expect(stopVerdict!.decision).toBe("stop");
     if (stopVerdict!.decision === "stop") {
@@ -332,7 +330,7 @@ describe("Phase 1c — cross-call silence accumulator (delegation livelock)", ()
       clock,
       POLICY({ taskInactivityMs: 2000, callFirstResponseMs: 100_000, callStallMs: 100_000, callHardMs: 100_000 }),
     );
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
+    const ledger = createFailureLedger(fakeHealth());
     const call = rc.enterCall({ firstResponseMs: 100_000, stallMs: 100_000, hardMs: 100_000 });
     call.firstTokenSeen();
     for (let i = 0; i < 10; i += 1) {
@@ -352,7 +350,7 @@ describe("Phase 1c — cross-call silence accumulator (delegation livelock)", ()
     // 1c is a pure opt-in: the same over-ceiling accumulator does NOT stop the run under 1b.
     const clock = new FakeClock(0);
     const rc = openRunClock(clock, POLICY({ taskInactivityMs: 2000, callFirstResponseMs: 100_000, callHardMs: 100_000 }));
-    const ledger = createFailureLedger(fakeHealth(), { pauseRetryBudget: 100 });
+    const ledger = createFailureLedger(fakeHealth());
     for (let i = 0; i < 5; i += 1) {
       const call = rc.enterCall({ firstResponseMs: 100_000, stallMs: 100_000, hardMs: 100_000 });
       clock.advance(700);
