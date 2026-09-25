@@ -961,6 +961,23 @@ export function captureCandidatePatch(input: {
 }
 
 /**
+ * Put the checkout back to the revision the candidate started from (CMP-17).
+ *
+ * A candidate's patch FILE is applied to the base tree it was written
+ * against. The common idiom is "edit the files, then `git diff >
+ * $STRADA_BENCH_PATCH_OUT`": applying that file over the already-edited tree
+ * fails (and `--3way` refuses unstaged edits), so a real fix scored as "patch
+ * did not apply". Tracked files, the index and HEAD go back to `baseRev`, and
+ * untracked files are removed; ignored ones (build output) stay.
+ */
+export function resetToBaseRevision(runGit: RunGit, baseRev: string): { ok: boolean; detail?: string } {
+  const checkout = runGit(["checkout", "--quiet", "--force", "--detach", baseRev]);
+  if (!checkout.ok) return { ok: false, detail: `could not check out the base revision ${baseRev.slice(0, 12)}` };
+  const clean = runGit(["clean", "-fdq"]);
+  return clean.ok ? { ok: true } : { ok: false, detail: "could not remove the candidate's untracked files" };
+}
+
+/**
  * The files a patch touches.
  *
  * Used to restore the task's test files from the base revision before the test

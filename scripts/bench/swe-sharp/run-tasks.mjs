@@ -669,6 +669,12 @@ async function runTask(task, args, api) {
 
     let patchApplied = { ok: true };
     if (candidate.patchSource !== "working-tree") {
+      // The patch file is a diff against the BASE tree, and a candidate that
+      // also edited the tree would have it applied over its own edits (CMP-17).
+      const reset = api.runner.resetToBaseRevision((gitArgs) => git(repoDir, gitArgs), baseRev);
+      if (!reset.ok) {
+        return finish({ notRun: { reason: "harness-error", detail: reset.detail }, baseline, candidate, deviations });
+      }
       patchApplied = applyPatch(repoDir, candidate.patch, "candidate");
       if (!patchApplied.ok) return finish({ baseline, candidate, patchApplied, deviations });
     }

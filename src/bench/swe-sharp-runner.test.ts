@@ -24,6 +24,7 @@ import {
   buildRunReport,
   buildTestCommand,
   captureCandidatePatch,
+  resetToBaseRevision,
   checkBaseline,
   checkoutFileAdapters,
   chooseFramework,
@@ -722,6 +723,38 @@ describe("captureCandidatePatch — however the candidate left the tree", () => 
     const out = captureCandidatePatch({ runGit, baseRev, patchFile: PATCH });
     expect(out.source).toBe("patch-file");
     expect(out.patch).toBe(PATCH);
+  });
+
+  it("a candidate that edited the tree AND wrote its diff to the patch file is scored on its fix (CMP-17)", () => {
+    // The common idiom: edit, then `git diff > $STRADA_BENCH_PATCH_OUT`.
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 6; }\n");
+    const patchFile = sh("git diff");
+    writeFileSync(path.join(dir, "Scratch.cs"), "class Scratch { }\n");
+    const out = captureCandidatePatch({ runGit, baseRev, patchFile });
+    expect(out.source).toBe("patch-file");
+    const file = path.join(dir, "..", `${path.basename(dir)}-candidate.patch`);
+    writeFileSync(file, out.patch!);
+    try {
+      // Over the already-edited tree the patch cannot apply…
+      expect(runGit(["apply", "--check", file]).ok).toBe(false);
+      // …over the base tree it was written against, it does.
+      expect(resetToBaseRevision(runGit, baseRev)).toEqual({ ok: true });
+      expect(existsSync(path.join(dir, "Scratch.cs"))).toBe(false);
+      expect(sh("git rev-parse HEAD").trim()).toBe(baseRev);
+      expect(runGit(["apply", file]).ok).toBe(true);
+      expect(readFileSync(path.join(dir, "Thing.cs"), "utf8")).toContain("V => 6");
+    } finally {
+      rmSync(file, { force: true });
+    }
+  });
+
+  it("the reset also undoes a candidate's commit on its own branch (CMP-17)", () => {
+    sh("git checkout -q -b agent-work");
+    writeFileSync(path.join(dir, "Thing.cs"), "class Thing { int V => 7; }\n");
+    sh('git -c user.email=a@b -c user.name=t commit -qam fix');
+    expect(resetToBaseRevision(runGit, baseRev).ok).toBe(true);
+    expect(readFileSync(path.join(dir, "Thing.cs"), "utf8")).toContain("V => 1");
+    expect(resetToBaseRevision(runGit, "0".repeat(40)).ok).toBe(false);
   });
 });
 
