@@ -66,6 +66,32 @@ describe('VaultRegistry', () => {
     expect(result.truncated).toBe(false);
   });
 
+  it('query() keeps the merged result within budgetTokens across vaults (MEM-14)', async () => {
+    const registry = new VaultRegistry();
+    const sized = (chunkId: string, rrf: number, tokenCount: number): VaultHit => {
+      const hit = makeHit(chunkId, rrf);
+      return { ...hit, chunk: { ...hit.chunk, tokenCount } };
+    };
+    // Each vault honoured the 4000-token budget on its own: 3000 tokens apiece.
+    registry.register(createFakeVault({
+      id: 'self',
+      rootPath: '/tmp/vault-self',
+      query: vi.fn(async () => ({ hits: [sized('s1', 0.9, 2000), sized('s2', 0.5, 1000)], budgetUsed: 3000, truncated: false })),
+    }));
+    registry.register(createFakeVault({
+      id: 'project',
+      rootPath: '/tmp/vault-project',
+      query: vi.fn(async () => ({ hits: [sized('p1', 0.8, 1500), sized('p2', 0.4, 1500)], budgetUsed: 3000, truncated: false })),
+    }));
+
+    const result = await registry.query({ text: 'x', topK: 10, budgetTokens: 4000 });
+
+    expect(result.budgetUsed).toBeLessThanOrEqual(4000);
+    // Greedy in score order: s1 (2000) + p1 (1500) fit, s2 (1000) does not, p2 does not.
+    expect(result.hits.map((h) => h.chunk.chunkId)).toEqual(['s1', 'p1']);
+    expect(result.truncated).toBe(true);
+  });
+
   it('resolveVaultForPath picks the longest matching root', () => {
     const root = makeTempDir('strada-registry-');
     const inner = join(root, 'inner');

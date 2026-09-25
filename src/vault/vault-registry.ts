@@ -3,6 +3,7 @@ import { isAbsolute, resolve, sep } from 'node:path';
 import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit, VaultStats } from './vault.interface.js';
 import { isVaultRootAllowed, redactPathsInMessage, resolveExistingVaultRoot } from './path-policy.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import { packByBudget } from './query-pipeline.js';
 
 export interface VaultFactory {
   createVault(rootPath: string): IVault | Promise<IVault>;
@@ -235,7 +236,13 @@ export class VaultRegistry {
       }
     }
     merged.sort((a, b) => b.scores.rrf - a.scores.rrf);
-    const capped = q.topK ? merged.slice(0, q.topK) : merged;
+    // Each vault packed to the budget on its own, so N vaults returned up to
+    // N budgets (MEM-14). Pack the merged, score-ordered list once more.
+    const packed = q.budgetTokens === undefined
+      ? merged
+      : packByBudget(merged.map((hit) => ({ hit, tokenCount: hit.chunk.tokenCount })), q.budgetTokens)
+        .kept.map((p) => p.hit);
+    const capped = q.topK ? packed.slice(0, q.topK) : packed;
     return {
       hits: capped,
       budgetUsed: capped.reduce((a, h) => a + h.chunk.tokenCount, 0),
