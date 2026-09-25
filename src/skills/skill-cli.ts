@@ -207,6 +207,10 @@ export function registerSkillCommands(program: Command): void {
 
         if (config.entries[name]?.enabled === false) {
           status = "disabled";
+        } else if (config.unreadable && skill.tier === "managed") {
+          // SEC-15: the same fail-closed rule as SkillManager.loadAll.
+          status = "disabled";
+          gateReason = `~/.strada/skills.json could not be read (${config.unreadable})`;
         } else {
           // The CLI has no app Config to resolve `requires.config` against, so
           // that gate comes back unevaluated here — shown, not hidden.

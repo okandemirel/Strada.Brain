@@ -85,6 +85,12 @@ export interface SkillRegistry {
 
 /** Per-skill user configuration (persisted in skills.json or equivalent). */
 export interface SkillConfig {
+  /**
+   * SEC-15: set (never persisted) when skills.json exists but could not be
+   * read or parsed — why. The entries are then unknown, so callers fail
+   * closed instead of treating every skill as enabled.
+   */
+  unreadable?: string;
   entries: Record<
     string,
     {

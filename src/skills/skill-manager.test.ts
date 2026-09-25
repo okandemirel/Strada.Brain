@@ -123,6 +123,22 @@ describe("SkillManager", () => {
       expect(mockLoadSkillTools).not.toHaveBeenCalled();
     });
 
+    it("keeps managed skills disabled while skills.json is unreadable, instead of enabling everything (SEC-15)", async () => {
+      mockDiscoverSkills.mockResolvedValue([
+        makeSkill("third-party", { tier: "managed" }),
+        makeSkill("shipped", { tier: "bundled" }),
+      ]);
+      mockReadSkillConfig.mockResolvedValue({ entries: {}, unreadable: "invalid JSON: Unexpected end of JSON input" });
+
+      const entries = await new SkillManager().loadAll();
+      const byName = Object.fromEntries(entries.map((e) => [e.manifest.name, e]));
+      expect(byName["third-party"]!.status).toBe("disabled");
+      expect(byName["third-party"]!.gateReason).toContain("skills.json could not be read");
+      expect(byName["shipped"]!.status).toBe("active");
+      expect(mockLoadSkillTools).toHaveBeenCalledTimes(1);
+      expect(silentLogger.error).toHaveBeenCalledWith(expect.stringContaining("managed skills stay disabled"));
+    });
+
     it("should mark gated skills with reasons", async () => {
       mockDiscoverSkills.mockResolvedValue([
         makeSkill("gated-one", {

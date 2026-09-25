@@ -85,6 +85,12 @@ export class SkillManager {
   async loadAll(projectRoot?: string, extraDirs?: string[]): Promise<SkillEntry[]> {
     const logger = getLoggerSafe();
     const config = await readSkillConfig();
+    // SEC-15: an unreadable skills.json may hold the user's `enabled: false`
+    // entries. Managed skills (third-party code) stay off until it is repaired.
+    const unreadableConfig = config.unreadable
+      ? `~/.strada/skills.json could not be read (${config.unreadable}), so managed skills stay disabled until it is repaired`
+      : null;
+    if (unreadableConfig) logger.error(`SkillManager: ${unreadableConfig}`);
     // SEC-12: which copy of a name wins is decided AFTER the workspace trust
     // verdict, not by discovery order alone (see resolveShadowedSkills).
     const workspaceTrust = new Map<string, SkillTrustVerdict>();
@@ -115,6 +121,10 @@ export class SkillManager {
         if (config.entries[name]?.enabled === false) {
           park(skill, "disabled");
           logger.debug(`Skill "${name}" is disabled by user config`);
+          continue;
+        }
+        if (unreadableConfig && skill.tier === "managed") {
+          park(skill, "disabled", unreadableConfig);
           continue;
         }
 
