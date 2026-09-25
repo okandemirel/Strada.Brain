@@ -10,6 +10,7 @@
 import type { IAIProvider } from "../providers/provider.interface.js";
 import { streamOrChatText } from "../providers/provider.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { stripLeakedReasoning } from "../leaked-reasoning.js";
 import { familyDefaults, styleProfileSchema, STYLE_FAMILIES } from "./style-profile.js";
 import type { StyleProfile } from "./style-profile.js";
 
@@ -110,7 +111,12 @@ export class StyleAnalysis {
           // drops — use the audit-sized window.
           `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\nExtract the style profile.`,
         );
-        const jsonText = extractJsonObject(response.text ?? "");
+        // Reasoning providers put a <reasoning> block before the answer, and a
+        // "{" inside it (a draft, a schema sketch) was taken for the reply.
+        // Only the text outside closed thinking blocks is the answer; a reply
+        // that is still inside an unclosed block has none.
+        const answer = stripLeakedReasoning(response.text);
+        const jsonText = answer.reasoningOnly ? undefined : extractJsonObject(answer.text);
         if (jsonText) {
           const parsed = styleProfileSchema.safeParse(JSON.parse(jsonText));
           if (parsed.success) {
