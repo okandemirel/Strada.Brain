@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { redactSecrets } from "../../security/secret-patterns.js";
 
 export interface TaskExecutionMemory {
   scopeKey: string;
@@ -96,11 +97,13 @@ export class TaskExecutionStore {
     topics: readonly string[],
   ): TaskExecutionMemory {
     const now = Date.now();
+    // Summaries and snapshots quote the conversation and are re-injected into
+    // later prompts, so they are stored redacted like every memory row (MEM-21).
     this.stmtUpsert.run({
       scope_key: scopeKey,
-      session_summary: summary,
-      open_items: JSON.stringify([...openItems]),
-      topics: JSON.stringify([...topics]),
+      session_summary: redactSecrets(summary),
+      open_items: JSON.stringify(openItems.map(redactSecrets)),
+      topics: JSON.stringify(topics.map(redactSecrets)),
       branch_summary: null,
       verifier_summary: null,
       learned_insights: null,
@@ -119,10 +122,10 @@ export class TaskExecutionStore {
       session_summary: null,
       open_items: null,
       topics: null,
-      branch_summary: snapshot.branchSummary ?? null,
-      verifier_summary: snapshot.verifierSummary ?? null,
+      branch_summary: snapshot.branchSummary !== undefined ? redactSecrets(snapshot.branchSummary) : null,
+      verifier_summary: snapshot.verifierSummary !== undefined ? redactSecrets(snapshot.verifierSummary) : null,
       learned_insights: snapshot.learnedInsights !== undefined
-        ? JSON.stringify([...snapshot.learnedInsights])
+        ? JSON.stringify(snapshot.learnedInsights.map(redactSecrets))
         : null,
       updated_at: now,
     });

@@ -88,9 +88,7 @@ import {
 import { getNow, _setNowFn, _resetNowFn } from "./agentdb-time.js";
 import { sanitizeSecretsDeep } from "../../security/secret-sanitizer.js";
 import { redactSecrets, stringifyRedacted } from "../../security/secret-patterns.js";
-import type { ProvenancedEmbedding } from "./agentdb-vector.js";
 
-/** Spread an embedWithProvenance result into storeEntry's embedding fields (plan 0-B.9). */
 /**
  * Ownership fields for a note-storing API (Codex round 7 #19). Only the keys
  * the caller set are written, so an entry with no ownership stays exactly as
@@ -109,10 +107,6 @@ function ownershipFields(ownership: MemoryOwnershipOptions | undefined): {
     ...(ownership.projectId !== undefined ? { projectId: ownership.projectId } : {}),
     ...(ownership.shared === true ? { shared: true as const } : {}),
   };
-}
-
-function embeddingFields(e: ProvenancedEmbedding): { embedding: Vector<number>; embeddingProvenance: string } {
-  return { embedding: e.embedding, embeddingProvenance: e.provenance };
 }
 
 /** Identity supplied through metadata by callers that cannot set top-level fields (plan 3.9). */
@@ -525,7 +519,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         importance: "high",
         archived: false,
         metadata: { projectPath },
-        ...embeddingFields(await embedWithProvenance(this.config, JSON.stringify(analysis))),
+        // No embedding passed: storeEntry embeds the redacted text (MEM-21).
         tier: MemoryTier.Persistent,
         importanceScore: createBrand(0.9, "NormalizedScore" as const),
         domain: "analysis-cache",
@@ -590,11 +584,14 @@ export class AgentDBMemory implements IUnifiedMemory {
         ...(options?.userMessage ? { userMessage: options.userMessage } : {}),
         ...(options?.assistantMessage ? { assistantMessage: options.assistantMessage } : {}),
       },
-      ...embeddingFields(await embedWithProvenance(this.config, summary)),
+      // No embedding passed: storeEntry embeds the redacted text (MEM-21).
       tier,
       importanceScore: calculateImportanceScore(summary, tier),
       chatId,
-    });
+    } as unknown as Omit<
+      UnifiedMemoryEntry,
+      "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+    >);
 
     if (result.kind === "err") {
       throw result.error;
@@ -618,7 +615,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       importance: "medium",
       archived: false,
       metadata: {},
-      ...embeddingFields(await embedWithProvenance(this.config, content)),
+      // No embedding passed: storeEntry embeds the redacted text (MEM-21).
       tier,
       importanceScore: calculateImportanceScore(content, tier),
       ...ownershipFields(ownership),

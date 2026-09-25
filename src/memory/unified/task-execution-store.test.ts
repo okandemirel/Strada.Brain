@@ -51,4 +51,25 @@ describe("TaskExecutionStore", () => {
       "Avoid assuming serialized YAML is enough without runtime confirmation.",
     ]);
   });
+
+  it("stores summaries and snapshots with secrets redacted (MEM-21)", () => {
+    const token = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    store.updateSessionSummary(
+      "user-1",
+      `User pasted ${token} while configuring the CI upload.`,
+      [`Rotate ${token}`],
+      ["ci"],
+    );
+    store.updateExecutionSnapshot("user-1", {
+      branchSummary: `pushed with ${token}`,
+      verifierSummary: `verified ${token}`,
+      learnedInsights: [`never commit ${token}`],
+    });
+
+    const row = db.prepare("SELECT * FROM task_execution_memory WHERE scope_key = ?").get("user-1");
+    expect(JSON.stringify(row)).not.toContain(token);
+    const memory = store.getMemory("user-1");
+    expect(memory?.sessionSummary).toContain("while configuring the CI upload");
+    expect(memory?.openItems[0]).toContain("Rotate");
+  });
 });

@@ -23,7 +23,7 @@ const GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz123456";
 let dir: string;
 const open: AgentDBMemory[] = [];
 
-function memoryAt(dbPath: string): AgentDBMemory {
+function memoryAt(dbPath: string, embeddingProvider?: (text: string) => Promise<number[]>): AgentDBMemory {
   const memory = new AgentDBMemory({
     dbPath,
     dimensions: 8,
@@ -33,6 +33,7 @@ function memoryAt(dbPath: string): AgentDBMemory {
     cacheSize: 10,
     enableAutoTiering: false,
     ephemeralTtlMs: 60_000,
+    ...(embeddingProvider ? { embeddingProvider } : {}),
   });
   open.push(memory);
   return memory;
@@ -104,5 +105,26 @@ describe("AgentDBAdapter write-backs against a real AgentDBMemory (MEM-17)", () 
     expect(entry.archived).toBe(true);
     expect(entry.content).toBe("prefer SystemBase for ECS systems");
     expect(JSON.stringify(entry.metadata)).not.toContain(GITHUB_TOKEN);
+  });
+});
+
+describe("AgentDBMemory store wrappers embed redacted text (MEM-21)", () => {
+  it("storeNote, storeConversation and cacheAnalysis never hand a raw secret to the embedding provider", async () => {
+    const embedded: string[] = [];
+    const memory = memoryAt(join(dir, "db"), async (text) => {
+      embedded.push(text);
+      return [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8];
+    });
+    expect((await memory.initialize()).kind).toBe("ok");
+
+    await memory.storeNote(`deploy key is ${GITHUB_TOKEN}`);
+    await memory.storeConversation("chat-1" as never, `user shared ${GITHUB_TOKEN}`);
+    await memory.cacheAnalysis(
+      { modules: [], systems: [], components: [], note: GITHUB_TOKEN, analyzedAt: new Date() } as never,
+      "/project",
+    );
+
+    expect(embedded.length).toBeGreaterThanOrEqual(3);
+    for (const text of embedded) expect(text).not.toContain(GITHUB_TOKEN);
   });
 });

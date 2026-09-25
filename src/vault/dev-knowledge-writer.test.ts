@@ -32,6 +32,26 @@ function makeRecordingWriter(): DevKnowledgeNoteWriter & { notes: Array<{ relPat
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('composeCompletionNote', () => {
+  it('redacts secrets from the note body and its file name (MEM-21)', () => {
+    // A key shape the prompt-injection pass alone does not catch.
+    const key = 'AKIAIOSFODNN7EXAMPLE';
+    const { relPath, content } = composeCompletionNote({
+      goal: `Upload the build with access key ${key}`,
+      success: false,
+      reason: `403 for ${key}`,
+      taskRunId: 'taskrun_secret',
+      filesTouched: [`notes/${key}.md`],
+      iterationsUsed: 2,
+      mutationsSinceVerify: 0,
+      errorCount: 1,
+      errorHistory: [`auth failed with ${key}`],
+      isoDate: '2026-06-25T10:00:00.000Z',
+    });
+    expect(content).not.toContain(key);
+    expect(relPath.toLowerCase()).not.toContain(key.toLowerCase());
+    expect(content).toContain('Upload the build with access key');
+  });
+
   it('produces a success note with all structured sections', () => {
     const { relPath, content } = composeCompletionNote({
       goal: 'Add jump ability to the player controller',

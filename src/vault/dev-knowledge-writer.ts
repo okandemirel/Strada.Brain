@@ -1,4 +1,5 @@
 import { sanitizePromptInjection } from '../agents/orchestrator-text-utils.js';
+import { redactSecrets } from '../security/secret-patterns.js';
 import { xxhash64Hex } from './hash.js';
 import type { VaultRegistry } from './vault-registry.js';
 import type { IVault } from './vault.interface.js';
@@ -83,6 +84,16 @@ function cap(text: string, max: number): string {
 }
 
 /**
+ * Free text bound for the note: secrets redacted (the note is written to disk,
+ * indexed and re-read into prompts, and the goal also names the file — MEM-21),
+ * then prompt-injection sanitized. Redacting before the cap keeps a cut from
+ * splitting a secret into an unrecognisable fragment.
+ */
+function noteText(text: string, max: number): string {
+  return sanitizePromptInjection(cap(redactSecrets(text.trim()), max));
+}
+
+/**
  * Compose the structured, prompt-injection-sanitized task-completion note.
  *
  * User goal text + error messages are persisted into a re-read, indexed corpus,
@@ -92,17 +103,17 @@ function cap(text: string, max: number): string {
  */
 export function composeCompletionNote(input: CompletionNoteInput): { relPath: string; content: string } {
   const iso = input.isoDate ?? new Date().toISOString();
-  const goal = sanitizePromptInjection(cap(input.goal.trim(), MAX_GOAL_CHARS));
-  const reason = input.reason ? sanitizePromptInjection(cap(input.reason.trim(), MAX_REASON_CHARS)) : '';
+  const goal = noteText(input.goal, MAX_GOAL_CHARS);
+  const reason = input.reason ? noteText(input.reason, MAX_REASON_CHARS) : '';
   const title = cap(goal.replace(/\s+/g, ' ').trim(), 80) || 'Task';
   const outcome = input.success ? 'success' : 'failure';
 
-  const files = input.filesTouched.slice(0, MAX_FILES).map((f) => sanitizePromptInjection(f));
+  const files = input.filesTouched.slice(0, MAX_FILES).map((f) => sanitizePromptInjection(redactSecrets(f)));
   const filesBlock = files.length
     ? files.map((f) => `- ${f}`).join('\n')
     : '- (none)';
 
-  const errors = input.errorHistory.slice(-MAX_ERRORS).map((e) => sanitizePromptInjection(cap(e.trim(), 200)));
+  const errors = input.errorHistory.slice(-MAX_ERRORS).map((e) => noteText(e, 200));
   const errorsBlock = errors.length ? errors.map((e) => `- ${e}`).join('\n') : '- (none)';
 
   const learning = input.success
