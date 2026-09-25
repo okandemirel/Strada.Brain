@@ -1711,13 +1711,16 @@ export class WebChannel
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy":
       "default-src 'self'; " +
-      "script-src 'self' https://cdn.jsdelivr.net blob: 'sha256-j7tZRAs1sYPSt7kkaOUXN3/joaG0F8R/arqlxeLc/50='; " +
+      // No third-party script or font origins: the CDN entry was for a Monaco
+      // editor the portal no longer ships, and in-browser speech-to-text was
+      // removed rather than widening this policy (WEB-4/WEB-15).
+      "script-src 'self' blob: 'sha256-j7tZRAs1sYPSt7kkaOUXN3/joaG0F8R/arqlxeLc/50='; " +
       "style-src 'self' 'unsafe-inline'; " +
       "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; " +
       "img-src 'self' data: blob:; " +
-      "font-src 'self' data: https://cdn.jsdelivr.net; " +
-      // 'self': the bundler emits the portal's module workers (speech-to-text,
-      // graph layout) as same-origin asset URLs, not blob: ones (WEB-4).
+      "font-src 'self' data:; " +
+      // 'self': the bundler emits the portal's module workers (graph layout)
+      // as same-origin asset URLs, not blob: ones (WEB-4).
       "worker-src 'self' blob:; " +
       "object-src 'none'; " +
       "base-uri 'none'; " +

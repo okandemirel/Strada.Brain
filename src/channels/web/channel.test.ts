@@ -2418,6 +2418,18 @@ describe("WebChannel CSP drift guard", () => {
     expect(workerSrc).toContain("'self'");
     expect(workerSrc).toContain("blob:");
   });
+
+  // The portal bundles everything it runs; a third-party origin in the policy
+  // would only widen what an injected tag could load.
+  it("allows no third-party script or font origin", () => {
+    const csp = (WebChannel as unknown as {
+      SECURITY_HEADERS: Record<string, string>;
+    }).SECURITY_HEADERS["Content-Security-Policy"];
+    for (const directive of ["script-src", "font-src"]) {
+      const sources = new RegExp(`${directive} ([^;]+)`).exec(csp)?.[1]?.split(/\s+/) ?? [];
+      expect(sources.filter((source) => /^https?:/.test(source)), directive).toEqual([]);
+    }
+  });
 });
 
 describe("GET /api/campaign — measured build status served in-daemon", () => {
