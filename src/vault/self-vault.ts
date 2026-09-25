@@ -1,6 +1,7 @@
 import { readdir, lstat } from 'node:fs/promises';
-import { join, relative, extname, basename, sep as pathSep } from 'node:path';
+import { join, relative, extname, basename, posix, sep as pathSep } from 'node:path';
 import { getLoggerSafe } from '../utils/logger.js';
+import { normalizeVaultRelPath } from './path-policy.js';
 import { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
 import { EXT_LANG } from './discovery.js';
 import type { VaultFile } from './vault.interface.js';
@@ -45,6 +46,21 @@ const SELF_INCLUDE_ROOTS = [
   'CLAUDE.md',
 ];
 
+/**
+ * The same rules discovery applies (SELF_INCLUDE_ROOTS, SELF_IGNORE,
+ * isSensitiveSelfPath), for a single vault-relative path. Discovery was the
+ * only place they ran, so the watchers, the write-hook and file-read's refresh
+ * could still index a secret fixture or a build directory (MEM-19).
+ */
+function isSelfIndexablePath(relPath: string): boolean {
+  const relPosix = posix.normalize(normalizeVaultRelPath(relPath));
+  const underRoot = SELF_INCLUDE_ROOTS.some((r) => relPosix === r || relPosix.startsWith(`${r}/`));
+  if (!underRoot) return false;
+  const segments = relPosix.split('/');
+  if (segments.some((segment) => SELF_IGNORE.has(segment))) return false;
+  return !isSensitiveSelfPath(relPosix, basename(relPosix));
+}
+
 async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> {
   let entries;
   try {
@@ -88,6 +104,14 @@ export class SelfVault extends UnityProjectVault {
 
   constructor(deps: UnityVaultDeps) {
     super(deps);
+  }
+
+  /** Every reindex path ends here: a path discovery would skip is dropped, never indexed. */
+  protected override async reindexFileInternal(relPath: string): Promise<boolean> {
+    if (!isSelfIndexablePath(relPath)) {
+      return this.deleteIndexedFileInternal(normalizeVaultRelPath(relPath));
+    }
+    return super.reindexFileInternal(relPath);
   }
 
   /**
