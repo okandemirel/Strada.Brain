@@ -8,7 +8,7 @@ import type { DiscoveredSkill } from "./skill-loader.js";
 import type { GateResult } from "./skill-gating.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { withTempDir } from "../test-helpers.js";
-import { approveWorkspaceSkill, openSkillTrustStore } from "./skill-trust.js";
+import { approveWorkspaceSkill, approveWorkspaceSkillInjection, openSkillTrustStore } from "./skill-trust.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -723,20 +723,36 @@ describe("SkillManager", () => {
     });
 
     it("carries the selection metadata (inject, triggers) on hot-load — the boot loader did, this path did not", async () => {
+      // SEC-12: `inject: always` from a workspace skill is honoured only once
+      // approved, so the approval is recorded (under a throwaway HOME) first.
       await withTempDir(async (dir) => {
-        const skillDir = join(dir, "deploy-notes");
-        await mkdir(skillDir, { recursive: true });
-        await writeFile(
-          join(skillDir, "SKILL.md"),
-          ["---", "name: deploy-notes", "version: 1.0.0", "description: deploy know-how", "inject: always", "triggers: [deploy, release]", "---", "", "# Deploy"].join("\n"),
-          "utf-8",
-        );
-        mockLoadSkillTools.mockResolvedValue([]);
-        mockCheckGates.mockResolvedValue({ passed: true, reasons: [] });
-        const mgr = new SkillManager();
-        const entry = await mgr.loadSingle(skillDir);
-        expect(entry!.manifest.inject).toBe("always");
-        expect(entry!.manifest.triggers).toEqual(["deploy", "release"]);
+        const savedHome = process.env["HOME"];
+        process.env["HOME"] = dir;
+        try {
+          const skillDir = join(dir, "skills", "deploy-notes");
+          await mkdir(skillDir, { recursive: true });
+          await writeFile(
+            join(skillDir, "SKILL.md"),
+            ["---", "name: deploy-notes", "version: 1.0.0", "description: deploy know-how", "inject: always", "triggers: [deploy, release]", "---", "", "# Deploy"].join("\n"),
+            "utf-8",
+          );
+          mockLoadSkillTools.mockResolvedValue([]);
+          mockCheckGates.mockResolvedValue({ passed: true, reasons: [] });
+
+          const unapproved = await new SkillManager().loadSingle(skillDir);
+          expect(unapproved!.status).toBe("active");
+          expect(unapproved!.manifest.inject).toBeUndefined();
+          expect(unapproved!.injectWithheld).toContain("strada skill trust deploy-notes");
+          expect(unapproved!.manifest.triggers).toEqual(["deploy", "release"]);
+
+          await approveWorkspaceSkillInjection(dir, skillDir);
+          const entry = await new SkillManager().loadSingle(skillDir);
+          expect(entry!.manifest.inject).toBe("always");
+          expect(entry!.injectWithheld).toBeUndefined();
+          expect(entry!.manifest.triggers).toEqual(["deploy", "release"]);
+        } finally {
+          process.env["HOME"] = savedHome;
+        }
       });
     });
 

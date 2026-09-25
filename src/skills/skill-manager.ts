@@ -19,9 +19,9 @@ import { parseFrontmatter } from "./frontmatter-parser.js";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
 import { readSkillConfig } from "./skill-config.js";
-import { assessWorkspaceSkillTrust, type SkillTrustVerdict } from "./skill-trust.js";
+import { assessWorkspaceSkillInjection, assessWorkspaceSkillTrust, type SkillTrustVerdict } from "./skill-trust.js";
 import { getLoggerSafe } from "../utils/logger.js";
-import type { SkillEntry, SkillRequirements, SkillStatus } from "./types.js";
+import type { SkillEntry, SkillManifest, SkillRequirements, SkillStatus } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ export class SkillManager {
     };
 
     // --- 3. per-skill checks --------------------------------------------
-    const candidates = new Map<string, { skill: DiscoveredSkill; unevaluated?: string }>();
+    const candidates = new Map<string, { skill: DiscoveredSkill; unevaluated?: string; injectWithheld?: string }>();
     for (const skill of discovered) {
       const { name } = skill.manifest;
       try {
@@ -154,18 +154,25 @@ export class SkillManager {
         // 1.15: a workspace-tier skill executes code from the project
         // checkout. Without an approval record outside the project it is not
         // imported at all.
+        let injectWithheld: string | null = null;
         if (skill.tier === "workspace") {
+          const root = projectRoot ?? dirname(dirname(skill.path));
           const trust = workspaceTrust.get(skill.path)
-            ?? await assessWorkspaceSkillTrust(projectRoot ?? dirname(dirname(skill.path)), skill.path, name);
+            ?? await assessWorkspaceSkillTrust(root, skill.path, name);
           if (!trust.trusted) {
             park(skill, "untrusted", trust.reason);
             logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
             continue;
           }
+          injectWithheld = await withheldInjectReason(skill, root, trust);
         }
 
         const unevaluated = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
-        candidates.set(name, { skill, ...(unevaluated ? { unevaluated } : {}) });
+        candidates.set(name, {
+          skill: injectWithheld ? { ...skill, manifest: withoutInjectAlways(skill.manifest) } : skill,
+          ...(unevaluated ? { unevaluated } : {}),
+          ...(injectWithheld ? { injectWithheld } : {}),
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         park(skill, "error", `Unexpected error: ${message}`);
@@ -186,7 +193,7 @@ export class SkillManager {
     }
 
     // --- 5. load + register the resolvable skills -----------------------
-    const registered = new Map<string, { skill: DiscoveredSkill; unevaluated?: string }>();
+    const registered = new Map<string, { skill: DiscoveredSkill; unevaluated?: string; injectWithheld?: string }>();
     for (const name of order) {
       const candidate = candidates.get(name)!;
       const { skill } = candidate;
@@ -219,7 +226,7 @@ export class SkillManager {
     }
 
     // --- 7. "active" only after initialize() succeeded ------------------
-    for (const [name, { skill, unevaluated }] of registered) {
+    for (const [name, { skill, unevaluated, injectWithheld }] of registered) {
       if (!this.registry.isInitialized(name)) {
         const reason = `Initialization failed: ${this.registry.getInitializationError(name) ?? "unknown"}`;
         park(skill, "error", reason);
@@ -237,6 +244,7 @@ export class SkillManager {
         tier: skill.tier,
         path: skill.path,
         ...(unevaluated ? { gateReason: unevaluated } : {}),
+        ...(injectWithheld ? { injectWithheld } : {}),
         ...(skill.body ? { body: skill.body } : {}),
       });
     }
@@ -292,7 +300,8 @@ export class SkillManager {
     }
 
     // Build a DiscoveredSkill and load tools
-    const manifest = {
+    const inject = data["inject"];
+    const manifest: SkillManifest = {
       name,
       version: String(data["version"] ?? "1.0.0"),
       description: String(data["description"] ?? ""),
@@ -304,7 +313,7 @@ export class SkillManager {
       // loader carried these; the hot-load path dropped them, so a skill
       // created mid-session with `inject: always` was withheld from every
       // prompt until the next boot (Codex review 2026-09-09).
-      ...(data["inject"] === "always" || data["inject"] === "on-mention" ? { inject: data["inject"] } : {}),
+      ...(inject === "always" || inject === "on-mention" ? { inject } : {}),
       ...(Array.isArray(data["triggers"])
         ? { triggers: (data["triggers"] as unknown[]).filter((t): t is string => typeof t === "string") }
         : {}),
@@ -353,6 +362,13 @@ export class SkillManager {
         logger.warn(`Skill "${name}" untrusted: ${trust.reason}`);
         return park("untrusted", trust.reason);
       }
+      // SEC-12: same `inject: always` rule as loadAll. create_skill records
+      // the approval for a skill it was asked to write that way.
+      const injectWithheld = await withheldInjectReason(
+        { manifest, tier: "workspace", path: skillPath },
+        dirname(dirname(skillPath)),
+        trust,
+      );
 
       let tools: ITool[];
       try {
@@ -378,11 +394,12 @@ export class SkillManager {
 
       const unevaluatedGate = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
       const entry: SkillEntry = {
-        manifest: manifest as SkillEntry["manifest"],
+        manifest: injectWithheld ? withoutInjectAlways(manifest) : manifest,
         status: "active",
         tier: "workspace",
         path: skillPath,
         ...(unevaluatedGate ? { gateReason: unevaluatedGate } : {}),
+        ...(injectWithheld ? { injectWithheld } : {}),
         ...(trimmedBody ? { body: trimmedBody } : {}),
       };
       this.entries.set(name, entry);
@@ -491,6 +508,38 @@ async function resolveShadowedSkills(
     winners.push(fallback);
   }
   return winners;
+}
+
+/**
+ * SEC-12: `inject: always` from a WORKSPACE skill puts repository content into
+ * every prompt, so it is honoured only for content approved for this project:
+ * an approved-code verdict (trusted with a hash) covers SKILL.md too; a
+ * body-only skill needs its own approval (assessWorkspaceSkillInjection).
+ * Returns why the request is not honoured (logged), or null. Fails closed.
+ */
+async function withheldInjectReason(
+  skill: DiscoveredSkill,
+  projectRoot: string,
+  trust: SkillTrustVerdict,
+): Promise<string | null> {
+  if (skill.tier !== "workspace" || skill.manifest.inject !== "always") return null;
+  if (trust.trusted && trust.sha256 !== null) return null;
+  let reason: string;
+  try {
+    const verdict = await assessWorkspaceSkillInjection(projectRoot, skill.path, skill.manifest.name);
+    if (verdict.approved) return null;
+    reason = verdict.reason;
+  } catch (err) {
+    reason = `its approval could not be read: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  getLoggerSafe().warn(`Skill "${skill.manifest.name}": inject: always is not honoured — ${reason}`);
+  return reason;
+}
+
+/** The manifest with its `inject` request dropped (the default on-mention policy applies). */
+function withoutInjectAlways(manifest: SkillManifest): SkillManifest {
+  const { inject: _inject, ...rest } = manifest;
+  return rest;
 }
 
 /** `requires` minus the `skills` gate, which loadAll measures itself. Same object when there is nothing to strip. */

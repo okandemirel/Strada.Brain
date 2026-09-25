@@ -56,6 +56,13 @@ export interface SkillEntry {
    * skill runs, but that requirement was never measured.
    */
   gateReason?: string;
+  /**
+   * SEC-12: set when the SKILL.md says `inject: always` but the skill is a
+   * workspace skill whose content is not approved for the project — why the
+   * body is NOT put into every prompt. `manifest.inject` is dropped with it,
+   * so the body is included only when a task names the skill or a trigger.
+   */
+  injectWithheld?: string;
   /** Markdown body content from SKILL.md — knowledge/instructions for the agent. */
   body?: string;
 }

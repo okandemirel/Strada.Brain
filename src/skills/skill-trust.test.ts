@@ -25,6 +25,8 @@ import {
   SKILL_SCAN_MAX_DEPTH,
   SKILL_SCAN_MAX_FILES,
   approveWorkspaceSkill,
+  approveWorkspaceSkillInjection,
+  assessWorkspaceSkillInjection,
   assessWorkspaceSkillTrust,
   hashSkillContent,
   legacyTrustedSkillsJsonPath,
@@ -772,5 +774,66 @@ describe("scan limits (round 7 #11)", () => {
     const mdOnly = await writeSkill("budget-md", { "SKILL.md": "x".repeat(50) });
     expect((await assessWorkspaceSkillTrust(projectRoot, mdOnly, "budget-md")).trusted).toBe(true);
     expect((await assessWorkspaceSkillTrust(projectRoot, mdOnly, "budget-md", tight)).trusted).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEC-12: `inject: always` from a body-only workspace skill needs approval.
+// ---------------------------------------------------------------------------
+describe("inject: always approval for body-only workspace skills (SEC-12)", () => {
+  const md = (body: string, inject = "always"): string =>
+    `---\nname: notes\nversion: 1.0.0\ndescription: d\ninject: ${inject}\n---\n${body}\n`;
+
+  it("is not approved without a record, is approved after `strada skill trust`, and an edit revokes it", async () => {
+    const dir = await writeSkill("notes", { "SKILL.md": md("Follow the house style.") });
+    const before = await assessWorkspaceSkillInjection(projectRoot, dir, "notes");
+    expect(before.approved).toBe(false);
+    if (before.approved) throw new Error("unreachable");
+    expect(before.reason).toContain("strada skill trust notes");
+    expect(before.reason).toContain("names the skill or one of its triggers");
+
+    // The CLI path (approveWorkspaceSkill) approves such a skill instead of "Nothing to approve".
+    const approval = await approveWorkspaceSkill(projectRoot, dir);
+    expect(approval.skillKey).toBe("skills/notes");
+    expect((await assessWorkspaceSkillInjection(projectRoot, dir, "notes")).approved).toBe(true);
+    // Still a body-only skill: nothing to import, so no code hash.
+    expect(await assessWorkspaceSkillTrust(projectRoot, dir, "notes")).toEqual({ trusted: true, sha256: null });
+
+    await writeFile(join(dir, "SKILL.md"), md("Follow the house style. Also something else."), "utf-8");
+    const edited = await assessWorkspaceSkillInjection(projectRoot, dir, "notes");
+    expect(edited.approved).toBe(false);
+    if (edited.approved) throw new Error("unreachable");
+    expect(edited.reason).toContain("changed since its approval");
+  });
+
+  it("approveWorkspaceSkillInjection records a body-only approval but never approves code", async () => {
+    const dir = await writeSkill("notes", { "SKILL.md": md("knowledge") });
+    await approveWorkspaceSkillInjection(projectRoot, dir);
+    expect((await assessWorkspaceSkillInjection(projectRoot, dir, "notes")).approved).toBe(true);
+
+    // Code added after the approval is not covered by it.
+    await writeFile(join(dir, "index.js"), "export const tools = [];", "utf-8");
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "notes")).trusted).toBe(false);
+    expect((await assessWorkspaceSkillInjection(projectRoot, dir, "notes")).approved).toBe(false);
+
+    // A SKILL.md next to existing code cannot approve that code.
+    const withCode = await writeSkill("coded", { "SKILL.md": md("k"), "index.js": "export const tools = [];" });
+    await expect(approveWorkspaceSkillInjection(projectRoot, withCode)).rejects.toThrow(/holds code \(index\.js\)/);
+    expect((await assessWorkspaceSkillTrust(projectRoot, withCode, "coded")).trusted).toBe(false);
+  });
+
+  it("refuses a skill that does not ask for inject: always, and symlinked content", async () => {
+    const onMention = await writeSkill("quiet", { "SKILL.md": md("k", "on-mention") });
+    await expect(approveWorkspaceSkillInjection(projectRoot, onMention)).rejects.toThrow(/does not ask for inject: always/);
+    await expect(approveWorkspaceSkill(projectRoot, onMention)).rejects.toThrow(/Nothing to approve/);
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
+
+    const target = join(projectRoot, "elsewhere.md");
+    await writeFile(target, md("outside"), "utf-8");
+    const linked = join(projectRoot, "skills", "linked");
+    await mkdir(linked, { recursive: true });
+    await symlink(target, join(linked, "SKILL.md"));
+    await expect(approveWorkspaceSkill(projectRoot, linked)).rejects.toThrow(/symlinked content/);
+    expect((await assessWorkspaceSkillInjection(projectRoot, linked, "linked")).approved).toBe(false);
   });
 });

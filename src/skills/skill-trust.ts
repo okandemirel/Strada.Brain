@@ -60,6 +60,12 @@
 // concurrent update, so a revocation is never resurrected by a concurrent
 // approval of another skill.
 //
+// SEC-12: the same record also approves `inject: always` for a BODY-ONLY
+// workspace skill (no entry point, so no code to approve). Its SKILL.md body
+// would otherwise go into every prompt straight from the checkout; the hash
+// covers SKILL.md like every other file, so an edit revokes the approval. See
+// assessWorkspaceSkillInjection / approveWorkspaceSkillInjection.
+//
 // An existing `~/.strada/trusted-skills.json` is imported ONCE (records +
 // migration marker in one transaction), then renamed to
 // `trusted-skills.json.imported` so it can never become a second authority; a
@@ -70,9 +76,10 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
-import { open, readdir, realpath } from "node:fs/promises";
+import { open, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { parseFrontmatter } from "./frontmatter-parser.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
 import { findOutsideImports, isSkillCodeFile } from "./skill-import-scan.js";
 
@@ -99,6 +106,11 @@ export type SkillTrustVerdict =
   | { readonly trusted: true; readonly sha256: string | null }
   /** `sha256` is null when the scan stopped at a limit (round 7 #11) and produced no hash. */
   | { readonly trusted: false; readonly reason: string; readonly sha256: string | null };
+
+/** SEC-12: whether a workspace skill's `inject: always` is honoured for this project. */
+export type SkillInjectionVerdict =
+  | { readonly approved: true }
+  | { readonly approved: false; readonly reason: string };
 
 /** Budget for one scan of a skill directory (round 7 #11). */
 export interface SkillScanLimits {
@@ -612,21 +624,59 @@ export async function assessWorkspaceSkillTrust(
       reason: `Workspace skill code is not approved for this project — ${howTo}`,
     };
   }
-  if (record.sha256 !== sha256 || (record.fileCount !== undefined && record.fileCount !== scan.fileCount)) {
-    const files = record.fileCount !== undefined ? `, ${record.fileCount} -> ${scan.fileCount} file(s)` : "";
-    return {
-      trusted: false,
-      sha256,
-      reason:
-        `Workspace skill content changed since approval (sha256 ${record.sha256.slice(0, 12)} -> ${sha256.slice(0, 12)}${files}) — ` +
-        howTo,
-    };
+  const changed = recordMismatch(record, sha256, scan.fileCount);
+  if (changed) {
+    return { trusted: false, sha256, reason: `Workspace skill content changed since approval (${changed}) — ${howTo}` };
   }
   return { trusted: true, sha256 };
 }
 
-function symlinkRefusal(symlinks: readonly string[]): string {
-  return `Workspace skill holds symlinked code, which cannot be approved (its target can change without the hash changing): ${symlinks.join(", ")}`;
+/** Why `record` does not cover the current content, or null when it does. */
+function recordMismatch(record: TrustedSkillRecord, sha256: string, fileCount: number): string | null {
+  if (record.sha256 === sha256 && (record.fileCount === undefined || record.fileCount === fileCount)) return null;
+  const files = record.fileCount !== undefined ? `, ${record.fileCount} -> ${fileCount} file(s)` : "";
+  return `sha256 ${record.sha256.slice(0, 12)} -> ${sha256.slice(0, 12)}${files}`;
+}
+
+/**
+ * SEC-12: `inject: always` puts a skill's SKILL.md body into the system prompt
+ * of every turn. From a workspace skill that is repository content acting as
+ * instructions, so — like workspace code — it needs an approval recorded
+ * outside the project for the directory's CURRENT content (the hash covers
+ * SKILL.md, so any edit revokes it). Until then the body is still available
+ * when a task names the skill or one of its triggers. A skill whose code is
+ * approved (assessWorkspaceSkillTrust with a hash) is covered by that record.
+ */
+export async function assessWorkspaceSkillInjection(
+  projectRoot: string,
+  skillPath: string,
+  skillName: string,
+  limits?: SkillScanLimits,
+): Promise<SkillInjectionVerdict> {
+  const scan = await scanSkillContent(skillPath, limits);
+  if (!scan) return { approved: false, reason: `Workspace skill ${skillPath} has no readable content` };
+  if (scan.exceeded) return { approved: false, reason: limitRefusal(scan.exceeded) };
+  if (scan.symlinks.length > 0) return { approved: false, reason: symlinkRefusal(scan.symlinks, "content") };
+  const projectId = await projectIdentity(projectRoot);
+  const howTo =
+    `run \`strada skill trust ${skillName}\` in ${projectId} to approve it; until then its body is included only ` +
+    "when a task names the skill or one of its triggers";
+  const record = readTrustedRecord(projectId, await skillKey(projectId, skillPath));
+  if (!record) {
+    return {
+      approved: false,
+      reason: `Workspace skill asks for inject: always (its body in every prompt), which is not approved for this project — ${howTo}`,
+    };
+  }
+  const changed = recordMismatch(record, scan.sha256, scan.fileCount);
+  if (changed) {
+    return { approved: false, reason: `Workspace skill content changed since its approval (${changed}) — ${howTo}` };
+  }
+  return { approved: true };
+}
+
+function symlinkRefusal(symlinks: readonly string[], what: "code" | "content" = "code"): string {
+  return `Workspace skill holds symlinked ${what}, which cannot be approved (its target can change without the hash changing): ${symlinks.join(", ")}`;
 }
 
 /** SEC-4: the approval hash covers only the skill directory, so the module graph it runs must stay inside it. */
@@ -678,7 +728,13 @@ export async function approveWorkspaceSkill(
     throw new Error(`Cannot approve ${skillPath}: ${limitRefusal(scan.exceeded)}`);
   }
   if (!scan || scan.entryPoint === null) {
-    throw new Error(`Nothing to approve: ${skillPath} has no entry point (${SKILL_ENTRY_POINTS.join("/")}), so no code of it is executed`);
+    // SEC-12: a body-only skill executes nothing, but `inject: always` still
+    // needs an approval (see assessWorkspaceSkillInjection).
+    if (scan && await declaresInjectAlways(skillPath)) return recordBodyOnlyApproval(projectRoot, skillPath, scan);
+    throw new Error(
+      `Nothing to approve: ${skillPath} has no entry point (${SKILL_ENTRY_POINTS.join("/")}), so no code of it is executed, ` +
+      "and it does not ask for inject: always",
+    );
   }
   if (!SKILL_ENTRY_POINTS.includes(scan.entryPoint)) {
     throw new Error(`Cannot approve ${skillPath}: ${entryCaseRefusal(scan.entryPoint)}`);
@@ -689,13 +745,63 @@ export async function approveWorkspaceSkill(
   if (scan.outsideImports.length > 0) {
     throw new Error(`Cannot approve ${skillPath}: ${outsideImportRefusal(scan.outsideImports)}`);
   }
-  const { sha256, fileCount } = scan;
+  return recordApproval(projectRoot, skillPath, scan.sha256, scan.fileCount);
+}
+
+/**
+ * SEC-12: approve `inject: always` for a BODY-ONLY workspace skill — what
+ * create_skill records for a skill the user asked it to write with
+ * `inject: always`. Unlike approveWorkspaceSkill it never approves code: a
+ * directory holding an entry point is refused (a SKILL.md written next to
+ * existing code must not approve that code), as is one that does not declare
+ * `inject: always`.
+ */
+export async function approveWorkspaceSkillInjection(
+  projectRoot: string,
+  skillPath: string,
+  limits?: SkillScanLimits,
+): Promise<ApprovalResult> {
+  const scan = await scanSkillContent(skillPath, limits);
+  if (!scan) throw new Error(`Nothing to approve: ${skillPath} has no readable content`);
+  if (scan.exceeded) throw new Error(`Cannot approve ${skillPath}: ${limitRefusal(scan.exceeded)}`);
+  if (scan.entryPoint !== null) {
+    throw new Error(
+      `Cannot approve ${skillPath} as knowledge only: it holds code (${scan.entryPoint}); review it and run \`strada skill trust\``,
+    );
+  }
+  if (!(await declaresInjectAlways(skillPath))) {
+    throw new Error(`Nothing to approve: ${skillPath} does not ask for inject: always`);
+  }
+  return recordBodyOnlyApproval(projectRoot, skillPath, scan);
+}
+
+async function recordBodyOnlyApproval(
+  projectRoot: string,
+  skillPath: string,
+  scan: SkillContentScan & { readonly exceeded: null },
+): Promise<ApprovalResult> {
+  if (scan.symlinks.length > 0) {
+    throw new Error(`Cannot approve ${skillPath}: ${symlinkRefusal(scan.symlinks, "content")}`);
+  }
+  return recordApproval(projectRoot, skillPath, scan.sha256, scan.fileCount);
+}
+
+async function recordApproval(projectRoot: string, skillPath: string, sha256: string, fileCount: number): Promise<ApprovalResult> {
   const projectId = await projectIdentity(projectRoot);
   const key = await skillKey(projectId, skillPath);
   withTrustStore((store) => {
     store.approve(projectId, key, { sha256, fileCount, approvedAtIso: new Date().toISOString() });
   });
   return { projectId, skillKey: key, sha256, fileCount, recordPath: trustedSkillsDbPath() };
+}
+
+/** Whether the skill's SKILL.md frontmatter says `inject: always`. */
+async function declaresInjectAlways(skillPath: string): Promise<boolean> {
+  try {
+    return parseFrontmatter(await readFile(join(skillPath, "SKILL.md"), "utf-8")).data["inject"] === "always";
+  } catch {
+    return false;
+  }
 }
 
 /** Remove the record for (project, skill). Returns whether one existed. */

@@ -9,6 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SkillManager } from "./skill-manager.js";
 import { approveWorkspaceSkill } from "./skill-trust.js";
+import { selectSkillKnowledge } from "../agents/skill-knowledge-selection.js";
+import { getLoggerSafe } from "../utils/logger.js";
+import type { SkillEntry } from "./types.js";
 import type { ITool } from "../agents/tools/tool.interface.js";
 
 vi.mock("../utils/logger.js", () => {
@@ -82,5 +85,55 @@ describe("workspace skills cannot shadow a bundled skill without approval (SEC-1
     const { entry } = await load();
     expect(entry?.tier).toBe("workspace");
     expect(entry?.status).toBe("active");
+  }, 30_000);
+});
+
+describe("inject: always from a workspace skill needs approval (SEC-12)", () => {
+  const UNRELATED = "fix the compile error in PlayerController";
+
+  async function writeHouseRules(body: string): Promise<string> {
+    const dir = join(projectRoot, "skills", "house-rules");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "SKILL.md"),
+      `---\nname: house-rules\nversion: 1.0.0\ndescription: rules\ninject: always\n---\n${body}\n`,
+      "utf-8",
+    );
+    return dir;
+  }
+
+  async function houseRules(): Promise<{ entry: SkillEntry; selected: (prompt: string) => boolean }> {
+    const entries = await new SkillManager().loadAll(projectRoot);
+    const entry = entries.find((e) => e.manifest.name === "house-rules")!;
+    const selected = (prompt: string): boolean =>
+      selectSkillKnowledge(entries, prompt).included.some((e) => e.manifest.name === "house-rules");
+    return { entry, selected };
+  }
+
+  it("an unapproved body-only skill is active on mention only, and says why", async () => {
+    await writeHouseRules(INJECTED);
+    const { entry, selected } = await houseRules();
+    expect(entry.status).toBe("active");
+    expect(entry.body).toContain(INJECTED);
+    expect(entry.manifest.inject).toBeUndefined();
+    expect(entry.injectWithheld).toContain("strada skill trust house-rules");
+    expect(selected(UNRELATED)).toBe(false);
+    expect(selected("apply the house-rules to this file")).toBe(true);
+    expect(vi.mocked(getLoggerSafe().warn)).toHaveBeenCalledWith(expect.stringContaining("inject: always is not honoured"));
+  }, 30_000);
+
+  it("once approved it is injected into every prompt, until its SKILL.md is edited", async () => {
+    const dir = await writeHouseRules(INJECTED);
+    await approveWorkspaceSkill(projectRoot, dir);
+    let loaded = await houseRules();
+    expect(loaded.entry.manifest.inject).toBe("always");
+    expect(loaded.entry.injectWithheld).toBeUndefined();
+    expect(loaded.selected(UNRELATED)).toBe(true);
+
+    await writeHouseRules(`${INJECTED} Also do something else.`);
+    loaded = await houseRules();
+    expect(loaded.entry.manifest.inject).toBeUndefined();
+    expect(loaded.entry.injectWithheld).toContain("changed since its approval");
+    expect(loaded.selected(UNRELATED)).toBe(false);
   }, 30_000);
 });

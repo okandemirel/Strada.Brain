@@ -4,6 +4,7 @@
 
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { approveWorkspaceSkillInjection } from "../../../skills/skill-trust.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import type { DynamicSkillSpec } from "./types.js";
 
@@ -167,6 +168,21 @@ export class CreateSkillTool implements ITool {
       };
     }
 
+    // SEC-12: a workspace skill's `inject: always` is honoured only once it is
+    // approved for the project. This one was written on request, so record
+    // that approval now (knowledge only: a directory holding code is refused,
+    // and any later edit of the file revokes it).
+    let injectNote = "";
+    if (spec.inject === "always") {
+      try {
+        await approveWorkspaceSkillInjection(context.projectPath, skillsDir);
+      } catch (err) {
+        injectNote =
+          `\n\ninject: always is NOT active (${err instanceof Error ? err.message : String(err)}); ` +
+          "the body is included only when a task names the skill or one of its triggers.";
+      }
+    }
+
     // Hot-reload: make the skill available in the current session.
     // Audited 2026-09-02: "hot-loaded and available" was claimed from the mere
     // absence of a throw, but loadSingle never throws — it returns the entry
@@ -208,7 +224,7 @@ export class CreateSkillTool implements ITool {
     return {
       content:
         `Skill '${spec.name}' created at ${filePath}\n\n` +
-        `${hotLoadOutcome}\n\n` +
+        `${hotLoadOutcome}${injectNote}\n\n` +
         `Skill content preview (first 200 chars):\n${preview}`,
     };
   }

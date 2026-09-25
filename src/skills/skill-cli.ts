@@ -32,12 +32,13 @@ export function registerSkillCommands(program: Command): void {
   // A workspace-tier skill (<project>/skills/<name>) executes code from the
   // checkout. It is not imported until its current executable content is
   // approved here; the record lives in ~/.strada/trusted-skills.db, keyed by
-  // the project's realpath, never inside the project.
+  // the project's realpath, never inside the project. A body-only skill that
+  // asks for `inject: always` is approved the same way (SEC-12).
   // =========================================================================
 
   skill
     .command("trust <name>")
-    .description("Approve a workspace skill's current code for this project (recorded outside the project)")
+    .description("Approve a workspace skill's current code, or its `inject: always` knowledge, for this project (recorded outside the project)")
     .option("--project <dir>", "Project root (default: current directory)")
     .action(async (name: string, opts: { project?: string }) => {
       const projectRoot = opts.project ?? process.cwd();

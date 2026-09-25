@@ -4,7 +4,25 @@ import { join } from "node:path";
 import { CreateSkillTool } from "./create-skill.js";
 import { discoverSkills } from "../../../skills/skill-loader.js";
 import { SkillManager } from "../../../skills/skill-manager.js";
+import { assessWorkspaceSkillTrust } from "../../../skills/skill-trust.js";
 import { withTempDir, createToolContext } from "../../../test-helpers.js";
+
+/** A temp project that is also HOME, so trust records (~/.strada) stay inside it. */
+async function withTempHome(fn: (dir: string) => Promise<void>): Promise<void> {
+  await withTempDir(async (dir) => {
+    const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+    process.env["HOME"] = dir;
+    process.env["USERPROFILE"] = dir;
+    try {
+      await fn(dir);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+}
 
 describe("CreateSkillTool", () => {
   const tool = new CreateSkillTool();
@@ -18,7 +36,7 @@ describe("CreateSkillTool", () => {
   });
 
   it("writes the selection fields it advertises (inject, triggers) and the loader reads them back (Codex review 2026-09-09)", async () => {
-    await withTempDir(async (dir) => {
+    await withTempHome(async (dir) => {
       const ctx = createToolContext({ projectPath: dir, workingDirectory: dir });
       const result = await tool.execute(
         { name: "deploy-notes", version: "1.0.0", description: "deploy know-how", content: "# Deploy", inject: "always", triggers: ["deploy", "release"] },
@@ -31,6 +49,43 @@ describe("CreateSkillTool", () => {
       const found = (await discoverSkills(dir)).find((s) => s.manifest.name === "deploy-notes");
       expect(found?.manifest.inject).toBe("always");
       expect(found?.manifest.triggers).toEqual(["deploy", "release"]);
+    });
+  });
+
+  it("records the inject: always approval the user asked for, so the hot-load and the next boot honour it (SEC-12)", async () => {
+    await withTempHome(async (dir) => {
+      const manager = new SkillManager();
+      const ctx = createToolContext({
+        projectPath: dir,
+        workingDirectory: dir,
+        onSkillCreated: (skillPath) => manager.loadSingle(skillPath),
+      });
+      const result = await tool.execute(
+        { name: "house-style", version: "1.0.0", description: "style", content: "# Style", inject: "always" },
+        ctx,
+      );
+      expect(result.content).toContain("hot-loaded and is available");
+      expect(result.content).not.toContain("NOT active");
+      expect(manager.getEntries().find((e) => e.manifest.name === "house-style")?.manifest.inject).toBe("always");
+
+      const booted = (await new SkillManager().loadAll(dir)).find((e) => e.manifest.name === "house-style");
+      expect(booted?.manifest.inject).toBe("always");
+      expect(booted?.injectWithheld).toBeUndefined();
+    });
+  });
+
+  it("does not approve code already sitting in the skill directory (SEC-12)", async () => {
+    await withTempHome(async (dir) => {
+      const skillDir = join(dir, "skills", "planted");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, "index.js"), "export const tools = [];\n");
+      const ctx = createToolContext({ projectPath: dir, workingDirectory: dir });
+      const result = await tool.execute(
+        { name: "planted", version: "1.0.0", description: "d", content: "body", inject: "always" },
+        ctx,
+      );
+      expect(result.content).toContain("inject: always is NOT active");
+      expect((await assessWorkspaceSkillTrust(dir, skillDir, "planted")).trusted).toBe(false);
     });
   });
 
