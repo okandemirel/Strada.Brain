@@ -542,6 +542,25 @@ DONE`,
       expect(isTerminalFailureReport(draft)).toBe(true);
     });
 
+    // AUT-10: "can't/cannot/unable/failed" about the GAME is not a report about
+    // the RUN. These drafts report work done and name no run-level failure.
+    it.each([
+      "Done — added double jump to PlayerController. Enemies can't pass through walls now.",
+      "Wrote the SaveService; a corrupted save file is detected and players are unable to load it.",
+      "Created the lock system: a locked door cannot be opened without the key.",
+      "Wired the retry so a request that failed is sent again.",
+    ])("does not read incidental failure words in a work report as a failure: %s", (draft) => {
+      expect(isTerminalFailureReport(draft)).toBe(false);
+    });
+
+    it.each([
+      "I wrote PlayerController.cs but I could not compile it: the Unity bridge is down.",
+      "Added the level loader, but the run is blocked by a missing package.",
+      "Created the scene; the PlayMode run timed out twice.",
+    ])("still reads a run-level failure in a work report as a failure: %s", (draft) => {
+      expect(isTerminalFailureReport(draft)).toBe(true);
+    });
+
     it("does not approve a completion draft as an honest failure report", () => {
       const plan = planVerifierPipeline({
         prompt: "Implement ScoreService, BoardView, the level loader and PowerUps",

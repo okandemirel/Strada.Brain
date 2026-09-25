@@ -476,6 +476,17 @@ export function collectVerifierPipelineEvidence(params: {
   };
 }
 
+/** Failure phrasing that is about the run's own outcome, not about the thing it built. */
+const RUN_FAILURE_PATTERNS: readonly RegExp[] = [
+  /\b(?:i|we)\s+(?:could\s+not|couldn'?t|can'?t|cannot|was\s+unable|were\s+unable|am\s+unable|are\s+unable|failed|did\s+not\s+manage|didn'?t\s+manage)\b/,
+  /\bbut\s+(?:could\s+not|couldn'?t|can'?t|cannot|was\s+unable|failed\s+to)\b/,
+  /\b(?:is|am|are|was|were|remains?|still)\s+blocked\b/,
+  /\bblocked\s+(?:by|on|until)\b/,
+  /\btimed\s+out\b/,
+  /\bmanual\s+intervention\b/,
+  /\bunable\s+to\s+(?:complete|finish|fix|build|compile|verify|run|proceed|continue|deliver)\b/,
+];
+
 export function isTerminalFailureReport(text: string | null | undefined): boolean {
   if (!text) {
     return false;
@@ -531,7 +542,14 @@ export function isTerminalFailureReport(text: string | null | undefined): boolea
   const mentionsFailure = failurePatterns.some((pattern) => pattern.test(normalized));
   const claimsSuccess = successPatterns.some((pattern) => pattern.test(normalized));
   const keepsWorking = continuationPatterns.some((pattern) => pattern.test(normalized));
-  return mentionsFailure && !claimsSuccess && !keepsWorking;
+  if (!mentionsFailure || claimsSuccess || keepsWorking) {
+    return false;
+  }
+  // A failure word alone does not make a report about the RUN: "added double
+  // jump; enemies can't pass through walls now" describes the game. When the
+  // draft reports work done, only a phrase whose subject is the run itself
+  // ("I could not", "is blocked", "timed out") makes it a failure report.
+  return RUN_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized)) || !draftClaimsWorkDone(text);
 }
 
 /**
