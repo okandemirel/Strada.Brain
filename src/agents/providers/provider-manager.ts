@@ -27,7 +27,7 @@ import type {
   ProviderCatalogHealth,
 } from "./provider-types.js";
 import { ProviderCatalog, type ProviderCatalogSnapshot } from "./provider-catalog.js";
-import { canonicalizeProviderName, toBareModelId } from "./provider-identity.js";
+import { canonicalizeProviderName, providerRecordKey, toBareModelId } from "./provider-identity.js";
 
 // Re-export shared types so existing consumers of this module are unaffected
 export type {
@@ -431,7 +431,9 @@ export class ProviderManager {
    * unknown the object is returned unchanged (keeps the common shape minimal).
    */
   private withHealth(info: ProviderActiveInfo): ProviderActiveInfo {
-    const entry = ProviderHealthRegistry.getInstance().getEntry(info.providerName);
+    // Looked up under the key the provider records under: a preference saved
+    // as "anthropic" names the provider whose health is kept as "claude".
+    const entry = ProviderHealthRegistry.getInstance().getEntry(providerRecordKey(info.providerName));
     if (!entry || entry.status === "healthy") {
       return info;
     }

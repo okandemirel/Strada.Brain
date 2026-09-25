@@ -100,3 +100,17 @@ export function canonicalizeProviderName(value: string | null | undefined): stri
 
   return normalized;
 }
+
+/**
+ * The key a provider's own records (health, catalog rows) live under.
+ *
+ * "anthropic" and "claude" are both accepted config names and both canonical,
+ * but a ClaudeProvider always reports itself as "claude", so that is where its
+ * records land. A lookup by the other spelling found nothing and read an
+ * outage as healthy. Folding here, at lookup time, keeps every config name
+ * valid without renaming anything.
+ */
+export function providerRecordKey(name: string): string {
+  const canonical = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+  return canonical === "anthropic" ? "claude" : canonical;
+}

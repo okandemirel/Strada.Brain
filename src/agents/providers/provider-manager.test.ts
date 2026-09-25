@@ -421,6 +421,27 @@ describe("ProviderManager", () => {
     expect(active.healthError).toContain("not supported");
   });
 
+  it("reads a preference saved as \"anthropic\" against the health Claude records as \"claude\" (PRV-18)", () => {
+    const manager = new ProviderManager(
+      makeProvider("chain(anthropic)"),
+      { anthropic: { apiKey: "anthropic-key" } },
+      {},
+      "/tmp/provider-manager-test",
+      ["anthropic"],
+    );
+    manager.setPreference("chat-1", "anthropic");
+
+    // ClaudeProvider.name is always "claude", so that is where its bench lands.
+    ProviderHealthRegistry.getInstance().recordQuotaExhausted("claude", "HTTP 429: usage quota exhausted");
+
+    const active = manager.getActiveInfo("chat-1");
+    // The displayed name keeps the user's spelling; only the lookup folds it.
+    expect(active.providerName).toBe("anthropic");
+    expect(active.healthStatus).toBeDefined();
+    expect(active.healthStatus).not.toBe("healthy");
+    expect(active.healthError).toContain("quota");
+  });
+
   it("limits execution candidates to the configured default chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(

@@ -11,7 +11,7 @@
  * outage measured as "someone is free" and retries fired into the wall.
  */
 import { ProviderHealthRegistry } from "./provider-health.js";
-import { canonicalizeProviderName } from "./provider-identity.js";
+import { providerRecordKey } from "./provider-identity.js";
 
 const liveChainMemberNames = new Set<string>();
 
@@ -23,8 +23,7 @@ const liveChainMemberNames = new Set<string>();
  * entry and every outage measured as "someone is free".
  */
 function memberKey(name: string): string {
-  const canonical = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
-  return canonical === "anthropic" ? "claude" : canonical;
+  return providerRecordKey(name);
 }
 
 /** Called by bootstrap once the provider chain's final order is known. */
