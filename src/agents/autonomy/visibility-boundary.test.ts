@@ -121,6 +121,52 @@ describe("decideInteractionBoundary", () => {
     expect(decision.gate).toContain("internal progress memo");
   });
 
+  // AUT-11: the memo rule matched any "will/should … check/test/run" plus an
+  // artifact noun, so a completion report that describes what the GAME does at
+  // runtime, or what the USER can do next, was held back as a progress memo.
+  const workEvidence: CompletionReviewEvidence = {
+    ...baseEvidence,
+    totalStepCount: 4,
+    mutationStepCount: 2,
+    verificationStepCount: 1,
+  };
+
+  it.each([
+    "Done. Implemented the win condition: GameSystem will now check the board after every move and fire LevelComplete. Compile is clean.",
+    "Added the pause menu. To try it, you should open the Main scene and press Escape to test it.",
+    "Wired the HUD system; the ScoreView will read the score from the service each frame.",
+  ])("surfaces a completion report that describes runtime behaviour: %s", (draft) => {
+    const decision = decideInteractionBoundary({
+      prompt: "Add the win condition to the board game system",
+      workerDraft: draft,
+      visibleDraft: draft,
+      task: task("code-generation"),
+      evidence: workEvidence,
+      canInspectLocally: true,
+      availableToolNames: ["file_read", "file_edit", "dotnet_build"],
+    });
+
+    expect(decision.kind).toBe("final_answer");
+  });
+
+  it.each([
+    "Edited GameSystem.cs. I still need to run the build and check the errors.",
+    "Need to verify the scene wiring in Main.unity before this is done.",
+    "We'll rerun the tests for the board system next.",
+  ])("still holds the agent's own next-step memo internal: %s", (draft) => {
+    const decision = decideInteractionBoundary({
+      prompt: "Add the win condition to the board game system",
+      workerDraft: draft,
+      visibleDraft: draft,
+      task: task("code-generation"),
+      evidence: workEvidence,
+      canInspectLocally: true,
+      availableToolNames: ["file_read", "file_edit", "dotnet_build"],
+    });
+
+    expect(decision.kind).toBe("internal_continue");
+  });
+
   it("keeps milestone handoff memos internal instead of surfacing them as progress narration", () => {
     const decision = decideInteractionBoundary({
       prompt: "Analyze the project fully and implement the improvement plan",

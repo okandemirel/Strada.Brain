@@ -56,8 +56,13 @@ const RISKY_IRREVERSIBLE_RE =
   /\b(?:irreversible|destructive|delete|drop|wipe|reset|migrate|deploy)\b.{0,40}\b(?:approval|permission|confirm|confirmation)\b|\b(?:need|requires?)\b.{0,40}\b(?:approval|permission|confirmation)\b/iu;
 const MANUAL_INTERVENTION_RE =
   /\bmanual(?:ly)?\s+intervention\b|\brestore(?:d)?\b.{0,40}\bversion control\b|\brecreate(?:d)?\b.{0,20}\bproject\b/iu;
+// A progress memo is the AGENT saying what it still has to do: the modal's
+// subject is "I"/"we" ("I need to", "we'll"), or it is elided at the
+// start of a sentence ("Need to verify…"). Any other subject describes the
+// product or the user — "GameSystem will now check the board", "you should run
+// the game to test it" — and a completion report that says so is not a memo.
 const LOCAL_PROGRESS_MEMO_RE =
-  /\b(?:need(?:s)? to|must|should|have to|will|going to)\b.{0,50}\b(?:inspect|read|open|check|search|review|analy[sz]e|investigat(?:e|ing)|trace|run|rerun|test|build|compile|profile|instrument|compare|verify)\b/iu;
+  /(?:\b(?:i|we)(?:['’]ll\b|\s+(?:still\s+|also\s+|now\s+|first\s+|then\s+|just\s+)?(?:need(?:s)?\s+to|must|should|have\s+to|will|am\s+going\s+to|are\s+going\s+to)\b)|\b(?:i['’]m|we['’]re)\s+going\s+to\b|(?:^|[.!?;:\n]\s*)(?:still\s+|next,?\s+|then\s+)?(?:need(?:s)?\s+to|must|should|have\s+to|will|going\s+to)\b).{0,50}\b(?:inspect|read|open|check|search|review|analy[sz]e|investigat(?:e|ing)|trace|run|rerun|test|build|compile|profile|instrument|compare|verify)\b/iu;
 const INTERNAL_MILESTONE_HANDOFF_RE =
   /\b(?:next steps? available|ready for whichever direction|ready for whatever direction|want me to start on|which direction(?: do)? you prefer|which path(?: do)? you prefer|should i continue|start on the .* implementation|implementation or the .* integration)\b/iu;
 const PLAN_SECTION_RE =
