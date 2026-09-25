@@ -15,41 +15,29 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       output: {
+        // Name only the small, always-needed vendor groups. Everything else is
+        // left to Rollup, so a package lands with the lazy panel that imports
+        // it: a catch-all 'vendor' chunk pulled three.js, shiki, KaTeX and the
+        // graph libraries into every page load (WEB-13).
         manualChunks(id) {
-          if (!id.includes('node_modules')) {
+          if (!id.includes('/node_modules/')) {
             return undefined
           }
 
-          if (
-            id.includes('react-markdown')
-            || id.includes('remark-gfm')
-            || id.includes('rehype-highlight')
-            || id.includes('highlight.js')
-            || id.includes('mdast')
-            || id.includes('micromark')
-            || id.includes('unist')
-            || id.includes('hast')
-          ) {
-            return 'markdown-vendor'
-          }
-
-          if (id.includes('tldraw') || id.includes('@tldraw')) {
-            return 'tldraw-vendor'
-          }
-
-          if (id.includes('react-router')) {
+          if (id.includes('/node_modules/react-router')) {
             return 'router-vendor'
           }
 
-          if (id.includes('/react/') || id.includes('react-dom')) {
+          // Exact package roots: '/react/' also matched '@xyflow/react/'.
+          if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) {
             return 'react-vendor'
           }
 
-          if (id.includes('class-variance-authority') || id.includes('clsx') || id.includes('tailwind-merge') || id.includes('sonner')) {
+          if (/\/node_modules\/(class-variance-authority|clsx|tailwind-merge|sonner)\//.test(id)) {
             return 'ui-vendor'
           }
 
-          return 'vendor'
+          return undefined
         },
       },
     },
