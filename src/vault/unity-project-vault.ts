@@ -69,6 +69,13 @@ export class UnityProjectVault implements IVault {
   /** Protected so subclasses that override init() keep the idempotence guard
    *  (audited 2026-09-02: SelfVault could not set it and re-walked per call). */
   protected initialized = false;
+  /**
+   * Boot and the dashboard run the first index in the background, so dispose()
+   * and other callers can arrive while it is still running.
+   */
+  private initInFlight: Promise<void> | null = null;
+  /** Set by dispose(): an index pass stops at its next file and no watcher starts. */
+  protected disposed = false;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
   /** Serializes canvas regenerations (SelfVault runs one watcher per root, plus sync). */
@@ -95,18 +102,38 @@ export class UnityProjectVault implements IVault {
   }
 
   async init(): Promise<void> {
+    // A vault_init while the background index runs joins it instead of
+    // starting a second full walk.
+    if (this.initInFlight) return this.initInFlight;
+    const run = this.initOnce();
+    this.initInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.initInFlight === run) this.initInFlight = null;
+    }
+  }
+
+  /** One index pass; init() joins concurrent callers onto it. */
+  protected async initOnce(): Promise<void> {
     // Idempotent ONLY while a watcher is live: the watcher owns freshness then,
     // so re-invoking vault_init on a running vault used to re-walk the entire
     // tree per call — a full disk pass each time on days-long autonomous runs.
     // Without a watcher nothing maintains freshness, so init() must still
     // reconcile the index against the disk (files may have been deleted or
     // added while the vault was offline).
-    if (this.initialized && this.watcher) return;
+    if (this.disposed || (this.initialized && this.watcher)) return;
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
     this.reconcileEmbeddingMode();
     await this.fullIndex();
-    this.initialized = true;
+    // A pass cut short by dispose() did not index the tree.
+    if (!this.disposed) this.initialized = true;
+  }
+
+  /** Resolves once an in-flight init() has settled; never rejects. */
+  protected async waitForInit(): Promise<void> {
+    await this.initInFlight?.catch(() => undefined);
   }
 
   /**
@@ -126,12 +153,17 @@ export class UnityProjectVault implements IVault {
   }
 
   async sync(): Promise<{ changed: number; durationMs: number }> {
+    // A sync during the background index waits for it rather than walking
+    // the same tree concurrently.
+    await this.waitForInit();
     const started = Date.now();
     const changed = await this.reindexChanged();
     return { changed, durationMs: Date.now() - started };
   }
 
   async rebuild(): Promise<void> {
+    // Not under a running index pass: it would carry on into the new store.
+    await this.waitForInit();
     this.store.close();
     await unlink(this.dbPath).catch(() => undefined);
     this.store = new SqliteVaultStore(this.dbPath);
@@ -264,7 +296,8 @@ export class UnityProjectVault implements IVault {
   }
 
   async startWatch(debounceMs = 800): Promise<void> {
-    if (this.watcher) return;
+    // After dispose() (a background init finishing late) a watcher would never be stopped.
+    if (this.watcher || this.disposed) return;
     // Dynamic import — watcher.ts is a future Task 9 file; will throw if not yet present.
     let WatcherCtor: new (opts: {
       root: string; debounceMs: number; onBatch: (paths: string[]) => Promise<void>;
@@ -279,7 +312,7 @@ export class UnityProjectVault implements IVault {
     // guard above inside the import window, and the first watcher instance is
     // then overwritten — orphaned with live fds, unreachable by stopWatch()
     // forever. SelfVault defends this exact race with the same double-check.
-    if (this.watcher) return;
+    if (this.watcher || this.disposed) return;
     this.watcher = new WatcherCtor({
       root: this.rootPath,
       debounceMs,
@@ -310,7 +343,13 @@ export class UnityProjectVault implements IVault {
     await this.dispose();
   }
 
+  /**
+   * Stops an in-flight index pass at its next file before the store closes.
+   * Closing under it made every remaining file fail against a closed database.
+   */
   async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.waitForInit();
     await this.stopWatch();
     this.store.close();
   }
@@ -564,6 +603,9 @@ export class UnityProjectVault implements IVault {
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) {
+      // dispose() waits for this pass: stop at the next file instead of
+      // indexing the rest of the tree first. The next init reconciles.
+      if (this.disposed) return;
       try {
         if (await this.reindexFile(f.path)) changed.push(f.path);
       } catch (err) {
@@ -572,6 +614,7 @@ export class UnityProjectVault implements IVault {
         });
       }
     }
+    if (this.disposed) return;
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);

@@ -255,6 +255,10 @@ export class VaultRegistry {
     // loop, and every vault after it leaked its watcher fds and SQLite handles
     // while the map clears below were skipped too.
     const vaults = [...this.vaults.values()];
+    // Out of the map before the disposes, as unregister() does: dispose waits
+    // for a background index to stop, and that index's continuation checks
+    // the registry to decide whether to start watchers.
+    this.vaults.clear();
     const settled = await Promise.allSettled(vaults.map((v) => v.dispose()));
     for (const [index, result] of settled.entries()) {
       if (result.status === 'rejected') {

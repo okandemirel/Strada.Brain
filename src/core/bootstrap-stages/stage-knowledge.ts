@@ -138,7 +138,53 @@ import { createHash } from "node:crypto";
 import { UnityProjectVault } from "../../vault/unity-project-vault.js";
 import { discoverUnityRoots } from "../../vault/discovery.js";
 import type { VaultRegistry } from "../../vault/vault-registry.js";
+import type { IVault } from "../../vault/vault.interface.js";
 import type { EmbeddingProvider, VectorStore } from "../../vault/embedding-adapter.js";
+import { SelfVault } from "../../vault/self-vault.js";
+import { ObsidianVault } from "../../vault/obsidian-vault.js";
+import { getLoggerSafe } from "../../utils/logger.js";
+
+/** A vault registered at boot whose initial index runs in the background. */
+export interface VaultStartup<V extends IVault> {
+  vault: V;
+  /**
+   * Settles once the initial index (and the watchers, for a watched vault) is
+   * up: true when it is, false when the index failed or the vault was disposed
+   * first. Never rejects.
+   */
+  ready: Promise<boolean>;
+}
+
+/**
+ * Register first and index in the background: an initial walk of a large
+ * tree held up startup for minutes. Registered, the vault is reachable by
+ * shutdown's disposeAll (which stops the walk) and reports "indexing" until it
+ * is done; queries meanwhile see what is indexed so far.
+ */
+function indexInBackground<V extends IVault>(
+  registry: VaultRegistry,
+  vault: V,
+  label: string,
+  afterInit?: () => Promise<void>,
+): VaultStartup<V> {
+  registry.register(vault);
+  const init = vault.init();
+  registry.trackInit(vault, init);
+  const ready = (async () => {
+    await init;
+    // Disposed or replaced while indexing: watchers started now would never be stopped.
+    if (registry.get(vault.id) !== vault) return false;
+    await afterInit?.();
+    getLoggerSafe().info(`[vault] async init complete for ${vault.id}`);
+    return true;
+  })().catch((err: unknown) => {
+    getLoggerSafe().warn(`[vault] ${label} initialization failed for ${vault.id}`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  });
+  return { vault, ready };
+}
 
 export interface InitVaultsInput {
   config: {
@@ -150,12 +196,14 @@ export interface InitVaultsInput {
   vectorStore: VectorStore;
 }
 
-export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<void> {
-  if (!input.config.vault?.enabled) return;
+export async function initVaultsFromBootstrap(
+  input: InitVaultsInput,
+): Promise<VaultStartup<UnityProjectVault> | undefined> {
+  if (!input.config.vault?.enabled) return undefined;
   const projectPath = input.config.unityProjectPath;
-  if (!projectPath) return;
+  if (!projectPath) return undefined;
   const roots = await discoverUnityRoots(projectPath);
-  if (!roots) return;
+  if (!roots) return undefined;
   const hash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
   const vault = new UnityProjectVault({
     id: `unity:${hash}`,
@@ -163,17 +211,11 @@ export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<v
     embedding: input.embedding,
     vectorStore: input.vectorStore,
   });
-  await vault.init();
-  // Register BEFORE startWatch, same reason as SelfVault below: a watcher
-  // start failure must not orphan already-started watchers outside the
-  // registry where nothing can stop them.
-  input.vaultRegistry.register(vault);
-  await vault.startWatch(input.config.vault.debounceMs ?? 800);
+  // Registered before the watchers start, so a watcher start failure cannot
+  // orphan already-started watchers outside the registry.
+  const debounceMs = input.config.vault.debounceMs ?? 800;
+  return indexInBackground(input.vaultRegistry, vault, "Unity project vault", () => vault.startWatch(debounceMs));
 }
-
-import { SelfVault } from "../../vault/self-vault.js";
-import { ObsidianVault } from "../../vault/obsidian-vault.js";
-import { getLoggerSafe } from "../../utils/logger.js";
 
 export interface InitSelfVaultInput {
   config: {
@@ -190,15 +232,7 @@ export interface InitSelfVaultInput {
   repoRoot: string;
 }
 
-export interface SelfVaultStartup {
-  vault: SelfVault;
-  /**
-   * Settles once the initial index and the watchers are up: true when they
-   * are, false when the index failed or the vault was disposed first. Never
-   * rejects.
-   */
-  ready: Promise<boolean>;
-}
+export type SelfVaultStartup = VaultStartup<SelfVault>;
 
 export async function initSelfVaultFromBootstrap(
   input: InitSelfVaultInput,
@@ -213,28 +247,9 @@ export async function initSelfVaultFromBootstrap(
     embedding: input.embedding,
     vectorStore: input.vectorStore,
   });
-  // Register first and index in the background, like the framework vaults:
-  // the initial walk of the install root took minutes on a cold checkout and
-  // held up startup. Registered, the vault is reachable by shutdown's
-  // disposeAll (which stops the walk) and reports "indexing" until it is done;
-  // queries meanwhile see what is indexed so far.
-  input.vaultRegistry.register(vault);
-  const init = vault.init();
-  input.vaultRegistry.trackInit(vault, init);
-  const ready = (async () => {
-    await init;
-    // Disposed or replaced while indexing: watchers started now would never be stopped.
-    if (input.vaultRegistry.get(vault.id) !== vault) return false;
-    await vault.startWatch(input.config.vault?.debounceMs ?? 800);
-    getLoggerSafe().info(`[vault] async init complete for ${vault.id}`);
-    return true;
-  })().catch((err: unknown) => {
-    getLoggerSafe().warn(`[vault] SelfVault initialization failed for ${vault.id}`, {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  });
-  return { vault, ready };
+  // The initial walk of the install root took minutes on a cold checkout.
+  const debounceMs = input.config.vault?.debounceMs ?? 800;
+  return indexInBackground(input.vaultRegistry, vault, "SelfVault", () => vault.startWatch(debounceMs));
 }
 
 export interface InitObsidianVaultInput {
@@ -252,9 +267,11 @@ export interface InitObsidianVaultInput {
   vectorStore: VectorStore;
 }
 
-export async function initObsidianVaultFromBootstrap(input: InitObsidianVaultInput): Promise<void> {
+export async function initObsidianVaultFromBootstrap(
+  input: InitObsidianVaultInput,
+): Promise<VaultStartup<ObsidianVault> | undefined> {
   const obsidian = input.config.obsidian;
-  if (!obsidian?.enabled || !obsidian.vaultPath) return;
+  if (!obsidian?.enabled || !obsidian.vaultPath) return undefined;
   const hash = createHash("sha1").update(obsidian.vaultPath).digest("hex").slice(0, 8);
   const vault = new ObsidianVault({
     id: `obsidian:${hash}`,
@@ -267,6 +284,7 @@ export async function initObsidianVaultFromBootstrap(input: InitObsidianVaultInp
       certPath: obsidian.certPath,
     },
   });
-  await vault.init();
-  input.vaultRegistry.register(vault);
+  // The init waits on the Obsidian API health check (up to its request
+  // timeout) before it indexes the notes. No watcher: sync() refreshes it.
+  return indexInBackground(input.vaultRegistry, vault, "ObsidianVault");
 }

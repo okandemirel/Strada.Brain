@@ -8,9 +8,11 @@ import { createFakeEmbedding, createFakeVectorStore, createTempDirTracker } from
 import type { EmbeddingProvider, VectorStore } from './embedding-adapter.js';
 import type { IVault } from './vault.interface.js';
 
+const { logWarn } = vi.hoisted(() => ({ logWarn: vi.fn() }));
+
 vi.mock('../utils/logger.js', () => ({
-  getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
-  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => ({ info: vi.fn(), warn: logWarn, error: vi.fn(), debug: vi.fn() }),
+  getLoggerSafe: () => ({ info: vi.fn(), warn: logWarn, error: vi.fn(), debug: vi.fn() }),
 }));
 
 /** In-memory VectorStore that records live ids so we can assert vector lifecycle. */
@@ -587,5 +589,97 @@ describe("UnityProjectVault FTS query escaping (multi-word + injection)", () => 
     } finally {
       await vault.dispose().catch(() => undefined);
     }
+  });
+});
+
+describe('UnityProjectVault initial index running in the background', () => {
+  // Boot (and the dashboard's POST /api/vaults) index in the background, so
+  // shutdown, vault_init and vault_sync can arrive while the first pass runs.
+  const tmp = createTempDirTracker('strada-unity-vault-bg-');
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    logWarn.mockClear();
+    tmp.cleanup();
+  });
+
+  function makeTree(fileCount: number): string {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'Assets'), { recursive: true });
+    for (let i = 0; i < fileCount; i++) writeFileSync(join(root, 'Assets', `S${i}.cs`), `public class S${i} {}\n`);
+    return root;
+  }
+
+  function newVault(root: string): UnityProjectVault {
+    return new UnityProjectVault({
+      id: 'unity:bg',
+      rootPath: root,
+      embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore(),
+    });
+  }
+
+  /** Holds the first reindexFile() until released, and reports when it has started. */
+  function gateFirstReindex(vault: UnityProjectVault) {
+    const reindex = vault.reindexFile.bind(vault);
+    let entered!: () => void;
+    const firstFile = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const spy = vi.spyOn(vault, 'reindexFile').mockImplementation(async (rel) => {
+      entered();
+      await gate;
+      return reindex(rel);
+    });
+    return { spy, firstFile, release };
+  }
+
+  it('dispose during the initial index stops it at the next file and starts no watcher', async () => {
+    const vault = newVault(makeTree(5));
+    const { spy, firstFile, release } = gateFirstReindex(vault);
+
+    const init = vault.init();
+    await firstFile;
+    const disposed = vault.dispose();
+    release();
+
+    await expect(disposed).resolves.toBeUndefined();
+    await expect(init).resolves.toBeUndefined();
+    // Closing the store under the walk made every remaining file fail
+    // against a closed database, one warning per file.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(logWarn).not.toHaveBeenCalled();
+
+    // The boot task's startWatch, arriving after dispose, starts nothing.
+    await vault.startWatch(10);
+    expect((vault as unknown as { watcher: unknown }).watcher).toBeNull();
+  });
+
+  it('a second init while the first is running joins it instead of walking again', async () => {
+    const vault = newVault(makeTree(3));
+    const spy = vi.spyOn(vault, 'reindexFile');
+    await Promise.all([vault.init(), vault.init()]);
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(vault.listFiles()).toHaveLength(3);
+    await vault.dispose();
+  });
+
+  it('a sync during the initial index waits for it instead of walking the tree alongside it', async () => {
+    const vault = newVault(makeTree(3));
+    const { spy, firstFile, release } = gateFirstReindex(vault);
+
+    const init = vault.init();
+    await firstFile;
+    const sync = vault.sync();
+    // Time for a sync that does not wait to list the tree and reach its first file.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(spy).toHaveBeenCalledTimes(1);
+    release();
+
+    await init;
+    await expect(sync).resolves.toMatchObject({ changed: 0 });
+    // Three files for the index, then three unchanged-hash checks for the sync.
+    expect(spy).toHaveBeenCalledTimes(6);
+    await vault.dispose();
   });
 });

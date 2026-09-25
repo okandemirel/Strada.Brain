@@ -217,6 +217,25 @@ describe('VaultRegistry disposal', () => {
     expect(registry.list()).toEqual([]);
     expect(registry.ids()).toEqual([]);
   });
+
+  it('disposeAll takes each vault out of the registry before disposing it', async () => {
+    // A vault's dispose waits for its background index to stop, and the boot
+    // task that index belongs to starts watchers only while the vault is
+    // still registered. Still listed at that moment, it started them anyway.
+    const registry = new VaultRegistry();
+    const seenDuringDispose: Array<unknown> = [];
+    const vault = createFakeVault({
+      id: 'indexing',
+      rootPath: '/tmp/v-indexing',
+      dispose: vi.fn(async () => { seenDuringDispose.push(registry.get('indexing')); }),
+    });
+    registry.register(vault);
+
+    await registry.disposeAll();
+
+    expect(vault.dispose).toHaveBeenCalledTimes(1);
+    expect(seenDuringDispose).toEqual([undefined]);
+  });
 });
 
 describe('resolve() accepts a bare id', () => {

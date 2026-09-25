@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ObsidianVault, VaultQueryError, redactPathsInMessage } from './obsidian-vault.js';
+import { ObsidianApiClient } from './obsidian-client.js';
 import { createFakeEmbedding, createFakeVectorStore, createTempDirTracker } from '../test-helpers.js';
 import type { EmbeddingProvider } from './embedding-adapter.js';
 import type { IVault } from './vault.interface.js';
@@ -158,5 +159,74 @@ describe('ObsidianVault', () => {
     it('handles the empty string', () => {
       expect(redactPathsInMessage('', '/some/root')).toBe('');
     });
+  });
+});
+
+describe('ObsidianVault initial index running in the background', () => {
+  // Boot indexes the Obsidian vault in the background, so shutdown and
+  // vault_init can arrive while the first pass is still running.
+  const tmp = createTempDirTracker('strada-obsidian-vault-bg-');
+  const vaults: IVault[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const v of vaults.splice(0)) await v.dispose();
+    tmp.cleanup();
+  });
+
+  function makeNotes(count: number): string {
+    const root = tmp.makeDir();
+    for (let i = 0; i < count; i++) writeFileSync(join(root, `n${i}.md`), `# Note ${i}\n`);
+    return root;
+  }
+
+  function makeVault(root: string, embedding: EmbeddingProvider = createFakeEmbedding()): ObsidianVault {
+    const vault = new ObsidianVault({
+      id: 'obsidian:bg',
+      rootPath: root,
+      embedding,
+      vectorStore: createFakeVectorStore(),
+      obsidian: OFFLINE_OBSIDIAN,
+    });
+    vaults.push(vault);
+    return vault;
+  }
+
+  it('dispose during the initial index waits for the note in hand, then stops the pass', async () => {
+    let entered!: () => void;
+    const firstNote = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let embedCalls = 0;
+    const vault = makeVault(makeNotes(5), createFakeEmbedding({
+      embed: async (texts) => {
+        embedCalls++;
+        entered();
+        await gate;
+        return texts.map(() => new Float32Array([1, 0, 0, 0]));
+      },
+    }));
+
+    const init = vault.init();
+    await firstNote;
+    let disposeSettled = false;
+    const disposed = vault.dispose().then(() => { disposeSettled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Closing the store under the pass failed every remaining note and then
+    // the wikilink pass, so init() rejected into its caller.
+    expect(disposeSettled).toBe(false);
+    release();
+
+    await expect(disposed).resolves.toBeUndefined();
+    await expect(init).resolves.toBeUndefined();
+    expect(embedCalls).toBe(1);
+  });
+
+  it('a second init while the first is running joins it', async () => {
+    const healthCheck = vi.spyOn(ObsidianApiClient.prototype, 'healthCheck').mockResolvedValue(false);
+    const vault = makeVault(makeNotes(3));
+    await Promise.all([vault.init(), vault.init()]);
+    expect(healthCheck).toHaveBeenCalledTimes(1);
+    expect(vault.listFiles()).toHaveLength(3);
   });
 });

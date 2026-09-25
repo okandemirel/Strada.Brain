@@ -107,6 +107,13 @@ export class ObsidianVault implements IVault {
    * fullIndex(), which regenerates unconditionally.
    */
   private canvasDirty = false;
+  /**
+   * Boot runs the first index in the background, so dispose() and other
+   * callers can arrive while it is still running.
+   */
+  private initInFlight: Promise<void> | null = null;
+  /** Set by dispose(): an index pass stops at its next file. */
+  private disposed = false;
 
   constructor(deps: ObsidianVaultDeps) {
     this.id = deps.id;
@@ -129,6 +136,20 @@ export class ObsidianVault implements IVault {
   }
 
   async init(): Promise<void> {
+    // A vault_init while the background index runs joins it instead of
+    // starting a second pass.
+    if (this.initInFlight) return this.initInFlight;
+    const run = this.initOnce();
+    this.initInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.initInFlight === run) this.initInFlight = null;
+    }
+  }
+
+  private async initOnce(): Promise<void> {
+    if (this.disposed) return;
     await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
     this.store.migrate();
     // Same gate as UnityProjectVault (audited 2026-09-02): say once whether
@@ -150,6 +171,8 @@ export class ObsidianVault implements IVault {
       getLoggerSafe().warn(`[obsidian-vault ${this.id}] Obsidian API unreachable at ${this.client}`);
       // Continue anyway — FS reads will still work.
     }
+    // The health check can take the full request timeout.
+    if (this.disposed) return;
 
     await this.fullIndex();
   }
@@ -189,6 +212,8 @@ export class ObsidianVault implements IVault {
   }
 
   async rebuild(): Promise<void> {
+    // Not under a running index pass: it would carry on into the new store.
+    await this.initInFlight?.catch(() => undefined);
     this.store.close();
     await fsp.unlink(this.dbPath).catch(() => undefined);
     this.store = new SqliteVaultStore(this.dbPath);
@@ -334,7 +359,13 @@ export class ObsidianVault implements IVault {
     await this.dispose();
   }
 
+  /**
+   * Stops an in-flight index pass at its next note before the store closes.
+   * Closing under it made every remaining note fail against a closed database.
+   */
   async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.initInFlight?.catch(() => undefined);
     this.store.close();
     await this.client.close();
   }
@@ -754,6 +785,9 @@ export class ObsidianVault implements IVault {
 
     const changed: string[] = [];
     for (const f of files) {
+      // dispose() waits for the initial pass: stop at the next note instead
+      // of indexing the rest first. The next init reconciles.
+      if (this.disposed) return { count: changed.length, paths: changed };
       try {
         if (await this.reindexFileInternal(f.path)) changed.push(f.path);
       } catch (err) {
@@ -763,6 +797,7 @@ export class ObsidianVault implements IVault {
         });
       }
     }
+    if (this.disposed) return { count: changed.length, paths: changed };
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (!present.has(p) && this.deleteIndexedFileInternal(p)) changed.push(p);
@@ -775,6 +810,7 @@ export class ObsidianVault implements IVault {
     // must not race with concurrent writes.
     await this.writeLock.run(async () => {
       const { paths: changed } = await this.runIndexPass('fullIndex');
+      if (this.disposed) return;
       // Single pass: runIndexPass processes files sequentially, so every
       // file is in vault_files by the time we resolve wikilinks. A second
       // predicate-filtered pass would iterate an empty set (re-review

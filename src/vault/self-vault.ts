@@ -101,25 +101,9 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
 
 export class SelfVault extends UnityProjectVault {
   override readonly kind = 'self' as const;
-  /**
-   * Boot runs the first index in the background (it walks the whole install
-   * root), so dispose() and other callers can arrive while it is still running.
-   */
-  private initInFlight: Promise<void> | null = null;
-  private disposed = false;
 
   constructor(deps: UnityVaultDeps) {
     super(deps);
-  }
-
-  /**
-   * Stops an in-flight index pass at its next file before the store closes.
-   * Closing under it made every remaining file fail against a closed database.
-   */
-  override async dispose(): Promise<void> {
-    this.disposed = true;
-    await this.initInFlight?.catch(() => undefined);
-    await super.dispose();
   }
 
   /** Every reindex path ends here: a path discovery would skip is dropped, never indexed. */
@@ -197,7 +181,7 @@ export class SelfVault extends UnityProjectVault {
   override async sync(): Promise<{ changed: number; durationMs: number }> {
     // A sync during boot's background index waits for it rather than walking
     // the same tree concurrently.
-    await this.initInFlight?.catch(() => undefined);
+    await this.waitForInit();
     const started = Date.now();
     const found = await this.discoverFiles();
     const before = new Set(this.store.listFiles().map((f) => f.path));
@@ -205,21 +189,10 @@ export class SelfVault extends UnityProjectVault {
     return { changed: changed.length, durationMs: Date.now() - started };
   }
 
-  // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
-  override async init(): Promise<void> {
-    // A vault_init while the background index runs joins it instead of
-    // starting a second full walk.
-    if (this.initInFlight) return this.initInFlight;
-    const run = this.initOnce();
-    this.initInFlight = run;
-    try {
-      await run;
-    } finally {
-      if (this.initInFlight === run) this.initInFlight = null;
-    }
-  }
-
-  private async initOnce(): Promise<void> {
+  // Override the index pass: use curated discovery roots rather than Unity's
+  // Assets/Packages layout. The base init() joins concurrent callers onto it,
+  // and the base dispose() stops it at the next file.
+  protected override async initOnce(): Promise<void> {
     // Same contract as UnityProjectVault.init() (audited 2026-09-02 — this
     // override had dropped both halves): idempotent only while a watcher owns
     // freshness, so a repeated vault_init does not re-walk the tree; and a
