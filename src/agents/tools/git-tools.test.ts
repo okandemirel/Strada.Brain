@@ -112,6 +112,18 @@ describe("GitLogTool", () => {
     expect(result.content).toContain("initial");
   });
 
+  it("refuses a non-integer count and an unknown format; 'full' is honoured (TLS-17)", async () => {
+    const nan = await tool.execute({ count: "abc" }, ctx);
+    expect(nan.isError).toBe(true);
+    expect(nan.content).toContain("'count' must be an integer");
+    const bogus = await tool.execute({ format: "fancy" }, ctx);
+    expect(bogus.isError).toBe(true);
+    expect(bogus.content).toContain("'format' must be one of");
+    const full = await tool.execute({ format: "full", count: "1" }, ctx);
+    expect(full.isError).toBeFalsy();
+    expect(full.content).toContain("Commit: Test");
+  });
+
   it("respects count parameter", async () => {
     await writeFile(join(tempDir, "a.txt"), "a");
     git("add .");

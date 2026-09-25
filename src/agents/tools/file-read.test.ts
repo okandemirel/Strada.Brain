@@ -169,6 +169,17 @@ describe("a miss inside a directory that exists", () => {
     expect(listed.indexOf("PixelFlow_Notes.md"), "the close match was not put first").toBe(1);
   });
 
+  it("refuses a non-integer offset or limit instead of reading nothing under a NaN header (TLS-17)", async () => {
+    const bad = await new FileReadTool().execute({ path: "hello.txt", offset: "x" }, ctx);
+    expect(bad.isError).toBe(true);
+    expect(bad.content).toContain("'offset' must be an integer");
+    const badLimit = await new FileReadTool().execute({ path: "hello.txt", limit: "all" }, ctx);
+    expect(badLimit.isError).toBe(true);
+    const ok = await new FileReadTool().execute({ path: "hello.txt", offset: "2", limit: "1" }, ctx);
+    expect(ok.content).toContain("showing 2-2");
+    expect(ok.content).toContain("World");
+  });
+
   it("says nothing extra when the directory is not there either", async () => {
     const root = mkdtempSync(join(tmpdir(), "strada-read-"));
 

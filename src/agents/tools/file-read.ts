@@ -8,6 +8,7 @@ import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { nearbyNames, sameNameElsewhere } from "./nearby-names.js";
+import { integerArg } from "./tool-input.js";
 
 const MAX_FILE_SIZE = FILE_LIMITS.MAX_FILE_SIZE;
 const MAX_LINES = FILE_LIMITS.MAX_LINES;
@@ -104,8 +105,12 @@ export class FileReadTool implements ITool {
     const symbol = typeof rawSymbol === "string" && rawSymbol.length > 0
       ? rawSymbol
       : undefined;
-    const offset = Math.max(1, Number(input["offset"] ?? 1));
-    const limit = Math.min(MAX_LINES, Math.max(1, Number(input["limit"] ?? MAX_LINES)));
+    const offsetArg = integerArg(input, "offset");
+    if (!offsetArg.ok) return { content: offsetArg.error, isError: true };
+    const limitArg = integerArg(input, "limit");
+    if (!limitArg.ok) return { content: limitArg.error, isError: true };
+    const offset = Math.max(1, offsetArg.value ?? 1);
+    const limit = Math.min(MAX_LINES, Math.max(1, limitArg.value ?? MAX_LINES));
 
     if (!relPath) {
       return { content: "Error: 'path' is required", isError: true };

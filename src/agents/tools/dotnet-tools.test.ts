@@ -260,6 +260,19 @@ describe("DotnetBuildTool", () => {
     expect(result.content).toBeDefined();
     expect(typeof result.content).toBe("string");
   });
+
+  it("takes a configuration NAME only, for build and test alike (TLS-17)", async () => {
+    for (const configuration of ["-p:Foo=bar", "Release; x", "", 7]) {
+      for (const t of [tool, new DotnetTestTool()]) {
+        vi.mocked(runProcess).mockClear();
+        const result = await t.execute({ configuration }, ctx);
+        expect(result.content, String(configuration)).toContain("'configuration' must be a build configuration name");
+        expect(runProcess).not.toHaveBeenCalled();
+      }
+    }
+    await tool.execute({ configuration: "Staging" }, ctx);
+    expect(vi.mocked(runProcess).mock.calls.at(-1)![0].args).toEqual(expect.arrayContaining(["-c", "Staging"]));
+  });
 });
 
 describe("DotnetTestTool", () => {

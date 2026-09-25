@@ -24,6 +24,18 @@ function run(
   });
 }
 
+/**
+ * The `-c` value: a configuration NAME (Debug, Release, or a project's own
+ * such as Staging). It was free text, so an option-shaped or garbage value
+ * reached dotnet's argument list (review TLS-17).
+ */
+function configurationArg(input: Record<string, unknown>): string | undefined {
+  const config = input["configuration"] ?? "Debug";
+  return typeof config === "string" && /^[A-Za-z][\w.-]{0,63}$/.test(config) ? config : undefined;
+}
+
+const CONFIGURATION_ERROR = "Error: 'configuration' must be a build configuration name such as Debug or Release";
+
 // ─── dotnet_build ─────────────────────────────────────────────────────────────
 
 interface BuildError {
@@ -112,7 +124,8 @@ export class DotnetBuildTool implements ITool {
       args.push(pathCheck.fullPath);
     }
 
-    const config = String(input["configuration"] ?? "Debug");
+    const config = configurationArg(input);
+    if (!config) return { content: CONFIGURATION_ERROR, isError: true };
     args.push("-c", config);
 
     if (input["restore"] === false) {
@@ -337,7 +350,8 @@ export class DotnetTestTool implements ITool {
       args.push(pathCheck.fullPath);
     }
 
-    const config = String(input["configuration"] ?? "Debug");
+    const config = configurationArg(input);
+    if (!config) return { content: CONFIGURATION_ERROR, isError: true };
     args.push("-c", config);
 
     if (input["filter"]) {

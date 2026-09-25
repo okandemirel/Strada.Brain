@@ -1,4 +1,5 @@
 import { runProcess } from "../../utils/process-runner.js";
+import { integerArg } from "./tool-input.js";
 import { buildShellEnv, GIT_ENV_NAMES } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
@@ -178,14 +179,20 @@ export class GitLogTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
-    const count = Math.min(Math.max(1, Number(input["count"] ?? 20)), 100);
-    const fmt = String(input["format"] ?? "oneline");
+    const countArg = integerArg(input, "count");
+    if (!countArg.ok) return { content: countArg.error, isError: true };
+    const count = Math.min(Math.max(1, countArg.value ?? 20), 100);
+    // An enum: "full" was accepted and silently printed the default format.
+    const fmt = input["format"] ?? "oneline";
+    if (fmt !== "oneline" && fmt !== "short" && fmt !== "full") {
+      return { content: `Error: 'format' must be one of oneline, short, full (got ${JSON.stringify(fmt)})`, isError: true };
+    }
 
     const args = ["log", `-${count}`];
     if (fmt === "oneline") {
       args.push("--oneline", "--decorate");
-    } else if (fmt === "short") {
-      args.push("--format=short");
+    } else {
+      args.push(`--format=${fmt}`);
     }
 
     if (input["path"]) {
