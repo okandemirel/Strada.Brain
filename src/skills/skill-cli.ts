@@ -15,7 +15,7 @@ import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-conf
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { fetchRegistry, searchRegistry } from "./skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "./skill-installer.js";
-import { readPin, recordPinnedCommit } from "./skill-pin.js";
+import { pullSkillCheckout, readCurrentGitSha, readPin, recordPinnedCommit } from "./skill-pin.js";
 import { approveWorkspaceSkill, revokeWorkspaceSkill } from "./skill-trust.js";
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -440,7 +440,11 @@ async function updateSkillDir(skillDir: string, name: string): Promise<boolean> 
 
   console.log(`Updating "${name}"...`);
   const previousSha = await readPin(skillDir).then((p) => p?.pinnedSha ?? null);
-  const result = await execFileNoThrow("git", ["-C", skillDir, "pull"], 60_000);
+  if (!(await readCurrentGitSha(skillDir))) {
+    console.error(`  "${name}" at ${skillDir} is not a git checkout; reinstall it to update`);
+    return false;
+  }
+  const result = await pullSkillCheckout(skillDir);
   if (result.exitCode !== 0) {
     console.error(`  Failed to update "${name}": ${result.stderr || result.stdout}`);
     return false;

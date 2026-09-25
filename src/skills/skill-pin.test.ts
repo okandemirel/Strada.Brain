@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writePin, readPin, recordPinnedCommit, describePinDrift } from "./skill-pin.js";
+import {
+  writePin,
+  readPin,
+  recordPinnedCommit,
+  describePinDrift,
+  pullSkillCheckout,
+  readCurrentGitSha,
+} from "./skill-pin.js";
 
 describe("skill-pin", () => {
   let dir: string;
@@ -60,5 +67,31 @@ describe("skill-pin", () => {
     const msg = await describePinDrift(dir, "my-skill");
     expect(msg).toContain("cannot be verified");
     expect(msg).toContain(sha!.slice(0, 9));
+  });
+
+  // SEC-16: git walked up from a skill dir with no .git and pinned/pulled the
+  // enclosing repository instead.
+  it("never reads or pulls an enclosing repository for a skill dir without .git", async () => {
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+    git("init", "-q");
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+    const skill = join(dir, "skills", "inner");
+    mkdirSync(skill, { recursive: true });
+
+    expect(await readCurrentGitSha(skill)).toBeNull();
+    expect(await recordPinnedCommit(skill)).toBeNull();
+    const pulled = await pullSkillCheckout(skill);
+    expect(pulled.exitCode).not.toBe(0);
+    expect(pulled.stderr).toMatch(/not a git repository/i);
+  });
+
+  it("updates over https only, as install does", async () => {
+    const origin = join(dir, "origin.git");
+    const checkout = join(dir, "skill");
+    execFileSync("git", ["init", "-q", "--bare", origin], { stdio: "pipe" });
+    execFileSync("git", ["clone", "-q", origin, checkout], { stdio: "pipe" });
+    const pulled = await pullSkillCheckout(checkout);
+    expect(pulled.exitCode).not.toBe(0);
+    expect(pulled.stderr).toMatch(/transport 'file' not allowed/);
   });
 });

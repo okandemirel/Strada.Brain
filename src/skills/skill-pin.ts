@@ -13,9 +13,10 @@
  */
 
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { execFileNoThrow, type ExecFileResult } from "../utils/execFileNoThrow.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,14 +28,41 @@ export interface SkillPin {
   readonly pinnedAtIso: string;
 }
 
+/**
+ * SEC-16: environment for every git command run on a skill checkout. The
+ * ceiling stops git from walking up to an enclosing repository when the skill
+ * directory has no `.git` of its own (it would pull and pin THAT repository),
+ * and the protocol allowlist is the one install uses (skill-installer.ts), so
+ * an update cannot fetch over any other transport either.
+ */
+export function skillGitEnv(skillDir: string): Record<string, string> {
+  return { GIT_ALLOW_PROTOCOL: "https", GIT_CEILING_DIRECTORIES: dirname(resolve(skillDir)) };
+}
+
 /** Best-effort: not a git repo (workspace skills) → null, never throws. */
 export async function readCurrentGitSha(skillDir: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", skillDir, "rev-parse", "HEAD"], { timeout: 10_000 });
+    const { stdout } = await execFileAsync("git", ["-C", skillDir, "rev-parse", "HEAD"], {
+      timeout: 10_000,
+      env: { ...process.env, ...skillGitEnv(skillDir) },
+    });
     return stdout.trim() || null;
   } catch {
     return null;
   }
+}
+
+/**
+ * `skill update`: fast-forward the skill's own checkout (SEC-16 — never an
+ * enclosing repository, https only, no submodule recursion).
+ */
+export function pullSkillCheckout(skillDir: string): Promise<ExecFileResult> {
+  return execFileNoThrow(
+    "git",
+    ["-C", skillDir, "pull", "--ff-only", "--no-recurse-submodules"],
+    60_000,
+    skillGitEnv(skillDir),
+  );
 }
 
 export async function writePin(skillDir: string, sha: string): Promise<void> {
