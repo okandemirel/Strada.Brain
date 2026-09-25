@@ -96,6 +96,15 @@ export class InterventionEngine {
    *   suggest_only → warn_enabled : 3+ approvals, 0 rejections in last 10 uses
    *   warn_enabled → auto_enabled : 10+ approvals, confidence > 0.8,
    *                                 lifecycle = permanent, never overridden
+   *
+   * INTENTIONALLY NOT CALLED from the learning loop (LRN-20): not from
+   * {@link logIntervention}, feedback or confidence updates. A learned instinct
+   * therefore stays 'new' and is capped at the passive tier however well it
+   * scores; only seeded / curated rules (which carry their own trust level) can
+   * warn. Its confidence comes from the agent's own runs and reactions, and
+   * that loop must not promote a rule it wrote itself into a warning or an
+   * auto-applied action on every matching tool call. This ladder is for an
+   * explicit curation step, should one be added.
    */
   advanceTrust(current: TrustLevel, ctx: TrustContext): TrustLevel {
     switch (current) {
