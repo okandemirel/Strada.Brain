@@ -28,4 +28,20 @@ describe("setupGlobalErrorHandlers", () => {
     expect(output).not.toContain("CANARYSECRETVALUE1234567890abcdefXYZ");
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
   });
+
+  // COR-19: once the runtime's own handler is installed, this one must go, or
+  // every rejection is reported twice.
+  it("returns a function that removes the handler", () => {
+    const printed = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onError = vi.fn();
+    const remove = setupGlobalErrorHandlers(onError);
+    const installed = process.listeners("unhandledRejection").filter((listener) => !before.includes(listener));
+    expect(installed).toHaveLength(1);
+
+    remove();
+
+    expect(process.listeners("unhandledRejection").filter((listener) => !before.includes(listener))).toEqual([]);
+    expect(printed).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });

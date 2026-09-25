@@ -18,7 +18,7 @@ if ((_major === 20 && _minor < 19) || _major === 21 || (_major === 22 && _minor 
 }
 
 import { Command } from "commander";
-import { shutdownExitCode } from "./core/shutdown-exit-code.js";
+import { setupShutdownHandlers } from "./core/shutdown-handlers.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -69,7 +69,9 @@ import {
 process.env["STRADA_LAUNCH_CWD"] ??= getSafeCurrentWorkingDirectory(homedir());
 const runtimePaths = initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
 
-setupGlobalErrorHandlers(
+// Until the runtime installs its own (setupShutdownHandlers), this reports
+// rejections; the runtime then removes it so none is reported twice (COR-19).
+const removeStartupRejectionHandler = setupGlobalErrorHandlers(
   (error) => {
     // Never createLogger here: it is first-call-wins, so a rejection before
     // startApp would pin the whole process to an error-only logger (COR-8).
@@ -675,7 +677,8 @@ async function startApp(
 
     // Setup graceful shutdown — release the runtime lock after the app drains,
     // so the very next start never sees a stale lock from a graceful exit.
-    setupShutdownHandlers(app.shutdown, lock.release);
+    setupShutdownHandlers({ shutdown: app.shutdown, afterShutdown: lock.release });
+    removeStartupRejectionHandler();
 
     // Keep process alive
     await new Promise(() => {
@@ -1006,65 +1009,4 @@ async function runRestartCommand(
 function isValidChannelType(type: string): boolean {
   // A single type or a comma list ("web,telegram") — every member must exist.
   return isValidChannelSpec(type);
-}
-
-function setupShutdownHandlers(shutdown: () => Promise<void>, afterShutdown?: () => Promise<void>): void {
-  let isShuttingDown = false;
-
-  const handleShutdown = async (signal: string): Promise<void> => {
-    if (isShuttingDown) {
-      console.log("Force shutdown...");
-      process.exit(1);
-    }
-    isShuttingDown = true;
-
-    console.log(`\nReceived ${signal}, shutting down gracefully...`);
-
-    try {
-      await shutdown();
-    } catch (error) {
-      console.error("Error during shutdown:", error);
-      process.exit(1);
-    }
-    try {
-      await afterShutdown?.();
-    } catch {
-      // Lock cleanup is best-effort; a stale lock self-heals on next start.
-    }
-    console.log("Shutdown complete.");
-    // A crash is a crash however clean the cleanup was: exit 0 here left a
-    // `Restart=on-failure` unit down after an uncaught exception (audit 14F5).
-    process.exit(shutdownExitCode(signal, true));
-  };
-
-  process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
-  process.on("SIGINT", () => void handleShutdown("SIGINT"));
-  process.on("SIGHUP", () => void handleShutdown("SIGHUP"));
-
-  // Handle fatal errors. The policy split (measured against long autonomous builds:
-  // a multi-hour GDD-to-game run must not die to one stray rejected promise):
-  //  - uncaughtException: process state may be corrupt → full graceful shutdown.
-  //  - unhandledRejection: log-and-continue, with a storm guard as the runaway backstop.
-  process.on("uncaughtException", (error) => {
-    console.error("Uncaught exception:", error);
-    void handleShutdown("uncaughtException");
-  });
-
-  const REJECTION_WINDOW_MS = 60_000;
-  const MAX_REJECTIONS_PER_WINDOW = 20;
-  let recentRejections: number[] = [];
-
-  process.on("unhandledRejection", (reason) => {
-    const now = Date.now();
-    recentRejections = recentRejections.filter((timestamp) => now - timestamp < REJECTION_WINDOW_MS);
-    recentRejections.push(now);
-    console.error(
-      `Unhandled rejection (${recentRejections.length} in the last ${REJECTION_WINDOW_MS / 1000}s):`,
-      reason,
-    );
-    if (recentRejections.length >= MAX_REJECTIONS_PER_WINDOW) {
-      console.error("Unhandled-rejection storm detected — shutting down before the log floods.");
-      void handleShutdown("unhandled-rejection-storm");
-    }
-  });
 }

@@ -515,16 +515,20 @@ export function wrapError(
 }
 
 /**
- * Global error handler for unhandled rejections.
- * uncaughtException is handled by setupShutdownHandlers() in index.ts
+ * Global error handler for unhandled rejections before the runtime starts.
+ * uncaughtException is handled by setupShutdownHandlers() (core/shutdown-handlers)
  * to drive the full graceful shutdown sequence.
+ *
+ * Returns a function that removes this handler. The runtime calls it once
+ * setupShutdownHandlers owns rejection reporting, so each rejection is reported
+ * once rather than by both handlers (COR-19).
  */
 export function setupGlobalErrorHandlers(
   onError?: (error: Error) => void,
-): void {
+): () => void {
   const logger = console;
 
-  process.on("unhandledRejection", (reason: unknown) => {
+  const onRejection = (reason: unknown): void => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
     // Straight to stderr, past the logger's redaction format: a rejection
     // carrying a key in its message or stack printed it in clear text into
@@ -532,11 +536,15 @@ export function setupGlobalErrorHandlers(
     // original error object.
     logger.error("Unhandled Rejection:", sanitizeSecretsQuiet(error.stack ?? `${error.name}: ${error.message}`));
     onError?.(error);
-  });
+  };
+  process.on("unhandledRejection", onRejection);
 
-  // Note: SIGTERM/SIGINT handlers are registered in index.ts setupShutdownHandlers()
+  // Note: SIGTERM/SIGINT handlers are registered by setupShutdownHandlers()
   // which runs the full graceful shutdown sequence (DB close, flush queues, etc.).
   // Do NOT register process.exit() here — it would bypass that sequence.
+  return () => {
+    process.off("unhandledRejection", onRejection);
+  };
 }
 
 /**
