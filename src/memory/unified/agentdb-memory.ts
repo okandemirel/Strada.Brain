@@ -122,6 +122,15 @@ function readIdentity(metadata: unknown, key: "userId" | "projectId"): string | 
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Top-level fields persistEntry writes back verbatim: identity and
+ * classification, never caller free text (and an altered id would write a
+ * different row).
+ */
+const PERSIST_UNREDACTED_FIELDS = new Set([
+  "id", "type", "content", "chatId", "userId", "projectId", "domain", "embeddingProvenance", "tier", "importance",
+]);
+
 // Re-export clock utilities for test compatibility
 export { _setNowFn, _resetNowFn };
 
@@ -1031,6 +1040,33 @@ export class AgentDBMemory implements IUnifiedMemory {
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Write an edited copy of a stored entry through to the cache and SQLite.
+   * AgentDBAdapter's updateEntry / resolveError / archiveOldEntries call this,
+   * and it did not exist, so each of them failed with a TypeError (MEM-17).
+   * Content, embedding and identity stay as stored. The caller merged its own
+   * values into metadata and the type-specific text fields (a resolution, a
+   * message), so those are secret-redacted here as storeEntry would (MEM-21).
+   */
+  persistEntry(entry: UnifiedMemoryEntry): void {
+    const id = entry.id as string;
+    const live = this.entries.get(id);
+    if (!live) throw new Error(`Entry not found: ${id}`);
+    const redacted: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(entry)) {
+      redacted[key] = typeof value === "string" && !PERSIST_UNREDACTED_FIELDS.has(key) ? redactSecrets(value) : value;
+    }
+    const updated = {
+      ...redacted,
+      id: live.id,
+      content: live.content,
+      embedding: live.embedding,
+      metadata: entry.metadata ? sanitizeSecretsDeep(entry.metadata) : entry.metadata,
+    } as UnifiedMemoryEntry;
+    sqlitePersistEntry(this.getSqliteCtx(), updated);
+    Object.assign(live, updated);
   }
 
   async touch(id: MemoryId): Promise<Result<void, Error>> {
