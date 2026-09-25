@@ -934,9 +934,9 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `RATE_LIMIT_ENABLED` | `false` | Active la limitation de d&eacute;bit |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Limite de messages par utilisateur par minute (0 = illimit&eacute;) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Limite horaire par utilisateur |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Quota journalier global de tokens |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Plafond de d&eacute;penses journalier en USD |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Plafond de d&eacute;penses mensuel en USD |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | Quota journalier global de tokens (0 = illimit&eacute;) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | Plafond de d&eacute;penses journalier en USD (0 = illimit&eacute;) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | Plafond de d&eacute;penses mensuel en USD (0 = illimit&eacute;) |
 
 ### S&eacute;curit&eacute;
 

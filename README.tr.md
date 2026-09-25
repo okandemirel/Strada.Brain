@@ -904,9 +904,9 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `RATE_LIMIT_ENABLED` | `false` | Hiz sinirlamasini etkinlestir |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Kullanici basina dakikalik mesaj limiti (0 = sinirsiz) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Kullanici basina saatlik limit |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Genel gunluk token kotasi |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | USD cinsinden gunluk harcama limiti |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | USD cinsinden aylik harcama limiti |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | Genel gunluk token kotasi (0 = sinirsiz) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | USD cinsinden gunluk harcama limiti (0 = sinirsiz) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | USD cinsinden aylik harcama limiti (0 = sinirsiz) |
 
 ### Guvenlik
 

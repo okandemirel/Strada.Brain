@@ -934,9 +934,9 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `RATE_LIMIT_ENABLED` | `false` | 启用速率限制 |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | 每用户每分钟消息限制（0 = 无限制） |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | 每用户每小时限制 |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | 全局每日令牌配额 |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | 每日支出上限（美元） |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | 每月支出上限（美元） |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | 全局每日令牌配额（0 = 无限制） |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | 每日支出上限（美元）（0 = 无限制） |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | 每月支出上限（美元）（0 = 无限制） |
 
 ### 安全
 

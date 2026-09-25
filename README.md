@@ -1027,9 +1027,9 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `RATE_LIMIT_ENABLED` | `false` | Enable rate limiting |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Per-user message limit (0 = unlimited) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Per-user hourly limit |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Global daily token quota |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Daily spend cap in USD |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Monthly spend cap in USD |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | Global daily token quota (0 = unlimited) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | Daily spend cap in USD (0 = unlimited) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | Monthly spend cap in USD (0 = unlimited) |
 
 ### Security
 

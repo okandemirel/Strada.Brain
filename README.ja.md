@@ -951,9 +951,9 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `RATE_LIMIT_ENABLED` | `false` | レート制限を有効化 |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | ユーザーあたりのメッセージ制限（0 = 無制限） |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | ユーザーあたりの時間制限 |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | グローバル日次トークンクォータ |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | 日次支出上限（USD） |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | 月次支出上限（USD） |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | グローバル日次トークンクォータ（0 = 無制限） |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | 日次支出上限（USD）（0 = 無制限） |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | 月次支出上限（USD）（0 = 無制限） |
 
 ### セキュリティ
 

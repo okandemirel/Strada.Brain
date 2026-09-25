@@ -928,9 +928,9 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `RATE_LIMIT_ENABLED` | `false` | 속도 제한 활성화 |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | 사용자당 분당 메시지 제한 (0 = 무제한) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | 사용자당 시간당 제한 |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | 글로벌 일일 토큰 할당량 |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | 일일 지출 한도 (USD) |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | 월간 지출 한도 (USD) |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | 글로벌 일일 토큰 할당량 (0 = 무제한) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | 일일 지출 한도 (USD) (0 = 무제한) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | 월간 지출 한도 (USD) (0 = 무제한) |
 
 ### 보안
 

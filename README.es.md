@@ -944,9 +944,9 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 | `RATE_LIMIT_ENABLED` | `false` | Habilitar limitacion de tasa |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Limite de mensajes por usuario por minuto (0 = ilimitado) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Limite por hora por usuario |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Cuota diaria global de tokens |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Tope de gasto diario en USD |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Tope de gasto mensual en USD |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | Cuota diaria global de tokens (0 = ilimitado) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | Tope de gasto diario en USD (0 = ilimitado) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | Tope de gasto mensual en USD (0 = ilimitado) |
 
 ### Seguridad
 

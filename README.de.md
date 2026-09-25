@@ -895,9 +895,9 @@ Strada gibt offensichtliche naechste Schritte nicht an den Benutzer zurueck. Wen
 | `RATE_LIMIT_ENABLED` | `false` | Ratenbegrenzung aktivieren |
 | `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Nachrichtenlimit pro Benutzer pro Minute (0 = unbegrenzt) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Stuendliches Limit pro Benutzer |
-| `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Globales taegliches Token-Kontingent |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Taegliche Ausgabenobergrenze in USD |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Monatliche Ausgabenobergrenze in USD |
+| `RATE_LIMIT_TOKENS_PER_DAY` | `500000` | Globales taegliches Token-Kontingent (0 = unbegrenzt) |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `5` | Taegliche Ausgabenobergrenze in USD (0 = unbegrenzt) |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `100` | Monatliche Ausgabenobergrenze in USD (0 = unbegrenzt) |
 
 ### Sicherheit
 
