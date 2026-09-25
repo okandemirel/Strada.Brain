@@ -386,10 +386,22 @@ export class ErrorRecoveryEngine {
       return null; // fast path: no error signals
     }
 
-    // Get learned solutions before analysis
+    let analysis: ErrorAnalysis | null;
+
+    switch (toolName) {
+      case "dotnet_build": analysis = this.analyzeBuild(result.content); break;
+      case "dotnet_test":  analysis = this.analyzeTests(result.content); break;
+      case "shell_exec":   analysis = this.analyzeShell(result.content); break;
+      default:
+        analysis = result.isError ? this.analyzeGeneric(toolName, result.content) : null;
+    }
+
+    // Learned solutions only for an error that has an analysis to carry them
+    // (AUT-14): asking first recorded the guidance as shown, and tracked the
+    // error, for failures whose recovery context never reached the prompt.
     let learnedSolutions = "";
     let correlationId: string | undefined;
-    if (this.isLearningEnabled() && this.learningHooks) {
+    if (analysis && this.isLearningEnabled() && this.learningHooks) {
       // The structured per-error detail travels with THIS exposure (#26): it used
       // to be delivered by re-calling the hook once per error afterwards, which
       // manufactured exposures nobody was ever shown.
@@ -410,16 +422,6 @@ export class ErrorRecoveryEngine {
       correlationId = shown.correlationId || undefined;
     }
 
-    let analysis: ErrorAnalysis | null;
-
-    switch (toolName) {
-      case "dotnet_build": analysis = this.analyzeBuild(result.content); break;
-      case "dotnet_test":  analysis = this.analyzeTests(result.content); break;
-      case "shell_exec":   analysis = this.analyzeShell(result.content); break;
-      default:
-        analysis = result.isError ? this.analyzeGeneric(toolName, result.content) : null;
-    }
-
     if (analysis && this.isLearningEnabled()) {
       analysis.learnedSolutions = learnedSolutions ?? "";
       if (learnedSolutions) {
@@ -437,7 +439,12 @@ export class ErrorRecoveryEngine {
 
     if (analysis && correlationId !== undefined) {
       // #26: remember WHICH exposure this is, so the repair that lands later can
-      // be correlated with it instead of hashing a new timestamp.
+      // be correlated with it instead of hashing a new timestamp. An exposure
+      // this replaces can no longer be closed, so the hooks let it go now.
+      const replaced = this.openErrors.get(toolName);
+      if (replaced !== undefined && replaced.correlationId !== correlationId) {
+        this.learningHooks?.discardExposure(replaced.correlationId);
+      }
       this.openErrors.set(toolName, {
         correlationId,
         errorOutput: result.content,
@@ -446,9 +453,10 @@ export class ErrorRecoveryEngine {
       });
       // Bounded: one open error per tool, and the oldest tool goes first.
       while (this.openErrors.size > 32) {
-        const oldest = this.openErrors.keys().next();
+        const oldest = this.openErrors.entries().next();
         if (oldest.done) break;
-        this.openErrors.delete(oldest.value);
+        this.openErrors.delete(oldest.value[0]);
+        this.learningHooks?.discardExposure(oldest.value[1].correlationId);
       }
     } else if (analysis === null && !result.isError) {
       this.reportObservedResolution(toolName);
@@ -472,7 +480,11 @@ export class ErrorRecoveryEngine {
     const open = this.openErrors.get(toolName);
     if (open === undefined) return;
     this.openErrors.delete(toolName);
-    if (Date.now() - open.at > ErrorRecoveryEngine.RESOLUTION_LINK_WINDOW_MS) return;
+    if (Date.now() - open.at > ErrorRecoveryEngine.RESOLUTION_LINK_WINDOW_MS) {
+      // Too late to be this error's repair: nothing will close it now.
+      this.learningHooks?.discardExposure(open.correlationId);
+      return;
+    }
     if (!this.isLearningEnabled()) return;
     // analyze() is synchronous and runs inside the tool loop, so the record is
     // scheduled; flushLearning() is how a caller waits for it.

@@ -618,4 +618,29 @@ describe("tracked errors are bounded (LRN-6)", () => {
     expect(hooks.getStats().activeErrors).toBe(0);
     expect(first.correlationId).not.toBe(second.correlationId);
   });
+
+  // AUT-14: an id the recovery engine lost is released at once, not at the TTL.
+  it("a discarded exposure is forgotten and its shown guidance counted as unjudged", () => {
+    storage.createInstinct({
+      id: "cs0246-add-using",
+      name: "cs0246-add-using",
+      type: "error_fix",
+      status: "active",
+      confidence: 0.8,
+      triggerPattern: failure(1).errorOutput,
+      action: "Add the missing using directive for the type",
+      contextConditions: [],
+      stats: { timesSuggested: 4, timesApplied: 4, timesFailed: 0, successRate: 1 },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const shown = hooks.onBeforeErrorAnalysis(failure(1));
+    expect(shown.recoveryInjection).toContain("cs0246-add-using");
+    expect(hooks.getStats().activeErrors).toBe(1);
+
+    hooks.discardExposure(shown.correlationId);
+
+    expect(hooks.getStats().activeErrors).toBe(0);
+    expect(hooks.getStats().unjudgedExposures).toBe(1);
+  });
 });

@@ -735,11 +735,26 @@ export class ErrorLearningHooks {
       const overCap = this.activeErrors.size > MAX_TRACKED_ERRORS;
       if (!overCap && now - entry.trackedAt <= TRACKED_ERROR_TTL_MS) break; // the rest are newer
       if (id === errorId) break;
-      this.activeErrors.delete(id);
-      // Guidance shown for an error nobody resolved was never judged: counted,
-      // not silently dropped.
-      if (this.shownGuidance.delete(id)) this.unjudgedExposures += 1;
+      this.forgetError(id);
     }
+  }
+
+  /**
+   * Stop tracking an error nobody will ever resolve (AUT-14): the recovery
+   * engine lost its correlation id (a newer failure of the same tool replaced
+   * it, its repair came too late to link, or it was evicted). Waiting for the
+   * TTL kept the whole tool output alive for half an hour per lost id.
+   */
+  discardExposure(correlationId: string): void {
+    const id = correlationId.trim();
+    if (id.length > 0) this.forgetError(id);
+  }
+
+  private forgetError(id: string): void {
+    this.activeErrors.delete(id);
+    // Guidance shown for an error nobody resolved was never judged: counted,
+    // not silently dropped.
+    if (this.shownGuidance.delete(id)) this.unjudgedExposures += 1;
   }
 
   // ─── Utility Methods ─────────────────────────────────────────────────────────

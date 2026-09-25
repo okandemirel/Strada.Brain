@@ -12,7 +12,7 @@
  *   2. NOTHING CALLED IT. `recordResolution` had no runtime caller at all, so even
  *      a correct id would have arrived from nowhere.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -157,5 +157,56 @@ describe("a resolution recorded through the recovery engine", () => {
     expect(hooks.getStats().unjudgedExposures).toBe(1);
     expect(storage.getInstinctCredits({ instinctId: RULE })).toHaveLength(0);
     expect(storage.getInstincts().map((i) => i.id)).toEqual([RULE]);
+  });
+});
+
+/**
+ * AUT-14 — the engine lost correlation ids the process-wide hooks kept waiting
+ * on: a newer failure of the same tool replaced the open one, a repair came too
+ * late to link, and a failure with no analysis was asked about before it was
+ * analysed, so guidance that never reached a prompt was recorded as shown.
+ */
+describe("exposures the engine can no longer close", () => {
+  const variant = (i: number) =>
+    `Assets/App${i}.cs(1,1): CS0006 — Metadata file 'Strada.Modules.dll' could not be found`;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("failing the same tool three times, then succeeding, leaves nothing tracked", async () => {
+    taughtRule(RULE, "Build the dependency project first, then re-run");
+    for (let i = 0; i < 3; i++) {
+      engine.analyze("dotnet_build", { content: variant(i), isError: true });
+    }
+    engine.analyze("dotnet_build", { content: "Build succeeded", isError: false });
+    await engine.flushLearning();
+
+    expect(hooks.getStats().activeErrors).toBe(0);
+    // All three were shown and none was judged: counted, not lost.
+    expect(hooks.getStats().unjudgedExposures).toBe(3);
+  });
+
+  it("a repair outside the link window releases the exposure", async () => {
+    vi.useFakeTimers();
+    taughtRule(RULE, "Build the dependency project first, then re-run");
+    engine.analyze("dotnet_build", failing);
+    vi.advanceTimersByTime(121_000);
+    engine.analyze("dotnet_build", { content: "Build succeeded", isError: false });
+    await engine.flushLearning();
+
+    expect(hooks.getStats().activeErrors).toBe(0);
+    expect(hooks.getStats().unjudgedExposures).toBe(1);
+  });
+
+  it("a failure with no analysis is never recorded as shown guidance", () => {
+    taughtRule(RULE, "Build the dependency project first, then re-run");
+    // A failed shell command whose output matches the rule but none of the
+    // runtime error shapes: there is no analysis to carry any guidance.
+    const analysis = engine.analyze("shell_exec", failing);
+
+    expect(analysis).toBeNull();
+    expect(hooks.getStats().activeErrors).toBe(0);
+    expect(storage.getExposureCoverage()).toEqual([]);
   });
 });
