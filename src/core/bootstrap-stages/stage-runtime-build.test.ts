@@ -17,8 +17,12 @@ const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // 6-byte file, which is what an empty bundle is (G#3).
 const realArtifact = join(artifactDir, "Game.app");
 mkdirSync(join(realArtifact, "Contents", "MacOS"), { recursive: true });
-writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), Buffer.alloc(64 * 1024, 7));
-// A bundle is its BINARY: Contents holding only data was accepted (O#8).
+// A bundle is its BINARY: Contents holding only data was accepted (O#8). The
+// binary starts with a 64-bit Mach-O header, which is what a Windows host
+// (no execute bit) judges it by.
+const machO = Buffer.alloc(64 * 1024, 7);
+machO.writeUInt32BE(0xcffaedfe, 0);
+writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), machO);
 chmodSync(join(realArtifact, "Contents", "MacOS", "Game"), 0o755);
 
 const built =
@@ -34,9 +38,12 @@ const built =
 describe("buildEvidenceFromToolResult — the tool's outer failure is not a build (audit 09.1)", () => {
   it("an isError result with an ok-shaped verdict and a real artifact is NOT ok", () => {
     const dir = mkdtempSync(join(tmpdir(), "build-evidence-"));
-    // A bare executable: no extension, > 1 MB, executable bit set.
+    // A bare executable: no extension, > 1 MB, executable bit set, and the
+    // ELF magic a Windows host (no execute bit) judges it by.
     const artifact = join(dir, "Game");
-    writeFileSync(artifact, Buffer.alloc(2 * 1024 * 1024, 1));
+    const binary = Buffer.alloc(2 * 1024 * 1024, 1);
+    binary.write("\u007fELF", 0, "latin1");
+    writeFileSync(artifact, binary);
     chmodSync(artifact, 0o755);
     const content =
       "Build crashed after writing the artifact\n\n```json\n" +
@@ -354,9 +361,10 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     writeFileSync(linux, elf(Buffer.alloc(256 * 1024, 1)));
     chmodSync(linux, 0o755);
     expect(looksLikePlayer(linux)).toBe(true);
-    // …a well-formed header with no execute permission is not a player.
+    // …a well-formed header with no execute permission is not a player — the
+    // POSIX rule, stated as one (a Windows file has no execute bit to read).
     chmodSync(linux, 0o644);
-    expect(looksLikePlayer(linux)).toBe(false);
+    expect(looksLikePlayer(linux, "linux")).toBe(false);
     chmodSync(linux, 0o755);
     // …and neither is one whose class byte is nonsense.
     const badClass = join(artifactDir, "BadClass.x86_64");
@@ -367,6 +375,37 @@ describe("a named player artifact must BE one (Codex 2026-09-11 E#2, G#3)", () =
     const notElf = join(artifactDir, "Fake.x86_64");
     writeFileSync(notElf, Buffer.alloc(256 * 1024, 0x41));
     expect(looksLikePlayer(notElf)).toBe(false);
+  });
+
+  it("on Windows, where no file has an execute bit, judges a Linux or macOS player by its header", () => {
+    // A Unity project on Windows can build Linux and macOS players; every
+    // one of them was refused because stat reports 0o666 there.
+    const linux = join(artifactDir, "WinBuilt.x86_64");
+    writeFileSync(linux, elf(Buffer.alloc(256 * 1024, 1)));
+    chmodSync(linux, 0o644);
+    expect(looksLikePlayer(linux, "win32")).toBe(true);
+
+    const bundle = join(artifactDir, "WinBuilt.app");
+    mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+    const binary = Buffer.alloc(64 * 1024, 7);
+    binary.writeUInt32BE(0xcffaedfe, 0);
+    writeFileSync(join(bundle, "Contents", "MacOS", "Game"), binary);
+    chmodSync(join(bundle, "Contents", "MacOS", "Game"), 0o644);
+    expect(looksLikePlayer(bundle, "win32")).toBe(true);
+
+    const bare = join(artifactDir, "WinBuiltGame");
+    writeFileSync(bare, elf(Buffer.alloc(2 * 1024 * 1024, 1)));
+    chmodSync(bare, 0o644);
+    expect(looksLikePlayer(bare, "win32")).toBe(true);
+
+    // …and the header is what stands in for the bit: padding is still not a binary.
+    const padded = join(artifactDir, "PaddedBundle.app");
+    mkdirSync(join(padded, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(join(padded, "Contents", "MacOS", "padding.bin"), Buffer.alloc(64 * 1024, 7));
+    expect(looksLikePlayer(padded, "win32")).toBe(false);
+    const noHeader = join(artifactDir, "PaddedGame");
+    writeFileSync(noHeader, Buffer.alloc(2 * 1024 * 1024, 1));
+    expect(looksLikePlayer(noHeader, "win32")).toBe(false);
   });
 
   it("rejects an EMPTY bundle and accepts one with a binary in it", () => {

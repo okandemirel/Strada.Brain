@@ -678,7 +678,33 @@ const PLAYER_EXT_RE = /\.(?:app|apk|aab|ipa|exe|x86_64|dmg|zip)$/i;
  */
 const MIN_PLAYER_FILE_BYTES = 64 * 1024;
 
-export function looksLikePlayer(artifactPath: string): boolean {
+/** Mach-O 32/64 in both byte orders, and the universal (fat) header. */
+const MACH_O_MAGICS: readonly number[] = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe];
+
+/**
+ * Is this binary executable? On POSIX, its execute bit. A Windows file has no
+ * execute bit — stat reports 0o666 for every one — so a Linux or macOS player
+ * built on Windows was refused for lacking a permission no file there can
+ * carry. There the binary's own ELF or Mach-O header answers instead.
+ */
+function isExecutableBinary(path: string, mode: number, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return (mode & 0o111) !== 0;
+  let head: Buffer;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      head = Buffer.alloc(4);
+      if (readSync(fd, head, 0, 4, 0) < 4) return false;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  return (head[0] === 0x7f && head.toString("latin1", 1, 4) === "ELF") || MACH_O_MAGICS.includes(head.readUInt32BE(0));
+}
+
+export function looksLikePlayer(artifactPath: string, platform: NodeJS.Platform = process.platform): boolean {
   let st: ReturnType<typeof statSync>;
   try {
     st = statSync(artifactPath);
@@ -707,7 +733,7 @@ export function looksLikePlayer(artifactPath: string): boolean {
       // A MAC BUNDLE IS ITS BINARY. Contents/padding.bin was accepted as a
       // player because something in there had bytes (Codex 2026-09-11 O#8).
       if (/\.app$/i.test(artifactPath) && entries.some((e) => /^Contents$/i.test(e))) {
-        return holdsExecutable(join(artifactPath, "Contents", "MacOS"));
+        return holdsExecutable(join(artifactPath, "Contents", "MacOS"), platform);
       }
       const buildDirs = entries.filter((e) => /^(?:Build|Data|.*_Data|Contents)$/i.test(e));
       if (buildDirs.length > 0) {
@@ -734,15 +760,15 @@ export function looksLikePlayer(artifactPath: string): boolean {
   // and the first bytes say whether it is one. 131 072 bytes of ASCII "x"
   // named Padded.apk passed the size floor (G#3).
   if (PLAYER_EXT_RE.test(artifactPath)) {
-    return st.size >= MIN_PLAYER_FILE_BYTES && hasPackageMagic(artifactPath);
+    return st.size >= MIN_PLAYER_FILE_BYTES && hasPackageMagic(artifactPath, platform);
   }
   // A bare Linux/macOS executable has no extension; require it to be
   // executable and not trivially small.
-  return st.size > 1024 * 1024 && (st.mode & 0o111) !== 0 && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
+  return st.size > 1024 * 1024 && isExecutableBinary(artifactPath, st.mode, platform) && !/\.[a-z0-9]{1,6}$/i.test(artifactPath);
 }
 
 /** A real executable inside a macOS bundle's MacOS directory. */
-function holdsExecutable(dir: string): boolean {
+function holdsExecutable(dir: string, platform: NodeJS.Platform): boolean {
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -752,7 +778,7 @@ function holdsExecutable(dir: string): boolean {
   for (const entry of entries) {
     try {
       const st = statSync(join(dir, entry));
-      if (st.isFile() && st.size >= MIN_BUNDLE_PAYLOAD_BYTES && (st.mode & 0o111) !== 0) return true;
+      if (st.isFile() && st.size >= MIN_BUNDLE_PAYLOAD_BYTES && isExecutableBinary(join(dir, entry), st.mode, platform)) return true;
     } catch {
       continue;
     }
@@ -955,7 +981,7 @@ function hasElfProgram(path: string): boolean {
  * Windows executable, or a macOS Mach-O / universal binary. A `.dmg` is
  * checked only for size, since its header varies by creator.
  */
-function hasPackageMagic(path: string): boolean {
+function hasPackageMagic(path: string, platform: NodeJS.Platform): boolean {
   let head: Buffer;
   try {
     const fd = openSync(path, "r");
@@ -1001,14 +1027,13 @@ function hasPackageMagic(path: string): boolean {
       }
       // 1 = 32-bit, 2 = 64-bit; anything else is not an ELF header. And the
       // header has to declare a program for a machine (L#17).
-      return (cls[0] === 1 || cls[0] === 2) && (st.mode & 0o111) !== 0 && hasElfProgram(path);
+      return (cls[0] === 1 || cls[0] === 2) && isExecutableBinary(path, st.mode, platform) && hasElfProgram(path);
     } catch {
       return false;
     }
   }
   if (/\.app$/i.test(path)) {
-    // Mach-O 32/64 in both byte orders, and the universal (fat) header.
-    return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(magic);
+    return MACH_O_MAGICS.includes(magic);
   }
   // A .dmg carries no single stable header; its size is the only check.
   return true;
