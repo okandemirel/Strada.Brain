@@ -243,3 +243,75 @@ describe("vaultId 'project'", () => {
     expect((self as { query: ReturnType<typeof vi.fn> }).query).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * MEM-14 for the tool: each vault packs its hits to `budgetTokens` on its own,
+ * and merging N vaults returned up to N budgets. VaultRegistry.query was fixed
+ * to pack the merged list once more; vault_search merges on its own path.
+ */
+describe('VaultSearchTool budgetTokens across vaults', () => {
+  const tool = new VaultSearchTool();
+
+  function vaultWithHits(id: string, kind: VaultKind, hits: Array<{ path: string; rrf: number; tokenCount: number }>) {
+    return {
+      id,
+      kind,
+      rootPath: '/project',
+      query: vi.fn().mockResolvedValue({
+        hits: hits.map((h) => ({
+          chunk: { path: h.path, startLine: 1, endLine: 5, content: `content of ${h.path}`, tokenCount: h.tokenCount },
+          scores: { fts: 1, hnsw: null, rrf: h.rrf },
+        })),
+        budgetUsed: hits.reduce((a, h) => a + h.tokenCount, 0),
+        truncated: false,
+      }),
+    } as never;
+  }
+
+  it('keeps the merged hits within one budget, best-scored first', async () => {
+    // Each vault stayed within 100 tokens on its own; together they hold 200.
+    const code = vaultWithHits('project', 'unity-project', [
+      { path: 'Assets/A.cs', rrf: 0.9, tokenCount: 60 },
+      { path: 'Assets/B.cs', rrf: 0.5, tokenCount: 40 },
+    ]);
+    const knowledge = vaultWithHits('dev-knowledge', 'knowledge', [
+      { path: 'notes/c.md', rrf: 0.8, tokenCount: 60 },
+      { path: 'notes/d.md', rrf: 0.4, tokenCount: 40 },
+    ]);
+    const ctx = makeContext([code, knowledge], 'project');
+
+    const result = await tool.execute({ query: 'spawn system', budgetTokens: 100 }, ctx);
+
+    // A (60) fits; C (60) would overrun; B (40) fits; D (40) would overrun.
+    expect(result.content).toContain('2 hit(s)');
+    expect(result.content).toContain('Assets/A.cs');
+    expect(result.content).toContain('Assets/B.cs');
+    expect(result.content).not.toContain('notes/c.md');
+    expect(result.content).not.toContain('notes/d.md');
+    expect(result.content).toContain('(truncated)');
+  });
+
+  it('packs by the chunks\' own token counts, so one vault within budget keeps every hit it returned', async () => {
+    const code = vaultWithHits('project', 'unity-project', [
+      { path: 'Assets/A.cs', rrf: 0.9, tokenCount: 60 },
+      { path: 'Assets/B.cs', rrf: 0.5, tokenCount: 40 },
+    ]);
+    const ctx = makeContext([code], 'project');
+
+    const result = await tool.execute({ query: 'spawn system', budgetTokens: 100 }, ctx);
+
+    expect(result.content).toContain('2 hit(s)');
+    expect(result.content).not.toContain('(truncated)');
+  });
+
+  it('leaves the merged list alone without a budget', async () => {
+    const code = vaultWithHits('project', 'unity-project', [{ path: 'Assets/A.cs', rrf: 0.9, tokenCount: 60 }]);
+    const knowledge = vaultWithHits('dev-knowledge', 'knowledge', [{ path: 'notes/c.md', rrf: 0.8, tokenCount: 60 }]);
+    const ctx = makeContext([code, knowledge], 'project');
+
+    const result = await tool.execute({ query: 'spawn system' }, ctx);
+
+    expect(result.content).toContain('2 hit(s)');
+    expect(result.content).not.toContain('(truncated)');
+  });
+});

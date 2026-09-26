@@ -5,6 +5,7 @@ import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
 import { estimateTextTokens } from "../../common/token-estimator.js";
+import { packByBudget } from '../../vault/query-pipeline.js';
 import { getLoggerSafe } from "../../utils/logger.js";
 
 type VaultSearchMode = 'semantic' | 'fts' | 'hybrid';
@@ -80,7 +81,7 @@ export class VaultSearchTool {
       },
       budgetTokens: {
         type: 'number',
-        description: 'Maximum chunk token budget to return from each vault query.',
+        description: 'Maximum chunk token budget for the returned hits, across every vault searched.',
       },
       langFilter: {
         type: 'array',
@@ -235,7 +236,7 @@ export class VaultSearchTool {
     // once; a store closed mid-query rejects one) was reported as searched and
     // "no vault hits ... across [...]" read as a genuine empty index. A vault
     // that was not searched is named as failed, never as searched.
-    const merged: VaultSearchHit[] = [];
+    const merged: Array<{ hit: VaultSearchHit; tokenCount: number }> = [];
     const searched: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
     let rawHits = 0;
@@ -254,11 +255,20 @@ export class VaultSearchTool {
         rawHits++;
         if (hit.scores.hnsw !== null && hit.scores.hnsw !== undefined) semanticScored++;
         const projected = projectHit(hit, vid, mode);
-        if (projected) merged.push(projected);
+        if (projected) {
+          const tokenCount = Number.isFinite(hit.chunk.tokenCount)
+            ? hit.chunk.tokenCount
+            : estimateTextTokens(projected.content);
+          merged.push({ hit: projected, tokenCount });
+        }
       }
     });
-    merged.sort((a, b) => b.score - a.score);
-    const capped = merged.slice(0, topK);
+    merged.sort((a, b) => b.hit.score - a.hit.score);
+    // Each vault packed its hits to the budget on its own, so N vaults
+    // returned up to N budgets. Pack the merged, score-ordered list once
+    // more, as VaultRegistry.query does (MEM-14).
+    const withinBudget = budgetTokens === undefined ? merged : packByBudget(merged, budgetTokens).kept;
+    const capped = withinBudget.slice(0, topK).map((m) => m.hit);
 
     const tokensUsed = capped.reduce((acc, h) => acc + estimateTextTokens(h.content), 0);
     const truncated = merged.length > capped.length || perVault.some((p) => p.status === "fulfilled" && p.value.result.truncated);
