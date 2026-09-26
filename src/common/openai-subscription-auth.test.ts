@@ -32,7 +32,8 @@ describe("expandHomePath", () => {
 
   it("follows CODEX_HOME for the default auth file only", () => {
     const env = { HOME: "/home/u", CODEX_HOME: "/srv/codex" };
-    expect(expandHomePath(OPENAI_CHATGPT_AUTH_DEFAULT_FILE, env, "linux")).toBe(path.join("/srv/codex", "auth.json"));
+    // CODEX_HOME is resolved: on Windows "/srv/codex" is on the current drive.
+    expect(expandHomePath(OPENAI_CHATGPT_AUTH_DEFAULT_FILE, env, "linux")).toBe(path.join(path.resolve("/srv/codex"), "auth.json"));
     expect(expandHomePath("~/elsewhere/auth.json", env, "linux")).toBe(path.join("/home/u", "elsewhere/auth.json"));
   });
 });

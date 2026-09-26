@@ -144,7 +144,8 @@ describe("validateScriptPath", () => {
       // The function allows resolved === projectRoot, so empty string resolves
       // to project root. This depends on the implementation -- verify behavior.
       const result = validateScriptPath("", PROJECT_ROOT);
-      expect(result).toBe(PROJECT_ROOT);
+      // Resolved: on Windows "/project" is on the current drive.
+      expect(result).toBe(path.resolve(PROJECT_ROOT));
     });
 
     it("handles path with null byte by relying on OS-level rejection", () => {
@@ -168,7 +169,7 @@ describe("validateScriptPath", () => {
     it("handles a dot path (current directory)", () => {
       // "." resolves to the project root itself
       const result = validateScriptPath(".", PROJECT_ROOT);
-      expect(result).toBe(PROJECT_ROOT);
+      expect(result).toBe(path.resolve(PROJECT_ROOT));
     });
 
     it("rejects absolute path outside project root", () => {
@@ -178,7 +179,7 @@ describe("validateScriptPath", () => {
     });
 
     it("accepts absolute path that happens to be inside project root", () => {
-      const absoluteInside = path.join(PROJECT_ROOT, "scripts", "deploy.sh");
+      const absoluteInside = path.resolve(PROJECT_ROOT, "scripts", "deploy.sh");
       const result = validateScriptPath(absoluteInside, PROJECT_ROOT);
       expect(result).toBe(absoluteInside);
     });

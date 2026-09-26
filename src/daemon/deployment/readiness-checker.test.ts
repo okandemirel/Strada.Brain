@@ -3,6 +3,7 @@ import { ReadinessChecker } from "./readiness-checker.js";
 import type { DeploymentConfig } from "./deployment-types.js";
 import { spawn as realSpawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 import { accessSync, constants as fsConstants } from "node:fs";
 
 vi.mock("node:child_process", () => ({
@@ -105,7 +106,8 @@ describe("ReadinessChecker", () => {
         ["test"],
         expect.objectContaining({
           shell: false,
-          cwd: "/project",
+          // The checker resolves its root: on Windows "/project" is on the current drive.
+          cwd: resolve("/project"),
         }),
       );
     });
@@ -400,7 +402,7 @@ describe("ReadinessChecker", () => {
 
       const result = checker.validateScriptPath("scripts/deploy.sh");
 
-      expect(result).toBe("/project/scripts/deploy.sh");
+      expect(result).toBe(resolve("/project", "scripts", "deploy.sh"));
     });
 
     it("throws on path traversal attempt", () => {
