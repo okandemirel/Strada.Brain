@@ -44,6 +44,14 @@ const MAX_SESSIONS = 100;
 
 /** One startup notice per process, not one per SessionManager (one per agent and delegation). */
 let sessionPersistenceOffNoticeLogged = false;
+/** Likewise one notice per process that session files already on disk are left unread. */
+let ignoredSessionFilesNoticeLogged = false;
+
+/** Test-only: forget the once-per-process notices. */
+export function __resetSessionPersistenceNotices(): void {
+  sessionPersistenceOffNoticeLogged = false;
+  ignoredSessionFilesNoticeLogged = false;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -906,6 +914,18 @@ export class SessionManager {
     try {
       const filePath = this.sessionFilePath(chatId);
       if (!existsSync(filePath)) return null;
+      // Memory off means no session persistence in either direction (ORC-16): a file written
+      // while memory was on is not brought back into the conversation. It stays on disk (the
+      // usual 24h expiry still applies), so turning memory back on finds it.
+      if (!this.deps.memoryManager) {
+        if (!ignoredSessionFilesNoticeLogged) {
+          getLogger().info("Existing session files are ignored because memory is disabled; they are not restored or deleted", {
+            sessionsDir: this.deps.sessionsDir,
+          });
+          ignoredSessionFilesNoticeLogged = true;
+        }
+        return null;
+      }
       const stat = statSync(filePath);
       if (stat.size > SessionManager.MAX_SESSION_FILE_BYTES) {
         getLogger().warn("Session file too large, skipping restore", { chatId, size: stat.size });

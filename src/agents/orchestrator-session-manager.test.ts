@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
-import { createLogger } from "../utils/logger.js";
-import { SessionManager, type SessionManagerDeps, type Session } from "./orchestrator-session-manager.js";
+import { createLogger, getLogger } from "../utils/logger.js";
+import {
+  SessionManager,
+  __resetSessionPersistenceNotices,
+  type SessionManagerDeps,
+  type Session,
+} from "./orchestrator-session-manager.js";
+import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
@@ -97,7 +103,8 @@ describe("SessionManager", () => {
         SessionManager.serializeSession({ messages: [{ role: "user", content: "hi" }], lastActivity: new Date(), visibleMessages: [] }),
         "utf-8",
       );
-      const sm = new SessionManager(createMockDeps({ sessionsDir: dir }));
+      // Restoring needs memory on (ORC-16).
+      const sm = new SessionManager(createMockDeps({ sessionsDir: dir, memoryManager: {} as unknown as IMemoryManager }));
       for (let i = 0; i < 100; i++) sm.getOrCreateSession(`chat-${i}`);
       const restored = sm.getOrCreateSession("restored-chat");
       expect(restored.messages).toHaveLength(1);
@@ -668,6 +675,7 @@ describe("SessionManager", () => {
 
   describe("disk restore integration", () => {
     let tempDir: string;
+    const memoryOn = {} as unknown as IMemoryManager;
 
     afterEach(() => {
       if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -692,11 +700,44 @@ describe("SessionManager", () => {
         "utf-8",
       );
 
-      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      // Restore is part of session persistence, which needs memory on (ORC-16).
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir, memoryManager: memoryOn }));
       const restored = mgr.getOrCreateSession("test-chat-1");
       expect(restored.messages).toHaveLength(2);
       expect(restored.messages[0]!.content).toBe("remember this");
       expect(restored.conversationScope).toBe("test-scope");
+    });
+
+    // ORC-16: with memory off nothing is written, and a file written while memory was on
+    // must not come back either. It is left on disk, and the skip is announced once.
+    it("with memory disabled, ignores existing session files without deleting them, and says so once", () => {
+      __resetSessionPersistenceNotices();
+      tempDir = mkdtempSync(join(tmpdir(), "strada-session-test-"));
+      const session: Session = {
+        messages: [
+          { role: "user", content: "remember this" },
+          { role: "assistant", content: "I will remember" },
+        ],
+        lastActivity: new Date(),
+        visibleMessages: [],
+      };
+      for (const chat of ["chat-a", "chat-b"]) {
+        writeFileSync(join(tempDir, `${chat}.json`), SessionManager.serializeSession(session), "utf-8");
+      }
+      const info = vi.spyOn(getLogger(), "info");
+      try {
+        const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+        expect(mgr.getOrCreateSession("chat-a").messages).toHaveLength(0);
+        expect(new SessionManager(createMockDeps({ sessionsDir: tempDir })).getOrCreateSession("chat-b").messages)
+          .toHaveLength(0);
+
+        expect(readdirSync(tempDir).sort()).toEqual(["chat-a.json", "chat-b.json"]);
+        const ignoredNotices = info.mock.calls.filter(([message]) =>
+          typeof message === "string" && message.includes("session files are ignored because memory is disabled"));
+        expect(ignoredNotices).toHaveLength(1);
+      } finally {
+        info.mockRestore();
+      }
     });
 
     it("creates fresh session when disk file is expired", () => {
@@ -712,7 +753,7 @@ describe("SessionManager", () => {
         "utf-8",
       );
 
-      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir, memoryManager: memoryOn }));
       const session = mgr.getOrCreateSession("expired-chat");
       expect(session.messages).toHaveLength(0); // fresh session
     });
@@ -723,7 +764,7 @@ describe("SessionManager", () => {
       const bigContent = "x".repeat(600 * 1024);
       writeFileSync(join(tempDir, "big-chat.json"), bigContent, "utf-8");
 
-      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir, memoryManager: memoryOn }));
       const session = mgr.getOrCreateSession("big-chat");
       expect(session.messages).toHaveLength(0); // fresh session, not restored
     });
