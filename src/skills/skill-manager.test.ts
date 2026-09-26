@@ -46,6 +46,23 @@ vi.mock("../utils/logger.js", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Point the user's home at `home` until the returned restore runs. os.homedir()
+ * reads USERPROFILE on Windows: with HOME alone, trust records went into the
+ * real profile.
+ */
+function redirectHome(home: string): () => void {
+  const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  process.env["HOME"] = home;
+  process.env["USERPROFILE"] = home;
+  return () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
 function makeTool(name: string): ITool {
   return {
     name,
@@ -551,8 +568,7 @@ describe("SkillManager", () => {
 
     it("(d2) an untrusted workspace skill's env is gone before its code was ever imported", async () => {
       const home = await mkdtemp(join(tmpdir(), "strada-hot-home-"));
-      const savedHome = process.env["HOME"];
-      process.env["HOME"] = home;
+      const restoreHome = redirectHome(home);
       try {
         await withTempDir(async (dir) => {
           const skillDir = await writeHotSkill(dir, "hot-untrusted", { indexJs: "export const tools = [];\n" });
@@ -564,7 +580,7 @@ describe("SkillManager", () => {
           expect(process.env[OTHER]).toBeUndefined();
         });
       } finally {
-        process.env["HOME"] = savedHome;
+        restoreHome();
         await rm(home, { recursive: true, force: true });
       }
     });
@@ -644,15 +660,15 @@ describe("SkillManager", () => {
   describe("workspace trust (plan 1.15)", () => {
     let fakeHome: string;
     let projectRoot: string;
-    const savedHome = process.env["HOME"];
+    let restoreHome: () => void;
 
     beforeEach(async () => {
       fakeHome = await mkdtemp(join(tmpdir(), "strada-trust-home-"));
       projectRoot = await mkdtemp(join(tmpdir(), "strada-trust-proj-"));
-      process.env["HOME"] = fakeHome;
+      restoreHome = redirectHome(fakeHome);
     });
     afterEach(async () => {
-      process.env["HOME"] = savedHome;
+      restoreHome();
       await rm(fakeHome, { recursive: true, force: true });
       await rm(projectRoot, { recursive: true, force: true });
     });
@@ -742,8 +758,7 @@ describe("SkillManager", () => {
       // SEC-12: `inject: always` from a workspace skill is honoured only once
       // approved, so the approval is recorded (under a throwaway HOME) first.
       await withTempDir(async (dir) => {
-        const savedHome = process.env["HOME"];
-        process.env["HOME"] = dir;
+        const restoreHome = redirectHome(dir);
         try {
           const skillDir = join(dir, "skills", "deploy-notes");
           await mkdir(skillDir, { recursive: true });
@@ -767,7 +782,7 @@ describe("SkillManager", () => {
           expect(entry!.injectWithheld).toBeUndefined();
           expect(entry!.manifest.triggers).toEqual(["deploy", "release"]);
         } finally {
-          process.env["HOME"] = savedHome;
+          restoreHome();
         }
       });
     });

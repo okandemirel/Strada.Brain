@@ -43,16 +43,22 @@ import {
 
 let fakeHome: string;
 let projectRoot: string;
-const savedHome = process.env["HOME"];
+// os.homedir() reads USERPROFILE on Windows: with HOME alone the records went
+// into the real profile, shared by every test.
+const savedHome = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
 
 beforeEach(async () => {
   fakeHome = await mkdtemp(join(tmpdir(), "strada-trust-home-"));
   projectRoot = await mkdtemp(join(tmpdir(), "strada-trust-proj-"));
   process.env["HOME"] = fakeHome;
+  process.env["USERPROFILE"] = fakeHome;
 });
 
 afterEach(async () => {
-  process.env["HOME"] = savedHome;
+  for (const [key, value] of Object.entries(savedHome)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   await rm(fakeHome, { recursive: true, force: true });
   await rm(projectRoot, { recursive: true, force: true });
 });
