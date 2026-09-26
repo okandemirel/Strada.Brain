@@ -863,3 +863,51 @@ describe("ControlLoopTracker — verifiers and MCP writers in the read-only stal
     expect(tracker.hadMutationsSinceLastReset()).toBe(true);
   });
 });
+
+describe("ControlLoopTracker — a check polled with the same answer (AUT-21 follow-up)", () => {
+  const POLL = "unity_compile_status:{}";
+  const IDLE = "ok:Compilation idle. 0 errors.";
+
+  it("the same check, same input, same result eight times in a row is a stall", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 1; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD; i++) {
+      tracker.markToolExecution("unity_compile_status", POLL, IDLE);
+      expect(tracker.readOnlyStall(), `after ${i} polls`).toBeNull();
+    }
+    tracker.markToolExecution("unity_compile_status", POLL, IDLE);
+    const stall = tracker.takeUnreportedReadOnlyStall();
+    expect(stall?.calls).toBe(ControlLoopTracker.READ_ONLY_STALL_THRESHOLD);
+    expect(stall?.reason).toContain("same check");
+    // Reported once per streak, like the read-only stalls.
+    expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
+    expect(tracker.getStallEpisodes()).toBe(1);
+  });
+
+  it("a poll whose answer changes (a compile finishing) never adds up", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < 20; i++) {
+      tracker.markToolExecution("unity_compile_status", POLL, i % 2 === 0 ? "ok:Compiling…" : IDLE);
+    }
+    expect(tracker.readOnlyStall()).toBeNull();
+  });
+
+  it("a write between polls starts the count over", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let round = 0; round < 4; round++) {
+      for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD - 1; i++) {
+        tracker.markToolExecution("unity_compile_status", POLL, IDLE);
+      }
+      tracker.markToolExecution("file_edit", `file_edit:{"path":"Assets/A${round}.cs"}`);
+    }
+    expect(tracker.readOnlyStall()).toBeNull();
+  });
+
+  it("the same check with different input, or with no result reported, is not counted", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    for (let i = 0; i < 20; i++) {
+      tracker.markToolExecution("dotnet_test", `dotnet_test:{"filter":"Suite${i}"}`, "ok:Passed!");
+      tracker.markToolExecution("unity_playmode_verify", "unity_playmode_verify:{}");
+    }
+    expect(tracker.readOnlyStall()).toBeNull();
+  });
+});

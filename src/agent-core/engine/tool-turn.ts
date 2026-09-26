@@ -239,12 +239,17 @@ export async function portExecuteToolTurn(
 
     // STEP B — control-loop tracker mark (per call), as v1 does.
     if (runCtx.controlLoopTracker) {
+      const resultsById = new Map(toolResults.map((r) => [r.toolCallId, r]));
       for (const tc of toolCalls) {
         // Fingerprint the call, not just the tool: reading forty different
-        // files is progress, reading one file forty times is not.
+        // files is progress, reading one file forty times is not. The result
+        // rides along so a check polled with the same answer every time is
+        // seen as the stall it is.
+        const result = resultsById.get(tc.id);
         runCtx.controlLoopTracker.markToolExecution(
           tc.name,
           `${tc.name}:${JSON.stringify(tc.input ?? {}).slice(0, 300)}`,
+          result ? `${result.isError === true ? "error" : "ok"}:${result.content}` : undefined,
         );
       }
       // A clean verification of changes this run made is verified progress:

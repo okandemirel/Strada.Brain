@@ -61,6 +61,9 @@ export class ControlLoopTracker {
   private stallEpisodes = 0;
   private lastReadOnlyFingerprint: string | null = null;
   private sameReadOnlyFingerprintCount = 0;
+  /** The last check (neutral call) with its result, and how many times in a row it came back the same. */
+  private lastCheckFingerprint: string | null = null;
+  private sameCheckResultCount = 0;
   private mutationsSinceLastReset = false;
   /** When the current read-only streak began (epoch ms); null = no streak. */
   private readOnlySince: number | null = null;
@@ -202,7 +205,12 @@ export class ControlLoopTracker {
     return this.mutationsSinceLastReset;
   }
 
-  markToolExecution(toolName?: string, callFingerprint?: string): void {
+  /**
+   * @param resultFingerprint what the call returned. Only a check (a neutral call) uses it: the
+   *   same check with the same input and the same answer, over and over, is a stall even though
+   *   checks count as neither reading nor progress.
+   */
+  markToolExecution(toolName?: string, callFingerprint?: string, resultFingerprint?: string): void {
     // Only reset stale analysis counter on mutation tools, not read-only tools
     // like file_read, grep_search, list_directory. When no toolName is provided
     // (backward compat), assume mutation to preserve existing behavior.
@@ -210,6 +218,7 @@ export class ControlLoopTracker {
     // but `grep -r` through it is reading, and it used to end a read-only
     // streak (measured 2026-09-08 16:07: four shell greps, streak reset).
     const stallClass = toolName ? stallClassOf(toolName, this.toolMetadata?.(toolName)) : "progress";
+    this.trackRepeatedCheck(stallClass === "neutral" ? toolName : undefined, callFingerprint, resultFingerprint);
     const progresses = stallClass === "progress";
     const mutates = !toolName || MUTATION_TOOLS.has(toolName) || progresses;
     if (mutates) {
@@ -239,6 +248,28 @@ export class ControlLoopTracker {
   }
 
   /**
+   * Count a check that returns exactly what the same check returned last time. Anything else in
+   * between — a write, a read, another check, a different answer — starts the count over, so a
+   * compile poll that waits out a compile (the answer changes) or re-checks after an edit never
+   * adds up. Once AUT-21 made checks neutral, a run polling unity_compile_status with the same
+   * input and the same answer indefinitely was caught by no rule.
+   */
+  private trackRepeatedCheck(checkTool: string | undefined, callFingerprint?: string, resultFingerprint?: string): void {
+    if (checkTool === undefined || resultFingerprint === undefined) {
+      this.lastCheckFingerprint = null;
+      this.sameCheckResultCount = 0;
+      return;
+    }
+    const fingerprint = `${callFingerprint ?? checkTool}\u0000${resultFingerprint}`;
+    if (fingerprint === this.lastCheckFingerprint) {
+      this.sameCheckResultCount++;
+    } else {
+      this.lastCheckFingerprint = fingerprint;
+      this.sameCheckResultCount = 1;
+    }
+  }
+
+  /**
    * Is the run reading without getting anywhere?
    *
    * The same condition is checked inside recordGate(), which only runs when
@@ -257,6 +288,16 @@ export class ControlLoopTracker {
         calls: this.sameReadOnlyFingerprintCount,
         reason:
           `Agent repeated the same read-only call ${this.sameReadOnlyFingerprintCount} times ` +
+          `without any file mutation.`,
+      };
+    }
+    // The same rule for a check: the same verifier asked the same thing, answering the same way,
+    // as many times as a repeated read takes to count as stuck.
+    if (this.sameCheckResultCount >= ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
+      return {
+        calls: this.sameCheckResultCount,
+        reason:
+          `Agent ran the same check ${this.sameCheckResultCount} times with identical input and an identical result ` +
           `without any file mutation.`,
       };
     }
@@ -295,10 +336,7 @@ export class ControlLoopTracker {
   takeUnreportedReadOnlyStall(): { readonly calls: number; readonly reason: string } | null {
     const stall = this.readOnlyStall();
     if (stall === null) return null;
-    this.consecutiveReadOnlyToolCalls = 0;
-    this.lastReadOnlyFingerprint = null;
-    this.sameReadOnlyFingerprintCount = 0;
-    this.readOnlySince = null;
+    this.resetReadOnlyStreak();
     this.readOnlyStreakReports += 1;
     this.stallEpisodes += 1;
     return stall;
@@ -338,6 +376,8 @@ export class ControlLoopTracker {
     this.lastReadOnlyFingerprint = null;
     this.sameReadOnlyFingerprintCount = 0;
     this.readOnlySince = null;
+    this.lastCheckFingerprint = null;
+    this.sameCheckResultCount = 0;
   }
 
   /**

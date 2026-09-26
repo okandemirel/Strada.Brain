@@ -342,3 +342,34 @@ describe("portExecuteToolTurn — a read-only streak is told to the model", () =
     expect(texts(messages).some((t) => t.startsWith("[READ-ONLY STREAK]"))).toBe(false);
   });
 });
+
+describe("portExecuteToolTurn — a check polled with the same answer is a stall (AUT-21 follow-up)", () => {
+  const poll = [{ id: "tc-p", name: "unity_compile_status", input: {} }] as unknown as ToolCall[];
+  const gateOf = (runCtx: EngineRunContext): string | undefined =>
+    (runCtx.session as unknown as { messages: Array<{ role: string; content: unknown }> }).messages
+      .flatMap((m) => (Array.isArray(m.content) ? (m.content as Array<{ type: string; text?: string }>) : []))
+      .find((b) => b.type === "text" && (b.text ?? "").startsWith("[READ-ONLY STREAK]"))?.text;
+  const answering = (content: () => string): Partial<ToolTurnDeps> => ({
+    executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+      toolCalls.map((tc) => ({ toolCallId: tc.id, content: content(), isError: false }) as unknown as ToolResult),
+  } as Partial<ToolTurnDeps>);
+
+  it("the tool result reaches the tracker: identical polls raise the gate", async () => {
+    const deps = makeDeps(answering(() => "Compilation idle."));
+    const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD; i++) {
+      await portExecuteToolTurn(deps, [poll, undefined, createInitialState("wait for compile"), ""], runCtx);
+    }
+    expect(gateOf(runCtx)).toContain("same check");
+  });
+
+  it("polls whose answer changes raise nothing", async () => {
+    let n = 0;
+    const deps = makeDeps(answering(() => `Compiling, ${++n}% done`));
+    const runCtx = makeRunCtx({ controlLoopTracker: new ControlLoopTracker({ staleAnalysisThreshold: 100 }) });
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD * 2; i++) {
+      await portExecuteToolTurn(deps, [poll, undefined, createInitialState("wait for compile"), ""], runCtx);
+    }
+    expect(gateOf(runCtx)).toBeUndefined();
+  });
+});
