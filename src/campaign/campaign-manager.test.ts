@@ -5332,6 +5332,7 @@ describe("CampaignManager", () => {
     // cleared — was written back over the revived row. Codex reproduced it
     // through the independent reviewer's await.
     let id: string | undefined;
+    let revived = false;
     const campaign = await runToSpentRemediation(
       (reqs) => {
         // The revival happens while the audit is in flight: a new generation,
@@ -5343,6 +5344,7 @@ describe("CampaignManager", () => {
           live.state = "planning";
           live.lastError = "revived by a person";
           storage.save(live);
+          revived = true;
         }
         return { closed: [...reqs], open: [] };
       },
@@ -5351,6 +5353,10 @@ describe("CampaignManager", () => {
 
     // The settlement's own writes are dropped: the revived row stands…
     const submittedAtRevival = tasks.submitted.length;
+    // The audit runs after the final gates, whose git probes are slower on
+    // Windows: wait for the revival itself, then give the settlement the
+    // same half second to (wrongly) write or announce anything.
+    await waitFor(() => expect(revived).toBe(true));
     await new Promise((r) => setTimeout(r, 500));
     const after = storage.get(campaign.id)!;
     expect(after.stopGeneration).toBe(1);
@@ -9185,7 +9191,10 @@ describe("CampaignManager", () => {
       for (let i = 0; i < 4 && storage.get(campaign.id)!.state === "executing"; i++) {
         const before = tasks.submitted.length;
         settleMilestone(`shipping it (round ${i})`);
-        await new Promise((r) => setTimeout(r, 150));
+        // Wait for the gate's answer — a bounce or a terminal state — rather
+        // than a fixed 150ms: the gate's git probes are slower on Windows, and
+        // a loop that stopped settling mid-bounce left the campaign executing.
+        await waitFor(() => expect(tasks.submitted.length > before || storage.get(campaign.id)!.state !== "executing").toBe(true));
         if (tasks.submitted.length === before) break;
       }
       await waitFor(() => expect(storage.get(campaign.id)!.state).not.toBe("executing"));
