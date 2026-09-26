@@ -1,9 +1,11 @@
 import { FileReadTool } from "./file-read.js";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 import type { ToolContext } from "./tool.interface.js";
+import { VaultRegistry } from "../../vault/vault-registry.js";
+import { createFakeVault } from "../../test-helpers.js";
 
 let tempDir: string;
 let ctx: ToolContext;
@@ -191,5 +193,49 @@ describe("a miss inside a directory that exists", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).not.toContain("that directory holds");
+  });
+});
+
+/**
+ * The vault keys files by their path under its own root, and file_read hands
+ * it the path validatePath's realpath produced. A root or project spelled any
+ * other way — a link here; on Windows an 8.3 short name (C:\Users\RUNNER~1)
+ * or other letter case — made every key `../…`, so the vault never served a
+ * read on Windows.
+ */
+describe("a vault whose root is spelled through an alias of the project", () => {
+  it("still serves the read from the vault, whichever side uses the alias", async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "file-read-alias-")));
+    try {
+      const real = join(base, "project");
+      mkdirSync(join(real, "src"), { recursive: true });
+      writeFileSync(join(real, "src", "a.ts"), "export const a = 1;\n");
+      const alias = join(base, "alias");
+      symlinkSync(real, alias, "junction");
+      const st = statSync(join(real, "src", "a.ts"));
+
+      for (const [rootPath, projectPath] of [[alias, alias], [alias, real], [real, alias]] as const) {
+        const vault = createFakeVault({
+          rootPath,
+          listFiles: vi.fn(() => [{
+            path: "src/a.ts", blobHash: "h", mtimeMs: st.mtimeMs, size: st.size,
+            lang: "typescript" as const, kind: "source" as const, indexedAt: 0,
+          }]),
+          readFile: vi.fn(async () => "export const a = 1;\n"),
+        });
+        const vaultRegistry = new VaultRegistry();
+        vaultRegistry.register(vault);
+
+        const result = await new FileReadTool().execute(
+          { path: "src/a.ts" },
+          { projectPath, workingDirectory: projectPath, readOnly: false, vaultRegistry },
+        );
+
+        expect(result.content, `root ${rootPath}, project ${projectPath}`).toContain("vault-cached");
+        expect(vault.readFile).toHaveBeenCalledWith("src/a.ts");
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

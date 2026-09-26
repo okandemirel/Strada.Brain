@@ -25,7 +25,7 @@ import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join, relative as pathRelative, basename, relative, sep } from "node:path";
+import { isAbsolute, join, basename, relative, sep } from "node:path";
 import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { canonicalizeProviderName } from "./providers/provider-identity.js";
@@ -55,7 +55,7 @@ import {
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
 import { validatePath } from "../security/path-guard.js";
-import { vaultFileRead, isVaultInsideProject, MAX_SYMBOL_LEN } from "./tools/file-read.js";
+import { vaultFileRead, isVaultInsideProject, toVaultRelative, MAX_SYMBOL_LEN } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
@@ -5376,7 +5376,9 @@ export class Orchestrator {
         if (pathCheck.valid) {
           const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
           if (vault && isVaultInsideProject(vault, toolContext.projectPath)) {
-            const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
+            // The tool's own conversion: it relates the canonical root to the
+            // realpath'd file, where a lexical relative() missed on Windows.
+            const vaultRel = toVaultRelative(vault, pathCheck.fullPath);
             const intercepted = await vaultFileRead({
               vault,
               vaultRelPath: vaultRel,

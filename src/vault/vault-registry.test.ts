@@ -17,8 +17,9 @@ describe('VaultRegistry', () => {
 
   function makeTempDir(prefix: string): string {
     // realpath immediately: macOS tmpdir lives behind a /var → /private/var
-    // symlink and the registry canonicalizes via realpath.
-    return realpathSync(tmp.makeDir(prefix));
+    // symlink and the registry canonicalizes via realpath — the native one,
+    // which on Windows also expands an 8.3 tmpdir (C:\Users\RUNNER~1).
+    return realpathSync.native(tmp.makeDir(prefix));
   }
 
   afterEach(() => tmp.cleanup());

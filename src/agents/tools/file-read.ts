@@ -6,6 +6,7 @@ import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
+import { canonicalVaultPath } from "../../vault/path-policy.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { nearbyNames, sameNameElsewhere } from "./nearby-names.js";
 import { integerArg } from "./tool-input.js";
@@ -333,20 +334,26 @@ export async function vaultFileRead(params: {
   };
 }
 
-/** Convert absolute disk path to vault-relative (POSIX-style), using the vault's rootPath. */
-function toVaultRelative(vault: IVault, absPath: string): string {
-  return pathRelative(vault.rootPath, absPath).replaceAll("\\", "/");
+/**
+ * Convert absolute disk path to vault-relative (POSIX-style), using the vault's rootPath.
+ * Both sides canonical: the path comes from validatePath's realpath, and a
+ * root spelled another way (a symlink, and on Windows an 8.3 short name or
+ * other letter case) gave `../` keys the vault never holds.
+ */
+export function toVaultRelative(vault: IVault, absPath: string): string {
+  return pathRelative(canonicalVaultPath(vault.rootPath), canonicalVaultPath(absPath)).replaceAll("\\", "/");
 }
 
 /**
  * sec-H2: true iff the vault's rootPath is contained within (or equal to)
  * the session's projectPath. Keeps file_read strictly confined to the
  * current project, even when the VaultRegistry also owns a sibling vault
- * (e.g. the SelfVault pointing at the Brain source tree).
+ * (e.g. the SelfVault pointing at the Brain source tree). Both compared as
+ * the filesystem spells them, like the path validatePath hands the vault.
  */
 export function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
-  const root = pathResolve(vault.rootPath);
-  const project = pathResolve(projectPath);
+  const root = canonicalVaultPath(vault.rootPath);
+  const project = canonicalVaultPath(projectPath);
   if (root === project) return true;
   const projectWithSep = project.endsWith(pathSep) ? project : project + pathSep;
   return root.startsWith(projectWithSep);

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Orchestrator } from "./orchestrator.js";
@@ -90,6 +90,21 @@ describe("the vault-first file_read interceptor applies FileReadTool's guards", 
 
     expect(fileRead.execute).not.toHaveBeenCalled();
     expect(vault.readFile).toHaveBeenCalledTimes(1);
+    expect(result?.content).toContain("source=vault:");
+  });
+
+  // The interceptor related the vault's root to the realpath'd file lexically:
+  // a root spelled through a link (on Windows an 8.3 short name or another
+  // letter case) produced a `../` key, and the vault never served the file.
+  it("a vault rooted at an alias of the project serves the file too", async () => {
+    const alias = join(root, "alias");
+    symlinkSync(projectPath, alias, "junction");
+    const { run, fileRead, vault } = build(vaultAt(alias, "src/a.ts"));
+
+    const [result] = await run({ path: "src/a.ts" });
+
+    expect(fileRead.execute).not.toHaveBeenCalled();
+    expect(vault.readFile).toHaveBeenCalledWith("src/a.ts");
     expect(result?.content).toContain("source=vault:");
   });
 

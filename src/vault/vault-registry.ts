@@ -1,7 +1,6 @@
-import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
 import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit, VaultStats } from './vault.interface.js';
-import { isVaultRootAllowed, redactPathsInMessage, resolveExistingVaultRoot } from './path-policy.js';
+import { canonicalVaultPath, isVaultRootAllowed, redactPathsInMessage, resolveExistingVaultRoot } from './path-policy.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { packByBudget } from './query-pipeline.js';
 
@@ -33,13 +32,12 @@ const MAX_INIT_ERROR_CHARS = 200;
  * Safely resolve a realpath. Falls back to the input when the path does
  * not exist or realpath fails for any reason — callers should still get
  * a deterministic, canonicalish path to compare against vault roots.
+ * The native flavour, like validatePath and resolveExistingVaultRoot: on
+ * Windows the plain one left 8.3 short names and letter case as typed, so
+ * no file_read path ever matched a root (canonicalVaultPath).
  */
 function safeRealpath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
+  return canonicalVaultPath(p);
 }
 
 export class VaultRegistry {

@@ -69,7 +69,9 @@ describe('VaultRegistry', () => {
       await expect(reg.createAndRegister(outside)).rejects.toThrow(/allowed project roots/i);
       await reg.createAndRegister(allowed);
 
-      expect(factoryCalls).toEqual([realpathSync(allowed)]);
+      // The native realpath, as the registry uses: on Windows the plain one
+      // leaves an 8.3 tmpdir (C:\Users\RUNNER~1) unexpanded.
+      expect(factoryCalls).toEqual([realpathSync.native(allowed)]);
       expect(reg.get('created')).toBeDefined();
     } finally {
       rmSync(allowed, { recursive: true, force: true });

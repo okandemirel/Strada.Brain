@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -278,6 +279,23 @@ export async function prepareSafeVaultWritePath(
     if (err instanceof Error && err.message.includes('symlink')) throw err;
   }
   return absPath;
+}
+
+/**
+ * A path as the filesystem spells it: the form validatePath's realpath hands
+ * the file tools. The native realpath resolves symlinks and, on Windows, also
+ * expands 8.3 short names (C:\Users\RUNNER~1) and takes letter case from
+ * the disk; plain realpathSync only resolves symlinks there. A vault root
+ * compared in the other spelling never matched those paths, so on Windows the
+ * vault never served a read. Falls back to the resolved input when the path
+ * does not exist.
+ */
+export function canonicalVaultPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
 }
 
 export async function resolveExistingVaultRoot(rootPath: string): Promise<
