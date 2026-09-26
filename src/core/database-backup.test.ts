@@ -833,8 +833,9 @@ describe("retained attachment bytes (round 11 #19)", () => {
     expect(blob?.root).toBe("memory");
     expect(blob?.bytes).toBe(payload.length);
     expect(blob?.sha256).toBe(createHash("sha256").update(payload).digest("hex"));
-    // And the copy inside the backup keeps the spool's privacy.
-    expect(statSync(path.join(destDir, blob!.backup)).mode & 0o777).toBe(0o600);
+    // And the copy inside the backup keeps the spool's privacy. Windows has no
+    // POSIX mode bits (stat reads 0666); there privacy is the directory's ACL.
+    if (process.platform !== "win32") expect(statSync(path.join(destDir, blob!.backup)).mode & 0o777).toBe(0o600);
   });
 
   it("recovers a delivery-package revision and an attachment's bytes on a fresh root", async () => {
@@ -912,7 +913,8 @@ describe("retained attachment bytes (round 11 #19)", () => {
     expect(serveBytes(freshDb, token).equals(payload)).toBe(true);
   });
 
-  it("restores the spool as 0700 directories of 0600 files", async () => {
+  // POSIX mode bits only: Windows does not enforce them (stat reads 0666).
+  it.skipIf(process.platform === "win32")("restores the spool as 0700 directories of 0600 files", async () => {
     // The store's guarantee about retained bytes — "the spool is 0700 and the
     // copy 0600, so that is not another process" — must survive the restore
     // that recreated them.
@@ -1735,7 +1737,11 @@ describe("every store asks before opening (round 13 #18)", () => {
     expect(before).toBeGreaterThan(0);
 
     const db = new Database(file);
-    expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    try {
+      expect(() => configureSqlitePragmas(db, "memory")).toThrow(/maintenance operation/i);
+    } finally {
+      db.close(); // an open connection keeps the file locked on Windows
+    }
     expect(existsSync(file)).toBe(true);
     expect(statSync(file).size).toBe(before);
     const reopened = new Database(file, { readonly: true });
