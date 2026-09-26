@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GlobSearchTool, GrepSearchTool, ListDirectoryTool } from "./search.js";
+import path from "node:path";
+import { GlobSearchTool, GrepSearchTool, ListDirectoryTool, toReportedPath } from "./search.js";
 import { createToolContext } from "../../test-helpers.js";
 
 vi.mock("glob", () => ({
@@ -191,5 +192,20 @@ describe("ListDirectoryTool", () => {
     const result = await tool.execute({ path: "missing" }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("not found");
+  });
+});
+
+describe("paths the search tools report", () => {
+  // glob answers with native separators; on Windows grep_search and
+  // glob_search reported `Assets\B.cs` where every other tool says Assets/B.cs.
+  it("uses forward slashes for a Windows match", () => {
+    const native = ["Assets", "Scripts", "Player.cs"].join(path.win32.sep);
+    expect(toReportedPath(native, path.win32)).toBe("Assets/Scripts/Player.cs");
+  });
+
+  it("leaves a POSIX match alone, backslash in a file name included", () => {
+    expect(toReportedPath("Assets/Scripts/Player.cs", path.posix)).toBe("Assets/Scripts/Player.cs");
+    const oddName = `Assets/odd${path.win32.sep}name.cs`;
+    expect(toReportedPath(oddName, path.posix)).toBe(oddName);
   });
 });

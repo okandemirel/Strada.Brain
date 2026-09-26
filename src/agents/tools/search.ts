@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { resolve, extname, relative, isAbsolute, sep } from "node:path";
+import path, { resolve, extname, relative, isAbsolute, sep } from "node:path";
 import { glob, type Path } from "glob";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -42,7 +42,18 @@ async function globInsideProject(pattern: string, projectPath: string): Promise<
     maxDepth: 20,
     ignore: { ignored: outside, childrenIgnored: outside },
   });
-  return matches.filter((match) => !isOutsideRoot(root, match));
+  return matches.filter((match) => !isOutsideRoot(root, match)).map((match) => toReportedPath(match));
+}
+
+/**
+ * A project-relative match as the search tools report it: with forward
+ * slashes, the way git, Unity (`Assets/...`) and the agent's own paths write
+ * it. glob answers with native separators, so on Windows grep_search and
+ * glob_search reported `Assets\B.cs`. Only the native separator is rewritten:
+ * on POSIX a backslash is part of a file name.
+ */
+export function toReportedPath(match: string, pathApi: path.PlatformPath = path): string {
+  return pathApi.sep === "/" ? match : match.split(pathApi.sep).join("/");
 }
 
 const MAX_RESULTS = 50;
