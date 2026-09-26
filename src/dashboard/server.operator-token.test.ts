@@ -78,7 +78,10 @@ function fakeDaemon() {
   return { ctx, fireNow, breaker };
 }
 
-/** Every allowlisted route with a body it accepts, and the spy it must reach. */
+/**
+ * Every allowlisted route with a body it accepts, the spy it must reach, and
+ * its success status (the two long operations answer 202: they start a job).
+ */
 function operatorCalls(daemon: ReturnType<typeof fakeDaemon>) {
   const { ctx } = daemon;
   return [
@@ -91,10 +94,10 @@ function operatorCalls(daemon: ReturnType<typeof fakeDaemon>) {
     { path: `/api/agents/${AGENT}/start`, body: {}, spy: ctx.agentManager.startAgent },
     { path: `/api/agents/${AGENT}/budget`, body: { usd: 2.5 }, spy: ctx.agentManager.setBudgetCap },
     { path: "/api/delegations/tier", body: { type: "code_review", tier: "cheap" }, spy: ctx.tierRouter.setOverride },
-    { path: "/api/consolidation/run", body: {}, spy: ctx.consolidationEngine.runCycle },
+    { path: "/api/consolidation/run", body: {}, spy: ctx.consolidationEngine.runCycle, status: 202 },
     { path: "/api/consolidation/undo", body: { logId: "log-1" }, spy: ctx.consolidationEngine.undo },
-    { path: "/api/deployment/check", body: {}, spy: ctx.readinessChecker.checkReadiness },
-  ];
+    { path: "/api/deployment/check", body: {}, spy: ctx.readinessChecker.checkReadiness, status: 202 },
+  ].map((call) => ({ status: 200, ...call }));
 }
 
 let server: DashboardServer | null = null;
@@ -150,6 +153,18 @@ function post(port: number, path: string, headers: Record<string, string>, body:
 }
 
 const operator = (token: string): Record<string, string> => ({ [OPERATOR_TOKEN_HEADER]: token });
+
+/** A job start's result: the 202's job polled over GET /api/daemon/jobs/:id until it settles. */
+async function jobResult(port: number, started: Response): Promise<unknown> {
+  expect(started.status).toBe(202);
+  const { jobId } = (await started.json()) as { jobId: string };
+  for (;;) {
+    const job = (await (await fetch(`http://127.0.0.1:${port}/api/daemon/jobs/${jobId}`)).json()) as { state: string; result?: unknown; error?: string };
+    if (job.state === "done") return job.result;
+    if (job.state === "failed") throw new Error(job.error);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 describe("the local operator credential file (COR-13)", () => {
   it("is written while the dashboard listens: its URL, this pid and a fresh random token, readable by this user only", async () => {
@@ -207,7 +222,7 @@ describe("what the operator token opens (COR-13)", () => {
     if (!started) return;
     for (const call of operatorCalls(started.daemon)) {
       const res = await post(started.port, call.path, operator(started.token), call.body);
-      expect(res.status, `${call.path}: ${await res.clone().text()}`).toBe(200);
+      expect(res.status, `${call.path}: ${await res.clone().text()}`).toBe(call.status);
       expect(call.spy, call.path).toHaveBeenCalled();
     }
   });
@@ -303,7 +318,7 @@ describe("what the operator token opens (COR-13)", () => {
       expect(guest.status, call.path).toBe(403);
       expect(call.spy, call.path).not.toHaveBeenCalled();
       const owner = await post(started.port, call.path, { ...self, ...as("owner-profile") }, call.body);
-      expect(owner.status, call.path).toBe(200);
+      expect(owner.status, call.path).toBe(call.status);
     }
   });
 
@@ -367,12 +382,13 @@ describe("the daemon control routes do what the in-process commands do (COR-13)"
     const started = await start();
     if (!started) return;
     const { ctx } = started.daemon;
-    const check = await post(started.port, "/api/deployment/check", operator(started.token), {});
-    expect(await check.json()).not.toHaveProperty("proposed");
+    const check = await jobResult(started.port, await post(started.port, "/api/deployment/check", operator(started.token), {}));
+    expect(check).toMatchObject({ ready: true });
+    expect(check).not.toHaveProperty("proposed");
     expect(ctx.deployTrigger.triggerReadinessCheck).not.toHaveBeenCalled();
 
-    const propose = await post(started.port, "/api/deployment/check", operator(started.token), { propose: true });
-    expect(await propose.json()).toMatchObject({ ready: true, proposed: true });
+    const propose = await jobResult(started.port, await post(started.port, "/api/deployment/check", operator(started.token), { propose: true }));
+    expect(propose).toMatchObject({ ready: true, proposed: true });
     expect(ctx.deployTrigger.triggerReadinessCheck).toHaveBeenCalledTimes(1);
   });
 
@@ -413,5 +429,102 @@ describe("the daemon control routes do what the in-process commands do (COR-13)"
     expect(((await change.json()) as { error: string }).error).toContain("Daemon mode is not enabled");
     const audit = await fetch(`http://127.0.0.1:${port}/api/daemon/audit`);
     expect(await audit.json()).toMatchObject({ enabled: false });
+  });
+});
+
+describe("long operations run as jobs the CLI polls (COR-13 follow-up)", () => {
+  const getJob = async (port: number, id: string, headers: Record<string, string> = {}) =>
+    fetch(`http://127.0.0.1:${port}/api/daemon/jobs/${id}`, { headers });
+
+  it("answers 202 { jobId } at once, reports the job running, then done with the cycle's result", async () => {
+    const started = await start();
+    if (!started) return;
+    let finish!: (value: unknown) => void;
+    started.daemon.ctx.consolidationEngine.runCycle.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }) as never);
+
+    const res = await post(started.port, "/api/consolidation/run", operator(started.token));
+    expect(res.status).toBe(202);
+    const { jobId, kind, state } = (await res.json()) as { jobId: string; kind: string; state: string };
+    expect([kind, state]).toEqual(["memory:consolidate", "running"]);
+
+    const running = await getJob(started.port, jobId);
+    expect(running.status).toBe(200);
+    expect(await running.json()).toMatchObject({ id: jobId, kind: "memory:consolidate", state: "running" });
+
+    finish({ status: "completed", processed: 2, remaining: 0, clustersFound: 2, costUsd: 0.01 });
+    await vi.waitFor(async () => {
+      expect(await (await getJob(started.port, jobId)).json()).toMatchObject({
+        state: "done",
+        result: { status: "completed", processed: 2 },
+      });
+    });
+  });
+
+  it("reports a failed job with its error", async () => {
+    const started = await start();
+    if (!started) return;
+    started.daemon.ctx.consolidationEngine.runCycle.mockImplementationOnce(async () => {
+      throw new Error("LLM provider unavailable");
+    });
+    const { jobId } = (await (await post(started.port, "/api/consolidation/run", operator(started.token))).json()) as { jobId: string };
+    await vi.waitFor(async () => {
+      expect(await (await getJob(started.port, jobId)).json()).toMatchObject({ state: "failed", error: "LLM provider unavailable" });
+    });
+  });
+
+  it("runs one job per kind: a second start while one runs is a 409 naming it, and starts nothing", async () => {
+    const started = await start();
+    if (!started) return;
+    const { ctx } = started.daemon;
+    ctx.readinessChecker.checkReadiness.mockImplementationOnce(() => new Promise(() => undefined));
+    const first = await post(started.port, "/api/deployment/check", operator(started.token), {});
+    const { jobId } = (await first.json()) as { jobId: string };
+
+    const second = await post(started.port, "/api/deployment/check", operator(started.token), { propose: true });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: `A deploy:check job is already running: ${jobId}`, jobId });
+    expect(ctx.readinessChecker.checkReadiness).toHaveBeenCalledTimes(1);
+
+    // Another kind is not held up by it.
+    expect((await post(started.port, "/api/consolidation/run", operator(started.token))).status).toBe(202);
+  });
+
+  it("answers 404 for a job it does not have", async () => {
+    const started = await start();
+    if (!started) return;
+    for (const id of ["0f8fad5b-d9cb-469f-a165-70867728950e", "not-a-job", "0F8FAD5B-D9CB-469F-A165-70867728950E"]) {
+      const res = await getJob(started.port, id);
+      expect(res.status, id).toBe(404);
+      expect(((await res.json()) as { error: string }).error).toContain("No such job");
+    }
+  });
+
+  it("serves the job read through the dashboard's read gates: the bearer, never the operator token", async () => {
+    const started = await start({ dashboardToken: "dashboard-secret" });
+    if (!started) return;
+    const { jobId } = (await (await post(started.port, "/api/consolidation/run", operator(started.token))).json()) as { jobId: string };
+
+    expect((await getJob(started.port, jobId, operator(started.token))).status).toBe(401);
+    expect((await getJob(started.port, jobId)).status).toBe(401);
+    expect((await getJob(started.port, jobId, { Authorization: "Bearer dashboard-secret" })).status).toBe(200);
+    // A read, not an owner-only power: the portal's table does not list it.
+    expect(ownerOnlyProxySurface(`/api/daemon/jobs/${jobId}`)).toBeUndefined();
+  });
+
+  it("answers a runtime without deployment at once, with no job", async () => {
+    const file = join(dir, "no-deploy.operator.json");
+    server = new DashboardServer(0, new MetricsCollector(), () => undefined, () => false, [], "127.0.0.1", [], file);
+    try {
+      await server.start();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const read = await readOperatorCredential(file);
+    if (read.kind !== "ok") throw new Error("no credential");
+    const port = Number(new URL(read.credential.baseUrl).port);
+    const res = await post(port, "/api/deployment/check", operator(read.credential.token));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ enabled: false });
   });
 });

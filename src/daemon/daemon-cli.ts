@@ -12,6 +12,7 @@
  *   strada daemon notifications -- Show notification history
  *   strada daemon notify  -- Send a test notification
  *   strada daemon chain:status -- Show tool chain resilience status
+ *   strada daemon job     -- Show a long operation a shell started (consolidation, readiness check)
  *
  * Uses callback-based DI: getDaemonContext() returns the daemon context when
  * these commands run inside the runtime process. `strada daemon …` typed at a
@@ -20,7 +21,9 @@
  * read-only ones GET it like any dashboard client; the ones that change state
  * POST with the runtime's local operator credential (a per-run token the
  * runtime writes under the config root, readable by its OS user only). None
- * claims the daemon is "not running", which that process cannot know.
+ * claims the daemon is "not running", which that process cannot know. The two
+ * that can outlast one HTTP answer (memory:consolidate, deploy:check) start a
+ * job in the runtime and poll it until it is done.
  *
  * Requirements: DAEMON-01, DAEMON-04, RPT-01, RPT-03
  */
@@ -48,7 +51,12 @@ import {
 import { computeChainWaves } from "../learning/chains/chain-dag.js";
 import type { ChainResilienceConfig, ChainMetadataV2 } from "../learning/chains/chain-types.js";
 import { z } from "zod";
-import type { DashboardClientResolution, OperatorClientResolution } from "../core/daemon-dashboard-client.js";
+import type {
+  DaemonOperatorClient,
+  DashboardClientResolution,
+  DashboardReadResult,
+  OperatorClientResolution,
+} from "../core/daemon-dashboard-client.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -97,12 +105,14 @@ export interface DaemonContext {
  * @param getDaemonContext - Callback returning the in-process daemon context, or undefined outside the runtime process
  * @param getDashboardClient - Resolves a client for the running runtime's dashboard API (used when there is no in-process context)
  * @param getOperatorClient - Resolves the local operator client that commands changing state post with (likewise)
+ * @param jobWait - How a shell waits on a job the runtime runs (tests shorten it and stand in for Ctrl-C)
  */
 export function registerDaemonCommands(
   program: Command,
   getDaemonContext: () => DaemonContext | undefined,
   getDashboardClient?: () => DashboardClientResolution,
   getOperatorClient?: () => Promise<OperatorClientResolution>,
+  jobWait: JobWaitOptions = {},
 ): void {
   const post = <S extends z.ZodType>(what: string, path: string, body: Record<string, unknown>, schema: S, options?: PostOptions) =>
     postToDashboard(what, path, body, schema, getOperatorClient, options);
@@ -996,7 +1006,9 @@ export function registerDaemonCommands(
       const ctx = getDaemonContext();
       if (!ctx) {
         printConsolidationStart(opts.force);
-        const result = await post("run memory consolidation", "/api/consolidation/run", {}, RemoteConsolidationRunSchema, { timeoutMs: LONG_OPERATION_TIMEOUT_MS });
+        const result = await runRemoteJob(
+          "run memory consolidation", "/api/consolidation/run", {}, RemoteConsolidationRunSchema, getOperatorClient, jobWait,
+        );
         if (result) printConsolidationResult(result);
         return;
       }
@@ -1136,7 +1148,7 @@ export function registerDaemonCommands(
     .action(async (opts: { execute?: boolean; force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        await runRemoteDeployCheck(opts, getOperatorClient);
+        await runRemoteDeployCheck(opts, getOperatorClient, jobWait);
         return;
       }
 
@@ -1158,6 +1170,22 @@ export function registerDaemonCommands(
           console.log("Use --force to propose deployment without interactive confirmation.");
         }
       }
+    });
+
+  // =========================================================================
+  // daemon job <id> -- a long operation a shell started, by its job id
+  // =========================================================================
+  daemon
+    .command("job <id>")
+    .description("Show a memory:consolidate or deploy:check job started from a shell")
+    .action(async (id: string) => {
+      if (!UUID_RE.test(id)) {
+        console.error("Invalid job ID format. Expected UUID.");
+        process.exitCode = 1;
+        return;
+      }
+      const read = await readFromDashboard(`job ${id}`, `/api/daemon/jobs/${id.toLowerCase()}`, RemoteJobSchema, getDashboardClient);
+      if (read) printJob(read.data);
     });
 }
 
@@ -1204,15 +1232,22 @@ function isValidAgentId(id: string): boolean {
 
 const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
 
-/**
- * How long a shell waits on a change that runs to completion in the runtime (a
- * consolidation cycle, a readiness check that runs the tests). Node's fetch
- * stops waiting for response headers after 300 s whatever the signal says.
- */
-const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
+/** The local operator client, or undefined after saying why there is none (COR-13). */
+async function operatorClientFor(
+  what: string,
+  getOperatorClient?: () => Promise<OperatorClientResolution>,
+): Promise<DaemonOperatorClient | undefined> {
+  const resolution: OperatorClientResolution = (await getOperatorClient?.())
+    ?? { kind: "unavailable", message: "no operator connection is configured for this CLI" };
+  if (resolution.kind === "unavailable") {
+    console.error(`Cannot ${what}: ${resolution.message}.`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  return resolution.client;
+}
 
 interface PostOptions {
-  readonly timeoutMs?: number;
   /**
    * The schema also describes the runtime's refusals (a 4xx whose JSON body
    * has that shape); the caller prints those itself, as the in-process path
@@ -1235,15 +1270,10 @@ async function postToDashboard<S extends z.ZodType>(
   getOperatorClient?: () => Promise<OperatorClientResolution>,
   options: PostOptions = {},
 ): Promise<z.output<S> | undefined> {
-  const resolution: OperatorClientResolution = (await getOperatorClient?.())
-    ?? { kind: "unavailable", message: "no operator connection is configured for this CLI" };
-  if (resolution.kind === "unavailable") {
-    console.error(`Cannot ${what}: ${resolution.message}.`);
-    process.exitCode = 1;
-    return undefined;
-  }
+  const client = await operatorClientFor(what, getOperatorClient);
+  if (!client) return undefined;
 
-  const result = await resolution.client.postJson(path, body, options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {});
+  const result = await client.postJson(path, body);
   if (result.kind === "refused" && options.answersRefusals) {
     const answer = schema.safeParse(result.body);
     if (answer.success) return answer.data;
@@ -1255,11 +1285,217 @@ async function postToDashboard<S extends z.ZodType>(
   }
   const parsed = schema.safeParse(result.body);
   if (!parsed.success) {
-    console.error(`Cannot ${what}: the dashboard at ${resolution.client.baseUrl} answered POST ${path} in an unexpected shape.`);
+    console.error(`Cannot ${what}: the dashboard at ${client.baseUrl} answered POST ${path} in an unexpected shape.`);
     process.exitCode = 1;
     return undefined;
   }
   return parsed.data;
+}
+
+// -----------------------------------------------------------------------------
+// Jobs: the changes that can outlast one HTTP answer (memory:consolidate,
+// deploy:check). Node's fetch stops waiting for response headers after 300 s
+// whatever the signal says, so the runtime answers 202 { jobId } at once and the
+// shell polls GET /api/daemon/jobs/:id — through the dashboard's read gates.
+// -----------------------------------------------------------------------------
+
+/** A stream the one-line progress indicator is written to (stderr by default). */
+export interface ProgressStream {
+  readonly isTTY?: boolean;
+  write(text: string): unknown;
+}
+
+/** How a shell waits on a job the runtime runs. */
+export interface JobWaitOptions {
+  /** Between two looks at the job. */
+  readonly pollIntervalMs?: number;
+  /** What stops the waiting (not the job): Ctrl-C by default. */
+  readonly interrupt?: () => { readonly signal: AbortSignal; dispose(): void };
+  readonly progress?: ProgressStream;
+}
+
+const JOB_POLL_INTERVAL_MS = 1_500;
+/** Consecutive unanswered looks before the shell stops waiting and says so. */
+const JOB_POLL_MISSES = 3;
+
+/** GET /api/daemon/jobs/:id. */
+const RemoteJobSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  state: z.enum(["running", "done", "failed"]),
+  startedAt: z.number(),
+  finishedAt: z.number().optional(),
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+});
+type RemoteJob = z.output<typeof RemoteJobSchema>;
+
+/** A job start's 202 answer, and the 409 that names the one already running. */
+const JobStartedSchema = z.looseObject({ jobId: z.string() });
+
+function interruptOnSigint(): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const onSigint = (): void => controller.abort();
+  process.once("SIGINT", onSigint);
+  return { signal: controller.signal, dispose: () => { process.removeListener("SIGINT", onSigint); } };
+}
+
+/** Resolves true after `ms`, or false as soon as `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * The one-line progress indicator: rewritten in place on a terminal; on a
+ * pipe or a log, one line when the wait starts (a line per poll would flood it).
+ */
+function jobProgress(stream: ProgressStream, jobId: string): { tick(): void; clear(): void } {
+  const tty = stream.isTTY === true;
+  const frames = ["|", "/", "-", "\\"];
+  const startedAt = Date.now();
+  let frame = 0;
+  let shown = false;
+  const tick = (): void => {
+    if (!tty) return;
+    const elapsed = formatDuration(Date.now() - startedAt);
+    stream.write(`\r${frames[frame++ % frames.length]} Waiting for job ${jobId} (${elapsed}; Ctrl-C stops waiting, not the job)\x1b[K`);
+    shown = true;
+  };
+  if (tty) tick();
+  else stream.write(`Waiting for job ${jobId} in the running Strada (Ctrl-C stops waiting, not the job)...\n`);
+  return {
+    tick,
+    clear: () => {
+      if (shown) stream.write("\r\x1b[K");
+      shown = false;
+    },
+  };
+}
+
+/**
+ * Start a long change as a job in the running runtime and wait for its result
+ * (COR-13). Returns the result in `resultSchema`'s shape, or undefined after
+ * saying why there is none. An answer that is not a job start is the result
+ * itself (the runtime could answer at once, e.g. deployment is off).
+ */
+async function runRemoteJob<S extends z.ZodType>(
+  what: string,
+  path: string,
+  body: Record<string, unknown>,
+  resultSchema: S,
+  getOperatorClient: (() => Promise<OperatorClientResolution>) | undefined,
+  wait: JobWaitOptions,
+): Promise<z.output<S> | undefined> {
+  const client = await operatorClientFor(what, getOperatorClient);
+  if (!client) return undefined;
+
+  const started = await client.postJson(path, body);
+  if (started.kind !== "ok") {
+    console.error(`Cannot ${what}: ${started.message}`);
+    const running = started.kind === "refused" && started.status === 409 ? JobStartedSchema.safeParse(started.body) : undefined;
+    if (running?.success) console.error(`Follow that job with \`strada daemon job ${running.data.jobId}\`.`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  const job = JobStartedSchema.safeParse(started.body);
+  const immediate = job.success ? undefined : resultSchema.safeParse(started.body);
+  if (immediate?.success) return immediate.data;
+  if (!job.success) {
+    console.error(`Cannot ${what}: the dashboard at ${client.baseUrl} answered POST ${path} in an unexpected shape.`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  return waitForJob(what, client, job.data.jobId, resultSchema, wait);
+}
+
+/** Poll a job until it settles; Ctrl-C (or `wait.interrupt`) stops waiting, never the job. */
+async function waitForJob<S extends z.ZodType>(
+  what: string,
+  client: { readonly baseUrl: string; getJson(path: string): Promise<DashboardReadResult> },
+  jobId: string,
+  resultSchema: S,
+  wait: JobWaitOptions,
+): Promise<z.output<S> | undefined> {
+  const interrupt = (wait.interrupt ?? interruptOnSigint)();
+  const progress = jobProgress(wait.progress ?? process.stderr, jobId);
+  const fail = (...lines: string[]): undefined => {
+    progress.clear();
+    for (const line of lines) console.error(line);
+    process.exitCode = 1;
+    return undefined;
+  };
+  const lookLater = `It may still be running; look at it with \`strada daemon job ${jobId}\`.`;
+  try {
+    let misses = 0;
+    for (;;) {
+      if (!(await pause(wait.pollIntervalMs ?? JOB_POLL_INTERVAL_MS, interrupt.signal))) {
+        progress.clear();
+        console.error(`Stopped waiting. Job ${jobId} keeps running in Strada; see how it ends with \`strada daemon job ${jobId}\`.`);
+        process.exitCode = 130;
+        return undefined;
+      }
+      const read = await client.getJson(`/api/daemon/jobs/${jobId}`);
+      if (read.kind === "unreachable" && ++misses < JOB_POLL_MISSES) continue;
+      if (read.kind !== "ok") return fail(`Cannot follow job ${jobId} (${what}): ${read.message}`, lookLater);
+      misses = 0;
+      const job = RemoteJobSchema.safeParse(read.body);
+      if (!job.success) {
+        return fail(`Cannot follow job ${jobId} (${what}): the dashboard at ${client.baseUrl} answered in an unexpected shape.`, lookLater);
+      }
+      if (job.data.state === "running") {
+        progress.tick();
+        continue;
+      }
+      if (job.data.state === "failed") return fail(`Cannot ${what}: it failed in the running Strada: ${job.data.error ?? "no reason given"}`);
+      const result = resultSchema.safeParse(job.data.result);
+      if (!result.success) return fail(`Cannot ${what}: job ${jobId} finished with a result in an unexpected shape.`);
+      progress.clear();
+      return result.data;
+    }
+  } finally {
+    interrupt.dispose();
+  }
+}
+
+/** `daemon job <id>`: the job's state, and its result printed as its command prints it. */
+function printJob(job: RemoteJob): void {
+  const took = job.finishedAt !== undefined ? formatDuration(job.finishedAt - job.startedAt) : "?";
+  if (job.state === "running") {
+    console.log(`Job ${job.id} (${job.kind}): running since ${new Date(job.startedAt).toISOString()}`);
+    return;
+  }
+  if (job.state === "failed") {
+    console.error(`Job ${job.id} (${job.kind}): failed after ${took}: ${job.error ?? "no reason given"}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Job ${job.id} (${job.kind}): done in ${took}`);
+  if (job.kind === "memory:consolidate") {
+    const result = RemoteConsolidationRunSchema.safeParse(job.result);
+    if (result.success) {
+      printConsolidationResult(result.data);
+      return;
+    }
+  } else if (job.kind === "deploy:check") {
+    const result = RemoteDeployCheckSchema.safeParse(job.result);
+    if (result.success && !("enabled" in result.data)) {
+      printReadiness(result.data);
+      if (result.data.proposed) console.log("Deployment proposed via approval queue.");
+      return;
+    }
+  }
+  console.log(JSON.stringify(job.result, null, 2));
 }
 
 /** A state change the runtime carried out: it names what it did in `status`. */
@@ -1570,17 +1806,19 @@ const RemoteDeployCheckSchema = z.union([
  */
 async function runRemoteDeployCheck(
   opts: { execute?: boolean; force?: boolean },
-  getOperatorClient?: () => Promise<OperatorClientResolution>,
+  getOperatorClient: (() => Promise<OperatorClientResolution>) | undefined,
+  jobWait: JobWaitOptions,
 ): Promise<void> {
   const propose = opts.execute === true && opts.force === true;
   console.log("Running readiness check...");
-  const result = await postToDashboard(
+  // The check runs the project's tests: a job, polled until it is done.
+  const result = await runRemoteJob(
     "run the readiness check",
     "/api/deployment/check",
     propose ? { propose: true } : {},
     RemoteDeployCheckSchema,
     getOperatorClient,
-    { timeoutMs: LONG_OPERATION_TIMEOUT_MS },
+    jobWait,
   );
   if (!result) return;
   if ("enabled" in result) {

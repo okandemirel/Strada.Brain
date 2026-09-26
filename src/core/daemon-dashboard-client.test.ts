@@ -127,6 +127,39 @@ describe("the local operator client (COR-13)", () => {
     });
   });
 
+  it("keeps a refusal's JSON body, so a 409 or 404 can say more than its error line", async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "A memory:consolidate job is already running: j-1", jobId: "j-1" }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const file = join(dir, "k.operator.json");
+    await publishOperatorCredential(file, { baseUrl, pid: 1, token: "t".repeat(43) });
+    const resolution = await resolveDaemonOperatorClient(file, config());
+    if (resolution.kind !== "ok") throw new Error(resolution.message);
+
+    await expect(resolution.client.postJson("/api/consolidation/run", {})).resolves.toEqual({
+      kind: "refused",
+      status: 409,
+      message: `the dashboard at ${baseUrl} refused POST /api/consolidation/run: A memory:consolidate job is already running: j-1`,
+      body: { error: "A memory:consolidate job is already running: j-1", jobId: "j-1" },
+    });
+  });
+
+  it("reads a job from the same runtime through the read gates: the bearer, never the operator token", async () => {
+    const { baseUrl, seen } = await listen();
+    const file = join(dir, "k.operator.json");
+    await publishOperatorCredential(file, { baseUrl, pid: 1, token: "t".repeat(43) });
+    const resolution = await resolveDaemonOperatorClient(file, config("bearer-9"));
+    if (resolution.kind !== "ok") throw new Error(resolution.message);
+
+    await expect(resolution.client.getJson("/api/daemon/jobs/j-1")).resolves.toMatchObject({ kind: "ok" });
+    expect(seen[0]!.url).toBe("/api/daemon/jobs/j-1");
+    expect(seen[0]!.headers["authorization"]).toBe("Bearer bearer-9");
+    expect(seen[0]!.headers).not.toHaveProperty("x-strada-operator-token");
+  });
+
   it("names the file and what its absence can mean", async () => {
     const file = join(dir, "missing.operator.json");
     const resolution = await resolveDaemonOperatorClient(file, config());

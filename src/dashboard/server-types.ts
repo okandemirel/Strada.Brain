@@ -458,6 +458,8 @@ export interface RouteContext {
    * without daemon mode.
    */
   daemonCliContext?: import("../daemon/daemon-cli.js").DaemonContext;
+  /** The long daemon operations the dashboard runs as jobs (daemon-jobs.ts). */
+  daemonJobs: import("./daemon-jobs.js").DaemonJobRegistry;
 
   // Chain resilience
   chainResilienceConfig?: ChainResilienceConfig;

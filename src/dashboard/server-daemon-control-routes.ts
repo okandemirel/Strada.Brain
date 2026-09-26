@@ -10,6 +10,7 @@
  *   GET  /api/daemon/notifications?limit=N&level=L
  *   GET  /api/daemon/digest/preview
  *   GET  /api/consolidation/preview
+ *   GET  /api/daemon/jobs/:id             a job's state, and its result once done
  *
  * Changes (POST, owner-only in `ownerOnlyProxySurface`, JSON bodies only):
  *   POST /api/daemon/trigger              { name }      fires it as a tick would
@@ -21,9 +22,12 @@
  *   POST /api/agents/:id/start            {}
  *   POST /api/agents/:id/budget           { usd }
  *   POST /api/delegations/tier            { type, tier }
- *   POST /api/consolidation/run           {}
+ *   POST /api/consolidation/run           {}            202 { jobId }
  *   POST /api/consolidation/undo          { logId }
- * plus the existing POST /api/deployment/check (server-system-routes.ts).
+ * plus the existing POST /api/deployment/check (server-system-routes.ts),
+ * also 202 { jobId }. Those two can outrun any one HTTP answer (an LLM pass
+ * over memory, the project's test command), so they run as jobs: one running
+ * per kind, a second start answers 409 with that job's id.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -32,9 +36,11 @@ import type { DaemonContext } from "../daemon/daemon-cli.js";
 import type { AgentId } from "../agents/multi/agent-types.js";
 import type { UrgencyLevel } from "../daemon/reporting/notification-types.js";
 import { sendJson, sendJsonError, type RouteContext } from "./server-types.js";
+import type { DaemonJobKind } from "./daemon-jobs.js";
 
 const AGENT_ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const AGENT_ACTION_RE = new RegExp(`^/api/agents/(${AGENT_ID})/(stop|start|budget)$`);
+const JOB_PATH_RE = /^\/api\/daemon\/jobs\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 /**
  * The only requests the local operator credential is accepted on: the method
@@ -143,6 +149,24 @@ function withBody<S extends z.ZodType>(
     });
 }
 
+/**
+ * Start `run` as the one `kind` job: 202 { jobId } at once, or 409 naming the
+ * job of that kind still running. GET /api/daemon/jobs/:id follows it.
+ */
+export function startDaemonJob(
+  res: ServerResponse,
+  ctx: Pick<RouteContext, "daemonJobs">,
+  kind: DaemonJobKind,
+  run: () => Promise<unknown>,
+): void {
+  const start = ctx.daemonJobs.start(kind, run);
+  if (!start.started) {
+    sendJson(res, { error: `A ${kind} job is already running: ${start.running.id}`, jobId: start.running.id }, 409);
+    return;
+  }
+  sendJson(res, { jobId: start.job.id, kind, state: start.job.state, startedAt: start.job.startedAt }, 202);
+}
+
 /** Try to handle a daemon control route. Returns true if the route was handled. */
 export function handleDaemonControlRoutes(
   url: string,
@@ -158,7 +182,7 @@ export function handleDaemonControlRoutes(
 }
 
 function handleDaemonReads(url: string, method: string, res: ServerResponse, ctx: RouteContext): boolean {
-  const pathOnly = url.split("?")[0];
+  const pathOnly = url.split("?")[0] ?? url;
 
   if (method === "GET" && pathOnly === "/api/daemon/audit") {
     const daemon = ctx.daemonCliContext;
@@ -192,6 +216,17 @@ function handleDaemonReads(url: string, method: string, res: ServerResponse, ctx
       return true;
     }
     sendJson(res, { enabled: true, markdown: reporter.previewDigest() });
+    return true;
+  }
+
+  if (method === "GET" && pathOnly.startsWith("/api/daemon/jobs/")) {
+    const id = JOB_PATH_RE.exec(pathOnly)?.[1];
+    const job = id !== undefined ? ctx.daemonJobs.get(id) : undefined;
+    if (!job) {
+      sendJsonError(res, 404, "No such job: this run of Strada never started it, or it finished more than an hour ago");
+      return true;
+    }
+    sendJson(res, job);
     return true;
   }
 
@@ -369,10 +404,10 @@ function handleMemoryAndDelegationChanges(url: string, method: string, req: Inco
       sendJsonError(res, 503, "Memory consolidation is not active in the running Strada (MEMORY_CONSOLIDATION_ENABLED=false)");
       return true;
     }
-    withBody(req, res, ctx, NO_ARGUMENTS, async () => {
-      // As in-process: one cycle, run to completion.
-      const result = await engine.runCycle(new AbortController().signal);
-      sendJson(res, result);
+    withBody(req, res, ctx, NO_ARGUMENTS, () => {
+      // As in-process: one cycle, run to completion — as a job, since it can
+      // take longer than any client waits for one answer.
+      startDaemonJob(res, ctx, "memory:consolidate", () => engine.runCycle(new AbortController().signal));
     });
     return true;
   }

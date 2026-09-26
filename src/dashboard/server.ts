@@ -70,6 +70,7 @@ import {
 // DASHBOARD_HTML and its CSP hash are built from dashboard/templates/ at module load
 import { handleDaemonRoutes } from "./server-daemon-routes.js";
 import { handleDaemonControlRoutes, isLocalOperatorRoute } from "./server-daemon-control-routes.js";
+import { DaemonJobRegistry } from "./daemon-jobs.js";
 import { handleMcpRoutes } from "./server-mcp-routes.js";
 import { handleProviderRoutes } from "./server-provider-routes.js";
 import { handlePersonalityRoutes } from "./server-personality-routes.js";
@@ -169,6 +170,8 @@ export class DashboardServer {
   private operatorToken?: string;
   /** The exact bytes written, so stop() removes this run's file and no other. */
   private operatorCredentialBytes?: string;
+  /** Consolidation and readiness runs started over the API, which outlive one HTTP answer. */
+  private readonly daemonJobs = new DaemonJobRegistry();
 
   // Identity and enrichment context (Plan 18-03)
   private identityManager?: IdentityStateManager;
@@ -605,6 +608,7 @@ export class DashboardServer {
       bootReport: this.bootReport,
       autoUpdater: this.autoUpdater,
       daemonCliContext: this.daemonCliContext,
+      daemonJobs: this.daemonJobs,
 
       // Chain resilience
       chainResilienceConfig: this.chainResilienceConfig,

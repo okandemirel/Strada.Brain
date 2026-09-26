@@ -23,7 +23,7 @@ export type DashboardReadResult =
   /**
    * An HTTP answer that is not a usable JSON success. `body` is its JSON, when
    * it had one: a refusal can say more than its error line (the gate that
-   * refused a trigger fire).
+   * refused a trigger fire, the job already running).
    */
   | { kind: "refused"; status: number; message: string; body?: unknown };
 
@@ -42,6 +42,11 @@ export interface DaemonOperatorClient {
   /** Base URL requests go to, for messages. */
   readonly baseUrl: string;
   postJson(path: string, body: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<DashboardReadResult>;
+  /**
+   * A read from the same runtime (a job it started), through the dashboard's
+   * read gates: the bearer when the install has one, never the operator token.
+   */
+  getJson(path: string): Promise<DashboardReadResult>;
 }
 
 export type OperatorClientResolution =
@@ -171,28 +176,36 @@ function fetchOrDefault(fetchImpl: FetchLike | undefined): FetchLike {
   return fetchImpl ?? ((input, init) => fetch(input, init));
 }
 
+/** GET `path` as any dashboard reader: with the bearer when the install has one. */
+function getAsReader(
+  baseUrl: string,
+  path: string,
+  options: { token?: string; timeoutMs?: number },
+  fetchImpl: FetchLike,
+): Promise<DashboardReadResult> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  // The dashboard gates every /api/ route on this bearer when a token is set.
+  if (options.token) headers["Authorization"] = `Bearer ${options.token}`;
+  return send({
+    baseUrl,
+    method: "GET",
+    path,
+    headers,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchImpl,
+    unreachable: (detail) =>
+      `could not reach the daemon dashboard at ${baseUrl} (${detail}); is Strada running with the dashboard enabled?`,
+    authHint: " — set WEBSOCKET_DASHBOARD_AUTH_TOKEN to the token the running Strada uses",
+  });
+}
+
 export function createDaemonDashboardClient(options: DaemonDashboardClientOptions): DaemonDashboardClient {
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
   const fetchImpl = fetchOrDefault(options.fetchImpl);
 
   return {
     baseUrl,
-    getJson(path: string): Promise<DashboardReadResult> {
-      const headers: Record<string, string> = { Accept: "application/json" };
-      // The dashboard gates every /api/ route on this bearer when a token is set.
-      if (options.token) headers["Authorization"] = `Bearer ${options.token}`;
-      return send({
-        baseUrl,
-        method: "GET",
-        path,
-        headers,
-        timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        fetchImpl,
-        unreachable: (detail) =>
-          `could not reach the daemon dashboard at ${baseUrl} (${detail}); is Strada running with the dashboard enabled?`,
-        authHint: " — set WEBSOCKET_DASHBOARD_AUTH_TOKEN to the token the running Strada uses",
-      });
-    },
+    getJson: (path) => getAsReader(baseUrl, path, options, fetchImpl),
   };
 }
 
@@ -241,6 +254,8 @@ export function createDaemonOperatorClient(options: DaemonOperatorClientOptions)
           "(left from an earlier run, or another Strada now answers on that port)",
       });
     },
+    // A read, not a change: the operator token is not sent (it opens no GET).
+    getJson: (path) => getAsReader(baseUrl, path, { token: options.token }, fetchImpl),
   };
 }
 

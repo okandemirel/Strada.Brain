@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Command } from "commander";
-import { registerDaemonCommands, type DaemonContext } from "./daemon-cli.js";
+import { registerDaemonCommands, type DaemonContext, type JobWaitOptions } from "./daemon-cli.js";
 import type { DaemonConfig, ITrigger, TriggerMetadata, TriggerState, AuditEntry } from "./daemon-types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import {
@@ -99,6 +99,7 @@ async function runDaemonCommand(
   args: string[],
   getDashboardClient?: () => DashboardClientResolution,
   getOperatorClient?: () => Promise<OperatorClientResolution>,
+  jobWait?: JobWaitOptions,
 ): Promise<{ stdout: string; stderr: string }> {
   const program = new Command();
   program.exitOverride();
@@ -107,7 +108,7 @@ async function runDaemonCommand(
     writeErr: () => {},
   });
 
-  registerDaemonCommands(program, getDaemonContext, getDashboardClient, getOperatorClient);
+  registerDaemonCommands(program, getDaemonContext, getDashboardClient, getOperatorClient, jobWait);
 
   const stdoutLines: string[] = [];
   const stderrLines: string[] = [];
@@ -1133,10 +1134,21 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
     });
   const readerAt = (baseUrl: string, bearer?: string) =>
     (): DashboardClientResolution => ({ kind: "ok", client: createDaemonDashboardClient({ baseUrl, ...(bearer ? { token: bearer } : {}) }) });
-  const run = (args: string[], baseUrl: string, bearer?: string) =>
-    runDaemonCommand(() => undefined, args, readerAt(baseUrl, bearer), operatorAt(baseUrl, OPERATOR, bearer));
+  /** What the one-line progress indicator wrote, for the job tests. */
+  let progress: string[] = [];
+  beforeEach(() => { progress = []; });
+  /** Fast polls, a captured non-terminal progress stream, and no real Ctrl-C handler. */
+  const quickWait = (extra: Partial<JobWaitOptions> = {}): JobWaitOptions => ({
+    pollIntervalMs: 5,
+    progress: { isTTY: false, write: (text: string) => progress.push(text) },
+    interrupt: () => ({ signal: new AbortController().signal, dispose: () => {} }),
+    ...extra,
+  });
+  const run = (args: string[], baseUrl: string, bearer?: string, jobWait: JobWaitOptions = quickWait()) =>
+    runDaemonCommand(() => undefined, args, readerAt(baseUrl, bearer), operatorAt(baseUrl, OPERATOR, bearer), jobWait);
 
   const ok = { body: { status: "done" } };
+  const JOB = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
   it("daemon trigger and reset post the trigger name with the operator token, and print what the in-process commands print", async () => {
     const { baseUrl, seen } = await startRuntime({
@@ -1242,13 +1254,17 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
     expect(seen.map((s) => s.body)).toEqual([{ type: "code_review", tier: "cheap" }]);
   });
 
-  it("daemon memory:consolidate runs one cycle and prints its result; consolidation-undo surfaces the runtime's refusal", async () => {
-    const { baseUrl } = await startRuntime({
-      "POST /api/consolidation/run": { body: { status: "completed", processed: 3, remaining: 1, clustersFound: 4, costUsd: 0.0123 } },
+  it("daemon memory:consolidate starts a job, polls it until done and prints its result; consolidation-undo surfaces the runtime's refusal", async () => {
+    const running = { body: { id: JOB, kind: "memory:consolidate", state: "running", startedAt: 1 } };
+    const result = { status: "completed", processed: 3, remaining: 1, clustersFound: 4, costUsd: 0.0123 };
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/consolidation/run": { status: 202, body: { jobId: JOB, kind: "memory:consolidate", state: "running", startedAt: 1 } },
+      [`GET /api/daemon/jobs/${JOB}`]: [running, running, { body: { id: JOB, kind: "memory:consolidate", state: "done", startedAt: 1, finishedAt: 2, result } }],
       "POST /api/consolidation/undo": { status: 409, body: { error: "Failed to undo: Consolidation log entry not found: log-9" } },
-    });
+    }, "bearer-1");
 
-    const cycle = await run(["memory:consolidate", "--force"], baseUrl);
+    const cycle = await run(["memory:consolidate", "--force"], baseUrl, "bearer-1");
+    expect(cycle.stderr).toBe("");
     expect(cycle.stdout.split("\n")).toEqual([
       "Running consolidation (forced)...",
       "Status: completed",
@@ -1257,6 +1273,13 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
       "Clusters found: 4",
       "Cost: $0.0123",
     ]);
+    // One progress line, on stderr's stream, naming the job.
+    expect(progress).toEqual([`Waiting for job ${JOB} in the running Strada (Ctrl-C stops waiting, not the job)...\n`]);
+    // Polled through the read gates: the bearer, never the operator token.
+    const polls = seen.filter((s) => s.line === `GET /api/daemon/jobs/${JOB}`);
+    expect(polls).toHaveLength(3);
+    expect(polls.every((s) => s.operator === undefined && s.authorization === "Bearer bearer-1")).toBe(true);
+    expect(process.exitCode).toBeUndefined();
 
     const undo = await run(["memory:consolidation-undo", "log-9"], baseUrl);
     expect(undo.stderr).toBe(
@@ -1267,7 +1290,10 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
 
   it("daemon deploy:check asks the runtime to propose only with --execute --force, as in-process", async () => {
     const ready = { ready: true, testPassed: true, gitClean: true, branchMatch: true, timestamp: 1, cached: false };
-    const { baseUrl, seen } = await startRuntime({ "POST /api/deployment/check": { body: { ...ready, proposed: true } } });
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/deployment/check": { status: 202, body: { jobId: JOB, kind: "deploy:check", state: "running", startedAt: 1 } },
+      [`GET /api/daemon/jobs/${JOB}`]: { body: { id: JOB, kind: "deploy:check", state: "done", startedAt: 1, finishedAt: 2, result: { ...ready, proposed: true } } },
+    });
 
     const check = await run(["deploy:check"], baseUrl);
     expect(check.stdout).toContain("Ready: YES");
@@ -1279,7 +1305,96 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
     const proposed = await run(["deploy:check", "--execute", "--force"], baseUrl);
     expect(proposed.stdout).toContain("Deployment proposed via approval queue.");
 
-    expect(seen.map((s) => s.body)).toEqual([{}, {}, { propose: true }]);
+    expect(seen.filter((s) => s.line.startsWith("POST")).map((s) => s.body)).toEqual([{}, {}, { propose: true }]);
+  });
+
+  it("a job that fails in the runtime is reported with its error, and the command exits non-zero", async () => {
+    const { baseUrl } = await startRuntime({
+      "POST /api/consolidation/run": { status: 202, body: { jobId: JOB } },
+      [`GET /api/daemon/jobs/${JOB}`]: { body: { id: JOB, kind: "memory:consolidate", state: "failed", startedAt: 1, finishedAt: 2, error: "LLM provider unavailable" } },
+    });
+
+    const { stdout, stderr } = await run(["memory:consolidate"], baseUrl);
+    expect(stdout).toBe("Running consolidation (use --force to bypass idle check)...");
+    expect(stderr).toBe("Cannot run memory consolidation: it failed in the running Strada: LLM provider unavailable");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("a second start while one runs names the running job and how to follow it", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/consolidation/run": { status: 409, body: { error: `A memory:consolidate job is already running: ${JOB}`, jobId: JOB } },
+    });
+
+    const { stderr } = await run(["memory:consolidate"], baseUrl);
+    expect(stderr.split("\n")).toEqual([
+      `Cannot run memory consolidation: the dashboard at ${baseUrl} refused POST /api/consolidation/run: A memory:consolidate job is already running: ${JOB}`,
+      `Follow that job with \`strada daemon job ${JOB}\`.`,
+    ]);
+    expect(process.exitCode).toBe(1);
+    expect(seen.map((s) => s.line)).toEqual(["POST /api/consolidation/run"]);
+  });
+
+  it("Ctrl-C stops the waiting, not the job, and says how to look at it later", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/consolidation/run": { status: 202, body: { jobId: JOB } },
+      [`GET /api/daemon/jobs/${JOB}`]: { body: { id: JOB, kind: "memory:consolidate", state: "running", startedAt: 1 } },
+    });
+    const ctrlC = new AbortController();
+    const dispose = vi.fn();
+    const writes: string[] = [];
+    const wait = quickWait({
+      pollIntervalMs: 20,
+      interrupt: () => ({ signal: ctrlC.signal, dispose }),
+      // A terminal: the indicator is one line, rewritten in place.
+      progress: { isTTY: true, write: (text: string) => writes.push(text) },
+    });
+
+    const pending = run(["memory:consolidate"], baseUrl, undefined, wait);
+    await vi.waitFor(() => expect(seen.filter((s) => s.line.startsWith("GET")).length).toBeGreaterThanOrEqual(2));
+    ctrlC.abort();
+    const { stdout, stderr } = await pending;
+
+    expect(stdout).toBe("Running consolidation (use --force to bypass idle check)...");
+    expect(stderr).toBe(`Stopped waiting. Job ${JOB} keeps running in Strada; see how it ends with \`strada daemon job ${JOB}\`.`);
+    expect(process.exitCode).toBe(130);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(writes.length).toBeGreaterThanOrEqual(2);
+    expect(writes.slice(0, -1).every((w) => w.startsWith("\r") && w.includes(`Waiting for job ${JOB}`) && !w.includes("\n"))).toBe(true);
+    expect(writes.at(-1)).toBe("\r\x1b[K"); // the line is cleared before the message
+  });
+
+  it("daemon job <id> reads GET /api/daemon/jobs/:id and prints the result as its command does", async () => {
+    const result = { status: "completed", processed: 1, remaining: 0, clustersFound: 1, costUsd: 0.001 };
+    const { baseUrl } = await startRuntime({
+      [`GET /api/daemon/jobs/${JOB}`]: [
+        { body: { id: JOB, kind: "memory:consolidate", state: "running", startedAt: Date.parse("2026-09-26T10:00:00Z") } },
+        { body: { id: JOB, kind: "memory:consolidate", state: "done", startedAt: 0, finishedAt: 125_000, result } },
+        { body: { id: JOB, kind: "deploy:check", state: "failed", startedAt: 0, finishedAt: 3_000, error: "test command timed out" } },
+        { status: 404, body: { error: "No such job: this run of Strada never started it, or it finished more than an hour ago" } },
+      ],
+    });
+
+    expect((await run(["job", JOB], baseUrl)).stdout).toBe(`Job ${JOB} (memory:consolidate): running since 2026-09-26T10:00:00.000Z`);
+    expect((await run(["job", JOB], baseUrl)).stdout.split("\n")).toEqual([
+      `Job ${JOB} (memory:consolidate): done in 2m 5s`,
+      "Status: completed",
+      "Processed: 1 clusters",
+      "Remaining: 0",
+      "Clusters found: 1",
+      "Cost: $0.0010",
+    ]);
+    expect(process.exitCode).toBeUndefined();
+
+    expect((await run(["job", JOB], baseUrl)).stderr).toBe(`Job ${JOB} (deploy:check): failed after 3s: test command timed out`);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    expect((await run(["job", JOB], baseUrl)).stderr).toContain("No such job");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    expect((await run(["job", "not-a-uuid"], baseUrl)).stderr).toBe("Invalid job ID format. Expected UUID.");
+    expect(process.exitCode).toBe(1);
   });
 
   it("daemon deploy:check reports deployment that is off in the running Strada", async () => {

@@ -264,8 +264,15 @@ describe("instance access model — dashboard proxy classification", () => {
     ]) {
       expect(ownerOnlyProxySurface(path), path).toBe("instance:control");
     }
-    // Their reads stay reads.
-    for (const path of ["/api/agents", "/api/daemon/notifications", "/api/daemon/audit", "/api/daemon/digest/preview", "/api/consolidation/preview"]) {
+    // Their reads stay reads — the job a long change starts included.
+    for (const path of [
+      "/api/agents",
+      "/api/daemon/notifications",
+      "/api/daemon/audit",
+      "/api/daemon/digest/preview",
+      "/api/consolidation/preview",
+      "/api/daemon/jobs/0f8fad5b-d9cb-469f-a165-70867728950e",
+    ]) {
       expect(ownerOnlyProxySurface(path), path).toBeUndefined();
     }
   });

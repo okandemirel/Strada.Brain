@@ -55,6 +55,22 @@ async function apiFetch(path, init) {
   return fetch(path, withToken(init, entered.trim()));
 }
 
+// POST /api/deployment/check starts a job (202 { jobId }, or 409 naming the
+// one already running): the check runs the project's tests, which can outlast
+// one HTTP answer. Resolves with the job's result once it has one.
+function followDaemonJob(jobId, intervalMs) {
+  return apiFetch('/api/daemon/jobs/' + encodeURIComponent(jobId))
+    .then(function(r) { return r.json(); })
+    .then(function(job) {
+      if (job.state === 'running') {
+        return new Promise(function(resolve) { setTimeout(resolve, intervalMs || 1500); })
+          .then(function() { return followDaemonJob(jobId, intervalMs); });
+      }
+      if (job.state !== 'done') throw new Error(job.error || 'job failed');
+      return job.result;
+    });
+}
+
 async function refresh() {
   try {
     const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes, delegationsRes, consolidationRes, deploymentRes] = await Promise.all([
@@ -907,6 +923,7 @@ function renderDeployment(data) {
     checkBtn.textContent = 'Checking...';
     apiFetch('/api/deployment/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(function(r) { return r.json(); })
+      .then(function(started) { return started.jobId ? followDaemonJob(started.jobId) : started; })
       .then(function(result) {
         checkBtn.textContent = result.ready ? 'Ready' : 'Not Ready';
         checkBtn.style.background = result.ready ? '#238636' : '#6e7681';
