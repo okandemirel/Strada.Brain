@@ -101,8 +101,19 @@ describe("ci.yml", () => {
     expect(stepBlock).not.toMatch(/continue-on-error/);
   });
 
+  it("runs the whole test suite on Windows, after the build, and lets it fail the build", () => {
+    // windows-verify ran only the launcher and setup tests, so the rest of the
+    // suite had never run on Windows.
+    const windows = jobBlock(ci, "windows-test");
+    expect(windows).toMatch(/runs-on: windows-/);
+    const test = windows.indexOf("run: npm test");
+    expect(test, "windows-test does not run the suite").toBeGreaterThan(-1);
+    expect(test).toBeGreaterThan(windows.indexOf("run: npm run build"));
+    expect(windows).not.toMatch(/continue-on-error/);
+  });
+
   it("keeps every other job", () => {
-    for (const job of ["verify", "windows-verify", "bench", "coverage"]) {
+    for (const job of ["verify", "windows-verify", "windows-test", "bench", "coverage"]) {
       expect(ci, job).toMatch(new RegExp(`\\n {2}${job}:\\n`));
     }
   });

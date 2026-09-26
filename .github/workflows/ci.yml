@@ -207,6 +207,47 @@ jobs:
       - name: Build
         run: npm run build
 
+  # The whole unit suite on Windows. windows-verify runs only the launcher and
+  # setup tests, so path handling, process spawning and file locking in the
+  # rest of the code base were exercised on Linux alone, while the launchers
+  # and installers ship for Windows too. Same runner image as windows-verify.
+  windows-test:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web-portal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install portal dependencies
+        run: npm ci --prefix web-portal
+
+      - name: Clone Strada.Core reference
+        run: git clone --depth 1 https://github.com/okandemirel/Strada.Core.git "${{ runner.temp }}/Strada.Core-ci"
+
+      # Before Test for the same reason as in verify: some tests run dist/.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        env:
+          CI: "1"
+          STRADA_CORE_PATH: ${{ runner.temp }}/Strada.Core-ci
+        run: npm test
+
   # Performance regression gate.
   #
   # Runs on its own job rather than inside `verify` so a timing regression is
