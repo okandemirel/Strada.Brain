@@ -98,6 +98,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Closes the campaign store and the project databases the manager opened
+  // (Windows cannot remove a directory holding an open SQLite file).
+  manager.dispose();
   daemon.close();
   campaigns.close();
   rmSync(dir, { recursive: true, force: true });

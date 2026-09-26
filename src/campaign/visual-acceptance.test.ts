@@ -214,7 +214,14 @@ describe("the delivery report the user reads", () => {
         ...m,
       })),
     } as unknown as Campaign;
-    return (manager as unknown as { buildDeliveryReport(c: Campaign): string }).buildDeliveryReport(campaign);
+    const internals = manager as unknown as { buildDeliveryReport(c: Campaign): string; closeProjectStores(): void };
+    try {
+      return internals.buildDeliveryReport(campaign);
+    } finally {
+      // The report opens the project's evidence and package databases; an
+      // open one cannot be deleted on Windows (EBUSY in afterEach).
+      internals.closeProjectStores();
+    }
   }
 
   it("a delivery nobody looked at SAYS SO — silence used to read as a pass (6.12)", () => {

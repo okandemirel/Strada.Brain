@@ -1082,8 +1082,22 @@ export class CampaignManager {
     this.disposed = true;
     for (const [event, listener] of this.taskEventListeners.splice(0)) this.taskManager.off(event, listener);
     this.eventsAttached = false;
-    this.deliveryPackages?.close();
+    this.closeProjectStores();
     this.storage.close();
+  }
+
+  /**
+   * Close the per-project databases this manager opened on first use. The
+   * evidence ledger was never closed, so its file stayed locked for the life
+   * of the process — on Windows the project's .strada directory could not be
+   * removed or replaced. Both are left `null`, so nothing reopens them after
+   * shutdown.
+   */
+  private closeProjectStores(): void {
+    this.deliveryPackages?.close();
+    this.deliveryPackages = null;
+    this.evidenceLedger?.close();
+    this.evidenceLedger = null;
   }
 
   /** Idea mode: draft the GDD first, then stop at the single approval gate. */

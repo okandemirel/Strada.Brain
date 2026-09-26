@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
 import { DELIVERY_PIECE_ORDER, DeliveryPackageStore, assembleDeliveryPackage } from "./delivery-package.js";
 import { ProducerFailure } from "./producer-failure.js";
-import { requirementKey, CampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
+import { requirementKey, CampaignManager as ProductCampaignManager, stripTimeBoxDirectives, UNMEASURABLE_PROOF_RE, UNRUNNABLE_HERE_RE, hasUnmeasurableProof, proofsSpanTwoRevisions } from "./campaign-manager.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { encodeRequirement } from "./requirement-identity.js";
 import { describeBuild } from "./campaign-status.js";
@@ -42,6 +42,18 @@ const suiteRunner = async (root: string, runId: string): Promise<void> => {
 };
 /** Real git checkouts a test made, cleaned up with the fixture. */
 const repos: string[] = [];
+/**
+ * Every manager a test builds, disposed with the fixture: a manager holds the
+ * project's SQLite stores open, and Windows cannot delete a directory with an
+ * open database in it (EBUSY on campaign-evidence.db).
+ */
+const liveManagers: ProductCampaignManager[] = [];
+class CampaignManager extends ProductCampaignManager {
+  constructor(...args: ConstructorParameters<typeof ProductCampaignManager>) {
+    super(...args);
+    liveManagers.push(this);
+  }
+}
 
 class FakeTaskManager extends EventEmitter {
   submitted: Array<{ prompt: string; chatId: string }> = [];
@@ -387,6 +399,7 @@ describe("CampaignManager", () => {
   });
 
   afterEach(() => {
+    for (const m of liveManagers.splice(0)) m.dispose();
     storage.close();
     rmSync(dir, { recursive: true, force: true });
     for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
