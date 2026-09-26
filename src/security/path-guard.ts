@@ -102,7 +102,7 @@ function lruSet<V>(cache: Map<string, V>, key: string, value: V): void {
  * recreated as something else, is re-resolved instead of reusing its old
  * realpath (SEC-23).
  */
-const realRootCache = new Map<string, { real: string; dev: number; ino: number }>();
+const realRootCache = new Map<string, { real: string; dev: bigint; ino: bigint }>();
 
 /** Number of roots each path-guard cache holds (tests). */
 export function pathGuardCacheSizes(): { realRoots: number; leaseOwners: number } {
@@ -220,9 +220,12 @@ export function redirectRealCheckoutPath(projectRoot: string, absolutePath: stri
  * directory (dev/ino), re-resolved otherwise. Throws when it does not exist.
  */
 async function resolveRealRoot(projectRoot: string): Promise<string> {
-  let current: { dev: number; ino: number };
+  let current: { dev: bigint; ino: bigint };
   try {
-    current = await stat(projectRoot);
+    // bigint: a Windows file id is 64 bits and loses precision as a double,
+    // so two different directories could compare equal and a root re-pointed
+    // at another directory kept resolving to the old one.
+    current = await stat(projectRoot, { bigint: true });
   } catch (err) {
     realRootCache.delete(projectRoot);
     throw err;

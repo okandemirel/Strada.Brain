@@ -1487,7 +1487,9 @@ function directoryIsCaseInsensitive(dir: string): boolean {
 function destinationKeys(target: string): string[] {
   const keys = [target];
   try {
-    const stat = statSync(target);
+    // bigint: a Windows file id loses precision as a double, and two files
+    // must not share a key.
+    const stat = statSync(target, { bigint: true });
     keys.push(`inode:${stat.dev}:${stat.ino}`);
   } catch {
     // Not there yet: a fresh destination has no inode to collide on.

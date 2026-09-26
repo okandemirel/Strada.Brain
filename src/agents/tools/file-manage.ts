@@ -223,12 +223,13 @@ export class FileRenameTool implements ITool {
     // not found", POSIX rename replaced an existing destination silently, and
     // a directory could be moved although the tool (and the delete guard)
     // assume files only. Each case is now named before anything moves.
-    const source = await stat(oldCheck.fullPath).catch(() => undefined);
+    // bigint: compared by dev/ino below, and a Windows file id does not fit in a double.
+    const source = await stat(oldCheck.fullPath, { bigint: true }).catch(() => undefined);
     if (!source) return { content: `Error: source file not found: ${oldPath}`, isError: true };
     if (source.isDirectory()) {
       return { content: `Error: ${oldPath} is a directory — file_rename moves one file at a time`, isError: true };
     }
-    const existing = await stat(newCheck.fullPath).catch(() => undefined);
+    const existing = await stat(newCheck.fullPath, { bigint: true }).catch(() => undefined);
     // Same file (a case-only rename on a case-insensitive disk) is not a clash.
     const sameFile = existing !== undefined && existing.ino === source.ino && existing.dev === source.dev;
     if (existing?.isDirectory()) {
