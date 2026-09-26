@@ -46,14 +46,19 @@ describe("LocalModelRunner", () => {
   let fakeHome: string;
   let prevRoot: string | undefined;
   let prevHome: string | undefined;
+  // os.homedir() reads USERPROFILE on Windows, so HOME alone left homedir()
+  // at the runner's real profile there.
+  let prevProfile: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "lmr-test-"));
     fakeHome = mkdtempSync(join(tmpdir(), "lmr-home-"));
     prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
     prevHome = process.env["HOME"];
+    prevProfile = process.env["USERPROFILE"];
     process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
     process.env["HOME"] = fakeHome;
+    process.env["USERPROFILE"] = fakeHome;
   });
 
   afterEach(() => {
@@ -61,6 +66,8 @@ describe("LocalModelRunner", () => {
     else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
     if (prevHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = prevHome;
+    if (prevProfile === undefined) delete process.env["USERPROFILE"];
+    else process.env["USERPROFILE"] = prevProfile;
     rmSync(dir, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
   });
