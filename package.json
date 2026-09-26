@@ -147,6 +147,21 @@
     "protobufjs": "^7.5.5",
     "esbuild": "0.28.1",
     "undici": "^6.27.0",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "@azure/msal-node": {
+      "uuid": "^11.1.1"
+    },
+    "botbuilder": {
+      "uuid": "^11.1.1"
+    },
+    "botbuilder-core": {
+      "uuid": "^11.1.1"
+    },
+    "botframework-schema": {
+      "uuid": "^11.1.1"
+    },
+    "botframework-streaming": {
+      "uuid": "^11.1.1"
+    }
   }
 }
