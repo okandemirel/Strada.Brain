@@ -1,8 +1,9 @@
-import { readdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { runAllBatches } from "./vitest-batch-policy.mjs";
+import { failuresFromJsonReport, runAllBatches } from "./vitest-batch-policy.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(__dirname);
@@ -48,6 +49,29 @@ function runVitest(args) {
   });
 }
 
+/**
+ * One batch, with vitest's JSON report written next to the normal output so
+ * the end-of-run summary can list every failing test by name.
+ */
+async function runBatch(batch, reportDir, number) {
+  const reportFile = join(reportDir, `batch-${number}.json`);
+  const exitCode = await runVitest([
+    ...BASE_ARGS,
+    "--reporter=default",
+    "--reporter=json",
+    `--outputFile.json=${reportFile}`,
+    ...batch,
+  ]);
+  if (exitCode === 0) return exitCode;
+  try {
+    const report = JSON.parse(await readFile(reportFile, "utf8"));
+    return { exitCode, failures: failuresFromJsonReport(report, (file) => relative(repoRoot, file)) };
+  } catch {
+    // No report (vitest died before writing it): the batch output says why.
+    return exitCode;
+  }
+}
+
 function partitionFiles(files) {
   const batchCount = Math.max(1, Math.ceil(files.length / TARGET_FILES_PER_BATCH));
   const batches = Array.from({ length: batchCount }, () => []);
@@ -85,7 +109,11 @@ async function main() {
   const batches = partitionFiles(files);
 
   // Every batch runs; a failure is reported at the end, not by stopping early.
-  process.exit(await runAllBatches(batches, (batch) => runVitest([...BASE_ARGS, ...batch])));
+  const reportDir = await mkdtemp(join(tmpdir(), "strada-vitest-batches-"));
+  let batchNumber = 0;
+  const exitCode = await runAllBatches(batches, (batch) => runBatch(batch, reportDir, ++batchNumber));
+  await rm(reportDir, { recursive: true, force: true });
+  process.exit(exitCode);
 }
 
 main().catch((error) => {
