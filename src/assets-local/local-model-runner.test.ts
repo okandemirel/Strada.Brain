@@ -12,6 +12,7 @@ import {
   hfWeightsDir,
   modelSubprocessEnv,
   modelWeightsPresent,
+  servedWeightsRevision,
   type SpawnImpl,
 } from "./local-model-runner.js";
 import { getModelSpec, LOCAL_MODEL_CATALOG } from "./model-catalog.js";
@@ -993,5 +994,233 @@ describe("isModelInstalled measures the weights, not just the marker (item 2.15)
     expect(result.ok).toBe(false);
     expect(result.detail).toMatch(/weights/i);
     expect(existsSync(join(dir, ".installed-sd15"))).toBe(false);
+  });
+});
+
+describe("weights are pinned to the commit the first download was served (CMP-13, trust on first use)", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const SHA_C = "c".repeat(40);
+  let dir: string;
+  let fakeHome: string;
+  let prevRoot: string | undefined;
+  let prevHome: string | undefined;
+  const lockPath = (): string => join(dir, "models.lock.json");
+  const readLock = (): { version: number; models: Record<string, { weightsRef: string; revision: string }> } =>
+    JSON.parse(readFileSync(lockPath(), "utf8"));
+
+  /**
+   * A stand-in for python + the hub: `venv` creates the interpreter, and
+   * fetch_weights.py lays the snapshot of the revision it was asked for (or of
+   * whatever "main" is right now) into the cache and reports it the way the
+   * real driver does.
+   */
+  function hub(): { spawn: SpawnImpl; calls: Array<{ cmd: string; args: string[] }>; setMain: (sha: string) => void; ignoreRevision: () => void } {
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    let main = SHA_A;
+    let honourRevision = true;
+    const spawn: SpawnImpl = async (cmd, args) => {
+      calls.push({ cmd, args });
+      if (args.includes("venv")) {
+        const venvDir = args[args.indexOf("venv") + 1]!;
+        mkdirSync(join(venvDir, "bin"), { recursive: true });
+        writeFileSync(join(venvDir, "bin", "python3"), "#!/bin/sh\n");
+      }
+      if (args.some((a) => a.endsWith("fetch_weights.py"))) {
+        const ref = args[args.indexOf("--model") + 1]!;
+        const asked = args.find((a) => a.startsWith("--revision="))?.slice("--revision=".length);
+        const sha = honourRevision && asked !== undefined ? asked : main;
+        const snapshot = join(hfWeightsDir(ref), "snapshots", sha);
+        const file = join(snapshot, "unet", "diffusion_pytorch_model.safetensors");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, `weights@${sha}`);
+        if (asked === undefined) {
+          mkdirSync(join(hfWeightsDir(ref), "refs"), { recursive: true });
+          writeFileSync(join(hfWeightsDir(ref), "refs", "main"), sha);
+        }
+        return { code: 0, stdout: `FETCHED ${snapshot}\nREVISION ${sha}\n`, stderr: "" };
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    return { spawn, calls, setMain: (sha) => { main = sha; }, ignoreRevision: () => { honourRevision = false; } };
+  }
+  const fetchCall = (calls: Array<{ cmd: string; args: string[] }>): string[] | undefined =>
+    calls.filter((c) => c.args.some((a) => a.endsWith("fetch_weights.py"))).at(-1)?.args;
+  /** A draw's args (the stub draws nothing, so only the arguments matter). */
+  const drawArgs = async (runner: LocalModelRunner, calls: Array<{ cmd: string; args: string[] }>, spec = getModelSpec("sd15")!): Promise<string[]> => {
+    calls.length = 0;
+    await runner.textToImage(spec, "a pig", join(dir, "pig.png"));
+    return calls.find((c) => c.args.some((a) => a.endsWith("txt2img.py")))!.args;
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lmr-pin-"));
+    fakeHome = mkdtempSync(join(tmpdir(), "lmr-pin-home-"));
+    prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    prevHome = process.env["HOME"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    process.env["HOME"] = fakeHome;
+  });
+
+  afterEach(() => {
+    if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it("the first install records the commit the hub served, and says so once", async () => {
+    const { spawn, calls } = hub();
+    const runner = new LocalModelRunner(spawn);
+    const progress: string[] = [];
+    const result = await runner.install(getModelSpec("sd15")!, (line) => progress.push(line));
+    expect(result.ok, result.detail).toBe(true);
+    // Nothing was pinned yet, so the first fetch asks for "main"…
+    expect(fetchCall(calls)!.some((a) => a.startsWith("--revision"))).toBe(false);
+    // …and what "main" turned out to be is now the pin.
+    expect(readLock()).toMatchObject({
+      version: 1,
+      models: { sd15: { weightsRef: getModelSpec("sd15")!.weightsRef, revision: SHA_A } },
+    });
+    expect(progress.filter((l) => l.startsWith("pinned sd15"))).toHaveLength(1);
+    expect(runner.isModelInstalled("sd15")).toBe(true);
+  });
+
+  it("a second install fetches the pinned commit, not the moved main, and pins nothing new", async () => {
+    const { spawn, calls, setMain } = hub();
+    const runner = new LocalModelRunner(spawn);
+    const progress: string[] = [];
+    await runner.install(getModelSpec("sd15")!, (line) => progress.push(line));
+    setMain(SHA_B); // upstream force-pushed
+    const again = await runner.install(getModelSpec("sd15")!, (line) => progress.push(line));
+    expect(again.ok, again.detail).toBe(true);
+    expect(fetchCall(calls)).toContain(`--revision=${SHA_A}`);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+    expect(progress.filter((l) => l.startsWith("pinned "))).toHaveLength(1);
+    // The draw loads the same commit.
+    expect(await drawArgs(runner, calls)).toContain(`--revision=${SHA_A}`);
+  });
+
+  it("a pinned snapshot that went missing is fetched again at the pin, never taken from main", async () => {
+    const { spawn, calls, setMain } = hub();
+    const runner = new LocalModelRunner(spawn);
+    await runner.install(getModelSpec("sd15")!);
+    // main moves and its complete snapshot lands in the cache (refs/main names
+    // it), while the pinned one is deleted.
+    setMain(SHA_B);
+    const cache = hfWeightsDir(getModelSpec("sd15")!.weightsRef);
+    const mainFile = join(cache, "snapshots", SHA_B, "unet", "diffusion_pytorch_model.safetensors");
+    mkdirSync(dirname(mainFile), { recursive: true });
+    writeFileSync(mainFile, "weights@main");
+    writeFileSync(join(cache, "refs", "main"), SHA_B);
+    rmSync(join(cache, "snapshots", SHA_A), { recursive: true, force: true });
+    // The readiness check verifies the pin, not whatever main now names.
+    expect(runner.isModelInstalled("sd15")).toBe(false);
+    const repaired = await runner.install(getModelSpec("sd15")!);
+    expect(repaired.ok, repaired.detail).toBe(true);
+    expect(fetchCall(calls)).toContain(`--revision=${SHA_A}`);
+    expect(runner.isModelInstalled("sd15")).toBe(true);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+  });
+
+  it("a catalog weightsRevision wins over the recorded pin, and does not rewrite it", async () => {
+    const { spawn, calls } = hub();
+    const runner = new LocalModelRunner(spawn);
+    await runner.install(getModelSpec("sd15")!);
+    const catalogPinned = { ...getModelSpec("sd15")!, weightsRevision: SHA_C };
+    const result = await runner.install(catalogPinned);
+    expect(result.ok, result.detail).toBe(true);
+    expect(fetchCall(calls)).toContain(`--revision=${SHA_C}`);
+    expect(fetchCall(calls)).not.toContain(`--revision=${SHA_A}`);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+    expect(modelWeightsPresent(catalogPinned)).toBe(true); // SHA_C's snapshot, just fetched
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    expect(await drawArgs(runner, calls, catalogPinned)).toContain(`--revision=${SHA_C}`);
+  });
+
+  it("the pin survives a restart: a freshly loaded runner reads it from disk", async () => {
+    const { spawn, calls, setMain } = hub();
+    await new LocalModelRunner(spawn).install(getModelSpec("sd15")!);
+    setMain(SHA_B);
+    // A new process: nothing in memory, only what the first run left on disk.
+    vi.resetModules();
+    const reloaded = await import("./local-model-runner.js");
+    const catalog = await import("./model-catalog.js");
+    const runner = new reloaded.LocalModelRunner(spawn);
+    const spec = catalog.getModelSpec("sd15")!;
+    expect(runner.isModelInstalled("sd15")).toBe(true);
+    calls.length = 0;
+    await runner.textToImage(spec, "a pig", join(dir, "pig.png"));
+    expect(calls.find((c) => c.args.some((a) => a.endsWith("txt2img.py")))!.args).toContain(`--revision=${SHA_A}`);
+    await runner.install(spec);
+    expect(fetchCall(calls)).toContain(`--revision=${SHA_A}`);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+  });
+
+  it("a hub that serves another commit than the pin fails the install", async () => {
+    const { spawn, setMain, ignoreRevision } = hub();
+    const runner = new LocalModelRunner(spawn);
+    await runner.install(getModelSpec("sd15")!);
+    rmSync(join(dir, ".installed-sd15"));
+    setMain(SHA_B);
+    ignoreRevision();
+    const result = await runner.install(getModelSpec("sd15")!);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("not the pinned");
+    expect(existsSync(join(dir, ".installed-sd15"))).toBe(false);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+  });
+
+  it("an unreadable lock stops the fetch instead of re-pinning from main, and leaves the file alone", async () => {
+    const { spawn, calls } = hub();
+    const runner = new LocalModelRunner(spawn);
+    writeFileSync(lockPath(), "{ not json");
+    const result = await runner.install(getModelSpec("sd15")!);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("models.lock.json");
+    expect(fetchCall(calls)).toBeUndefined();
+    expect(readFileSync(lockPath(), "utf8")).toBe("{ not json");
+    expect(existsSync(join(dir, ".installed-sd15"))).toBe(false);
+  });
+
+  it("a pin recorded for another weights repo does not apply to this one", async () => {
+    const { spawn, calls } = hub();
+    writeFileSync(lockPath(), JSON.stringify({ version: 1, models: { sd15: { weightsRef: "someone/else", revision: SHA_C, recordedAt: "x" } } }));
+    const result = await new LocalModelRunner(spawn).install(getModelSpec("sd15")!);
+    expect(result.ok, result.detail).toBe(true);
+    expect(fetchCall(calls)!.some((a) => a.startsWith("--revision"))).toBe(false);
+    expect(readLock().models["sd15"]).toMatchObject({ weightsRef: getModelSpec("sd15")!.weightsRef, revision: SHA_A });
+  });
+
+  it("a mesh lift loads the pinned snapshot, and refuses rather than fall back to the repo id", async () => {
+    const spec = getModelSpec("triposr")!;
+    writeFileSync(lockPath(), JSON.stringify({ version: 1, models: { triposr: { weightsRef: spec.weightsRef, revision: SHA_A, recordedAt: "x" } } }));
+    for (const name of spec.weightFiles!) {
+      const file = join(hfWeightsDir(spec.weightsRef), "snapshots", SHA_A, name);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "bytes");
+    }
+    const seen: string[][] = [];
+    const runner = new LocalModelRunner(async (_cmd, args) => {
+      seen.push(args);
+      writeFileSync(args[args.indexOf("--out") + 1]!, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    expect((await runner.imageToMesh(spec, join(dir, "in.png"), join(dir, "Hero.obj"))).ok).toBe(true);
+    expect(seen[0]![seen[0]!.indexOf("--weights") + 1]).toBe(join(hfWeightsDir(spec.weightsRef), "snapshots", SHA_A));
+    rmSync(join(hfWeightsDir(spec.weightsRef), "snapshots", SHA_A), { recursive: true, force: true });
+    const refused = await runner.imageToMesh(spec, join(dir, "in.png"), join(dir, "Hero2.obj"));
+    expect(refused.ok).toBe(false);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("the driver reports the served commit, and a fetch from several commits is refused", () => {
+    expect(FETCH_WEIGHTS_SCRIPT).toContain('print("REVISION", commit, flush=True)');
+    expect(servedWeightsRevision(`FETCHED /x\nREVISION ${SHA_A}\nREVISION ${SHA_A}\n`)).toEqual({ ok: true, revision: SHA_A });
+    expect(servedWeightsRevision("FETCHED /x\n")).toEqual({ ok: true, revision: undefined });
+    expect(servedWeightsRevision(`REVISION ${SHA_A}\nREVISION ${SHA_B}\n`).ok).toBe(false);
   });
 });

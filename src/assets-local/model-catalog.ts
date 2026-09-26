@@ -71,9 +71,11 @@ export interface LocalModelSpec {
    */
   readonly weightFiles?: readonly string[];
   /**
-   * The cache ref whose snapshot the driver loads ("main" when absent). The
-   * readiness check reads refs/<this> to learn which revision to verify
-   * (Codex round 9 #25).
+   * The cache ref whose snapshot the driver loads. The readiness check reads
+   * refs/<this> to learn which revision to verify (Codex round 9 #25). When
+   * absent, the commit the first successful download was served is recorded
+   * in the install's models.lock.json and used from then on (CMP-13,
+   * weights-lock.ts); an explicit value here wins over that record.
    */
   readonly weightsRevision?: string;
 }
@@ -122,8 +124,9 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     installMethod: "repo",
     repoUrl: "https://github.com/VAST-AI-Research/TripoSR.git",
     // Upstream HEAD as `git ls-remote` reported it on 2026-09-25. The weights
-    // (stabilityai/TripoSR) are NOT pinned: no revision could be resolved from
-    // the Hugging Face API at the time, and an invented one would be worse.
+    // (stabilityai/TripoSR) carry no catalog pin: no revision could be resolved
+    // from the Hugging Face API at the time, and an invented one would be
+    // worse. The first download's commit is pinned per install instead.
     repoCommit: "107cefdc244c39106fa830359024f6a2f1c78871",
     repoRequirements: "requirements.txt",
   },

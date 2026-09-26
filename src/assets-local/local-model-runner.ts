@@ -10,6 +10,8 @@
  *                         alone is NOT the installed check — see
  *                         isModelInstalled: the weights under weights/ and a
  *                         repo-shipped model's src/<id> clone are measured too)
+ *   models.lock.json      the weights commit each model was first downloaded
+ *                         at; later fetches/draws/checks use it (CMP-13)
  *
  * Everything is optional: with nothing installed the generation tools fall
  * back to their procedural providers, and the setup menu is the only place
@@ -22,6 +24,7 @@ import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_REMOVAL_PACKAGES, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
+import { COMMIT_SHA_RE, WEIGHTS_LOCK_FILE, pinFor, readWeightsLock, recordWeightsPin } from "./weights-lock.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { PASSTHROUGH_VAR, SHELL_ENV_ALLOWLIST, buildShellEnv } from "../agents/tools/shell-env-policy.js";
 import { planTreeKill } from "../utils/process-runner.js";
@@ -123,8 +126,13 @@ for job in jobs:
  * Named files (`--files`) for models the driver loads by name (TripoSR);
  * otherwise the diffusers pipeline folder, which is exactly what
  * `from_pretrained` would have fetched.
+ *
+ * `REVISION <sha>` reports the commit the hub actually served — the name of
+ * the cache snapshot folder the files landed in — so the first download can
+ * be pinned (CMP-13, see weights-lock.ts). Named files after the first are
+ * fetched at that commit, so "main" moving mid-install cannot mix revisions.
  */
-export const FETCH_WEIGHTS_SCRIPT = `import argparse, sys
+export const FETCH_WEIGHTS_SCRIPT = `import argparse, os, sys
 p = argparse.ArgumentParser()
 p.add_argument("--model", required=True)
 p.add_argument("--files", default="")
@@ -132,14 +140,30 @@ p.add_argument("--revision", default="")
 a = p.parse_args()
 rev = a.revision or None
 
+def served(path):
+    # <cache>/models--<org>--<name>/snapshots/<commit>[/<file>]
+    parts = os.path.normpath(path).split(os.sep)
+    for i in range(len(parts) - 3, -1, -1):
+        if parts[i].startswith("models--") and parts[i + 1] == "snapshots":
+            return parts[i + 2]
+    return ""
+
 names = [f for f in a.files.split(",") if f]
 if names:
     from huggingface_hub import hf_hub_download
     for name in names:
-        print("FETCHED", hf_hub_download(repo_id=a.model, filename=name, revision=rev), flush=True)
+        path = hf_hub_download(repo_id=a.model, filename=name, revision=rev)
+        print("FETCHED", path, flush=True)
+        commit = served(path)
+        if commit:
+            print("REVISION", commit, flush=True)
+            rev = commit
 else:
     from diffusers import DiffusionPipeline
-    print("FETCHED", DiffusionPipeline.download(a.model, revision=rev), flush=True)
+    path = DiffusionPipeline.download(a.model, revision=rev)
+    print("FETCHED", path, flush=True)
+    if served(path):
+        print("REVISION", served(path), flush=True)
 `;
 
 export const IMG2MESH_SCRIPT = `import argparse, sys
@@ -188,6 +212,8 @@ const WEIGHTS = (): string => join(ROOT_DIR(), "weights");
  * 2026-09-17: the marker was never invalidated).
  */
 const RMBG_READY = (): string => join(ROOT_DIR(), ".rmbg-ready");
+/** The commits each model's weights are pinned to (CMP-13, weights-lock.ts). */
+const WEIGHTS_LOCK = (): string => join(ROOT_DIR(), WEIGHTS_LOCK_FILE);
 /** The import the txt2img driver performs under --rmbg; probed with the same names. */
 export const RMBG_IMPORT_PROBE = "import rembg, onnxruntime";
 /**
@@ -270,6 +296,9 @@ function filesUnder(dir: string, depth = 8): Array<{ rel: string; size: number }
  * DIFFERENT revisions (Codex 2026-09-17 round 9 #25).
  */
 function hfSnapshotDir(spec: LocalModelSpec): string | null {
+  // An unreadable weights lock names no revision this install can trust.
+  const pinned = weightsRevisionFor(spec);
+  if (!pinned.ok) return null;
   const root = hfWeightsDir(spec.weightsRef);
   const snapshots = join(root, "snapshots");
   if (!existsSync(snapshots)) {
@@ -277,7 +306,7 @@ function hfSnapshotDir(spec: LocalModelSpec): string | null {
     // fixture): the root itself is the revision.
     return existsSync(root) ? root : null;
   }
-  const ref = spec.weightsRevision ?? "main";
+  const ref = pinned.revision ?? "main";
   // A COMMIT revision has no refs/ file: the cache names its snapshot by the
   // commit itself.
   if (/^[0-9a-f]{40}$/.test(ref)) return existsSync(join(snapshots, ref)) ? join(snapshots, ref) : null;
@@ -300,9 +329,41 @@ function hfSnapshotDir(spec: LocalModelSpec): string | null {
   }
 }
 
-/** `--revision=<rev>` for a catalog entry that pins its weights, as one token. */
-function revisionArgs(spec: LocalModelSpec): string[] {
-  return spec.weightsRevision === undefined ? [] : [`--revision=${spec.weightsRevision}`];
+/**
+ * The revision of this model's weights every fetch, draw and readiness check
+ * uses: the catalog's `weightsRevision` when it pins one, else the commit the
+ * first download recorded in the weights lock (CMP-13), else none yet ("main",
+ * and the next successful download records what that was).
+ */
+type WeightsRevision =
+  | { ok: true; revision: string | undefined; source: "catalog" | "lock" | "none" }
+  | { ok: false; detail: string };
+
+function weightsRevisionFor(spec: LocalModelSpec): WeightsRevision {
+  if (spec.weightsRevision !== undefined) return { ok: true, revision: spec.weightsRevision, source: "catalog" };
+  const lock = readWeightsLock(WEIGHTS_LOCK());
+  if (!lock.ok) return lock;
+  const pin = pinFor(lock.pins, spec.id, spec.weightsRef);
+  return pin !== undefined ? { ok: true, revision: pin.revision, source: "lock" } : { ok: true, revision: undefined, source: "none" };
+}
+
+/** `--revision=<rev>` for pinned weights, as one token. */
+function revisionArgs(revision: string | undefined): string[] {
+  return revision === undefined ? [] : [`--revision=${revision}`];
+}
+
+/**
+ * The one commit a weights fetch reports it was served (`REVISION <sha>`
+ * lines), undefined when it reported none, or an error when its files came
+ * from more than one commit.
+ */
+export function servedWeightsRevision(stdout: string): { ok: true; revision: string | undefined } | { ok: false; detail: string } {
+  const served = new Set<string>();
+  for (const match of stdout.matchAll(/^REVISION (\S+)\s*$/gmu)) {
+    if (COMMIT_SHA_RE.test(match[1]!)) served.add(match[1]!);
+  }
+  if (served.size > 1) return { ok: false, detail: `the weights came from several commits (${[...served].map((s) => s.slice(0, 12)).join(", ")})` };
+  return { ok: true, revision: [...served][0] };
 }
 
 /** A file in a snapshot whose blob is still downloading is not there yet. */
@@ -755,15 +816,36 @@ export class LocalModelRunner {
     onProgress?: (line: string) => void,
   ): Promise<{ ok: boolean; detail: string }> {
     this.writeScripts();
+    // A pinned model is fetched at its pin even when its snapshot is gone or
+    // broken — never at "main" (CMP-13); an unreadable lock stops the fetch.
+    const pinned = weightsRevisionFor(spec);
+    if (!pinned.ok) return { ok: false, detail: `weights download refused: ${pinned.detail}` };
     onProgress?.(`downloading ${spec.label} weights (~${spec.diskGb} GB, resumable)…`);
     const args = [join(SCRIPTS(), "fetch_weights.py"), "--model", spec.weightsRef];
     if (spec.weightFiles && spec.weightFiles.length > 0) args.push("--files", spec.weightFiles.join(","));
     // THE REVISION THE READINESS CHECK VERIFIES is the one fetched (CMP-13):
     // the fetch took "main" while the check looked for refs/<weightsRevision>.
-    args.push(...revisionArgs(spec));
+    args.push(...revisionArgs(pinned.revision));
     const run = await this.spawn(venvPython(), args, { timeoutMs: 3_600_000, env });
     if (run.code !== 0) {
       return { ok: false, detail: `weights download failed: ${(run.stderr || run.stdout).slice(-400)}` };
+    }
+    const served = servedWeightsRevision(run.stdout);
+    if (!served.ok) return { ok: false, detail: `weights download failed: ${served.detail}` };
+    if (pinned.revision !== undefined && COMMIT_SHA_RE.test(pinned.revision) && served.revision !== undefined && served.revision !== pinned.revision) {
+      return { ok: false, detail: `weights download failed: the hub served ${served.revision.slice(0, 12)}, not the pinned ${pinned.revision.slice(0, 12)}` };
+    }
+    if (pinned.source === "none") {
+      // Trust on first use: what the hub served now is what every later fetch,
+      // draw and readiness check of this model asks for.
+      if (served.revision === undefined) {
+        getLoggerSafe().warn(`assets-local: the ${spec.id} weights download reported no commit; they stay unpinned until the next install`);
+      } else {
+        recordWeightsPin(WEIGHTS_LOCK(), spec.id, { weightsRef: spec.weightsRef, revision: served.revision, recordedAt: new Date().toISOString() });
+        const line = `pinned ${spec.id} weights (${spec.weightsRef}) to commit ${served.revision} in ${WEIGHTS_LOCK_FILE}`;
+        onProgress?.(line);
+        getLoggerSafe().info(`assets-local: ${line}`);
+      }
     }
     return { ok: true, detail: `${spec.label} weights cached.` };
   }
@@ -778,6 +860,8 @@ export class LocalModelRunner {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
     }
+    const pinned = weightsRevisionFor(spec);
+    if (!pinned.ok) return { ok: false, detail: pinned.detail };
     this.writeScripts();
     const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
     const args = [
@@ -793,7 +877,7 @@ export class LocalModelRunner {
       "--size", String(opts.size ?? 512),
       "--rmbg", opts.removeBackground ? "1" : "0",
       "--seed", String(opts.seed ?? -1),
-      ...revisionArgs(spec),
+      ...revisionArgs(pinned.revision),
     ];
     const env = this.envWithWeights();
     if (opts.removeBackground) {
@@ -822,6 +906,8 @@ export class LocalModelRunner {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.`, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
     }
     if (jobs.length === 0) return { ok: true, detail: "no jobs", written: [], missing: [], keptBackground: [] };
+    const pinned = weightsRevisionFor(spec);
+    if (!pinned.ok) return { ok: false, detail: pinned.detail, written: [], missing: jobs.map((j) => j.out), keptBackground: [] };
     this.writeScripts();
     const family = spec.id === "flux-schnell" ? "flux" : spec.id === "sdxl" ? "sdxl" : "sd15";
     // A UNIQUE name, exclusively created. Two batches starting in the same
@@ -840,7 +926,7 @@ export class LocalModelRunner {
         "--steps", String(opts.steps ?? 0),
         "--size", String(opts.size ?? 512),
         "--rmbg", opts.removeBackground ? "1" : "0",
-        ...revisionArgs(spec),
+        ...revisionArgs(pinned.revision),
       ];
       // Only files this run produced count as written (review 2026-09-07:
       // a batch that drew nothing over three earlier PNGs reported "3 of 3
@@ -891,6 +977,15 @@ export class LocalModelRunner {
     if (!this.isModelInstalled(spec.id)) {
       return { ok: false, detail: `${spec.label} is not installed — run assets-local-setup first.` };
     }
+    // TSR.from_pretrained takes no revision: a pinned one is loaded from its
+    // own snapshot directory, which it reads like a local checkout. With that
+    // snapshot gone there is nothing to load — the bare repo id means "main".
+    const pinned = weightsRevisionFor(spec);
+    if (!pinned.ok) return { ok: false, detail: pinned.detail };
+    const weights = pinned.revision === undefined ? spec.weightsRef : hfSnapshotDir(spec);
+    if (weights === null) {
+      return { ok: false, detail: `${spec.label}'s pinned weights snapshot is missing — run assets-local-setup first.` };
+    }
     this.writeScripts();
     // INTO A STAGING PATH, never over the target. The subprocess was trusted
     // to have produced geometry because it exited 0 and the target path
@@ -906,9 +1001,7 @@ export class LocalModelRunner {
     try { rmSync(staged, { force: true }); } catch { /* nothing to clear */ }
     const args = [
       join(SCRIPTS(), "img2mesh.py"),
-      // TSR.from_pretrained takes no revision: a pinned one is loaded from
-      // its own snapshot directory, which it reads like a local checkout.
-      "--weights", (spec.weightsRevision !== undefined ? hfSnapshotDir(spec) : null) ?? spec.weightsRef,
+      "--weights", weights,
       "--image", imagePath,
       "--out", staged,
     ];
