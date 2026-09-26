@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { join } from "node:path";
 import { isValidSkillName, isValidRepoUrl, installSkillFromRepo } from "./skill-installer.js";
+
+/** Where the installer clones a skill under the mocked home, as path.join spells it on this platform. */
+const managedSkillDir = (name: string): string => join("/mock-home", ".strada", "skills", name);
 
 // =============================================================================
 // Mocks
@@ -216,7 +220,7 @@ describe("installSkillFromRepo", () => {
     expect(result.error).toContain("Git clone failed");
     // Should attempt cleanup
     expect(fsMock.rm).toHaveBeenCalledWith(
-      "/mock-home/.strada/skills/my-skill",
+      managedSkillDir("my-skill"),
       { recursive: true, force: true },
     );
   });
@@ -251,7 +255,7 @@ describe("installSkillFromRepo", () => {
     const result = await installSkillFromRepo("my-skill", "https://github.com/x/y");
 
     expect(result.success).toBe(true);
-    expect(result.targetDir).toBe("/mock-home/.strada/skills/my-skill");
+    expect(result.targetDir).toBe(managedSkillDir("my-skill"));
     expect(skillConfigMock.setSkillEnabled).toHaveBeenCalledWith("my-skill", true);
   });
 
@@ -287,7 +291,7 @@ describe("installSkillFromRepo", () => {
     expect(result.error).toContain("not a skill");
     expect(skillConfigMock.setSkillEnabled).not.toHaveBeenCalled();
     expect(fsMock.rm).toHaveBeenCalledWith(
-      "/mock-home/.strada/skills/my-skill",
+      managedSkillDir("my-skill"),
       { recursive: true, force: true },
     );
   });
@@ -327,7 +331,7 @@ describe("installSkillFromRepo", () => {
       "1",
       "--",
       "https://github.com/owner/repo",
-      "/mock-home/.strada/skills/test-skill",
+      managedSkillDir("test-skill"),
     ]);
     // Should have timeout
     expect(cloneCall[2]).toBe(60_000);

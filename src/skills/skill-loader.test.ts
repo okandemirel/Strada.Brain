@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { basename, join, sep } from "node:path";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
 
 // ---------------------------------------------------------------------------
@@ -63,19 +64,22 @@ const fileStat = { isDirectory: () => false, isFile: () => true, isSymbolicLink:
 /** A `readdir(…, { withFileTypes: true })` entry for a regular file. */
 const dirent = (name: string) => ({ name, ...fileStat });
 
+// The loader builds every path with path.join, so the mocked filesystem is
+// keyed the same way: `\test-project\skills` on Windows, not `/test-project/skills`.
+
 // ---------------------------------------------------------------------------
 // discoverSkills
 // ---------------------------------------------------------------------------
 
 describe("discoverSkills", () => {
   it("discovers a valid skill from a directory", async () => {
-    const skillDir = "/test-project/skills";
-    const gmailDir = `${skillDir}/gmail`;
+    const skillDir = join("/test-project", "skills");
+    const gmailDir = join(skillDir, "gmail");
 
     // stat calls: first for the tier directory, then for the skill subdirectory
     fsMock.stat.mockImplementation(async (path: string) => {
       if (path === skillDir || path === gmailDir) return dirStat;
-      if (path === `${gmailDir}/SKILL.md`) return fileStat;
+      if (path === join(gmailDir, "SKILL.md")) return fileStat;
       throw new Error("ENOENT");
     });
 
@@ -85,7 +89,7 @@ describe("discoverSkills", () => {
     });
 
     fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === `${gmailDir}/SKILL.md`) {
+      if (path === join(gmailDir, "SKILL.md")) {
         return makeSkillMd({
           name: "gmail",
           version: "1.0.0",
@@ -107,16 +111,16 @@ describe("discoverSkills", () => {
   });
 
   it("reads inject and triggers from the frontmatter (how a body earns its place in a prompt)", async () => {
-    const skillDir = "/test-project/skills";
-    const planDir = `${skillDir}/ufo-plan`;
+    const skillDir = join("/test-project", "skills");
+    const planDir = join(skillDir, "ufo-plan");
     fsMock.stat.mockImplementation(async (path: string) => {
       if (path === skillDir || path === planDir) return dirStat;
-      if (path === `${planDir}/SKILL.md`) return fileStat;
+      if (path === join(planDir, "SKILL.md")) return fileStat;
       throw new Error("ENOENT");
     });
     fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["ufo-plan"] : []));
     fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === `${planDir}/SKILL.md`) {
+      if (path === join(planDir, "SKILL.md")) {
         return makeSkillMd({
           name: "ufo-plan",
           version: "1.0.0",
@@ -137,7 +141,7 @@ describe("discoverSkills", () => {
 
   it("skips skills with missing name field", async () => {
     const extraDir = "/extra-skills";
-    const badDir = `${extraDir}/bad-skill`;
+    const badDir = join(extraDir, "bad-skill");
 
     fsMock.stat.mockImplementation(async (path: string) => {
       if (path === extraDir || path === badDir) return dirStat;
@@ -150,7 +154,7 @@ describe("discoverSkills", () => {
     });
 
     fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === `${badDir}/SKILL.md`) {
+      if (path === join(badDir, "SKILL.md")) {
         // Missing name field
         return makeSkillMd({ version: "1.0.0", description: "No name" });
       }
@@ -163,10 +167,10 @@ describe("discoverSkills", () => {
   });
 
   it("higher tier overrides lower tier for same skill name", async () => {
-    const workspaceDir = "/project/skills";
+    const workspaceDir = join("/project", "skills");
     const extraDir = "/extra-skills";
-    const wsSkill = `${workspaceDir}/my-skill`;
-    const exSkill = `${extraDir}/my-skill`;
+    const wsSkill = join(workspaceDir, "my-skill");
+    const exSkill = join(extraDir, "my-skill");
 
     fsMock.stat.mockImplementation(async (path: string) => {
       if (
@@ -187,14 +191,14 @@ describe("discoverSkills", () => {
     });
 
     fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === `${wsSkill}/SKILL.md`) {
+      if (path === join(wsSkill, "SKILL.md")) {
         return makeSkillMd({
           name: "my-skill",
           version: "2.0.0",
           description: "Workspace version",
         });
       }
-      if (path === `${exSkill}/SKILL.md`) {
+      if (path === join(exSkill, "SKILL.md")) {
         return makeSkillMd({
           name: "my-skill",
           version: "1.0.0",
@@ -248,7 +252,7 @@ describe("loadSkillTools", () => {
       throw new Error("ENOENT");
     });
     fsMock.stat.mockImplementation(async (path: string) => {
-      if (path === "/mock/skills/gmail/index.js") return fileStat;
+      if (path === join("/mock/skills/gmail", "index.js")) return fileStat;
       throw new Error("ENOENT");
     });
 
@@ -267,8 +271,8 @@ describe("loadSkillTools", () => {
     }
 
     // Only the listed entry point was probed — never a name the listing lacks.
-    expect(fsMock.stat).toHaveBeenCalledWith("/mock/skills/gmail/index.js");
-    expect(fsMock.stat).not.toHaveBeenCalledWith("/mock/skills/gmail/index.ts");
+    expect(fsMock.stat).toHaveBeenCalledWith(join("/mock/skills/gmail", "index.js"));
+    expect(fsMock.stat).not.toHaveBeenCalledWith(join("/mock/skills/gmail", "index.ts"));
   });
 
   it("returns empty array when no entry point exists", async () => {
@@ -301,8 +305,8 @@ describe("loadSkillTools", () => {
     });
     // Case-insensitive lookup, as APFS/NTFS answer it.
     fsMock.stat.mockImplementation(async (path: string) => {
-      const base = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
-      if (path.startsWith("/mock/skills/cased/") && onDisk.some((n) => n.toLowerCase() === base)) return fileStat;
+      const base = basename(path).toLowerCase();
+      if (path.startsWith(join("/mock/skills/cased") + sep) && onDisk.some((n) => n.toLowerCase() === base)) return fileStat;
       throw new Error("ENOENT");
     });
 
