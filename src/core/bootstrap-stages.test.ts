@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolve, sep } from "node:path";
 import type { Config } from "../config/config.js";
 import {
   finalizeChannelStartupStage,
@@ -646,7 +647,8 @@ describe("bootstrap-stages", () => {
       createFileWatchTrigger: vi.fn(),
     });
 
-    expect(result.heartbeatPath).toBe("/workspace/HEARTBEAT.md");
+    // resolve(), as the product does (a drive letter and backslashes on Windows).
+    expect(result.heartbeatPath).toBe(resolve("/workspace", "HEARTBEAT.md"));
     expect(result.webhookTriggers.get("hook-1")).toBe(webhookTrigger);
     // The parsed cooldown reaches the webhook constructor (audited 2026-09-02)
     expect(createWebhookTrigger).toHaveBeenCalledWith("hook-1", "Run webhook", 900);
@@ -661,6 +663,43 @@ describe("bootstrap-stages", () => {
         byType: { cron: 1, webhook: 1 },
       }),
     );
+  });
+
+  // Windows 2026-09-26: the root was compared as configured (a string prefix
+  // against an unresolved root), so a root with a trailing separator — or, on
+  // Windows, a drive-less or forward-slash one — refused its own HEARTBEAT.md
+  // and the daemon did not start.
+  it("finds the heartbeat and watch paths inside a root given with a trailing separator, and still refuses an escape", () => {
+    const daemon = makeConfig({
+      daemon: {
+        heartbeat: { heartbeatFile: "HEARTBEAT.md", intervalMs: 1000 },
+        triggers: { checklistMorningHour: 9, checklistAfternoonHour: 14, checklistEveningHour: 18, defaultDebounceMs: 250 },
+        timezone: "",
+      } as Config["daemon"],
+    }).daemon;
+    const createFileWatchTrigger = vi.fn().mockReturnValue({ _tag: "watch" } as any);
+    const run = (projectRoot: string, heartbeatFile = "HEARTBEAT.md") =>
+      loadDaemonTriggersStage({
+        daemonConfig: { ...daemon, heartbeat: { ...daemon.heartbeat, heartbeatFile } },
+        logger: createMockLogger(),
+        triggerRegistry: { register: vi.fn(), count: vi.fn().mockReturnValue(1) } as any,
+        projectRoot,
+      }, {
+        readFile: vi.fn().mockReturnValue("# heartbeat"),
+        parseHeartbeatFile: vi.fn().mockReturnValue([
+          { type: "file-watch", name: "watch-in", action: "Watch", path: "Assets", debounce: 100 },
+          { type: "file-watch", name: "watch-sibling", action: "Watch", path: "../workspace-other", debounce: 100 },
+        ]),
+        createFileWatchTrigger,
+      });
+
+    const rootWithSeparator = `${resolve("/workspace")}${sep}`;
+    expect(run(rootWithSeparator).heartbeatPath).toBe(resolve("/workspace", "HEARTBEAT.md"));
+    expect(createFileWatchTrigger).toHaveBeenCalledTimes(1);
+    expect(createFileWatchTrigger).toHaveBeenCalledWith(expect.objectContaining({ path: resolve("/workspace", "Assets") }));
+
+    expect(() => run(rootWithSeparator, `..${sep}HEARTBEAT.md`)).toThrow(/outside project root/);
+    expect(() => run(rootWithSeparator, resolve("/elsewhere", "HEARTBEAT.md"))).toThrow(/outside project root/);
   });
 
   it("initializes daemon heartbeat wiring and binds the command handler", () => {

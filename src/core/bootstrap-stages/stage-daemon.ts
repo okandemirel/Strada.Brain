@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type * as winston from "winston";
 import type { Config } from "../../config/config.js";
 import { resolveRuntimePaths } from "../../common/runtime-paths.js";
@@ -31,6 +31,17 @@ import type {
   DaemonHeartbeatStageResult,
 } from "./bootstrap-stages-types.js";
 
+/**
+ * `candidate` is `root` itself or a path inside it. Judged by path.relative, not
+ * by `startsWith(root + sep)`: the root arrives as configured (STRADA_INSTALL_ROOT
+ * verbatim, a trailing separator, forward slashes on Windows), and a string
+ * prefix test against an unnormalized root refused the project's own files.
+ */
+function isAtOrInside(root: string, candidate: string): boolean {
+  const step = relative(root, candidate);
+  return step === "" || (step !== ".." && !step.startsWith(`..${sep}`) && !isAbsolute(step));
+}
+
 export function loadDaemonTriggersStage(
   params: {
     daemonConfig: Config["daemon"];
@@ -40,9 +51,9 @@ export function loadDaemonTriggersStage(
   },
   deps: DaemonTriggerStageDeps = {},
 ): DaemonTriggerStageResult {
-  const projectRoot = params.projectRoot ?? resolveRuntimePaths({ moduleUrl: import.meta.url }).configRoot;
+  const projectRoot = resolve(params.projectRoot ?? resolveRuntimePaths({ moduleUrl: import.meta.url }).configRoot);
   const heartbeatPath = resolve(projectRoot, params.daemonConfig.heartbeat.heartbeatFile);
-  if (!heartbeatPath.startsWith(projectRoot + sep) && heartbeatPath !== projectRoot) {
+  if (!isAtOrInside(projectRoot, heartbeatPath)) {
     throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);
   }
 
@@ -72,7 +83,7 @@ export function loadDaemonTriggersStage(
           break;
         case "file-watch": {
           const resolvedWatchPath = resolve(projectRoot, def.path);
-          if (!resolvedWatchPath.startsWith(projectRoot + sep) && resolvedWatchPath !== projectRoot) {
+          if (!isAtOrInside(projectRoot, resolvedWatchPath)) {
             params.logger.warn("File-watch path outside project root, skipping", {
               trigger: def.name,
               path: def.path,
