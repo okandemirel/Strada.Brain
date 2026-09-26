@@ -37,6 +37,7 @@
     "setup:web": "node --import tsx src/index.ts setup --web",
     "setup:terminal": "node --import tsx src/index.ts setup --terminal",
     "prepack": "npm run build",
+    "prepublishOnly": "node scripts/ci/check-publish-lock.mjs",
     "pack:dry-run": "npm pack --dry-run",
     "build": "node scripts/build-package.mjs",
     "build:portal": "npm --prefix web-portal run build",

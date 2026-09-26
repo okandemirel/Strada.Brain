@@ -334,6 +334,7 @@ To contribute a skill directly to the Strada.Brain repo:
 - Sanitize file paths with the path guard before any file system operation.
 - When adding tools that execute commands, respect the `readOnly` flag from `ToolContext`.
 - Run `npm run security:audit` periodically to check for dependency vulnerabilities.
+- Dependency `overrides` in `package.json` apply only to a source checkout's install; npm drops them for a published package. `npm publish` therefore refuses to run (`prepublishOnly`, `scripts/ci/check-publish-lock.mjs`) until `npm shrinkwrap` has written an `npm-shrinkwrap.json` for the version being published.
 
 ## Questions?
 
