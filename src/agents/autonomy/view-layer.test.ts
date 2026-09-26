@@ -110,6 +110,17 @@ describe("whether a project can render anything", () => {
     expect(result?.camerslessScenes).toEqual(["Gameplay.unity"]);
   });
 
+  it("names a cameraless scene by its file name when the listing holds Windows paths", () => {
+    // A Windows walk lists C:\p\Assets\...: the report named the whole path.
+    const result = assessViewLayer("C:\\p", io({
+      "C:\\p\\Assets\\Modules\\Board\\CubeView.cs": "public class CubeView : MonoBehaviour { }",
+      "C:\\p\\Assets\\Modules\\Board\\Prefabs\\Cube.prefab": "SpriteRenderer:",
+      "C:\\p\\Assets\\Scenes\\Gameplay.unity": "GameObject:\nTransform:",
+    }));
+
+    expect(result?.camerslessScenes).toEqual(["Gameplay.unity"]);
+  });
+
   it("says nothing about a scene that has one", () => {
     const result = assessViewLayer("/p", io({
       "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",

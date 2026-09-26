@@ -348,7 +348,9 @@ export function assessViewLayer(
     // the scene's: such a scene was accused of holding no camera.
     cameraPrefabs ??= cameraPrefabGuids(prefabs, io);
     if (instancedPrefabGuids(text).some((guid) => cameraPrefabs!.has(guid))) continue;
-    cameraless.push(scene.slice(scene.lastIndexOf("/") + 1));
+    // The listing holds native paths: cutting at "/" alone left a Windows
+    // path whole, so the report named the full path, not the scene.
+    cameraless.push(scene.slice(Math.max(scene.lastIndexOf("/"), scene.lastIndexOf("\\")) + 1));
   }
 
   return {
