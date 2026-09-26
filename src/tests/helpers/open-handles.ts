@@ -8,7 +8,7 @@
  * through /proc/self/fd. Where /proc is absent (macOS, Windows) the count reads
  * 0 and the platform's own cleanup failure is the check.
  */
-import { readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 const FD_DIR = "/proc/self/fd";
@@ -20,6 +20,15 @@ function canonical(file: string): string {
   } catch {
     return resolve(file);
   }
+}
+
+/**
+ * Whether descriptors can be counted here at all. Where they cannot, a test's
+ * "it is open now" precondition has nothing to read, and the cleanup's EBUSY
+ * on Windows is what catches a handle left open.
+ */
+export function descriptorsObservable(): boolean {
+  return existsSync(FD_DIR);
 }
 
 /** How many descriptors this process holds open on `file` (0 where it cannot be observed). */

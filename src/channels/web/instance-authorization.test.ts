@@ -12,7 +12,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAtOrUnder, kernelEnforcesPermissions, permissionDenied } from "../../tests/helpers/permission-faults.js";
-import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
+import { descriptorsObservable, openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 
 /** The config the resolver locates the identity database with — never the real one. */
 let memoryDbDir: string;
@@ -194,7 +194,7 @@ describe("instance identity state is three-way (round 13 #14)", () => {
   it("closes the identity database it opened when that store is let go", () => {
     seedIdentities();
     expect(instanceIdentityState().kind).toBe("store");
-    expect(openDescriptorsOn(dbPath())).toBeGreaterThan(0);
+    if (descriptorsObservable()) expect(openDescriptorsOn(dbPath())).toBeGreaterThan(0);
     setInstanceIdentityStore(null);
     expect(openDescriptorsOn(dbPath())).toBe(0);
 

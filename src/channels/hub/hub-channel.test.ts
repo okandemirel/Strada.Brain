@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { HubChannel } from "./hub-channel.js";
 import { HubOwnerStore, HUB_OWNERS_DB_FILE } from "./owner-store.js";
-import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
+import { descriptorsObservable, openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 import type { IChannelAdapter } from "../channel.interface.js";
 import type { IncomingMessage } from "../channel-messages.interface.js";
 
@@ -264,7 +264,7 @@ describe("HubChannel", () => {
   it("closes the default owner store it opened when it disconnects", async () => {
     const hub = track(new HubChannel([fake("web"), fake("telegram")]));
     const dbPath = join(defaultStradaHome(), HUB_OWNERS_DB_FILE);
-    expect(openDescriptorsOn(dbPath)).toBeGreaterThan(0);
+    if (descriptorsObservable()) expect(openDescriptorsOn(dbPath)).toBeGreaterThan(0);
     await hub.disconnect();
     expect(openDescriptorsOn(dbPath)).toBe(0);
   });
