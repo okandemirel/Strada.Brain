@@ -1031,7 +1031,7 @@ export class WorkspaceLeaseManager {
       });
     }
     // The project's HEAD at seed time: for a tracked file whose mtime moved
-    // during the run, `git show <seedHead>:<path>` is what it held when the
+    // during the run, the blob at `<seedHead>:<path>` is what it held when the
     // lease was taken, so "did the user change it" can be answered by content
     // and not by a timestamp a git merge, a reimport or a reserialisation
     // bumps without changing a byte (measured 2026-09-07 21:32).
@@ -2718,6 +2718,13 @@ export class WorkspaceLeaseManager {
    * "unknown" is its own answer: a file the seed commit does not hold (an
    * untracked or gitignored one) can neither confirm nor contradict a stamp,
    * and the caller decides which way that cuts.
+   *
+   * Compared as object ids, never as bytes. `git show` hands back the blob as
+   * git STORES it, while the working tree holds it as checked out: with
+   * core.autocrlf=true (the Git for Windows default) every unchanged text file
+   * read as "different", and a binary asset never survived the trip through a
+   * UTF-8 stdout string. `hash-object --path` applies the filters `git add`
+   * would, so "same" means exactly "git sees no change here".
    */
   private async seedHeadVerdict(
     sourceRoot: string,
@@ -2726,17 +2733,19 @@ export class WorkspaceLeaseManager {
     target: string,
   ): Promise<"same" | "different" | "unknown"> {
     if (!seedHead) return "unknown";
+    const path = rel.split(sep).join("/");
+    const git = (args: string[]) =>
+      this.commandRunner({ command: "git", args: ["-C", sourceRoot, ...args], cwd: sourceRoot, timeoutMs: 15_000 });
     try {
-      const shown = await this.commandRunner({
-        command: "git",
-        args: ["-C", sourceRoot, "show", `${seedHead}:${rel.split(sep).join("/")}`],
-        cwd: sourceRoot,
-        timeoutMs: 15_000,
-        maxOutput: 64 * 1024 * 1024,
-      });
-      if (shown.exitCode !== 0) return "unknown";
-      const current = await fsp.readFile(target);
-      return Buffer.from(shown.stdout, "utf8").equals(current) ? "same" : "different";
+      const [atSeed, now] = await Promise.all([
+        git(["rev-parse", "--verify", "--quiet", `${seedHead}:${path}`]),
+        git(["hash-object", `--path=${path}`, "--", target]),
+      ]);
+      if (atSeed.exitCode !== 0 || now.exitCode !== 0) return "unknown";
+      const seedId = atSeed.stdout.trim();
+      const nowId = now.stdout.trim();
+      if (!/^[0-9a-f]{40,64}$/.test(seedId) || !/^[0-9a-f]{40,64}$/.test(nowId)) return "unknown";
+      return seedId === nowId ? "same" : "different";
     } catch {
       return "unknown";
     }

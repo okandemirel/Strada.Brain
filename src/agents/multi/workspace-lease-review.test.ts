@@ -250,6 +250,54 @@ describe("a moved mtime is not a user edit", () => {
     expect(result.conflicts).toEqual([join("Assets", "Scripts", "Player.cs")]);
     expect(readFileSync(target, "utf8")).toContain("/* user */");
   });
+
+  // "The bytes still equal the seed-time HEAD" has to mean what git means by
+  // it. A Windows checkout (core.autocrlf=true, the Git for Windows default)
+  // holds CRLF where the commit holds LF, and a binary asset does not survive
+  // a trip through a UTF-8 string. Comparing the raw blob called both "the
+  // user changed it" and quarantined the agent's edit.
+  it("a CRLF checkout of the seed-time HEAD is not a user edit", async () => {
+    put(source, "Assets/Scripts/Board.cs", "class Board\n{\n}\n");
+    git(source, "init", "-q");
+    git(source, "config", "core.autocrlf", "true");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "base");
+    // Checked out again the way Git for Windows does it: CRLF on disk, LF in
+    // the commit, and git sees no change.
+    const target = join(source, "Assets/Scripts/Board.cs");
+    rmSync(target);
+    git(source, "checkout", "--", "Assets/Scripts/Board.cs");
+    expect(readFileSync(target, "utf8")).toBe("class Board\r\n{\r\n}\r\n");
+    expect(git(source, "status", "--porcelain")).toBe("");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    put(lease.path, "Assets/Scripts/Board.cs", "class Board\r\n{\r\n  // agent\r\n}\r\n");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(target, future, future);
+    const result = await lease.commit();
+    await lease.release();
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(readFileSync(target, "utf8")).toContain("// agent");
+  });
+
+  it("a binary asset whose bytes still equal the seed-time HEAD is not a user edit", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0xff, 0xfe, 0x80]);
+    const target = join(source, "Assets/Sprites/Hero.png");
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, png);
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "base");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets/Sprites/Hero.png"), Buffer.concat([png, Buffer.from([0x01, 0x02])]));
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(target, future, future);
+    const result = await lease.commit();
+    await lease.release();
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).toEqual([join("Assets", "Sprites", "Hero.png")]);
+    expect(readFileSync(target).subarray(-2)).toEqual(Buffer.from([0x01, 0x02]));
+  });
 });
 
 describe("retention and salvage", () => {
