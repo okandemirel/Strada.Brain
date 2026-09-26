@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -79,6 +79,28 @@ describe("unity version", () => {
     const result = readUnityVersion(tmp());
     expect(result.version).toBeUndefined();
     expect(result.note).toContain("ProjectVersion.txt");
+  });
+
+  it("names the file as Unity writes it on Windows too, not with backslashes", async () => {
+    // Under Windows path rules join() produced "ProjectSettings\ProjectVersion.txt"
+    // in the note the delivered HOW_TO_RUN.md prints.
+    vi.resetModules();
+    vi.doMock("node:path", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:path")>();
+      return { ...actual.win32, default: actual.win32 };
+    });
+    try {
+      const { readUnityVersion: onWindows } = await import("./how-to-run.js");
+      const unreadable = onWindows("C:\\Games\\Pixel", () => {
+        throw new Error("ENOENT");
+      });
+      expect(unreadable.note).toBe("ProjectSettings/ProjectVersion.txt could not be read (ENOENT)");
+      const unnamed = onWindows("C:\\Games\\Pixel", () => "m_EditorVersionWithRevision: 6000.3.22f1\n");
+      expect(unnamed.note).toBe("ProjectSettings/ProjectVersion.txt names no m_EditorVersion line");
+    } finally {
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
   });
 });
 

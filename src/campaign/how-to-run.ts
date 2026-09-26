@@ -59,7 +59,9 @@ export function readUnityVersion(
   projectRoot: string,
   read: (path: string) => string = (p) => readFileSync(p, "utf8"),
 ): { version?: string; note?: string } {
-  const path = join("ProjectSettings", "ProjectVersion.txt");
+  // The name the person reads, in Unity's own form: join() wrote it with
+  // backslashes on Windows. The filesystem read below still uses join().
+  const path = "ProjectSettings/ProjectVersion.txt";
   try {
     const raw = read(join(projectRoot, path));
     const version = /^m_EditorVersion:\s*(\S+)\s*$/mu.exec(raw)?.[1];
