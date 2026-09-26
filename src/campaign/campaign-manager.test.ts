@@ -3334,7 +3334,12 @@ describe("CampaignManager", () => {
     git("config", "user.email", "t@t");
     git("config", "user.name", "t");
     git("add", "-A");
-    git("commit", "-qm", "baseline");
+    // Dated an hour before the campaign, so no sprint's `git log --since`
+    // window can lend it the baseline's files (see didWork).
+    const past = new Date(Date.now() - 60 * 60_000).toISOString();
+    execFileSync("git", ["-C", projectRoot, "commit", "-qm", "baseline"], {
+      env: { ...process.env, GIT_AUTHOR_DATE: past, GIT_COMMITTER_DATE: past },
+    });
     // The tree the receipts are bound to is whatever HEAD is when the run
     // happens: every sprint commits its own work here, the way a real one does.
     const head = (): string => git("rev-parse", "HEAD").trim();
@@ -3342,7 +3347,15 @@ describe("CampaignManager", () => {
       // Commit timestamps are second-granular, so a sprint's work must land
       // strictly after the second the sprint began in.
       await new Promise((r) => setTimeout(r, 1100));
-      writeFileSync(join(projectRoot, `work-${n}.txt`), `sprint ${n}`);
+      // CODE, not a note. The prose-only gate judges the files committed since
+      // the sprint began, and a sprint that committed only `work-N.txt` passed
+      // only when that second-granular window also caught the baseline commit.
+      // When a second boundary fell between the baseline and sprint A's start
+      // (likelier the busier the machine), sprint A was bounced as
+      // documentation, the ladder ran one task behind these settles, and the
+      // final gate never ran: a 15 s timeout, not a slow gate.
+      mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
+      writeFileSync(join(projectRoot, "Assets", "Scripts", `Sprint${n}.cs`), `public static class Sprint${n} { }\n`);
       git("add", "-A");
       git("commit", "-qm", `sprint ${n}`);
     };
@@ -3404,12 +3417,17 @@ describe("CampaignManager", () => {
     await didWork(1);
     settleMilestone("sprint A done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    // Each settle ADVANCED the ladder — a bounced sprint fails here, by name,
+    // instead of as a timeout on a final gate that was never reached.
+    expect(tasks.submitted[1]!.prompt).toContain("build the elements");
     await didWork(2);
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    expect(tasks.submitted[2]!.prompt).toContain("DELIVERY REPORT");
     await didWork(3);
     settleMilestone("green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
+    expect(tasks.submitted).toHaveLength(3);
 
     const ledger = new EvidenceLedger(join(projectRoot, ".strada", "campaign-evidence.db"));
     try {
