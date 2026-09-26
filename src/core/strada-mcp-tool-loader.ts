@@ -268,9 +268,13 @@ function resolveAllowedPaths(
   projectPath: string,
 ): string[] | undefined {
   if (!configured || configured.length === 0) return configured;
+  // Both sides resolved: a resolved entry against the raw project path missed
+  // the same directory spelled another way (on Windows, a driveless or
+  // forward-slash path), and the list grew an entry it did not need.
+  const project = resolve(projectPath);
   const covered = configured.some((allowed) => {
     const normalized = resolve(allowed);
-    return projectPath === normalized || projectPath.startsWith(normalized + sep);
+    return project === normalized || project.startsWith(normalized + sep);
   });
   return covered ? configured : [...configured, projectPath];
 }

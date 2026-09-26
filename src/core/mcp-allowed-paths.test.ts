@@ -42,6 +42,13 @@ describe("resolveAllowedPaths", () => {
     expect(resolveAllowedPaths([PROJECT], join(PROJECT, "Assets"))).toEqual([PROJECT]);
   });
 
+  it("recognises the configured project however the call spells it", () => {
+    // Only the configured side was resolved, so on Windows the project itself
+    // (driveless, or with forward slashes) did not count as covered.
+    expect(resolveAllowedPaths([PROJECT], "/Users/dev/./MyGame")).toEqual([PROJECT]);
+    expect(resolveAllowedPaths([PROJECT], `/Users/other/../dev/MyGame/Assets`)).toEqual([PROJECT]);
+  });
+
   it("keeps an unrestricted configuration unrestricted", () => {
     // An empty list means "no additional restriction" to MCP's isPathAllowed;
     // turning it into a one-entry list would silently start restricting.
