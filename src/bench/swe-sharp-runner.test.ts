@@ -806,6 +806,9 @@ describe("restoreTestPaths — the base state, stated positively", () => {
     mkdirSync(path.join(dir, "test"));
     writeFileSync(path.join(dir, "test", "Existing.cs"), "old\n");
     sh("git init -q");
+    // The Windows runner's global core.autocrlf=true would check the base
+    // back out as "old\r\n"; this repo keeps the bytes it was given.
+    sh("git config core.autocrlf false");
     sh("git add -- test/Existing.cs");
     sh("git -c user.email=a@b -c user.name=t commit -qm base -- test/Existing.cs");
     baseRev = sh("git rev-parse HEAD").trim();
