@@ -176,6 +176,32 @@ everywhere: **0** ran and passed, **1** ran and failed, **2** bad invocation,
 Two rules that hold for all of them: a pre-registered budget is never moved to
 make a run green, and a step that did not run is never folded into a pass.
 
+## 7b. Live verify (real services, started by hand)
+
+The unit suite never reaches huggingface.co or a provider's API. The **Live
+verify** workflow (`.github/workflows/live-verify.yml`) does, on a
+GitHub-hosted runner. Run it from **Actions → Live verify → Run workflow**. It
+never runs on push or pull_request, so it gates nothing, and a fork's code
+never sees the secret. Each job writes its table to the run's summary page.
+
+| Command (job) | What it actually does | Reads |
+|---|---|---|
+| `node scripts/ci/live-verify-weights.mjs` (`local-weights`) | downloads the smallest catalog model's weights from the real Hugging Face hub through the runner's own fetch, into a throwaway install root and a venv holding only `huggingface_hub`; checks the `models.lock.json` pin (40-hex commit, origin `download`), the readiness check at that pin, and that once the pin is removed, adoption re-pins the same commit from disk (origin `disk`) under `HF_HUB_OFFLINE=1`, with a guard that records every network or process attempt (there must be none) | no secrets |
+| `node scripts/ci/live-verify-providers.mjs` (`providers`) | OpenCode only: a short completion, a streamed completion and a tool-call round trip through the project's `OpencodeProvider`, on the cheapest OpenCode model in the project's catalog, at most 1024 output tokens per call. The key is redacted from everything it prints | secret `OPENCODE_API_KEY`; optional variables `OPENCODE_BASE_URL`, `OPENCODE_DEFAULT_MODEL` |
+
+Set the secret under Settings → Secrets and variables → Actions. No other
+provider key is read, and the other providers are out of scope for this
+workflow.
+
+Each row reads **PASS** (it ran against the real service and passed, for
+this run only), **FAIL** with the reason (exit 1, the job is red), or
+**NOT RUN**. NOT RUN proves nothing and is never a pass. In `providers` it
+means `OPENCODE_API_KEY` is not configured: the job stays green, but it raises
+the warning `NOT RUN: OPENCODE_API_KEY is not configured` and the summary says
+NOT RUN, never "passed". That exit 0 is the one deliberate difference from the
+exit codes above, so that a repository without the secret shows no red job. In
+`local-weights`, NOT RUN rows follow a failed check, and the job is red.
+
 ## 8. Universality rule
 
 Nothing in `src/` may carry a game's own names, scene names or defaults. The

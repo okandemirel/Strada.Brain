@@ -1,0 +1,95 @@
+name: Live verify
+
+# Checks, against the real services, what the unit suite can only fake: the
+# local model weights download, its models.lock.json pin and the offline
+# re-pin from the cache (local-weights), and the OpenCode provider's
+# completion, streaming and tool calls (providers). docs/RUNBOOK.md, "Live
+# verify", says how to run it and how to read it.
+#
+# Started by hand only (Actions → Live verify → Run workflow), never on push or
+# pull_request: it must not gate CI, spend provider credit on every commit, or
+# run a fork's code with this repository's secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # No secrets. The smallest catalog model's weights come from the real
+  # Hugging Face hub through the runner's own fetch, into a throwaway install
+  # root, with a venv that holds only what the fetch imports.
+  local-weights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # The script creates the runner's venv with `python3 -m venv`.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The script drives the compiled runner; the portal is not needed.
+      - name: Build backend
+        run: npm run build
+        env:
+          STRADA_ALLOW_PORTAL_BUILD_FAILURE: "1"
+
+      - name: Verify local weights against the Hugging Face hub
+        run: node scripts/ci/live-verify-weights.mjs
+
+  # OpenCode only (maintainer decision). OPENCODE_API_KEY is the one secret
+  # this workflow reads, and only the verify step sees it: npm ci runs
+  # dependency install scripts, which must not have it in their environment.
+  # Without the secret the job reports NOT RUN with a warning, never a pass.
+  providers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The script drives the compiled provider classes; the portal is not needed.
+      - name: Build backend
+        run: npm run build
+        env:
+          STRADA_ALLOW_PORTAL_BUILD_FAILURE: "1"
+
+      - name: Verify the OpenCode provider against its real API
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # Optional repository variables, not secrets: another endpoint (the
+          # Go platform) or model. Unset, the preset URL and the cheapest
+          # OpenCode model in the project's catalog are used.
+          OPENCODE_BASE_URL: ${{ vars.OPENCODE_BASE_URL }}
+          OPENCODE_DEFAULT_MODEL: ${{ vars.OPENCODE_DEFAULT_MODEL }}
+        run: node scripts/ci/live-verify-providers.mjs

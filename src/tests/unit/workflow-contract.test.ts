@@ -33,6 +33,7 @@ const read = (name: string): string =>
 
 const ci = read("ci.yml");
 const bump = read("version-bump.yml");
+const liveVerify = read("live-verify.yml");
 
 /** The block of a top-level `jobs:` entry, by name. */
 function jobBlock(workflow: string, job: string): string {
@@ -180,3 +181,68 @@ describe("version-bump.yml", () => {
     expect(job).toMatch(/git rev-parse FETCH_HEAD/);
   });
 });
+
+/**
+ * Live verify (manual): the real Hugging Face download and the real OpenCode
+ * API. It holds a provider secret, so what it may be triggered by, what its
+ * token may do and where that secret may appear are the contract.
+ */
+describe("live-verify.yml", () => {
+  /** The steps of a job, each from its `- name:` to the next. */
+  const steps = (job: string): string[] => jobBlock(liveVerify, job).split(/\n(?= {6}- )/).slice(1);
+
+  it("runs only when started by hand: never on push, pull_request or any other event", () => {
+    const on = /^on:\n((?:[ \t]+.*\n|\n)*)/m.exec(liveVerify)?.[1];
+    expect(on, "no on: block").toBeDefined();
+    const triggers = [...on!.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]);
+    expect(triggers).toEqual(["workflow_dispatch"]);
+    expect(liveVerify).not.toMatch(/^\s*(push|pull_request|pull_request_target|workflow_run|workflow_call|schedule|repository_dispatch):/m);
+  });
+
+  it("holds a read-only token, and no job widens it", () => {
+    expect(liveVerify).toMatch(/^permissions:\n {2}contents: read\n/m);
+    expect(liveVerify.match(/permissions:/g)).toHaveLength(1);
+    expect(liveVerify).not.toMatch(/:\s*write\b/);
+  });
+
+  it("gives each job its own time limit, and lets no step fail quietly", () => {
+    for (const job of ["local-weights", "providers"]) {
+      expect(jobBlock(liveVerify, job), job).toMatch(/\n {4}timeout-minutes: \d+\n/);
+    }
+    expect(liveVerify).not.toMatch(/continue-on-error/);
+  });
+
+  it("builds, then runs each verification script", () => {
+    for (const [job, script] of [["local-weights", "live-verify-weights.mjs"], ["providers", "live-verify-providers.mjs"]] as const) {
+      const block = jobBlock(liveVerify, job);
+      const run = block.indexOf(`run: node scripts/ci/${script}`);
+      expect(run, `${job} does not run ${script}`).toBeGreaterThan(-1);
+      expect(block.indexOf("run: npm run build"), `${job} does not build first`).toBeGreaterThan(-1);
+      expect(block.indexOf("run: npm run build")).toBeLessThan(run);
+    }
+  });
+
+  it("uses one secret, OPENCODE_API_KEY, only in the env of the providers verify step", () => {
+    const secrets = [...liveVerify.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map((match) => match[1]);
+    expect(secrets).toEqual(["OPENCODE_API_KEY"]);
+    expect(jobBlock(liveVerify, "local-weights")).not.toMatch(/secrets\./);
+    const withSecret = steps("providers").filter((step) => step.includes("secrets."));
+    expect(withSecret).toHaveLength(1);
+    const step = withSecret[0]!;
+    expect(step).toMatch(/run: node scripts\/ci\/live-verify-providers\.mjs/);
+    // In the step's env mapping, not interpolated into a shell command.
+    const env = /\n {8}env:\n((?: {10}.*\n| *#.*\n)*)/.exec(step)?.[1] ?? "";
+    expect(env).toMatch(/^ {10}OPENCODE_API_KEY: \$\{\{ secrets\.OPENCODE_API_KEY \}\}$/m);
+    for (const line of liveVerify.split("\n").filter((entry) => /\brun:/.test(entry))) {
+      expect(line).not.toMatch(/secrets\.|\bprintenv\b|\benv\s*(\||$)|set -x/);
+    }
+    // Repository variables are for the non-secret overrides only.
+    const vars = [...liveVerify.matchAll(/vars\.([A-Za-z0-9_]+)/g)].map((match) => match[1]).sort();
+    expect(vars).toEqual(["OPENCODE_BASE_URL", "OPENCODE_DEFAULT_MODEL"]);
+  });
+
+  it("never mentions an Anthropic key: it is not used for live tests", () => {
+    expect(liveVerify).not.toMatch(/anthropic/i);
+  });
+});
+

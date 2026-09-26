@@ -14,6 +14,10 @@ requires your live secrets/services; the harness only makes that verification
 Companion script: `scripts/provider-smoke.mjs` (Part C) automates the
 single provider round-trip. There is also the existing, deeper Teams runbook at
 `docs/deployment/teams-verification.md` (Part B step "teams" points to it).
+For OpenCode and the local model weights, the manual **Live verify** GitHub
+workflow runs the real calls on a hosted runner (completion, streaming and a
+tool call; the weights download, pin and offline re-pin): see
+`docs/RUNBOOK.md` §7b.
 
 Relevant code:
 - Channels: `src/channels/<name>/`, wired in `src/core/bootstrap-channels.ts`.
