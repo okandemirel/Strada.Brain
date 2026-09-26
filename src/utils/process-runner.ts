@@ -223,7 +223,11 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     child.on("close", (code) => {
       finish({
         ...capped(),
-        exitCode: code ?? (timedOut ? 124 : 1),
+        // 124 for EVERY timeout, as documented. A POSIX kill leaves code null,
+        // but taskkill /F makes the Windows process exit with 1, which read
+        // as an ordinary failure; a command that exits by itself on SIGTERM
+        // did the same everywhere.
+        exitCode: timedOut ? 124 : code ?? 1,
         timedOut,
         durationMs: Date.now() - start,
       });

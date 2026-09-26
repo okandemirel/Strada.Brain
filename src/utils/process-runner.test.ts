@@ -16,8 +16,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProcess } from "./process-runner.js";
 
+/** Node itself, so a plain command runs the same on every platform. */
+const node = (script: string) => ({ command: process.execPath, args: ["-e", script] });
+
+// bash, a forked pipeline and pgrep: the POSIX process-group kill. Windows has
+// no process groups; "a timed-out command on Windows" below covers taskkill.
+const posixOnly = process.platform === "win32";
+
 describe("a command that outlives its shell", () => {
-  it("stops waiting for a grandchild holding the pipe open", async () => {
+  it.skipIf(posixOnly)("stops waiting for a grandchild holding the pipe open", async () => {
     const started = Date.now();
 
     // The pipeline makes bash fork rather than exec, so the sleep is a
@@ -35,7 +42,7 @@ describe("a command that outlives its shell", () => {
     expect(Date.now() - started, "returned late — the kill did not reach the pipe").toBeLessThan(4_000);
   }, 20_000);
 
-  it("leaves nothing of the command running", async () => {
+  it.skipIf(posixOnly)("leaves nothing of the command running", async () => {
     // pgrep matches on the command line, so the sleeper needs a name of its
     // own — arguments to `sleep` would just make it fail immediately and
     // leave nothing to find either way.
@@ -66,8 +73,7 @@ describe("a command that outlives its shell", () => {
 
   it("still reports an ordinary command normally", async () => {
     const result = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", "echo hello"],
+      ...node('console.log("hello")'),
       cwd: process.cwd(),
       timeoutMs: 5_000,
     });
@@ -79,8 +85,7 @@ describe("a command that outlives its shell", () => {
 
   it("carries a failing command's exit code", async () => {
     const result = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", "exit 3"],
+      ...node("process.exitCode = 3"),
       cwd: process.cwd(),
       timeoutMs: 5_000,
     });
@@ -88,6 +93,22 @@ describe("a command that outlives its shell", () => {
     expect(result.exitCode).toBe(3);
     expect(result.timedOut).toBe(false);
   });
+
+  it("reports a timeout as exit code 124 even when the killed command exits with a code of its own", async () => {
+    // What every kill looks like on Windows: taskkill /F makes the process
+    // exit with 1, and 'close' got that 1 instead of a null code, so the
+    // timeout read as an ordinary failure. A command that handles SIGTERM
+    // and exits is the same shape on POSIX.
+    const result = await runProcess({
+      ...node('process.on("SIGTERM", () => process.exit(1)); setInterval(() => {}, 1000); console.log("ready")'),
+      cwd: process.cwd(),
+      timeoutMs: 1_500,
+    });
+
+    expect(result.stdout).toContain("ready");
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).toBe(124);
+  }, 20_000);
 });
 
 // Windows has no process groups; the timeout walks the tree with taskkill
@@ -122,7 +143,8 @@ describe.runIf(process.platform === "win32")("a timed-out command on Windows", (
   }, 30_000);
 });
 
-describe("a process the kill cannot reach", () => {
+// os.setsid: leaving the process group is POSIX-only.
+describe.skipIf(posixOnly)("a process the kill cannot reach", () => {
   // The group kill covers what the shell starts. It does not cover something
   // that leaves the group on purpose — and such a process still holds the
   // stdout pipe this side is reading, so 'close' would wait for it. The
@@ -160,12 +182,16 @@ describe("a process the kill cannot reach", () => {
 describe("output past the capture cap", () => {
   // 1000 lines of `LINE nnnn ` + 56 x's + newline = 67 chars each, ~67KB: four
   // times the default cap, so the middle is guaranteed to fall out.
-  // One awk process, not a shell loop forking printf+tr per line: the loop
-  // was 2000 forks, and under machine load (a sprite generator saturating the
+  // One process, not a shell loop forking printf+tr per line: the loop was
+  // 2000 forks, and under machine load (a sprite generator saturating the
   // CPU, measured 2026-09-10) it overran the 10 s timeout, was killed, and the
   // truncated output failed assertions that are about the cap, not the clock.
-  const script =
-    'awk \'BEGIN { x = sprintf("%56s", ""); gsub(/ /, "x", x); for (i = 1; i <= 1000; i++) printf "LINE %04d %s\\n", i, x }\'';
+  // Node rather than bash and awk, which Windows does not have.
+  const lines = (stream: "stdout" | "stderr") =>
+    node(
+      'let out = ""; for (let i = 1; i <= 1000; i++) out += `LINE ${String(i).padStart(4, "0")} ${"x".repeat(56)}\\n`; ' +
+        `process.${stream}.write(out);`,
+    );
   const marker = (stream: string): RegExp =>
     new RegExp(
       `\\n\\[… (\\d+) characters of ${stream} omitted from the MIDDLE by the (\\d+)-character capture limit; ` +
@@ -174,8 +200,7 @@ describe("output past the capture cap", () => {
 
   it("keeps the head and the tail, and marks and counts the dropped middle", async () => {
     const full = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", script],
+      ...lines("stdout"),
       cwd: process.cwd(),
       timeoutMs: 60_000,
       maxOutput: 1_000_000,
@@ -184,8 +209,7 @@ describe("output past the capture cap", () => {
     expect(full.stdout).toContain("LINE 0001");
 
     const capped = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", script],
+      ...lines("stdout"),
       cwd: process.cwd(),
       timeoutMs: 60_000,
     });
@@ -214,8 +238,7 @@ describe("output past the capture cap", () => {
 
   it("applies the same to stderr", async () => {
     const result = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", `(${script}) 1>&2`],
+      ...lines("stderr"),
       cwd: process.cwd(),
       timeoutMs: 60_000,
     });
@@ -260,8 +283,7 @@ describe("output past the capture cap", () => {
 
   it("leaves output within the cap untouched and unmarked", async () => {
     const result = await runProcess({
-      command: "/bin/bash",
-      args: ["-c", "echo hello"],
+      ...node('process.stdout.write("hello\\n")'),
       cwd: process.cwd(),
       timeoutMs: 5_000,
     });
