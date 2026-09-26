@@ -187,7 +187,8 @@ export async function loadDatabaseBackupModule(root = repoRoot) {
     throw new Error(`Neither ${compiled} nor ${source} exists — cannot load the restore API`);
   }
   const { tsImport } = await import("tsx/esm/api");
-  return { module: await tsImport(source, import.meta.url), source };
+  // A file URL, not the bare path: on Windows `C:\...` reads as a URL scheme.
+  return { module: await tsImport(pathToFileURL(source).href, import.meta.url), source };
 }
 
 async function main(argv) {
