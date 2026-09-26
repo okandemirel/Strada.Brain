@@ -37,6 +37,7 @@ import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { reloadEnvAfterSetup } from "./core/setup-env-reload.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
+import { describeProxy, installEnvProxy } from "./common/env-proxy.js";
 import { acquireRuntimeLock } from "./core/runtime-lock.js";
 import {
   getSafeCurrentWorkingDirectory,
@@ -69,6 +70,10 @@ import {
 // Setup global error handlers
 process.env["STRADA_LAUNCH_CWD"] ??= getSafeCurrentWorkingDirectory(homedir());
 const runtimePaths = initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
+// Node's fetch ignores HTTPS_PROXY, so behind a proxy-only network every
+// provider call failed to connect; route fetch through it (env-proxy.ts).
+// Here, before anything can fetch, and after config.ts loaded .env.
+const envProxy = installEnvProxy();
 
 // Until the runtime installs its own (setupShutdownHandlers), this reports
 // rejections; the runtime then removes it so none is reported twice (COR-19).
@@ -571,6 +576,14 @@ async function startApp(
     sourceCheckout: runtimePaths.sourceCheckout,
     setupWizardPort: wizardPort,
   });
+  if (envProxy.kind === "installed") {
+    // Scheme, host and port only: a proxy URL can carry credentials.
+    logger.info("Outbound HTTP(S) goes through the proxy the environment names", {
+      httpsProxy: envProxy.httpsProxy !== undefined ? describeProxy(envProxy.httpsProxy) : undefined,
+      httpProxy: envProxy.httpProxy !== undefined ? describeProxy(envProxy.httpProxy) : undefined,
+      noProxy: envProxy.noProxy,
+    });
+  }
 
   if (parseChannelSpec(channelType).includes("web") && !activeWizard) {
     const updater = await createCliAutoUpdater(config.autoUpdate);

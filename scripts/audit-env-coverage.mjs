@@ -61,6 +61,7 @@ export const NOT_FOR_ENV_FILE = new Map([
   ["LANG", "OS"],
   ["LOCALAPPDATA", "OS"],
   ["NODE_ENV", "Node/deployment convention"],
+  ["NODE_USE_ENV_PROXY", "Node runtime flag; the app defers to it (src/common/env-proxy.ts)"],
   ["NVM_DIR", "nvm"],
   ["PATH", "OS"],
   ["PATHEXT", "OS"],

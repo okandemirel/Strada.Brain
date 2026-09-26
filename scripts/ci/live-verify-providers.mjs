@@ -51,6 +51,7 @@ const REQUIRED_DIST = [
   "agents/providers/provider.interface.js",
   "agents/providers/model-intelligence.js",
   "utils/logger.js",
+  "common/env-proxy.js",
 ];
 
 /** The one provider in scope, and the project's own variable names for it (.env.example). */
@@ -425,6 +426,10 @@ async function main(argv) {
   }
   if (!apiKey) return emit(notConfiguredRun(), secrets);
 
+  // The proxy routing the app installs at startup (src/common/env-proxy.ts),
+  // so the checks reach the provider the way the app does behind a proxy.
+  const { installEnvProxy } = await importDist("common/env-proxy.js");
+  installEnvProxy();
   const registry = await importDist("agents/providers/provider-registry.js");
   const { supportsStreaming } = await importDist("agents/providers/provider.interface.js");
   const { HARDCODED_MODELS } = await importDist("agents/providers/model-intelligence.js");
