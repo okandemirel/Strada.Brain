@@ -4,6 +4,7 @@ import { PassThrough, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { validateHeaderValue } from "node:http";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import { IdentityIssueLimiter } from "./identity-issue-limiter.js";
@@ -2432,9 +2433,9 @@ describe("WebChannel shutdown teardown", () => {
 
 describe("WebChannel CSP drift guard", () => {
   it("script-src contains the correct inline-script hash and no unsafe-inline", () => {
-    // Resolve web-portal/index.html relative to this repo root.
-    // __dirname is not available in ESM; use import.meta.url instead.
-    const repoRoot = new URL("../../../", import.meta.url).pathname;
+    // Resolve web-portal/index.html relative to this repo root. fileURLToPath,
+    // not `.pathname`: on Windows that is "/D:/..." and resolves to "D:\D:\...".
+    const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
     const indexPath = join(repoRoot, "web-portal", "index.html");
     const html = readFileSync(indexPath, "utf8");
 

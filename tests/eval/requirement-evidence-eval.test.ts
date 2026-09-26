@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import {
   ORACLE,
@@ -32,7 +33,8 @@ import {
 import { EXIT, STATE } from "../../scripts/eval/learning-eval-core.mjs";
 import { closingFact, quotableFactsOf } from "../../src/campaign/campaign-planner.js";
 
-const REPO_ROOT = new URL("../../", import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: on Windows that is "/D:/..." and resolves to "D:\D:\...".
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = join(REPO_ROOT, "scripts", "eval", "requirement-evidence-eval.mjs");
 const DATASET_PATH = join(REPO_ROOT, "scripts", "eval", "datasets", "requirement-evidence.json");
 const matcher = { quotableFactsOf, closingFact };

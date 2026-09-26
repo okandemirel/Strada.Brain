@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   DECISION,
   EXIT,
@@ -42,7 +43,8 @@ import * as learningModule from "../../src/learning/index.js";
 import { InstinctRetriever } from "../../src/agents/instinct-retriever.js";
 import * as ledgerModule from "../../src/learning/ledger.js";
 
-const REPO_ROOT = new URL("../../", import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: on Windows that is "/D:/..." and resolves to "D:\D:\...".
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = join(REPO_ROOT, "scripts", "eval", "learning-eval.mjs");
 
 const learning = {

@@ -8,7 +8,11 @@
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** src/ itself. fileURLToPath, not `.pathname`: on Windows that is "/D:/…" and scans "D:\D:\…". */
+const SRC_DIR = fileURLToPath(new URL(".", import.meta.url));
 
 function tsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -22,12 +26,13 @@ function tsFiles(dir: string, out: string[] = []): string[] {
 describe("no bare require() in ESM source", () => {
   it("every src/**/*.ts is free of require( outside comments and createRequire", () => {
     const offenders: string[] = [];
-    for (const file of tsFiles(new URL(".", import.meta.url).pathname)) {
+    for (const file of tsFiles(SRC_DIR)) {
       const lines = readFileSync(file, "utf8").split("\n");
+      const shown = `src/${relative(SRC_DIR, file).split(sep).join("/")}`;
       lines.forEach((line, i) => {
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
         if (/createRequire|_require\(|\brequire\.(resolve|cache)/.test(line)) return;
-        if (/\brequire\(/.test(line)) offenders.push(`${file.replace(/.*\/src\//, "src/")}:${i + 1}`);
+        if (/\brequire\(/.test(line)) offenders.push(`${shown}:${i + 1}`);
       });
     }
     expect(offenders).toEqual([]);
