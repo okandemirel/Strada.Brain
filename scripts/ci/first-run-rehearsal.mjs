@@ -33,11 +33,12 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const REPO = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+// fileURLToPath, not .pathname: on Windows the pathname is "/C:/..." and not a path.
+const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/[\\/]$/, "");
 
 /** One row of the rehearsal. `notRun` never counts as a pass. */
 function step(id, what) {
