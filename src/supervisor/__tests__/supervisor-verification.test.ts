@@ -241,4 +241,32 @@ describe("createSupervisorNodeVerifier", () => {
     expect(verdict).toMatchObject({ verdict: "reject", verifierProvider: "deepseek" });
     expect(chatStream).toHaveBeenCalledTimes(1);
   });
+
+  // STREAMING_ENABLED=false governs every provider call, node verification included.
+  it("with STREAMING_ENABLED=false reviews through chat(), never chatStream()", async () => {
+    const chatStream = vi.fn(async () => {
+      throw new Error("chatStream() must not be called with streaming disabled");
+    });
+    const chat = vi.fn().mockResolvedValue({
+      text: '{"verdict":"approve"}', toolCalls: [], stopReason: "end_turn", usage: undefined,
+    });
+    const reviewer = {
+      name: "deepseek",
+      capabilities: {
+        maxTokens: 4096, streaming: true, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true,
+      },
+      chat,
+      chatStream,
+    };
+    const verifyNode = createSupervisorNodeVerifier({
+      listAvailable: () => [{ name: "DeepSeek", defaultModel: "deepseek-v4-pro" }],
+      getProviderByName: (name: string) => (name === "deepseek" ? (reviewer as any) : null),
+    }, { streamingEnabled: false });
+
+    const verdict = await verifyNode(makeNodeResult({ provider: "claude" }), { chatId: "chat-1" } as any);
+
+    expect(verdict).toMatchObject({ verdict: "approve", verifierProvider: "deepseek" });
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chatStream).not.toHaveBeenCalled();
+  });
 });

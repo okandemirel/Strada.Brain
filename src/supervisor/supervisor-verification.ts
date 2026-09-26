@@ -190,12 +190,16 @@ function chooseVerificationProvider(
   return null;
 }
 
-export function createSupervisorNodeVerifier(providerManager: {
-  listExecutionCandidates?(identityKey?: string): Array<{ name: string; defaultModel: string }>;
-  listAvailable(): Array<{ name: string; defaultModel: string }>;
-  getProviderByName(name: string, model?: string): IAIProvider | null;
-  getPrimaryProviderByName?(name: string, model?: string): IAIProvider | null;
-}): (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict> {
+export function createSupervisorNodeVerifier(
+  providerManager: {
+    listExecutionCandidates?(identityKey?: string): Array<{ name: string; defaultModel: string }>;
+    listAvailable(): Array<{ name: string; defaultModel: string }>;
+    getProviderByName(name: string, model?: string): IAIProvider | null;
+    getPrimaryProviderByName?(name: string, model?: string): IAIProvider | null;
+  },
+  /** STREAMING_ENABLED: false = review with chat(), never chatStream(). Default true. */
+  options: { readonly streamingEnabled?: boolean } = {},
+): (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict> {
   return async (node: NodeResult, context: SupervisorContext): Promise<VerificationVerdict> => {
     let reviewer = chooseVerificationProvider(providerManager, node.provider, context.chatId);
     let independent = true;
@@ -234,6 +238,8 @@ export function createSupervisorNodeVerifier(providerManager: {
         reviewer.provider,
         "You are a verification agent. Review another worker's result for obvious issues and reply with strict JSON only.",
         buildVerificationPrompt(node),
+        undefined,
+        { streaming: options.streamingEnabled },
       );
       const parsed = parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
       return independent ? parsed : { ...parsed, independent: false };

@@ -480,6 +480,33 @@ describe("GoalDecomposer", () => {
       // Parsed from the accumulator → identical tree (root + 2 depth-1).
       expect(tree.nodes.size).toBe(3);
     });
+
+    // STREAMING_ENABLED=false governs every provider call, decomposition included.
+    it("with STREAMING_ENABLED=false decomposes through chat(), never chatStream()", async () => {
+      const body = JSON.stringify({
+        nodes: [
+          { id: "s1", task: "Setup database schema", dependsOn: [] },
+          { id: "s2", task: "Create auth middleware", dependsOn: ["s1"] },
+        ],
+      });
+      const provider: IStreamingProvider = {
+        name: "mock-stream",
+        capabilities: { streaming: true, vision: false, functionCalling: true },
+        chat: vi.fn(async (): Promise<ProviderResponse> => ({
+          text: body, toolCalls: [], usage: { inputTokens: 10, outputTokens: 10 }, stopReason: "end",
+        })),
+        chatStream: vi.fn(async (): Promise<ProviderResponse> => {
+          throw new Error("chatStream() must not be called with streaming disabled");
+        }),
+      } as unknown as IStreamingProvider;
+
+      const decomposer = new GoalDecomposer(provider, 3, [0], { streamingEnabled: false });
+      const tree = await decomposer.decomposeProactive("test-session", "Build auth with database schema and middleware");
+
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+      expect(provider.chatStream).not.toHaveBeenCalled();
+      expect(tree.nodes.size).toBe(3);
+    });
   });
 
   // ===========================================================================

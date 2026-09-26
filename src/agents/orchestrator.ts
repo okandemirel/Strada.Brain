@@ -1344,6 +1344,7 @@ export class Orchestrator {
       userProfileStore: this.userProfileStore,
       onUsage: this.onUsage,
       defaultLanguage: this.defaultLanguage,
+      streamingEnabled: this.streamingEnabled,
       // Step 6a (rendering).
       sessionManager: this.sessionManager,
       // Step 6b (reflection/end-turn dispatch, HIGHEST CARE): taskManager is setter-backed → LAZY.
@@ -2214,6 +2215,8 @@ export class Orchestrator {
         synthesisProvider,
         `${params.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, params.strategy.synthesizer)}`,
         synthesisRequest,
+        undefined,
+        { streaming: this.streamingEnabled },
       );
       // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
       const synthesizerServed = { ...params.strategy.synthesizer, servedBy: synthesisResponse.servedBy };
@@ -2373,6 +2376,8 @@ export class Orchestrator {
         synthesisProvider,
         `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
         synthesisRequest,
+        undefined,
+        { streaming: this.streamingEnabled },
       );
       // audited 2026-09-02: attribute and bill the chain member that answered, not the pick.
       const goalSynthesizerServed = { ...strategy.synthesizer, servedBy: synthesisResponse.servedBy };

@@ -63,6 +63,8 @@ export interface ReviewDeps extends AccountingDeps, SynthesisDeps {
   readonly userProfileStore?: UserProfileStore;
   readonly onUsage?: (usage: import("../../tasks/types.js").TaskUsageEvent) => void;
   readonly defaultLanguage: string;
+  /** STREAMING_ENABLED: false = review calls use chat(), never chatStream(). Default true. */
+  readonly streamingEnabled?: boolean;
 }
 
 /** The subset of the shell's ToolExecutionOptions the shell-review reads (decoupled from Step 8). */
@@ -169,6 +171,8 @@ export async function runVisibilityReview(
       task: params.task,
       canInspectLocally: params.canInspectLocally,
     }),
+    undefined,
+    { streaming: deps.streamingEnabled },
   );
   recordExecutionTrace(deps, {
     chatId: params.chatId,
@@ -241,6 +245,8 @@ export async function reviewShellCommandWithProvider(
         `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
         `Recent context:\n${recentContext || "(none)"}\n\n` +
         `Command:\n${command}`,
+      undefined,
+      { streaming: deps.streamingEnabled },
     );
     recordExecutionTrace(deps, {
       chatId,

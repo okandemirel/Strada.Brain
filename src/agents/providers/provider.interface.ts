@@ -145,6 +145,12 @@ export function supportsStreaming(provider: IAIProvider): provider is IStreaming
   );
 }
 
+/** How {@link streamOrChatText} may call the provider. */
+export interface StreamOrChatMode {
+  /** STREAMING_ENABLED. `false` = always `chat()`; absent/true = stream when the provider can. */
+  readonly streaming?: boolean;
+}
+
 /**
  * Issue a single-user-message, tool-less LLM call over the STREAMING path when the
  * provider supports it, falling back to the blocking {@link IAIProvider.chat} otherwise.
@@ -163,15 +169,20 @@ export function supportsStreaming(provider: IAIProvider): provider is IStreaming
  * Returns the FULL ProviderResponse (usage, stopReason, …) so callers that record
  * token usage (e.g. the orchestrator review/verify cluster) lose nothing by
  * switching from a blocking `chat()` to this streaming-first helper.
+ *
+ * `mode.streaming: false` is STREAMING_ENABLED=false: the operator asked for no
+ * provider streaming (a proxy that breaks SSE, say), so the call goes to `chat()`
+ * even when the provider could stream — the same rule the model turns follow.
  */
 export async function streamOrChatText(
   provider: IAIProvider,
   systemPrompt: string,
   userMessage: string,
   options?: ProviderCallOptions,
+  mode?: StreamOrChatMode,
 ): Promise<ProviderResponse> {
   const messages: ConversationMessage[] = [{ role: "user", content: userMessage }];
-  if (supportsStreaming(provider)) {
+  if (mode?.streaming !== false && supportsStreaming(provider)) {
     let accumulated = "";
     const response = await provider.chatStream(systemPrompt, messages, [], (chunk) => {
       // The first chunk clears the FallbackChain first-response timer (see fallback-chain.ts).

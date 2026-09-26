@@ -412,7 +412,9 @@ export async function initializeTaskRuntimeStage(
     const { StyleAnalysis } = await import("../../agents/style/style-analysis.js");
     campaignManager = new CampaignManager({
       storage: campaignStorage,
-      planner: new CampaignPlanner(params.providerManager.getProvider("")),
+      planner: new CampaignPlanner(params.providerManager.getProvider(""), {
+        streamingEnabled: params.config.streamingEnabled,
+      }),
       // A provider that claims vision on its OWN capabilities. NEVER
       // getProvider(""): that is the fallback chain, whose vision flag is an
       // OR across members and which strips the image when it routes to a
@@ -473,7 +475,9 @@ export async function initializeTaskRuntimeStage(
       // The final sprint's suite proof is a run the campaign makes itself,
       // under its own ticket — never the record a sprint left (CMP-8).
       runPlaymodeSuite: params.toolRegistry ? makeRunPlaymodeSuite(params.toolRegistry) : undefined,
-      styleAnalysis: new StyleAnalysis(params.providerManager.getProvider("")),
+      styleAnalysis: new StyleAnalysis(params.providerManager.getProvider(""), {
+        streamingEnabled: params.config.streamingEnabled,
+      }),
     });
     campaignManager.attachEvents();
     messageRouter.setCampaignManager(campaignManager);

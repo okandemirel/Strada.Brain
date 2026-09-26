@@ -337,6 +337,20 @@ describe("closure needs evidence that names content", () => {
     expect(judged.closed).toEqual(["R-14 determinism: absent"]);
   });
 
+  // STREAMING_ENABLED=false governs every provider call, campaign planning included.
+  it("with STREAMING_ENABLED=false the planner calls chat(), never chatStream()", async () => {
+    const chat = vi.fn(async () => ({ text: '{"missing": []}' }));
+    const chatStream = vi.fn(async () => {
+      throw new Error("chatStream() must not be called with streaming disabled");
+    });
+    const provider = { chat, chatStream, name: "test", capabilities: { streaming: true } } as never;
+    const planner = new CampaignPlanner(provider, { streamingEnabled: false });
+
+    expect(await planner.auditCoverage("# GDD", [{ title: "Sprint A" }])).toEqual([]);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chatStream).not.toHaveBeenCalled();
+  });
+
   it("namesContent reads paths, files and type names — not counts and hashes", () => {
     expect(namesContent("landed: Committed 1 file(s) as `abcdef`.")).toBe(false);
     expect(namesContent("landed: Committed 12 file(s) as `9f2ab1c`.")).toBe(false);

@@ -53,4 +53,19 @@ describe("StyleAnalysis reads the answer, not the reasoning before it (PRV-22)",
     const { source } = await new StyleAnalysis(providerReplying(reply)).analyze(GDD);
     expect(source).toBe("keyword-fallback");
   });
+
+  // STREAMING_ENABLED=false governs every provider call, style analysis included.
+  it("with STREAMING_ENABLED=false analyzes through chat(), never chatStream()", async () => {
+    const provider = {
+      ...providerReplying(PROFILE("realistic", "pbr-realistic")),
+      capabilities: { ...providerReplying("").capabilities, streaming: true },
+      chatStream: vi.fn(async () => {
+        throw new Error("chatStream() must not be called with streaming disabled");
+      }),
+    };
+    const { source } = await new StyleAnalysis(provider, { streamingEnabled: false }).analyze(GDD);
+    expect(source).toBe("llm");
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(provider.chatStream).not.toHaveBeenCalled();
+  });
 });

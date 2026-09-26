@@ -237,7 +237,9 @@ export function initializeSupervisorStage(
     // given goals without anything rebuilding these descriptors.
     const providerAssigner = deps.createProviderAssigner?.(descriptors)
       ?? new ProviderAssigner(descriptors);
-    const verifyNode = createSupervisorNodeVerifier(params.providerManager);
+    const verifyNode = createSupervisorNodeVerifier(params.providerManager, {
+      streamingEnabled: params.config.streamingEnabled,
+    });
 
     // 5. Inject runtime context into the decomposer so it can make
     //    cost-aware, provider-aware decisions about goal granularity

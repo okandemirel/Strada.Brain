@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
-import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import type { IAIProvider, ProviderCallOptions } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { milestoneLadderSchema } from "./types.js";
@@ -245,7 +245,21 @@ export const GDD_AUDIT_FULL_CHARS = 400_000;
 export const COVERAGE_ASK_WINDOW = 30;
 
 export class CampaignPlanner {
-  constructor(private readonly provider: IAIProvider | undefined) {}
+  constructor(
+    private readonly provider: IAIProvider | undefined,
+    /** STREAMING_ENABLED: false = plan with chat(), never chatStream(). Default true. */
+    private readonly options: { readonly streamingEnabled?: boolean } = {},
+  ) {}
+
+  /** Every planning call goes through here, so STREAMING_ENABLED governs them all. */
+  private ask(
+    provider: IAIProvider,
+    systemPrompt: string,
+    userMessage: string,
+    options?: ProviderCallOptions,
+  ): ReturnType<typeof streamOrChatText> {
+    return streamOrChatText(provider, systemPrompt, userMessage, options, { streaming: this.options.streamingEnabled });
+  }
 
   /**
    * Build the milestone ladder for a campaign. Throws on provider outage or
@@ -356,7 +370,7 @@ export class CampaignPlanner {
       `each covering consecutive headings. Reply with this JSON and NOTHING else — no prose, no <reasoning>, no fence:\n` +
       `{"milestones":[{"title":"…","coveredSections":["…"]}]}`;
     let titles = this.readStagedTitles(
-      (await streamOrChatText(this.provider, system, titlesAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS })).text ?? "",
+      (await this.ask(this.provider, system, titlesAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS })).text ?? "",
     );
     if (titles.length < 2) {
       // THE DOCUMENT'S OWN SHAPE. A ladder does not need a model to exist: the
@@ -377,7 +391,7 @@ export class CampaignPlanner {
         `Write the sprint instruction for THIS milestone only: what to build, in this project, with what proof. ` +
         `End it by demanding a CAPTURED FRAME of what was built, so the visual gate can run. ` +
         `Reply with the instruction text itself — no JSON, no title, no preamble.`;
-      const reply = await streamOrChatText(this.provider, system, promptAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
+      const reply = await this.ask(this.provider, system, promptAsk, { maxTokens: CampaignPlanner.STAGE_OUTPUT_TOKENS });
       // ROOM FOR THE DEMAND. Truncating to the cap, appending the capture
       // requirement and truncating again produced an 8 000-character prompt
       // with the requirement cut off — the gate unarmed and nobody the wiser
@@ -455,7 +469,7 @@ export class CampaignPlanner {
     let failed = 0;
     for (const chunk of chunks) {
       try {
-        const response = await streamOrChatText(this.provider, BRIEF_SYSTEM, `<section heading="${chunk.heading.replace(/"/g, "'")}">\n${chunk.text}\n</section>`);
+        const response = await this.ask(this.provider, BRIEF_SYSTEM, `<section heading="${chunk.heading.replace(/"/g, "'")}">\n${chunk.text}\n</section>`);
         const brief = stripLeakedReasoning(response.text ?? "").text.trim();
         if (brief.length === 0) throw new Error("empty brief");
         briefs.push(brief.slice(0, 6_000));
@@ -501,7 +515,7 @@ export class CampaignPlanner {
     // reply budget — and a model that thinks out loud first never reaches the
     // JSON at all: measured live 2026-09-12 00:52, the whole reply was an
     // unterminated <reasoning> block listing the GDD's headings.
-    const response = await streamOrChatText(this.provider, system, userMessage, {
+    const response = await this.ask(this.provider, system, userMessage, {
       maxTokens: CampaignPlanner.PLAN_OUTPUT_TOKENS,
     });
     const text = response.text ?? "";
@@ -589,7 +603,7 @@ export class CampaignPlanner {
     // 2026-09-03 08:33: "delivered WITHOUT a clean GDD-coverage check"
     // because a model wrapped its JSON in prose. The second ask restates the
     // contract; only then does the audit give up.
-    let response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
+    let response = await this.ask(this.provider, COVERAGE_SYSTEM, userMessage);
     let jsonText = extractJsonObject(response.text ?? "");
     let parsedOnce: unknown;
     const tryParse = (text: string | null | undefined): unknown => {
@@ -605,7 +619,7 @@ export class CampaignPlanner {
       getLoggerSafe().warn("Coverage audit reply was not usable JSON — asking once more", {
         replyLength: response.text?.length ?? 0,
       });
-      response = await streamOrChatText(
+      response = await this.ask(
         this.provider,
         COVERAGE_SYSTEM,
         `${userMessage}
@@ -698,7 +712,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       `the lines beginning "landed:", "shipped tree:", "document numbers:", or a "suite:" line marked (unfiltered). ` +
       `A "status:" line says how a sprint ended and nothing about this requirement; it closes nothing. ` +
       `A paraphrase, a milestone title, a worker's own "report:" sentence, a plan or a promise is not evidence and closes nothing, and a requirement you cannot judge is delivered:false.`;
-    const response = await streamOrChatText(this.provider, COVERAGE_SYSTEM, userMessage);
+    const response = await this.ask(this.provider, COVERAGE_SYSTEM, userMessage);
     let parsed: unknown;
     for (const candidate of balancedJsonObjects(response.text ?? "")) {
       try {

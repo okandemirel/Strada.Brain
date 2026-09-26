@@ -421,6 +421,29 @@ describe("bootstrap-stages", () => {
     );
   });
 
+  // STREAMING_ENABLED=false reached the model turns only; decomposition kept streaming.
+  it("hands STREAMING_ENABLED=false to the goal decomposer it builds", async () => {
+    const provider = {
+      name: "mock-provider",
+      capabilities: { streaming: true },
+      chat: vi.fn().mockResolvedValue({ text: '{"nodes":[{"id":"s1","task":"Do it","dependsOn":[]}]}', toolCalls: [] }),
+      chatStream: vi.fn().mockRejectedValue(new Error("chatStream() must not be called with streaming disabled")),
+    };
+    const result = initializeGoalContextStage({
+      config: makeConfig({ streamingEnabled: false }),
+      logger: createMockLogger(),
+      provider: provider as never,
+    }, {
+      createGoalStorage: vi.fn().mockReturnValue({ initialize: vi.fn(), pruneOldTrees: vi.fn() }),
+      detectInterruptedTrees: vi.fn().mockReturnValue([]),
+    });
+
+    await result.goalDecomposer!.decomposeProactive("s", "Build the thing in one well-defined step, please");
+
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(provider.chatStream).not.toHaveBeenCalled();
+  });
+
   it("forwards shared dependencies into tool registry initialization", async () => {
     const toolRegistry = {
       initialize: vi.fn().mockResolvedValue(undefined),

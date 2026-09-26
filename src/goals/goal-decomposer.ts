@@ -209,6 +209,8 @@ export class GoalDecomposer {
     private readonly maxDepth: number = 3,
     /** Backoff between patient retry rounds on transient provider outages. Injectable for tests. */
     private readonly outageBackoffMs: readonly number[] = [0, 15_000, 30_000, 45_000],
+    /** STREAMING_ENABLED: false = decompose with chat(), never chatStream(). Default true. */
+    private readonly options: { readonly streamingEnabled?: boolean } = {},
   ) {}
 
   private decompositionContext: DecompositionContext | undefined;
@@ -545,7 +547,9 @@ export class GoalDecomposer {
           const callOptions = maxTokens || signal
             ? { ...(maxTokens ? { maxTokens } : {}), ...(signal ? { signal } : {}) }
             : undefined;
-          response = await streamOrChatText(this.provider, systemPrompt, userMessage, callOptions);
+          response = await streamOrChatText(this.provider, systemPrompt, userMessage, callOptions, {
+            streaming: this.options.streamingEnabled,
+          });
           break;
         } catch (err) {
           // The cancel aborted the call in flight: that is not a provider failure.

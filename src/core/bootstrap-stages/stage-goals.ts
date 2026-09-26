@@ -49,7 +49,9 @@ export function initializeGoalContextStage(
     goalStorage.initialize();
     goalStorage.pruneOldTrees();
     goalDecomposer = deps.createGoalDecomposer?.(params.provider, params.config.goalMaxDepth)
-      ?? new GoalDecomposer(params.provider, params.config.goalMaxDepth);
+      ?? new GoalDecomposer(params.provider, params.config.goalMaxDepth, undefined, {
+        streamingEnabled: params.config.streamingEnabled,
+      });
     params.logger.info("GoalDecomposer initialized", {
       dbPath: goalsDbPath,
       maxDepth: params.config.goalMaxDepth,

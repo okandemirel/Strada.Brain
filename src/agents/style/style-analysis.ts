@@ -91,7 +91,11 @@ export function paletteFromText(text: string): string[] {
 }
 
 export class StyleAnalysis {
-  constructor(private readonly provider: IAIProvider | undefined) {}
+  constructor(
+    private readonly provider: IAIProvider | undefined,
+    /** STREAMING_ENABLED: false = analyze with chat(), never chatStream(). Default true. */
+    private readonly options: { readonly streamingEnabled?: boolean } = {},
+  ) {}
 
   /**
    * Derive the profile from the design document. LLM-first; keyword fallback
@@ -110,6 +114,8 @@ export class StyleAnalysis {
           // (palette words, mood, reference games) the planner's tight window
           // drops — use the audit-sized window.
           `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\nExtract the style profile.`,
+          undefined,
+          { streaming: this.options.streamingEnabled },
         );
         // Reasoning providers put a <reasoning> block before the answer, and a
         // "{" inside it (a draft, a schema sketch) was taken for the reply.
