@@ -34,7 +34,7 @@
  *   2  the build is missing or config is invalid (run `npm run build` / fix .env)
  */
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -67,12 +67,13 @@ for (const rel of requiredCompiled) {
 }
 
 // --- import the REAL production wiring from the compiled output -------------
-const { loadConfigSafe } = await import(path.join(DIST, "config/config.js"));
-const { collectProviderCredentials, detectConfiguredResponseProviders } = await import(
-  path.join(DIST, "core/provider-config.js")
-);
-const { createProvider } = await import(path.join(DIST, "agents/providers/provider-registry.js"));
-const { createLogger } = await import(path.join(DIST, "utils/logger.js"));
+// By file URL: import() of a bare absolute path fails on Windows
+// (ERR_UNSUPPORTED_ESM_URL_SCHEME for "C:\\...").
+const importDist = (rel) => import(pathToFileURL(path.join(DIST, rel)).href);
+const { loadConfigSafe } = await importDist("config/config.js");
+const { collectProviderCredentials, detectConfiguredResponseProviders } = await importDist("core/provider-config.js");
+const { createProvider } = await importDist("agents/providers/provider-registry.js");
+const { createLogger } = await importDist("utils/logger.js");
 
 // loadConfigSafe() internally runs dotenv against the resolved .env path, so any
 // secrets in .env are already in process.env by the time this returns.

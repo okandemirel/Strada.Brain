@@ -33,6 +33,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -209,7 +210,8 @@ async function main() {
             HOME: home,
             STRADA_HOME: home,
             STRADA_SOURCE_CHECKOUT: "false",
-            REHEARSAL_MODULE: join(REPO, "src/core/setup-env-persistence.ts"),
+            // A file URL: import() of a bare absolute path fails on Windows.
+            REHEARSAL_MODULE: pathToFileURL(join(REPO, "src/core/setup-env-persistence.ts")).href,
             REHEARSAL_ENV_PATH: envPath,
             REHEARSAL_LINES: JSON.stringify(lines),
             REHEARSAL_OWNED: JSON.stringify(["UNITY_PROJECT_PATH", "STRADA_LANGUAGE", "WEB_PORT", "PROVIDER_CHAIN"]),

@@ -39,7 +39,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -241,14 +241,18 @@ function comparePins(pinned, current) {
   return problems;
 }
 
+// By file URL: import() of a bare absolute path fails on Windows
+// (ERR_UNSUPPORTED_ESM_URL_SCHEME for "C:\\...").
+const importDist = (rel) => import(pathToFileURL(path.join(DIST, rel)).href);
+
 async function measure() {
-  const { chunkFile } = await import(path.join(DIST, "vault/chunker.js"));
-  const { SqliteVaultStore } = await import(path.join(DIST, "vault/sqlite-vault-store.js"));
-  const { createLogger } = await import(path.join(DIST, "utils/logger.js"));
+  const { chunkFile } = await importDist("vault/chunker.js");
+  const { SqliteVaultStore } = await importDist("vault/sqlite-vault-store.js");
+  const { createLogger } = await importDist("utils/logger.js");
   // MEASURE WHAT THE PRODUCT DOES: the vault builds its MATCH expression with
   // escapeFtsQuery, so a benchmark that hands searchFts a raw string measures a
   // path no user takes (plan 6.7).
-  const { escapeFtsQuery } = await import(path.join(DIST, "vault/fts-query.js"));
+  const { escapeFtsQuery } = await importDist("vault/fts-query.js");
   createLogger("error", "retrieval.log");
 
   const corpus = loadCorpus();
