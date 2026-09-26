@@ -3526,6 +3526,9 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     git("init", "-q", "-b", "main");
     git("config", "user.email", "t@example.com");
     git("config", "user.name", "t");
+    // The bytes of shared.txt are asserted below, and the aborted merge checks
+    // it out again: a global core.autocrlf=true (Windows runners) writes CRLF.
+    git("config", "core.autocrlf", "false");
     writeFileSync(join(root, "shared.txt"), "base\n");
     git("add", ".");
     git("commit", "-q", "-m", "base");
