@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
 import { assessStradaMcpLoadTrust, detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
@@ -319,6 +319,21 @@ function resolveModuleCandidates(pkgRoot: string, relativePath: string): string[
   ];
 }
 
+/**
+ * Import one module file by its file: URL — for tsx as much as for Node. A
+ * bare Windows path (`C:\...`) parses as a URL whose scheme is `c:`, so
+ * both loaders refused it (ERR_UNSUPPORTED_ESM_URL_SCHEME) and Strada.MCP
+ * never loaded on Windows.
+ */
+async function importModuleFile<T>(candidate: string): Promise<T> {
+  const url = pathToFileURL(candidate).href;
+  if (candidate.endsWith(".ts")) {
+    const { tsImport } = await import("tsx/esm/api");
+    return await tsImport(url, import.meta.url) as T;
+  }
+  return await import(url) as T;
+}
+
 async function importFirstAvailable<T>(paths: string[]): Promise<T> {
   let lastError: unknown;
 
@@ -328,11 +343,7 @@ async function importFirstAvailable<T>(paths: string[]): Promise<T> {
     }
 
     try {
-      if (candidate.endsWith(".ts")) {
-        const { tsImport } = await import("tsx/esm/api");
-        return await tsImport(candidate, import.meta.url) as T;
-      }
-      return await import(pathToFileURL(candidate).href) as T;
+      return await importModuleFile<T>(candidate);
     } catch (error) {
       lastError = error;
     }
@@ -342,7 +353,7 @@ async function importFirstAvailable<T>(paths: string[]): Promise<T> {
     throw lastError;
   }
 
-  throw new Error(`No loadable module found for: ${paths.map(p => p.split("/").pop()).join(", ")}`);
+  throw new Error(`No loadable module found for: ${paths.map(p => basename(p)).join(", ")}`);
 }
 
 async function importOptionalFirstAvailable<T>(paths: string[]): Promise<T | null> {
@@ -352,11 +363,7 @@ async function importOptionalFirstAvailable<T>(paths: string[]): Promise<T | nul
     }
 
     try {
-      if (candidate.endsWith(".ts")) {
-        const { tsImport } = await import("tsx/esm/api");
-        return await tsImport(candidate, import.meta.url) as T;
-      }
-      return await import(pathToFileURL(candidate).href) as T;
+      return await importModuleFile<T>(candidate);
     } catch {
       continue;
     }

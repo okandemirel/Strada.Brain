@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
 import {
@@ -13,6 +13,21 @@ import {
 } from "./strada-mcp-tool-loader.js";
 import { symlinkSync, realpathSync } from "node:fs";
 import type { ITool, ToolContext } from "../agents/tools/tool-core.interface.js";
+
+// What the loader hands tsx, recorded on the way through to the real tsx: a
+// bare absolute path works on POSIX but is read as a URL with scheme `c:` on
+// Windows, so every specifier must already be a file: URL.
+const tsImportSpecifiers = vi.hoisted(() => [] as string[]);
+vi.mock("tsx/esm/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tsx/esm/api")>();
+  return {
+    ...actual,
+    tsImport: (specifier: string, options: Parameters<typeof actual.tsImport>[1]) => {
+      tsImportSpecifiers.push(specifier);
+      return actual.tsImport(specifier, options);
+    },
+  };
+});
 
 describe("registerStradaMcpTools", () => {
   const tempDirs: string[] = [];
@@ -171,11 +186,14 @@ export function bootstrap(options) {
       strada: { mcpPath: pkgRoot },
     } as Config;
 
+    tsImportSpecifiers.length = 0;
     const result = await loadInstalledStradaMcpTools(config);
 
     expect(result?.source.path).toBe(pkgRoot);
     expect(result?.tools).toHaveLength(1);
     expect(result?.tools[0]?.name).toBe("mcp_echo");
+    expect(tsImportSpecifiers.length).toBeGreaterThan(0);
+    for (const specifier of tsImportSpecifiers) expect(specifier).toMatch(/^file:\/\//);
   });
 });
 
@@ -322,14 +340,16 @@ describe("a projectPath outside the run's project is refused, not noted", () => 
     return tool;
   }
 
+  // The redirect is a filesystem path, so it is the lease as this platform
+  // spells it (`D:\tmp\...` on Windows).
   it("redirects the real checkout to the lease, runs there, and says so", async () => {
     const execute = vi.fn(async () => ({ content: "ran" }));
     const result = await registeredTool(execute).execute({ projectPath: real, other: 1 }, context());
     expect(result.isError).toBeFalsy();
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: lease, other: 1 });
+    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: resolve(lease), other: 1 });
     expect(result.content).toContain("is the real checkout");
-    expect(result.content).toContain(`ran against ${lease}`);
+    expect(result.content).toContain(`ran against ${resolve(lease)}`);
     expect(result.content).toContain("WITH this run's edits");
     expect(result.content).toContain("ran");
   });
@@ -337,7 +357,7 @@ describe("a projectPath outside the run's project is refused, not noted", () => 
   it("redirects a subtree of the real checkout to the same subtree of the lease", async () => {
     const execute = vi.fn(async () => ({ content: "ran" }));
     await registeredTool(execute).execute({ projectPath: `${real}/Assets/Scenes` }, context());
-    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: `${lease}/Assets/Scenes` });
+    expect(execute.mock.calls[0]?.[0]).toEqual({ projectPath: join(resolve(lease), "Assets", "Scenes") });
   });
 
   // Codex review (gpt-6-astra, 2026-09-07): containment was lexical.
