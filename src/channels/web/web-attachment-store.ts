@@ -73,6 +73,7 @@ import {
   copyFileSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -88,6 +89,13 @@ import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
+
+/**
+ * O_NOFOLLOW where the platform has it. Windows has none: the constant is
+ * undefined there and `open` follows a symlink, so `openStoredFile` does not
+ * rely on the flag alone.
+ */
+const NOFOLLOW_FLAG = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
 
 /** Files up to this size are copied into the row; larger ones are retained as a private copy. */
 export const DEFAULT_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -713,24 +721,35 @@ export class WebAttachmentStore {
 
   /**
    * Open a by-reference record's file and VERIFY it through the very descriptor
-   * the caller will read: a regular file (O_NOFOLLOW refuses a symlink that
-   * appeared later) of the recorded size with the recorded SHA-256. Returns the
-   * open fd, or null — and never an fd that failed a check.
+   * the caller will read: a regular file (never a symlink that appeared later)
+   * of the recorded size with the recorded SHA-256. Returns the open fd, or null
+   * — and never an fd that failed a check.
    *
    * Verifying a path and then opening it separately was round 10 #2's race: a
    * file replaced in between was streamed under the verified length. One inode,
    * checked and read, cannot be swapped: a replacement after this call changes
    * the directory entry, not the file this fd is open on.
+   *
+   * A symlink is refused by O_NOFOLLOW where the platform has it and, on every
+   * platform, by an lstat before the open plus a device/inode check that the
+   * descriptor is that same regular file. Windows has no O_NOFOLLOW, and there
+   * the flag alone opened whatever the link pointed at.
    */
   openStoredFile(entry: StoredAttachment): OpenStoredFile | null {
     if (!entry.path || entry.checksum === undefined || entry.sizeBytes === undefined) return null;
     let fd: number | undefined;
     try {
-      fd = openSync(entry.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-      const info = fstatSync(fd);
-      if (!info.isFile() || info.size !== entry.sizeBytes) throw new Error("not the registered file");
+      const examined = lstatSync(entry.path, { bigint: true });
+      if (!examined.isFile()) throw new Error("not a regular file");
+      fd = openSync(entry.path, fsConstants.O_RDONLY | NOFOLLOW_FLAG);
+      // bigint: a Windows file id does not fit in a double.
+      const info = fstatSync(fd, { bigint: true });
+      if (!info.isFile() || info.dev !== examined.dev || info.ino !== examined.ino) {
+        throw new Error("not the file that was examined");
+      }
+      if (info.size !== BigInt(entry.sizeBytes)) throw new Error("not the registered file");
       if (hashDescriptor(fd) !== entry.checksum) throw new Error("not the registered bytes");
-      return { fd, sizeBytes: info.size };
+      return { fd, sizeBytes: entry.sizeBytes };
     } catch {
       if (fd !== undefined) {
         try {
