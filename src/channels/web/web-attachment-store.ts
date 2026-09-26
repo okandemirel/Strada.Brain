@@ -93,9 +93,12 @@ import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 /**
  * O_NOFOLLOW where the platform has it. Windows has none: the constant is
  * undefined there and `open` follows a symlink, so `openStoredFile` does not
- * rely on the flag alone.
+ * rely on the flag alone. Read at open time, not at import, so a module that
+ * only imports this one still loads under a node:fs test double.
  */
-const NOFOLLOW_FLAG = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+function nofollowFlag(): number {
+  return typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+}
 
 /** Files up to this size are copied into the row; larger ones are retained as a private copy. */
 export const DEFAULT_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -741,7 +744,7 @@ export class WebAttachmentStore {
     try {
       const examined = lstatSync(entry.path, { bigint: true });
       if (!examined.isFile()) throw new Error("not a regular file");
-      fd = openSync(entry.path, fsConstants.O_RDONLY | NOFOLLOW_FLAG);
+      fd = openSync(entry.path, fsConstants.O_RDONLY | nofollowFlag());
       // bigint: a Windows file id does not fit in a double.
       const info = fstatSync(fd, { bigint: true });
       if (!info.isFile() || info.dev !== examined.dev || info.ino !== examined.ino) {

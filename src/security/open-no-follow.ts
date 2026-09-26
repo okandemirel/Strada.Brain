@@ -1,8 +1,14 @@
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 
-/** O_NOFOLLOW where the platform has it; Windows has none (see openNoFollow). */
-const NOFOLLOW_FLAG = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+/**
+ * O_NOFOLLOW where the platform has it; Windows has none (see openNoFollow).
+ * Read when a file is opened, not at import: modules that only import this
+ * one must load under a node:fs test double that has no `constants`.
+ */
+function nofollowFlag(): number {
+  return typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+}
 
 function followRefusal(fullPath: string): NodeJS.ErrnoException {
   const err: NodeJS.ErrnoException = new Error(
@@ -34,7 +40,7 @@ export async function openNoFollow(fullPath: string, flags: number, mode?: numbe
   if (before?.isSymbolicLink()) throw followRefusal(fullPath);
 
   const truncate = (flags & fsConstants.O_TRUNC) !== 0;
-  const handle = await open(fullPath, (flags & ~fsConstants.O_TRUNC) | NOFOLLOW_FLAG, mode);
+  const handle = await open(fullPath, (flags & ~fsConstants.O_TRUNC) | nofollowFlag(), mode);
   try {
     const [opened, atPath] = await Promise.all([
       handle.stat({ bigint: true }),
