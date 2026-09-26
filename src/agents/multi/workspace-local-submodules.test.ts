@@ -104,7 +104,8 @@ describe("commits the agent makes inside a submodule reach the project (2026-09-
     const leaseHead = git(leaseSub, "rev-parse", "HEAD").trim();
 
     const result = await lease.commit();
-    expect(result.commitsReplayed?.submodules).toEqual([{ path: sub, replayed: 1 }]);
+    // Reported under git's own name for the submodule, as .gitmodules spells it.
+    expect(result.commitsReplayed?.submodules).toEqual([{ path: "Packages/Submodules/Strada.Core", replayed: 1 }]);
     // The project's submodule now holds the commit, and its working tree the file.
     expect(git(join(root, sub), "rev-parse", "HEAD").trim()).toBe(leaseHead);
     expect(git(join(root, sub), "log", "--oneline", "-1")).toContain("fix(framework): module config null check");

@@ -38,7 +38,7 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { WorkspaceLeaseManager, type WorkspaceCommandRunner } from "./workspace-lease-manager.js";
 import { runProcess } from "../../utils/process-runner.js";
 import {
@@ -83,16 +83,17 @@ function manager(opts: { worktree?: boolean } = {}): WorkspaceLeaseManager {
   });
 }
 
-function git(cwd: string, cmd: string): string {
-  return execSync(`git -c user.email=a@b -c user.name=t ${cmd}`, { cwd, encoding: "utf8" });
+/** An argument array, not a shell string: cmd.exe keeps `'msg'` quotes literally. */
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.email=a@b", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
 }
 
 /** A real repository, with .strada ignored the way a project that uses Strada has to. */
 function makeGitRepo(): void {
   writeFileSync(join(source, ".gitignore"), ".strada/\n", "utf8");
-  git(source, "init -q");
-  git(source, "add -A");
-  git(source, "commit -qm init");
+  git(source, "init", "-q");
+  git(source, "add", "-A");
+  git(source, "commit", "-qm", "init");
 }
 
 /** Every file in the project and its bytes — the "nothing left over" measure. */
@@ -160,13 +161,13 @@ describe("seeing before undoing", () => {
   it("names every path, what would happen to it, and the commits that would go — and writes nothing", async () => {
     makeGitRepo();
     put(source, "Assets/Scripts/Existing.cs", "the user's version");
-    git(source, "add -A");
-    git(source, "commit -qm existing");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "existing");
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
     put(lease.path, "Assets/Scripts/New.cs", "brand new");
-    git(lease.path, "add -A");
-    git(lease.path, "commit -qm 'run: two files'");
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-qm", "run: two files");
     const result = await lease.commit();
     await lease.release();
 
@@ -212,22 +213,22 @@ describe("an undo leaves nothing over", () => {
     makeGitRepo();
     put(source, "Assets/Scripts/Existing.cs", "the user's version");
     put(source, "Assets/Scripts/Untouched.cs", "nobody touches this");
-    git(source, "add -A");
-    git(source, "commit -qm existing");
-    const baseHead = git(source, "rev-parse HEAD").trim();
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "existing");
+    const baseHead = git(source, "rev-parse", "HEAD").trim();
     const before = snapshotTree(source);
 
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
     put(lease.path, "Assets/Generated/New.cs", "brand new");
-    git(lease.path, "add -A");
-    git(lease.path, "commit -qm 'run: rewrote one file, added another'");
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-qm", "run: rewrote one file, added another");
     const result = await lease.commit();
     await lease.release();
 
     // The run really did land, in the files AND in the history.
     expect(readFileSync(join(source, "Assets/Scripts/Existing.cs"), "utf8")).toBe("the run's version");
-    expect(git(source, "rev-parse HEAD").trim()).not.toBe(baseHead);
+    expect(git(source, "rev-parse", "HEAD").trim()).not.toBe(baseHead);
     expect(snapshotTree(source)).not.toEqual(before);
 
     const undo = await applyUndo(source, result.changeReview!.id);
@@ -241,9 +242,9 @@ describe("an undo leaves nothing over", () => {
     // which an undo that only removed files would have left behind empty.
     expect(snapshotTree(source)).toEqual(before);
     expect(existsSync(join(source, "Assets/Generated"))).toBe(false);
-    expect(git(source, "rev-parse HEAD").trim()).toBe(baseHead);
+    expect(git(source, "rev-parse", "HEAD").trim()).toBe(baseHead);
     // …and nothing is staged or unstaged: the index went back with the ref.
-    expect(git(source, "status --porcelain").trim()).toBe("");
+    expect(git(source, "status", "--porcelain").trim()).toBe("");
     expect(readChangeReview(source, result.changeReview!.id)!.status).toBe("undone");
   });
 
@@ -414,19 +415,19 @@ describe("a human editing the same files while the run works", () => {
   it("refuses to move HEAD when something committed after the run, and says which commit it found", async () => {
     makeGitRepo();
     put(source, "Assets/Scripts/Existing.cs", "the user's version");
-    git(source, "add -A");
-    git(source, "commit -qm existing");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "existing");
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, "commit -qm 'run: rewrote a file'");
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-qm", "run: rewrote a file");
     const result = await lease.commit();
     await lease.release();
 
     // The user commits their own work on top of the run's.
     put(source, "Assets/Scripts/Mine.cs", "my own work");
-    git(source, "add -A");
-    git(source, "commit -qm mine");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "mine");
     const published = snapshotTree(source);
 
     const preview = (await previewUndo(source, result.changeReview!.id))!;
@@ -556,15 +557,15 @@ describe("an undo that overlaps something else", () => {
   async function publishIntoRepo(): Promise<{ reviewId: string; baseHead: string; before: Record<string, string> }> {
     makeGitRepo();
     put(source, "Assets/Scripts/Existing.cs", "the user's version");
-    git(source, "add -A");
-    git(source, "commit -qm existing");
-    const baseHead = git(source, "rev-parse HEAD").trim();
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "existing");
+    const baseHead = git(source, "rev-parse", "HEAD").trim();
     const before = snapshotTree(source);
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
     put(lease.path, "Assets/Scripts/New.cs", "brand new");
-    git(lease.path, "add -A");
-    git(lease.path, "commit -qm 'run: rewrote one file, added another'");
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-qm", "run: rewrote one file, added another");
     const result = await lease.commit();
     await lease.release();
     expect(readFileSync(join(source, "Assets/Scripts/Existing.cs"), "utf8")).toBe("the run's version");
@@ -605,7 +606,7 @@ describe("an undo that overlaps something else", () => {
     // the project holds afterwards, whichever undo won.
     expect(readFileSync(join(source, "Assets/Scripts/Existing.cs"), "utf8")).toBe("the user's version");
     expect(existsSync(join(source, "Assets/Scripts/New.cs"))).toBe(false);
-    expect(git(source, "rev-parse HEAD").trim()).toBe(baseHead);
+    expect(git(source, "rev-parse", "HEAD").trim()).toBe(baseHead);
     expect(snapshotTree(source)).toEqual(before);
   }, 20_000);
 

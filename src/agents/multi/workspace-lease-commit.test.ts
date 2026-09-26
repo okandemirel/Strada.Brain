@@ -11,10 +11,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, readdirSync, existsSync, statSync, utimesSync, chmodSync, renameSync, promises as fsp } from "node:fs";
 import { tmpdir, hostname } from "node:os";
-import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { basename, join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { runProcess } from "../../utils/process-runner.js";
 import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES, isAlreadyGone, reconcileSeedBaseline, stampUnchanged, existedAtSeed, readLeaseSeed, writeLeaseSeed } from "./workspace-lease-manager.js";
 import type { SeedStamp } from "./workspace-lease-manager.js";
@@ -49,10 +49,23 @@ function gitManager() {
   });
 }
 
+/**
+ * git with an argument array. A shell string such as `commit -qm 'msg'` runs
+ * through cmd.exe on Windows, which passes the single quotes on literally.
+ */
+function gitAt(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.email=a@b", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
+}
+
+/** Init `source` and commit everything in it with `message`. */
+function commitAll(message: string): void {
+  gitAt(source, "init", "-q");
+  gitAt(source, "add", "-A");
+  gitAt(source, "commit", "-qm", message);
+}
+
 function makeGitRepo(): void {
-  execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm init", {
-    cwd: source,
-  });
+  commitAll("init");
 }
 
 /**
@@ -561,12 +574,13 @@ describe("workspace lease commit", () => {
     const lease = await gitManager().acquireLease({ label: "t" });
     mkdirSync(join(lease.path, "Assets", "Locked"), { recursive: true });
     writeFileSync(join(lease.path, "Assets", "Locked", "New.cs"), "class New {}", "utf8");
-    execSync("git add -A && git -c user.email=a@b -c user.name=t commit -qm 'locked work'", { cwd: lease.path });
+    gitAt(lease.path, "add", "-A");
+    gitAt(lease.path, "commit", "-qm", "locked work");
     const restore = makeUnreadable(join(lease.path, "Assets", "Locked"));
     try {
       const result = await lease.commit();
       expect(result.failed.some((f) => f.startsWith(join("Assets", "Locked") + " (unreadable"))).toBe(true);
-      const tree = execSync("git ls-tree -r --name-only HEAD", { cwd: source }).toString();
+      const tree = gitAt(source, "ls-tree", "-r", "--name-only", "HEAD");
       expect(tree).not.toContain("Assets/Locked/New.cs");
       expect(existsSync(join(source, "Assets", "Locked", "New.cs"))).toBe(false);
     } finally {
@@ -581,11 +595,12 @@ describe("workspace lease commit", () => {
     mkdirSync(join(lease.path, "UserSettings"), { recursive: true });
     writeFileSync(join(lease.path, "UserSettings", "Search.settings"), "editor state", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "class Real {}", "utf8");
-    execSync("git add -A -f && git -c user.email=a@b -c user.name=t commit -qm 'with editor state'", { cwd: lease.path });
+    gitAt(lease.path, "add", "-A", "-f");
+    gitAt(lease.path, "commit", "-qm", "with editor state");
     const result = await lease.commit();
     await lease.release();
     expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
-    const tree = execSync("git ls-tree -r --name-only HEAD", { cwd: source }).toString();
+    const tree = gitAt(source, "ls-tree", "-r", "--name-only", "HEAD");
     expect(tree).toContain("Assets/Scripts/Real.cs");
     expect(tree).not.toContain("UserSettings/Search.settings");
   });
@@ -716,7 +731,7 @@ describe("orphaned lease salvage at construction", () => {
     // Salvage runs once per lease root per process, so the crashed lease is
     // moved to a root this process has never constructed against.
     const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root2-"));
-    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    const orphanPath = join(leaseRoot2, basename(lease.path));
     renameSync(lease.path, orphanPath);
     if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
     renameSync(`${lease.path}.seed.json`, `${orphanPath}.seed.json`);
@@ -731,7 +746,7 @@ describe("orphaned lease salvage at construction", () => {
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
     // The user's concurrent edit was kept; the agent's copy went to quarantine.
     expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");
-    const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${orphanPath.split("/").pop()!.slice(0, 8)}`);
+    const conflictDir = join(source, ".strada", "lease-conflicts", `orphan-${basename(orphanPath).slice(0, 8)}`);
     expect(readFileSync(join(conflictDir, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("agent copy");
     // The seed sidecar never travels into the project and goes with the orphan.
     expect(existsSync(join(source, ".strada-lease-seed.json"))).toBe(false);
@@ -754,7 +769,7 @@ describe("orphaned lease salvage at construction", () => {
       writeFileSync(claimFile, JSON.stringify({ ...claim, pid: 4194303 }), "utf8");
     }
     const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root4-"));
-    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    const orphanPath = join(leaseRoot2, basename(lease.path));
     renameSync(lease.path, orphanPath);
     if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
 
@@ -784,7 +799,7 @@ describe("orphaned lease salvage at construction", () => {
       writeFileSync(claimFile, JSON.stringify({ ...claim, pid: 4194303 }), "utf8");
     }
     const leaseRoot2 = mkdtempSync(join(tmpdir(), "lease-root3-"));
-    const orphanPath = join(leaseRoot2, lease.path.split("/").pop()!);
+    const orphanPath = join(leaseRoot2, basename(lease.path));
     renameSync(lease.path, orphanPath);
     if (existsSync(claimFile)) renameSync(claimFile, `${orphanPath}.claim.json`);
     renameSync(`${lease.path}.seed.json`, `${orphanPath}.seed.json`);
@@ -892,10 +907,7 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     mkdirSync(join(source, "Assets"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
-    execSync(
-      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations'",
-      { cwd: source },
-    );
+    commitAll("campaign: Sprint 1 — foundations");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
@@ -922,10 +934,7 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     mkdirSync(join(source, "Assets"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
-    execSync(
-      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations'",
-      { cwd: source },
-    );
+    commitAll("campaign: Sprint 1 — foundations");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
@@ -946,11 +955,10 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "dup", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "mine", "utf8");
-    execSync(
-      "git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'campaign: Sprint 1 — foundations' " +
-        "&& echo more >> Assets/Scripts/UserNotes.cs && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'my own tweak'",
-      { cwd: source },
-    );
+    commitAll("campaign: Sprint 1 — foundations");
+    appendFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "more\n");
+    gitAt(source, "add", "-A");
+    gitAt(source, "commit", "-qm", "my own tweak");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
     rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
@@ -982,7 +990,7 @@ describe("a loose script with a module twin is the system's own duplicate", () =
     writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
-    execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm 'feat: construct PlayfieldBuilder runtime'", { cwd: source });
+    commitAll("feat: construct PlayfieldBuilder runtime");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "Solo.cs"));
@@ -997,8 +1005,8 @@ describe("a loose script with a module twin is the system's own duplicate", () =
 });
 
 describe("lease commit replay (measured 2026-09-10: three worker commits dangling in the game repo, no salvage branch)", () => {
-  const git = (cwd: string, cmd: string) =>
-    execSync(`git -c user.email=w@x -c user.name=worker ${cmd}`, { cwd, encoding: "utf8" }).trim();
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=w@x", "-c", "user.name=worker", ...args], { cwd, encoding: "utf8" }).trim();
 
   it("does not replay a version the worker took back (Codex 2026-09-11 N#8)", async () => {
     // The worker committed version B, then restored A without committing.
@@ -1009,17 +1017,17 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const lease = await gitManager().acquireLease({ label: "t" });
     const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
     writeFileSync(inLease, "version B", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board B"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board B");
     writeFileSync(inLease, "version A", "utf8"); // taken back, never committed
 
     const result = await lease.commit();
     await lease.release();
 
     // Whatever the commit says, it may not claim B.
-    const headTree = git(source, "show --name-only --format= HEAD");
+    const headTree = git(source, "show", "--name-only", "--format=", "HEAD");
     if (headTree.includes("Board.cs")) {
-      expect(git(source, "show HEAD:Assets/Scripts/Board.cs")).toBe("version A");
+      expect(git(source, "show", "HEAD:Assets/Scripts/Board.cs")).toBe("version A");
     }
     expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("version A");
     expect(result.commitsReplayed?.replayed ?? 0).toBeLessThanOrEqual(1);
@@ -1033,11 +1041,11 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const lease = await gitManager().acquireLease({ label: "t" });
     const inLease = join(lease.path, "Assets", "Scripts", "Existing.cs");
     writeFileSync(inLease, "version B", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board B"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board B");
     writeFileSync(inLease, "version C", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board C"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board C");
     writeFileSync(inLease, "original", "utf8"); // taken back to the seed, never committed
 
     const result = await lease.commit();
@@ -1045,9 +1053,9 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
 
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("original");
     // No commit in the project may describe B or C for that path.
-    const log = git(source, "log --format=%H");
+    const log = git(source, "log", "--format=%H");
     for (const sha of log.split("\n").filter(Boolean)) {
-      const shown = execSync(`git show ${sha}:Assets/Scripts/Existing.cs`, { cwd: source, encoding: "utf8" });
+      const shown = gitAt(source, "show", `${sha}:Assets/Scripts/Existing.cs`);
       expect(shown).toBe("original");
     }
     expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
@@ -1063,16 +1071,16 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     // HEAD holds — a common shape ("stage this hunk, keep working"). The
     // selection now exists only in the index.
     writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "the person's staged version", "utf8");
-    git(source, "add Assets/Scripts/Existing.cs");
+    git(source, "add", "Assets/Scripts/Existing.cs");
     writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "the worker's version", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: worker edit"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: worker edit");
 
     await lease.commit();
     await lease.release();
 
-    expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
+    expect(git(source, "show", ":Assets/Scripts/Existing.cs")).toBe("the person's staged version");
   });
 
   it("a commit whose metadata cannot be READ is a hole in the series (Codex 2026-09-12 T#4)", async () => {
@@ -1080,7 +1088,7 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     // series looked like a one-commit series: the replay published the prefix
     // and reported skipped: 0.
     makeGitRepo();
-    const before = git(source, "rev-parse HEAD");
+    const before = git(source, "rev-parse", "HEAD");
     let shows = 0;
     const mgr = new WorkspaceLeaseManager({
       projectRoot: source,
@@ -1096,16 +1104,16 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     });
     const lease = await mgr.acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets", "Scripts", "One.cs"), "1", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: one"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: one");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Two.cs"), "2", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: two"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: two");
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(git(source, "rev-parse", "HEAD")).toBe(before);
     expect(result.commitsReplayed?.replayed).toBe(0);
   });
 
@@ -1114,7 +1122,7 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     // not be read, and a write-tree that failed. Both moved HEAD to a prefix
     // of the series.
     makeGitRepo();
-    const before = git(source, "rev-parse HEAD");
+    const before = git(source, "rev-parse", "HEAD");
     let writeTrees = 0;
     const mgr = new WorkspaceLeaseManager({
       projectRoot: source,
@@ -1130,16 +1138,16 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const lease = await mgr.acquireLease({ label: "t" });
     const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
     writeFileSync(inLease, "v1", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board v1"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board v1");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Other.cs"), "v2", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: other"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: other");
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(git(source, "rev-parse", "HEAD")).toBe(before);
     expect(result.commitsReplayed?.replayed).toBe(0);
   });
 
@@ -1162,23 +1170,23 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const lease = await mgr.acquireLease({ label: "t" });
     // The person stages their own version, then restores the working file.
     writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "the person's staged version", "utf8");
-    git(source, "add Assets/Scripts/Existing.cs");
+    git(source, "add", "Assets/Scripts/Existing.cs");
     writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "the worker's version", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: worker edit"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: worker edit");
 
     await lease.commit();
     await lease.release();
 
-    expect(git(source, "show :Assets/Scripts/Existing.cs")).toBe("the person's staged version");
+    expect(git(source, "show", ":Assets/Scripts/Existing.cs")).toBe("the person's staged version");
   });
 
   it("a series that cannot be built whole leaves the branch where it was (Codex 2026-09-12 Q#7)", async () => {
     // HEAD moved once per commit, so a later commit that could not be staged
     // left the project's history ending at an EARLIER version of the work.
     makeGitRepo();
-    const before = git(source, "rev-parse HEAD");
+    const before = git(source, "rev-parse", "HEAD");
     let readTrees = 0;
     const mgr = new WorkspaceLeaseManager({
       projectRoot: source,
@@ -1195,18 +1203,18 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const lease = await mgr.acquireLease({ label: "t" });
     const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
     writeFileSync(inLease, "v1", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board v1"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board v1");
     writeFileSync(inLease, "v2", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board v2"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board v2");
 
     const result = await lease.commit();
     await lease.release();
 
     // Nothing was applied: the files are in the project as uncommitted work,
     // and no commit claims a version of them that is not the final one.
-    expect(git(source, "rev-parse HEAD")).toBe(before);
+    expect(git(source, "rev-parse", "HEAD")).toBe(before);
     expect(result.commitsReplayed?.replayed).toBe(0);
     expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
   });
@@ -1218,15 +1226,15 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Extra.cs"), "scaffolding", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: scaffolding"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: scaffolding");
     rmSync(join(lease.path, "Assets", "Scripts", "Extra.cs")); // withdrawn, never committed
 
     const result = await lease.commit();
     await lease.release();
 
     expect(existsSync(join(source, "Assets", "Scripts", "Extra.cs"))).toBe(false);
-    expect(git(source, "show --name-only --format= HEAD")).not.toContain("Extra.cs");
+    expect(git(source, "show", "--name-only", "--format=", "HEAD")).not.toContain("Extra.cs");
     expect(result.commitsReplayed?.replayed ?? 0).toBe(0);
   });
 
@@ -1234,57 +1242,57 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Hero,Idle.cs"), "frames", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: idle"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: idle");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.commitsReplayed?.replayed).toBe(1);
-    expect(git(source, "show --name-only --format= HEAD")).toContain("Assets/Scripts/Hero,Idle.cs");
+    expect(git(source, "show", "--name-only", "--format=", "HEAD")).toContain("Assets/Scripts/Hero,Idle.cs");
     expect(readFileSync(join(source, "Assets", "Scripts", "Hero,Idle.cs"), "utf8")).toBe("frames");
     // The path is staged as committed, not left as a staged reversal.
-    expect(git(source, "status --porcelain -- 'Assets/Scripts/Hero,Idle.cs'")).toBe("");
+    expect(git(source, "status", "--porcelain", "--", "Assets/Scripts/Hero,Idle.cs")).toBe("");
   });
 
   it("replays the agent's commits onto the project's HEAD, in order, with author, message and content", async () => {
     makeGitRepo();
     writeFileSync(join(source, "Assets", "Scripts", "Wip.cs"), "user wip", "utf8"); // uncommitted → becomes the seed commit
-    const before = git(source, "rev-parse HEAD");
+    const before = git(source, "rev-parse", "HEAD");
     const lease = await gitManager().acquireLease({ label: "t" });
     expect(lease.kind).toBe("git-worktree");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board v1"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board v1");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v2", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "edited", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board v2"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board v2");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.commitsReplayed).toEqual({ replayed: 2, skipped: 0, shas: expect.any(Array) });
-    expect(git(source, "log --format=%s -n 3")).toBe("feat: board v2\nfeat: board v1\ninit");
-    expect(git(source, "log --format=%an -n 1")).toBe("worker");
-    expect(git(source, "log --format=%B -n 1")).toContain("Strada-Lease-Commit:");
-    expect(git(source, `show ${before}..HEAD~1 --format= --name-only`)).toBe("Assets/Scripts/Board.cs");
-    expect(git(source, "show HEAD~1:Assets/Scripts/Board.cs")).toBe("v1");
-    expect(git(source, "show HEAD:Assets/Scripts/Board.cs")).toBe("v2");
+    expect(git(source, "log", "--format=%s", "-n", "3")).toBe("feat: board v2\nfeat: board v1\ninit");
+    expect(git(source, "log", "--format=%an", "-n", "1")).toBe("worker");
+    expect(git(source, "log", "--format=%B", "-n", "1")).toContain("Strada-Lease-Commit:");
+    expect(git(source, "show", `${before}..HEAD~1`, "--format=", "--name-only")).toBe("Assets/Scripts/Board.cs");
+    expect(git(source, "show", "HEAD~1:Assets/Scripts/Board.cs")).toBe("v1");
+    expect(git(source, "show", "HEAD:Assets/Scripts/Board.cs")).toBe("v2");
     expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
     // The replayed paths read as committed; the user's own WIP is still theirs, uncommitted.
-    expect(git(source, "status --porcelain -- Assets")).toBe("?? Assets/Scripts/Wip.cs");
+    expect(git(source, "status", "--porcelain", "--", "Assets")).toBe("?? Assets/Scripts/Wip.cs");
     // Nothing is stranded, so no salvage branch is needed.
-    expect(git(source, "branch --list 'lease-salvage/*'")).toBe("");
+    expect(git(source, "branch", "--list", "lease-salvage/*")).toBe("");
   });
 
   it("does not commit a conflicted path on the user's behalf, and salvages the stranded commit on a branch", async () => {
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: existing"');
-    const stranded = git(lease.path, "rev-parse HEAD");
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: existing");
+    const stranded = git(lease.path, "rev-parse", "HEAD");
     // The user edits the same file while the agent works.
     const target = join(source, "Assets", "Scripts", "Existing.cs");
     writeFileSync(target, "user", "utf8");
@@ -1295,27 +1303,27 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
 
     expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
     expect(result.commitsReplayed).toEqual({ replayed: 0, skipped: 1, shas: [] });
-    expect(git(source, "log --format=%s -n 2")).toBe("init");
+    expect(git(source, "log", "--format=%s", "-n", "2")).toBe("init");
     expect(readFileSync(target, "utf8")).toBe("user");
-    expect(git(source, "branch --list 'lease-salvage/*'")).toContain("lease-salvage/");
-    expect(git(source, `branch --contains ${stranded} --list 'lease-salvage/*'`)).toContain("lease-salvage/");
+    expect(git(source, "branch", "--list", "lease-salvage/*")).toContain("lease-salvage/");
+    expect(git(source, "branch", "--contains", stranded, "--list", "lease-salvage/*")).toContain("lease-salvage/");
   });
 
   it("leaves the user's staged changes staged and uncommitted", async () => {
     makeGitRepo();
     writeFileSync(join(source, "Assets", "Scripts", "Staged.cs"), "staged by user", "utf8");
-    git(source, "add Assets/Scripts/Staged.cs");
+    git(source, "add", "Assets/Scripts/Staged.cs");
     const lease = await gitManager().acquireLease({ label: "t" });
     writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
-    git(lease.path, "add -A");
-    git(lease.path, 'commit -q -m "feat: board"');
+    git(lease.path, "add", "-A");
+    git(lease.path, "commit", "-q", "-m", "feat: board");
 
     await lease.commit();
     await lease.release();
 
-    expect(git(source, "log --format=%s -n 1")).toBe("feat: board");
-    expect(git(source, "show HEAD --format= --name-only")).toBe("Assets/Scripts/Board.cs");
-    expect(git(source, "status --porcelain -- Assets")).toBe("A  Assets/Scripts/Staged.cs");
+    expect(git(source, "log", "--format=%s", "-n", "1")).toBe("feat: board");
+    expect(git(source, "show", "HEAD", "--format=", "--name-only")).toBe("Assets/Scripts/Board.cs");
+    expect(git(source, "status", "--porcelain", "--", "Assets")).toBe("A  Assets/Scripts/Staged.cs");
   });
 
   it("makes no project commit when the agent committed nothing", async () => {
@@ -1325,8 +1333,8 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const result = await lease.commit();
     await lease.release();
     expect(result.commitsReplayed).toBeUndefined();
-    expect(git(source, "log --format=%s -n 2")).toBe("init");
-    expect(git(source, "branch --list 'lease-salvage/*'")).toBe("");
+    expect(git(source, "log", "--format=%s", "-n", "2")).toBe("init");
+    expect(git(source, "branch", "--list", "lease-salvage/*")).toBe("");
   });
 });
 
@@ -1482,8 +1490,8 @@ describe("the seed survives a restart exactly as it was written (Codex 2026-09-1
 });
 
 describe("a person's edit that stats cannot see is not published over (Codex 2026-09-12 Q#5)", () => {
-  const git = (cwd: string, cmd: string) =>
-    execSync(`git -c user.email=w@x -c user.name=worker ${cmd}`, { cwd, encoding: "utf8" }).trim();
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=w@x", "-c", "user.name=worker", ...args], { cwd, encoding: "utf8" }).trim();
 
   it("quarantines the worker's version when the project's copy changed under the same size and mtime", async () => {
     makeGitRepo();
@@ -1517,8 +1525,17 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
     // person's file is not recoverable once overwritten.
     const target = join(source, "Assets", "Scripts", "Untracked.cs");
     writeFileSync(target, "the person's file", "utf8");
+    // A whole-second stamp, so putting it back is exact rather than rounded.
+    const stamp = 1_600_000_000;
+    utimesSync(target, stamp, stamp);
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    chmodSync(target, 0o640); // ctime moves; no git, so nothing can prove the bytes
+    // Only the ctime moves: same size, mtime put back, and no git to prove the
+    // bytes. This was a chmod 0o640, which on Windows changes no attribute of
+    // a writable file, so its ctime stayed put and the premise never held.
+    const ctimeAtSeed = statSync(target).ctimeMs;
+    writeFileSync(target, "the person's file", "utf8");
+    utimesSync(target, stamp, stamp);
+    expect(statSync(target).ctimeMs).not.toBe(ctimeAtSeed);
     writeFileSync(join(lease.path, "Assets", "Scripts", "Untracked.cs"), "the worker's version", "utf8");
 
     const result = await lease.commit();
@@ -1541,7 +1558,7 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
 
     expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
     expect(readFileSync(target, "utf8")).toBe("worker work");
-    expect(git(source, "status --porcelain -- Assets/Scripts/Existing.cs")).not.toBe("");
+    expect(git(source, "status", "--porcelain", "--", "Assets/Scripts/Existing.cs")).not.toBe("");
   });
 });
 

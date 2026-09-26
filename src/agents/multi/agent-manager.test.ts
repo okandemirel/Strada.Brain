@@ -282,7 +282,7 @@ describe("AgentManager", () => {
       const mockConstructor = AgentDBMemory as unknown as Mock;
       expect(mockConstructor).toHaveBeenCalledTimes(1);
       const callArgs = mockConstructor.mock.calls[0][0];
-      expect(callArgs.dbPath).toContain("agents/");
+      expect(callArgs.dbPath).toBe(join(tmpDir, "agents", agents[0]!.id));
     });
 
     it("submits plain messages to the background task system when configured", async () => {

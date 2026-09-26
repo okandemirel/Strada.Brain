@@ -130,8 +130,10 @@ describe("workspaces carry the user's uncommitted work", () => {
     writeFileSync(join(lease.path, "Assets", "Agent.cs"), "// agent output\n");
     const result = await lease.commit();
 
-    expect(result.written).toContain("Assets/Agent.cs");
-    expect(result.written).not.toContain("Assets/Player.cs");
+    // Native separators, as a commit reports them: a "/" literal made the
+    // not.toContain below pass vacuously on Windows.
+    expect(result.written).toContain(join("Assets", "Agent.cs"));
+    expect(result.written).not.toContain(join("Assets", "Player.cs"));
     expect(result.conflicts).toEqual([]);
     // And the user's in-progress edit survived untouched.
     expect(readFileSync(join(root, "Assets", "Player.cs"), "utf8")).toBe(

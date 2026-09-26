@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, symlinkSync, readlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { WorkspaceLeaseManager, readCommitLedger } from "./workspace-lease-manager.js";
 import { LEASE_WRITTEN_LEDGER } from "./system-owned-path.js";
@@ -33,8 +33,9 @@ function put(root: string, rel: string, body: string): string {
   writeFileSync(abs, body, "utf8");
   return abs;
 }
-function git(cwd: string, cmd: string): string {
-  return execSync(`git -c user.email=a@b -c user.name=t ${cmd}`, { cwd, encoding: "utf8" });
+/** An argument array, not a shell string: cmd.exe keeps `'msg'` quotes literally. */
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.email=a@b", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
 }
 function manager(opts: { worktree?: boolean; projectRoot?: string } = {}): WorkspaceLeaseManager {
   return new WorkspaceLeaseManager({
@@ -87,9 +88,9 @@ describe("deletions: only the system's own files go, and every applied deletion 
   it("a user's file swept into a 'campaign:' envelope commit is not the system's without the ledger's word", async () => {
     put(source, "Assets/Scripts/MyLevelDesign.cs", "the user's uncommitted design");
     put(source, "Assets/Scripts/Generated.cs", "lease output");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm 'campaign: Sprint 3 — envelope'");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "campaign: Sprint 3 — envelope");
     put(source, LEASE_WRITTEN_LEDGER, "Assets/Scripts/Generated.cs\n");
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     rmSync(join(lease.path, "Assets/Scripts/MyLevelDesign.cs"));
@@ -138,9 +139,9 @@ describe("writes: the user's copy is never overwritten by a version the agent wr
   it("a gitignored user file the worktree never held is a conflict, not a write", async () => {
     put(source, "Assets/Scripts/Existing.cs", "x");
     put(source, ".gitignore", "Assets/StreamingAssets/config.json\n");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm init");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "init");
     put(source, "Assets/StreamingAssets/config.json", '{"apiKey":"USER-SECRET"}');
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     expect(lease.kind).toBe("git-worktree");
@@ -181,13 +182,13 @@ describe("writes: the user's copy is never overwritten by a version the agent wr
 
   it("git stash inside a worktree lease does not revert the user's WIP in the project", async () => {
     put(source, "Assets/Scripts/Player.cs", "class Player { }");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm init");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "init");
     put(source, "Assets/Scripts/Player.cs", "class Player { /* WIP */ }");
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     expect(readFileSync(join(lease.path, "Assets/Scripts/Player.cs"), "utf8")).toContain("WIP");
-    git(lease.path, "stash -q");
+    git(lease.path, "stash", "-q");
     put(lease.path, "Assets/Scripts/Other.cs", "agent work");
     const result = await lease.commit();
     await lease.release();
@@ -198,14 +199,15 @@ describe("writes: the user's copy is never overwritten by a version the agent wr
   it("an uncommitted relative symlink stays relative inside the worktree", async () => {
     put(source, "Packages/Shared/Config.cs", "USER ORIGINAL");
     put(source, "Assets/Scripts/A.cs", "x");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm init");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "init");
     mkdirSync(join(source, "Packages/Vendored"), { recursive: true });
     symlinkSync("../Shared", join(source, "Packages/Vendored/Shared"));
     const lease = await manager({ worktree: true }).acquireLease({ label: "t" });
     const link = join(lease.path, "Packages/Vendored/Shared");
-    expect(readlinkSync(link)).toBe("../Shared");
+    // Native separators: Node writes a Windows link's target with `\`.
+    expect(readlinkSync(link)).toBe(join("..", "Shared"));
     await lease.release();
   });
 });
@@ -216,9 +218,9 @@ describe("a moved mtime is not a user edit", () => {
   // one as "the user changed it" and quarantined the sprint's scene placements.
   it("writes an agent edit over a project file whose mtime moved but whose bytes still equal the seed-time HEAD", async () => {
     put(source, "Assets/Scenes/Main.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm base");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "base");
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     put(lease.path, "Assets/Scenes/Main.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n--- !u!1001 &1001\nPrefabInstance:\n");
     // Something rewrote the project's copy with the same bytes (a merge, a reimport).
@@ -234,9 +236,9 @@ describe("a moved mtime is not a user edit", () => {
 
   it("still refuses when the bytes differ from the seed-time HEAD", async () => {
     put(source, "Assets/Scripts/Player.cs", "class Player { }");
-    git(source, "init -q");
-    git(source, "add -A");
-    git(source, "commit -qm base");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "base");
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     put(lease.path, "Assets/Scripts/Player.cs", "class Player { /* agent */ }");
     const target = join(source, "Assets/Scripts/Player.cs");

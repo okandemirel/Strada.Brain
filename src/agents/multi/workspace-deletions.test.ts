@@ -66,7 +66,8 @@ describe("files the agent deleted", () => {
     rmSync(join(lease.path, "Assets", "Broken.asmdef"));
     const result = await lease.commit();
 
-    expect(result.removed).toContain("Assets/Broken.asmdef");
+    // A commit reports project-relative paths with native separators.
+    expect(result.removed).toContain(join("Assets", "Broken.asmdef"));
     // Reported, not acted on: the file is still the user's to keep or drop.
     expect(existsSync(join(root, "Assets", "Broken.asmdef"))).toBe(true);
     expect(existsSync(join(root, "Assets", "Keep.cs"))).toBe(true);
@@ -83,7 +84,7 @@ describe("files the agent deleted", () => {
     const result = await lease.commit();
 
     expect(result.removed).toEqual([]);
-    expect(result.written).toContain("Assets/New.cs");
+    expect(result.written).toContain(join("Assets", "New.cs"));
 
     await lease.release();
   });
