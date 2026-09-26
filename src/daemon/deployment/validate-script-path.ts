@@ -28,10 +28,19 @@ export function validateScriptPath(scriptPath: string, projectRoot: string): str
     throw new Error(`Script not found or not executable: "${resolved}"`);
   }
 
-  // Resolve symlinks and verify real path stays within project root (best-effort)
+  // Resolve symlinks and verify real path stays within project root (best-effort).
+  // The root is resolved the same way: a symlinked root (macOS /tmp is
+  // /private/tmp) or a Windows 8.3 short name made the real script path look
+  // like it had left a root that was only spelled differently.
   try {
     const realPath = realpathSync(resolved);
-    if (!realPath.startsWith(normalizedRoot + path.sep) && realPath !== normalizedRoot) {
+    let realRoot = normalizedRoot;
+    try {
+      realRoot = realpathSync(normalizedRoot);
+    } catch {
+      // Unresolvable root: compare against it as given.
+    }
+    if (!realPath.startsWith(realRoot + path.sep) && realPath !== realRoot) {
       throw new Error(`Script path traversal via symlink: "${scriptPath}" resolves to "${realPath}" outside project root`);
     }
     return realPath;
