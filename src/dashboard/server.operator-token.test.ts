@@ -42,7 +42,7 @@ const as = (profileId: string): Record<string, string> => ({
 });
 
 function fakeDaemon() {
-  const onFired = vi.fn();
+  const fireNow = vi.fn((name: string) => (name === "nightly" ? { status: "submitted", taskId: "task_1" } : { status: "not_found" }));
   const breaker = {
     reset: vi.fn(),
     getState: vi.fn(() => "CLOSED"),
@@ -51,8 +51,9 @@ function fakeDaemon() {
   const ctx = {
     heartbeatLoop: {
       getCircuitBreaker: vi.fn((name: string) => (name === "nightly" ? breaker : undefined)),
+      fireNow,
     },
-    registry: { getByName: vi.fn((name: string) => (name === "nightly" ? { onFired } : undefined)) },
+    registry: { getByName: vi.fn() },
     budgetTracker: { resetBudget: vi.fn() },
     approvalQueue: { getAuditLog: vi.fn(() => [{ id: 1, toolName: "shell_exec", decision: "approved", timestamp: 1 }]) },
     storage: { upsertCircuitState: vi.fn() },
@@ -74,14 +75,14 @@ function fakeDaemon() {
     },
     deployTrigger: { triggerReadinessCheck: vi.fn(async () => ({})), onApprovalDecided: vi.fn() },
   };
-  return { ctx, onFired, breaker };
+  return { ctx, fireNow, breaker };
 }
 
 /** Every allowlisted route with a body it accepts, and the spy it must reach. */
 function operatorCalls(daemon: ReturnType<typeof fakeDaemon>) {
   const { ctx } = daemon;
   return [
-    { path: "/api/daemon/trigger", body: { name: "nightly" }, spy: daemon.onFired },
+    { path: "/api/daemon/trigger", body: { name: "nightly" }, spy: daemon.fireNow },
     { path: "/api/daemon/circuit/reset", body: { name: "nightly" }, spy: daemon.breaker.reset },
     { path: "/api/daemon/budget/reset", body: {}, spy: ctx.budgetTracker.resetBudget },
     { path: "/api/daemon/digest/send", body: {}, spy: ctx.digestReporter.sendDigest },
@@ -331,9 +332,14 @@ describe("the daemon control routes do what the in-process commands do (COR-13)"
   it("fires, resets and persists by trigger name, and names a trigger it cannot find", async () => {
     const started = await start();
     if (!started) return;
+    const fired = await post(started.port, "/api/daemon/trigger", operator(started.token), { name: "nightly" });
+    expect(fired.status).toBe(200);
+    expect(await fired.json()).toEqual({ trigger: "nightly", status: "submitted", taskId: "task_1" });
+    expect(started.daemon.fireNow).toHaveBeenCalledWith("nightly");
+
     const missing = await post(started.port, "/api/daemon/trigger", operator(started.token), { name: "nope" });
     expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({ error: "Trigger 'nope' not found" });
+    expect(await missing.json()).toEqual({ trigger: "nope", status: "not_found", error: "Trigger 'nope' not found" });
 
     await post(started.port, "/api/daemon/circuit/reset", operator(started.token), { name: "nightly" });
     expect(started.daemon.ctx.storage.upsertCircuitState).toHaveBeenCalledWith("nightly", "CLOSED", 0, 0, 1000);

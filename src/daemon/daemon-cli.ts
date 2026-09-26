@@ -104,8 +104,8 @@ export function registerDaemonCommands(
   getDashboardClient?: () => DashboardClientResolution,
   getOperatorClient?: () => Promise<OperatorClientResolution>,
 ): void {
-  const post = <S extends z.ZodType>(what: string, path: string, body: Record<string, unknown>, schema: S, timeoutMs?: number) =>
-    postToDashboard(what, path, body, schema, getOperatorClient, timeoutMs);
+  const post = <S extends z.ZodType>(what: string, path: string, body: Record<string, unknown>, schema: S, options?: PostOptions) =>
+    postToDashboard(what, path, body, schema, getOperatorClient, options);
 
   const daemon = program
     .command("daemon")
@@ -202,22 +202,19 @@ export function registerDaemonCommands(
   // =========================================================================
   daemon
     .command("trigger <name>")
-    .description("Manually fire a named trigger")
+    .description("Fire a named trigger now, through the same gates as a scheduled fire")
     .action(async (name: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        if (await post(`fire trigger '${name}'`, "/api/daemon/trigger", { name }, RemoteStatusSchema)) printTriggerFired(name);
+        // A refusal (404, 409) carries the same answer the runtime would print.
+        const answer = await post(`fire trigger '${name}'`, "/api/daemon/trigger", { name }, RemoteTriggerFireSchema, { answersRefusals: true });
+        if (answer) printTriggerFire(name, answer);
         return;
       }
 
-      const trigger = ctx.registry.getByName(name);
-      if (!trigger) {
-        console.error(`Trigger '${name}' not found`);
-        return;
-      }
-
-      trigger.onFired(new Date());
-      printTriggerFired(name);
+      // The fire path of a heartbeat tick: budget, circuit breaker, dedup,
+      // approval. Calling onFired() alone recorded a fire and ran nothing.
+      printTriggerFire(name, ctx.heartbeatLoop.fireNow(name));
     });
 
   // =========================================================================
@@ -999,7 +996,7 @@ export function registerDaemonCommands(
       const ctx = getDaemonContext();
       if (!ctx) {
         printConsolidationStart(opts.force);
-        const result = await post("run memory consolidation", "/api/consolidation/run", {}, RemoteConsolidationRunSchema, LONG_OPERATION_TIMEOUT_MS);
+        const result = await post("run memory consolidation", "/api/consolidation/run", {}, RemoteConsolidationRunSchema, { timeoutMs: LONG_OPERATION_TIMEOUT_MS });
         if (result) printConsolidationResult(result);
         return;
       }
@@ -1214,6 +1211,16 @@ const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critic
  */
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
 
+interface PostOptions {
+  readonly timeoutMs?: number;
+  /**
+   * The schema also describes the runtime's refusals (a 4xx whose JSON body
+   * has that shape); the caller prints those itself, as the in-process path
+   * would.
+   */
+  readonly answersRefusals?: boolean;
+}
+
 /**
  * POST a state change to the running runtime as its local operator (COR-13).
  * On any failure it says what could not be done and why, sets a non-zero exit
@@ -1226,7 +1233,7 @@ async function postToDashboard<S extends z.ZodType>(
   body: Record<string, unknown>,
   schema: S,
   getOperatorClient?: () => Promise<OperatorClientResolution>,
-  timeoutMs?: number,
+  options: PostOptions = {},
 ): Promise<z.output<S> | undefined> {
   const resolution: OperatorClientResolution = (await getOperatorClient?.())
     ?? { kind: "unavailable", message: "no operator connection is configured for this CLI" };
@@ -1236,7 +1243,11 @@ async function postToDashboard<S extends z.ZodType>(
     return undefined;
   }
 
-  const result = await resolution.client.postJson(path, body, timeoutMs !== undefined ? { timeoutMs } : {});
+  const result = await resolution.client.postJson(path, body, options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {});
+  if (result.kind === "refused" && options.answersRefusals) {
+    const answer = schema.safeParse(result.body);
+    if (answer.success) return answer.data;
+  }
   if (result.kind !== "ok") {
     console.error(`Cannot ${what}: ${result.message}`);
     process.exitCode = 1;
@@ -1259,8 +1270,38 @@ const RemoteStatusSchema = z.looseObject({ status: z.string() });
 // command prints the same thing wherever it runs.
 // -----------------------------------------------------------------------------
 
-function printTriggerFired(name: string): void {
-  console.log(`Trigger '${name}' fired manually`);
+/** What a manual fire did, in the shape both HeartbeatLoop.fireNow() and POST /api/daemon/trigger give. */
+type TriggerFireView =
+  | { status: "submitted"; taskId: string }
+  | { status: "approval" }
+  | { status: "refused"; reason: string }
+  | { status: "not_found" };
+
+/** POST /api/daemon/trigger: 200 for a fire, 409 for a gate's refusal, 404 for an unknown name. */
+const RemoteTriggerFireSchema = z.discriminatedUnion("status", [
+  z.looseObject({ status: z.literal("submitted"), taskId: z.string() }),
+  z.looseObject({ status: z.literal("approval") }),
+  z.looseObject({ status: z.literal("refused"), reason: z.string() }),
+  z.looseObject({ status: z.literal("not_found") }),
+]);
+
+function printTriggerFire(name: string, outcome: TriggerFireView): void {
+  switch (outcome.status) {
+    case "submitted":
+      console.log(`Trigger '${name}' fired manually: task ${outcome.taskId} submitted`);
+      return;
+    case "approval":
+      console.log(`Trigger '${name}' fired manually: its action is waiting for approval (pending approvals: strada daemon status)`);
+      return;
+    case "refused":
+      console.error(`Trigger '${name}' did not fire: ${outcome.reason}`);
+      process.exitCode = 1;
+      return;
+    case "not_found":
+      console.error(`Trigger '${name}' not found`);
+      process.exitCode = 1;
+      return;
+  }
 }
 
 function printCircuitReset(name: string): void {
@@ -1539,7 +1580,7 @@ async function runRemoteDeployCheck(
     propose ? { propose: true } : {},
     RemoteDeployCheckSchema,
     getOperatorClient,
-    LONG_OPERATION_TIMEOUT_MS,
+    { timeoutMs: LONG_OPERATION_TIMEOUT_MS },
   );
   if (!result) return;
   if ("enabled" in result) {

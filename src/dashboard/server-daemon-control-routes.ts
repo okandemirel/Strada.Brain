@@ -12,7 +12,7 @@
  *   GET  /api/consolidation/preview
  *
  * Changes (POST, owner-only in `ownerOnlyProxySurface`, JSON bodies only):
- *   POST /api/daemon/trigger              { name }
+ *   POST /api/daemon/trigger              { name }      fires it as a tick would
  *   POST /api/daemon/circuit/reset        { name }
  *   POST /api/daemon/budget/reset         {}
  *   POST /api/daemon/digest/send          {}
@@ -215,13 +215,17 @@ function handleDaemonChanges(url: string, method: string, req: IncomingMessage, 
     const daemon = daemonOr503(ctx, res);
     if (!daemon) return true;
     withBody(req, res, ctx, TRIGGER_BODY, ({ name }) => {
-      const trigger = daemon.registry.getByName(name);
-      if (!trigger) {
-        sendJsonError(res, 404, `Trigger '${name}' not found`);
-        return;
+      // The path a scheduled fire takes, every gate included: onFired() alone
+      // recorded a fire and ran nothing.
+      const outcome = daemon.heartbeatLoop.fireNow(name);
+      const answer = { trigger: name, ...outcome };
+      if (outcome.status === "not_found") {
+        sendJson(res, { ...answer, error: `Trigger '${name}' not found` }, 404);
+      } else if (outcome.status === "refused") {
+        sendJson(res, { ...answer, error: `Trigger '${name}' did not fire: ${outcome.reason}` }, 409);
+      } else {
+        sendJson(res, answer);
       }
-      trigger.onFired(new Date());
-      sendJson(res, { status: "fired", trigger: name });
     });
     return true;
   }

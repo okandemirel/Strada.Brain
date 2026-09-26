@@ -15,13 +15,16 @@
  *     d. If shouldFire(now) -- fire, submit task via TaskManager
  *  4. Update lastTick timestamp
  *
+ * fireNow(name) runs one trigger through step 3 on demand (`strada daemon
+ * trigger <name>`), with the same gates.
+ *
  * Requirements: DAEMON-01, DAEMON-02, DAEMON-04, DAEMON-05
  */
 
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type { TriggerRegistry } from "./trigger-registry.js";
 import type { TaskManager } from "../tasks/task-manager.js";
-import type { BudgetTracker } from "./budget/budget-tracker.js";
+import type { BudgetTracker, BudgetUsage } from "./budget/budget-tracker.js";
 import type { DaemonSecurityPolicy } from "./security/daemon-security-policy.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
@@ -63,6 +66,49 @@ interface ConsolidationEngineContract {
 /** Deploy trigger interface -- only the subset HeartbeatLoop uses */
 interface DeployTriggerContract {
   triggerReadinessCheck(): Promise<{ ready: boolean }>;
+}
+
+/** The gate that kept a trigger from firing. */
+export type TriggerFireGate =
+  | "stopped"
+  | "disabled"
+  | "circuit_open"
+  | "budget_exceeded"
+  | "task_active"
+  | "foreground_active"
+  | "not_due"
+  | "deduplicated"
+  | "submit_failed"
+  | "failed";
+
+/**
+ * What one evaluation of a trigger did: its task was submitted, its fire
+ * enqueued an approval (an approval-only trigger submits no task), or a gate
+ * refused it and why. Also the answer `strada daemon trigger <name>` prints.
+ */
+export type TriggerFireOutcome =
+  | { readonly status: "submitted"; readonly taskId: TaskId }
+  | { readonly status: "approval" }
+  | { readonly status: "refused"; readonly gate: TriggerFireGate; readonly reason: string }
+  | { readonly status: "not_found" };
+
+function refused(gate: TriggerFireGate, reason: string): TriggerFireOutcome {
+  return { status: "refused", gate, reason };
+}
+
+/**
+ * Why a trigger has nothing to fire. Only a cron trigger's schedule is
+ * overridden by a manual fire; every other type fires on content (due items,
+ * buffered events, a confirmed readiness) that a manual fire must not invent.
+ */
+function notDueReason(type: TriggerType): string {
+  switch (type) {
+    case "checklist": return "no checklist item is due";
+    case "file-watch": return "no file changes are waiting";
+    case "webhook": return "no webhook events are waiting";
+    case "deploy": return "there is no deployment to propose (readiness not confirmed, a proposal already pending, a deployment running, or cooling down)";
+    case "cron": return "no occurrence is due";
+  }
 }
 
 export class HeartbeatLoop {
@@ -369,339 +415,16 @@ export class HeartbeatLoop {
     const budgetUsage = this.budgetTracker.getUsage();
 
     // Unified budget check -- run once per tick, not per trigger
-    if (this.unifiedBudgetManager) {
-      this.unifiedBudgetManager.checkAndEmitEvents();
-      if (this.unifiedBudgetManager.isGlobalExceeded()) {
-        this.eventBus.emit("daemon:budget_exceeded", { source: "unified", timestamp: now.getTime() } as never);
-        this.lastTick = now;
-        return; // Skip all triggers this tick
-      }
-      // The portal's "Daemon daily sub-limit" (subLimits.daemonDailyUsd) was
-      // accepted, persisted and displayed but read by nothing on the dispatch
-      // path — isSourceExceeded() had no production caller, so the setting
-      // enforced nothing (audited 2026-09-02). Gate the tick on it here, next
-      // to the global wall, and name the limit that stopped the daemon.
-      if (this.unifiedBudgetManager.isSourceExceeded("daemon")) {
-        const usedUsd = this.unifiedBudgetManager.getSnapshot().breakdown.daemon;
-        const limitUsd = this.unifiedBudgetManager.getConfig().subLimits.daemonDailyUsd;
-        // Latched like the legacy budget wall (audited 2026-09-02): announce the
-        // crossing once, not once per tick for as long as spend sits over it.
-        if (!this.daemonSubLimitExceededEmitted) {
-          this.eventBus.emit("daemon:budget_exceeded", {
-            source: "unified:daemon-sublimit",
-            usedUsd,
-            limitUsd,
-            timestamp: now.getTime(),
-          } as never);
-          this.daemonSubLimitExceededEmitted = true;
-        }
-        this.logger.info("Daemon daily sub-limit reached — triggers skipped this tick", { usedUsd, limitUsd });
-        this.lastTick = now;
-        return;
-      }
-      // Under the sub-limit again (window drained, or the operator raised it) —
-      // re-arm so the next crossing is announced.
-      this.daemonSubLimitExceededEmitted = false;
+    if (this.unifiedBudgetRefusal(now) !== undefined) {
+      this.lastTick = now;
+      return; // Skip all triggers this tick
     }
 
     // Sequential evaluation -- prevents budget race conditions
     for (const trigger of triggers) {
-      const name = trigger.metadata.name;
-      this.attachTriggerState(trigger);
-
-      // 1. Get or create circuit breaker
-      const cb = this.getOrCreateCircuitBreaker(name);
-
-      // 2. Check circuit breaker
-      if (cb.isOpen()) {
-        this.logger.debug("Trigger skipped (circuit open)", { trigger: name });
-        continue;
-      }
-
-      if (budgetUsage.pct >= 1.0) {
-        if (!this.budgetExceededEmitted) {
-          this.eventBus.emit("daemon:budget_exceeded", {
-            usedUsd: budgetUsage.usedUsd,
-            limitUsd: budgetUsage.limitUsd ?? 0,
-            timestamp: now.getTime(),
-          });
-          this.budgetExceededEmitted = true;
-        }
-        break;
-      } else if (budgetUsage.limitUsd === undefined && this.unifiedBudgetManager) {
-        // Fall back to unified budget manager when dailyBudgetUsd is undefined
-        const globalExceeded = this.unifiedBudgetManager.isGlobalExceeded();
-        if (globalExceeded) {
-          if (!this.budgetExceededEmitted) {
-            this.eventBus.emit("daemon:budget_exceeded", {
-              usedUsd: budgetUsage.usedUsd,
-              limitUsd: 0,
-              timestamp: now.getTime(),
-            });
-            this.budgetExceededEmitted = true;
-          }
-          break;
-        } else if (this.budgetExceededEmitted) {
-          this.budgetExceededEmitted = false;
-          this.budgetWarningEmitted = false;
-        }
-      } else {
-        // Budget recovered -- reset flags so events fire again on next breach
-        if (this.budgetExceededEmitted) {
-          this.budgetExceededEmitted = false;
-          this.budgetWarningEmitted = false;
-        }
-      }
-
-      // 4. Check warning threshold. Same latch defect as the unified manager
-      // (audited 2026-09-02): the flag was cleared only inside the exceeded-
-      // recovery branches, so once the sliding window drained below warnPct
-      // without a hard stop, no further warning could ever fire — and this
-      // legacy event is the one that drives push notifications. Re-arm on
-      // a drop below the threshold — but only a real one.
-      //
-      // Audited 2026-09-02: re-arming at exactly warnPct gave the latch no
-      // hysteresis, so a sliding window drifting 0.79 <-> 0.81 pushed a fresh
-      // medium-urgency notification on every crossing. Re-arm only once usage
-      // falls a dead band below the threshold; the notification then marks a
-      // genuine new approach to the limit, not window jitter.
-      // Halve the band rather than let it swallow a very low warnPct: a
-      // negative re-arm point would silently disable re-arming altogether.
-      const warnRearmPct =
-        this.config.budget.warnPct
-        - Math.min(BUDGET_WARN_DEAD_BAND, this.config.budget.warnPct / 2);
-      if (budgetUsage.pct < warnRearmPct) {
-        this.budgetWarningEmitted = false;
-      }
-      if (budgetUsage.pct >= this.config.budget.warnPct && !this.budgetWarningEmitted) {
-        this.eventBus.emit("daemon:budget_warning", {
-          usedUsd: budgetUsage.usedUsd,
-          limitUsd: budgetUsage.limitUsd ?? 0,
-          pct: budgetUsage.pct,
-          timestamp: now.getTime(),
-        });
-        this.budgetWarningEmitted = true;
-      }
-
-      // 5. Check overlap suppression
-      const existingTaskId = this.activeTriggerTasks.get(name);
-      if (existingTaskId) {
-        const taskStatus = this.taskManager.getStatus(existingTaskId);
-        if (taskStatus && ACTIVE_STATUSES.has(taskStatus.status as TaskStatus)) {
-          this.logger.debug("Trigger skipped (task still active)", {
-            trigger: name,
-            taskId: existingTaskId,
-          });
-          try {
-            this.storage.insertTriggerFireHistory({
-              triggerName: name,
-              result: "deduplicated",
-              taskId: existingTaskId,
-              timestamp: now.getTime(),
-            });
-          } catch (err) {
-            this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
-          }
-          continue;
-        }
-        // Task is done -- clean up
-        this.activeTriggerTasks.delete(name);
-      }
-
-      if (
-        this.config.heartbeat.idlePause &&
-        this.taskManager.hasActiveForegroundTasks?.()
-      ) {
-        this.logger.debug("Trigger skipped (foreground task active)", { trigger: name });
-        continue;
-      }
-
-      // 6. Evaluate trigger
-      try {
-        if (trigger.shouldFire(now)) {
-          const cooldownMs = trigger.metadata.cooldownSeconds
-            ? (trigger.metadata.cooldownSeconds * 1000)
-            : 0;
-          // Dedup check (TRIG-05) -- before onFired and task submission.
-          // Hash what THIS fire would publish: description-rewriting triggers
-          // expose it via previewFireDescription, because metadata.description
-          // still holds the PREVIOUS fire's summary here (audited 2026-09-02:
-          // hashing it let a true repeat through and then suppressed the next
-          // genuinely new change set as a "duplicate").
-          const fireContent = trigger.previewFireDescription?.(now) ?? trigger.metadata.description;
-          if (this.deduplicator) {
-            if (this.deduplicator.shouldSuppress(name, fireContent, now.getTime(), cooldownMs)) {
-              const reason = this.deduplicator.getSuppressionReason();
-              this.eventBus.emit("daemon:trigger_deduplicated", {
-                triggerName: name,
-                reason: reason ?? "cooldown",
-                timestamp: now.getTime(),
-              });
-              try {
-                this.storage.insertTriggerFireHistory({
-                  triggerName: name,
-                  result: "deduplicated",
-                  timestamp: now.getTime(),
-                });
-              } catch (err) {
-                this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
-              }
-              this.logger.debug("Trigger deduplicated", { trigger: name, reason });
-              continue;
-            }
-          }
-
-          // Emit type-specific events BEFORE onFired drains event buffers
-          this.emitTypedTriggerEvent(trigger, name, now);
-
-          trigger.onFired(now);
-
-          // Approval-only triggers: DeployTrigger's whole effect is the
-          // approval it enqueued in onFired, and its description is the
-          // static label "Deployment readiness detection", not an instruction.
-          // Audited 2026-09-02: submitting it spawned a full agent run against
-          // that label on every readiness event, charged to the daemon budget.
-          if (trigger.metadata.type === "deploy") {
-            if (this.deduplicator) {
-              this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
-            }
-            cb.recordSuccess();
-            this.persistCircuitState(name, cb);
-            try {
-              this.storage.insertTriggerFireHistory({
-                triggerName: name,
-                result: "success",
-                timestamp: now.getTime(),
-              });
-            } catch (err) {
-              this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
-            }
-            // The fire is real even though no task carries it: record it as
-            // daemon activity and announce it, exactly like the submitting
-            // path (audited 2026-09-02 — this branch returned before both, so
-            // the dashboard, the notification router and the CLI never saw
-            // deploy fires, and a daemon firing all night still read as idle
-            // to the identity manager). The event names no task because none
-            // was submitted.
-            this.identityManager?.recordActivity();
-            this.eventBus.emit("daemon:trigger_fired", {
-              triggerName: name,
-              timestamp: now.getTime(),
-            });
-            this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
-            continue;
-          }
-
-          // Mark trigger as in-flight BEFORE submission to prevent
-          // duplicate fires if the next tick runs before submit returns.
-          this.activeTriggerTasks.set(name, "pending" as TaskId);
-
-          // Submit task via TaskManager with daemon origin.
-          // A FIRE THAT NEVER BECAME WORK GIVES BACK WHAT IT CONSUMED: a
-          // checklist item fires once, and a throwing submit left it marked
-          // as done with nothing running (Codex 2026-09-13 AG#12).
-          let task: ReturnType<typeof this.taskManager.submit>;
-          try {
-            task = this.taskManager.submit(
-              "daemon",
-              "daemon",
-              trigger.metadata.description,
-              { origin: "daemon", triggerName: name },
-            );
-          } catch (err) {
-            this.activeTriggerTasks.delete(name);
-            try {
-              trigger.onSubmitFailed?.(now);
-            } catch (restoreErr) {
-              this.logger.warn("A trigger could not take its fire back", {
-                trigger: name,
-                error: String(restoreErr),
-              });
-            }
-            this.logger.error("Trigger fired but its task could not be submitted", {
-              trigger: name,
-              error: err instanceof Error ? err.message : String(err),
-            });
-            continue;
-          }
-
-          // Record dedup fire — with this trigger's own cooldown so another
-          // trigger's cleanup pass cannot evict it early (audited 2026-09-02)
-          if (this.deduplicator) {
-            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
-          }
-
-          // Update with real task ID now that submission succeeded
-          this.activeTriggerTasks.set(name, task.id);
-
-          // The circuit learns this fire's result when the task settles
-          // (TSK-13), not now: submitting is not succeeding.
-          for (const [taskId, trigger] of this.triggerByTask) {
-            if (trigger === name) this.triggerByTask.delete(taskId);
-          }
-          this.triggerByTask.set(task.id, name);
-          // A submit that could not enqueue returns a task that already failed,
-          // before this mapping existed to hear it.
-          if (this.taskManager.getStatus(task.id)?.status === TaskStatus.failed) {
-            this.recordTaskOutcome(task.id, false);
-          }
-
-          // Record activity in identity manager
-          this.identityManager?.recordActivity();
-
-          // Emit trigger fired event
-          this.eventBus.emit("daemon:trigger_fired", {
-            triggerName: name,
-            taskId: task.id,
-            timestamp: now.getTime(),
-          });
-          try {
-            this.storage.insertTriggerFireHistory({
-              triggerName: name,
-              result: "success",
-              taskId: task.id,
-              timestamp: now.getTime(),
-            });
-          } catch (err) {
-            this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
-          }
-
-          this.logger.info("Trigger fired", {
-            trigger: name,
-            taskId: task.id,
-          });
-        }
-      } catch (error) {
-        // Record circuit breaker failure
-        cb.recordFailure();
-        this.persistCircuitState(name, cb);
-
-        // Emit trigger failed event
-        this.eventBus.emit("daemon:trigger_failed", {
-          triggerName: name,
-          error: error instanceof Error ? error.message : String(error),
-          circuitState: cb.getState(),
-          timestamp: now.getTime(),
-        });
-        try {
-          this.storage.insertTriggerFireHistory({
-            triggerName: name,
-            result: "failure",
-            timestamp: now.getTime(),
-          });
-        } catch (histErr) {
-          this.logger.warn("Failed to persist trigger fire history", {
-            trigger: name,
-            error: histErr instanceof Error ? histErr.message : String(histErr),
-          });
-        }
-
-        this.logger.error("Trigger evaluation failed", {
-          trigger: name,
-          error: error instanceof Error ? error.message : String(error),
-          circuitState: cb.getState(),
-        });
-      }
+      const outcome = this.evaluateTrigger(trigger, now, budgetUsage, false);
+      // Over budget: no later trigger may fire this tick either.
+      if (outcome.status === "refused" && outcome.gate === "budget_exceeded") break;
     }
 
     // Agent Core reasoning (Phase 4 — autonomous agent OODA loop)
@@ -714,6 +437,33 @@ export class HeartbeatLoop {
 
     // Update lastTick
     this.lastTick = now;
+  }
+
+  /**
+   * Fire one trigger now, on the operator's say-so (`strada daemon trigger
+   * <name>`), through the path a tick's fire takes: the unified and daemon
+   * budgets, the circuit breaker, a still-running task, idle pause,
+   * dedup/cooldown, and the approval an approval-only trigger enqueues. Only a
+   * cron trigger's schedule is overridden (see notDueReason). This used to be
+   * a bare onFired(), which recorded a fire and ran nothing.
+   */
+  fireNow(name: string, now: Date = new Date()): TriggerFireOutcome {
+    const trigger = this.registry.getByName(name);
+    if (!trigger) return { status: "not_found" };
+    // A paused daemon fires nothing; before its first start() it has not even
+    // loaded the persisted circuit states.
+    if (!this.running) return refused("stopped", "the daemon heartbeat is stopped (resume it with /daemon start)");
+    // The tick evaluates registry.getActive(): everything but disabled.
+    if (trigger.getState() === "disabled") return refused("disabled", "the trigger is disabled");
+
+    this.approvalQueue.expireStale();
+    const overBudget = this.unifiedBudgetRefusal(now);
+    const outcome = overBudget !== undefined
+      ? refused("budget_exceeded", overBudget)
+      : this.evaluateTrigger(trigger, now, this.budgetTracker.getUsage(), true);
+    // The fire history has no column for who fired; the log says it.
+    this.logger.info("Manual trigger fire", { trigger: name, ...outcome });
+    return outcome;
   }
 
   /**
@@ -834,6 +584,342 @@ export class HeartbeatLoop {
   // ===========================================================================
   // Private
   // ===========================================================================
+
+  /**
+   * The unified budget's refusal to dispatch any trigger now, or undefined
+   * when it allows it. Checked once per tick, and by every manual fire.
+   */
+  private unifiedBudgetRefusal(now: Date): string | undefined {
+    const manager = this.unifiedBudgetManager;
+    if (!manager) return undefined;
+    manager.checkAndEmitEvents();
+    if (manager.isGlobalExceeded()) {
+      this.eventBus.emit("daemon:budget_exceeded", { source: "unified", timestamp: now.getTime() } as never);
+      return "the global daily budget is exhausted";
+    }
+    // The portal's "Daemon daily sub-limit" (subLimits.daemonDailyUsd) was
+    // accepted, persisted and displayed but read by nothing on the dispatch
+    // path — isSourceExceeded() had no production caller, so the setting
+    // enforced nothing (audited 2026-09-02). Gate the tick on it here, next
+    // to the global wall, and name the limit that stopped the daemon.
+    if (manager.isSourceExceeded("daemon")) {
+      const usedUsd = manager.getSnapshot().breakdown.daemon;
+      const limitUsd = manager.getConfig().subLimits.daemonDailyUsd;
+      // Latched like the legacy budget wall (audited 2026-09-02): announce the
+      // crossing once, not once per tick for as long as spend sits over it.
+      if (!this.daemonSubLimitExceededEmitted) {
+        this.eventBus.emit("daemon:budget_exceeded", {
+          source: "unified:daemon-sublimit",
+          usedUsd,
+          limitUsd,
+          timestamp: now.getTime(),
+        } as never);
+        this.daemonSubLimitExceededEmitted = true;
+      }
+      this.logger.info("Daemon daily sub-limit reached — triggers skipped", { usedUsd, limitUsd });
+      return `the daemon daily sub-limit is reached ($${usedUsd.toFixed(2)} of $${limitUsd.toFixed(2)})`;
+    }
+    // Under the sub-limit again (window drained, or the operator raised it) —
+    // re-arm so the next crossing is announced.
+    this.daemonSubLimitExceededEmitted = false;
+    return undefined;
+  }
+
+  /**
+   * The daemon budget's refusal (announced once per crossing), or undefined;
+   * also raises the warning once usage passes warnPct.
+   */
+  private daemonBudgetRefusal(budgetUsage: BudgetUsage, now: Date): string | undefined {
+    if (budgetUsage.pct >= 1.0) {
+      if (!this.budgetExceededEmitted) {
+        this.eventBus.emit("daemon:budget_exceeded", {
+          usedUsd: budgetUsage.usedUsd,
+          limitUsd: budgetUsage.limitUsd ?? 0,
+          timestamp: now.getTime(),
+        });
+        this.budgetExceededEmitted = true;
+      }
+      return `the daemon budget is exhausted ($${budgetUsage.usedUsd.toFixed(2)} of $${(budgetUsage.limitUsd ?? 0).toFixed(2)})`;
+    } else if (budgetUsage.limitUsd === undefined && this.unifiedBudgetManager) {
+      // Fall back to unified budget manager when dailyBudgetUsd is undefined
+      const globalExceeded = this.unifiedBudgetManager.isGlobalExceeded();
+      if (globalExceeded) {
+        if (!this.budgetExceededEmitted) {
+          this.eventBus.emit("daemon:budget_exceeded", {
+            usedUsd: budgetUsage.usedUsd,
+            limitUsd: 0,
+            timestamp: now.getTime(),
+          });
+          this.budgetExceededEmitted = true;
+        }
+        return "the global daily budget is exhausted";
+      } else if (this.budgetExceededEmitted) {
+        this.budgetExceededEmitted = false;
+        this.budgetWarningEmitted = false;
+      }
+    } else {
+      // Budget recovered -- reset flags so events fire again on next breach
+      if (this.budgetExceededEmitted) {
+        this.budgetExceededEmitted = false;
+        this.budgetWarningEmitted = false;
+      }
+    }
+
+    // Check warning threshold. Same latch defect as the unified manager
+    // (audited 2026-09-02): the flag was cleared only inside the exceeded-
+    // recovery branches, so once the sliding window drained below warnPct
+    // without a hard stop, no further warning could ever fire — and this
+    // legacy event is the one that drives push notifications. Re-arm on
+    // a drop below the threshold — but only a real one.
+    //
+    // Audited 2026-09-02: re-arming at exactly warnPct gave the latch no
+    // hysteresis, so a sliding window drifting 0.79 <-> 0.81 pushed a fresh
+    // medium-urgency notification on every crossing. Re-arm only once usage
+    // falls a dead band below the threshold; the notification then marks a
+    // genuine new approach to the limit, not window jitter.
+    // Halve the band rather than let it swallow a very low warnPct: a
+    // negative re-arm point would silently disable re-arming altogether.
+    const warnRearmPct =
+      this.config.budget.warnPct
+      - Math.min(BUDGET_WARN_DEAD_BAND, this.config.budget.warnPct / 2);
+    if (budgetUsage.pct < warnRearmPct) {
+      this.budgetWarningEmitted = false;
+    }
+    if (budgetUsage.pct >= this.config.budget.warnPct && !this.budgetWarningEmitted) {
+      this.eventBus.emit("daemon:budget_warning", {
+        usedUsd: budgetUsage.usedUsd,
+        limitUsd: budgetUsage.limitUsd ?? 0,
+        pct: budgetUsage.pct,
+        timestamp: now.getTime(),
+      });
+      this.budgetWarningEmitted = true;
+    }
+    return undefined;
+  }
+
+  /** The trigger's previous task while it is still active (overlap suppression), else undefined. */
+  private stillActiveTask(name: string, now: Date): TaskId | undefined {
+    const existingTaskId = this.activeTriggerTasks.get(name);
+    if (!existingTaskId) return undefined;
+    const taskStatus = this.taskManager.getStatus(existingTaskId);
+    if (taskStatus && ACTIVE_STATUSES.has(taskStatus.status as TaskStatus)) {
+      this.logger.debug("Trigger skipped (task still active)", {
+        trigger: name,
+        taskId: existingTaskId,
+      });
+      this.recordFireHistory({ triggerName: name, result: "deduplicated", taskId: existingTaskId, timestamp: now.getTime() });
+      return existingTaskId;
+    }
+    // Task is done -- clean up
+    this.activeTriggerTasks.delete(name);
+    return undefined;
+  }
+
+  /**
+   * One trigger through every gate, then its fire: what each tick does for
+   * each active trigger, and what fireNow() does for one. `manual` changes one
+   * thing — a cron trigger fires though no occurrence is due.
+   */
+  private evaluateTrigger(trigger: ITrigger, now: Date, budgetUsage: BudgetUsage, manual: boolean): TriggerFireOutcome {
+    const name = trigger.metadata.name;
+    this.attachTriggerState(trigger);
+
+    // 1. Get or create circuit breaker
+    const cb = this.getOrCreateCircuitBreaker(name);
+
+    // 2. Check circuit breaker
+    if (cb.isOpen()) {
+      this.logger.debug("Trigger skipped (circuit open)", { trigger: name });
+      return refused("circuit_open", `its circuit breaker is OPEN after repeated failures (reset it with \`strada daemon reset ${name}\`)`);
+    }
+
+    // 3. Budget, and the warning as it nears
+    const overBudget = this.daemonBudgetRefusal(budgetUsage, now);
+    if (overBudget !== undefined) return refused("budget_exceeded", overBudget);
+
+    // 4. Check overlap suppression
+    const activeTaskId = this.stillActiveTask(name, now);
+    if (activeTaskId !== undefined) return refused("task_active", `its previous task ${activeTaskId} is still running`);
+
+    if (
+      this.config.heartbeat.idlePause &&
+      this.taskManager.hasActiveForegroundTasks?.()
+    ) {
+      this.logger.debug("Trigger skipped (foreground task active)", { trigger: name });
+      return refused("foreground_active", "a foreground task is running and daemon idle pause is on");
+    }
+
+    // 5. Evaluate trigger. A manual fire still asks, so a cron occurrence due
+    // now is consumed by it rather than fired again on the next tick.
+    try {
+      const due = trigger.shouldFire(now);
+      if (!due && !(manual && trigger.metadata.type === "cron")) {
+        return refused("not_due", notDueReason(trigger.metadata.type));
+      }
+      return this.fireTrigger(trigger, cb, now);
+    } catch (error) {
+      // Record circuit breaker failure
+      cb.recordFailure();
+      this.persistCircuitState(name, cb);
+
+      // Emit trigger failed event
+      this.eventBus.emit("daemon:trigger_failed", {
+        triggerName: name,
+        error: error instanceof Error ? error.message : String(error),
+        circuitState: cb.getState(),
+        timestamp: now.getTime(),
+      });
+      this.recordFireHistory({ triggerName: name, result: "failure", timestamp: now.getTime() });
+
+      this.logger.error("Trigger evaluation failed", {
+        trigger: name,
+        error: error instanceof Error ? error.message : String(error),
+        circuitState: cb.getState(),
+      });
+      return refused("failed", `it failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** A due trigger past its gates: dedup, then the fire, then its task (or its approval). */
+  private fireTrigger(trigger: ITrigger, cb: CircuitBreaker, now: Date): TriggerFireOutcome {
+    const name = trigger.metadata.name;
+    const cooldownMs = trigger.metadata.cooldownSeconds
+      ? (trigger.metadata.cooldownSeconds * 1000)
+      : 0;
+    // Dedup check (TRIG-05) -- before onFired and task submission.
+    // Hash what THIS fire would publish: description-rewriting triggers
+    // expose it via previewFireDescription, because metadata.description
+    // still holds the PREVIOUS fire's summary here (audited 2026-09-02:
+    // hashing it let a true repeat through and then suppressed the next
+    // genuinely new change set as a "duplicate").
+    const fireContent = trigger.previewFireDescription?.(now) ?? trigger.metadata.description;
+    if (this.deduplicator?.shouldSuppress(name, fireContent, now.getTime(), cooldownMs)) {
+      const reason = this.deduplicator.getSuppressionReason();
+      this.eventBus.emit("daemon:trigger_deduplicated", {
+        triggerName: name,
+        reason: reason ?? "cooldown",
+        timestamp: now.getTime(),
+      });
+      this.recordFireHistory({ triggerName: name, result: "deduplicated", timestamp: now.getTime() });
+      this.logger.debug("Trigger deduplicated", { trigger: name, reason });
+      return refused("deduplicated", reason === "content_duplicate"
+        ? "the same work was fired moments ago (duplicate content)"
+        : `it fired within its cooldown (${Math.round(cooldownMs / 1000)}s)`);
+    }
+
+    // Emit type-specific events BEFORE onFired drains event buffers
+    this.emitTypedTriggerEvent(trigger, name, now);
+
+    trigger.onFired(now);
+
+    // Approval-only triggers: DeployTrigger's whole effect is the
+    // approval it enqueued in onFired, and its description is the
+    // static label "Deployment readiness detection", not an instruction.
+    // Audited 2026-09-02: submitting it spawned a full agent run against
+    // that label on every readiness event, charged to the daemon budget.
+    if (trigger.metadata.type === "deploy") {
+      this.deduplicator?.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
+      cb.recordSuccess();
+      this.persistCircuitState(name, cb);
+      this.recordFireHistory({ triggerName: name, result: "success", timestamp: now.getTime() });
+      // The fire is real even though no task carries it: record it as
+      // daemon activity and announce it, exactly like the submitting
+      // path (audited 2026-09-02 — this branch returned before both, so
+      // the dashboard, the notification router and the CLI never saw
+      // deploy fires, and a daemon firing all night still read as idle
+      // to the identity manager). The event names no task because none
+      // was submitted.
+      this.identityManager?.recordActivity();
+      this.eventBus.emit("daemon:trigger_fired", {
+        triggerName: name,
+        timestamp: now.getTime(),
+      });
+      this.logger.info("Trigger fired (approval-only; no task submitted)", { trigger: name });
+      return { status: "approval" };
+    }
+
+    return this.submitTriggerTask(trigger, cooldownMs, now);
+  }
+
+  /** Submit a fired trigger's task, or give the fire back if it cannot become work. */
+  private submitTriggerTask(trigger: ITrigger, cooldownMs: number, now: Date): TriggerFireOutcome {
+    const name = trigger.metadata.name;
+    // Mark trigger as in-flight BEFORE submission to prevent
+    // duplicate fires if the next tick runs before submit returns.
+    this.activeTriggerTasks.set(name, "pending" as TaskId);
+
+    // Submit task via TaskManager with daemon origin.
+    // A FIRE THAT NEVER BECAME WORK GIVES BACK WHAT IT CONSUMED: a
+    // checklist item fires once, and a throwing submit left it marked
+    // as done with nothing running (Codex 2026-09-13 AG#12).
+    let task: ReturnType<typeof this.taskManager.submit>;
+    try {
+      task = this.taskManager.submit(
+        "daemon",
+        "daemon",
+        trigger.metadata.description,
+        { origin: "daemon", triggerName: name },
+      );
+    } catch (err) {
+      this.activeTriggerTasks.delete(name);
+      try {
+        trigger.onSubmitFailed?.(now);
+      } catch (restoreErr) {
+        this.logger.warn("A trigger could not take its fire back", {
+          trigger: name,
+          error: String(restoreErr),
+        });
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error("Trigger fired but its task could not be submitted", { trigger: name, error: message });
+      return refused("submit_failed", `its task could not be submitted: ${message}`);
+    }
+
+    // Record dedup fire — with this trigger's own cooldown so another
+    // trigger's cleanup pass cannot evict it early (audited 2026-09-02)
+    this.deduplicator?.recordFired(name, trigger.metadata.description, now.getTime(), cooldownMs);
+
+    // Update with real task ID now that submission succeeded
+    this.activeTriggerTasks.set(name, task.id);
+
+    // The circuit learns this fire's result when the task settles
+    // (TSK-13), not now: submitting is not succeeding.
+    for (const [taskId, triggerName] of this.triggerByTask) {
+      if (triggerName === name) this.triggerByTask.delete(taskId);
+    }
+    this.triggerByTask.set(task.id, name);
+    // A submit that could not enqueue returns a task that already failed,
+    // before this mapping existed to hear it.
+    if (this.taskManager.getStatus(task.id)?.status === TaskStatus.failed) {
+      this.recordTaskOutcome(task.id, false);
+    }
+
+    // Record activity in identity manager
+    this.identityManager?.recordActivity();
+
+    // Emit trigger fired event
+    this.eventBus.emit("daemon:trigger_fired", {
+      triggerName: name,
+      taskId: task.id,
+      timestamp: now.getTime(),
+    });
+    this.recordFireHistory({ triggerName: name, result: "success", taskId: task.id, timestamp: now.getTime() });
+
+    this.logger.info("Trigger fired", {
+      trigger: name,
+      taskId: task.id,
+    });
+    return { status: "submitted", taskId: task.id };
+  }
+
+  /** Best effort: the fire history is for the dashboard, never a reason to fail a fire. */
+  private recordFireHistory(entry: Parameters<DaemonStorage["insertTriggerFireHistory"]>[0]): void {
+    try {
+      this.storage.insertTriggerFireHistory(entry);
+    } catch (err) {
+      this.logger.warn("Failed to record trigger fire history", { trigger: entry.triggerName, error: String(err) });
+    }
+  }
 
   /**
    * Emit a type-specific event based on the trigger type.

@@ -201,29 +201,40 @@ describe("daemon status", () => {
 });
 
 describe("daemon trigger <name>", () => {
-  it("fires a named trigger manually", async () => {
-    const trigger = makeTrigger("daily-report");
-    const ctx = makeMockContext({
-      registry: {
-        getAll: vi.fn(() => [trigger]),
-        getByName: vi.fn((name: string) => name === "daily-report" ? trigger : undefined),
-        count: vi.fn(() => 1),
-      } as any,
-    });
+  // These used to assert trigger.onFired() was called: that recorded a fire
+  // and ran nothing. The command now fires through the heartbeat's own path.
+  const withFire = (fireNow: ReturnType<typeof vi.fn>) =>
+    makeMockContext({ heartbeatLoop: { ...makeMockContext().heartbeatLoop, fireNow } as unknown as DaemonContext["heartbeatLoop"] });
 
-    const { stdout } = await runDaemonCommand(() => ctx, ["trigger", "daily-report"]);
+  it("fires a named trigger through the heartbeat and names the task it submitted", async () => {
+    const fireNow = vi.fn(() => ({ status: "submitted", taskId: "task_9" }));
 
-    expect(trigger.onFired).toHaveBeenCalled();
-    expect(stdout.toLowerCase()).toContain("fired");
-    expect(stdout).toContain("daily-report");
+    const { stdout, stderr } = await runDaemonCommand(() => withFire(fireNow), ["trigger", "daily-report"]);
+
+    expect(fireNow).toHaveBeenCalledWith("daily-report");
+    expect(stdout).toBe("Trigger 'daily-report' fired manually: task task_9 submitted");
+    expect(stderr).toBe("");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("says a trigger's action is waiting for approval", async () => {
+    const { stdout } = await runDaemonCommand(() => withFire(vi.fn(() => ({ status: "approval" }))), ["trigger", "deploy-readiness"]);
+    expect(stdout).toBe("Trigger 'deploy-readiness' fired manually: its action is waiting for approval (pending approvals: strada daemon status)");
+  });
+
+  it("names the gate that refused it and exits non-zero", async () => {
+    const fireNow = vi.fn(() => ({ status: "refused", gate: "budget_exceeded", reason: "the daemon budget is exhausted ($5.10 of $5.00)" }));
+    const { stdout, stderr } = await runDaemonCommand(() => withFire(fireNow), ["trigger", "daily-report"]);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Trigger 'daily-report' did not fire: the daemon budget is exhausted ($5.10 of $5.00)");
+    expect(process.exitCode).toBe(1);
   });
 
   it("errors when trigger not found", async () => {
-    const ctx = makeMockContext();
+    const { stderr } = await runDaemonCommand(() => withFire(vi.fn(() => ({ status: "not_found" }))), ["trigger", "nonexistent"]);
 
-    const { stderr } = await runDaemonCommand(() => ctx, ["trigger", "nonexistent"]);
-
-    expect(stderr.toLowerCase()).toContain("not found");
+    expect(stderr).toBe("Trigger 'nonexistent' not found");
+    expect(process.exitCode).toBe(1);
   });
 });
 
@@ -1076,8 +1087,11 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
    * A stub runtime: GETs need the bearer when one is set, POSTs need this run's
    * operator token in its header (as the real dashboard's allowlisted routes).
    */
+  interface Answer { status?: number; body: unknown }
+
+  /** A route answers the same each time, or a list of answers in turn (the last one repeats). */
   async function startRuntime(
-    routes: Record<string, { status?: number; body: unknown }>,
+    routes: Record<string, Answer | Answer[]>,
     bearer?: string,
   ): Promise<{ baseUrl: string; seen: Seen[] }> {
     const seen: Seen[] = [];
@@ -1102,8 +1116,9 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
           return;
         }
         const route = routes[line];
-        res.writeHead(route ? route.status ?? 200 : 404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(route ? route.body : { error: "Not found" }));
+        const answer = Array.isArray(route) ? (route.length > 1 ? route.shift() : route[0]) : route;
+        res.writeHead(answer ? answer.status ?? 200 : 404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(answer ? answer.body : { error: "Not found" }));
       });
     });
     await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
@@ -1125,13 +1140,13 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
 
   it("daemon trigger and reset post the trigger name with the operator token, and print what the in-process commands print", async () => {
     const { baseUrl, seen } = await startRuntime({
-      "POST /api/daemon/trigger": ok,
+      "POST /api/daemon/trigger": { body: { trigger: "nightly-build", status: "submitted", taskId: "task_7" } },
       "POST /api/daemon/circuit/reset": ok,
     });
 
     const fired = await run(["trigger", "nightly-build"], baseUrl);
     expect(fired.stderr).toBe("");
-    expect(fired.stdout).toBe("Trigger 'nightly-build' fired manually");
+    expect(fired.stdout).toBe("Trigger 'nightly-build' fired manually: task task_7 submitted");
 
     const reset = await run(["reset", "nightly-build"], baseUrl);
     expect(reset.stdout).toBe("Circuit breaker for 'nightly-build' reset to CLOSED");
@@ -1141,6 +1156,26 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
       ["POST /api/daemon/circuit/reset", OPERATOR, "application/json", { name: "nightly-build" }],
     ]);
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("daemon trigger prints a gate's refusal and an unknown name as the in-process command does, exiting non-zero", async () => {
+    const reason = "the daemon budget is exhausted ($5.10 of $5.00)";
+    const { baseUrl } = await startRuntime({
+      "POST /api/daemon/trigger": [
+        { status: 409, body: { trigger: "nightly-build", status: "refused", gate: "budget_exceeded", reason, error: `Trigger 'nightly-build' did not fire: ${reason}` } },
+        { status: 404, body: { trigger: "nope", status: "not_found", error: "Trigger 'nope' not found" } },
+      ],
+    });
+
+    const refused = await run(["trigger", "nightly-build"], baseUrl);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toBe(`Trigger 'nightly-build' did not fire: ${reason}`);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    const missing = await run(["trigger", "nope"], baseUrl);
+    expect(missing.stderr).toBe("Trigger 'nope' not found");
+    expect(process.exitCode).toBe(1);
   });
 
   it("daemon budget reset and digest post an empty JSON object, and send the dashboard bearer too when the install has one", async () => {

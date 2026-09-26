@@ -20,8 +20,12 @@ export type DashboardReadResult =
   | { kind: "ok"; body: unknown }
   /** No HTTP answer at all: connection refused, reset, timed out. */
   | { kind: "unreachable"; message: string }
-  /** An HTTP answer that is not a usable JSON success. */
-  | { kind: "refused"; status: number; message: string };
+  /**
+   * An HTTP answer that is not a usable JSON success. `body` is its JSON, when
+   * it had one: a refusal can say more than its error line (the gate that
+   * refused a trigger fire).
+   */
+  | { kind: "refused"; status: number; message: string; body?: unknown };
 
 export interface DaemonDashboardClient {
   /** Base URL requests go to, for messages. */
@@ -91,16 +95,20 @@ function describeNetworkError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function errorFromBody(text: string): string | undefined {
+function jsonOrUndefined(text: string): unknown {
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && "error" in parsed) {
-      const value = (parsed as { error: unknown }).error;
-      if (typeof value === "string") return value;
-    }
+    return JSON.parse(text) as unknown;
   } catch {
-    // Not JSON — fall through to the status line.
+    return undefined;
   }
+}
+
+function errorFromBody(parsed: unknown): string | undefined {
+  if (parsed && typeof parsed === "object" && "error" in parsed) {
+    const value = (parsed as { error: unknown }).error;
+    if (typeof value === "string") return value;
+  }
+  // Not a JSON error — fall through to the status line.
   return undefined;
 }
 
@@ -141,9 +149,15 @@ async function send(options: SendOptions): Promise<DashboardReadResult> {
   }
 
   if (!response.ok) {
-    const detail = errorFromBody(text) ?? `HTTP ${response.status}`;
+    const body = jsonOrUndefined(text);
+    const detail = errorFromBody(body) ?? `HTTP ${response.status}`;
     const hint = response.status === 401 || response.status === 403 ? options.authHint : "";
-    return { kind: "refused", status: response.status, message: `the dashboard at ${baseUrl} refused ${what}: ${detail}${hint}` };
+    return {
+      kind: "refused",
+      status: response.status,
+      message: `the dashboard at ${baseUrl} refused ${what}: ${detail}${hint}`,
+      ...(body !== undefined ? { body } : {}),
+    };
   }
 
   try {

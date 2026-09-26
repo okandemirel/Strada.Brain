@@ -1436,3 +1436,182 @@ describe("HeartbeatLoop — the budget warning has a dead band, so a flapping pc
     }
   });
 });
+
+// `strada daemon trigger <name>` used to call trigger.onFired() alone: it
+// recorded a fire and ran nothing. fireNow() takes the tick's own path.
+describe("HeartbeatLoop.fireNow — a manual fire takes the tick's path, gates included", () => {
+  let registry: TriggerRegistry;
+  let taskManager: ReturnType<typeof makeTaskManager>;
+  let budgetTracker: ReturnType<typeof makeBudgetTracker>;
+  let approvalQueue: ReturnType<typeof makeApprovalQueue>;
+  let storage: ReturnType<typeof makeStorage>;
+  let eventBus: IEventBus<DaemonEventMap>;
+  let config: DaemonConfig;
+  let loop: HeartbeatLoop;
+
+  const build = (deduplicator?: TriggerDeduplicator): HeartbeatLoop => new HeartbeatLoop(
+    registry, taskManager as any, budgetTracker as any, makeSecurityPolicy() as any, approvalQueue as any,
+    storage as any, makeIdentityManager() as any, eventBus, config, makeLogger() as any, deduplicator,
+  );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    registry = new TriggerRegistry();
+    taskManager = makeTaskManager();
+    budgetTracker = makeBudgetTracker();
+    approvalQueue = makeApprovalQueue();
+    storage = makeStorage();
+    eventBus = makeEventBus();
+    config = makeDaemonConfig();
+    loop = build();
+  });
+
+  afterEach(() => {
+    loop.stop();
+    vi.useRealTimers();
+  });
+
+  it("runs the trigger's action: submits its task, off-schedule, and records the fire", () => {
+    const trigger = makeTrigger("nightly", { shouldFire: false }); // a cron with no occurrence due
+    registry.register(trigger);
+    loop.start();
+
+    expect(loop.fireNow("nightly")).toEqual({ status: "submitted", taskId: "task_1" });
+
+    expect(taskManager.submit).toHaveBeenCalledWith("daemon", "daemon", "Trigger: nightly", { origin: "daemon", triggerName: "nightly" });
+    expect(trigger.onFired).toHaveBeenCalledTimes(1);
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerName: "nightly", result: "success", taskId: "task_1" }),
+    );
+    expect(eventBus.emit).toHaveBeenCalledWith("daemon:trigger_fired", expect.objectContaining({ triggerName: "nightly", taskId: "task_1" }));
+  });
+
+  it("is refused when the daemon budget is exhausted, and nothing fires", () => {
+    budgetTracker = makeBudgetTracker(true);
+    loop = build();
+    const trigger = makeTrigger("nightly");
+    registry.register(trigger);
+    loop.start();
+
+    const outcome = loop.fireNow("nightly");
+
+    expect(outcome).toMatchObject({ status: "refused", gate: "budget_exceeded" });
+    expect(outcome.status === "refused" && outcome.reason).toBe("the daemon budget is exhausted ($15.00 of $10.00)");
+    expect(trigger.onFired).not.toHaveBeenCalled();
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(eventBus.emit).toHaveBeenCalledWith("daemon:budget_exceeded", expect.objectContaining({ usedUsd: 15, limitUsd: 10 }));
+  });
+
+  it("is refused by the unified daemon sub-limit, as a tick is", () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", { triggerName: "overnight" });
+    loop.setUnifiedBudgetManager(mgr);
+    registry.register(makeTrigger("nightly"));
+    loop.start();
+
+    expect(loop.fireNow("nightly")).toEqual({
+      status: "refused",
+      gate: "budget_exceeded",
+      reason: "the daemon daily sub-limit is reached ($6.00 of $5.00)",
+    });
+    expect(taskManager.submit).not.toHaveBeenCalled();
+  });
+
+  it("queues an approval-only trigger's action for approval instead of running a task", () => {
+    const deploy = makeTrigger("deploy-readiness", { shouldFire: true, type: "deploy", description: "Deployment readiness detection" });
+    (deploy.onFired as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      approvalQueue.enqueue("deployment", { proposalId: "p-1" }, "deploy-readiness");
+    });
+    registry.register(deploy);
+    loop.start();
+
+    expect(loop.fireNow("deploy-readiness")).toEqual({ status: "approval" });
+    expect(approvalQueue.enqueue).toHaveBeenCalledWith("deployment", { proposalId: "p-1" }, "deploy-readiness");
+    expect(taskManager.submit).not.toHaveBeenCalled();
+  });
+
+  it("does not override the deploy trigger's own gates: no readiness, no proposal", () => {
+    const deploy = makeTrigger("deploy-readiness", { shouldFire: false, type: "deploy" });
+    registry.register(deploy);
+    loop.start();
+
+    expect(loop.fireNow("deploy-readiness")).toMatchObject({ status: "refused", gate: "not_due" });
+    expect(deploy.onFired).not.toHaveBeenCalled();
+    expect(approvalQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not invent work for an event-driven trigger with nothing waiting", () => {
+    registry.register(makeTrigger("assets", { shouldFire: false, type: "file-watch" }));
+    loop.start();
+
+    expect(loop.fireNow("assets")).toEqual({ status: "refused", gate: "not_due", reason: "no file changes are waiting" });
+    expect(taskManager.submit).not.toHaveBeenCalled();
+  });
+
+  it("is refused while the trigger's circuit breaker is open", () => {
+    storage.upsertCircuitState("nightly", "OPEN", 3, Date.now(), 60_000);
+    const trigger = makeTrigger("nightly");
+    registry.register(trigger);
+    loop.start();
+
+    const outcome = loop.fireNow("nightly");
+
+    expect(outcome).toMatchObject({ status: "refused", gate: "circuit_open" });
+    expect(outcome.status === "refused" && outcome.reason).toContain("strada daemon reset nightly");
+    expect(trigger.onFired).not.toHaveBeenCalled();
+  });
+
+  it("is refused within the trigger's cooldown, like a scheduled fire", () => {
+    loop = build(new TriggerDeduplicator(300_000));
+    const trigger = makeTrigger("nightly");
+    registry.register({ ...trigger, metadata: { ...trigger.metadata, cooldownSeconds: 600 } });
+    loop.start();
+
+    expect(loop.fireNow("nightly")).toEqual({ status: "submitted", taskId: "task_1" });
+    taskManager._setTaskStatus("task_1", "completed");
+    vi.advanceTimersByTime(60_000);
+
+    expect(loop.fireNow("nightly")).toEqual({ status: "refused", gate: "deduplicated", reason: "it fired within its cooldown (600s)" });
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("is refused while the trigger's previous task still runs", () => {
+    registry.register(makeTrigger("nightly"));
+    loop.start();
+
+    expect(loop.fireNow("nightly")).toMatchObject({ status: "submitted" });
+    expect(loop.fireNow("nightly")).toEqual({ status: "refused", gate: "task_active", reason: "its previous task task_1 is still running" });
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("names an unknown trigger, and fires nothing while the heartbeat is stopped", () => {
+    const trigger = makeTrigger("nightly");
+    registry.register(trigger);
+    loop.start();
+    expect(loop.fireNow("nope")).toEqual({ status: "not_found" });
+
+    loop.stop();
+    expect(loop.fireNow("nightly")).toMatchObject({ status: "refused", gate: "stopped" });
+    expect(trigger.onFired).not.toHaveBeenCalled();
+  });
+
+  it("consumes a cron occurrence that is due, so the next tick does not run it again", async () => {
+    vi.setSystemTime(new Date("2026-09-26T10:00:30Z"));
+    const hourly = new CronTrigger({ name: "hourly", description: "Hourly sweep", type: "cron" }, "0 * * * *", "UTC");
+    registry.register(hourly);
+    loop.start();
+
+    vi.setSystemTime(new Date("2026-09-26T11:00:30Z")); // the 11:00 occurrence is due
+    expect(loop.fireNow("hourly")).toEqual({ status: "submitted", taskId: "task_1" });
+    taskManager._setTaskStatus("task_1", "completed");
+
+    vi.setSystemTime(new Date("2026-09-26T11:01:30Z"));
+    await loop.tick();
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-09-26T12:00:30Z"));
+    await loop.tick();
+    expect(taskManager.submit).toHaveBeenCalledTimes(2);
+  });
+});
