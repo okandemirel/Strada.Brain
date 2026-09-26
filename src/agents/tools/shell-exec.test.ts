@@ -292,10 +292,14 @@ describe("the shell applies the same sensitive-path blocklist as the file tools 
     await writeFile(join(tempDir, ".env"), "SECRET_TOKEN=do-not-print\n");
     await mkdir(join(tempDir, "Packages"));
     await writeFile(join(tempDir, "Packages", "manifest.json"), '{"dependencies":{}}\n');
-    for (const command of ["ls *", "cat Packages/*.json", 'echo "n: $n"', "echo $STRADA_TEST_WITHHELD_FILE"]) {
+    // cmd.exe hands `*` to the program, and a Windows wildcard matches dot
+    // files too, so there `ls *` reaches .env and is refused; bash's `*` skips them.
+    const cmdShell = process.platform === "win32";
+    for (const command of ["cat Packages/*.json", 'echo "n: $n"', "echo $STRADA_TEST_WITHHELD_FILE", ...(cmdShell ? [] : ["ls *"])]) {
       const result = await tool.execute({ command }, ctx);
       expect(result.isError, command).toBeFalsy();
     }
+    if (cmdShell) expect((await tool.execute({ command: "ls *" }, ctx)).content).toContain("sensitive path");
 
     await mkdir(join(tempDir, "Keys"));
     await writeFile(join(tempDir, "Keys", "server.pem"), "-----BEGIN PRIVATE KEY-----\n");
@@ -311,10 +315,11 @@ describe("the shell applies the same sensitive-path blocklist as the file tools 
         expect(result.content, command).toContain("sensitive path");
         expect(result.content, command).not.toContain("do-not-print");
       }
-      // Withheld from the child, so it expands to nothing there.
+      // Withheld from the child, so it expands to nothing there. cmd.exe does
+      // not expand $NAME at all, so that half is bash's.
       const withheld = await tool.execute({ command: "echo [$STRADA_TEST_WITHHELD_FILE]" }, ctx);
       expect(withheld.isError).toBeFalsy();
-      expect(withheld.content).toContain("[]");
+      if (!cmdShell) expect(withheld.content).toContain("[]");
     } finally {
       process.env = saved;
     }

@@ -39,6 +39,15 @@ beforeEach(() => {
   tool = new ShellExecTool();
 });
 
+/**
+ * `mkdir -p` in the platform's own shell. cmd.exe's mkdir creates the parents
+ * by itself, has no -p, and reads a "/" as the start of a switch.
+ */
+const mkdirP = (...dirs: string[]): string =>
+  process.platform === "win32"
+    ? `mkdir ${dirs.map((dir) => dir.replace(/\//g, "\\")).join(" ")}`
+    : `mkdir -p ${dirs.join(" ")}`;
+
 const ctx = (): ToolContext =>
   ({
     projectPath: workspace,
@@ -50,7 +59,7 @@ const ctx = (): ToolContext =>
 describe("a command naming the source project", () => {
   it("writes into the workspace instead", async () => {
     const result = await tool.execute(
-      { command: `mkdir -p ${sourceProject}/Assets/Modules/BoardModule` },
+      { command: mkdirP(`${sourceProject}/Assets/Modules/BoardModule`) },
       ctx(),
     );
 
@@ -91,7 +100,7 @@ describe("a command naming the source project", () => {
 
   it("rewrites every occurrence in the command", async () => {
     const result = await tool.execute(
-      { command: `mkdir -p ${sourceProject}/Assets/A ${sourceProject}/Assets/B` },
+      { command: mkdirP(`${sourceProject}/Assets/A`, `${sourceProject}/Assets/B`) },
       ctx(),
     );
 
