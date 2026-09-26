@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { join } from "node:path";
 
 const {
   resolveEmbeddingProviderMock,
@@ -345,7 +346,8 @@ describe("initializeMemory", () => {
 
     const constructorArg = vi.mocked(AgentDBMemory).mock.calls[0]?.[0] as Record<string, unknown>;
     expect(constructorArg).toBeDefined();
-    expect(constructorArg.dbPath).toBe("/tmp/test-memory/agentdb");
+    // Built with path.join, like the product (backslashes on Windows).
+    expect(constructorArg.dbPath).toBe(join("/tmp/test-memory", "agentdb"));
     expect(constructorArg.dimensions).toBe(768);
     expect(constructorArg.enableAutoTiering).toBe(false);
     expect(constructorArg.maxEntriesPerTier).toEqual({

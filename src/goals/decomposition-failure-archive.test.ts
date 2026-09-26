@@ -26,7 +26,7 @@ describe("archiveDecompositionFailure", () => {
   });
 
   it("lives under STRADA_HOME/.strada/analysis, under the temp root while vitest runs, or where the env says", () => {
-    expect(decompositionFailureRoot({ STRADA_HOME: "/h" } as NodeJS.ProcessEnv)).toBe("/h/.strada/analysis/decomposition-failures");
+    expect(decompositionFailureRoot({ STRADA_HOME: "/h" } as NodeJS.ProcessEnv)).toBe(join("/h", ".strada", "analysis", "decomposition-failures"));
     expect(decompositionFailureRoot({ VITEST: "true" } as NodeJS.ProcessEnv)).toBe(join(tmpdir(), "strada-decomposition-failures"));
     expect(decompositionFailureRoot({ STRADA_DECOMPOSITION_FAILURE_DIR: "/x" } as NodeJS.ProcessEnv)).toBe("/x");
     expect(existsSync("/x")).toBe(false);
