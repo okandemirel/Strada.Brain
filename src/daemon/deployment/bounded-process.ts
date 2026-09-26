@@ -12,6 +12,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 /** How long output is still collected after the process exits. */
 export const EXIT_DRAIN_GRACE_MS = 500;
@@ -85,6 +87,31 @@ function unrefStream(stream: unknown): void {
   (stream as { unref?: () => void } | null)?.unref?.();
 }
 
+/**
+ * `npm` and `npx` are `.cmd` shims on Windows, which spawn() cannot start
+ * without a shell (ENOENT for the bare name, EINVAL for `.cmd` since
+ * CVE-2024-27980), and this module never uses one: the readiness check's
+ * default `npm test` could not run there at all. Node ships both CLIs'
+ * JavaScript next to its executable, so a bare `npm`/`npx` runs that with
+ * this Node instead. Everything else, and every other platform, is spawned
+ * exactly as given.
+ */
+export function resolveNodeCliCommand(
+  command: string,
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  execPath: string = process.execPath,
+  exists?: (file: string) => boolean,
+): { command: string; args: readonly string[] } {
+  if (platform !== "win32") return { command, args };
+  const name = command.toLowerCase().replace(/\.cmd$/, "");
+  const cli = name === "npm" ? "npm-cli.js" : name === "npx" ? "npx-cli.js" : undefined;
+  if (!cli) return { command, args };
+  const script = path.win32.join(path.win32.dirname(execPath), "node_modules", "npm", "bin", cli);
+  if (!(exists ?? existsSync)(script)) return { command, args };
+  return { command: execPath, args: [script, ...args] };
+}
+
 export function runBoundedProcess(opts: BoundedProcessOptions): Promise<BoundedProcessResult> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -96,7 +123,8 @@ export function runBoundedProcess(opts: BoundedProcessOptions): Promise<BoundedP
 
     let child: ChildProcess;
     try {
-      child = spawn(opts.command, [...(opts.args ?? [])], {
+      const resolved = resolveNodeCliCommand(opts.command, opts.args ?? []);
+      child = spawn(resolved.command, [...resolved.args], {
         cwd: opts.cwd,
         env: opts.env,
         shell: false,

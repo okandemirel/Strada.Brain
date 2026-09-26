@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { DeploymentExecutor, type DeploymentDatabase } from "./deployment-executor.js";
 import { ReadinessChecker } from "./readiness-checker.js";
-import { runBoundedProcess } from "./bounded-process.js";
+import { resolveNodeCliCommand, runBoundedProcess } from "./bounded-process.js";
 import type { DeploymentConfig } from "./deployment-types.js";
 
 const posix = process.platform !== "win32";
@@ -140,4 +140,32 @@ describe.skipIf(!posix)("deployment child processes are bounded (TSK-9)", () => 
     expect(result.timedOut).toBe(true);
     expect(result.exitCode === 0 && result.signal === null).toBe(false);
   }, 10_000);
+});
+
+describe("resolveNodeCliCommand (npm/npx on Windows without a shell)", () => {
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+  const npmCli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+  const npxCli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
+  const present = (file: string): boolean => file === npmCli || file === npxCli;
+
+  it("runs a bare npm or npx through this Node's own CLI script on Windows", () => {
+    expect(resolveNodeCliCommand("npm", ["test"], "win32", execPath, present))
+      .toEqual({ command: execPath, args: [npmCli, "test"] });
+    expect(resolveNodeCliCommand("NPM.cmd", ["run", "ci"], "win32", execPath, present))
+      .toEqual({ command: execPath, args: [npmCli, "run", "ci"] });
+    expect(resolveNodeCliCommand("npx", ["vitest"], "win32", execPath, present))
+      .toEqual({ command: execPath, args: [npxCli, "vitest"] });
+  });
+
+  it("leaves every other command, and every other platform, as given", () => {
+    expect(resolveNodeCliCommand("npm", ["test"], "linux", execPath, present)).toEqual({ command: "npm", args: ["test"] });
+    expect(resolveNodeCliCommand("dotnet", ["test"], "win32", execPath, present)).toEqual({ command: "dotnet", args: ["test"] });
+    // A path is the operator's explicit choice, not the bare shim name.
+    expect(resolveNodeCliCommand("C:\\tools\\npm.cmd", ["test"], "win32", execPath, present))
+      .toEqual({ command: "C:\\tools\\npm.cmd", args: ["test"] });
+  });
+
+  it("falls back to the command as given when the CLI script is not beside node", () => {
+    expect(resolveNodeCliCommand("npm", ["test"], "win32", execPath, () => false)).toEqual({ command: "npm", args: ["test"] });
+  });
 });
