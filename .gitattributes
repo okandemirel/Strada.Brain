@@ -1,0 +1,7 @@
+# Text is stored and checked out with LF on every platform. Git for Windows'
+# default (core.autocrlf=true) checked text out with CRLF, so on Windows the
+# code base differed from what every test and tool saw on Linux and macOS.
+# Batch files keep CRLF: cmd.exe can mis-parse labels in LF-only batch files.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
