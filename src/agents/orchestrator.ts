@@ -80,6 +80,7 @@ import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
 import { CorrectionDetector } from "../learning/feedback/correction-detector.js";
 import { authorizedTeachingScope, mayTeachForEveryone } from "../learning/feedback/teaching-scope.js";
+import { capLearnedText } from "../learning/feedback/learned-text.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { ErrorLearningHooks } from "../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
@@ -5466,7 +5467,10 @@ export class Orchestrator {
           for (const match of intervention.matches.filter((m: { tier: string }) => m.tier === 'warn')) {
             const source = relevantInstincts.find((inst) => inst.id === match.instinctId);
             if (!source) continue;
-            learnedWarnings.push(`${source.name}: ${source.action}`.slice(0, 300));
+            // LRN-20: learned (not only curated) rules can reach this tier now,
+            // so their stored text gets the filter other learned text gets
+            // before it reaches a prompt.
+            learnedWarnings.push(capLearnedText(sanitizePromptInjection(`${source.name}: ${source.action}`), 300));
             await this.interventionEngine.logIntervention(
               match.instinctId, activeToolCall.name, 'warn', 'applied',
             );

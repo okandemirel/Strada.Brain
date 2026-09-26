@@ -128,11 +128,12 @@ export function isTierValidForLifecycle(tier: InterventionTier, lifecycle: strin
 /**
  * Determine the maximum allowed tier for a given trust level.
  *
- * - new          → passive only (every learned instinct: nothing in the
- *                  learning loop advances trust — see InterventionEngine.advanceTrust)
+ * - new          → passive only (where every learned instinct starts)
  * - suggest_only → max suggest
- * - warn_enabled → max warn
- * - auto_enabled → all tiers
+ * - warn_enabled → max warn (the ceiling for a learned instinct: explicit human
+ *                  approvals move it up, rejections down — see
+ *                  InterventionEngine.advanceTrust)
+ * - auto_enabled → all tiers (seeded / curated rules only)
  */
 export function maxTierForTrust(trust: TrustLevel): InterventionTier {
   switch (trust) {

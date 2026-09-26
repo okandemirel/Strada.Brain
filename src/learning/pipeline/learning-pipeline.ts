@@ -13,6 +13,7 @@ import { PatternMatcher, embedderFromProvider, combinedSimilarity } from "../mat
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
+import { InterventionEngine, TRUST_SIGNAL_WINDOW } from "../intervention/intervention-engine.js";
 import { capLearnedText } from "../feedback/learned-text.js";
 import { errorSignatureMessage, toErrorSignature, toSignatureErrorDetails } from "../error-signature.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
@@ -44,6 +45,7 @@ import {
   type ScopeType,
   type CorrectionRecord,
   type PatternMatch,
+  type TrustLevel,
   CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
@@ -174,6 +176,8 @@ export class LearningPipeline {
   private readonly autoEvolveBar: number;
   private eventBus: IEventBus<LearningEventMap> | null = null;
   private readonly feedbackHandler: FeedbackHandler;
+  /** LRN-20: the learned-instinct trust ladder (InterventionEngine.advanceTrust). */
+  private readonly trustLadder: InterventionEngine;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private feedbackReactionListener: ((event: FeedbackReactionEvent) => void) | null = null;
@@ -940,7 +944,10 @@ export class LearningPipeline {
     // lifecycle, ranking and intervention tier read — not only factor_* columns.
     this.feedbackHandler = new FeedbackHandler(storage, {
       onReaction: (instinct, positive) => this.applyReactionEvidence(instinct, positive),
+      onHumanSignal: (instinctId, userId, positive) =>
+        this.recordHumanTrustSignal({ instinctId, userId, signal: positive ? "approval" : "rejection" }),
     });
+    this.trustLadder = new InterventionEngine(storage);
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
@@ -1609,6 +1616,71 @@ export class LearningPipeline {
   }
 
   /**
+   * LRN-20 — AN EXPLICIT HUMAN SIGNAL MOVES A LEARNED INSTINCT'S TRUST LEVEL.
+   *
+   * Approvals and rejections are a person's reaction to a run that applied the
+   * instinct. The run is the latest one the credit ledger settled with the
+   * instinct applied, so one person's signal counts once per run however often
+   * the reaction is toggled, and a signal about an instinct no run applied
+   * counts for nothing. The agent's own successes, verdicts and confidence
+   * never come through here.
+   *
+   * The ladder (InterventionEngine.advanceTrust) stops at warn_enabled, and a
+   * rejection demotes one step. Seeded / curated rules keep the trust level
+   * they were given. Returns the new level when it changed.
+   */
+  recordHumanTrustSignal(params: {
+    instinctId: string;
+    userId?: string;
+    signal: "approval" | "rejection";
+  }): TrustLevel | null {
+    try {
+      const userId = params.userId?.trim();
+      if (!userId) return null;
+      const instinct = this.storage.getInstinct(params.instinctId);
+      if (!instinct || instinct.seed) return null;
+      const applied = this.storage
+        .getInstinctCredits({ instinctId: params.instinctId, limit: 50 })
+        .find((credit) => credit.applied);
+      if (!applied) return null;
+      const runKey = applied.taskRunId
+        ? `run:${applied.taskRunId}`
+        : `chat:${applied.sessionId}@${applied.timestamp}`;
+      const recorded = this.storage.recordTrustSignal({
+        instinctId: params.instinctId,
+        userId,
+        runKey,
+        signal: params.signal,
+        createdAt: Date.now(),
+        keep: TRUST_SIGNAL_WINDOW * 5,
+      });
+      if (!recorded) return null;
+
+      const window = this.storage.getTrustSignals(params.instinctId, TRUST_SIGNAL_WINDOW);
+      const approvals = window.filter((s) => s === "approval").length;
+      const rejections = window.length - approvals;
+      const from: TrustLevel = instinct.trustLevel ?? "new";
+      const to = this.trustLadder.advanceTrust(from, { approvals, rejections, signal: params.signal });
+      if (to === from) return null;
+      this.storage.updateInstinctTrustLevel(params.instinctId, to);
+      // Ids and counts only: the instinct's text is learned content.
+      getLoggerSafe().info("Learned instinct trust level changed", {
+        instinctId: params.instinctId,
+        from,
+        to,
+        signal: params.signal,
+        approvals,
+        rejections,
+        window: window.length,
+      });
+      return to;
+    } catch {
+      // A trust update is bookkeeping: it must never break reaction handling.
+      return null;
+    }
+  }
+
+  /**
    * Push a user reaction (thumbs up/down) into the stored posterior and run
    * the lifecycle state machine on the result. Stats are untouched: a
    * reaction is not an application.
@@ -2061,11 +2133,13 @@ export class LearningPipeline {
    * for the life of the daemon. The credit ledger keeps the exposure log's
    * window, since the two are read together; the rest keep historyRetentionDays.
    */
-  pruneHistory(): { credits: number; interventions: number; trajectories: number; sessionHits: number } {
+  pruneHistory(): {
+    credits: number; interventions: number; trajectories: number; sessionHits: number; trustSignals: number;
+  } {
     const day = 24 * 60 * 60 * 1000;
     const ledgerCutoff = Date.now() - this.config.exposureRetentionDays * day;
     const historyCutoff = Date.now() - this.config.historyRetentionDays * day;
-    const counts = { credits: 0, interventions: 0, trajectories: 0, sessionHits: 0 };
+    const counts = { credits: 0, interventions: 0, trajectories: 0, sessionHits: 0, trustSignals: 0 };
     // Each sweep on its own: one that cannot run is not a reason to skip the others.
     const sweep = (key: keyof typeof counts, run: () => number): void => {
       try {
@@ -2078,6 +2152,7 @@ export class LearningPipeline {
     sweep("interventions", () => this.storage.pruneInterventionLog(historyCutoff));
     sweep("trajectories", () => this.storage.pruneProcessedTrajectories(historyCutoff));
     sweep("sessionHits", () => this.storage.pruneSessionHitMarkers(historyCutoff));
+    sweep("trustSignals", () => this.storage.pruneTrustSignals(historyCutoff));
     return counts;
   }
 

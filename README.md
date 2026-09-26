@@ -647,6 +647,11 @@ The learning system observes agent behavior and learns from errors through an ev
 - **Cooling period** -- 7-day window with minimum observation requirements before status changes
 - **Permanent** -- frozen, no further confidence updates
 
+**Learned warnings (trust ladder):**
+- Before a tool call, matching instincts are ranked into tiers. A warn-tier match adds a short, filtered warning to the tool result after the tool has run. It never blocks, rewrites or auto-applies the call
+- A learned instinct starts at trust `new` (passive). Only explicit human feedback moves it: a thumbs up from a named person on a run that applied it promotes it to `suggest_only`, and 3 approvals with no rejection in its last 10 judged uses promote it to `warn_enabled`, the ceiling. A thumbs down demotes it one step. The agent's own successes and confidence never promote it, and one person's reaction counts once per run
+- `auto_enabled` is reserved for seeded, curated rules; learned instincts never reach it. Every change is logged with the instinct id, the old and new level and the counts
+
 **Active retrieval:** Instincts are proactively queried at the start of each task using the `InstinctRetriever`. It searches by keyword similarity and HNSW vector embeddings to find relevant learned patterns, which are injected into the PLAN phase prompt.
 
 **Cross-session learning:** Instincts carry provenance metadata (source session, session count) for cross-session knowledge transfer.

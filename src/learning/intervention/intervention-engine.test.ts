@@ -163,55 +163,48 @@ describe('InterventionEngine', () => {
   // advanceTrust()
   // ---------------------------------------------------------------------------
 
+  // LRN-20: this is the ladder for LEARNED instincts, driven by explicit human
+  // signals only. It used to continue warn_enabled → auto_enabled (10+
+  // approvals, confidence > 0.8, permanent); a learned instinct is now capped
+  // at warn_enabled, and a rejection demotes one step.
   describe('advanceTrust()', () => {
+    const approval = (approvals: number, rejections = 0) => ({ approvals, rejections, signal: 'approval' as const });
+    const rejection = (approvals: number, rejections: number) => ({ approvals, rejections, signal: 'rejection' as const });
+
     it('should advance new -> suggest_only on first approval', () => {
-      const ctx = { approvals: 1, rejections: 0, totalUses: 1, confidence: 0.5, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('new', ctx)).toBe('suggest_only');
+      expect(engine.advanceTrust('new', approval(1))).toBe('suggest_only');
     });
 
     it('should stay new when no approvals', () => {
-      const ctx = { approvals: 0, rejections: 0, totalUses: 0, confidence: 0.5, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('new', ctx)).toBe('new');
+      expect(engine.advanceTrust('new', approval(0))).toBe('new');
     });
 
     it('should advance suggest_only -> warn_enabled with 3+ approvals and 0 rejections', () => {
-      const ctx = { approvals: 3, rejections: 0, totalUses: 5, confidence: 0.7, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('suggest_only', ctx)).toBe('warn_enabled');
+      expect(engine.advanceTrust('suggest_only', approval(3))).toBe('warn_enabled');
     });
 
     it('should NOT advance suggest_only -> warn_enabled if rejections > 0', () => {
-      const ctx = { approvals: 5, rejections: 1, totalUses: 6, confidence: 0.7, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('suggest_only', ctx)).toBe('suggest_only');
+      expect(engine.advanceTrust('suggest_only', approval(5, 1))).toBe('suggest_only');
     });
 
     it('should NOT advance suggest_only -> warn_enabled if approvals < 3', () => {
-      const ctx = { approvals: 2, rejections: 0, totalUses: 4, confidence: 0.7, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('suggest_only', ctx)).toBe('suggest_only');
+      expect(engine.advanceTrust('suggest_only', approval(2))).toBe('suggest_only');
     });
 
-    it('should NOT advance to auto_enabled if lifecycle != permanent', () => {
-      const ctx = { approvals: 10, rejections: 0, totalUses: 15, confidence: 0.9, lifecycle: 'active', overridden: false };
-      expect(engine.advanceTrust('warn_enabled', ctx)).toBe('warn_enabled');
+    it('should never advance a learned instinct beyond warn_enabled', () => {
+      expect(engine.advanceTrust('warn_enabled', approval(10))).toBe('warn_enabled');
+      expect(engine.advanceTrust('warn_enabled', approval(100))).toBe('warn_enabled');
     });
 
-    it('should advance to auto_enabled for permanent instincts with 10+ approvals and confidence > 0.8', () => {
-      const ctx = { approvals: 10, rejections: 0, totalUses: 15, confidence: 0.9, lifecycle: 'permanent', overridden: false };
-      expect(engine.advanceTrust('warn_enabled', ctx)).toBe('auto_enabled');
+    it('should treat a learned instinct carrying auto_enabled as warn_enabled', () => {
+      expect(engine.advanceTrust('auto_enabled', approval(100))).toBe('warn_enabled');
+      expect(engine.advanceTrust('auto_enabled', rejection(9, 1))).toBe('suggest_only');
     });
 
-    it('should not advance to auto_enabled if confidence is exactly 0.8 (requires > 0.8)', () => {
-      const ctx = { approvals: 10, rejections: 0, totalUses: 15, confidence: 0.8, lifecycle: 'permanent', overridden: false };
-      expect(engine.advanceTrust('warn_enabled', ctx)).toBe('warn_enabled');
-    });
-
-    it('should not advance if overridden', () => {
-      const ctx = { approvals: 15, rejections: 0, totalUses: 20, confidence: 0.95, lifecycle: 'permanent', overridden: true };
-      expect(engine.advanceTrust('warn_enabled', ctx)).toBe('warn_enabled');
-    });
-
-    it('should stay auto_enabled once reached', () => {
-      const ctx = { approvals: 100, rejections: 0, totalUses: 100, confidence: 0.99, lifecycle: 'permanent', overridden: false };
-      expect(engine.advanceTrust('auto_enabled', ctx)).toBe('auto_enabled');
+    it('should demote one step on a rejection', () => {
+      expect(engine.advanceTrust('warn_enabled', rejection(9, 1))).toBe('suggest_only');
+      expect(engine.advanceTrust('suggest_only', rejection(9, 1))).toBe('new');
+      expect(engine.advanceTrust('new', rejection(0, 1))).toBe('new');
     });
   });
 

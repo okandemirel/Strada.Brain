@@ -19,6 +19,14 @@ import type { FeedbackSource, ScopeType, CorrectionRecord, Instinct } from "../t
  */
 export type ReactionEvidenceHook = (instinct: Instinct, positive: boolean) => void;
 
+/**
+ * Called for EVERY attributable reaction (a named person, an existing
+ * instinct), before the once-per-person evidence dedup below. The pipeline
+ * turns it into a trust signal for the run the instinct was applied in
+ * (LRN-20), and dedups per person and run itself.
+ */
+export type HumanSignalHook = (instinctId: string, userId: string, positive: boolean) => void;
+
 /** Thumbs-up boost amount */
 const THUMBS_UP_DELTA = 0.1;
 
@@ -32,10 +40,15 @@ function generateFeedbackId(): string {
 export class FeedbackHandler {
   private storage: LearningStorage;
   private readonly onReaction?: ReactionEvidenceHook;
+  private readonly onHumanSignal?: HumanSignalHook;
 
-  constructor(storage: LearningStorage, options?: { onReaction?: ReactionEvidenceHook }) {
+  constructor(
+    storage: LearningStorage,
+    options?: { onReaction?: ReactionEvidenceHook; onHumanSignal?: HumanSignalHook },
+  ) {
     this.storage = storage;
     this.onReaction = options?.onReaction;
+    this.onHumanSignal = options?.onHumanSignal;
   }
 
   handleThumbsUp(params: {
@@ -67,6 +80,7 @@ export class FeedbackHandler {
     for (const instinctId of new Set(params.instinctIds)) {
       const instinct = this.storage.getInstinct(instinctId);
       if (!instinct) continue;
+      if (userId) this.onHumanSignal?.(instinctId, userId, delta > 0);
       if (!userId || this.storage.hasReactionFrom(userId, instinctId, feedbackType)) continue;
 
       this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', delta);

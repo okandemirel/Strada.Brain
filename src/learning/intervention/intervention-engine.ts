@@ -22,13 +22,18 @@ import type { LearningStorage } from '../storage/learning-storage.js';
 // INTERNAL TYPES
 // =============================================================================
 
-interface TrustContext {
+/** How many of an instinct's latest judged uses its trust is decided on. */
+export const TRUST_SIGNAL_WINDOW = 10;
+
+/**
+ * Explicit human signals about one learned instinct, counted over its last
+ * {@link TRUST_SIGNAL_WINDOW} judged uses (the signal being applied included).
+ */
+export interface TrustContext {
   approvals: number;
   rejections: number;
-  totalUses: number;
-  confidence: number;
-  lifecycle: string;
-  overridden: boolean;
+  /** The signal being applied now. A rejection demotes one step. */
+  signal: 'approval' | 'rejection';
 }
 
 // =============================================================================
@@ -89,50 +94,39 @@ export class InterventionEngine {
   }
 
   /**
-   * State machine for advancing an instinct's trust level.
+   * The trust ladder for LEARNED instincts (LRN-20).
    *
-   * Transitions:
-   *   new          → suggest_only : first approval (approvals >= 1)
-   *   suggest_only → warn_enabled : 3+ approvals, 0 rejections in last 10 uses
-   *   warn_enabled → auto_enabled : 10+ approvals, confidence > 0.8,
-   *                                 lifecycle = permanent, never overridden
+   *   new          → suggest_only : an approval (approvals >= 1)
+   *   suggest_only → warn_enabled : 3+ approvals and 0 rejections in the last
+   *                                 {@link TRUST_SIGNAL_WINDOW} judged uses
+   *   warn_enabled                : the ceiling
+   *   a rejection                 : one step down (warn_enabled → suggest_only,
+   *                                 suggest_only → new)
    *
-   * INTENTIONALLY NOT CALLED from the learning loop (LRN-20): not from
-   * {@link logIntervention}, feedback or confidence updates. A learned instinct
-   * therefore stays 'new' and is capped at the passive tier however well it
-   * scores; only seeded / curated rules (which carry their own trust level) can
-   * warn. Its confidence comes from the agent's own runs and reactions, and
-   * that loop must not promote a rule it wrote itself into a warning or an
-   * auto-applied action on every matching tool call. This ladder is for an
-   * explicit curation step, should one be added.
+   * Called by the learning pipeline (`LearningPipeline.recordHumanTrustSignal`)
+   * for explicit HUMAN signals only: a person's reaction on a run that applied
+   * the instinct. The agent's own tool successes, run verdicts and confidence
+   * gains never reach it, because a loop must not promote a rule it wrote
+   * itself. The warn tier is advisory: its text is appended to the tool result
+   * after the tool ran, nothing is blocked or rewritten.
+   *
+   * Never returns 'auto_enabled': a learned instinct is capped at warn_enabled
+   * (one that somehow carries auto_enabled is treated as warn_enabled). Only
+   * seeded / curated rules carry auto_enabled, and the pipeline does not run
+   * this ladder for them.
    */
   advanceTrust(current: TrustLevel, ctx: TrustContext): TrustLevel {
-    switch (current) {
-      case 'new': {
-        if (ctx.approvals >= 1) return 'suggest_only';
-        return 'new';
-      }
-
-      case 'suggest_only': {
-        if (ctx.approvals >= 3 && ctx.rejections === 0) return 'warn_enabled';
-        return 'suggest_only';
-      }
-
-      case 'warn_enabled': {
-        if (
-          ctx.approvals >= 10 &&
-          ctx.confidence > 0.8 &&
-          ctx.lifecycle === 'permanent' &&
-          !ctx.overridden
-        ) {
-          return 'auto_enabled';
-        }
+    const from: TrustLevel = current === 'auto_enabled' ? 'warn_enabled' : current;
+    if (ctx.signal === 'rejection') {
+      return from === 'warn_enabled' ? 'suggest_only' : 'new';
+    }
+    switch (from) {
+      case 'new':
+        return ctx.approvals >= 1 ? 'suggest_only' : 'new';
+      case 'suggest_only':
+        return ctx.approvals >= 3 && ctx.rejections === 0 ? 'warn_enabled' : 'suggest_only';
+      default:
         return 'warn_enabled';
-      }
-
-      case 'auto_enabled': {
-        return 'auto_enabled';
-      }
     }
   }
 

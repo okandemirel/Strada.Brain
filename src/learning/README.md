@@ -85,6 +85,19 @@ proposed (confidence = 0.0)
   → deprecated (confidence < 0.3)
 ```
 
+## Intervention Trust (`intervention/`)
+
+Before a tool call, the orchestrator ranks matching instincts into tiers (passive, suggest, warn, auto), capped by lifecycle and by trust level. Only the warn tier does anything at runtime: a filtered, length-capped warning is appended to the tool result after the tool ran. Nothing blocks, rewrites or auto-applies a call.
+
+Learned instincts start at trust `new` and move only on explicit human signals (`LearningPipeline.recordHumanTrustSignal`, fed by thumbs up/down reactions from a named person):
+
+```
+new ──approval──▶ suggest_only ──3+ approvals, 0 rejections in the last 10 judged uses──▶ warn_enabled (ceiling)
+warn_enabled ──rejection──▶ suggest_only ──rejection──▶ new
+```
+
+A signal counts once per person and per run, and only for a run the credit ledger settled with the instinct applied. The agent's own tool successes, run verdicts and confidence never promote a rule. `auto_enabled` belongs to seeded, curated rules only, and their trust is not changed by the ladder. Signals are kept in `instinct_trust_signals`; each promotion or demotion is logged with ids and counts, never the instinct's text.
+
 ## Runtime Artifact Lifecycle
 
 ```

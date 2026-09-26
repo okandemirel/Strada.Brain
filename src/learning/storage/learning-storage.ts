@@ -730,6 +730,23 @@ export class LearningStorage {
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_intervention_log_instinct ON intervention_log(instinct_id, created_at)").run();
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_intervention_log_user ON intervention_log(user_id, created_at)").run();
 
+    // LRN-20: the explicit human signals a learned instinct's trust level is
+    // decided from. One row per person, per judged run and per direction, so a
+    // toggled reaction is one signal; `id` orders the window deterministically.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS instinct_trust_signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instinct_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        run_key TEXT NOT NULL,
+        signal TEXT NOT NULL CHECK(signal IN ('approval', 'rejection')),
+        created_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trust_signal_once
+        ON instinct_trust_signals(instinct_id, user_id, run_key, signal);
+      CREATE INDEX IF NOT EXISTS idx_trust_signals_instinct ON instinct_trust_signals(instinct_id, id DESC);
+    `);
+
     // Learning Pipeline v2: scope index
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_instinct_scopes_type_user ON instinct_scopes(scope_type, user_id, project_path)").run();
   }
@@ -2916,6 +2933,59 @@ export class LearningStorage {
     this.ensureConnection();
     const info = this.db!.prepare("DELETE FROM intervention_log WHERE created_at < ?").run(olderThanMs);
     return info.changes;
+  }
+
+  /** Drop human trust signals older than a cutoff (LRN-20); returns how many went. */
+  pruneTrustSignals(olderThanMs: number): number {
+    this.ensureConnection();
+    const info = this.db!.prepare("DELETE FROM instinct_trust_signals WHERE created_at < ?").run(olderThanMs);
+    return info.changes;
+  }
+
+  /**
+   * Record one explicit human signal about an instinct (LRN-20). Returns false
+   * when this person already gave this signal for this run: a repeated or
+   * toggled reaction is one signal. Only the newest `keep` rows per instinct
+   * are retained.
+   */
+  recordTrustSignal(entry: {
+    instinctId: string;
+    userId: string;
+    runKey: string;
+    signal: "approval" | "rejection";
+    createdAt: number;
+    keep: number;
+  }): boolean {
+    this.ensureConnection();
+    const info = this.db!.prepare(`
+      INSERT OR IGNORE INTO instinct_trust_signals (instinct_id, user_id, run_key, signal, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(entry.instinctId, entry.userId, entry.runKey, entry.signal, entry.createdAt);
+    if (info.changes === 0) return false;
+    this.db!.prepare(`
+      DELETE FROM instinct_trust_signals WHERE instinct_id = ? AND id NOT IN (
+        SELECT id FROM instinct_trust_signals WHERE instinct_id = ? ORDER BY id DESC LIMIT ?
+      )
+    `).run(entry.instinctId, entry.instinctId, entry.keep);
+    return true;
+  }
+
+  /** An instinct's most recent human trust signals, newest first (LRN-20). */
+  getTrustSignals(instinctId: string, limit: number): Array<"approval" | "rejection"> {
+    this.ensureConnection();
+    const rows = this.db!.prepare(
+      "SELECT signal FROM instinct_trust_signals WHERE instinct_id = ? ORDER BY id DESC LIMIT ?",
+    ).all(instinctId, limit) as Array<{ signal: string }>;
+    return rows.map((row) => (row.signal === "approval" ? "approval" : "rejection"));
+  }
+
+  /**
+   * Set only an instinct's trust level (LRN-20). A narrow write, so it cannot
+   * overwrite confidence or status that another path moved since the read.
+   */
+  updateInstinctTrustLevel(instinctId: string, trustLevel: TrustLevel): void {
+    this.ensureConnection();
+    this.db!.prepare("UPDATE instincts SET trust_level = ? WHERE id = ?").run(trustLevel, instinctId);
   }
 
   /**
