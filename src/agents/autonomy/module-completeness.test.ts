@@ -18,6 +18,7 @@
  * module stays legitimate as long as the result is a module.
  */
 
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { StradaConformanceGuard } from "./strada-conformance.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -35,7 +36,7 @@ const DEPS = {
 function guardSeeing(files: Record<string, string[]>) {
   return new StradaConformanceGuard(DEPS, {
     projectPath: "/proj",
-    listDir: (dir: string) => files[dir.replace(/\\/g, "/")] ?? [],
+    listDir: (dir: string) => files[dir] ?? [],
   });
 }
 
@@ -43,7 +44,9 @@ function writeCs(guard: StradaConformanceGuard, path: string): void {
   guard.trackToolCall("file_write", { path, content: "class X {}" }, false, "written");
 }
 
-const MODULE_DIR = "/proj/Assets/Modules/GameModule";
+// The guard resolves module roots natively ("D:\proj\..." on Windows), so the
+// fixture keys each directory the same way.
+const MODULE_DIR = resolve("/proj/Assets/Modules/GameModule");
 
 describe("module completeness gate", () => {
   it("flags a module written with neither ModuleConfig nor asmdef", () => {
@@ -112,7 +115,7 @@ describe("module completeness gate", () => {
   it("reports every incomplete module it touched", () => {
     const guard = guardSeeing({
       [MODULE_DIR]: ["A.cs"],
-      "/proj/Assets/Modules/UiModule": ["B.cs"],
+      [resolve("/proj/Assets/Modules/UiModule")]: ["B.cs"],
     });
     writeCs(guard, "Assets/Modules/GameModule/Scripts/A.cs");
     writeCs(guard, "Assets/Modules/UiModule/Scripts/B.cs");

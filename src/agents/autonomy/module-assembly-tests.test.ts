@@ -13,6 +13,7 @@
  * own, and nothing in the system said so.
  */
 
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { StradaConformanceGuard } from "./strada-conformance.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -26,7 +27,9 @@ const DEPS = {
   mcpPath: null,
 } as unknown as StradaDepsStatus;
 
-const MODULE_DIR = "/proj/Assets/Modules/PixelFlow";
+// The guard resolves module roots natively ("D:\proj\..." on Windows), so the
+// fixture names the directory the same way.
+const MODULE_DIR = resolve("/proj/Assets/Modules/PixelFlow");
 
 /** A guard whose view of a module's .asmdef files is whatever the test says. */
 function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
@@ -34,7 +37,7 @@ function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
     projectPath: "/proj",
     // The completeness gate must stay quiet so this one is what we read.
     listDir: () => ["PixelFlowModuleConfig.cs", "PixelFlow.asmdef"],
-    listAsmdefs: (dir: string) => (dir.replace(/\\/g, "/") === MODULE_DIR ? asmdefs : []),
+    listAsmdefs: (dir: string) => (dir === MODULE_DIR ? asmdefs : []),
   });
   guard.trackToolCall(
     "file_write",
