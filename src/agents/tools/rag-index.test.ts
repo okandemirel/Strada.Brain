@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { resolve } from "node:path";
 import { RAGIndexTool } from "./rag-index.js";
 import { createToolContext } from "../../test-helpers.js";
 import type { IRAGPipeline, IndexingStats, RAGSearchResult } from "../../rag/rag.interface.js";
@@ -66,7 +67,8 @@ describe("RAGIndexTool", () => {
 
     expect(result.isError).toBeUndefined();
     expect(rag.indexFile).toHaveBeenCalledWith(
-      "/test/project/Assets/Player.cs",
+      // Resolved by the tool: on Windows "/test/project" is on the current drive.
+      resolve("/test/project", "Assets/Player.cs"),
       "public class Foo {}"
     );
     expect(result.content).toContain("5 chunk(s)");

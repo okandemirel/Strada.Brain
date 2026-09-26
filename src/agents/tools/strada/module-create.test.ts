@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { sep } from "node:path";
 import { ModuleCreateTool } from "./module-create.js";
 import { createToolContext } from "../../../test-helpers.js";
 
@@ -96,7 +97,8 @@ describe("ModuleCreateTool", () => {
     expect(systemCode).not.toContain("World.Query");
 
     const serviceCall = vi.mocked(writeFile).mock.calls.find(
-      (c) => String(c[0]).endsWith("/CombatService.cs")
+      // The separator keeps ICombatService.cs out; the tool joins native paths.
+      (c) => String(c[0]).endsWith(`${sep}CombatService.cs`)
     );
     expect(serviceCall).toBeTruthy();
     const serviceCode = serviceCall![1] as string;

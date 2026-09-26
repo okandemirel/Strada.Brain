@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, execSync } from "node:child_process";
 import {
@@ -515,7 +515,11 @@ describe("GitPushTool", () => {
       const other = await mkdtemp(join(tmpdir(), "git-push-other-"));
       try {
         gitIn(other, "init", "--bare");
-        const result = await tool.execute({ remote: other, branch: current }, ctx);
+        // Forward slashes, which git takes on Windows too: a backslash is
+        // refused earlier as an invalid character, and this is about the path
+        // itself not being a configured remote.
+        const remote = other.split(sep).join("/");
+        const result = await tool.execute({ remote, branch: current }, ctx);
         expect(result.isError).toBe(true);
         expect(result.content).toContain("not a configured remote");
         expect(result.content).toContain("origin");
