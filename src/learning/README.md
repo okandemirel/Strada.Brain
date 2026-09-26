@@ -2,7 +2,7 @@
 
 Experience replay and pattern learning system. Observes agent behavior, learns reusable instincts with hybrid weighted confidence scoring, and materializes runtime self-improvement artifacts that the control plane can reuse safely.
 
-> **Error-pattern learning is intentionally off in production.** No production `tool:result` producer sets `errorDetails`, so tool failures create no `error_patterns` rows and no "recurring error" instincts. Deriving them from raw tool output (recovery text included) would put that text into instincts that reach prompts, so enabling it is a design decision, not a missing wire. Error→fix instincts are unaffected: they come from a failure followed by a repair on the same target.
+> **Error-pattern learning uses structured signatures only.** A failed `tool:result` carries `errorDetails` built by `error-signature.ts` from the error-recovery classification: a category from the closed enum, a code only if it has a strict diagnostic shape (`CS0246`, `MSB3073`), a project-relative file (no `..`, not absolute) and a line. The message is a template ("CS0246 validation error"), never tool output, which can be attacker-influenced and would otherwise reach prompts through instincts. The pipeline runs the same check again before it records an `error_patterns` row or creates a "recurring error" instinct (same coded error 3+ times in one session's window), so a producer cannot bypass it. Error→fix instincts are unaffected: they come from a failure followed by a repair on the same target.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ SQLite database (`learning.db`) with tables:
 - `instincts` — atomic learned patterns with confidence, triggers, actions, context conditions, source trajectory lineage, and tags
 - `trajectories` — recorded execution paths (tool call sequences with outcomes)
 - `trajectory_instincts` — many-to-many join
-- `error_patterns` — recurring error signatures with FTS5 full-text search (not fed by tool failures in production; see above)
+- `error_patterns` — recurring structured error signatures (see above), one count per failed tool call, with FTS5 full-text search
 - `solutions` — fixes linked to error patterns
 - `observations` — raw input events for batch processing
 - `verdicts` — quality evaluations of trajectories

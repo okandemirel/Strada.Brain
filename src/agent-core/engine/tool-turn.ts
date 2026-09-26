@@ -25,6 +25,7 @@ import { resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHel
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
 import type { ToolExecutionOptions } from "../../agents/orchestrator-intervention-pipeline.js";
+import type { ErrorSignature } from "../../learning/error-signature.js";
 import {
   executeAndTrackTools,
   runConsensusIfAvailable,
@@ -136,6 +137,7 @@ export interface ToolTurnDeps extends SetupDeps {
     chatId: string,
     tc: { name: string; input: unknown },
     tr: { content: string; isError?: boolean; metadata?: Record<string, unknown> },
+    errorSignature?: ErrorSignature,
   ): void;
   buildToolBatchProgressSignal(params: {
     prompt: string;
@@ -227,7 +229,7 @@ export async function portExecuteToolTurn(
         agentPhase: agentState.phase,
         providerName: assignment.providerName,
         modelId: assignment.modelId,
-        emitToolResult: (c, tc, tr) => deps.emitToolResult(c, tc, tr),
+        emitToolResult: (c, tc, tr, sig) => deps.emitToolResult(c, tc, tr, sig),
         workerCollector: runCtx.workerCollector ?? undefined,
       },
     });

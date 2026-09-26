@@ -83,6 +83,7 @@ import { authorizedTeachingScope, mayTeachForEveryone } from "../learning/feedba
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { ErrorLearningHooks } from "../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
+import { toSignatureErrorDetails, type ErrorSignature } from "../learning/error-signature.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
@@ -1417,7 +1418,7 @@ export class Orchestrator {
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
-      emitToolResult: (chatId, tc, tr) => this.emitToolResult(chatId, tc, tr),
+      emitToolResult: (chatId, tc, tr, sig) => this.emitToolResult(chatId, tc, tr, sig),
       buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
       // BUG#1 P2: route the plain-loop live step DAG through the shell's MonitorLifecycle (lazy —
       // setter-backed), under the active episode root. The engine gates this on its suppression
@@ -5980,14 +5981,23 @@ export class Orchestrator {
     chatId: string,
     tc: { name: string; input: unknown },
     tr: { content: string; isError?: boolean; metadata?: Record<string, unknown> },
+    errorSignature?: ErrorSignature,
   ): void {
     if (!this.eventEmitter) return;
+    const failed = tr.isError ?? false;
+    // LRN-19: a failure feeds error-pattern learning only as a structured
+    // signature (category, strict code, project-relative file, line) with a
+    // templated message. The output is attacker-influenced and never used.
+    const errorDetails = failed
+      ? toSignatureErrorDetails(errorSignature ?? { category: "unknown" }, { projectRoot: this.projectPath })
+      : undefined;
     this.eventEmitter.emit("tool:result", {
       sessionId: chatId,
       toolName: tc.name,
       input: sanitizeEventInput(tc.input as Record<string, unknown>),
       output: tr.content.slice(0, 500),
-      success: !(tr.isError ?? false),
+      success: !failed,
+      ...(errorDetails ? { errorDetails } : {}),
       retryCount: 0,
       // audited 2026-09-02: the instincts THIS run retrieved, not whichever
       // sibling node on this chatId wrote to the map last.

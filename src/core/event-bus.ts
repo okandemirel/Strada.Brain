@@ -45,16 +45,19 @@ export interface ToolResultEvent {
   readonly success: boolean;
   /**
    * Feeds error-pattern learning (`error_patterns` rows and "recurring error"
-   * instincts). Intentionally OFF in production (LRN-19): the orchestrator's
-   * emitToolResult leaves it unset (and the agent-core learning bridge is not
-   * wired), because it would be built from raw tool output — recovery text
-   * included — and learned instincts reach prompts. Enabling it is a design
-   * decision, not a wiring gap.
+   * instincts). LRN-19: a structured signature only — category from the closed
+   * enum, a strict diagnostic code, a project-relative file and a line, with a
+   * templated message (see learning/error-signature.ts). Never tool output: it
+   * can be attacker-influenced and learned instincts reach prompts. The
+   * learning pipeline re-validates it, so anything else a producer puts here
+   * is dropped.
    */
   readonly errorDetails?: {
     readonly code?: string;
     readonly category: string;
     readonly message: string;
+    readonly file?: string;
+    readonly line?: number;
   };
   readonly retryCount?: number;
   /**

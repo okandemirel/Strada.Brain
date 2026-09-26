@@ -387,7 +387,9 @@ describe("learning bridge", () => {
       sessionId: "session-9",
       toolName: "edit_file",
       success: false,
-      errorDetails: { category: "fs", message: "fs" },
+      // LRN-19: a structured signature only. "fs" is not in the closed category
+      // enum, and the free string is never copied into the message.
+      errorDetails: { category: "unknown", message: "unknown error" },
     });
   });
 });

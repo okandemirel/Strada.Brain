@@ -23,7 +23,8 @@ import type { ErrorLearningHooks } from "../../learning/index.js";
 import type { 
   ErrorCategory as LearningErrorCategory,
 } from "../../learning/types.js";
-import { 
+import type { ErrorSignature } from "../../learning/error-signature.js";
+import {
   type JsonObject,
 } from "../../types/index.js";
 
@@ -64,6 +65,12 @@ export interface ErrorAnalysis {
   recoveryInjection: string;
   /** Learned solutions that might help */
   learnedSolutions?: string;
+  /**
+   * The failure's classification for error-pattern learning (LRN-19): the
+   * learning category and, for a parsed diagnostic, its code, file and line.
+   * Never message text. Re-validated by toErrorSignature wherever it is used.
+   */
+  signature?: ErrorSignature;
 }
 
 export interface ErrorRecoveryConfig {
@@ -559,6 +566,7 @@ export class ErrorRecoveryEngine {
           hasErrors: true,
           errorCount: 1,
           summary: "runtime error",
+          signature: { category: "runtime" },
           recoveryInjection:
             `\n[ERROR RECOVERY]\nRuntime error: ${m[1]!.trim()}\n` +
             `Fix: ${RECOVERY.get("runtime")}\nThen re-run to verify.\n`,
@@ -574,6 +582,7 @@ export class ErrorRecoveryEngine {
       hasErrors: true,
       errorCount: 1,
       summary: `${toolName} failed`,
+      signature: { category: "unknown" },
       recoveryInjection:
         `\n[ERROR RECOVERY: ${toolName}]\n` +
         `${content.slice(0, 300)}\n` +
@@ -623,11 +632,19 @@ export class ErrorRecoveryEngine {
     }
     lines.push(`${step}. Run dotnet_build to verify fixes.`);
 
+    // The first diagnostic classifies the failure for error-pattern learning.
+    const first = errors[0]!;
     return {
       hasErrors: true,
       errorCount: errors.length,
       summary,
       recoveryInjection: lines.join("\n"),
+      signature: {
+        category: toLearningCategory(first.category),
+        code: first.code,
+        ...(first.file ? { file: first.file } : {}),
+        ...(first.line > 0 ? { line: first.line } : {}),
+      },
     };
   }
 

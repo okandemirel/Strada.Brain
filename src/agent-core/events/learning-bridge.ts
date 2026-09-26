@@ -15,6 +15,7 @@
  */
 
 import type { IEventEmitter } from "../../core/event-bus.js";
+import { toSignatureErrorDetails } from "../../learning/error-signature.js";
 import type { LiveSink } from "./event-bus.js";
 
 export function createLearningBridgeSink(sessionId: string, learning: IEventEmitter): LiveSink {
@@ -30,8 +31,11 @@ export function createLearningBridgeSink(sessionId: string, learning: IEventEmit
           input: {},
           output: "",
           success: e.success,
-          errorDetails: e.errorCategory
-            ? { category: e.errorCategory, message: e.errorCategory }
+          // LRN-19: only a structured signature. The run-scoped category is a
+          // free string, so it is mapped onto the closed enum ("unknown" if it
+          // is not a member) and the message is the template, never the string.
+          errorDetails: !e.success && e.errorCategory
+            ? toSignatureErrorDetails({ category: e.errorCategory })
             : undefined,
           timestamp: Date.now(),
         });

@@ -14,6 +14,7 @@ import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
 import { capLearnedText } from "../feedback/learned-text.js";
+import { errorSignatureMessage, toErrorSignature, toSignatureErrorDetails } from "../error-signature.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
@@ -1207,6 +1208,10 @@ export class LearningPipeline {
    * Replaces the batch detection timer for per-event learning.
    */
   async handleToolResult(event: ToolResultEvent): Promise<void> {
+    // LRN-19: re-validated here as well as at the producer. Only the fields
+    // that pass the signature schema survive, and the message is the template,
+    // so no producer can put tool output into patterns or instincts.
+    const errorDetails = event.success ? undefined : toSignatureErrorDetails(event.errorDetails);
     // 1. Build observation in-memory (avoids write→read DB round-trip)
     const observation: Observation = {
       id: `obs_${randomUUID()}` as ObservationId,
@@ -1216,7 +1221,7 @@ export class LearningPipeline {
       input: event.input as JsonObject,
       output: event.output,
       success: event.success,
-      errorDetails: event.errorDetails as ErrorDetails | undefined,
+      errorDetails,
       timestamp: Date.now() as TimestampMs,
       processed: false,
     };
@@ -1282,14 +1287,11 @@ export class LearningPipeline {
     // 4. Inline pattern detection. Awaited, so any instinct it creates is stored
     //    before the serial queue hands over the next event: fired and forgotten,
     //    two queued events could both pass the duplicate check (LRN-19).
-    //    `errorDetails` is intentionally never set by the production tool:result
-    //    producers, so only the tool-sequence branch runs there (see
-    //    ToolResultEvent.errorDetails).
     await this.detectPatternInline({
       sessionId: event.sessionId,
       toolName: event.toolName,
       success: event.success,
-      errorDetails: event.errorDetails as ErrorDetails | undefined,
+      errorDetails,
     });
   }
 
@@ -1951,9 +1953,15 @@ export class LearningPipeline {
   private async detectPatternInline(obs: {
     sessionId: string;
     toolName: string; success: boolean;
-    errorDetails?: { message?: string };
+    errorDetails?: unknown;
   }): Promise<void> {
     const windowSize = this.config?.batchSize ? this.config.batchSize * 2 : 20;
+    // LRN-19: a recurring error is identified by its structured signature
+    // alone, and only one with a diagnostic code: a bare category ("unknown
+    // error") says nothing about which error recurred. The instinct's trigger
+    // and action are the fixed template, never text from the tool's output.
+    const signature = obs.success ? undefined : toErrorSignature(obs.errorDetails);
+    const errorPattern = signature?.code ? errorSignatureMessage(signature) : undefined;
 
     const window = this.recentObservations.get(obs.sessionId) ?? [];
     this.recentObservations.delete(obs.sessionId);
@@ -1965,8 +1973,7 @@ export class LearningPipeline {
 
     window.push({
       toolName: obs.toolName,
-      errorPattern: obs.errorDetails?.message
-        ? this.sanitizePattern(obs.errorDetails.message) : undefined,
+      errorPattern,
       timestamp: Date.now(),
     });
 
@@ -1978,14 +1985,13 @@ export class LearningPipeline {
     if (window.length < minObs) return;
 
     // Same error pattern 3+ times
-    if (obs.errorDetails?.message) {
-      const pattern = this.sanitizePattern(obs.errorDetails.message);
-      const count = window.filter(o => o.errorPattern === pattern).length;
+    if (errorPattern) {
+      const count = window.filter(o => o.errorPattern === errorPattern).length;
       if (count >= 3) {
         await this.createInlineInstinct({
           type: "error_pattern",
-          triggerPattern: pattern,
-          action: JSON.stringify({ description: 'Recurring error: ' + pattern }),
+          triggerPattern: errorPattern,
+          action: JSON.stringify({ description: 'Recurring error: ' + errorPattern }),
           toolName: obs.toolName,
         });
       }
@@ -2187,13 +2193,18 @@ export class LearningPipeline {
   // ─── Private Helpers ─────────────────────────────────────────────────────────
 
   private recordErrorPattern(errorDetails: ErrorDetails, _toolName?: string): void {
+    // LRN-19: whatever the caller passed (a producer, observeToolUse, or an
+    // observation replayed from an older database), only the signature fields
+    // are kept and the stored message is the template.
+    const details = toSignatureErrorDetails(errorDetails);
+    if (!details) return;
     const pattern: ErrorPattern = {
       id: `error_${randomUUID()}` as ErrorPatternId,
-      name: `${errorDetails.category} pattern`,
-      category: errorDetails.category,
-      codePattern: errorDetails.code,
-      messagePattern: this.sanitizePattern(errorDetails.message),
-      filePatterns: errorDetails.file ? [errorDetails.file] : [],
+      name: `${details.category} pattern`,
+      category: details.category,
+      codePattern: details.code,
+      messagePattern: details.message,
+      filePatterns: details.file ? [details.file] : [],
       occurrenceCount: 1,
       firstSeen: Date.now() as TimestampMs,
       lastSeen: Date.now() as TimestampMs,

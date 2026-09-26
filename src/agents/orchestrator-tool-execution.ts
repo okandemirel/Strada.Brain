@@ -4,6 +4,7 @@ import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import type { WorkerRunResult, WorkerToolTrace } from "./supervisor/supervisor-types.js";
 import { sanitizeToolResult } from "./orchestrator-runtime-utils.js";
+import type { ErrorSignature } from "../learning/error-signature.js";
 
 /** Minimal interface for TaskPlanner methods used by tracking. */
 interface TaskPlannerLike {
@@ -24,7 +25,10 @@ interface StradaConformanceLike {
 
 /** Minimal interface for ErrorRecoveryEngine methods used by tracking. */
 interface ErrorRecoveryLike {
-  analyze(toolName: string, result: ToolResult): { summary: string; recoveryInjection: string } | null;
+  analyze(
+    toolName: string,
+    result: ToolResult,
+  ): { summary: string; recoveryInjection: string; signature?: ErrorSignature } | null;
 }
 
 /** Optional bg-specific worker instrumentation. */
@@ -106,7 +110,11 @@ export interface ToolTrackingParams {
   agentPhase: AgentPhase;
   providerName: string;
   modelId?: string;
-  emitToolResult: (chatId: string, tc: ToolCall, tr: ToolResult) => void;
+  /**
+   * `errorSignature`: the error-recovery classification of this result, the
+   * only thing error-pattern learning may be fed (LRN-19).
+   */
+  emitToolResult: (chatId: string, tc: ToolCall, tr: ToolResult, errorSignature?: ErrorSignature) => void;
   /** BG-specific: worker collector for delegation audit trail. */
   workerCollector?: WorkerCollectorLike;
   /** BG-specific: workspace lease id for tool trace. */
@@ -205,7 +213,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       };
     }
 
-    emitToolResult(chatId, tc, toolResults[i]!);
+    emitToolResult(chatId, tc, toolResults[i]!, analysis?.signature);
   }
 
   executionJournal.recordToolBatch({
