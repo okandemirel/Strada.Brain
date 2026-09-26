@@ -38,6 +38,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 }))
 
 import ChatView from './ChatView'
+import { useSessionStore } from '../stores/session-store'
 
 function createMockWS(overrides: {
   messages?: ChatMessage[]
@@ -157,6 +158,24 @@ describe('ChatView', () => {
     // Clearing the search restores the plain 50-message window.
     fireEvent.change(screen.getByPlaceholderText('Search messages...'), { target: { value: '' } })
     expect(screen.getByText(/Load 10 earlier/)).toBeInTheDocument()
+  })
+
+  // LRN-20b: the server attributes feedback through the message it is on; the
+  // instinct ids a message once carried are never sent back.
+  it('sends feedback naming the message it is on, without instinct ids', () => {
+    const message: ChatMessage = {
+      id: 'srv-msg-1', sender: 'assistant', text: 'Done.', isMarkdown: false, timestamp: Date.now(), instinctIds: ['stale'],
+    }
+    useSessionStore.getState().reset()
+    useSessionStore.setState({ messages: [message] })
+    const ws = { ...createMockWS({ messages: [message] }), sendRawJSON: vi.fn() }
+    mockUseWS.mockReturnValue(ws)
+    render(<ChatView />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bad response' }))
+
+    expect(ws.sendRawJSON).toHaveBeenCalledWith({ type: 'feedback', feedbackType: 'thumbs_down', messageId: 'srv-msg-1' })
+    useSessionStore.getState().reset()
   })
 
   it('shows typing indicator when isTyping is true', () => {

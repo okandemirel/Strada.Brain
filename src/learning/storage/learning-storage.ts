@@ -747,6 +747,27 @@ export class LearningStorage {
       CREATE INDEX IF NOT EXISTS idx_trust_signals_instinct ON instinct_trust_signals(instinct_id, id DESC);
     `);
 
+    // LRN-20b: what each sent response is attributed to (the run, its requester,
+    // the rules it applied and the warnings its footer named), keyed by the
+    // message a reaction names. Bounded by age and count (ResponseAttributionLedger).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS response_attributions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        message_ref TEXT NOT NULL,
+        run_id TEXT,
+        requester_user_id TEXT,
+        instinct_ids TEXT NOT NULL,
+        warned_rules TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_response_attr_ref
+        ON response_attributions(channel, chat_id, message_ref);
+      CREATE INDEX IF NOT EXISTS idx_response_attr_chat ON response_attributions(channel, chat_id, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_response_attr_created ON response_attributions(created_at);
+    `);
+
     // Learning Pipeline v2: scope index
     this.db.prepare("CREATE INDEX IF NOT EXISTS idx_instinct_scopes_type_user ON instinct_scopes(scope_type, user_id, project_path)").run();
   }
@@ -2837,13 +2858,23 @@ export class LearningStorage {
   }
 
   /** The runs one instinct influenced, newest first. */
-  getInstinctCredits(options?: { instinctId?: string; since?: number; limit?: number }): InstinctCreditRecord[] {
+  getInstinctCredits(options?: {
+    instinctId?: string;
+    /** Only this run's rows (LRN-20b: a reaction names the run it judges). */
+    taskRunId?: string;
+    since?: number;
+    limit?: number;
+  }): InstinctCreditRecord[] {
     this.ensureConnection();
     let sql = "SELECT * FROM instinct_credit_log WHERE 1=1";
     const params: (string | number)[] = [];
     if (options?.instinctId) {
       sql += " AND instinct_id = ?";
       params.push(options.instinctId);
+    }
+    if (options?.taskRunId) {
+      sql += " AND task_run_id = ?";
+      params.push(options.taskRunId);
     }
     if (options?.since !== undefined) {
       sql += " AND timestamp >= ?";
@@ -2986,6 +3017,85 @@ export class LearningStorage {
   updateInstinctTrustLevel(instinctId: string, trustLevel: TrustLevel): void {
     this.ensureConnection();
     this.db!.prepare("UPDATE instincts SET trust_level = ? WHERE id = ?").run(trustLevel, instinctId);
+  }
+
+  /**
+   * Remember what one sent message is attributed to (LRN-20b). Re-recording the
+   * same message replaces the row.
+   */
+  recordResponseAttribution(entry: ResponseAttributionRow): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT OR REPLACE INTO response_attributions
+        (channel, chat_id, message_ref, run_id, requester_user_id, instinct_ids, warned_rules, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.channel,
+      entry.chatId,
+      entry.messageRef,
+      entry.runId ?? null,
+      entry.requesterUserId ?? null,
+      JSON.stringify(entry.instinctIds),
+      JSON.stringify(entry.warnedRules),
+      entry.createdAt,
+    );
+  }
+
+  /**
+   * The attribution of one sent message, or of the chat's most recent recorded
+   * response when `messageRef` is omitted; rows older than `since` are ignored.
+   */
+  getResponseAttribution(
+    channel: string,
+    chatId: string,
+    messageRef: string | undefined,
+    since: number,
+  ): ResponseAttributionRow | null {
+    this.ensureConnection();
+    const row = (messageRef === undefined
+      ? this.db!.prepare(`
+          SELECT * FROM response_attributions WHERE channel = ? AND chat_id = ? AND created_at >= ?
+          ORDER BY id DESC LIMIT 1
+        `).get(channel, chatId, since)
+      : this.db!.prepare(`
+          SELECT * FROM response_attributions
+          WHERE channel = ? AND chat_id = ? AND message_ref = ? AND created_at >= ?
+        `).get(channel, chatId, messageRef, since)) as {
+      channel: string;
+      chat_id: string;
+      message_ref: string;
+      run_id: string | null;
+      requester_user_id: string | null;
+      instinct_ids: string;
+      warned_rules: string;
+      created_at: number;
+    } | undefined;
+    if (!row) return null;
+    return {
+      channel: row.channel,
+      chatId: row.chat_id,
+      messageRef: row.message_ref,
+      ...(row.run_id === null ? {} : { runId: row.run_id }),
+      ...(row.requester_user_id === null ? {} : { requesterUserId: row.requester_user_id }),
+      instinctIds: parseIdListOrEmpty(row.instinct_ids),
+      warnedRules: parseWarnedRules(row.warned_rules),
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Drop response attributions older than a cutoff, then all but the newest
+   * `keep` (LRN-20b); returns how many went.
+   */
+  pruneResponseAttributions(olderThanMs: number, keep: number): number {
+    this.ensureConnection();
+    const aged = this.db!.prepare("DELETE FROM response_attributions WHERE created_at < ?").run(olderThanMs);
+    const excess = this.db!.prepare(`
+      DELETE FROM response_attributions WHERE id NOT IN (
+        SELECT id FROM response_attributions ORDER BY id DESC LIMIT ?
+      )
+    `).run(keep);
+    return aged.changes + excess.changes;
   }
 
   /**
@@ -3941,4 +4051,35 @@ export interface InstinctCreditRecord {
    * applications.
    */
   applied: boolean;
+}
+
+// ─── Response attribution (LRN-20b) ──────────────────────────────────────────
+
+/** One sent message and what a reaction on it is attributed to. */
+export interface ResponseAttributionRow {
+  channel: string;
+  chatId: string;
+  messageRef: string;
+  runId?: string;
+  requesterUserId?: string;
+  instinctIds: string[];
+  warnedRules: Array<{ instinctId: string; toolName: string }>;
+  createdAt: number;
+}
+
+/** A stored warned-rule list; anything unreadable reads as none. */
+function parseWarnedRules(raw: string): Array<{ instinctId: string; toolName: string }> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const rules: Array<{ instinctId: string; toolName: string }> = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const { instinctId, toolName } = item as { instinctId?: unknown; toolName?: unknown };
+      if (typeof instinctId === "string" && typeof toolName === "string") rules.push({ instinctId, toolName });
+    }
+    return rules;
+  } catch {
+    return [];
+  }
 }

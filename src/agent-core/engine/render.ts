@@ -15,6 +15,7 @@ import { getResilienceMessage } from "../../agents/resilience-messages.js";
 import { getLogger } from "../../utils/logger.js";
 import type { EngineRunContext } from "./engine-deps.js";
 import { getLiveInteractiveTokenBudget, type BudgetDeps } from "./budget.js";
+import type { RunResponse } from "../../learning/feedback/response-attribution.js";
 
 /** Copies of the shell's loop-block detection const + the interactive non-abort run-ending reasons
  *  (both still used in the shell; transitional duplication until Steps 7-9 finish the relocation). */
@@ -37,6 +38,12 @@ export interface RenderDeps extends BudgetDeps {
   readonly sessionManager: SessionManager;
   readonly userProfileStore?: UserProfileStore;
   readonly defaultLanguage: string;
+  /**
+   * LRN-20b — the current run's final response: the learned-warning footer and
+   * the attribution a reaction on the answer resolves to. Optional (and may
+   * answer undefined): the answer is then sent bare and unrecorded.
+   */
+  readonly runResponse?: (chatId: string) => RunResponse | undefined;
 }
 
 export function sanitizeBlockedVisibleText(
@@ -67,7 +74,14 @@ export async function emitVisibleBoundary(
 ): Promise<{ text: string; marked: boolean }> {
   const safe = sanitizeBlockedVisibleText(deps, visibleText ?? "");
   if (safe.text) {
-    await deps.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safe.text);
+    // LRN-20b: the interactive terminal answer is the run's final response.
+    const response = deps.runResponse?.(chatId);
+    await deps.sessionManager.sendVisibleAssistantMarkdown(
+      chatId,
+      session,
+      safe.text,
+      response ? { footer: response.footer, responseAttribution: response.attribution } : undefined,
+    );
   }
   return safe;
 }

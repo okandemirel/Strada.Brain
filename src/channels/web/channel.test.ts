@@ -2297,7 +2297,7 @@ describe("WebChannel attachment data validation", () => {
 });
 
 describe("WebChannel rate-limit cleanup (L8)", () => {
-  it("runs per-chat cleanup (no appliedInstinctIds leak) when a rate-limited client closes", async () => {
+  it("runs per-chat cleanup (no per-stream state leak) when a rate-limited client closes", async () => {
     const channel = new WebChannel();
 
     // Socket whose close() does NOT synchronously fire the 'close' handler — this
@@ -2318,7 +2318,10 @@ describe("WebChannel rate-limit cleanup (L8)", () => {
     (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
 
     const chatId = String(sent[0]!.chatId);
-    channel.setAppliedInstinctIds(chatId, ["instinct-A", "instinct-B"]);
+    // Per-chat state the disconnect cleanup must drop. (This used to be the
+    // per-chat applied instinct ids, which LRN-20b replaced with per-response
+    // records outside the channel.)
+    const streamId = await channel.startStreamingMessage(chatId);
 
     const send21 = (data: Record<string, unknown>) =>
       (channel as unknown as {
@@ -2335,11 +2338,63 @@ describe("WebChannel rate-limit cleanup (L8)", () => {
 
     // TEETH: the manual clients.delete in the rate-limit branch ran BEFORE this
     // close event, so handleDisconnect's `clients.get(chatId) === ws` guard failed
-    // and skipped cleanup, leaking appliedInstinctIds[chatId].
+    // and skipped cleanup, leaking the chat's stream state.
     const leaked = (channel as unknown as {
-      appliedInstinctIds: Map<string, string[]>;
-    }).appliedInstinctIds.has(chatId);
+      streamChatIds: Map<string, string>;
+    }).streamChatIds.has(streamId!);
     expect(leaked).toBe(false);
+  });
+});
+
+// LRN-20b: a final response is recorded under the messageId its frame carries;
+// the portal's feedback button sends that id back, and nothing else decides
+// what the feedback is about.
+describe("WebChannel response attribution (LRN-20b)", () => {
+  function connect() {
+    const channel = new WebChannel();
+    const sent: Array<Record<string, unknown>> = [];
+    const socket = {
+      readyState: 1,
+      send(p: string) { sent.push(JSON.parse(p) as Record<string, unknown>); },
+      close() {},
+      ping() {},
+      terminate() {},
+      on() {},
+    };
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const chatId = String(sent[0]!.chatId);
+    const port = { recordResponse: vi.fn(), react: vi.fn((..._args: unknown[]) => true) };
+    channel.setFeedbackHandler(port);
+    const receive = (data: Record<string, unknown>) =>
+      (channel as unknown as {
+        handleWsMessage: (c: string, d: Record<string, unknown>) => Promise<void>;
+      }).handleWsMessage(chatId, data);
+    return { channel, sent, chatId, port, receive };
+  }
+
+  it("records a final response under the messageId the client receives, and a plain send not at all", async () => {
+    const { channel, sent, chatId, port } = connect();
+    const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "u1" };
+
+    await channel.sendMarkdown(chatId, "the answer", { responseAttribution: attribution });
+    await channel.sendMarkdown(chatId, "a notice");
+
+    const frame = sent.find((f) => f.type === "markdown" && f.text === "the answer")!;
+    expect(typeof frame.messageId).toBe("string");
+    expect(frame).not.toHaveProperty("instinctIds");
+    expect(port.recordResponse.mock.calls).toEqual([[chatId, frame.messageId, attribution]]);
+  });
+
+  it("attributes a feedback button through the message it names, ignoring client instinct ids", async () => {
+    const { chatId, port, receive } = connect();
+
+    await receive({ type: "feedback", feedbackType: "thumbs_down", messageId: "msg-7", instinctIds: ["forged"] });
+    expect(port.react).toHaveBeenCalledTimes(1);
+    expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId, messageRef: "msg-7" }, chatId, "button");
+
+    // A frame that names no message teaches nothing (an old client's shape).
+    await receive({ type: "feedback", feedbackType: "thumbs_up", instinctIds: ["forged"] });
+    expect(port.react).toHaveBeenCalledTimes(1);
   });
 });
 

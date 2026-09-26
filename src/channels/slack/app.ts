@@ -14,6 +14,9 @@ import type {
   IChannelAdapter,
   ConfirmationRequest,
   Attachment,
+  ResponseAttribution,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
@@ -87,6 +90,8 @@ interface QueuedMessage {
   type: "text" | "markdown" | "blocks" | "ephemeral" | "thread" | "file" | "update";
   channelId: string;
   content?: string;
+  /** A run's final response: recorded under each posted message's ts (LRN-20b). */
+  responseAttribution?: ResponseAttribution;
   blocks?: KnownBlock[];
   userId?: string;
   threadTs?: string;
@@ -164,22 +169,12 @@ export function parseSlackChatId(chatId: string): { channelId: string; threadTs?
 /** Slack channel ids (C…/D…/G…), optionally thread-scoped. Used by HubChannel as the last-resort owner test. */
 const SLACK_CHAT_ID_RE = /^[CDGW][A-Z0-9]{2,}(?::\d+\.\d+)?$/;
 
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
-
 export class SlackChannel implements IChannelAdapter {
   readonly name = "slack";
 
   private app: App | null = null;
   private messageHandler: ((msg: IncomingMessage) => Promise<void>) | null = null;
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
-  /** Per-channelId applied instinct IDs for reaction-based feedback attribution. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
+  private feedbackPort: ResponseFeedbackPort | null = null;
   private readonly logger = getLogger();
   private readonly rateLimiter: SlackRateLimiter;
   private readonly streamingLimiter: StreamingRateLimiter;
@@ -357,20 +352,9 @@ export class SlackChannel implements IChannelAdapter {
     this.messageHandler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
-  }
-
-  /** Set the applied instinct IDs for a channel so reactions can be attributed. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    // Reactions arrive with the channel id only, so attribution is per channel.
-    const { channelId } = parseSlackChatId(chatId);
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(channelId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(channelId);
-    }
+  /** Receive the learning feedback port (records responses, reports reactions). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   /** Whether a chat id has Slack's shape (see composeSlackChatId). */
@@ -434,12 +418,17 @@ export class SlackChannel implements IChannelAdapter {
         for (const chunk of chunks) {
           if (!chunk) continue;
           await this.rateLimiter.acquire("chat.postMessage", 1);
-          await this.app.client.chat.postMessage({
+          const posted = await this.app.client.chat.postMessage({
             channel: msg.channelId,
             thread_ts: msg.threadTs,
             text: chunk,
             mrkdwn: true,
           });
+          // LRN-20b: a reaction arrives with the bare channel id and the
+          // message ts, so that is the key a final response is recorded under.
+          if (msg.responseAttribution && typeof posted?.ts === "string") {
+            this.feedbackPort?.recordResponse(msg.channelId, posted.ts, msg.responseAttribution);
+          }
         }
         break;
       }
@@ -555,10 +544,13 @@ export class SlackChannel implements IChannelAdapter {
     await this.enqueueMessage("text", chatId, { content: text }, 5);
   }
 
-  async sendMarkdown(chatId: string, markdown: string): Promise<void> {
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
     const formattedText = formatToSlackMrkdwn(markdown);
-    await this.enqueueMessage("markdown", chatId, { content: formattedText }, 5);
+    await this.enqueueMessage("markdown", chatId, {
+      content: formattedText,
+      ...(options?.responseAttribution ? { responseAttribution: options.responseAttribution } : {}),
+    }, 5);
   }
 
   async sendBlockMessage(chatId: string, blocks: KnownBlock[], text?: string): Promise<void> {
@@ -915,7 +907,8 @@ export class SlackChannel implements IChannelAdapter {
     // Feedback via emoji reactions (thumbs up/down)
     this.app.event("reaction_added", async ({ event }) => {
       try {
-        if (!this.feedbackReactionCallback) return;
+        const feedbackPort = this.feedbackPort;
+        if (!feedbackPort) return;
 
         // Skip the bot's own reactions so it never self-attributes feedback.
         if (this.botUserId && event.user === this.botUserId) return;
@@ -931,7 +924,7 @@ export class SlackChannel implements IChannelAdapter {
 
         const item = event.item as { channel?: string; ts?: string };
         const channelId = item.channel;
-        if (!channelId) return;
+        if (!channelId || !item.ts) return;
 
         // Idempotency: ignore duplicate/redelivered reaction events for the same
         // (user, message, reaction) tuple so feedback fires at most once until the
@@ -940,10 +933,8 @@ export class SlackChannel implements IChannelAdapter {
         if (this.seenReactions.has(dedupKey)) return;
         this.rememberReaction(dedupKey);
 
-        const instinctIds = this.appliedInstinctIds.get(channelId);
-        if (!instinctIds || instinctIds.length === 0) return;
-
-        this.feedbackReactionCallback(feedbackType, instinctIds, event.user, "reaction");
+        // LRN-20b: attributed through the reacted-to message, not the channel.
+        feedbackPort.react(feedbackType, { chatId: channelId, messageRef: item.ts }, event.user, "reaction");
       } catch (error) {
         this.logger.debug("Error handling reaction feedback", {
           error: sanitizeError(error),

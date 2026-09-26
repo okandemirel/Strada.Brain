@@ -648,8 +648,10 @@ The learning system observes agent behavior and learns from errors through an ev
 - **Permanent** -- frozen, no further confidence updates
 
 **Learned warnings (trust ladder):**
-- Before a tool call, matching instincts are ranked into tiers. A warn-tier match adds a short, filtered warning to the tool result after the tool has run. It never blocks, rewrites or auto-applies the call
-- A learned instinct starts at trust `new` (passive). Only explicit human feedback moves it: a thumbs up from a named person on a run that applied it promotes it to `suggest_only`, and 3 approvals with no rejection in its last 10 judged uses promote it to `warn_enabled`, the ceiling. A thumbs down demotes it one step. The agent's own successes and confidence never promote it, and one person's reaction counts once per run
+- Before a tool call, matching instincts are ranked into tiers. A warn-tier match adds a short, filtered warning to the tool result after the tool has run, and the final response ends with a short footer naming the rules that warned. It never blocks, rewrites or auto-applies the call
+- A reaction judges the response it is on: each final response is recorded under its sent message id with its run, its requester, the instincts it applied and the warnings it showed. A reaction on a message with no record is ignored
+- A learned instinct starts at trust `new` (passive). Only explicit human feedback moves it: a thumbs up from the person who asked for a run that applied it promotes it to `suggest_only`, and 3 approvals with no rejection in its last 10 judged uses promote it to `warn_enabled`, the ceiling. A thumbs down demotes it one step. Other people's reactions move confidence, not trust. The agent's own successes and confidence never promote it, and one person's reaction counts once per run
+- On a response that showed warnings, the requester's thumbs down dismisses them and demotes each named rule; a thumbs up accepts them
 - `auto_enabled` is reserved for seeded, curated rules; learned instincts never reach it. Every change is logged with the instinct id, the old and new level and the counts
 
 **Active retrieval:** Instincts are proactively queried at the start of each task using the `InstinctRetriever`. It searches by keyword similarity and HNSW vector embeddings to find relevant learned patterns, which are injected into the PLAN phase prompt.

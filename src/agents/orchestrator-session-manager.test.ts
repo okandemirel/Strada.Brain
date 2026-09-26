@@ -152,6 +152,33 @@ describe("SessionManager", () => {
     expect(deps.channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "**bold**");
   });
 
+  // LRN-20b: a run's final response ends with the learned-warning footer and
+  // carries its attribution to the channel; the footer is for the person, so
+  // the model's transcript keeps the answer alone.
+  it("sendVisibleAssistantMarkdown sends a final response's footer and attribution, and records the answer alone", async () => {
+    const deps = createMockDeps();
+    const sm = new SessionManager(deps);
+    const session = sm.getOrCreateSession("chat-1");
+    const responseAttribution = {
+      instinctIds: ["a"],
+      warnedRules: [{ instinctId: "w", toolName: "dotnet_build" }],
+      runId: "run-1",
+      requesterUserId: "u1",
+    };
+
+    await sm.sendVisibleAssistantMarkdown("chat-1", session, "Done.", {
+      footer: "⚠️ Learned rule warned before dotnet_build: Rule",
+      responseAttribution,
+    });
+
+    expect(session.messages).toEqual([{ role: "assistant", content: "Done." }]);
+    expect(deps.channel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      "Done.\n\n⚠️ Learned rule warned before dotnet_build: Rule",
+      { responseAttribution },
+    );
+  });
+
   it("strips provider reasoning blocks before storing and sending visible markdown", async () => {
     const deps = createMockDeps();
     const sm = new SessionManager(deps);

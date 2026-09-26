@@ -7,7 +7,7 @@
  * per-iteration context-window trim (trimContextWindowForRun). Moved VERBATIM from orchestrator.ts;
  * mutual calls stay INTERNAL (localFn), so SetupDeps carries only leaf services/config + the few
  * genuinely-external shell callbacks (buildFreshRunSession, buildFixedSupervisorExecutionStrategy,
- * maybeUpdateUserProfileFromPrompt, getTaskExecutionContext, propagateInstinctIdsToChannel) and the
+ * maybeUpdateUserProfileFromPrompt, getTaskExecutionContext, settleRunResponse) and the
  * ContextBuilderDeps getter (buildSystemPromptWithContext is called on it directly, mirroring the
  * shell's getSupervisorRoutingContext seam).
  *
@@ -102,7 +102,12 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
     userId: string | undefined,
   ): Promise<void>;
   getTaskExecutionContext(): { readonly identityKey?: string; readonly taskRunId?: string } | undefined;
-  propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void;
+  /**
+   * LRN-20b — at the run's teardown: stage a background run's final response
+   * (warning footer + attribution) for the task system that delivers it, and
+   * forget the run's warnings. Optional: a deps object without it records none.
+   */
+  settleRunResponse?(chatId: string, toolExecMode: "interactive" | "background" | "delegated"): void;
   /**
    * ROUND 12 #9 — "THIS GUIDANCE IS NOW IN THE PROMPT", reported at the moment it
    * goes in.
@@ -414,7 +419,6 @@ export async function setupAgentCoreRun(
       instinctScopeKey(chatId, deps.getTaskExecutionContext()?.taskRunId),
       matchedInstinctIds,
     );
-    deps.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
     // ROUND 12 #9: the guidance is IN THE PROMPT as of the append above, and this
     // is the moment the credit ledger's exposure column must carry. Reported for
     // exactly what was rendered (the retriever returns ids only for insights it

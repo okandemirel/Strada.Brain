@@ -543,3 +543,50 @@ describe("resolveTeamsPort (COR-16)", () => {
     }
   });
 });
+
+// LRN-20b: a final response is recorded under the id of every activity it was
+// sent as. Teams feedback is a message of its own, so it names no response and
+// resolves to the conversation's latest one.
+describe("TeamsChannel response attribution (LRN-20b)", () => {
+  const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "user-1" };
+
+  it("records the sent activity id of a final response, on the turn and the proactive path", async () => {
+    const channel = new TeamsChannel("app-id", "app-password");
+    const port = { recordResponse: vi.fn(), react: vi.fn(() => true) };
+    channel.setFeedbackHandler(port);
+    const sendActivity = vi.fn().mockResolvedValueOnce({ id: "act-1" }).mockResolvedValueOnce({ id: "act-2" });
+    (channel as unknown as {
+      activeTurnContexts: Map<string, { sendActivity: (a: unknown) => Promise<unknown> }>;
+    }).activeTurnContexts.set("chat-1", { sendActivity });
+
+    await channel.sendMarkdown("chat-1", "the answer", { responseAttribution: attribution });
+    await channel.sendMarkdown("chat-1", "a notice");
+    expect(port.recordResponse.mock.calls).toEqual([["chat-1", "act-1", attribution]]);
+
+    const channel2 = new TeamsChannel("app-id", "app-password");
+    channel2.setFeedbackHandler(port);
+    const continueConversationAsync = vi.fn().mockImplementation(
+      async (_appId: string, _ref: unknown, logic: (ctx: unknown) => Promise<void>) => {
+        await logic({ sendActivity: vi.fn().mockResolvedValue({ id: "act-9" }) });
+      },
+    );
+    (channel2 as unknown as { adapter: unknown }).adapter = { continueConversationAsync };
+    (channel2 as unknown as { conversationReferences: Map<string, unknown> }).conversationReferences.set(
+      "chat-2",
+      { reference: { conversation: { id: "chat-2" } }, updatedAt: Date.now() },
+    );
+    await channel2.sendMarkdown("chat-2", "later answer", { responseAttribution: attribution });
+    expect(port.recordResponse).toHaveBeenLastCalledWith("chat-2", "act-9", attribution);
+  });
+
+  it("reports text feedback against the conversation's latest response", () => {
+    const channel = new TeamsChannel("app-id", "app-password");
+    const port = { recordResponse: vi.fn(), react: vi.fn(() => true) };
+    channel.setFeedbackHandler(port);
+    const sent = (channel as unknown as {
+      fireFeedback: (type: "thumbs_up" | "thumbs_down", chatId: string, userId?: string) => boolean;
+    }).fireFeedback("thumbs_down", "chat-1", "user-1");
+    expect(sent).toBe(true);
+    expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId: "chat-1" }, "user-1", "reaction");
+  });
+});

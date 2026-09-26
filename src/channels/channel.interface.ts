@@ -7,6 +7,7 @@
 
 import type { IChannelCore, IChannelReceiver, IChannelSender } from "./channel-core.interface.js";
 import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
+import type { ResponseFeedbackPort } from "../learning/feedback/response-attribution.js";
 
 /**
  * Common interface for all messaging channel adapters.
@@ -50,15 +51,12 @@ export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChanne
     emitter: ((event: string, payload: unknown) => boolean | void) | null,
   ): void;
 
-  /** Receive user feedback reactions (thumbs up/down) for the learning system. */
-  setFeedbackHandler?(
-    handler: (
-      type: "thumbs_up" | "thumbs_down",
-      instinctIds: string[],
-      userId?: string,
-      source?: "reaction" | "button",
-    ) => void,
-  ): void;
+  /**
+   * Receive the learning system's feedback port (LRN-20b): record each final
+   * response sent with a `responseAttribution` under the sent message's id, and
+   * report a thumbs up/down by the id of the message it is on.
+   */
+  setFeedbackHandler?(port: ResponseFeedbackPort | null): void;
 
   // Core features are required
   // Optional features use type guards
@@ -74,7 +72,13 @@ export type {
   IChannelStreaming,
   IChannelMessageEditor,
   ConfirmationRequest,
+  SendMarkdownOptions,
 } from "./channel-core.interface.js";
+
+export type {
+  ResponseAttribution,
+  ResponseFeedbackPort,
+} from "../learning/feedback/response-attribution.js";
 
 export type {
   IncomingMessage,

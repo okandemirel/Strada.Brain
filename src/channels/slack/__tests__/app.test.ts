@@ -1060,3 +1060,54 @@ describe("SlackChannel file extraction", () => {
     });
   });
 });
+
+// LRN-20b: a final response is recorded under the ts of every message it was
+// posted as, and a reaction is reported by the ts of the message it is on.
+describe("SlackChannel response attribution (LRN-20b)", () => {
+  const config = { botToken: "xoxb-test-token", signingSecret: "test-secret", appToken: "xapp-test-token", socketMode: true };
+  const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "U1" };
+
+  async function setup() {
+    const channel = new SlackChannel(config);
+    await channel.connect();
+    const port = { recordResponse: vi.fn(), react: vi.fn((..._args: unknown[]) => true) };
+    channel.setFeedbackHandler(port);
+    const internal = channel as unknown as {
+      app: { client: { chat: { postMessage: ReturnType<typeof vi.fn> } }; event: ReturnType<typeof vi.fn> };
+      processQueuedMessage: (m: Record<string, unknown>) => Promise<void>;
+    };
+    return { channel, port, internal };
+  }
+
+  it("records a final response under the bare channel id and the posted ts", async () => {
+    const { channel, port, internal } = await setup();
+    const postMessage = internal.app.client.chat.postMessage;
+    postMessage.mockClear();
+    postMessage.mockResolvedValueOnce({ ts: "111.0001" });
+
+    await internal.processQueuedMessage({
+      id: "m1", type: "markdown", channelId: "C123", threadTs: "99.1", content: "the answer", responseAttribution: attribution,
+    });
+    expect(port.recordResponse).toHaveBeenCalledWith("C123", "111.0001", attribution);
+
+    // A message sent without attribution (a notice) is not recorded.
+    await internal.processQueuedMessage({ id: "m2", type: "markdown", channelId: "C123", content: "a notice" });
+    expect(port.recordResponse).toHaveBeenCalledTimes(1);
+    await channel.disconnect();
+  });
+
+  it("reports a thumbs reaction by the reacted-to message's ts", async () => {
+    const { channel, port, internal } = await setup();
+    const handler = internal.app.event.mock.calls.find(([name]) => name === "reaction_added")?.[1] as (
+      args: { event: Record<string, unknown> },
+    ) => Promise<void>;
+
+    await handler({ event: { user: "U9", reaction: "-1", item: { channel: "C123", ts: "111.0001" } } });
+    expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId: "C123", messageRef: "111.0001" }, "U9", "reaction");
+
+    // A reaction that names no message cannot be attributed.
+    await handler({ event: { user: "U9", reaction: "+1", item: { channel: "C123" } } });
+    expect(port.react).toHaveBeenCalledTimes(1);
+    await channel.disconnect();
+  });
+});

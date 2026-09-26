@@ -81,6 +81,7 @@ import { TeachingParser } from "../learning/feedback/teaching-parser.js";
 import { CorrectionDetector } from "../learning/feedback/correction-detector.js";
 import { authorizedTeachingScope, mayTeachForEveryone } from "../learning/feedback/teaching-scope.js";
 import { capLearnedText } from "../learning/feedback/learned-text.js";
+import { buildRunResponse, type RunResponse, type RunWarning } from "../learning/feedback/response-attribution.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { ErrorLearningHooks } from "../learning/hooks/error-learning-hooks.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
@@ -965,6 +966,11 @@ export class Orchestrator {
   private readonly interventionEngine: InterventionEngine | null;
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
   private readonly currentSessionInstinctIds = new Map<string, string[]>();
+  /**
+   * LRN-20b: the warn-tier rules that fired in each run (same run scope as the
+   * set above), for the footer of the run's final response.
+   */
+  private readonly runWarnings = new Map<string, RunWarning[]>();
   private readonly goalDecomposer: GoalDecomposer | null;
   private readonly reRetrievalConfig?: ReRetrievalConfig;
   private readonly embeddingProvider?: IEmbeddingProvider;
@@ -1400,8 +1406,8 @@ export class Orchestrator {
         this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId),
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       errorLearningHooks: () => this.errorLearningHooks ?? undefined,
-      propagateInstinctIdsToChannel: (chatId, instinctIds) =>
-        this.propagateInstinctIdsToChannel(chatId, instinctIds),
+      runResponse: (chatId) => this.buildRunResponse(chatId),
+      settleRunResponse: (chatId, toolExecMode) => this.settleRunResponse(chatId, toolExecMode),
       clearRunInstinctCredits: (chatId, terminal, taskRunId) =>
         this.learningPipeline?.clearRunInstinctCredits(chatId, terminal, taskRunId),
       // Round 12 #9: the engine knows WHEN guidance entered the prompt (the run
@@ -3879,11 +3885,53 @@ export class Orchestrator {
   }
 
 
-  /** Propagate instinct IDs to the channel adapter for feedback attribution. */
-  private propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void {
-    const ch = this.channel as unknown as Record<string, unknown>;
-    if (typeof ch.setAppliedInstinctIds === "function") {
-      (ch.setAppliedInstinctIds as (chatId: string, ids: string[]) => void)(chatId, instinctIds);
+  /**
+   * LRN-20b — the current run's final response: the footer naming the learned
+   * warnings that fired, and what a reaction on the response is attributed to
+   * (the run, its requester, the instincts it applied, the warnings named).
+   * Undefined when there is nothing to show and no learning pipeline to learn
+   * from a reaction: the answer is then sent exactly as before.
+   */
+  private buildRunResponse(chatId: string): RunResponse | undefined {
+    const taskContext = this.getTaskExecutionContext();
+    const key = instinctScopeKey(chatId, taskContext?.taskRunId);
+    const response = buildRunResponse({
+      instinctIds: this.currentSessionInstinctIds.get(key) ?? [],
+      warnings: this.runWarnings.get(key) ?? [],
+      runId: taskContext?.taskRunId,
+      requesterUserId: taskContext?.userId,
+    });
+    return this.learningPipeline || response.footer ? response : undefined;
+  }
+
+  /**
+   * LRN-20b — at a run's teardown. A background run's answer is delivered by the
+   * task system after the run ends, so its response is staged under the run id
+   * (the task id) for the progress reporter; an interactive run already sent
+   * its own. Either way the run's warnings are done with.
+   */
+  private settleRunResponse(chatId: string, toolExecMode: string): void {
+    const taskContext = this.getTaskExecutionContext();
+    const runId = taskContext?.taskRunId;
+    const response = toolExecMode === "background" && runId ? this.buildRunResponse(chatId) : undefined;
+    if (runId && response) {
+      this.learningPipeline?.getResponseAttributions().stageForRun(runId, response);
+    }
+    this.runWarnings.delete(instinctScopeKey(chatId, runId));
+  }
+
+  /** LRN-20b: remember a warn-tier rule that fired in this run, once per rule. */
+  private noteRunWarning(chatId: string, warning: RunWarning): void {
+    const key = instinctScopeKey(chatId, this.getTaskExecutionContext()?.taskRunId);
+    const warnings = this.runWarnings.get(key) ?? [];
+    if (warnings.some((w) => w.instinctId === warning.instinctId) || warnings.length >= 20) return;
+    this.runWarnings.set(key, [...warnings, warning]);
+    // Run teardown clears its entry; a tool call outside a run never gets one,
+    // so the oldest entries go past a bound.
+    while (this.runWarnings.size > 200) {
+      const oldest = this.runWarnings.keys().next().value;
+      if (oldest === undefined) break;
+      this.runWarnings.delete(oldest);
     }
   }
 
@@ -5471,6 +5519,13 @@ export class Orchestrator {
             // so their stored text gets the filter other learned text gets
             // before it reaches a prompt.
             learnedWarnings.push(capLearnedText(sanitizePromptInjection(`${source.name}: ${source.action}`), 300));
+            // LRN-20b: the person sees it too, in the final response's footer.
+            this.noteRunWarning(chatId, {
+              instinctId: match.instinctId,
+              toolName: activeToolCall.name,
+              name: source.name,
+              seed: source.seed === true,
+            });
             await this.interventionEngine.logIntervention(
               match.instinctId, activeToolCall.name, 'warn', 'applied',
             );

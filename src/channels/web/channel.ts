@@ -57,6 +57,8 @@ import type {
   IChannelInteractive,
   ConfirmationRequest,
   Attachment,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
 } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { npmCheckCwd, npmCheckInvocation } from "../npm-check-command.js";
@@ -76,14 +78,6 @@ type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 export type TaskOwnerResolver = (
   taskId: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
-
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-export type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
 
 interface WsClient {
   ws: WebSocket;
@@ -413,9 +407,7 @@ export class WebChannel
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private postSetupBootstrapHandler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null = null;
   private postSetupBootstrapConsumed = false;
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
-  /** Per-chatId applied instinct IDs so responses can carry them for feedback attribution. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
+  private feedbackPort: ResponseFeedbackPort | null = null;
   /** The text the client already has for each active stream, so an update can be sent as a delta. */
   private readonly streamSentTexts = new Map<string, string>();
   /** Maps streamId → chatId so abandoned streams can be cleaned up on disconnect. */
@@ -552,9 +544,9 @@ export class WebChannel
     this.handler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
+  /** Receive the learning feedback port (records responses, reports feedback). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   /**
@@ -586,15 +578,6 @@ export class WebChannel
       getLoggerSafe().warn("[WebChannel] build status broadcast failed", {
         error: err instanceof Error ? err.message : String(err),
       });
-    }
-  }
-
-  /** Set the applied instinct IDs for a chat so outgoing messages include them for feedback. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(chatId);
     }
   }
 
@@ -1346,23 +1329,25 @@ export class WebChannel
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
-    const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "text",
       text,
       messageId: randomUUID(),
-      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     });
   }
 
-  async sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    const instinctIds = this.appliedInstinctIds.get(chatId);
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
+    const messageId = randomUUID();
     this.sendToClient(chatId, {
       type: "markdown",
       text: markdown,
-      messageId: randomUUID(),
-      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
+      messageId,
     });
+    // LRN-20b: the portal's feedback buttons send this id back, and a reaction
+    // is attributed through it. The client never supplies instinct ids.
+    if (options?.responseAttribution) {
+      this.feedbackPort?.recordResponse(chatId, messageId, options.responseAttribution);
+    }
   }
 
   /**
@@ -1376,12 +1361,10 @@ export class WebChannel
    * instead.
    */
   async sendMarkdownDelivered(chatId: string, markdown: string): Promise<boolean> {
-    const instinctIds = this.appliedInstinctIds.get(chatId);
     return this.sendToClient(chatId, {
       type: "markdown",
       text: markdown,
       messageId: randomUUID(),
-      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     });
   }
 
@@ -1691,12 +1674,10 @@ export class WebChannel
   ): Promise<void> {
     this.streamSentTexts.delete(streamId);
     this.streamChatIds.delete(streamId);
-    const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "stream_end",
       streamId,
       text: finalText,
-      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     });
   }
 
@@ -1959,7 +1940,6 @@ export class WebChannel
         });
 
         // Clean up per-session state that would otherwise leak
-        this.appliedInstinctIds.delete(chatId);
         for (const [sid, cid] of this.streamChatIds) {
           if (cid === chatId) {
             this.streamSentTexts.delete(sid);
@@ -2179,7 +2159,7 @@ export class WebChannel
           messageId: randomUUID(),
         });
         // Let the 'close' handler (handleDisconnect) own teardown — it deletes the
-        // client AND runs per-chat cleanup (appliedInstinctIds, recentlyDisconnected,
+        // client AND runs per-chat cleanup (recentlyDisconnected,
         // streams, pendingConfirmations). Deleting here first made handleDisconnect's
         // `clients.get(chatId) === ws` guard fail, skipping all of that cleanup.
         client.ws.close(WS_CLOSE_POLICY_VIOLATION, "Rate limit exceeded");
@@ -2386,16 +2366,18 @@ export class WebChannel
 
       case "feedback": {
         const feedbackType = String(data.feedbackType ?? "");
-        const instinctIds = Array.isArray(data.instinctIds) ? data.instinctIds.filter(
-          (id: unknown): id is string => typeof id === "string",
-        ).slice(0, 50) : [];
+        // LRN-20b: the button names the message it is on; what that message is
+        // attributed to was recorded when it was sent. Instinct ids a client
+        // sends are ignored, and a frame naming no message teaches nothing.
+        const messageId = typeof data.messageId === "string" ? data.messageId.slice(0, 100) : "";
         if (
+          messageId &&
           (feedbackType === "thumbs_up" || feedbackType === "thumbs_down") &&
-          this.feedbackReactionCallback
+          this.feedbackPort
         ) {
-          this.feedbackReactionCallback(
+          this.feedbackPort.react(
             feedbackType,
-            instinctIds,
+            { chatId, messageRef: messageId },
             client?.profileId ?? chatId,
             "button",
           );

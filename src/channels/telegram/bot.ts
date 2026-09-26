@@ -5,6 +5,8 @@ import type {
   IncomingMessage,
   ConfirmationRequest,
   Attachment,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
 import { downloadMedia, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
@@ -50,14 +52,6 @@ export const TELEGRAM_MENU_COMMANDS: ReadonlyArray<{ command: string; descriptio
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
-
 interface TelegramMediaEnvelope {
   voice?: { file_id: string };
   audio?: { file_id: string };
@@ -102,9 +96,7 @@ export class TelegramChannel implements IChannelAdapter {
       options: readonly string[];
     }
   >();
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
-  /** Per-chatId applied instinct IDs for feedback attribution via /feedback command. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
+  private feedbackPort: ResponseFeedbackPort | null = null;
   /**
    * Per-chatId outbound serialization tail-chain. Concurrent sends to the SAME
    * chat are queued so their (possibly multi-chunk) bodies arrive in order; sends
@@ -138,18 +130,9 @@ export class TelegramChannel implements IChannelAdapter {
     this.handler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
-  }
-
-  /** Set the applied instinct IDs for a chat so /feedback can attribute them. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(chatId);
-    }
+  /** Receive the learning feedback port (records responses, reports /feedback). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   async connect(): Promise<void> {
@@ -266,18 +249,17 @@ export class TelegramChannel implements IChannelAdapter {
     id: number,
     chunk: string,
     options?: { parse_mode: "Markdown" | "MarkdownV2" },
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     const maxAttempts = 4;
     for (let attempt = 1; ; attempt++) {
       try {
         // Avoid passing a 3rd `undefined` arg on the plain-text path so callers/
         // tests observing the exact argument list still see a 2-arg sendMessage.
-        if (options) {
-          await this.bot.api.sendMessage(id, chunk, options);
-        } else {
-          await this.bot.api.sendMessage(id, chunk);
-        }
-        return;
+        const sent = options
+          ? await this.bot.api.sendMessage(id, chunk, options)
+          : await this.bot.api.sendMessage(id, chunk);
+        // The sent message's id, which a /feedback reply names (LRN-20b).
+        return typeof sent?.message_id === "number" ? sent.message_id : undefined;
       } catch (err) {
         if (
           err instanceof GrammyError &&
@@ -307,28 +289,33 @@ export class TelegramChannel implements IChannelAdapter {
     });
   }
 
-  async sendMarkdown(chatId: string, markdown: string): Promise<void> {
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
     const id = parseInt(chatId, 10);
+    const attribution = options?.responseAttribution;
     return this.enqueueSend(chatId, async () => {
       // Chunk BEFORE sending so the plain-text fallback also operates on an
       // already-bounded chunk — otherwise an oversized answer throws "too long"
       // on the Markdown send AND again on the fallback, dropping the whole reply.
       for (const chunk of chunkTelegramMessage(markdown)) {
-        await this.sendMarkdownChunk(id, chatId, chunk);
+        const messageId = await this.sendMarkdownChunk(id, chatId, chunk);
+        // LRN-20b: a final response is recorded under every message it was sent as.
+        if (attribution && messageId !== undefined) {
+          this.feedbackPort?.recordResponse(chatId, String(messageId), attribution);
+        }
       }
     });
   }
 
   /** One already-bounded chunk as Markdown, falling back to plain text. */
-  private async sendMarkdownChunk(id: number, chatId: string, chunk: string): Promise<void> {
+  private async sendMarkdownChunk(id: number, chatId: string, chunk: string): Promise<number | undefined> {
     try {
-      await this.sendChunkWithRetry(id, chunk, { parse_mode: "Markdown" });
+      return await this.sendChunkWithRetry(id, chunk, { parse_mode: "Markdown" });
     } catch (err) {
       getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
         chatId,
         error: err instanceof Error ? err.message : String(err),
       });
-      await this.sendChunkWithRetry(id, chunk);
+      return this.sendChunkWithRetry(id, chunk);
     }
   }
 
@@ -586,7 +573,7 @@ export class TelegramChannel implements IChannelAdapter {
 
     // Handle /feedback command for instinct-level thumbs up/down
     this.bot.command("feedback", async (ctx) => {
-      if (!this.feedbackReactionCallback) {
+      if (!this.feedbackPort) {
         await ctx.reply("Feedback is not available at this time.");
         return;
       }
@@ -607,13 +594,20 @@ export class TelegramChannel implements IChannelAdapter {
         return;
       }
 
-      const instinctIds = this.appliedInstinctIds.get(chatId);
-      if (!instinctIds || instinctIds.length === 0) {
+      // LRN-20b: sent as a reply to one of the bot's messages, /feedback judges
+      // that message. Sent on its own it means "the last response", and
+      // resolves to the most recent response recorded in this chat.
+      const replyTo = ctx.message?.reply_to_message?.message_id;
+      const attributed = this.feedbackPort.react(
+        feedbackType,
+        { chatId, ...(replyTo !== undefined ? { messageRef: String(replyTo) } : {}) },
+        userId,
+        "button",
+      );
+      if (!attributed) {
         await ctx.reply("No recent response to give feedback on.");
         return;
       }
-
-      this.feedbackReactionCallback(feedbackType, instinctIds, userId, "button");
       await ctx.reply(feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
     });
 

@@ -137,7 +137,9 @@ export class InterventionEngine {
     instinctId: string,
     toolName: string,
     tier: string,
-    actionTaken: 'applied' | 'overridden' | 'dismissed',
+    // 'accepted' / 'dismissed': the requester's verdict on a response whose
+    // footer showed this warning (LRN-20b); 'applied' is logged when it fires.
+    actionTaken: 'applied' | 'overridden' | 'dismissed' | 'accepted',
     userId?: string,
   ): Promise<void> {
     const id = randomBytes(8).toString('hex');

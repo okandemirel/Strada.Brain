@@ -41,7 +41,6 @@ function deps(): ToolTurnDeps {
     taskClassifier: {},
     getSupervisorRoutingContext: () => ({}),
     currentSessionInstinctIds: new Map(),
-    propagateInstinctIdsToChannel: vi.fn(),
   } as unknown as ToolTurnDeps;
 }
 

@@ -124,7 +124,7 @@ export interface AgentCoreToolTurnResult {
 /**
  * The dependency slice the tool turn reads. Extends {@link SetupDeps} so the already-injected
  * services (sessionManager, consensusManager, confidenceEstimator, providerRouter, providerManager,
- * taskClassifier, currentSessionInstinctIds, propagateInstinctIdsToChannel, getSupervisorRoutingContext,
+ * taskClassifier, currentSessionInstinctIds, getSupervisorRoutingContext,
  * + the accounting fns) are inherited; adds only the 3 shell-owned callbacks the turn delegates to.
  */
 export interface ToolTurnDeps extends SetupDeps {
@@ -386,7 +386,7 @@ export async function portExecuteToolTurn(
       systemPrompt: runCtx.systemPrompt,
       agentState: step.agentState,
       // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
-      // dedupe+cap into the run's set and propagate to the channel for attribution. v1's
+      // dedupe+cap into the run's set (the final response's attribution reads it, LRN-20b). v1's
       // background loop passed no callback; keep that asymmetry.
       ...(isInteractiveTurn
         ? {
@@ -396,7 +396,6 @@ export async function portExecuteToolTurn(
               const current = deps.currentSessionInstinctIds.get(key) ?? [];
               const merged = [...new Set([...current, ...ids])].slice(0, 200);
               deps.currentSessionInstinctIds.set(key, merged);
-              deps.propagateInstinctIdsToChannel(chatId, merged);
               // ROUND 12 #9: these ids entered the prompt NOW (the refreshed
               // sections are written back into runCtx.systemPrompt below), and
               // from here on every tool:result claims them. Report the NEW ones:

@@ -53,7 +53,6 @@ function makeDeps(overrides?: Partial<ToolTurnDeps>): ToolTurnDeps {
     taskClassifier: {} as never,
     getSupervisorRoutingContext: () => ({}) as never,
     currentSessionInstinctIds: new Map<string, string[]>(),
-    propagateInstinctIdsToChannel: vi.fn(),
     getTaskExecutionContext: () => ({ taskRunId: RUN }),
     ...overrides,
   } as unknown as ToolTurnDeps;

@@ -263,6 +263,11 @@ export async function initializeTaskRuntimeStage(
     metrics?: import("../../dashboard/metrics.js").MetricsCollector;
     /** Tool registry — the real-tree guardian verifies compiles through it. */
     toolRegistry?: import("../tool-registry.js").ToolRegistry;
+    /**
+     * LRN-20b: where a background run stages its final response (warning footer
+     * + attribution) for the progress reporter that sends it.
+     */
+    runResponses?: import("../../tasks/progress-reporter.js").StagedRunResponses;
   },
   deps: TaskRuntimeStageDeps = {},
 ): Promise<TaskRuntimeStageResult> {
@@ -596,14 +601,22 @@ export async function initializeTaskRuntimeStage(
     );
   }
 
+  const runResponses = params.runResponses;
   const progressReporter = deps.createProgressReporter
     ? deps.createProgressReporter(
         params.channel,
         taskManager,
         params.config.interaction,
         params.config.language,
+        runResponses,
       )
-    : new ProgressReporter(params.channel, taskManager, params.config.interaction, params.config.language);
+    : new ProgressReporter(
+        params.channel,
+        taskManager,
+        params.config.interaction,
+        params.config.language,
+        runResponses,
+      );
 
   return {
     daemonEventBus,

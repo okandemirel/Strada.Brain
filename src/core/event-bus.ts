@@ -225,6 +225,15 @@ export interface FeedbackReactionEvent {
   readonly source: "reaction" | "button";
   readonly channel: string;
   readonly timestamp: number;
+  /**
+   * LRN-20b: the run that produced the reacted-to response, as recorded when it
+   * was sent. Trust signals are keyed by it; without it none is recorded.
+   */
+  readonly runId?: string;
+  /** LRN-20b: who sent the message that run answered. Only their reaction moves trust. */
+  readonly requesterUserId?: string;
+  /** LRN-20b: the warn-tier rules the response's footer named, with the tool each warned before. */
+  readonly warnedRules?: ReadonlyArray<{ readonly instinctId: string; readonly toolName: string }>;
 }
 
 // =============================================================================

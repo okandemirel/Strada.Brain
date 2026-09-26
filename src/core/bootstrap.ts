@@ -73,6 +73,7 @@ import {
 } from "../learning/index.js";
 import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bus.js";
 import { LearningQueue } from "../learning/pipeline/learning-queue.js";
+import { createResponseFeedbackPort } from "../learning/feedback/response-attribution.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
@@ -1670,6 +1671,8 @@ async function bootstrapImpl(
     providerRouter,
     startupNotices,
     toolRegistry,
+    // LRN-20b: background answers carry their run's warning footer and attribution.
+    runResponses: learningResult.pipeline?.getResponseAttributions(),
   });
   commandHandler.setVaultRegistry(vaultRegistry);
   if (taskStorage) {
@@ -2270,26 +2273,19 @@ async function bootstrapImpl(
     );
   }
 
-  // Wire feedback reactions from channel adapters to the learning event bus
-  if (learningResult.eventBus) {
+  // Wire feedback reactions from channel adapters to the learning event bus.
+  // LRN-20b: a channel records each final response it sends in the pipeline's
+  // response registry and reports a reaction by the message it is on; the
+  // port resolves that message's own attribution before the event is emitted.
+  if (learningResult.eventBus && learningResult.pipeline) {
     const feedbackBus = learningResult.eventBus;
-    const feedbackCallback = (
-      type: "thumbs_up" | "thumbs_down",
-      instinctIds: string[],
-      userId?: string,
-      source?: "reaction" | "button",
-    ) => {
-      feedbackBus.emit("feedback:reaction", {
-        type,
-        instinctIds,
-        userId,
-        source: source ?? "reaction",
-        channel: channelType,
-        timestamp: Date.now(),
-      });
-    };
+    const feedbackPort = createResponseFeedbackPort({
+      ledger: learningResult.pipeline.getResponseAttributions(),
+      channel: channelType,
+      emit: (event) => feedbackBus.emit("feedback:reaction", event),
+    });
     if (typeof channel.setFeedbackHandler === "function") {
-      channel.setFeedbackHandler(feedbackCallback);
+      channel.setFeedbackHandler(feedbackPort);
     }
   }
 

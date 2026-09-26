@@ -692,9 +692,8 @@ describe("DiscordChannel reaction feedback respects the allowlist (LRN-10)", () 
       allowedDiscordRoles: new Set(["trusted-role"]),
     });
     const channel = new DiscordChannel("fake-token", auth, { guildId: "guild123" });
-    const feedback = vi.fn();
-    channel.setFeedbackHandler(feedback);
-    channel.setAppliedInstinctIds("channel-1", ["instinct-a"]);
+    const feedback = vi.fn((..._args: unknown[]) => true);
+    channel.setFeedbackHandler({ recordResponse: vi.fn(), react: feedback });
     const on = (channel.getClient() as unknown as { on: ReturnType<typeof vi.fn> }).on;
     const handler = on.mock.calls.find(([event]) => event === Events.MessageReactionAdd)?.[1] as ReactionHandler;
     const members = new Map<string, { roles: string[] }>();
@@ -710,7 +709,7 @@ describe("DiscordChannel reaction feedback respects the allowlist (LRN-10)", () 
     };
     const react = (userId: string) =>
       handler(
-        { partial: false, emoji: { name: "\uD83D\uDC4E" }, message: { channelId: "channel-1", guild } },
+        { partial: false, emoji: { name: "\uD83D\uDC4E" }, message: { id: "msg-1", channelId: "channel-1", guild } },
         { id: userId, bot: false },
       );
     return { feedback, members, react };
@@ -730,7 +729,60 @@ describe("DiscordChannel reaction feedback respects the allowlist (LRN-10)", () 
     await react("listed-user");
     await react("role-holder");
     expect(feedback.mock.calls.map((call) => call[2])).toEqual(["listed-user", "role-holder"]);
-    expect(feedback).toHaveBeenCalledWith("thumbs_down", ["instinct-a"], "listed-user", "reaction");
+    // LRN-20b: attributed through the reacted-to message, not the channel.
+    expect(feedback).toHaveBeenCalledWith(
+      "thumbs_down",
+      { chatId: "channel-1", messageRef: "msg-1" },
+      "listed-user",
+      "reaction",
+    );
+  });
+});
+
+// LRN-20b: a final response is recorded under the id of every message it was
+// sent as, so a reaction on one of them resolves to that response's run.
+describe("DiscordChannel records final responses by sent message id (LRN-20b)", () => {
+  function setup() {
+    const channel = new DiscordChannel("fake-token", new AuthManager([], {}), { guildId: "guild123" });
+    const recordResponse = vi.fn();
+    channel.setFeedbackHandler({ recordResponse, react: vi.fn(() => false) });
+    const process = (msg: Record<string, unknown>) =>
+      (channel as unknown as { processQueuedMessage: (m: Record<string, unknown>) => Promise<unknown> })
+        .processQueuedMessage(msg);
+    return { channel, recordResponse, process };
+  }
+
+  it("records each chunk's message id with the response attribution, and plain sends not at all", async () => {
+    const { channel, recordResponse, process } = setup();
+    const send = vi.fn()
+      .mockResolvedValueOnce({ id: "m-1" })
+      .mockResolvedValueOnce({ id: "m-2" })
+      .mockResolvedValueOnce({ id: "m-3" });
+    const fetch = (channel.getClient() as unknown as { channels: { fetch: ReturnType<typeof vi.fn> } }).channels.fetch;
+    fetch.mockResolvedValue({ isTextBased: () => true, send });
+    const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "u1" };
+
+    // Longer than one Discord message: sent as two.
+    await process({ id: "q1", type: "markdown", chatId: "chan-1", content: "a ".repeat(1500), responseAttribution: attribution });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(recordResponse.mock.calls).toEqual([
+      ["chan-1", "m-1", attribution],
+      ["chan-1", "m-2", attribution],
+    ]);
+
+    await process({ id: "q2", type: "markdown", chatId: "chan-1", content: "a notice" });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(recordResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the attribution from sendMarkdown to the queued send", async () => {
+    const { channel } = setup();
+    const enqueue = vi
+      .spyOn(channel as unknown as { enqueueMessage: (m: unknown) => Promise<unknown> }, "enqueueMessage")
+      .mockResolvedValue(undefined);
+    const attribution = { instinctIds: [], warnedRules: [], runId: "run-2" };
+    await channel.sendMarkdown("chan-1", "answer", { responseAttribution: attribution });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: "markdown", responseAttribution: attribution }));
   });
 });
 

@@ -24,7 +24,6 @@ function deps(executeToolCalls: ToolTurnDeps["executeToolCalls"]): ToolTurnDeps 
     buildToolBatchProgressSignal: () => undefined as never,
     emitPlainLoopStep: vi.fn(),
     currentSessionInstinctIds: new Map(),
-    propagateInstinctIdsToChannel: vi.fn(),
   } as unknown as ToolTurnDeps;
 }
 

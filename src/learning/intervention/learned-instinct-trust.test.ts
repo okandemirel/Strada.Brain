@@ -11,7 +11,9 @@
  *    nothing (first test, the old assertion kept);
  *  - a person's approval of a run that applied the rule promotes it
  *    new → suggest_only → warn_enabled, once per person per run, and never to
- *    auto_enabled;
+ *    auto_enabled. LRN-20b: the run is the one the reacted-to response came
+ *    from, and only the person who asked for it gives a trust signal
+ *    (response-attribution.test.ts covers the per-message resolution);
  *  - a rejection demotes one step;
  *  - curated seed rules keep the trust they were given.
  * The warn tier is advisory (orchestrator-intervention-warn.test.ts).
@@ -38,6 +40,8 @@ let bus: TypedEventBus<LearningEventMap>;
 let pipeline: LearningPipeline;
 let engine: InterventionEngine;
 let runs: number;
+/** The run the next reaction is about (LRN-20b: the reacted-to response's run). */
+let lastRun: string | undefined;
 
 beforeEach(() => {
   storage = new LearningStorage(":memory:");
@@ -46,6 +50,7 @@ beforeEach(() => {
   pipeline = new LearningPipeline(storage, { enabled: true }, undefined, undefined, bus);
   engine = new InterventionEngine(storage);
   runs = 0;
+  lastRun = undefined;
   log.info.mockClear();
 });
 
@@ -79,9 +84,16 @@ async function applyInRun(id: string, toolName = "dotnet_build"): Promise<void> 
     timestamp: Date.now(),
   });
   pipeline.clearRunInstinctCredits("chat-1", { success: true, verdictScore: 1 }, runId);
+  lastRun = runId;
 }
 
-function react(type: "thumbs_up" | "thumbs_down", id: string, userId: string | undefined): void {
+/** A reaction on the last run's response; `requester` asked for that run (default: the reactor). */
+function react(
+  type: "thumbs_up" | "thumbs_down",
+  id: string,
+  userId: string | undefined,
+  requester: string | undefined = userId,
+): void {
   bus.emit("feedback:reaction", {
     type,
     instinctIds: [id],
@@ -89,6 +101,8 @@ function react(type: "thumbs_up" | "thumbs_down", id: string, userId: string | u
     source: "reaction",
     channel: "web",
     timestamp: Date.now(),
+    ...(lastRun ? { runId: lastRun } : {}),
+    ...(requester ? { requesterUserId: requester } : {}),
   });
 }
 
@@ -157,10 +171,16 @@ describe("learned-instinct trust follows explicit human signals only (LRN-20)", 
     for (let i = 0; i < 5; i++) react("thumbs_up", id, "user-1");
     expect(trust(id)).toBe("suggest_only");
 
-    // Other people approving the same run are separate signals.
-    react("thumbs_up", id, "user-2");
+    // LRN-20b: other people approving the same run are not trust signals (only
+    // its requester's are); the requester's approvals of later runs are.
+    react("thumbs_up", id, "user-2", "user-1");
+    react("thumbs_up", id, "user-3", "user-1");
     expect(trust(id)).toBe("suggest_only");
-    react("thumbs_up", id, "user-3");
+    await applyInRun(id);
+    react("thumbs_up", id, "user-1");
+    expect(trust(id)).toBe("suggest_only");
+    await applyInRun(id);
+    react("thumbs_up", id, "user-1");
     expect(trust(id)).toBe("warn_enabled");
   });
 
@@ -183,7 +203,7 @@ describe("learned-instinct trust follows explicit human signals only (LRN-20)", 
     expect(trust(id)).toBe("suggest_only");
 
     await applyInRun(id);
-    react("thumbs_down", id, "user-2");
+    react("thumbs_down", id, "user-1");
     expect(trust(id)).toBe("new");
   });
 
@@ -194,6 +214,11 @@ describe("learned-instinct trust follows explicit human signals only (LRN-20)", 
 
     await applyInRun(id);
     react("thumbs_up", id, undefined);
+    expect(trust(id)).toBe("new");
+
+    // LRN-20b: a run that did not apply the rule is not a signal about it.
+    lastRun = "run-that-applied-something-else";
+    react("thumbs_up", id, "user-1");
     expect(trust(id)).toBe("new");
   });
 });
@@ -213,5 +238,103 @@ describe("curated seed rules keep their trust (LRN-20)", () => {
     await applyInRun(seed!.id, "file_write");
     react("thumbs_up", seed!.id, "user-2");
     expect(storage.getInstinct(seed!.id)!.trustLevel).toBe(seed!.trustLevel);
+  });
+});
+
+/**
+ * LRN-20b: a reaction is about the response it is on. The event carries that
+ * response's run and requester (resolved from the record written when it was
+ * sent); the ladder keys the signal by that run, counts it only from that
+ * requester, and takes the requester's verdict on a warning the response's
+ * footer showed.
+ */
+describe("trust signals follow the reacted-to response (LRN-20b)", () => {
+  function reactOn(
+    type: "thumbs_up" | "thumbs_down",
+    run: { runId: string; requester: string },
+    userId: string,
+    ids: { instinctIds?: string[]; warnedRules?: Array<{ instinctId: string; toolName: string }> },
+  ): void {
+    bus.emit("feedback:reaction", {
+      type,
+      instinctIds: ids.instinctIds ?? [],
+      userId,
+      source: "reaction",
+      channel: "discord",
+      timestamp: Date.now(),
+      runId: run.runId,
+      requesterUserId: run.requester,
+      ...(ids.warnedRules ? { warnedRules: ids.warnedRules } : {}),
+    });
+  }
+
+  it("a late reaction on an older response counts for that response's run, not the latest", async () => {
+    const id = await learn();
+    const answered: string[] = [];
+    for (let run = 0; run < 3; run++) {
+      await applyInRun(id);
+      answered.push(lastRun!);
+    }
+    // The person reacts to all three answers after the fact. Each is a signal
+    // about its own run; attributing all of them to the latest run made the
+    // second and third duplicates of the first.
+    for (const runId of answered) reactOn("thumbs_up", { runId, requester: "user-1" }, "user-1", { instinctIds: [id] });
+    expect(trust(id)).toBe("warn_enabled");
+  });
+
+  it("a non-requester's reaction changes confidence but not trust", async () => {
+    const id = await learn();
+    await applyInRun(id);
+    const run = { runId: lastRun!, requester: "user-1" };
+    const alphaBefore = storage.getInstinct(id)!.bayesianAlpha!;
+
+    reactOn("thumbs_up", run, "user-2", { instinctIds: [id] });
+    expect(storage.getInstinct(id)!.bayesianAlpha!).toBeGreaterThan(alphaBefore);
+    expect(trust(id)).toBe("new");
+
+    reactOn("thumbs_up", run, "user-1", { instinctIds: [id] });
+    expect(trust(id)).toBe("suggest_only");
+  });
+
+  it("the requester's thumbs down on a warned response logs 'dismissed' and demotes; thumbs up is logged 'accepted'", async () => {
+    const id = await learn();
+    storage.updateInstinctTrustLevel(id, "warn_enabled");
+    const warned = [{ instinctId: id, toolName: "dotnet_build" }];
+
+    // Someone else's verdict on the requester's warning is not theirs to give.
+    reactOn("thumbs_down", { runId: "run-w1", requester: "user-1" }, "user-2", { warnedRules: warned });
+    expect(storage.getInterventionLogs(id)).toEqual([]);
+    expect(trust(id)).toBe("warn_enabled");
+
+    reactOn("thumbs_down", { runId: "run-w1", requester: "user-1" }, "user-1", { warnedRules: warned });
+    // Toggling it counts once.
+    reactOn("thumbs_down", { runId: "run-w1", requester: "user-1" }, "user-1", { warnedRules: warned });
+    expect(storage.getInterventionLogs(id)).toEqual([
+      expect.objectContaining({ toolName: "dotnet_build", tier: "warn", actionTaken: "dismissed", userId: "user-1" }),
+    ]);
+    expect(trust(id)).toBe("suggest_only");
+
+    reactOn("thumbs_up", { runId: "run-w2", requester: "user-1" }, "user-1", { warnedRules: warned });
+    expect(storage.getInterventionLogs(id).map((entry) => entry.actionTaken).sort()).toEqual(["accepted", "dismissed"]);
+    expect(storage.getTrustSignals(id, 10)).toEqual(["approval", "rejection"]);
+  });
+
+  it("accepted warnings never promote a learned rule past warn_enabled, and a seed's verdict leaves its trust", async () => {
+    const id = await learn();
+    storage.updateInstinctTrustLevel(id, "warn_enabled");
+    for (let run = 0; run < 12; run++) {
+      reactOn("thumbs_up", { runId: `run-a${run}`, requester: "user-1" }, "user-1", {
+        warnedRules: [{ instinctId: id, toolName: "dotnet_build" }],
+      });
+    }
+    expect(trust(id)).toBe("warn_enabled");
+
+    await seedStradaConventions(storage);
+    const seed = storage.getInstinctByPattern(STRADA_SEEDS[0]!.pattern, "global")!;
+    reactOn("thumbs_down", { runId: "run-s1", requester: "user-1" }, "user-1", {
+      warnedRules: [{ instinctId: seed.id, toolName: "file_write" }],
+    });
+    expect(storage.getInterventionLogs(seed.id).map((entry) => entry.actionTaken)).toEqual(["dismissed"]);
+    expect(storage.getInstinct(seed.id)!.trustLevel).toBe(seed.trustLevel);
   });
 });

@@ -21,6 +21,9 @@ import type {
   IncomingMessage,
   ConfirmationRequest,
   Attachment,
+  ResponseAttribution,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
 import { AuthManager } from "../../security/auth.js";
@@ -44,14 +47,6 @@ import { StreamingBuffer } from "../streaming-buffer.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
-
 interface StreamingMessageState {
   message: Message;
   /** Throttled streaming buffer that manages edits and finalization. */
@@ -65,6 +60,8 @@ interface QueuedMessage {
   type: 'text' | 'markdown' | 'embed' | 'typing' | 'thread' | 'confirmation';
   chatId: string;
   content?: string;
+  /** A run's final response: recorded under each sent message id (LRN-20b). */
+  responseAttribution?: ResponseAttribution;
   embedOptions?: Parameters<DiscordChannel['sendRichEmbed']>[1];
   threadOptions?: { name: string; autoArchiveDuration?: 60 | 1440 | 4320 | 10080 };
   confirmationRequest?: ConfirmationRequest;
@@ -141,7 +138,7 @@ export class DiscordChannel implements IChannelAdapter {
   /** Shared queue infrastructure — FIFO ordering, timeout eviction, retry. */
   private readonly queue: MessageQueue<QueuedMessage>;
   private queueInterval: NodeJS.Timeout | null = null;
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  private feedbackPort: ResponseFeedbackPort | null = null;
 
   /** Backward-compatible accessor — used internally by /status and by tests. */
   protected get messageQueue(): MessageQueue<QueuedMessage>["entries"] {
@@ -152,8 +149,6 @@ export class DiscordChannel implements IChannelAdapter {
   protected get retryTimers(): MessageQueue<QueuedMessage>["timerMap"] {
     return this.queue.timerMap;
   }
-  /** Per-channelId applied instinct IDs for reaction-based feedback attribution. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   constructor(
     token: string,
@@ -217,18 +212,9 @@ export class DiscordChannel implements IChannelAdapter {
     this.handler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
-  }
-
-  /** Set the applied instinct IDs for a channel so reactions can be attributed. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(chatId);
-    }
+  /** Receive the learning feedback port (records responses, reports reactions). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   async connect(): Promise<void> {
@@ -380,7 +366,7 @@ export class DiscordChannel implements IChannelAdapter {
         await this.sendTextImmediate(msg.chatId, msg.content!);
         return undefined;
       case 'markdown':
-        await this.sendMarkdownImmediate(msg.chatId, msg.content!);
+        await this.sendMarkdownImmediate(msg.chatId, msg.content!, msg.responseAttribution);
         return undefined;
       case 'embed':
         await this.sendRichEmbedImmediate(msg.chatId, msg.embedOptions!);
@@ -452,8 +438,9 @@ export class DiscordChannel implements IChannelAdapter {
 
   /** Send each pre-split chunk to the channel through the rate limiter, isolating
    * per-chunk failures so one failed send does not drop the remaining chunks. */
-  private async sendChunksToChannel(chatId: string, chunks: string[]): Promise<void> {
+  private async sendChunksToChannel(chatId: string, chunks: string[]): Promise<string[]> {
     let resolvedChannel: TextChannel | null = null;
+    const sentIds: string[] = [];
     for (const chunk of chunks) {
       if (chunk.length === 0) continue;
       await this.rateLimiter.acquire();
@@ -464,15 +451,26 @@ export class DiscordChannel implements IChannelAdapter {
         }
         resolvedChannel = channel as TextChannel;
       }
-      await resolvedChannel.send(chunk);
+      const sent = await resolvedChannel.send(chunk);
+      if (typeof sent?.id === "string") sentIds.push(sent.id);
     }
+    return sentIds;
   }
 
-  async sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    await this.enqueueMessage({ type: 'markdown', chatId, content: markdown }) as Promise<void>;
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
+    await this.enqueueMessage({
+      type: 'markdown',
+      chatId,
+      content: markdown,
+      ...(options?.responseAttribution ? { responseAttribution: options.responseAttribution } : {}),
+    }) as Promise<void>;
   }
 
-  private async sendMarkdownImmediate(chatId: string, markdown: string): Promise<void> {
+  private async sendMarkdownImmediate(
+    chatId: string,
+    markdown: string,
+    responseAttribution?: ResponseAttribution,
+  ): Promise<void> {
     const formatted = formatToDiscordMarkdown(markdown);
     const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
     if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
@@ -484,11 +482,17 @@ export class DiscordChannel implements IChannelAdapter {
       // The interaction reply takes the first chunk; any overflow is delivered
       // as follow-up channel messages so no content is dropped.
       await replyCallback(chunks[0]!);
-      await this.sendChunksToChannel(chatId, chunks.slice(1));
+      this.recordResponse(chatId, await this.sendChunksToChannel(chatId, chunks.slice(1)), responseAttribution);
       return;
     }
 
-    await this.sendChunksToChannel(chatId, chunks);
+    this.recordResponse(chatId, await this.sendChunksToChannel(chatId, chunks), responseAttribution);
+  }
+
+  /** LRN-20b: a final response is recorded under every message it was sent as. */
+  private recordResponse(chatId: string, messageIds: string[], attribution?: ResponseAttribution): void {
+    if (!attribution || !this.feedbackPort) return;
+    for (const id of messageIds) this.feedbackPort.recordResponse(chatId, id, attribution);
   }
 
   async sendRichEmbed(
@@ -910,7 +914,8 @@ export class DiscordChannel implements IChannelAdapter {
     this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
       try {
         if (user.bot) return;
-        if (!this.feedbackReactionCallback) return;
+        const feedbackPort = this.feedbackPort;
+        if (!feedbackPort) return;
 
         // With Partials enabled, reactions on uncached messages arrive partial;
         // fetch the full structure before reading emoji/message fields.
@@ -931,15 +936,17 @@ export class DiscordChannel implements IChannelAdapter {
         }
         if (!feedbackType) return;
 
-        const channelId = reaction.message.channelId;
-        const instinctIds = this.appliedInstinctIds.get(channelId);
-        if (!instinctIds || instinctIds.length === 0) return;
-
         // A reaction moves learned confidence, so it counts only from someone
         // this channel accepts messages from (LRN-10).
         if (!(await this.isReactingUserAllowed(reaction.message.guild, user.id))) return;
 
-        this.feedbackReactionCallback(feedbackType, instinctIds, user.id, "reaction");
+        // LRN-20b: attributed through the reacted-to message, not the channel.
+        feedbackPort.react(
+          feedbackType,
+          { chatId: reaction.message.channelId, messageRef: reaction.message.id },
+          user.id,
+          "reaction",
+        );
       } catch (error) {
         logger.debug("Error handling reaction feedback", {
           error: error instanceof Error ? error.message : String(error),

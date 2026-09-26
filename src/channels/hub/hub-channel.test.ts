@@ -142,13 +142,23 @@ describe("HubChannel", () => {
     hub.setWorkspaceBusEmitter(emitter);
     hub.broadcastRaw("{\"type\":\"campaign:status\"}");
     hub.setBuildStatusProvider("provider");
-    const feedback = () => undefined;
+    const feedback = { recordResponse: vi.fn(), react: vi.fn(() => false) };
     hub.setFeedbackHandler(feedback);
     expect(web.setWorkspaceBusEmitter).toHaveBeenCalledWith(emitter);
     expect(web.broadcastRaw).toHaveBeenCalledWith("{\"type\":\"campaign:status\"}");
     expect(web.setBuildStatusProvider).toHaveBeenCalledWith("provider");
     expect(web.setFeedbackHandler).toHaveBeenCalledWith(feedback);
     expect(tg.setFeedbackHandler).toHaveBeenCalledWith(feedback);
+  });
+
+  // LRN-20b: the member that sends a final response is the one that learns the
+  // sent message's id, so the response attribution must reach it.
+  it("passes a final response's attribution through to the owning member", async () => {
+    const tg = fake("telegram", { claimsChatId: (id: string) => /^\d+$/.test(id) });
+    const hub = new HubChannel([fake("web"), tg], { ownerStore: null });
+    const options = { responseAttribution: { instinctIds: ["i-1"], warnedRules: [], runId: "run-1" } };
+    await hub.sendMarkdown("777", "the answer", options);
+    expect(tg.sendMarkdown).toHaveBeenCalledWith("777", "the answer", options);
   });
 
   // Plan 2.9 (audit 12F1/D58): ownership is bound once; a later inbound on

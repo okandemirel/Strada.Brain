@@ -25,6 +25,8 @@ import type { TaskExecutionStore } from "../memory/unified/task-execution-store.
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
+import type { SendMarkdownOptions } from "../channels/channel-core.interface.js";
+import { appendWarningFooter, type ResponseAttribution } from "../learning/feedback/response-attribution.js";
 import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -140,7 +142,7 @@ export function replaceProviderFailureNotice(session: Session, providerName: str
 export interface SessionManagerDeps {
   readonly channel: {
     sendText(chatId: string, text: string): Promise<void>;
-    sendMarkdown(chatId: string, markdown: string): Promise<void>;
+    sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void>;
     /**
      * Optional system-notice sink (renders as a distinct system pill rather
      * than an assistant answer). Mirrors {@link import("../channels/channel-core.interface.js").IChannelSender.sendSystemMessage}.
@@ -1191,10 +1193,22 @@ export class SessionManager {
     chatId: string,
     session: Session,
     content: string,
+    finalResponse?: { footer: string; responseAttribution: ResponseAttribution },
   ): Promise<void> {
     const sanitizedContent = stripVisibleProviderArtifacts(content);
     this.appendVisibleAssistantMessage(session, sanitizedContent);
-    await this.deps.channel.sendMarkdown(chatId, sanitizedContent);
+    if (!finalResponse) {
+      await this.deps.channel.sendMarkdown(chatId, sanitizedContent);
+      return;
+    }
+    // LRN-20b: a run's final response. The learned-warning footer is for the
+    // person, so it is sent but kept out of the transcript the model reads; the
+    // attribution lets the channel record the sent message for reactions.
+    await this.deps.channel.sendMarkdown(
+      chatId,
+      appendWarningFooter(sanitizedContent, finalResponse.footer),
+      { responseAttribution: finalResponse.responseAttribution },
+    );
   }
 
   /**

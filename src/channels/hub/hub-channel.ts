@@ -24,7 +24,7 @@
 // naming the file, a stream never starts (the caller then sends the final
 // text whole). Nothing is silently dropped.
 // ---------------------------------------------------------------------------
-import type { IChannelAdapter } from "../channel.interface.js";
+import type { IChannelAdapter, ResponseFeedbackPort, SendMarkdownOptions } from "../channel.interface.js";
 import type { IncomingMessage, Attachment } from "../channel-messages.interface.js";
 import type { ConfirmationRequest } from "../channel-core.interface.js";
 import type { PostSetupBootstrapContext } from "../../common/setup-contract.js";
@@ -63,7 +63,6 @@ interface MemberExtras {
   updateStreamingMessage?(chatId: string, streamId: string, accumulatedText: string): Promise<void>;
   finalizeStreamingMessage?(chatId: string, streamId: string, finalText: string): Promise<void>;
   editMessage?(chatId: string, messageId: string, newContent: string): Promise<void>;
-  setAppliedInstinctIds?(chatId: string, instinctIds: string[]): void;
   broadcastRaw?(message: string): void;
   broadcastBuildStatus?(): Promise<void>;
   setBuildStatusProvider?(provider: unknown): void;
@@ -247,8 +246,12 @@ export class HubChannel implements IChannelAdapter {
     return this.ownerOf(chatId).sendText(chatId, text);
   }
 
-  sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    return this.ownerOf(chatId).sendMarkdown(chatId, markdown);
+  sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
+    // The options carry a final response's attribution (LRN-20b): the member
+    // that sends it is the one that learns the sent message's id.
+    return options
+      ? this.ownerOf(chatId).sendMarkdown(chatId, markdown, options)
+      : this.ownerOf(chatId).sendMarkdown(chatId, markdown);
   }
 
   async sendSystemMessage(chatId: string, text: string): Promise<void> {
@@ -305,10 +308,6 @@ export class HubChannel implements IChannelAdapter {
     return owner.editMessage(chatId, messageId, newContent);
   }
 
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    this.ownerOf(chatId).setAppliedInstinctIds?.(chatId, instinctIds);
-  }
-
   // ---- fan-out (no chat id) ------------------------------------------------
 
   setPostSetupBootstrapHandler(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void {
@@ -323,10 +322,8 @@ export class HubChannel implements IChannelAdapter {
     for (const m of this.members) m.setWorkspaceBusEmitter?.(emitter);
   }
 
-  setFeedbackHandler(
-    handler: (type: "thumbs_up" | "thumbs_down", instinctIds: string[], userId?: string, source?: "reaction" | "button") => void,
-  ): void {
-    for (const m of this.members) m.setFeedbackHandler?.(handler);
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    for (const m of this.members) m.setFeedbackHandler?.(port);
   }
 
   setBuildStatusProvider(provider: unknown): void {

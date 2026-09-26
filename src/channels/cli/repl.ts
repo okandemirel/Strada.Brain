@@ -3,18 +3,12 @@ import type {
   IChannelAdapter,
   IncomingMessage,
   ConfirmationRequest,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
-
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
 
 interface PendingCliConfirmation {
   options: string[];
@@ -61,26 +55,17 @@ export class CLIChannel implements IChannelAdapter {
    * mid-task (audited 2026-09-02).
    */
   private shutdownAfterDrain = false;
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
-  /** Per-chatId applied instinct IDs for feedback attribution. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
+  private feedbackPort: ResponseFeedbackPort | null = null;
+  /** Local numbering for recorded responses: a terminal line has no message id. */
+  private responseSeq = 0;
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
-  }
-
-  /** Set the applied instinct IDs for a chat so feedback can be attributed. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(chatId);
-    }
+  /** Receive the learning feedback port (records responses, reports feedback). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   async connect(): Promise<void> {
@@ -150,9 +135,15 @@ export class CLIChannel implements IChannelAdapter {
     console.log(`\n${text}\n`);
   }
 
-  async sendMarkdown(_chatId: string, markdown: string): Promise<void> {
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
     // In CLI, just output the markdown as-is (terminals handle it reasonably)
     console.log(`\n${markdown}\n`);
+    // LRN-20b: a printed line has no id a reaction could name, so each final
+    // response gets a local one and feedback resolves to the latest response.
+    if (options?.responseAttribution) {
+      this.responseSeq += 1;
+      this.feedbackPort?.recordResponse(chatId, `cli-${Date.now()}-${this.responseSeq}`, options.responseAttribution);
+    }
   }
 
   async sendTypingIndicator(_chatId: string): Promise<void> {
@@ -320,17 +311,17 @@ export class CLIChannel implements IChannelAdapter {
     return null;
   }
 
-  /** Fire the feedback callback with stored instinct IDs. Returns true if feedback was actually sent. */
+  /**
+   * Report feedback on the most recent response recorded in this chat (a
+   * terminal cannot name a message, see sendMarkdown). True if it reached one.
+   */
   private fireFeedback(
     type: "thumbs_up" | "thumbs_down",
     chatId: string,
     userId?: string,
   ): boolean {
-    if (!this.feedbackReactionCallback) return false;
-    const instinctIds = this.appliedInstinctIds.get(chatId);
-    if (!instinctIds || instinctIds.length === 0) return false;
-    this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
-    return true;
+    if (!this.feedbackPort) return false;
+    return this.feedbackPort.react(type, { chatId }, userId, "reaction");
   }
 
   private async drainInputQueue(): Promise<void> {

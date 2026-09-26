@@ -87,7 +87,7 @@ proposed (confidence = 0.0)
 
 ## Intervention Trust (`intervention/`)
 
-Before a tool call, the orchestrator ranks matching instincts into tiers (passive, suggest, warn, auto), capped by lifecycle and by trust level. Only the warn tier does anything at runtime: a filtered, length-capped warning is appended to the tool result after the tool ran. Nothing blocks, rewrites or auto-applies a call.
+Before a tool call, the orchestrator ranks matching instincts into tiers (passive, suggest, warn, auto), capped by lifecycle and by trust level. Only the warn tier does anything at runtime: a filtered, length-capped warning is appended to the tool result after the tool ran, and the run's final response ends with a short footer (at most 3 lines) naming each rule that warned, learned or curated. Nothing blocks, rewrites or auto-applies a call.
 
 Learned instincts start at trust `new` and move only on explicit human signals (`LearningPipeline.recordHumanTrustSignal`, fed by thumbs up/down reactions from a named person):
 
@@ -97,6 +97,14 @@ warn_enabled ──rejection──▶ suggest_only ──rejection──▶ new
 ```
 
 A signal counts once per person and per run, and only for a run the credit ledger settled with the instinct applied. The agent's own tool successes, run verdicts and confidence never promote a rule. `auto_enabled` belongs to seeded, curated rules only, and their trust is not changed by the ladder. Signals are kept in `instinct_trust_signals`; each promotion or demotion is logged with ids and counts, never the instinct's text.
+
+### What a reaction is about (`feedback/response-attribution.ts`)
+
+A reaction judges the response it is on, not "whatever ran last in the chat". When a channel sends a run's final response it records, under the sent message's id (Discord message id, Slack ts, Telegram message_id, Teams activity id, web message id), what that response is attributed to: the run id, the person who asked for it, the instincts the run applied and the warn-tier rules its footer named. The records live in `response_attributions` (7 days, at most 5,000). A reaction resolves through the message it names; a message with no record teaches nothing. Feedback that cannot name a message (the CLI, Telegram's `/feedback` sent on its own, a Teams `👍` message) resolves to the chat's most recent recorded response.
+
+- Confidence evidence (LRN-10) still comes from any allowed person, once per person, rule and direction.
+- Trust signals come only from the run's requester, keyed by the recorded run.
+- On a response whose footer named warnings, the requester's 👎 dismisses them (intervention log `dismissed`, a rejection signal for each named rule) and 👍 accepts them (`accepted`, an approval signal). A seed rule's verdict is logged; its trust stays.
 
 ## Runtime Artifact Lifecycle
 

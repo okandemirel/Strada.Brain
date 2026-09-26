@@ -1363,6 +1363,44 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     expect([...store.keys()]).toEqual([]);
   });
 
+  it("LRN-20b: a background run stages its final response with the run's instincts, run id and requester", async () => {
+    // The task system sends a background run's answer after the run ends, so
+    // the run stages what that answer is attributed to at teardown. It must do
+    // so BEFORE the teardown drops the run's instinct set, or every background
+    // answer would be recorded as having applied nothing.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }] }),
+      )
+      .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" }));
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+    const pipeline = new LearningPipeline(storage, { enabled: true });
+    const getInsightsForTask = vi.fn().mockResolvedValue({ insights: ["an insight"], matchedInstinctIds: ["inst-bg"] });
+    const h = buildHarness(
+      provider,
+      undefined,
+      undefined,
+      { instinctRetriever: { getInsightsForTask } },
+      undefined,
+      undefined,
+      undefined,
+      pipeline,
+    );
+    try {
+      await drive(h.clock, h.runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("background")));
+
+      const staged = pipeline.getResponseAttributions().takeForRun("task-42");
+      expect(staged, "the background run staged no final response").toBeDefined();
+      expect(staged!.attribution).toMatchObject({ instinctIds: ["inst-bg"], runId: "task-42", requesterUserId: "u-1" });
+    } finally {
+      pipeline.stop();
+      storage.close();
+    }
+  });
+
   it("r12 #9: the exposure is dated from the prologue's prompt, not from the tool event or its processing", async () => {
     // GAP1 above proves the run's tool results are ATTRIBUTED to the retrieved
     // instincts. This proves WHEN the ledger says the run was shown them. Round

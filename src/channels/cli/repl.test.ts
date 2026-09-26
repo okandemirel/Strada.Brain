@@ -421,3 +421,35 @@ describe("CLIChannel.claimsChatId (hub routing)", () => {
     expect(channel.claimsChatId("123")).toBe(false);
   });
 });
+
+// LRN-20b: a terminal line has no message id, so the CLI records each final
+// response under a local one and feedback resolves to the chat's latest.
+describe("CLIChannel response attribution (LRN-20b)", () => {
+  it("records each final response under its own local ref, and plain sends not at all", async () => {
+    const channel = new CLIChannel();
+    const port = { recordResponse: vi.fn(), react: vi.fn(() => true) };
+    channel.setFeedbackHandler(port);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "cli-user" };
+
+    await channel.sendMarkdown("cli-local", "first answer", { responseAttribution: attribution });
+    await channel.sendMarkdown("cli-local", "a notice");
+    await channel.sendMarkdown("cli-local", "second answer", { responseAttribution: attribution });
+    spy.mockRestore();
+
+    expect(port.recordResponse).toHaveBeenCalledTimes(2);
+    const refs = port.recordResponse.mock.calls.map((call: unknown[]) => call[1]);
+    expect(new Set(refs).size).toBe(2);
+    expect(port.recordResponse.mock.calls[0]?.[0]).toBe("cli-local");
+  });
+
+  it("reports a thumbs line against the chat's latest response", async () => {
+    const channel = new CLIChannel();
+    const port = { recordResponse: vi.fn(), react: vi.fn(() => true) };
+    channel.setFeedbackHandler(port);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await (channel as unknown as { handleLine: (input: string) => Promise<void> }).handleLine("\uD83D\uDC4E");
+    spy.mockRestore();
+    expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId: "cli-local" }, "cli-user", "reaction");
+  });
+});

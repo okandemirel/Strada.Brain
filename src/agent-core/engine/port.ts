@@ -516,6 +516,10 @@ export function createAgentCorePort(
         // audited 2026-09-02: this run's set, not the chat's — a sibling wave
         // node finishing first used to delete the set its siblings were still
         // being attributed to.
+        // LRN-20b: a background run's answer is sent after this, by the task
+        // system; its footer and attribution are staged first, while the run's
+        // instinct set is still here to read.
+        deps.settleRunResponse?.(c.chatId, c.toolExecMode);
         deps.currentSessionInstinctIds.delete(
           instinctScopeKey(c.chatId, deps.getTaskExecutionContext()?.taskRunId),
         );
@@ -531,7 +535,6 @@ export function createAgentCorePort(
           { success: !(cancelled || failedVerdict || stoppedShortByArbiter) },
           deps.getTaskExecutionContext()?.taskRunId,
         );
-        deps.propagateInstinctIdsToChannel(c.chatId, []);
         } finally {
           // audited 2026-09-02: SelfVerification publishes into a process-wide
           // map that prefers ANY currently-failing entry, and nothing retired a

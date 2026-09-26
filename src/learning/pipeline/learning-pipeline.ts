@@ -13,6 +13,7 @@ import { PatternMatcher, embedderFromProvider, combinedSimilarity } from "../mat
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { FeedbackHandler } from "../feedback/feedback-handler.js";
+import { ResponseAttributionLedger } from "../feedback/response-attribution.js";
 import { InterventionEngine, TRUST_SIGNAL_WINDOW } from "../intervention/intervention-engine.js";
 import { capLearnedText } from "../feedback/learned-text.js";
 import { errorSignatureMessage, toErrorSignature, toSignatureErrorDetails } from "../error-signature.js";
@@ -178,6 +179,8 @@ export class LearningPipeline {
   private readonly feedbackHandler: FeedbackHandler;
   /** LRN-20: the learned-instinct trust ladder (InterventionEngine.advanceTrust). */
   private readonly trustLadder: InterventionEngine;
+  /** LRN-20b: what each sent response is attributed to, for reactions on it. */
+  private readonly responseAttributions: ResponseAttributionLedger;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private feedbackReactionListener: ((event: FeedbackReactionEvent) => void) | null = null;
@@ -944,10 +947,26 @@ export class LearningPipeline {
     // lifecycle, ranking and intervention tier read — not only factor_* columns.
     this.feedbackHandler = new FeedbackHandler(storage, {
       onReaction: (instinct, positive) => this.applyReactionEvidence(instinct, positive),
-      onHumanSignal: (instinctId, userId, positive) =>
-        this.recordHumanTrustSignal({ instinctId, userId, signal: positive ? "approval" : "rejection" }),
+      onHumanSignal: (instinctId, userId, positive, context) =>
+        this.recordHumanTrustSignal({
+          instinctId,
+          userId,
+          requesterUserId: context.requesterUserId,
+          runId: context.runId,
+          signal: positive ? "approval" : "rejection",
+        }),
+      onWarningVerdict: (rule, userId, accepted, context) =>
+        this.recordWarningVerdict({
+          instinctId: rule.instinctId,
+          toolName: rule.toolName,
+          userId,
+          requesterUserId: context.requesterUserId,
+          runId: context.runId,
+          accepted,
+        }),
     });
     this.trustLadder = new InterventionEngine(storage);
+    this.responseAttributions = new ResponseAttributionLedger(storage);
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
@@ -956,18 +975,18 @@ export class LearningPipeline {
     // Subscribe to feedback:reaction events from channel adapters
     if (this.eventBus) {
       this.feedbackReactionListener = (event: FeedbackReactionEvent) => {
+        const params = {
+          instinctIds: event.instinctIds,
+          userId: event.userId,
+          source: event.source,
+          runId: event.runId,
+          requesterUserId: event.requesterUserId,
+          warnedRules: event.warnedRules,
+        };
         if (event.type === "thumbs_up") {
-          this.feedbackHandler.handleThumbsUp({
-            instinctIds: event.instinctIds,
-            userId: event.userId,
-            source: event.source,
-          });
+          this.feedbackHandler.handleThumbsUp(params);
         } else if (event.type === "thumbs_down") {
-          this.feedbackHandler.handleThumbsDown({
-            instinctIds: event.instinctIds,
-            userId: event.userId,
-            source: event.source,
-          });
+          this.feedbackHandler.handleThumbsDown(params);
         }
       };
       this.eventBus.on("feedback:reaction", this.feedbackReactionListener);
@@ -1619,10 +1638,12 @@ export class LearningPipeline {
    * LRN-20 — AN EXPLICIT HUMAN SIGNAL MOVES A LEARNED INSTINCT'S TRUST LEVEL.
    *
    * Approvals and rejections are a person's reaction to a run that applied the
-   * instinct. The run is the latest one the credit ledger settled with the
-   * instinct applied, so one person's signal counts once per run however often
-   * the reaction is toggled, and a signal about an instinct no run applied
-   * counts for nothing. The agent's own successes, verdicts and confidence
+   * instinct. LRN-20b: the run is the one that produced the reacted-to response
+   * (its id was recorded with the sent message), it must have applied the
+   * instinct per the credit ledger, and only the person who asked for that run
+   * gives a trust signal; anyone else's reaction still moves confidence (LRN-10)
+   * but not trust. One person's signal counts once per run however often the
+   * reaction is toggled. The agent's own successes, verdicts and confidence
    * never come through here.
    *
    * The ladder (InterventionEngine.advanceTrust) stops at warn_enabled, and a
@@ -1632,36 +1653,92 @@ export class LearningPipeline {
   recordHumanTrustSignal(params: {
     instinctId: string;
     userId?: string;
+    requesterUserId?: string;
+    runId?: string;
     signal: "approval" | "rejection";
   }): TrustLevel | null {
+    return this.applyHumanTrustSignal({ ...params, exposure: "applied" }).to;
+  }
+
+  /**
+   * LRN-20b — THE REQUESTER'S VERDICT ON A WARNING THEY WERE SHOWN.
+   *
+   * The response carried a footer naming this warn-tier rule. The requester's
+   * thumbs down dismisses the warning, a thumbs up accepts it: the verdict is
+   * logged as an intervention outcome and is a trust signal for the run, like
+   * any other. The footer record is the proof the run showed it, so no credit
+   * is required. A seed rule's verdict is logged; its trust stays.
+   */
+  recordWarningVerdict(params: {
+    instinctId: string;
+    toolName: string;
+    userId?: string;
+    requesterUserId?: string;
+    runId?: string;
+    accepted: boolean;
+  }): TrustLevel | null {
+    const outcome = this.applyHumanTrustSignal({
+      instinctId: params.instinctId,
+      userId: params.userId,
+      requesterUserId: params.requesterUserId,
+      runId: params.runId,
+      signal: params.accepted ? "approval" : "rejection",
+      exposure: "warned",
+    });
+    if (outcome.recorded) {
+      void this.trustLadder
+        .logIntervention(
+          params.instinctId,
+          params.toolName,
+          "warn",
+          params.accepted ? "accepted" : "dismissed",
+          params.userId?.trim(),
+        )
+        .catch(() => undefined);
+    }
+    return outcome.to;
+  }
+
+  private applyHumanTrustSignal(params: {
+    instinctId: string;
+    userId?: string;
+    requesterUserId?: string;
+    runId?: string;
+    signal: "approval" | "rejection";
+    exposure: "applied" | "warned";
+  }): { recorded: boolean; to: TrustLevel | null } {
+    const none = { recorded: false, to: null };
     try {
       const userId = params.userId?.trim();
-      if (!userId) return null;
+      const runId = params.runId?.trim();
+      if (!userId || !runId || userId !== params.requesterUserId?.trim()) return none;
       const instinct = this.storage.getInstinct(params.instinctId);
-      if (!instinct || instinct.seed) return null;
-      const applied = this.storage
-        .getInstinctCredits({ instinctId: params.instinctId, limit: 50 })
-        .find((credit) => credit.applied);
-      if (!applied) return null;
-      const runKey = applied.taskRunId
-        ? `run:${applied.taskRunId}`
-        : `chat:${applied.sessionId}@${applied.timestamp}`;
+      if (!instinct) return none;
+      if (params.exposure === "applied") {
+        if (instinct.seed) return none;
+        const applied = this.storage
+          .getInstinctCredits({ instinctId: params.instinctId, taskRunId: runId, limit: 20 })
+          .some((credit) => credit.applied);
+        if (!applied) return none;
+      }
       const recorded = this.storage.recordTrustSignal({
         instinctId: params.instinctId,
         userId,
-        runKey,
+        runKey: `run:${runId}`,
         signal: params.signal,
         createdAt: Date.now(),
         keep: TRUST_SIGNAL_WINDOW * 5,
       });
-      if (!recorded) return null;
+      if (!recorded) return none;
+      // A seed's row only makes its warning verdict count once per person and run.
+      if (instinct.seed) return { recorded: true, to: null };
 
       const window = this.storage.getTrustSignals(params.instinctId, TRUST_SIGNAL_WINDOW);
       const approvals = window.filter((s) => s === "approval").length;
       const rejections = window.length - approvals;
       const from: TrustLevel = instinct.trustLevel ?? "new";
       const to = this.trustLadder.advanceTrust(from, { approvals, rejections, signal: params.signal });
-      if (to === from) return null;
+      if (to === from) return { recorded: true, to: null };
       this.storage.updateInstinctTrustLevel(params.instinctId, to);
       // Ids and counts only: the instinct's text is learned content.
       getLoggerSafe().info("Learned instinct trust level changed", {
@@ -1673,10 +1750,10 @@ export class LearningPipeline {
         rejections,
         window: window.length,
       });
-      return to;
+      return { recorded: true, to };
     } catch {
       // A trust update is bookkeeping: it must never break reaction handling.
-      return null;
+      return none;
     }
   }
 
@@ -1935,6 +2012,11 @@ export class LearningPipeline {
     return this.runtimeArtifacts;
   }
 
+  /** LRN-20b: the sent-response registry channels record into and reactions resolve through. */
+  getResponseAttributions(): ResponseAttributionLedger {
+    return this.responseAttributions;
+  }
+
   // ─── Lifecycle Helpers ───────────────────────────────────────────────────────
 
   /** Emit a lifecycle event on the event bus (fire-and-forget) */
@@ -2135,11 +2217,14 @@ export class LearningPipeline {
    */
   pruneHistory(): {
     credits: number; interventions: number; trajectories: number; sessionHits: number; trustSignals: number;
+    responseAttributions: number;
   } {
     const day = 24 * 60 * 60 * 1000;
     const ledgerCutoff = Date.now() - this.config.exposureRetentionDays * day;
     const historyCutoff = Date.now() - this.config.historyRetentionDays * day;
-    const counts = { credits: 0, interventions: 0, trajectories: 0, sessionHits: 0, trustSignals: 0 };
+    const counts = {
+      credits: 0, interventions: 0, trajectories: 0, sessionHits: 0, trustSignals: 0, responseAttributions: 0,
+    };
     // Each sweep on its own: one that cannot run is not a reason to skip the others.
     const sweep = (key: keyof typeof counts, run: () => number): void => {
       try {
@@ -2153,6 +2238,8 @@ export class LearningPipeline {
     sweep("trajectories", () => this.storage.pruneProcessedTrajectories(historyCutoff));
     sweep("sessionHits", () => this.storage.pruneSessionHitMarkers(historyCutoff));
     sweep("trustSignals", () => this.storage.pruneTrustSignals(historyCutoff));
+    // LRN-20b: sent-response records keep their own short window (7 days).
+    sweep("responseAttributions", () => this.responseAttributions.prune());
     return counts;
   }
 

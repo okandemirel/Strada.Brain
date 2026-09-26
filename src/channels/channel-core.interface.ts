@@ -6,6 +6,18 @@
  */
 
 import type { IncomingMessage, Attachment } from "./channel-messages.interface.js";
+import type { ResponseAttribution } from "../learning/feedback/response-attribution.js";
+
+/** Per-send options for {@link IChannelSender.sendMarkdown}. */
+export interface SendMarkdownOptions {
+  /**
+   * This message is a run's final response (LRN-20b). A channel that learns the
+   * sent message's id records the attribution under it through its feedback
+   * port, so a reaction on this message resolves to this run. A channel that
+   * does not support feedback ignores it.
+   */
+  readonly responseAttribution?: ResponseAttribution;
+}
 
 /**
  * Essential channel operations - all channels must implement these.
@@ -40,7 +52,7 @@ export interface IChannelSender {
   sendText(chatId: string, text: string): Promise<void>;
 
   /** Send a markdown-formatted message */
-  sendMarkdown(chatId: string, markdown: string): Promise<void>;
+  sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void>;
 
   /** Send a system notification message (renders differently from assistant messages) */
   sendSystemMessage?(chatId: string, text: string): Promise<void>;

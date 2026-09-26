@@ -336,3 +336,56 @@ describe("ProgressReporter", () => {
     expect(taskManager.listenerCount("task:created")).toBe(0);
   });
 });
+
+// LRN-20b: a background run's answer is its final response. The run staged its
+// learned-warning footer and attribution under its run id (the task id); the
+// reporter appends the footer and sends the attribution so the channel records
+// the sent message.
+describe("ProgressReporter final responses (LRN-20b)", () => {
+  function setup() {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    const staged = new Map<string, { attribution: Record<string, unknown>; footer: string }>();
+    const runResponses = {
+      takeForRun: vi.fn((runId: string) => {
+        const entry = staged.get(runId);
+        staged.delete(runId);
+        return entry as never;
+      }),
+    };
+    const reporter = new ProgressReporter(channel as never, taskManager as never, undefined, "en", runResponses);
+    return { channel, taskManager, staged, runResponses, reporter };
+  }
+
+  it("appends the staged footer and sends the staged attribution", () => {
+    const { channel, taskManager, staged, reporter } = setup();
+    const attribution = { instinctIds: ["a"], warnedRules: [{ instinctId: "w", toolName: "t" }], runId: "task_heartbeat", requesterUserId: "u1" };
+    staged.set("task_heartbeat", { attribution, footer: "⚠️ Learned rule warned before t: Rule" });
+
+    taskManager.emitCreated(createTask({ userId: "u1" }));
+    taskManager.emitCompleted("task_heartbeat", "**Done**");
+
+    expect(channel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      "**Done**\n\n⚠️ Learned rule warned before t: Rule",
+      { responseAttribution: attribution },
+    );
+    reporter.dispose();
+  });
+
+  it("still records an answer with nothing staged, so 'the last response' is never an older one", () => {
+    const { channel, taskManager, reporter } = setup();
+    taskManager.emitCreated(createTask({ userId: "u1" }));
+    taskManager.emitBlocked("task_heartbeat", "Which scene?");
+
+    expect(channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Which scene?", {
+      responseAttribution: { instinctIds: [], warnedRules: [], runId: "task_heartbeat", requesterUserId: "u1" },
+    });
+    reporter.dispose();
+  });
+});

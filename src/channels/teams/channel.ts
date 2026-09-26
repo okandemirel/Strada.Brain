@@ -9,7 +9,12 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { IChannelAdapter } from "../channel.interface.js";
+import type {
+  IChannelAdapter,
+  ResponseAttribution,
+  ResponseFeedbackPort,
+  SendMarkdownOptions,
+} from "../channel.interface.js";
 import { limitIncomingText, type Attachment, type IncomingMessage } from "../channel-messages.interface.js";
 import { chunkText } from "../chunk-text.js";
 import { getLogger } from "../../utils/logger.js";
@@ -60,14 +65,6 @@ interface StoredConversationReference {
   reference: ConversationReferenceLike;
   updatedAt: number;
 }
-
-/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
-type FeedbackReactionCallback = (
-  type: "thumbs_up" | "thumbs_down",
-  instinctIds: string[],
-  userId?: string,
-  source?: "reaction" | "button",
-) => void;
 
 /** The minimal structural shape of the optional `botbuilder` package that connect() consumes. */
 interface BotbuilderModule {
@@ -129,9 +126,7 @@ export class TeamsChannel implements IChannelAdapter {
   private referencesWriteTimer: ReturnType<typeof setTimeout> | null = null;
   /** Serialises writes so two snapshots never race on the rename. */
   private referencesWriteChain: Promise<void> = Promise.resolve();
-  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
-  /** Per-conversationId applied instinct IDs for feedback attribution. */
-  private readonly appliedInstinctIds = new Map<string, string[]>();
+  private feedbackPort: ResponseFeedbackPort | null = null;
 
   constructor(
     private readonly appId: string,
@@ -148,18 +143,9 @@ export class TeamsChannel implements IChannelAdapter {
     this.handler = handler;
   }
 
-  /** Register a callback for feedback reactions (thumbs up/down). */
-  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
-    this.feedbackReactionCallback = callback;
-  }
-
-  /** Set the applied instinct IDs for a conversation so feedback can be attributed. */
-  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
-    if (instinctIds.length > 0) {
-      this.appliedInstinctIds.set(chatId, instinctIds);
-    } else {
-      this.appliedInstinctIds.delete(chatId);
-    }
+  /** Receive the learning feedback port (records responses, reports feedback). */
+  setFeedbackHandler(port: ResponseFeedbackPort | null): void {
+    this.feedbackPort = port;
   }
 
   async connect(): Promise<void> {
@@ -331,9 +317,9 @@ export class TeamsChannel implements IChannelAdapter {
     await this.deliver(chatId, text, "plain");
   }
 
-  async sendMarkdown(chatId: string, markdown: string): Promise<void> {
+  async sendMarkdown(chatId: string, markdown: string, options?: SendMarkdownOptions): Promise<void> {
     // Markdown intent: leave Bot Framework's default markdown rendering in place.
-    await this.deliver(chatId, markdown, "markdown");
+    await this.deliver(chatId, markdown, "markdown", options?.responseAttribution);
   }
 
   /**
@@ -349,6 +335,7 @@ export class TeamsChannel implements IChannelAdapter {
     chatId: string,
     body: string,
     format: "plain" | "markdown",
+    responseAttribution?: ResponseAttribution,
   ): Promise<void> {
     const chunks = chunkText(body, TEAMS_MAX_MESSAGE_LENGTH);
     if (chunks.length === 0) return; // nothing to send (empty/whitespace input)
@@ -373,18 +360,23 @@ export class TeamsChannel implements IChannelAdapter {
         textFormat: format,
       };
 
+      let sentId: string | undefined;
       if (context) {
         // Fast path: a turn context is still active for this chat.
-        await context.sendActivity(activity);
+        sentId = sentActivityId(await context.sendActivity(activity));
       } else {
         // Proactive path: deliver via the persisted conversation reference.
         await this.adapter!.continueConversationAsync(
           this.appId,
           reference!,
           async (proactive) => {
-            await proactive.sendActivity(activity);
+            sentId = sentActivityId(await proactive.sendActivity(activity));
           },
         );
+      }
+      // LRN-20b: a final response is recorded under every activity it was sent as.
+      if (responseAttribution && typeof sentId === "string") {
+        this.feedbackPort?.recordResponse(chatId, sentId, responseAttribution);
       }
     }
   }
@@ -546,17 +538,20 @@ export class TeamsChannel implements IChannelAdapter {
     return null;
   }
 
-  /** Fire the feedback callback with stored instinct IDs. Returns true if feedback was actually sent. */
+  /**
+   * Report text feedback. Returns true if it reached a recorded response.
+   *
+   * LRN-20b: Teams feedback is a message of its own, not a reaction on one, so
+   * it cannot name the response it judges: it means "the last response" and
+   * resolves to the most recent response recorded in this conversation.
+   */
   private fireFeedback(
     type: "thumbs_up" | "thumbs_down",
     chatId: string,
     userId?: string,
   ): boolean {
-    if (!this.feedbackReactionCallback) return false;
-    const instinctIds = this.appliedInstinctIds.get(chatId);
-    if (!instinctIds || instinctIds.length === 0) return false;
-    this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
-    return true;
+    if (!this.feedbackPort) return false;
+    return this.feedbackPort.react(type, { chatId }, userId, "reaction");
   }
 
   private async toIncomingMessage(activity: TeamsActivityLike): Promise<IncomingMessage | null> {
@@ -740,7 +735,15 @@ interface TurnContextStaticLike {
 
 interface TurnContextLike {
   activity: TeamsActivityLike;
-  sendActivity(activityOrText: string | OutgoingActivityLike): Promise<void>;
+  /** botbuilder resolves the sent activity's ResourceResponse (its id). */
+  sendActivity(activityOrText: string | OutgoingActivityLike): Promise<unknown>;
+}
+
+/** The id botbuilder's ResourceResponse carries for a sent activity, if any. */
+function sentActivityId(response: unknown): string | undefined {
+  if (!response || typeof response !== "object") return undefined;
+  const id = (response as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 interface TeamsActivityLike {

@@ -622,6 +622,66 @@ describe("TelegramChannel", () => {
   });
 });
 
+// LRN-20b: a final response is recorded under the message_id of every message
+// it was sent as; /feedback sent as a reply judges that message, and on its own
+// judges the chat's last response.
+describe("TelegramChannel response attribution (LRN-20b)", () => {
+  const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "123" };
+
+  function setup() {
+    mockMiddlewares.length = 0;
+    mockHandlers.clear();
+    mockBotApi.sendMessage.mockReset();
+    const channel = new TelegramChannel("test-token", new AuthManager([123]));
+    const port = { recordResponse: vi.fn(), react: vi.fn((..._args: unknown[]) => true) };
+    channel.setFeedbackHandler(port);
+    return { channel, port };
+  }
+
+  it("records each sent chunk's message_id, and plain sends not at all", async () => {
+    const { channel, port } = setup();
+    mockBotApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 501 })
+      .mockResolvedValueOnce({ message_id: 502 })
+      .mockResolvedValueOnce({ message_id: 503 });
+
+    await channel.sendMarkdown("42", `${"a".repeat(4000)}\n\n${"b".repeat(1000)}`, { responseAttribution: attribution });
+    expect(port.recordResponse.mock.calls).toEqual([
+      ["42", "501", attribution],
+      ["42", "502", attribution],
+    ]);
+
+    await channel.sendMarkdown("42", "a notice");
+    expect(port.recordResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("/feedback as a reply names the replied-to message; on its own it names none", async () => {
+    const { port } = setup();
+    const feedback = mockHandlers.get("command:feedback")!;
+    const reply = vi.fn().mockResolvedValue(undefined);
+
+    await feedback({
+      chat: { id: 42 },
+      from: { id: 123 },
+      match: "down",
+      message: { reply_to_message: { message_id: 501 } },
+      reply,
+    });
+    expect(port.react).toHaveBeenLastCalledWith("thumbs_down", { chatId: "42", messageRef: "501" }, "123", "button");
+
+    await feedback({ chat: { id: 42 }, from: { id: 123 }, match: "up", message: {}, reply });
+    expect(port.react).toHaveBeenLastCalledWith("thumbs_up", { chatId: "42" }, "123", "button");
+  });
+
+  it("says there is nothing to judge when the reaction reached no recorded response", async () => {
+    const { port } = setup();
+    port.react.mockReturnValue(false);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    await mockHandlers.get("command:feedback")!({ chat: { id: 42 }, from: { id: 123 }, match: "up", message: {}, reply });
+    expect(reply).toHaveBeenCalledWith("No recent response to give feedback on.");
+  });
+});
+
 describe("Telegram command menu (2026-09-09)", () => {
   it("advertises only commands the daemon handles", async () => {
     const { TELEGRAM_MENU_COMMANDS } = await import("./bot.js");

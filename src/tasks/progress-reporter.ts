@@ -6,7 +6,7 @@
  * long-running tasks and updates it in place when the summarized task state changes.
  */
 
-import type { IChannelAdapter, IChannelRichMessaging } from "../channels/channel.interface.js";
+import type { IChannelAdapter, IChannelRichMessaging, SendMarkdownOptions } from "../channels/channel.interface.js";
 import { sendChannelNotice, supportsRichMessaging, supportsStreaming } from "../channels/channel-core.interface.js";
 import { DEFAULT_INTERACTION_CONFIG, type InteractionConfig } from "../config/config.js";
 import type { TaskManager } from "./task-manager.js";
@@ -14,6 +14,15 @@ import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { buildTaskProgressSummary, type ProgressLanguage } from "./progress-signals.js";
 import { getLogger } from "../utils/logger.js";
 import { classifyTaskErrorMessage } from "../utils/error-messages.js";
+import { appendWarningFooter, type RunResponse } from "../learning/feedback/response-attribution.js";
+
+/**
+ * Where a background run leaves its final response's attribution and warning
+ * footer for the task system to deliver (LRN-20b, ResponseAttributionLedger).
+ */
+export interface StagedRunResponses {
+  takeForRun(runId: string): RunResponse | undefined;
+}
 
 interface HeartbeatState {
   chatId?: string;
@@ -51,6 +60,7 @@ export class ProgressReporter {
     taskManager: TaskManager,
     interaction: InteractionConfig = DEFAULT_INTERACTION_CONFIG,
     defaultLanguage: ProgressLanguage = "en",
+    private readonly runResponses?: StagedRunResponses,
   ) {
     this.interaction = interaction;
     this.defaultLanguage = defaultLanguage;
@@ -160,7 +170,7 @@ export class ProgressReporter {
 
   private reportCompleted(task: Task, result: string): void {
     this.clearHeartbeat(task.id, true);
-    this.sendToChannel(task.chatId, result);
+    this.sendAnswer(task, result);
   }
 
   private reportFailed(task: Task, error: string): void {
@@ -173,7 +183,31 @@ export class ProgressReporter {
 
   private reportBlocked(task: Task, result: string): void {
     this.clearHeartbeat(task.id, true);
-    this.sendToChannel(task.chatId, result);
+    this.sendAnswer(task, result);
+  }
+
+  /**
+   * The run's answer is its final response (LRN-20b): it ends with the footer
+   * naming any learned warnings that fired, and is sent with the attribution a
+   * reaction on it resolves to. The task id is the run id the run staged it
+   * under. A run that staged nothing is still recorded, with nothing to learn
+   * from, so feedback on "the last response" never reaches an older one.
+   */
+  private sendAnswer(task: Task, result: string): void {
+    if (!this.runResponses) {
+      this.sendToChannel(task.chatId, result);
+      return;
+    }
+    const staged = this.runResponses.takeForRun(task.id);
+    const attribution = staged?.attribution ?? {
+      instinctIds: [],
+      warnedRules: [],
+      runId: task.id,
+      ...(task.userId ? { requesterUserId: task.userId } : {}),
+    };
+    this.sendToChannel(task.chatId, appendWarningFooter(result, staged?.footer ?? ""), {
+      responseAttribution: attribution,
+    });
   }
 
   private reportCancelled(task: Task): void {
@@ -369,8 +403,8 @@ export class ProgressReporter {
   }
 
   /** Deliver a task-completion/blocked result (the real answer) as markdown. */
-  private sendToChannel(chatId: string, message: string): void {
-    this.channel.sendMarkdown(chatId, message).catch((err) => {
+  private sendToChannel(chatId: string, message: string, options?: SendMarkdownOptions): void {
+    (options ? this.channel.sendMarkdown(chatId, message, options) : this.channel.sendMarkdown(chatId, message)).catch((err) => {
       getLogger().error("Failed to send progress update", {
         chatId,
         error: err instanceof Error ? err.message : String(err),

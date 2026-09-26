@@ -221,7 +221,8 @@ export default function ChatView() {
     if (!msg) return
     if (msg.feedback === feedbackType) return
     updateMessage(messageId, { feedback: feedbackType })
-    sendRawJSON({ type: 'feedback', feedbackType, instinctIds: msg.instinctIds ?? [] })
+    // The server attributes feedback through the message it is on (LRN-20b).
+    sendRawJSON({ type: 'feedback', feedbackType, messageId })
   }, [sendRawJSON, updateMessage])
 
   // Run a suggested shell command from an assistant code-block: send it verbatim

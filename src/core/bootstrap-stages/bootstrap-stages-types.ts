@@ -40,6 +40,7 @@ import {
   TaskManager,
   TaskStorage,
 } from "../../tasks/index.js";
+import type { StagedRunResponses } from "../../tasks/progress-reporter.js";
 import type { DaemonEventMap } from "../../daemon/daemon-events.js";
 import { AutoUpdater } from "../auto-updater.js";
 import type { ChannelActivityRegistry } from "../channel-activity-registry.js";
@@ -374,6 +375,7 @@ export interface TaskRuntimeStageDeps {
     taskManager: TaskManager,
     interaction: Config["interaction"],
     defaultLanguage: Config["language"],
+    runResponses?: StagedRunResponses,
   ) => ProgressReporter;
 }
 
