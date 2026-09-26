@@ -557,10 +557,12 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
       ctx,
     );
     expect(r.isError, String(r.content)).toBeFalsy();
-    // validatePath hands back REAL paths (/private/var…), so compare by suffix.
+    // validatePath hands back REAL native paths (/private/var…, C:\…), so
+    // compare by suffix in one separator.
     expect(outs).toHaveLength(2);
-    expect(outs[0]!.endsWith("/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png")).toBe(true);
-    expect(outs[1]!.endsWith("/Assets/Art/Generated/Brand.png")).toBe(true);
+    const [claim, brand] = outs.map((o) => o.replace(/\\/g, "/"));
+    expect(claim!.endsWith("/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png")).toBe(true);
+    expect(brand!.endsWith("/Assets/Art/Generated/Brand.png")).toBe(true);
     expect(existsSync(join(root, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SpriteGenerateTool, encodePng, SPRITE_SHAPES, spriteMeta } from "./sprite-generate.js";
+import { SpriteGenerateTool, encodePng, isPngNamed, SPRITE_SHAPES, spriteMeta } from "./sprite-generate.js";
 import type { ToolContext } from "../tool.interface.js";
 
 function makeContext(projectPath: string, readOnly = false): ToolContext {
@@ -127,6 +127,15 @@ describe("SpriteGenerateTool", () => {
     expect(batch.isError, String(batch.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
     expect(existsSync(join(dir, "Assets/Art/Generated/Fresh.png"))).toBe(true);
+  });
+
+  it("finds the same-stem placeholder in a native Windows path too", () => {
+    // The walk lists C:\...\ClaimFeedback.png on Windows; a "/<name>.png"
+    // suffix never matched it, so the redirect above never happened there.
+    expect(isPngNamed("C:\\Game\\Assets\\Modules\\LiveOpsModule\\Art\\Status\\ClaimFeedback.png", "ClaimFeedback")).toBe(true);
+    expect(isPngNamed("/game/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png", "ClaimFeedback")).toBe(true);
+    expect(isPngNamed("C:\\Game\\Assets\\Art\\OldClaimFeedback.png", "ClaimFeedback")).toBe(false);
+    expect(isPngNamed("C:\\Game\\Assets\\ClaimFeedback.png\\Other.png", "ClaimFeedback")).toBe(false);
   });
 
   it("a batch item may name its target as path/file, and one malformed item does not cost the rest their turn (measured 2026-09-09 21:21)", async () => {

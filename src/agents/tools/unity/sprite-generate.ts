@@ -570,6 +570,15 @@ function walkPngs(dir: string, out: string[], depth = 0): void {
   }
 }
 
+/**
+ * Is this PNG, by its file name, the sprite `name`? The walk hands back
+ * native paths, and a match on "/<name>.png" found nothing on Windows, so a
+ * bare name never reached the placeholder it was meant to replace.
+ */
+export function isPngNamed(filePath: string, name: string): boolean {
+  return filePath.slice(Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1) === `${name}.png`;
+}
+
 export type SameStemPlaceholder =
   | { readonly kind: "none" }
   | { readonly kind: "one"; readonly dirRel: string; readonly relFile: string }
@@ -591,7 +600,7 @@ export function findSameStemPlaceholder(projectPath: string, name: string, dirRe
   if (existsSync(intended)) return { kind: "none" };
   const all: string[] = [];
   walkPngs(join(projectPath, "Assets"), all);
-  const matches = all.filter((abs) => abs.endsWith(`/${name}.png`) && isPlaceholderGradePng(abs));
+  const matches = all.filter((abs) => isPngNamed(abs, name) && isPlaceholderGradePng(abs));
   if (matches.length === 0) return { kind: "none" };
   const rels = matches.map((abs) => relative(projectPath, abs).replace(/\\/g, "/"));
   if (matches.length > 1) return { kind: "many", matches: rels };
