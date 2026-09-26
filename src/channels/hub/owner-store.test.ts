@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HubOwnerStore, HUB_OWNERS_DB_FILE, HUB_OWNERS_LEGACY_FILE, HUB_OWNERS_MIGRATED_SUFFIX } from "./owner-store.js";
+import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 
 const loggerStub = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({ getLoggerSafe: () => loggerStub, getLogger: () => loggerStub }));
@@ -150,6 +151,9 @@ describe("HubOwnerStore", () => {
     expect(() => s.bind(SLACK_CHAT, "slack")).not.toThrow();
     expect(s.load().size).toBe(0);
     expect(loggerStub.warn).toHaveBeenCalledWith(expect.stringMatching(/unavailable/i), expect.objectContaining({ path: dbPath }));
+    // Windows 2026-09-26: the failed open kept its connection, so the file
+    // stayed locked (EBUSY) for the life of the process.
+    expect(openDescriptorsOn(dbPath)).toBe(0);
   });
 
   it("defaults to the Strada home", () => {

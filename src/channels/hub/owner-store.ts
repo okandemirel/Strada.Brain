@@ -168,12 +168,13 @@ export class HubOwnerStore {
   // ---- internals -----------------------------------------------------------
 
   private open(): void {
+    let db: Database.Database | undefined;
     try {
       if (this.dbPath !== ":memory:") {
         const dir = dirname(this.dbPath);
         if (dir && dir !== "." && !existsSync(dir)) mkdirSync(dir, { recursive: true });
       }
-      const db = new Database(this.dbPath);
+      db = new Database(this.dbPath);
       configureSqlitePragmas(db, "identity");
       db.exec(`
         CREATE TABLE IF NOT EXISTS hub_owners (
@@ -192,6 +193,14 @@ export class HubOwnerStore {
       );
       this.db = db;
     } catch (err) {
+      // The connection is still local here (this.db is set last), so close()
+      // alone would miss it — and on Windows a leaked handle keeps the file
+      // locked until the process exits.
+      try {
+        db?.close();
+      } catch {
+        // Never fully opened: nothing to release.
+      }
       this.close();
       getLoggerSafe().warn("Hub owner store unavailable — ownership will not survive a restart", {
         path: this.dbPath,

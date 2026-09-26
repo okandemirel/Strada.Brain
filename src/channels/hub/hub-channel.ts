@@ -87,6 +87,8 @@ export class HubChannel implements IChannelAdapter {
    */
   private readonly owners = new Map<string, OwnerEntry>();
   private readonly ownerStore: HubOwnerStore | null;
+  /** True when the hub opened the default store itself, so the hub must close it. */
+  private readonly ownsOwnerStore: boolean;
   private readonly unownedWarned = new Set<string>();
   private handler: Handler | undefined;
 
@@ -96,6 +98,7 @@ export class HubChannel implements IChannelAdapter {
     }
     this.members = members as readonly Member[];
     this.name = members.map((m) => m.name).join("+");
+    this.ownsOwnerStore = options.ownerStore === undefined;
     this.ownerStore = options.ownerStore === undefined ? new HubOwnerStore(HubOwnerStore.defaultPath()) : options.ownerStore;
     if (this.ownerStore) {
       const now = Date.now();
@@ -135,6 +138,10 @@ export class HubChannel implements IChannelAdapter {
         });
       }
     }
+    // The default store is the hub's own, and nothing else would ever close it:
+    // on Windows its open database stays locked until the process exits. A
+    // store the caller passed in is the caller's to close.
+    if (this.ownsOwnerStore) this.ownerStore?.close();
   }
 
   isHealthy(): boolean {

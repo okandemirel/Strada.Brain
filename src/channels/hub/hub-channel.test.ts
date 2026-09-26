@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { HubChannel } from "./hub-channel.js";
 import { HubOwnerStore, HUB_OWNERS_DB_FILE } from "./owner-store.js";
+import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 import type { IChannelAdapter } from "../channel.interface.js";
 import type { IncomingMessage } from "../channel-messages.interface.js";
 
@@ -43,19 +44,40 @@ function incoming(chatId: string, channelType: string): IncomingMessage {
   return { chatId, channelType, userId: "u", text: "hi", timestamp: new Date() } as IncomingMessage;
 }
 
-// The default owner store lives under the Strada home: fake HOME so no test
-// touches the real ~/.strada.
+// The default owner store lives under the Strada home: fake the home so no test
+// touches the real one. Windows reads USERPROFILE (not HOME) for the home and
+// LOCALAPPDATA for the Strada home, so all three move.
+const HOME_KEYS = ["HOME", "USERPROFILE", "LOCALAPPDATA", "STRADA_HOME"] as const;
 let fakeHome: string;
-const savedEnv = { HOME: process.env["HOME"], STRADA_HOME: process.env["STRADA_HOME"] };
+const savedEnv = Object.fromEntries(HOME_KEYS.map((key) => [key, process.env[key]]));
 beforeAll(() => {
   fakeHome = mkdtempSync(join(tmpdir(), "hub-home-"));
   process.env["HOME"] = fakeHome;
+  process.env["USERPROFILE"] = fakeHome;
+  process.env["LOCALAPPDATA"] = join(fakeHome, "AppData", "Local");
   delete process.env["STRADA_HOME"];
 });
 afterAll(() => {
-  process.env["HOME"] = savedEnv.HOME;
-  if (savedEnv.STRADA_HOME !== undefined) process.env["STRADA_HOME"] = savedEnv.STRADA_HOME;
+  for (const key of HOME_KEYS) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
   rmSync(fakeHome, { recursive: true, force: true });
+});
+
+/** Where the default owner store must land under the fake home, per platform. */
+const defaultStradaHome = (): string =>
+  process.platform === "win32" ? join(fakeHome, "AppData", "Local", "Strada") : join(fakeHome, ".strada");
+
+// A hub on the default store holds that database open until it is disconnected;
+// on Windows an open database cannot be deleted, so every such hub is closed.
+const hubs: HubChannel[] = [];
+const track = (hub: HubChannel): HubChannel => {
+  hubs.push(hub);
+  return hub;
+};
+afterEach(async () => {
+  for (const hub of hubs.splice(0)) await hub.disconnect();
 });
 
 describe("HubChannel", () => {
@@ -65,13 +87,13 @@ describe("HubChannel", () => {
 
   it("needs at least two members and names itself after them", () => {
     expect(() => new HubChannel([fake("web")])).toThrow(/at least two/);
-    expect(new HubChannel([fake("web"), fake("telegram")]).name).toBe("web+telegram");
+    expect(track(new HubChannel([fake("web"), fake("telegram")])).name).toBe("web+telegram");
   });
 
   it("delivers every member's messages to the one handler and replies on the member the chat arrived on", async () => {
     const web = fake("web");
     const tg = fake("telegram");
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
     const received: string[] = [];
     hub.onMessage(async (msg) => {
       received.push(`${msg.channelType}:${msg.chatId}`);
@@ -91,7 +113,7 @@ describe("HubChannel", () => {
   it("routes a chat it never saw to the member that claims the id's shape, else to the primary with one warning", async () => {
     const web = fake("web", { claimsChatId: (id: string) => /^[0-9a-f-]{36}$/.test(id) });
     const tg = fake("telegram", { claimsChatId: (id: string) => /^-?\d+$/.test(id) });
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
 
     await hub.sendMarkdown("-100999", "persisted campaign chat");
     expect(tg.sent).toHaveLength(1);
@@ -111,7 +133,7 @@ describe("HubChannel", () => {
       startStreamingMessage: vi.fn(async () => "stream-1"),
       sendTypingIndicator: vi.fn(async () => undefined),
     });
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
     await web.handler; // no-op; ownership for the web id comes from the message below
     hub.onMessage(async () => undefined);
     await (web as Fake).handler!(incoming("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "web"));
@@ -137,7 +159,7 @@ describe("HubChannel", () => {
   it("fans setters and broadcasts out to every member that implements them", () => {
     const web = fake("web", { setWorkspaceBusEmitter: vi.fn(), broadcastRaw: vi.fn(), setBuildStatusProvider: vi.fn(), setFeedbackHandler: vi.fn() });
     const tg = fake("telegram", { setFeedbackHandler: vi.fn() });
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
     const emitter = () => true;
     hub.setWorkspaceBusEmitter(emitter);
     hub.broadcastRaw("{\"type\":\"campaign:status\"}");
@@ -203,14 +225,20 @@ describe("HubChannel", () => {
       // inbound, no claimsChatId on either member.
       const slack2 = fake("slack");
       const tg2 = fake("telegram");
-      const hub2 = new HubChannel([tg2, slack2], { ownerStore: new HubOwnerStore(dbPath) });
-      hub2.onMessage(async () => undefined);
-      await hub2.sendMarkdown("C123:1700000000.000100", "goal finished");
-      expect(slack2.sent).toEqual([["C123:1700000000.000100", "markdown", "goal finished"]]);
-      expect(tg2.sent).toEqual([]);
-      expect(loggerStub.warn).not.toHaveBeenCalled();
-      expect(hub2.ownerNames().get("C123:1700000000.000100")).toBe("slack");
+      const store2 = new HubOwnerStore(dbPath);
+      try {
+        const hub2 = new HubChannel([tg2, slack2], { ownerStore: store2 });
+        hub2.onMessage(async () => undefined);
+        await hub2.sendMarkdown("C123:1700000000.000100", "goal finished");
+        expect(slack2.sent).toEqual([["C123:1700000000.000100", "markdown", "goal finished"]]);
+        expect(tg2.sent).toEqual([]);
+        expect(loggerStub.warn).not.toHaveBeenCalled();
+        expect(hub2.ownerNames().get("C123:1700000000.000100")).toBe("slack");
+      } finally {
+        store2.close();
+      }
     } finally {
+      store.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -218,10 +246,10 @@ describe("HubChannel", () => {
   it("persists ownership under the Strada home by default", async () => {
     const web = fake("web");
     const tg = fake("telegram");
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
     hub.onMessage(async () => undefined);
     await tg.handler!(incoming("4242", "telegram"));
-    const dbPath = join(fakeHome, ".strada", HUB_OWNERS_DB_FILE);
+    const dbPath = join(defaultStradaHome(), HUB_OWNERS_DB_FILE);
     expect(existsSync(dbPath)).toBe(true);
     const persisted = new HubOwnerStore(dbPath);
     try {
@@ -231,14 +259,38 @@ describe("HubChannel", () => {
     }
   });
 
+  // Windows 2026-09-26: the hub opened its default store and nothing ever closed
+  // it, so the database stayed locked (EBUSY) for the life of the process.
+  it("closes the default owner store it opened when it disconnects", async () => {
+    const hub = track(new HubChannel([fake("web"), fake("telegram")]));
+    const dbPath = join(defaultStradaHome(), HUB_OWNERS_DB_FILE);
+    expect(openDescriptorsOn(dbPath)).toBeGreaterThan(0);
+    await hub.disconnect();
+    expect(openDescriptorsOn(dbPath)).toBe(0);
+  });
+
+  it("leaves a store the caller passed in open for the caller to close", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-owners-caller-"));
+    const store = new HubOwnerStore(join(dir, HUB_OWNERS_DB_FILE));
+    try {
+      const hub = new HubChannel([fake("web"), fake("telegram")], { ownerStore: store });
+      await hub.disconnect();
+      store.bind("after-disconnect", "web");
+      expect(store.load().get("after-disconnect")).toBe("web");
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("connects members in order, rolls back on a failure, and is healthy only when all are", async () => {
     const web = fake("web");
     const tg = fake("telegram", { connect: vi.fn(async () => { throw new Error("401 bad token"); }) });
-    const hub = new HubChannel([web, tg]);
+    const hub = track(new HubChannel([web, tg]));
     await expect(hub.connect()).rejects.toThrow(/"telegram" failed to connect: 401 bad token/);
     expect(web.disconnect).toHaveBeenCalledTimes(1);
 
-    const ok = new HubChannel([fake("web"), fake("telegram", { isHealthy: () => false })]);
+    const ok = track(new HubChannel([fake("web"), fake("telegram", { isHealthy: () => false })]));
     expect(ok.isHealthy()).toBe(false);
     expect(ok.memberHealth()).toEqual([{ name: "web", healthy: true }, { name: "telegram", healthy: false }]);
     await ok.disconnect();
