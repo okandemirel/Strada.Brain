@@ -206,6 +206,17 @@ export interface FetchWithRetryOptions {
    * or any secret — only the named rate-limit headers + truncated body.
    */
   onBackoff?: (info: BackoffInfo) => void;
+  /**
+   * Which failed statuses are retried. Default: 429 and 5xx except 529 — an overloaded
+   * server is left to the FallbackChain's circuit breaker.
+   */
+  isRetryableStatus?: (status: number, headers: Headers) => boolean;
+  /**
+   * Hand back the final failed response (not retryable, or retries used up) instead of
+   * throwing, for a caller that turns it into its own typed error — an SDK that owns the
+   * transport. The hard quota stop still throws QuotaExhaustedError.
+   */
+  returnFinalResponse?: boolean;
 }
 
 /** Rate-limit diagnostics surfaced on a retryable 429 (no auth headers / secrets). */
@@ -572,10 +583,26 @@ function attachReleaseOnBodyClose(response: Response, releasePermit: () => void)
   });
 }
 
+/**
+ * fetchWithRetry's retry policy — status and transport retries, Retry-After, the hard quota
+ * stop, onBackoff — over the caller's own `send`, without the per-provider permit or start
+ * pacing. For a client that sends each attempt itself: the Anthropic SDK hands its request
+ * middleware a `next` that signs and times one attempt, and its own retries report nothing.
+ */
+export function retryHttpAttempts(
+  url: string,
+  init: RequestInit,
+  send: (url: string, init: RequestInit) => Promise<Response>,
+  opts: FetchWithRetryOptions = {},
+): Promise<Response> {
+  return runFetchLoop(url, init, opts, send);
+}
+
 async function runFetchLoop(
   url: string,
   init: RequestInit,
   opts: FetchWithRetryOptions = {},
+  send: (url: string, init: RequestInit) => Promise<Response> = (u, i) => fetch(u, i),
 ): Promise<Response> {
   const maxRetries = opts.maxRetries ?? DEFAULTS.maxRetries;
   const networkMaxRetries = opts.networkMaxRetries ?? DEFAULTS.networkMaxRetries;
@@ -600,7 +627,7 @@ async function runFetchLoop(
     let response: Response;
     try {
       const fetchInit = opts.signal ? { ...init, signal: opts.signal } : init;
-      response = await fetch(url, fetchInit);
+      response = await send(url, fetchInit);
     } catch (err) {
       // An abort is ours, not the network's.
       //
@@ -652,9 +679,12 @@ async function runFetchLoop(
     const status = response.status;
     // 529 = server overloaded — don't retry internally, let FallbackChain circuit-break
     const isOverloaded = status === 529;
-    const isRetryable = !isOverloaded && (status === 429 || (status >= 500 && status < 600));
+    const isRetryable = opts.isRetryableStatus
+      ? opts.isRetryableStatus(status, response.headers)
+      : !isOverloaded && (status === 429 || (status >= 500 && status < 600));
 
     if (!isRetryable || attempt === maxRetries) {
+      if (opts.returnFinalResponse) return response;
       // 1500, not 200: a gateway that relays an upstream's 4xx (OpenCode Go →
       // DeepSeek) puts the sentence that names the cause at the END of a
       // nested JSON body — "…Upstream request failed: [invalid_request_error]

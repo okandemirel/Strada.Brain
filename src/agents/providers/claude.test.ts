@@ -97,7 +97,8 @@ describe("ClaudeProvider", () => {
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ tools: undefined }),
-      undefined,
+      // Message calls retry through the project's policy, not the SDK's (PRV-12).
+      expect.objectContaining({ maxRetries: 0 }),
     );
   });
 

@@ -1,5 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { type Middleware } from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
+import { retryHttpAttempts } from "../../common/fetch-with-retry.js";
 import type {
   IAIProvider,
   IStreamingProvider,
@@ -39,6 +40,17 @@ export function toClaudeToolId(id: string): string {
 
 /** `anthropic-beta` value for OAuth-bearer requests (SDK: OAUTH_API_BETA_HEADER). */
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
+
+/** The SDK's own default retry count, kept for message calls now that they retry through ours. */
+const CLAUDE_MAX_RETRIES = 2;
+
+/** The SDK's retry rule (its client.shouldRetry), so a Claude call retries the same statuses as before. */
+function isClaudeRetryableStatus(status: number, headers: Headers): boolean {
+  const hint = headers.get("x-should-retry");
+  if (hint === "true") return true;
+  if (hint === "false") return false;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
 
 /**
  * Claude AI provider using the Anthropic SDK.
@@ -104,10 +116,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       toolCount: request.tools?.length ?? 0,
     });
 
-    const response = await this.client.messages.create(
-      request,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
+    const response = await this.client.messages.create(request, this.messageRequestOptions(options));
 
     return this.parseResponse(response);
   }
@@ -128,10 +137,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       messageCount: request.messages.length,
     });
 
-    const stream = this.client.messages.stream(
-      request,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
+    const stream = this.client.messages.stream(request, this.messageRequestOptions(options));
 
     stream.on("text", (text) => {
       onChunk(text);
@@ -139,6 +145,36 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
 
     const response = await stream.finalMessage();
     return this.parseResponse(response);
+  }
+
+  /**
+   * Per-request options for a message call. The SDK retried 429s and 5xx on its own and gave
+   * no hook, so a Claude backoff was silence to the FallbackChain: its first-response timer
+   * fired and the model was filed as unresponsive (PRV-12). The SDK's retries are off for
+   * these calls and a request middleware retries each attempt through the project's policy,
+   * which reports every backoff via `onBackoff`. Each `next()` is one SDK attempt — signed
+   * and under its own timeout — and the final failed response goes back to the SDK, so its
+   * typed errors (status, headers) are unchanged.
+   */
+  private messageRequestOptions(options?: ProviderCallOptions): {
+    signal?: AbortSignal;
+    maxRetries: number;
+    middleware: Middleware[];
+  } {
+    const retry: Middleware = (request, next) =>
+      retryHttpAttempts(request.url, request, () => next(request), {
+        callerName: this.name,
+        maxRetries: CLAUDE_MAX_RETRIES,
+        networkMaxRetries: CLAUDE_MAX_RETRIES,
+        isRetryableStatus: isClaudeRetryableStatus,
+        returnFinalResponse: true,
+        onBackoff: options?.onBackoff,
+      });
+    return {
+      ...(options?.signal ? { signal: options.signal } : {}),
+      maxRetries: 0,
+      middleware: [retry],
+    };
   }
 
   async healthCheck(): Promise<boolean> {
