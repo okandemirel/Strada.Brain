@@ -921,7 +921,24 @@ export class Orchestrator {
     return this.dotnetProjectPresence;
   }
 
-  private systemPrompt: string;
+  private baseSystemPrompt = "";
+  /** Project-vault state the vault hint in baseSystemPrompt was built from. */
+  private vaultHintState: string | undefined;
+  /**
+   * The base system prompt, rebuilt first when the project vault's state has
+   * moved on since its vault hint was written. On a cold boot the vault is
+   * still indexing in the background when this orchestrator is built, and a
+   * hint computed once told the agent for the whole session that the project
+   * was not indexed. The check is a path lookup; files are listed only when
+   * the state changed (registered, indexing → ready).
+   */
+  private get systemPrompt(): string {
+    if (this.currentVaultHintState() !== this.vaultHintState) this.rebuildBaseSystemPrompt();
+    return this.baseSystemPrompt;
+  }
+  private set systemPrompt(prompt: string) {
+    this.baseSystemPrompt = prompt;
+  }
   private readonly getIdentityState?: () => IdentityState;
   private readonly crashRecoveryContext?: CrashRecoveryContext;
   private stradaDeps: StradaDepsStatus | undefined;
@@ -1920,10 +1937,15 @@ export class Orchestrator {
    * synchronous path and stats() is async.
    */
   private describeVaultAvailability(): VaultAvailability | undefined {
+    this.vaultHintState = this.currentVaultHintState();
     if (!this.vaultRegistry || !this.projectPath) return undefined;
     try {
       const vault = this.vaultRegistry.resolveVaultForPath(this.projectPath);
       if (!vault) return { indexedFileCount: 0, frameworkFileCount: 0 };
+      // First index still running: what it lists so far is partial.
+      if (this.vaultRegistry.getInitState?.(vault.id)?.status === "indexing") {
+        return { indexedFileCount: 0, frameworkFileCount: 0, indexing: true };
+      }
       const files = vault.listFiles();
       const frameworkFileCount = files.filter((f) =>
         /(^|\/)Strada\.(Core|Modules)(\/|$)/i.test(f.path.replace(/\\/g, "/")),
@@ -1932,6 +1954,18 @@ export class Orchestrator {
     } catch {
       // A vault that cannot be read is a vault the agent should not be sent to.
       return undefined;
+    }
+  }
+
+  /** What the vault hint depends on: the project's vault and its init status. */
+  private currentVaultHintState(): string {
+    if (!this.vaultRegistry || !this.projectPath) return "off";
+    try {
+      const vault = this.vaultRegistry.resolveVaultForPath(this.projectPath);
+      if (!vault) return "none";
+      return `${vault.id}:${this.vaultRegistry.getInitState?.(vault.id)?.status ?? "untracked"}`;
+    } catch {
+      return "unreadable";
     }
   }
 

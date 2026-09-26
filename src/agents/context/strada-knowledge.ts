@@ -382,6 +382,8 @@ export interface VaultAvailability {
   readonly indexedFileCount: number;
   /** Framework sources (Strada.Core/Modules) present in the index. */
   readonly frameworkFileCount: number;
+  /** The first index is still running (background init on a cold boot); counts would be partial. */
+  readonly indexing?: boolean;
 }
 
 /**
@@ -409,6 +411,17 @@ export function buildToolUsageHints(vault?: VaultAvailability | boolean): string
   // Legacy boolean call sites: no counts available, so say nothing rather than
   // repeat the instruction that taught the agent to ignore this section.
   if (!vault || vault === true) return "";
+
+  // Indexing in the background: a partial count read as "not indexed" or as
+  // a small project. Say what is true now; the orchestrator rebuilds the hint
+  // with the counts once the index is ready.
+  if (vault.indexing) {
+    return (
+      "\n## Tool Usage Hints\n" +
+      "- This project's vault is still being indexed. `vault_search` works, but its results may be partial " +
+      "until indexing finishes; when it misses, use `glob_search`/`grep_search`/`file_read`.\n"
+    );
+  }
 
   const { indexedFileCount, frameworkFileCount } = vault;
   if (indexedFileCount <= 0) {

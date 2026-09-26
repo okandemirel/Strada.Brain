@@ -17,8 +17,12 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { buildToolUsageHints } from "./strada-knowledge.js";
 import { Orchestrator } from "../orchestrator.js";
+import { VaultRegistry } from "../../vault/vault-registry.js";
+import type { IVault } from "../../vault/vault.interface.js";
 
 describe("vault usage hint", () => {
   it("states what is indexed, with counts the agent can check", () => {
@@ -85,6 +89,13 @@ function vaultWith(paths: string[]) {
 }
 
 function orchestratorWithVault(vault: unknown | undefined): Orchestrator {
+  return orchestratorWithRegistry({
+    resolveVaultForPath: () => vault,
+    list: () => (vault ? [vault] : []),
+  });
+}
+
+function orchestratorWithRegistry(vaultRegistry: unknown, projectPath = "/tmp/test-project"): Orchestrator {
   const provider = {
     name: "mock",
     capabilities: {
@@ -108,13 +119,10 @@ function orchestratorWithVault(vault: unknown | undefined): Orchestrator {
     } as never,
     tools: [],
     channel: { sendMessage: vi.fn(), type: "cli" } as never,
-    projectPath: "/tmp/test-project",
+    projectPath,
     readOnly: false,
     requireConfirmation: false,
-    vaultRegistry: {
-      resolveVaultForPath: () => vault,
-      list: () => (vault ? [vault] : []),
-    } as never,
+    vaultRegistry: vaultRegistry as never,
   });
 }
 
@@ -149,5 +157,56 @@ describe("the hint reaches the system prompt with real counts", () => {
     // The self-vault case: a registry exists, but nothing covers this project.
     const orchestrator = orchestratorWithVault(undefined);
     expect(systemPromptOf(orchestrator)).toMatch(/NOT indexed/i);
+  });
+});
+
+describe("the hint follows the vault's live state (cold boot)", () => {
+  it("says the vault is still indexing, not that the project is unindexed", () => {
+    const hint = buildToolUsageHints({ indexedFileCount: 12, frameworkFileCount: 0, indexing: true });
+
+    expect(hint).toMatch(/still being indexed/i);
+    expect(hint).toMatch(/partial/i);
+    expect(hint).not.toMatch(/NOT indexed/i);
+    // No count while indexing: a partial one would read as a small project.
+    expect(hint).not.toContain("12");
+  });
+
+  it("moves from not registered, to indexing, to the real counts as the registry's init settles", async () => {
+    // Real registry: bootstrap registers the project vault and indexes it in
+    // the background, so an orchestrator built on a cold boot first sees no
+    // vault or an empty one. Its hint was computed once and said "NOT
+    // indexed" for the whole session.
+    const root = join(tmpdir(), "strada-vault-hint-cold-boot");
+    const registry = new VaultRegistry();
+    const files: Array<{ path: string; indexedAt: number }> = [];
+    const vault = {
+      id: "unity:coldboot",
+      kind: "unity-project",
+      rootPath: root,
+      listFiles: () => files,
+      query: vi.fn(),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IVault;
+    const orchestrator = orchestratorWithRegistry(registry, root);
+    expect(systemPromptOf(orchestrator)).toMatch(/NOT indexed/i);
+
+    registry.register(vault);
+    let finishInit!: () => void;
+    registry.trackInit(vault, new Promise<void>((resolve) => { finishInit = resolve; }));
+    files.push({ path: "Assets/Game/Bootstrap.cs", indexedAt: 1 });
+    expect(systemPromptOf(orchestrator)).toMatch(/still being indexed/i);
+    expect(systemPromptOf(orchestrator)).not.toMatch(/NOT indexed/i);
+
+    files.push(
+      { path: "Assets/Game/Board.cs", indexedAt: 1 },
+      { path: "Packages/Submodules/Strada.Core/Runtime/Modules/ModuleConfig.cs", indexedAt: 1 },
+    );
+    finishInit();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const ready = systemPromptOf(orchestrator);
+    expect(ready).toMatch(/indexed in the vault: 3 files/);
+    expect(ready).toMatch(/1 framework source file/);
+    expect(ready).not.toMatch(/still being indexed/i);
   });
 });

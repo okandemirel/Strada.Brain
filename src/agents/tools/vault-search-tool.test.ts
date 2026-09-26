@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { VaultSearchTool } from './vault-search-tool.js';
 import type { ToolContext } from './tool.interface.js';
-import type { VaultKind } from '../../vault/vault.interface.js';
+import type { IVault, VaultKind } from '../../vault/vault.interface.js';
+import { VaultRegistry } from '../../vault/vault-registry.js';
 
 const EMPTY_RESULT = { hits: [], budgetUsed: 0, truncated: false };
 
@@ -313,5 +314,57 @@ describe('VaultSearchTool budgetTokens across vaults', () => {
 
     expect(result.content).toContain('2 hit(s)');
     expect(result.content).not.toContain('(truncated)');
+  });
+});
+
+/**
+ * Since vaults index in the background, a cold first boot queries a project
+ * vault that holds only part of the project; an empty or thin answer then read
+ * as "not in this project".
+ */
+describe('VaultSearchTool while a vault is still indexing', () => {
+  const tool = new VaultSearchTool();
+
+  function registryWithIndexingVault(hits: unknown[] = []) {
+    const registry = new VaultRegistry();
+    const vault = {
+      id: 'unity:4ca9bd33',
+      kind: 'unity-project' as VaultKind,
+      rootPath: '/project',
+      query: vi.fn().mockResolvedValue({ hits, budgetUsed: 0, truncated: false }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IVault;
+    registry.register(vault);
+    let finishInit!: () => void;
+    registry.trackInit(vault, new Promise<void>((resolve) => { finishInit = resolve; }));
+    const ctx = { vaultRegistry: registry, projectPath: '/project' } as ToolContext;
+    return { ctx, finishInit };
+  }
+
+  it('says results may be partial while the queried vault is indexing, and stops once it is ready', async () => {
+    const { ctx, finishInit } = registryWithIndexingVault();
+
+    const during = await tool.execute({ query: 'GameBootstrapper' }, ctx);
+    expect(during.content).toMatch(/no vault hits/u);
+    expect(during.content).toContain('indexing in progress for [unity:4ca9bd33] — results may be partial');
+
+    finishInit();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const after = await tool.execute({ query: 'GameBootstrapper' }, ctx);
+    expect(after.content).toMatch(/no vault hits/u);
+    expect(after.content).not.toContain('indexing in progress');
+  });
+
+  it('carries the note next to the hits it did find', async () => {
+    const { ctx } = registryWithIndexingVault([{
+      chunk: { path: 'Assets/GameBootstrapper.cs', startLine: 1, endLine: 9, content: 'class GameBootstrapper {}', tokenCount: 8 },
+      scores: { fts: 2, hnsw: null, rrf: 0.02 },
+    }]);
+
+    const result = await tool.execute({ query: 'GameBootstrapper' }, ctx);
+
+    expect(result.content).toContain('1 hit(s)');
+    expect(result.content).toContain('indexing in progress for [unity:4ca9bd33] — results may be partial');
   });
 });

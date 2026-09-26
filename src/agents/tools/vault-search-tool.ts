@@ -29,6 +29,8 @@ interface VaultSearchResultPayload {
   /** Vault ids whose query threw, with the reason; they were NOT searched. */
   failed: Array<{ id: string; reason: string }>;
   hint?: string;
+  /** Searched vaults still building their first index: their answers may be partial. */
+  indexing: string[];
 }
 
 const DEFAULT_TOP_K = 8;
@@ -270,6 +272,12 @@ export class VaultSearchTool {
     const withinBudget = budgetTokens === undefined ? merged : packByBudget(merged, budgetTokens).kept;
     const capped = withinBudget.slice(0, topK).map((m) => m.hit);
 
+    // A vault still building its first index (background init on a cold
+    // boot) answers from what it has indexed so far: say so, or a thin or
+    // empty answer reads as "not in this project".
+    const indexing = searched.filter((id) => registry.getInitState?.(id)?.status === 'indexing');
+    const indexingNote = describeIndexing(indexing);
+
     const tokensUsed = capped.reduce((acc, h) => acc + estimateTextTokens(h.content), 0);
     const truncated = merged.length > capped.length || perVault.some((p) => p.status === "fulfilled" && p.value.result.truncated);
 
@@ -280,6 +288,7 @@ export class VaultSearchTool {
       searched,
       failed,
       hint,
+      indexing,
     };
 
     if (failed.length === targetVaults.length) {
@@ -304,6 +313,7 @@ export class VaultSearchTool {
         `semantic retrieval unavailable for "${query}": ${evidence}. Re-run with mode='hybrid' or 'fts'.`,
       ];
       if (failed.length) lines.push(`(not searched — query failed: ${formatFailed(failed)})`);
+      if (indexingNote) lines.push(`(${indexingNote})`);
       if (hint) lines.push(`(${hint})`);
       return {
         content: lines.join('\n'),
@@ -314,6 +324,7 @@ export class VaultSearchTool {
     if (!capped.length) {
       const lines = [`no vault hits for "${query}" across [${searched.join(', ')}]`];
       if (failed.length) lines.push(`(not searched — query failed: ${formatFailed(failed)})`);
+      if (indexingNote) lines.push(`(${indexingNote})`);
       if (hint) lines.push(`(${hint})`);
       return {
         content: lines.join('\n'),
@@ -401,6 +412,11 @@ function formatFailed(failed: ReadonlyArray<{ id: string; reason: string }>): st
   return `[${failed.map((f) => `${f.id}: ${f.reason}`).join('; ')}]`;
 }
 
+/** The note for searched vaults whose first index is still running, or undefined when none is. */
+function describeIndexing(ids: readonly string[]): string | undefined {
+  return ids.length > 0 ? `indexing in progress for [${ids.join(', ')}] — results may be partial` : undefined;
+}
+
 function formatHitsForAgent(payload: VaultSearchResultPayload): string {
   const header =
     `vault_search: ${payload.hits.length} hit(s), ` +
@@ -408,6 +424,7 @@ function formatHitsForAgent(payload: VaultSearchResultPayload): string {
     `searched=[${payload.searched.join(', ')}]` +
     (payload.failed.length ? ` failed=${formatFailed(payload.failed)}` : '') +
     (payload.truncated ? ' (truncated)' : '') +
+    (payload.indexing.length ? `\n(${describeIndexing(payload.indexing)})` : '') +
     (payload.hint ? `\n(hint: ${payload.hint})` : '');
   const body = payload.hits
     .map((h, i) => {
