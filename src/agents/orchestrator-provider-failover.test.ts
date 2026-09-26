@@ -46,7 +46,11 @@ const QWEN_HOST = "dashscope-intl.aliyuncs.com";
 const CREDENTIALS = { kimi: { apiKey: "test-kimi-key" }, qwen: { apiKey: "test-qwen-key" } };
 
 const tempDirs: string[] = [];
+// Each ProviderManager holds provider-preferences.db open until shutdown(); on
+// Windows an open database cannot be removed, so they are shut down first.
+const managers: Array<{ shutdown(): void }> = [];
 afterAll(() => {
+  for (const manager of managers.splice(0)) manager.shutdown();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -116,6 +120,7 @@ function harness() {
     prefsDir,
     order,
   );
+  managers.push(providerManager);
   const orchestrator = new Orchestrator({
     providerManager,
     tools: [],
