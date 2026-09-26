@@ -94,7 +94,8 @@ describe("PrerenderFramesTool validation", () => {
   // so any other account failed with an error naming a stranger's home
   // directory and no mention of the override.
   it("looks for the Unity CLI under the current user's home, not a hardcoded one", () => {
-    expect(resolveUnityCliPath({}, "/home/ci")).toBe("/home/ci/.unity/bin/unity");
+    // A native path: the CLI is looked up on this machine's filesystem.
+    expect(resolveUnityCliPath({}, "/home/ci")).toBe(join("/home/ci", ".unity", "bin", "unity"));
     expect(resolveUnityCliPath({ STRADA_UNITY_CLI: "/opt/unity/bin/unity" }, "/home/ci")).toBe("/opt/unity/bin/unity");
     expect(resolveUnityCliPath({}, "/home/ci")).not.toContain("okan");
   });
@@ -151,7 +152,8 @@ describe("PrerenderFramesTool launch semantics", () => {
     rmSync(cliDir, { recursive: true, force: true });
   });
 
-  it("keeps waiting for frames when the CLI wrapper exits nonzero after handing off", async () => {
+  // The stand-in CLI is a #!/bin/sh script (sed, sleep): Windows cannot execFile it.
+  it.skipIf(process.platform === "win32")("keeps waiting for frames when the CLI wrapper exits nonzero after handing off", async () => {
     // A stand-in for `unity open`: hands off to a detached "editor" that lands
     // the frames three seconds later, then exits 3 the way the Hub wrapper can.
     const fakeCli = join(cliDir, "unity");
@@ -203,7 +205,8 @@ describe("PrerenderFramesTool keeps an authored frame .meta (audit A5 / D56)", (
     rmSync(cliDir, { recursive: true, force: true });
   });
 
-  it("a frame meta with PPU 16, a custom pivot and two slices survives a re-render; a wrong-importer one is replaced", async () => {
+  // The stand-in CLI is a #!/bin/sh script (sed, sleep): Windows cannot execFile it.
+  it.skipIf(process.platform === "win32")("a frame meta with PPU 16, a custom pivot and two slices survives a re-render; a wrong-importer one is replaced", async () => {
     const fakeCli = join(cliDir, "unity");
     writeFileSync(
       fakeCli,
