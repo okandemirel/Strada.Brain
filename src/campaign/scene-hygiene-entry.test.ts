@@ -9,10 +9,13 @@ import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
  *    scene could be promoted to "open this and press Play".
  */
 function io(files: Record<string, string>) {
+  // The assessment reads through join(), so on Windows it asks for
+  // "\p\Assets\Scenes\Game.unity"; the fixture keys are Unity's own form.
+  const unity = (p: string): string => p.replace(/\\/g, "/");
   return {
-    exists: (p: string) => Object.keys(files).some((k) => p.endsWith(k)),
+    exists: (p: string) => Object.keys(files).some((k) => unity(p).endsWith(k)),
     readFile: (p: string) => {
-      const hit = Object.keys(files).find((k) => p.endsWith(k));
+      const hit = Object.keys(files).find((k) => unity(p).endsWith(k));
       if (!hit) throw new Error("missing");
       return files[hit]!;
     },
