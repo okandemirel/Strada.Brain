@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 
 describe("LearningStorage", () => {
   let storage: LearningStorage;
@@ -514,6 +515,16 @@ describe("LearningStorage", () => {
       // Storage is already initialized in beforeEach
       // Calling initialize again should not throw (ALTER TABLE silently fails if column exists)
       expect(() => storage.initialize()).not.toThrow();
+    });
+
+    // Windows 2026-09-26: a second initialize() replaced the connection without
+    // closing it, and the orphaned handle kept the file locked (EBUSY).
+    it("does not leak the replaced connection when initialize is called twice", () => {
+      const once = openDescriptorsOn(dbPath);
+      storage.initialize();
+      expect(openDescriptorsOn(dbPath)).toBe(once);
+      storage.close();
+      expect(openDescriptorsOn(dbPath)).toBe(0);
     });
 
     it("should have embedding column in instincts table after initialize", () => {

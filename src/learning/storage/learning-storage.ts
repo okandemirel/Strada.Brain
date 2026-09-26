@@ -407,6 +407,10 @@ export class LearningStorage {
     // Only a LIVE holder blocks either way — a lock left by a dead process is the
     // restore's to refuse, never a reason to keep the daemon out of its own store.
     assertNoMaintenanceExclusion(resolveStradaHome(), `open ${this.dbPath}`);
+    // Initializing again (the migration is idempotent) must not orphan the
+    // connection and flush timer it replaces: on Windows the orphaned handle
+    // keeps learning.db locked until the process exits.
+    if (this.db) this.close();
     const dir = dirname(this.dbPath);
     if (dir && dir !== ".") {
       if (!existsSync(dir)) {
