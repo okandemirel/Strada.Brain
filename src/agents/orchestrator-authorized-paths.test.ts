@@ -7,6 +7,7 @@
  * run can read. Tests drive the real tool context executeToolCalls builds.
  */
 
+import { resolve } from "node:path";
 import { Orchestrator } from "./orchestrator.js";
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 
@@ -28,6 +29,8 @@ vi.mock("./context/strada-knowledge.js", () => ({
 
 const OUTSIDE = "/tmp/strada-outside/other-repo/config.yaml";
 const NAMED_BY_USER = "/tmp/strada-outside/PixelFlow_GDD.docx";
+/** What extraction keeps: the resolved path (on Windows, on the current drive). */
+const AUTHORIZED = resolve(NAMED_BY_USER);
 
 interface ToolCallsHost {
   executeToolCalls(chatId: string, calls: unknown[], opts: unknown): Promise<unknown[]>;
@@ -113,8 +116,8 @@ describe("user-authorized paths come only from a channel message", () => {
       taskPrompt: `Sub-goal: compare the design with ${OUTSIDE}`,
     });
 
-    expect(paths).toEqual([NAMED_BY_USER]);
-    expect(store.get("chat-1")).toEqual([NAMED_BY_USER]);
+    expect(paths).toEqual([AUTHORIZED]);
+    expect(store.get("chat-1")).toEqual([AUTHORIZED]);
   });
 
   it("a user-role turn the run synthesized (gate or tool-failure text) authorizes nothing", async () => {
@@ -142,7 +145,7 @@ describe("user-authorized paths come only from a channel message", () => {
 
     const paths = await pathsSeenBy(orch, seen, "chat-user", { taskPrompt: "Continue building the game" });
 
-    expect(paths).toEqual([NAMED_BY_USER]);
+    expect(paths).toEqual([AUTHORIZED]);
   });
 
   it("a delegated child never holds more than its parent", async () => {

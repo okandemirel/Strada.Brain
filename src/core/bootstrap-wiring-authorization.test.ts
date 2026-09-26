@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 
 describe("what the wiring must remember before routing", () => {
@@ -22,8 +23,9 @@ describe("what the wiring must remember before routing", () => {
     "Continue building the game described in /Users/okan/Downloads/PixelFlow_GDD.docx in this Unity project.";
 
   it("finds the path in the request that starts a run", () => {
+    // Resolved: on Windows a rooted path lands on the current drive.
     expect(extractUserAuthorizedPaths(REQUEST)).toEqual([
-      "/Users/okan/Downloads/PixelFlow_GDD.docx",
+      resolve("/Users/okan/Downloads/PixelFlow_GDD.docx"),
     ]);
   });
 
