@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import { join } from "node:path";
 import { createTempDirTracker } from "../test-helpers.js";
 import { SqliteVaultStore } from "./sqlite-vault-store.js";
@@ -10,6 +10,20 @@ import type { VaultFile, VaultChunk, VaultSymbol, VaultEdge, VaultWikilink } fro
 
 const tmp = createTempDirTracker("sqlite-vault-test-");
 afterAll(() => tmp.cleanup());
+
+// Every store a test opens is closed after it (close() is idempotent): several
+// tests never close theirs, and Windows refuses to delete an open vault.db
+// (EBUSY), which failed the whole file at cleanup.
+const openStores: SqliteVaultStore[] = [];
+afterEach(() => {
+  for (const store of openStores.splice(0)) store.close();
+});
+
+function openStore(dbPath: string): SqliteVaultStore {
+  const store = new SqliteVaultStore(dbPath);
+  openStores.push(store);
+  return store;
+}
 
 function makeDbPath(): string {
   return join(tmp.makeDir(), "vault.db");
@@ -79,20 +93,20 @@ function makeWikilink(overrides: Partial<VaultWikilink> = {}): VaultWikilink {
 
 describe("SqliteVaultStore — migrate", () => {
   it("runs without throwing on a fresh DB", () => {
-    const store = new SqliteVaultStore(makeDbPath());
+    const store = openStore(makeDbPath());
     expect(() => store.migrate()).not.toThrow();
     store.close();
   });
 
   it("is idempotent: calling migrate() twice on the same instance does not throw", () => {
-    const store = new SqliteVaultStore(makeDbPath());
+    const store = openStore(makeDbPath());
     store.migrate();
     expect(() => store.migrate()).not.toThrow();
     store.close();
   });
 
   it("creates the expected tables", () => {
-    const store = new SqliteVaultStore(makeDbPath());
+    const store = openStore(makeDbPath());
     store.migrate();
     const tables = store.listTableNamesForTest();
     expect(tables).toContain("vault_files");
@@ -107,7 +121,7 @@ describe("SqliteVaultStore — migrate", () => {
   });
 
   it("seeds vault_meta with indexer_version", () => {
-    const store = new SqliteVaultStore(makeDbPath());
+    const store = openStore(makeDbPath());
     store.migrate();
     expect(store.getMeta("indexer_version")).toBe("phase2.v1");
     store.close();
@@ -122,7 +136,7 @@ describe("SqliteVaultStore — file CRUD", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
   });
 
@@ -189,7 +203,7 @@ describe("SqliteVaultStore — chunks", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
   });
@@ -233,7 +247,7 @@ describe("SqliteVaultStore — FTS search", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
     store.upsertChunk(makeChunk({
@@ -308,12 +322,12 @@ describe("SqliteVaultStore — persistence across re-open", () => {
   it("data written by one instance is readable by a new instance on the same path", () => {
     const dbPath = makeDbPath();
 
-    const s1 = new SqliteVaultStore(dbPath);
+    const s1 = openStore(dbPath);
     s1.migrate();
     s1.upsertFile(makeFile({ path: "persist/Test.cs", blobHash: "hash-persist" }));
     s1.close();
 
-    const s2 = new SqliteVaultStore(dbPath);
+    const s2 = openStore(dbPath);
     s2.migrate();
     const got = s2.getFile("persist/Test.cs");
     expect(got).not.toBeNull();
@@ -330,7 +344,7 @@ describe("SqliteVaultStore — symbols", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
   });
@@ -392,7 +406,7 @@ describe("SqliteVaultStore — edges", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
     store.upsertFile(makeFile({ path: "src/Bar.cs" }));
@@ -438,7 +452,7 @@ describe("SqliteVaultStore — wikilinks", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
   });
 
@@ -497,7 +511,7 @@ describe("SqliteVaultStore — tags", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
   });
@@ -549,7 +563,7 @@ describe("SqliteVaultStore — frontmatter", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
   });
@@ -590,7 +604,7 @@ describe("SqliteVaultStore — deleteFile cascades child data", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
 
     store.upsertFile(makeFile({ path: "src/Foo.cs" }));
@@ -650,7 +664,7 @@ describe("SqliteVaultStore — runReindexTxn", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
   });
 
@@ -742,7 +756,7 @@ describe("SqliteVaultStore — embeddings", () => {
   let store: SqliteVaultStore;
 
   beforeEach(() => {
-    store = new SqliteVaultStore(makeDbPath());
+    store = openStore(makeDbPath());
     store.migrate();
     store.upsertFile(makeFile());
     store.upsertChunk(makeChunk({ chunkId: "emb-chunk" }));
@@ -774,7 +788,7 @@ describe("SqliteVaultStore — embeddings", () => {
 
 describe("SqliteVaultStore — close", () => {
   it("close() is idempotent: calling it twice does not throw", () => {
-    const store = new SqliteVaultStore(makeDbPath());
+    const store = openStore(makeDbPath());
     store.migrate();
     store.close();
     expect(() => store.close()).not.toThrow();
