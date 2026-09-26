@@ -19,7 +19,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   attachmentSpoolDir,
@@ -199,8 +199,9 @@ describe("WebAttachmentStore snapshots what the token serves (round 9 #24)", () 
     expect(entry.sizeBytes).toBe(500);
     expect(entry.checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(readFileSync(entry.path!, "utf-8")).toBe("x".repeat(500));
-    // 0600: the copy is the store's, not the machine's.
-    expect(statSync(entry.path!).mode & 0o777).toBe(0o600);
+    // 0600: the copy is the store's, not the machine's. Windows has no POSIX
+    // mode bits (stat reads 0666); there the spool inherits the user profile's ACL.
+    if (process.platform !== "win32") expect(statSync(entry.path!).mode & 0o777).toBe(0o600);
 
     // The source is replaced, then deleted: the token serves the same bytes.
     writeFileSync(file, "y".repeat(500));
@@ -580,7 +581,7 @@ describe("WebAttachmentStore spools per database (round 11 #15)", () => {
     // What other subsystems (the backup, a pruner) are told to look at.
     expect(attachmentSpoolRoot(db)).toBe(join(dirname(db), RETAINED_ATTACHMENT_DIR));
     expect(attachmentSpoolDir(db)).toBe(store.spoolDir);
-    expect(store.spoolDir.startsWith(attachmentSpoolRoot(db)! + "/")).toBe(true);
+    expect(store.spoolDir.startsWith(attachmentSpoolRoot(db)! + sep)).toBe(true);
     // …and it is where the bytes actually are.
     expect(dirname(store.get(token)!.path!)).toBe(attachmentSpoolDir(db));
 
@@ -682,10 +683,11 @@ describe("WebAttachmentStore remembers whose attachment it is (plan 6.14)", () =
     legacy.close();
 
     const store = new WebAttachmentStore(path);
+    const probe = new Database(path);
     const columns = new Set(
-      (new Database(path).prepare("PRAGMA table_info(web_attachments)").all() as Array<{ name: string }>)
-        .map((c) => c.name),
+      (probe.prepare("PRAGMA table_info(web_attachments)").all() as Array<{ name: string }>).map((c) => c.name),
     );
+    probe.close(); // an open connection keeps the file locked on Windows
     expect(columns.has("owner_profile_id")).toBe(true);
     const entry = store.get("legacy-token");
     expect(entry).toMatchObject({ name: "old.png" });
