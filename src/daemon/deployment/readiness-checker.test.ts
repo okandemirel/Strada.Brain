@@ -13,6 +13,10 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", () => ({
   accessSync: vi.fn(),
   constants: { X_OK: 1 },
+  // On Windows the bounded runner looks for npm's CLI script beside node
+  // (resolveNodeCliCommand); none here, so `npm` is spawned as named on
+  // every platform and the spawn expectations below hold everywhere.
+  existsSync: vi.fn(() => false),
 }));
 
 const mockSpawn = vi.mocked(realSpawn);
