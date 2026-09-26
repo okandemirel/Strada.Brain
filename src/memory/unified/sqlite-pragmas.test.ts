@@ -55,7 +55,11 @@ describe("validateAndRepairSqlite", () => {
     const seed = new Database(dbPath);
     seed.exec("CREATE TABLE t (x TEXT); CREATE INDEX idx_t_x ON t(x);");
     const ins = seed.prepare("INSERT INTO t (x) VALUES (?)");
-    for (let i = 0; i < 400; i++) ins.run(`row-${i}-${"p".repeat(40)}`);
+    // One transaction: 400 autocommits are 400 journal syncs, which took the
+    // Windows runner past the test timeout on their own.
+    seed.transaction(() => {
+      for (let i = 0; i < 400; i++) ins.run(`row-${i}-${"p".repeat(40)}`);
+    })();
     seed.close();
 
     corruptIndexPage(dbPath);

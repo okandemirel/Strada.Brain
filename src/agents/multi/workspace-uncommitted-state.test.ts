@@ -231,7 +231,13 @@ describe("workspaces carry the user's uncommitted work", () => {
   });
 });
 
-describe("the seed budget never cuts the project's own content (audited 2026-09-10: edits past the 2000-path cut were quarantined, then deleted with the lease)", () => {
+// Each test writes 2,100 files and runs git over them: past the 2,000-path
+// budget is the point, so the count cannot shrink. The Windows runner took
+// 25 s for one of them in a passing run and over 30 s in others, so these two
+// get their own limit instead of the suite's 30 s.
+const SEED_BUDGET_TIMEOUT_MS = 120_000;
+
+describe("the seed budget never cuts the project's own content (audited 2026-09-10: edits past the 2000-path cut were quarantined, then deleted with the lease)", { timeout: SEED_BUDGET_TIMEOUT_MS }, () => {
   it("seeds every uncommitted Assets/ path, and an agent edit to the last of them commits back", async () => {
     const root = committedRepo();
     mkdirSync(join(root, "Assets", "Big"), { recursive: true });
