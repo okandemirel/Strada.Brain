@@ -4,6 +4,7 @@ import {
   canAutoContinueInteractiveEpoch,
   buildPolicySeed,
   resolveLiveCostCapUsd,
+  resolveUnreservedCostCapUsd,
   type BudgetDeps,
 } from "./budget.js";
 
@@ -99,5 +100,15 @@ describe("the run's USD cost cap, resolved from the unified budget manager", () 
     } as never);
 
     expect(seed.costCapUsd).toBeCloseTo(1);
+  });
+
+  // A supervisor's nodes share one budget, seeded from what in-flight work has not reserved (ACR-9).
+  it("the unreserved headroom subtracts live reservations, not dead owners' leftovers", () => {
+    const withEstimates = (outstandingUsd: number, reconciledUsd: number) =>
+      depsWithSnapshot({ ...snap(3, 10, 0, 0), estimates: { outstandingUsd, reconciledUsd } });
+    expect(resolveUnreservedCostCapUsd(withEstimates(2, 0))).toBeCloseTo(5);
+    expect(resolveUnreservedCostCapUsd(withEstimates(2, 1.5))).toBeCloseTo(6.5);
+    expect(resolveUnreservedCostCapUsd(withEstimates(20, 0))).toBe(0);
+    expect(resolveUnreservedCostCapUsd(depsWithSnapshot(snap(3, 0, 0, 0)))).toBe(Number.POSITIVE_INFINITY);
   });
 });

@@ -272,6 +272,8 @@ import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
+import { resolveUnreservedCostCapUsd } from "../agent-core/engine/budget.js";
+import { createBudget } from "../agent-core/control/budget.js";
 import {
   isUnityEditorExclusiveTool,
   withUnityEditorLock,
@@ -1881,6 +1883,13 @@ export class Orchestrator {
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
         ...(params.onLiveness ? { onLiveness: params.onLiveness } : {}),
+        // The supervisor runs before any run is open, so there is no run budget to carve its
+        // nodes from: they share the global headroom other in-flight work has not reserved.
+        // The output-token cap stays per node run (its own policy), so only cost is shared.
+        runBudget: createBudget(
+          Number.POSITIVE_INFINITY,
+          resolveUnreservedCostCapUsd({ unifiedBudgetManager: () => this.unifiedBudgetManager ?? null }),
+        ),
       });
       if (!result) {
         return {

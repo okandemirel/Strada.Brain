@@ -15,7 +15,7 @@ import {
 } from "./cancel-reason.js";
 import { FakeClock } from "./clock.js";
 import { createCancelToken } from "./cancel-token.js";
-import { createBudget } from "./budget.js";
+import { createBudget, createChildBudgetPool } from "./budget.js";
 import { resolveRunBudgetPolicy, type RunBudgetPolicy } from "./policy.js";
 import { openRunClock } from "./run-clock.js";
 import { createControlPlane } from "./control-plane.js";
@@ -288,6 +288,50 @@ describe("ControlPlane.openRun for a delegated child", () => {
     const { budget, clock } = plane().openRun("background");
     expect(budget.remainingCostUsd()).toBe(1);
     expect(clock.remainingTaskMs()).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+// ── createChildBudgetPool: concurrent children of one budget (ACR-9, supervisor nodes) ──
+
+describe("createChildBudgetPool", () => {
+  it("children open at once never hold more than the parent has", () => {
+    const parent = createBudget(Number.POSITIVE_INFINITY, 1);
+    const pool = createChildBudgetPool(parent, 3);
+    const slices = [pool.open(), pool.open(), pool.open()].map((c) => c.childBudget.slice.costUsd);
+    for (const slice of slices) expect(slice).toBeCloseTo(1 / 3);
+    expect(slices.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it("carveChild alone would promise a running sibling's money twice; the pool does not", () => {
+    const parent = createBudget(Number.POSITIVE_INFINITY, 1);
+    const pool = createChildBudgetPool(parent, 2);
+    const first = pool.open();
+    const second = pool.open();
+    // The first child spends its half and ends; the second is still running with its half.
+    first.childBudget.parent.debit({ inputTokens: 0, outputTokens: 0, costUsd: 0.5 });
+    first.close();
+    // carveChild(1, 2) of the parent's remaining ($0.5) would hand out $0.25 more — money the
+    // running sibling still holds. Nothing is unheld, so the next child gets nothing.
+    expect(parent.carveChild(1, 2).costUsd).toBeCloseTo(0.25);
+    expect(pool.open().childBudget.slice.costUsd).toBe(0);
+    second.close();
+  });
+
+  it("a closed child's unspent remainder returns to the pool; its spend stays debited", () => {
+    const parent = createBudget(Number.POSITIVE_INFINITY, 1);
+    const pool = createChildBudgetPool(parent, 2);
+    const first = pool.open();
+    first.childBudget.parent.debit({ inputTokens: 0, outputTokens: 0, costUsd: 0.1 });
+    first.close();
+    expect(parent.remainingCostUsd()).toBeCloseTo(0.9);
+    expect(pool.open().childBudget.slice.costUsd).toBeCloseTo(0.45);
+  });
+
+  it("an unbounded parent hands out unbounded slices (no cost limit configured)", () => {
+    const pool = createChildBudgetPool(createBudget(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY), 4);
+    const { slice } = pool.open().childBudget;
+    expect(slice.costUsd).toBe(Number.POSITIVE_INFINITY);
+    expect(slice.outputTokens).toBe(Number.POSITIVE_INFINITY);
   });
 });
 

@@ -66,6 +66,7 @@ vi.mock("../agent-core/runner/index.js", async (importOriginal) => {
           goalContext: request.goalContext,
           monitorScope: request.monitorScope,
           onUsage: request.onUsage,
+          childBudget: request.childBudget,
           signal: io.externalSignal,
           onProgress: (update: unknown) => io.onEvent(update as never),
         };
@@ -3901,6 +3902,41 @@ describe("workspacePolicy \"none\" means no lease at any level", () => {
 
     expect(acquireLease).not.toHaveBeenCalled();
     expect(runWorkerTask).toHaveBeenCalledWith(expect.objectContaining({ workspaceLease: undefined }));
+  });
+
+  // ACR-9: a supervisor node's run opens with its slice of the supervisor's budget.
+  it("the envelope hands a supervisor node's budget slice to its run", async () => {
+    const runWorkerTask = vi.fn().mockResolvedValue({
+      status: "completed",
+      finalSummary: "ok",
+      visibleResponse: "ok",
+      provider: "mock",
+      catalogVersion: "mock:default",
+      assignmentVersion: 0,
+      touchedFiles: [],
+      toolTrace: [],
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    });
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({ orchestrator: workerOrchestrator });
+    const childBudget = { slice: { outputTokens: 1000, costUsd: 0.25 }, parent: {} } as any;
+
+    await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated",
+      prompt: "Sub-goal",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "cli-local",
+      taskRunId: "task_x:node1",
+      channelType: "cli",
+      workspacePolicy: "none",
+      supervisorMode: "off",
+      childBudget,
+    });
+
+    expect(runWorkerTask).toHaveBeenCalledWith(expect.objectContaining({ childBudget }));
   });
 
   it("the envelope still leases a run without the policy", async () => {

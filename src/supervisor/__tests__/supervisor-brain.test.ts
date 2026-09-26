@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { SupervisorBrain } from "../supervisor-brain.js";
 import type { GoalTree, GoalNode } from "../../goals/types.js";
-import type { SupervisorConfig, NodeResult } from "../supervisor-types.js";
+import type { SupervisorConfig, NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor-types.js";
 import { CapabilityMatcher } from "../capability-matcher.js";
 import { ProviderAssigner } from "../provider-assigner.js";
+import { createBudget } from "../../agent-core/control/budget.js";
+import { createControlPlane } from "../../agent-core/control/control-plane.js";
+import { FakeClock } from "../../agent-core/control/clock.js";
+import type { HealthCore } from "../../agent-core/control/failure-ledger.js";
 
 function makeGoalTree(nodes: Array<{ id: string; task: string; deps?: string[] }>): GoalTree {
   const nodeMap = new Map() as any;
@@ -850,5 +854,81 @@ describe("SupervisorBrain", () => {
         .map(([, payload]) => String(payload.rootId)),
     );
     expect([...taskUpdateRootIds]).toEqual([dagPayload.rootId]);
+  });
+});
+
+// ACR-9: supervisor nodes run in parallel as separate runs, and each was seeded with the whole
+// global headroom — four nodes against $1 could spend about $4.
+describe("SupervisorBrain — parallel nodes share the supervisor run's budget", () => {
+  const TURN_USD = 0.05;
+  const seed = {
+    streamInitialTimeoutMs: 600_000,
+    streamStallTimeoutMs: 300_000,
+    providerFirstResponseMs: 90_000,
+    taskInactivityMs: 600_000,
+    minInactivityOverStreamRatio: 2,
+    outputTokenCap: 100_000,
+    costCapUsd: 1, // the global headroom a top-level run is seeded with
+  };
+  const health: HealthCore = {
+    recordSuccess: () => {},
+    recordFailure: () => {},
+    shouldAbort: () => false,
+    shouldAskUser: () => false,
+    backoffMs: () => 1000,
+    statusLevel: "healthy",
+    failureRate: 0,
+    consecutive: 0,
+  };
+
+  it("four parallel nodes against a $1 budget spend about $1 in all, not $1 each", async () => {
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(makeGoalTree([
+        { id: "root", task: "Build the game" },
+        { id: "a", task: "Build the board" },
+        { id: "b", task: "Build the pieces" },
+        { id: "c", task: "Build the menu" },
+        { id: "d", task: "Build the audio" },
+      ])),
+    };
+    // Each node opens its run the way the runner does — through the control plane, with the
+    // slice the brain handed it (if any) — and spends a turn at a time while its gate shows
+    // headroom, yielding between turns so the four interleave.
+    const controlPlane = createControlPlane({ clock: new FakeClock(0), seed, createHealthCore: () => health });
+    let spent = 0;
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const executeNode = vi.fn(async (node: TaggedGoalNode, context: SupervisorContext): Promise<NodeResult> => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      const { budget } = controlPlane.openRun("supervisor-node", undefined, context.nodeBudget);
+      while (budget.remainingCostUsd() > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        budget.debit({ inputTokens: 0, outputTokens: 10, costUsd: TURN_USD });
+        spent += TURN_USD;
+      }
+      concurrent--;
+      return {
+        nodeId: node.id, status: "ok", output: "done", artifacts: [], toolResults: [],
+        provider: "claude", model: "sonnet", cost: 0, duration: 1,
+      };
+    });
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    const runBudget = createBudget(Number.POSITIVE_INFINITY, 1);
+    await brain.execute("Build the game", { chatId: "test", runBudget });
+
+    expect(executeNode).toHaveBeenCalledTimes(4);
+    expect(maxConcurrent).toBe(4);
+    // At most one overshooting turn per node — the gate is checked before each turn.
+    expect(spent).toBeLessThanOrEqual(1 + 4 * TURN_USD + 1e-9);
+    expect(runBudget.remainingCostUsd()).toBeCloseTo(1 - spent);
   });
 });

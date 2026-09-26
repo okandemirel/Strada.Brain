@@ -185,6 +185,14 @@ export interface SupervisorContext extends WorkerExecutionEnvelope {
   /** Liveness ping on every node status change — re-arms the task inactivity
    *  watchdog, which milestone-only progress updates leave to expire. */
   readonly onLiveness?: () => void;
+  /**
+   * The whole supervisor run's budget. Its nodes run in parallel as separate runs, and each
+   * used to be seeded with the entire global headroom; the brain now carves each node a
+   * slice of this (see createChildBudgetPool). Absent ⇒ nodes seed from the headroom alone.
+   */
+  readonly runBudget?: import("../agent-core/control/budget.js").Budget;
+  /** Set per node by the brain: the node's slice of {@link runBudget}, for its run to open with. */
+  readonly nodeBudget?: import("../agent-core/control/budget.js").ChildBudget;
 }
 
 /** Aggregate result of a full supervisor execution run */

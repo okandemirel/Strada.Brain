@@ -42,6 +42,25 @@ describe("createSupervisorExecuteNodeBridge", () => {
     }))).testsGreen).toBe(false);
   });
 
+  // ACR-9: the node's run opens with the slice the brain carved for it, not the whole headroom.
+  it("hands the node's budget slice to the worker run", async () => {
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", toolTrace: [] } });
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      defaultChannelType: "cli",
+    });
+    const nodeBudget = { slice: { outputTokens: 1000, costUsd: 0.25 }, parent: {} } as any;
+
+    await bridge(
+      { id: "node-1", task: "Build the board", assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent", nodeBudget } as any,
+      new AbortController().signal,
+    );
+
+    expect(runWorkerEnvelope.mock.calls[0]![1].childBudget).toBe(nodeBudget);
+  });
+
   it("tells the worker which named tools this run does not have, and what it does (Codex 2026-09-12 R#1)", async () => {
     const runWorkerEnvelope = vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", toolTrace: [] } });
     const bridge = createSupervisorExecuteNodeBridge({

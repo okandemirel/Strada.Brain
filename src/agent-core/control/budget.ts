@@ -120,3 +120,50 @@ class BudgetImpl implements Budget {
 export function createBudget(outputCap: number, costCapUsd: number, parent?: Budget): Budget {
   return new BudgetImpl(outputCap, costCapUsd, parent);
 }
+
+/** One child opened from a {@link ChildBudgetPool}; `close()` it when the child's run ends. */
+export interface PooledChildBudget {
+  readonly childBudget: ChildBudget;
+  close(): void;
+}
+
+/**
+ * Slices of one parent budget for children that run at the same time, which together never
+ * hold more than the parent has.
+ */
+export interface ChildBudgetPool {
+  /** Carve the next child's slice: an even share of what no live child holds, over the free slots. */
+  open(): PooledChildBudget;
+}
+
+/**
+ * `carveChild` alone cannot bound concurrent children: it slices the parent's REMAINING, and a
+ * running sibling's unspent slice is still part of that, so a child that starts while another
+ * runs is carved from money already promised. The pool carves from what the parent has left
+ * minus what its live children still hold, split evenly over the `slots` that can still start
+ * (the caller's concurrency). A closed child's unspent remainder returns to the pool; its spend
+ * stays debited to the parent.
+ */
+export function createChildBudgetPool(parent: Budget, slots: number): ChildBudgetPool {
+  const live = new Set<Budget>();
+  const unheld = (total: number, held: (b: Budget) => number): number => {
+    if (total === Number.POSITIVE_INFINITY) return total;
+    let reserved = 0;
+    for (const child of live) reserved += Math.max(0, held(child));
+    return Math.max(0, total - reserved);
+  };
+  return {
+    open(): PooledChildBudget {
+      const share = 1 / Math.max(1, Math.floor(slots) - live.size);
+      const slice: BudgetSlice = {
+        outputTokens: Math.floor(unheld(parent.remainingOutputTokens(), (b) => b.remainingOutputTokens()) * share),
+        costUsd: unheld(parent.remainingCostUsd(), (b) => b.remainingCostUsd()) * share,
+      };
+      // The holder is the child's parent: it gates the child's spend at the slice and passes
+      // every debit on up, and while it is live its unspent remainder is held back from siblings.
+      const holder = createBudget(slice.outputTokens, slice.costUsd, parent);
+      live.add(holder);
+      return { childBudget: { slice, parent: holder }, close: () => { live.delete(holder); } };
+    },
+  };
+}

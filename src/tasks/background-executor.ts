@@ -1435,6 +1435,8 @@ export class BackgroundExecutor {
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
       monitorScope?: string;
+      /** A supervisor node's slice of the supervisor run's budget (see AgentRunRequest.childBudget). */
+      childBudget?: import("../agent-core/control/budget.js").ChildBudget;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     // The runner seam (cutover Step 5: the V2 spine is THE engine — selectAgentRunner constructs
@@ -1480,6 +1482,7 @@ export class BackgroundExecutor {
       // Parent-episode rollup scope; see AgentRunRequest.monitorScope. MONITOR-only.
       monitorScope: params.monitorScope,
       onUsage: params.onUsage,
+      childBudget: params.childBudget,
     };
 
     const result = await runner.run(request, io);
@@ -1512,6 +1515,7 @@ export class BackgroundExecutor {
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
       monitorScope?: string;
+      childBudget?: import("../agent-core/control/budget.js").ChildBudget;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     // A task that must edit the real project root (workspacePolicy "none")

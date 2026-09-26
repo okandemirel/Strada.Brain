@@ -25,6 +25,7 @@ import type { CapabilityMatcher } from "./capability-matcher.js";
 import type { ProviderAssigner } from "./provider-assigner.js";
 import { SupervisorDispatcher } from "./supervisor-dispatcher.js";
 import { ResultAggregator } from "./result-aggregator.js";
+import { createChildBudgetPool } from "../agent-core/control/budget.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 import {
   buildSupervisorAbortNarrative,
@@ -587,10 +588,27 @@ export class SupervisorBrain {
         goalTree: liveGoalTree,
       };
       const executeNodeFn = this.executeNodeFn;
+      const width = nodeParallelism(context, this.config.maxParallelNodes);
+      // Nodes run as separate runs, and each used to be seeded with the whole global headroom,
+      // so N parallel nodes could spend it N times (ACR-9). Each node now gets a slice of the
+      // supervisor run's budget; the pool never hands out more than that budget still holds.
+      const nodeBudgets = context.runBudget ? createChildBudgetPool(context.runBudget, width) : undefined;
       const dispatcher = new SupervisorDispatcher({
         onLiveness: context.onLiveness,
         executeNode: async (node: TaggedGoalNode, nodeSignal: AbortSignal) => {
-          const nodeResult = await executeNodeFn(node, dispatchContext, nodeSignal);
+          const nodeBudget = nodeBudgets?.open();
+          let nodeResult: NodeResult;
+          try {
+            nodeResult = await executeNodeFn(
+              node,
+              nodeBudget ? { ...dispatchContext, nodeBudget: nodeBudget.childBudget } : dispatchContext,
+              nodeSignal,
+            );
+          } finally {
+            // Settles when the node's run does — also for a node the dispatcher abandoned on
+            // timeout, whose slice stays held while it is still running.
+            nodeBudget?.close();
+          }
           const previous = liveNodes.get(node.id);
           if (previous && nodeResult.status === "ok") {
             liveNodes.set(node.id, {
@@ -603,7 +621,7 @@ export class SupervisorBrain {
           return nodeResult;
         },
         config: {
-          maxParallelNodes: nodeParallelism(context, this.config.maxParallelNodes),
+          maxParallelNodes: width,
           nodeTimeoutMs: this.calculateAdaptiveTimeout(
             assignedNodes.length,
             planningTask.length,

@@ -27,6 +27,8 @@ export interface BudgetSnapshotLike {
     daily: { usedUsd: number; limitUsd: number };
     monthly: { usedUsd: number; limitUsd: number };
   };
+  /** In-flight reservations: `outstandingUsd` in all, `reconciledUsd` of it left by dead owners. */
+  estimates?: { outstandingUsd: number; reconciledUsd?: number };
 }
 
 /** The dependency slice the budget/limit functions read (grows only with this module). */
@@ -80,7 +82,7 @@ export function resolveLiveOutputTokenCap(deps: BudgetDeps): number {
  * further spend once it reaches 0. No manager, no snapshot, or no configured limit → Infinity
  * (unbounded — the historical behavior for users who opted out of cost ceilings).
  */
-export function resolveLiveCostCapUsd(deps: BudgetDeps): number {
+export function resolveLiveCostCapUsd(deps: Pick<BudgetDeps, "unifiedBudgetManager">): number {
   const snapshot = deps.unifiedBudgetManager()?.getSnapshot?.();
   if (!snapshot) return Number.POSITIVE_INFINITY;
   const headrooms = [snapshot.global.daily, snapshot.global.monthly]
@@ -88,6 +90,22 @@ export function resolveLiveCostCapUsd(deps: BudgetDeps): number {
     .map((usage) => usage.limitUsd - usage.usedUsd);
   if (headrooms.length === 0) return Number.POSITIVE_INFINITY;
   return Math.max(0, Math.min(...headrooms));
+}
+
+/**
+ * The global headroom minus what live reservations still hold: what a group of runs that shares
+ * one budget (a supervisor's nodes) may spend without eating into money other in-flight work
+ * has already reserved. Remainders left by owners that died (reconciled) are not counted: they
+ * estimate what a crashed run may have spent, not what live work will spend, and the snapshot
+ * carries them with no time window — a crash from last week would shrink today's group budget.
+ * Infinity when no cost limit is configured.
+ */
+export function resolveUnreservedCostCapUsd(deps: Pick<BudgetDeps, "unifiedBudgetManager">): number {
+  const headroom = resolveLiveCostCapUsd(deps);
+  if (headroom === Number.POSITIVE_INFINITY) return headroom;
+  const estimates = deps.unifiedBudgetManager()?.getSnapshot?.()?.estimates;
+  const live = Math.max(0, (estimates?.outstandingUsd ?? 0) - (estimates?.reconciledUsd ?? 0));
+  return Math.max(0, headroom - live);
 }
 
 /** Phase 1b — build the PolicySeed the control plane resolves the run's clock/budget from. */

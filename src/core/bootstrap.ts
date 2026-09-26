@@ -296,6 +296,8 @@ export function createSupervisorExecuteNodeBridge(params: {
         ...(context.workspacePolicy ? { workspacePolicy: context.workspacePolicy } : {}),
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
+        // The node's slice of the supervisor run's budget (ACR-9), not the whole headroom.
+        ...(context.nodeBudget ? { childBudget: context.nodeBudget } : {}),
         onProgress: (update) => {
           // Every worker event is the PARENT task's liveness. Only node status
           // changes used to re-arm the task inactivity watchdog, so a node that
