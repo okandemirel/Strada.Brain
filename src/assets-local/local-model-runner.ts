@@ -11,7 +11,9 @@
  *                         isModelInstalled: the weights under weights/ and a
  *                         repo-shipped model's src/<id> clone are measured too)
  *   models.lock.json      the weights commit each model was first downloaded
- *                         at; later fetches/draws/checks use it (CMP-13)
+ *                         at; later fetches/draws/checks use it (CMP-13).
+ *                         Weights cached before the lock existed are pinned
+ *                         from disk, offline, once per process
  *
  * Everything is optional: with nothing installed the generation tools fall
  * back to their procedural providers, and the setup menu is the only place
@@ -23,7 +25,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { BACKGROUND_REMOVAL_PACKAGES, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
+import { BACKGROUND_REMOVAL_PACKAGES, LOCAL_MODEL_CATALOG, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
 import { COMMIT_SHA_RE, WEIGHTS_LOCK_FILE, pinFor, readWeightsLock, recordWeightsPin } from "./weights-lock.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { PASSTHROUGH_VAR, SHELL_ENV_ALLOWLIST, buildShellEnv } from "../agents/tools/shell-env-policy.js";
@@ -340,11 +342,125 @@ type WeightsRevision =
   | { ok: false; detail: string };
 
 function weightsRevisionFor(spec: LocalModelSpec): WeightsRevision {
+  adoptDownloadedWeightsOnce();
   if (spec.weightsRevision !== undefined) return { ok: true, revision: spec.weightsRevision, source: "catalog" };
   const lock = readWeightsLock(WEIGHTS_LOCK());
   if (!lock.ok) return lock;
   const pin = pinFor(lock.pins, spec.id, spec.weightsRef);
   return pin !== undefined ? { ok: true, revision: pin.revision, source: "lock" } : { ok: true, revision: undefined, source: "none" };
+}
+
+/** What adoption did for one catalog model; only "adopted" wrote anything. */
+export interface WeightsAdoption {
+  readonly modelId: string;
+  readonly outcome:
+    | "adopted"
+    | "already-pinned"
+    | "catalog-revision"
+    | "not-downloaded"
+    | "ambiguous"
+    | "incomplete"
+    | "lock-unreadable"
+    | "write-failed";
+  readonly revision?: string;
+  readonly detail?: string;
+}
+
+/**
+ * Pin weights that were downloaded BEFORE the weights lock existed (CMP-13
+ * follow-up): such installs have no pin, so every fetch, draw and readiness
+ * check kept asking the hub for "main" until the next install. The commit is
+ * read from the HF cache already on disk, with no network and no hashing
+ * (readdir, stat and the tiny refs/main file only):
+ *   - refs/main, when it names a commit whose snapshot passes the runner's own
+ *     readiness check;
+ *   - else the one snapshot that passes it, when exactly one does.
+ * Anything else is left unpinned (and logged). A model with a catalog
+ * `weightsRevision` or ANY lock entry is never touched, and an unreadable lock
+ * is not written to — the fetch and readiness check report it as before.
+ */
+export function adoptDownloadedWeights(catalog: readonly LocalModelSpec[] = LOCAL_MODEL_CATALOG): WeightsAdoption[] {
+  const log = getLoggerSafe();
+  const lockPath = WEIGHTS_LOCK();
+  const lock = readWeightsLock(lockPath);
+  if (!lock.ok) {
+    log.warn(`assets-local: cached weights were not checked for pinning: ${lock.detail}`);
+    return catalog.map((spec) => ({ modelId: spec.id, outcome: "lock-unreadable", detail: lock.detail }));
+  }
+  return catalog.map((spec): WeightsAdoption => {
+    if (spec.weightsRevision !== undefined) return { modelId: spec.id, outcome: "catalog-revision" };
+    if (Object.prototype.hasOwnProperty.call(lock.pins, spec.id)) return { modelId: spec.id, outcome: "already-pinned" };
+    const found = downloadedSnapshot(spec);
+    if (found.outcome !== "adopted") {
+      if (found.outcome !== "not-downloaded") {
+        log.warn(`assets-local: ${spec.id} weights stay unpinned until they are next downloaded: ${found.detail}`);
+      }
+      return { modelId: spec.id, outcome: found.outcome, detail: found.detail };
+    }
+    try {
+      const pin = { weightsRef: spec.weightsRef, revision: found.revision, recordedAt: new Date().toISOString(), origin: "disk" as const };
+      if (!recordWeightsPin(lockPath, spec.id, pin, { keepExisting: true })) return { modelId: spec.id, outcome: "already-pinned" };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log.warn(`assets-local: could not pin the cached ${spec.id} weights: ${detail}`);
+      return { modelId: spec.id, outcome: "write-failed", detail };
+    }
+    log.info(`assets-local: pinned ${spec.id} weights (${spec.weightsRef}) to the cached commit ${found.revision} (${found.detail}) in ${WEIGHTS_LOCK_FILE}`);
+    return { modelId: spec.id, outcome: "adopted", revision: found.revision, detail: found.detail };
+  });
+}
+
+/** The one cached snapshot of a model's weights repo that adoption may pin, or why none. */
+function downloadedSnapshot(spec: LocalModelSpec):
+  | { outcome: "adopted"; revision: string; detail: string }
+  | { outcome: "not-downloaded" | "ambiguous" | "incomplete"; detail: string } {
+  const root = hfWeightsDir(spec.weightsRef);
+  const snapshots = join(root, "snapshots");
+  let names: string[] = [];
+  try {
+    names = readdirSync(snapshots, { withFileTypes: true })
+      .filter((e) => e.isDirectory() || e.isSymbolicLink())
+      .map((e) => e.name);
+  } catch {
+    // No snapshots directory: nothing was downloaded through huggingface_hub.
+  }
+  if (names.length === 0) return { outcome: "not-downloaded", detail: "no cached snapshot" };
+  const complete = (name: string): boolean => snapshotHoldsWeights(spec, join(snapshots, name));
+  let main = "";
+  try {
+    main = readFileSync(join(root, "refs", "main"), "utf8").trim();
+  } catch {
+    // No refs/main: the snapshots alone decide below.
+  }
+  if (COMMIT_SHA_RE.test(main) && complete(main)) return { outcome: "adopted", revision: main, detail: "from refs/main" };
+  const whole = names.filter(complete);
+  if (whole.length === 0) return { outcome: "incomplete", detail: `none of its ${names.length} cached snapshot(s) holds every file the driver loads` };
+  if (whole.length === 1 && COMMIT_SHA_RE.test(whole[0]!)) return { outcome: "adopted", revision: whole[0]!, detail: "the only complete snapshot" };
+  return {
+    outcome: "ambiguous",
+    detail: whole.length === 1
+      ? `its only complete snapshot ("${whole[0]}") is not named by a commit`
+      : `${whole.length} complete snapshots and no refs/main naming one of them`,
+  };
+}
+
+/**
+ * Install roots this process has already adopted cached weights for. Per
+ * root, not one flag: the root is read at call time, and the boot liveness
+ * probe points it at a throwaway directory before anything uses the real one.
+ */
+const adoptionDone = new Set<string>();
+
+function adoptDownloadedWeightsOnce(): void {
+  const lockPath = WEIGHTS_LOCK();
+  if (adoptionDone.has(lockPath)) return;
+  adoptionDone.add(lockPath);
+  try {
+    adoptDownloadedWeights();
+  } catch (err) {
+    // Adoption is a convenience: it must never break a readiness check.
+    getLoggerSafe().warn(`assets-local: adopting cached weights failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** `--revision=<rev>` for pinned weights, as one token. */
@@ -396,7 +512,11 @@ const WEIGHT_METADATA_RE = /\.(?:json|txt|md|ya?ml|py)$/iu;
  */
 export function modelWeightsPresent(spec: LocalModelSpec): boolean {
   const snapshot = hfSnapshotDir(spec);
-  if (snapshot === null) return false;
+  return snapshot !== null && snapshotHoldsWeights(spec, snapshot);
+}
+
+/** The readiness check for ONE snapshot directory: every file the driver loads, finished. */
+function snapshotHoldsWeights(spec: LocalModelSpec, snapshot: string): boolean {
   const files = filesUnder(snapshot);
   const named = spec.weightFiles ?? [];
   if (named.length > 0) {
@@ -841,7 +961,7 @@ export class LocalModelRunner {
       if (served.revision === undefined) {
         getLoggerSafe().warn(`assets-local: the ${spec.id} weights download reported no commit; they stay unpinned until the next install`);
       } else {
-        recordWeightsPin(WEIGHTS_LOCK(), spec.id, { weightsRef: spec.weightsRef, revision: served.revision, recordedAt: new Date().toISOString() });
+        recordWeightsPin(WEIGHTS_LOCK(), spec.id, { weightsRef: spec.weightsRef, revision: served.revision, recordedAt: new Date().toISOString(), origin: "download" });
         const line = `pinned ${spec.id} weights (${spec.weightsRef}) to commit ${served.revision} in ${WEIGHTS_LOCK_FILE}`;
         onProgress?.(line);
         getLoggerSafe().info(`assets-local: ${line}`);

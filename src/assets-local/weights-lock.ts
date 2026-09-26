@@ -14,6 +14,10 @@
  * A pin is bound to the weights repo it was recorded for: a catalog entry
  * that moves to another repo starts a fresh pin instead of asking the new
  * repo for a commit of the old one.
+ *
+ * Weights downloaded before this lock existed are pinned offline, from the
+ * snapshot already in the cache, the first time a process uses the install
+ * (`origin: "disk"`, see adoptDownloadedWeights in local-model-runner.ts).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -31,7 +35,15 @@ export interface WeightsPin {
   readonly revision: string;
   /** ISO time the pin was recorded (informational). */
   readonly recordedAt: string;
+  /**
+   * Where the commit came from: "download" = the hub served it to a fetch;
+   * "disk" = adopted from a snapshot already cached before the lock existed.
+   * Absent in files written before the field (all of them downloads).
+   */
+  readonly origin?: WeightsPinOrigin;
 }
+
+export type WeightsPinOrigin = "download" | "disk";
 
 export type WeightsLockRead =
   | { readonly ok: true; readonly pins: Readonly<Record<string, WeightsPin>> }
@@ -49,7 +61,8 @@ function isPin(value: unknown): value is WeightsPin {
     && pin["weightsRef"] !== ""
     && typeof pin["revision"] === "string"
     && COMMIT_SHA_RE.test(pin["revision"])
-    && typeof pin["recordedAt"] === "string";
+    && typeof pin["recordedAt"] === "string"
+    && (pin["origin"] === undefined || pin["origin"] === "download" || pin["origin"] === "disk");
 }
 
 /**
@@ -78,7 +91,12 @@ export function readWeightsLock(path: string): WeightsLockRead {
   const pins: Record<string, WeightsPin> = {};
   for (const [id, pin] of Object.entries(models)) {
     if (!isPin(pin)) return unreadable(`the entry for "${id}" is not a weights pin`);
-    pins[id] = { weightsRef: pin.weightsRef, revision: pin.revision, recordedAt: pin.recordedAt };
+    pins[id] = {
+      weightsRef: pin.weightsRef,
+      revision: pin.revision,
+      recordedAt: pin.recordedAt,
+      ...(pin.origin !== undefined ? { origin: pin.origin } : {}),
+    };
   }
   return { ok: true, pins };
 }
@@ -97,11 +115,22 @@ export function pinFor(
  * Record (or replace) one model's pin, keeping every other entry. Written
  * atomically: a crash mid-write leaves the previous lock, never a torn one
  * that the next read would have to refuse.
+ *
+ * `keepExisting` records only when the model has no entry at all, checked
+ * against the file as read for this write (not a caller's older copy), and
+ * returns false without writing otherwise.
  */
-export function recordWeightsPin(path: string, modelId: string, pin: WeightsPin): void {
+export function recordWeightsPin(
+  path: string,
+  modelId: string,
+  pin: WeightsPin,
+  opts: { keepExisting?: boolean } = {},
+): boolean {
   if (!COMMIT_SHA_RE.test(pin.revision)) throw new Error(`refusing to pin ${modelId} to "${pin.revision}": not a commit sha`);
   const current = readWeightsLock(path);
   if (!current.ok) throw new Error(current.detail);
+  if (opts.keepExisting === true && Object.prototype.hasOwnProperty.call(current.pins, modelId)) return false;
   const file: WeightsLockFile = { version: 1, models: { ...current.pins, [modelId]: pin } };
   writeFileAtomicSync(path, `${JSON.stringify(file, null, 2)}\n`);
+  return true;
 }

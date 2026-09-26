@@ -9,6 +9,7 @@ import {
   RMBG_IMPORT_PROBE,
   TXT2IMG_SCRIPT,
   RMBG_REPAIR_TIMEOUT_MS,
+  adoptDownloadedWeights,
   hfWeightsDir,
   modelSubprocessEnv,
   modelWeightsPresent,
@@ -16,6 +17,7 @@ import {
   type SpawnImpl,
 } from "./local-model-runner.js";
 import { getModelSpec, LOCAL_MODEL_CATALOG } from "./model-catalog.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 function spawnOk(): { spawn: SpawnImpl; calls: Array<{ cmd: string; args: string[] }> } {
   const calls: Array<{ cmd: string; args: string[] }> = [];
@@ -1222,5 +1224,203 @@ describe("weights are pinned to the commit the first download was served (CMP-13
     expect(servedWeightsRevision(`FETCHED /x\nREVISION ${SHA_A}\nREVISION ${SHA_A}\n`)).toEqual({ ok: true, revision: SHA_A });
     expect(servedWeightsRevision("FETCHED /x\n")).toEqual({ ok: true, revision: undefined });
     expect(servedWeightsRevision(`REVISION ${SHA_A}\nREVISION ${SHA_B}\n`).ok).toBe(false);
+  });
+});
+
+describe("weights cached before the lock existed are pinned from disk, offline (CMP-13 follow-up)", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const SHA_C = "c".repeat(40);
+  let dir: string;
+  let fakeHome: string;
+  let prevRoot: string | undefined;
+  let prevHome: string | undefined;
+  const lockPath = (): string => join(dir, "models.lock.json");
+  const readLock = (): { version: number; models: Record<string, { weightsRef: string; revision: string; origin?: string }> } =>
+    JSON.parse(readFileSync(lockPath(), "utf8"));
+  /** One file in a model's HF cache (a snapshot file, or refs/main). */
+  const cached = (id: string, rel: string, body = "weight-bytes"): void => {
+    const path = join(hfWeightsDir(getModelSpec(id)!.weightsRef), rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, body);
+  };
+  /** A complete snapshot at `sha`: every file the readiness check wants. */
+  const snapshot = (id: string, sha: string): void => {
+    for (const f of getModelSpec(id)!.weightFiles ?? ["unet/diffusion_pytorch_model.safetensors"]) cached(id, join("snapshots", sha, f));
+  };
+  /** The rest of an install made before the lock: venv, marker, a repo model's source. */
+  const installedBefore = (id: string): void => {
+    mkdirSync(join(dir, "venv", "bin"), { recursive: true });
+    writeFileSync(join(dir, "venv", "bin", "python3"), "#!/bin/sh\n");
+    writeFileSync(join(dir, `.installed-${id}`), "2026-09-01\n");
+    if (getModelSpec(id)!.installMethod === "repo") {
+      mkdirSync(join(dir, "src", id, "tsr"), { recursive: true });
+      writeFileSync(join(dir, "src", id, "tsr", "system.py"), "# TSR\n");
+    }
+  };
+  const argsOf = (calls: Array<{ cmd: string; args: string[] }>, script: string): string[] | undefined =>
+    calls.filter((c) => c.args.some((a) => a.endsWith(script))).at(-1)?.args;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lmr-adopt-"));
+    fakeHome = mkdtempSync(join(tmpdir(), "lmr-adopt-home-"));
+    prevRoot = process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    prevHome = process.env["HOME"];
+    process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+    process.env["HOME"] = fakeHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (prevRoot === undefined) delete process.env["STRADA_ASSETS_LOCAL_ROOT"];
+    else process.env["STRADA_ASSETS_LOCAL_ROOT"] = prevRoot;
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it("an install from before the lock is pinned to the commit refs/main names, and draws and fetches at it", async () => {
+    installedBefore("sd15");
+    snapshot("sd15", SHA_A);
+    snapshot("sd15", SHA_B); // an older complete download: refs/main decides
+    cached("sd15", join("refs", "main"), `${SHA_A}\r\n`);
+    const { spawn, calls } = spawnOk();
+    const runner = new LocalModelRunner(spawn);
+    expect(runner.isModelInstalled("sd15")).toBe(true);
+    expect(existsSync(lockPath()), "nothing pinned the weights already on disk").toBe(true);
+    expect(readLock().models["sd15"]).toMatchObject({ weightsRef: getModelSpec("sd15")!.weightsRef, revision: SHA_A, origin: "disk" });
+    await runner.textToImage(getModelSpec("sd15")!, "a pig", join(dir, "pig.png"));
+    expect(argsOf(calls, "txt2img.py")).toContain(`--revision=${SHA_A}`);
+    // The next install asks the hub for that commit, not for wherever main is now.
+    await runner.install(getModelSpec("sd15")!);
+    expect(argsOf(calls, "fetch_weights.py")).toContain(`--revision=${SHA_A}`);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+  });
+
+  it("with no usable refs/main, the one complete snapshot is pinned", () => {
+    // Named weight files: SHA_A has the config but not the checkpoint.
+    installedBefore("triposr");
+    snapshot("triposr", SHA_B);
+    cached("triposr", join("snapshots", SHA_A, "config.yaml"), "cfg");
+    cached("triposr", join("refs", "main"), "not-a-commit");
+    // A pipeline: SHA_B is metadata only, and there is no refs/main at all.
+    snapshot("sd15", SHA_A);
+    cached("sd15", join("snapshots", SHA_B, "model_index.json"), "{}");
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("triposr")).toBe(true);
+    expect(readLock().models).toMatchObject({
+      triposr: { revision: SHA_B, origin: "disk" },
+      sd15: { revision: SHA_A, origin: "disk" },
+    });
+  });
+
+  it("leaves ambiguous and incomplete caches unpinned, and says so once per model", () => {
+    snapshot("sd15", SHA_A);
+    snapshot("sd15", SHA_B); // two complete, nothing names one
+    cached("sdxl", join("snapshots", SHA_A, "model_index.json"), "{}"); // died before the weights
+    cached("sdxl", join("refs", "main"), SHA_A);
+    snapshot("flux-schnell", "rev1"); // complete, but not named by a commit
+    cached("triposr", join("snapshots", SHA_A, "config.yaml"), "cfg");
+    cached("triposr", join("snapshots", SHA_A, "model.ckpt"), ""); // an empty checkpoint
+    cached("triposr", join("refs", "main"), SHA_A);
+    for (const spec of LOCAL_MODEL_CATALOG) installedBefore(spec.id);
+    const warn = vi.spyOn(getLoggerSafe(), "warn");
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    for (let round = 0; round < 3; round++) {
+      for (const spec of LOCAL_MODEL_CATALOG) runner.isModelInstalled(spec.id);
+    }
+    expect(existsSync(lockPath())).toBe(false);
+    for (const id of ["sd15", "sdxl", "flux-schnell", "triposr"]) {
+      expect(warn.mock.calls.filter(([msg]) => String(msg).includes(` ${id} weights stay unpinned`)), id).toHaveLength(1);
+    }
+    const outcomes = Object.fromEntries(adoptDownloadedWeights().map((a) => [a.modelId, a.outcome]));
+    expect(outcomes).toEqual({ sd15: "ambiguous", sdxl: "incomplete", "flux-schnell": "ambiguous", triposr: "incomplete" });
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  it("never overwrites an existing pin, whatever the cache holds", () => {
+    const original = `${JSON.stringify({
+      version: 1,
+      models: {
+        sd15: { weightsRef: getModelSpec("sd15")!.weightsRef, revision: SHA_B, recordedAt: "2026-09-26" },
+        // A pin for another repo is the next download's to replace, not adoption's.
+        sdxl: { weightsRef: "someone/else", revision: SHA_C, recordedAt: "2026-09-26" },
+      },
+    }, null, 2)}\n`;
+    writeFileSync(lockPath(), original);
+    for (const id of ["sd15", "sdxl"]) {
+      snapshot(id, SHA_A);
+      cached(id, join("refs", "main"), SHA_A);
+    }
+    const runner = new LocalModelRunner(spawnOk().spawn);
+    for (const spec of LOCAL_MODEL_CATALOG) runner.isModelInstalled(spec.id);
+    expect(readFileSync(lockPath(), "utf8")).toBe(original);
+    const outcomes = adoptDownloadedWeights().filter((a) => a.modelId === "sd15" || a.modelId === "sdxl");
+    expect(outcomes.map((a) => a.outcome)).toEqual(["already-pinned", "already-pinned"]);
+    expect(readFileSync(lockPath(), "utf8")).toBe(original);
+  });
+
+  it("makes no network call: no fetch, no subprocess", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("no network in this test"));
+    installedBefore("sd15");
+    snapshot("sd15", SHA_A);
+    cached("sd15", join("refs", "main"), SHA_A);
+    snapshot("triposr", SHA_B);
+    const { spawn, calls } = spawnOk();
+    const runner = new LocalModelRunner(spawn);
+    for (const spec of LOCAL_MODEL_CATALOG) runner.isModelInstalled(spec.id);
+    expect(readLock().models).toMatchObject({ sd15: { revision: SHA_A }, triposr: { revision: SHA_B } });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("a throwaway root used first (the boot liveness probe) does not use up adoption for the real one", () => {
+    const throwaway = mkdtempSync(join(tmpdir(), "lmr-adopt-probe-"));
+    try {
+      process.env["STRADA_ASSETS_LOCAL_ROOT"] = throwaway;
+      expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(false);
+    } finally {
+      process.env["STRADA_ASSETS_LOCAL_ROOT"] = dir;
+      rmSync(throwaway, { recursive: true, force: true });
+    }
+    installedBefore("sd15");
+    snapshot("sd15", SHA_A);
+    cached("sd15", join("refs", "main"), SHA_A);
+    expect(new LocalModelRunner(spawnOk().spawn).isModelInstalled("sd15")).toBe(true);
+    expect(readLock().models["sd15"]!.revision).toBe(SHA_A);
+  });
+
+  it("an unreadable lock stays the error it was, and is never written", async () => {
+    writeFileSync(lockPath(), "{ not json");
+    installedBefore("sd15");
+    snapshot("sd15", SHA_A);
+    cached("sd15", join("refs", "main"), SHA_A);
+    const { spawn, calls } = spawnOk();
+    const runner = new LocalModelRunner(spawn);
+    expect(runner.isModelInstalled("sd15")).toBe(false);
+    const install = await runner.install(getModelSpec("sd15")!);
+    expect(install.ok).toBe(false);
+    expect(install.detail).toContain("models.lock.json");
+    expect(argsOf(calls, "fetch_weights.py")).toBeUndefined();
+    expect(adoptDownloadedWeights().every((a) => a.outcome === "lock-unreadable")).toBe(true);
+    expect(readFileSync(lockPath(), "utf8")).toBe("{ not json");
+    expect(readdirSync(dir).filter((f) => f.startsWith("models.lock.json"))).toEqual(["models.lock.json"]);
+  });
+
+  it("an explicit catalog revision wins: nothing is adopted for it, and it is what the runner uses", async () => {
+    snapshot("sd15", SHA_A);
+    cached("sd15", join("refs", "main"), SHA_A);
+    const catalogPinned = { ...getModelSpec("sd15")!, weightsRevision: SHA_C };
+    expect(adoptDownloadedWeights([catalogPinned])).toEqual([{ modelId: "sd15", outcome: "catalog-revision" }]);
+    expect(existsSync(lockPath())).toBe(false);
+    // Even after the plain catalog entry's cache is adopted below, the
+    // catalog's revision is the one verified and drawn with.
+    const { spawn, calls } = spawnOk();
+    const runner = new LocalModelRunner(spawn);
+    expect(modelWeightsPresent(catalogPinned)).toBe(false); // SHA_C is not cached
+    (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
+    await runner.textToImage(catalogPinned, "a pig", join(dir, "pig.png"));
+    expect(argsOf(calls, "txt2img.py")).toContain(`--revision=${SHA_C}`);
+    expect(argsOf(calls, "txt2img.py")).not.toContain(`--revision=${SHA_A}`);
   });
 });

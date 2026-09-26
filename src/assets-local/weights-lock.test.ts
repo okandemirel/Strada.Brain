@@ -57,6 +57,30 @@ describe("weights lock (CMP-13)", () => {
     }
   });
 
+  it("reads a lock written before pins had an origin, and keeps each pin's origin as written", () => {
+    const old = { version: 1, models: { sd15: { weightsRef: "org/sd15", revision: SHA_A, recordedAt: "t1" } } };
+    writeFileSync(path, JSON.stringify(old));
+    expect(readWeightsLock(path)).toEqual({ ok: true, pins: old.models });
+    recordWeightsPin(path, "sdxl", { weightsRef: "org/sdxl", revision: SHA_B, recordedAt: "t2", origin: "disk" });
+    const lock = readWeightsLock(path);
+    if (!lock.ok) throw new Error(lock.detail);
+    expect(lock.pins["sdxl"]!.origin).toBe("disk");
+    expect(lock.pins["sd15"]).toEqual(old.models.sd15);
+    expect(JSON.parse(readFileSync(path, "utf8")).models.sd15).not.toHaveProperty("origin");
+    writeFileSync(path, JSON.stringify({ version: 1, models: { sd15: { ...old.models.sd15, origin: "elsewhere" } } }));
+    expect(readWeightsLock(path).ok).toBe(false);
+  });
+
+  it("keepExisting never replaces an entry, not even one recorded for another repo", () => {
+    recordWeightsPin(path, "sd15", { weightsRef: "org/old-repo", revision: SHA_A, recordedAt: "t" });
+    const before = readFileSync(path, "utf8");
+    const again = recordWeightsPin(path, "sd15", { weightsRef: "org/sd15", revision: SHA_B, recordedAt: "t", origin: "disk" }, { keepExisting: true });
+    expect(again).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(recordWeightsPin(path, "sdxl", { weightsRef: "org/sdxl", revision: SHA_B, recordedAt: "t", origin: "disk" }, { keepExisting: true })).toBe(true);
+    expect(readdirSync(dir)).toEqual([WEIGHTS_LOCK_FILE]);
+  });
+
   it("only a full commit sha can be pinned", () => {
     expect(() => recordWeightsPin(path, "sd15", { weightsRef: "org/sd15", revision: "main", recordedAt: "t" })).toThrow(/not a commit/);
     expect(readdirSync(dir)).toEqual([]);
