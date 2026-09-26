@@ -11,7 +11,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve, relative, normalize, extname } from "node:path";
+import path, { extname } from "node:path";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isSensitivePath } from "../security/path-guard.js";
 
@@ -127,26 +127,28 @@ export interface PathSafetyResult {
  *   5. Check the denylist per segment, case-insensitively, plus path-guard's
  *      sensitive-file list (the endpoints repeat this on the real path)
  */
-export function isPathSafe(requestedPath: string, projectRoot: string): PathSafetyResult {
+export function isPathSafe(
+  requestedPath: string,
+  projectRoot: string,
+  pathApi: path.PlatformPath = path,
+): PathSafetyResult {
   // 1. Reject null bytes
   if (requestedPath.includes("\x00")) {
     return { safe: false, resolved: "", error: "Invalid path: null bytes" };
   }
 
   // 2. Normalize and reject traversal sequences
-  const normalized = normalize(requestedPath);
+  const normalized = pathApi.normalize(requestedPath);
   if (normalized.includes("..")) {
     return { safe: false, resolved: "", error: "Path traversal rejected" };
   }
 
   // 3. Resolve to absolute and verify containment
-  const resolved = resolve(projectRoot, normalized);
-  const rel = relative(projectRoot, resolved);
-
-  // If relative path starts with '..' or is absolute, it's outside project root
-  if (rel.startsWith("..") || resolve(projectRoot, rel) !== resolved) {
+  const resolved = pathApi.resolve(projectRoot, normalized);
+  if (isOutsideRoot(projectRoot, resolved, pathApi)) {
     return { safe: false, resolved: "", error: "Path outside project" };
   }
+  const rel = pathApi.relative(projectRoot, resolved);
 
   // 4. Check depth
   const segments = rel.split(/[/\\]/).filter(Boolean);
@@ -162,6 +164,18 @@ export function isPathSafe(requestedPath: string, projectRoot: string): PathSafe
   }
 
   return { safe: true, resolved };
+}
+
+/**
+ * Is `target` outside `root`? path.relative gives `..`-something for a path
+ * elsewhere under the same root, and an ABSOLUTE path when there is no
+ * relative way there at all: another drive or a UNC share on Windows.
+ * Resolving that absolute answer gives the target straight back, so the old
+ * test (`..`, or resolve(root, rel) !== target) let such a path through.
+ */
+function isOutsideRoot(root: string, target: string, pathApi: path.PlatformPath): boolean {
+  const rel = pathApi.relative(root, target);
+  return rel.startsWith("..") || pathApi.isAbsolute(rel) || pathApi.resolve(root, rel) !== target;
 }
 
 /**
@@ -227,11 +241,10 @@ async function verifyRealPath(
   try {
     const real = await realpath(resolvedPath);
     const projectReal = await realpath(projectRoot);
-    const rel = relative(projectReal, real);
-    if (rel.startsWith("..") || resolve(projectReal, rel) !== real) {
+    if (isOutsideRoot(projectReal, real, path)) {
       return { status: "escaped" };
     }
-    if (deniedReason(rel)) return { status: "denied" };
+    if (deniedReason(path.relative(projectReal, real))) return { status: "denied" };
     return { status: "ok", realPath: real };
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;

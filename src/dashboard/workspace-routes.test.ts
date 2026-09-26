@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import pathModule, { join } from "node:path";
 import { handleWorkspaceRoute, isPathSafe } from "./workspace-routes.js";
 
 interface CapturedResponse {
@@ -105,5 +105,22 @@ describe("workspace endpoints decide on the resolved path (CHN-3)", () => {
     const out = await get("/api/workspace/file?path=Assets/Scripts/Game.cs");
     expect(out.status).toBe(200);
     expect(JSON.parse(out.body).content).toContain("class Game");
+  });
+});
+
+describe("isPathSafe under Windows path rules", () => {
+  // path.relative answers with an ABSOLUTE path when the target is on another
+  // drive or a UNC share, and the containment test resolved that answer back
+  // to the target and called it inside the project.
+  it.each(["E:\\secret.txt", "D:/notes.txt", "\\\\server\\share\\file.txt", "c:\\Windows\\win.ini"])(
+    "refuses %s outside a project on C:",
+    (requested) => {
+      expect(isPathSafe(requested, "C:\\proj", pathModule.win32).safe).toBe(false);
+    },
+  );
+
+  it("still serves a file inside the project", () => {
+    const result = isPathSafe("Assets\\Scripts\\Game.cs", "C:\\proj", pathModule.win32);
+    expect(result).toEqual({ safe: true, resolved: "C:\\proj\\Assets\\Scripts\\Game.cs" });
   });
 });

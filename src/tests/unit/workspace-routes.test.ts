@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Readable, Writable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { handleWorkspaceRoute, isPathSafe } from '../../dashboard/workspace-routes.js'
@@ -311,11 +311,17 @@ describe('handleWorkspaceRoute', () => {
 
   it('GET /api/workspace/file rejects symlinks escaping project root', async () => {
     const linkPath = join(testRoot, 'Assets', 'escape-link.txt')
+    // A file that exists outside the project on every platform: '/etc/hosts'
+    // is a dangling link on Windows, which is a 404, not an escape.
+    const outsideDir = mkdtempSync(join(tmpdir(), 'workspace-routes-outside-'))
+    const outsideFile = join(outsideDir, 'hosts')
+    writeFileSync(outsideFile, 'outside the project')
     try {
       // Create a symlink pointing outside the project
-      symlinkSync('/etc/hosts', linkPath)
+      symlinkSync(outsideFile, linkPath)
     } catch {
       // symlink creation may fail, skip
+      rmSync(outsideDir, { recursive: true, force: true })
       return
     }
 
@@ -326,7 +332,9 @@ describe('handleWorkspaceRoute', () => {
     await new Promise((r) => setTimeout(r, 100))
 
     expect(res._status).toBe(403)
+    expect(res._body).not.toContain('outside the project')
 
     try { rmSync(linkPath); } catch { /* */ }
+    rmSync(outsideDir, { recursive: true, force: true })
   })
 })
