@@ -12,6 +12,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAtOrUnder, kernelEnforcesPermissions, permissionDenied } from "../../tests/helpers/permission-faults.js";
+import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 
 /** The config the resolver locates the identity database with — never the real one. */
 let memoryDbDir: string;
@@ -185,6 +186,24 @@ describe("instance identity state is three-way (round 13 #14)", () => {
 
     // …and once permission is back, the very next request is judged normally.
     expect(instanceIdentityState().kind).toBe("store");
+  });
+
+  // Windows 2026-09-26: the store this module opens from the file was dropped by
+  // reference and never closed, so the identity database stayed locked (EBUSY)
+  // for the life of the process — no restore or replacement could touch it.
+  it("closes the identity database it opened when that store is let go", () => {
+    seedIdentities();
+    expect(instanceIdentityState().kind).toBe("store");
+    expect(openDescriptorsOn(dbPath())).toBeGreaterThan(0);
+    setInstanceIdentityStore(null);
+    expect(openDescriptorsOn(dbPath())).toBe(0);
+
+    // …and a store that fails its probe is closed when it is dropped, too.
+    expect(instanceIdentityState().kind).toBe("store");
+    writeFileSync(dbPath(), "this is not a sqlite database", "utf8");
+    expect(instanceIdentityState().kind).toBe("unavailable");
+    expect(openDescriptorsOn(dbPath())).toBe(0);
+    unlinkSync(dbPath());
   });
 
   it("reports `unavailable` when a store that WAS readable stops being readable", () => {

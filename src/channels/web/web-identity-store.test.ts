@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { WebIdentityStore } from "./web-identity-store.js";
+import { openDescriptorsOn } from "../../tests/helpers/open-handles.js";
 
 describe("WebIdentityStore", () => {
   const tempDirs: string[] = [];
@@ -36,6 +37,20 @@ describe("WebIdentityStore", () => {
     const secondStore = new WebIdentityStore(dbPath);
     expect(secondStore.verify(identity.profileId, identity.profileToken)).toBe(true);
     secondStore.close();
+  });
+
+  // Windows 2026-09-26: a file that is not a database failed the constructor
+  // with the connection still open, and the file stayed locked (EBUSY) for the
+  // life of the process — nothing could replace or restore it.
+  it("releases the file when the database cannot be opened", () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-web-identity-"));
+    tempDirs.push(dir);
+    const dbPath = join(dir, "web-identities.db");
+    writeFileSync(dbPath, "this is not a sqlite database", "utf8");
+
+    expect(() => new WebIdentityStore(dbPath)).toThrow();
+    expect(openDescriptorsOn(dbPath)).toBe(0);
+    unlinkSync(dbPath);
   });
 });
 

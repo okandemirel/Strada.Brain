@@ -64,7 +64,23 @@ export type InstanceIdentityState =
   | { readonly kind: "unavailable"; readonly why: string };
 
 let injectedStore: InstanceIdentityStoreView | null = null;
-let openedStore: InstanceIdentityStoreView | undefined;
+/** The store THIS module opened from the file fallback — the only one it may close. */
+let openedStore: WebIdentityStore | undefined;
+
+/**
+ * Forget the store this module opened AND close it. Dropping the reference alone
+ * leaked the connection: on Windows an open database cannot be deleted, renamed
+ * over or restored until the process exits.
+ */
+function releaseOpenedStore(): void {
+  const store = openedStore;
+  openedStore = undefined;
+  try {
+    store?.close();
+  } catch {
+    // Already unusable; there is nothing left to release.
+  }
+}
 
 /**
  * Hand these surfaces the identity store to verify callers against (the daemon's
@@ -72,7 +88,7 @@ let openedStore: InstanceIdentityStoreView | undefined;
  */
 export function setInstanceIdentityStore(store: InstanceIdentityStoreView | null): void {
   injectedStore = store;
-  openedStore = undefined;
+  releaseOpenedStore();
 }
 
 /** The identity database the web channel keeps, where bootstrap puts it. */
@@ -105,7 +121,7 @@ export function instanceIdentityState(): InstanceIdentityState {
     } catch (error) {
       const why = `the identity database stopped being readable: ${String(error)}`;
       getLoggerSafe().warn("[instance-access] identity store unreadable", { error: String(error) });
-      openedStore = undefined;
+      releaseOpenedStore();
       return { kind: "unavailable", why };
     }
   }
@@ -223,7 +239,7 @@ export function authorizeInstanceRequest(
     // Mid-read failure: the same unknown owner as a failed open.
     const why = `the identity database could not be read: ${String(error)}`;
     getLoggerSafe().warn("[instance-access] identity store read failed", { error: String(error) });
-    openedStore = undefined;
+    releaseOpenedStore();
     return { kind: "unavailable", why };
   }
 
@@ -273,7 +289,7 @@ export function verifiedRequestIdentity(headers: IncomingHttpHeaders | undefined
     const viewer = verifiedProfileId(headers, state.store);
     return { kind: "viewer", ...(viewer ? { viewer } : {}) };
   } catch (error) {
-    openedStore = undefined;
+    releaseOpenedStore();
     return { kind: "unavailable", why: `the identity database could not be read: ${String(error)}` };
   }
 }

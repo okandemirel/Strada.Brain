@@ -38,7 +38,16 @@ export class WebIdentityStore {
     private readonly dbPath: string = ":memory:",
     private readonly abandonedAfterMs: number = ABANDONED_IDENTITY_MS,
   ) {
-    this.initialize();
+    try {
+      this.initialize();
+    } catch (error) {
+      // A file that is not a database (or a refused maintenance window) fails
+      // AFTER the connection opened. The caller never gets an instance to close,
+      // so release it here: on Windows a leaked handle keeps the file locked
+      // until the process exits, and nothing can restore or replace it.
+      this.close();
+      throw error;
+    }
   }
 
   private initialize(): void {
