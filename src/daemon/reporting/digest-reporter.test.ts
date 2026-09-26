@@ -263,6 +263,26 @@ describe("DigestReporter.sendDigest", () => {
   });
 });
 
+describe("DigestReporter.previewDigest", () => {
+  it("formats the digest sendDigest() would send, without sending it, emitting, or moving the baseline", async () => {
+    const sender = makeMockChannelSender();
+    const eventBus = makeMockEventBus();
+    const deps = makeDeps({ channelSender: sender, chatId: "chat-123", channelType: "web", eventBus });
+    const reporter = new DigestReporter(deps);
+
+    const preview = reporter.previewDigest();
+
+    expect(preview.length).toBeGreaterThan(0);
+    expect(sender.sendMarkdown).not.toHaveBeenCalled();
+    expect(eventBus.emit).not.toHaveBeenCalled();
+    expect(storage.getDaemonState("digest_last_timestamp")).toBeUndefined();
+
+    // The same text a send would deliver right now.
+    await reporter.sendDigest();
+    expect((sender.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toBe(preview);
+  });
+});
+
 describe("DigestReporter.start", () => {
   it("creates croner Cron job with configured schedule and timezone", () => {
     const deps = makeDeps({

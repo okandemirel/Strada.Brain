@@ -2128,6 +2128,8 @@ async function bootstrapImpl(
           historyDepth: 10,
           triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
           autoUpdater,
+          // COR-13: `strada daemon …` from a shell acts on this same context.
+          cliContext: daemonContext,
         });
       }
     }

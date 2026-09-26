@@ -11,7 +11,16 @@ import { Command } from "commander";
 import { registerDaemonCommands, type DaemonContext } from "./daemon-cli.js";
 import type { DaemonConfig, ITrigger, TriggerMetadata, TriggerState, AuditEntry } from "./daemon-types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
-import { createDaemonDashboardClient, type DashboardClientResolution } from "../core/daemon-dashboard-client.js";
+import {
+  createDaemonDashboardClient,
+  createDaemonOperatorClient,
+  resolveDaemonOperatorClient,
+  type DashboardClientResolution,
+  type OperatorClientResolution,
+} from "../core/daemon-dashboard-client.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // =============================================================================
 // HELPERS
@@ -89,6 +98,7 @@ async function runDaemonCommand(
   getDaemonContext: () => DaemonContext | undefined,
   args: string[],
   getDashboardClient?: () => DashboardClientResolution,
+  getOperatorClient?: () => Promise<OperatorClientResolution>,
 ): Promise<{ stdout: string; stderr: string }> {
   const program = new Command();
   program.exitOverride();
@@ -97,7 +107,7 @@ async function runDaemonCommand(
     writeErr: () => {},
   });
 
-  registerDaemonCommands(program, getDaemonContext, getDashboardClient);
+  registerDaemonCommands(program, getDaemonContext, getDashboardClient, getOperatorClient);
 
   const stdoutLines: string[] = [];
   const stderrLines: string[] = [];
@@ -326,15 +336,20 @@ describe("daemon digest", () => {
     expect(stdout.toLowerCase()).toContain("digest sent");
   });
 
-  it("prints to stdout in --dry-run mode", async () => {
-    const sendDigest = vi.fn().mockResolvedValue("**3 tasks done, 1 error**\n\n---\nDashboard: http://localhost:3100");
+  it("prints to stdout in --dry-run mode, without sending anything", async () => {
+    // COR-13 made the flag mean what it says: this test used to expect
+    // sendDigest() — which delivers the digest and moves its baseline — to run
+    // for a dry run.
+    const sendDigest = vi.fn().mockResolvedValue("sent");
+    const previewDigest = vi.fn().mockReturnValue("**3 tasks done, 1 error**\n\n---\nDashboard: http://localhost:3100");
     const ctx = makeMockContext({
-      digestReporter: { sendDigest, start: vi.fn(), stop: vi.fn(), getLastDigestTime: vi.fn() } as any,
+      digestReporter: { sendDigest, previewDigest, start: vi.fn(), stop: vi.fn(), getLastDigestTime: vi.fn() } as any,
     });
 
     const { stdout } = await runDaemonCommand(() => ctx, ["digest", "--dry-run"]);
 
-    expect(sendDigest).toHaveBeenCalled();
+    expect(previewDigest).toHaveBeenCalled();
+    expect(sendDigest).not.toHaveBeenCalled();
     expect(stdout).toContain("Preview");
     expect(stdout).toContain("3 tasks done");
   });
@@ -761,23 +776,25 @@ describe("daemon commands outside the runtime process (COR-13)", () => {
   });
 
   it.each([
-    [["trigger", "nightly-build"], "daemon trigger"],
-    [["reset", "nightly-build"], "daemon reset"],
-    [["audit"], "daemon audit"],
-    [["budget", "reset"], "daemon budget reset"],
-    [["notifications"], "daemon notifications"],
-    [["memory:consolidation-preview"], "daemon memory:consolidation-preview"],
-    [["delegation:tier", "code_review", "cheap"], "daemon delegation:tier"],
-    [["agent", "stop", "123e4567-e89b-42d3-a456-426614174000"], "daemon agent stop"],
-    [["deploy:check"], "daemon deploy:check"],
-  ])("%j has no read endpoint or changes state: says so and exits non-zero instead of 'not running'", async (args, name) => {
-    const { stdout, stderr } = await runDaemonCommand(() => undefined, args, () => ({
-      kind: "ok",
-      client: { baseUrl: "http://127.0.0.1:1", getJson: () => Promise.reject(new Error("must not be called")) },
+    [["trigger", "nightly-build"], "fire trigger 'nightly-build'"],
+    [["reset", "nightly-build"], "reset the circuit breaker for 'nightly-build'"],
+    [["budget", "reset"], "reset the daemon budget"],
+    [["digest"], "send the digest"],
+    [["notify", "--level", "high", "--message", "hi"], "send the notification"],
+    [["delegation:tier", "code_review", "cheap"], "set the tier override"],
+    [["agent", "stop", "123e4567-e89b-42d3-a456-426614174000"], "stop agent '123e4567-e89b-42d3-a456-426614174000'"],
+    [["agent", "start", "123e4567-e89b-42d3-a456-426614174000"], "start agent '123e4567-e89b-42d3-a456-426614174000'"],
+    [["agent", "budget", "set", "123e4567-e89b-42d3-a456-426614174000", "2"], "set agent '123e4567-e89b-42d3-a456-426614174000' budget cap"],
+    [["memory:consolidate"], "run memory consolidation"],
+    [["memory:consolidation-undo", "log-1"], "undo consolidation 'log-1'"],
+    [["deploy:check"], "run the readiness check"],
+  ])("%j with no way to reach the runtime says it cannot, and exits non-zero instead of claiming 'not running'", async (args, what) => {
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, args, undefined, async () => ({
+      kind: "unavailable",
+      message: "no running Strada has published an operator credential at /cfg/.strada/locks/k.operator.json",
     }));
-    expect(stderr).toContain(`\`strada ${name}\` is not available from the CLI`);
-    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
-    expect(`${stdout}\n${stderr}`).not.toContain("is not enabled");
+    expect(stderr).toContain(`Cannot ${what}: no running Strada has published an operator credential at /cfg/.strada/locks/k.operator.json.`);
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("daemon is not running");
     expect(process.exitCode).toBe(1);
   });
 });
@@ -1027,6 +1044,309 @@ describe("read-only daemon commands over the dashboard API (COR-13)", () => {
     const { stderr } = await run(["deploy:status"], wrong);
 
     expect(stderr).toContain("Authentication required");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+// =============================================================================
+// COR-13: every other command, against a stub of the running runtime
+// =============================================================================
+
+describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+    server = undefined;
+  });
+
+  const OPERATOR = "operator-token-0123456789abcdef0123456789abcdef";
+  const CREDENTIAL = "/cfg/.strada/locks/k.operator.json";
+  const AGENT_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+  interface Seen {
+    line: string;
+    operator: string | undefined;
+    authorization: string | undefined;
+    contentType: string | undefined;
+    body: unknown;
+  }
+
+  /**
+   * A stub runtime: GETs need the bearer when one is set, POSTs need this run's
+   * operator token in its header (as the real dashboard's allowlisted routes).
+   */
+  async function startRuntime(
+    routes: Record<string, { status?: number; body: unknown }>,
+    bearer?: string,
+  ): Promise<{ baseUrl: string; seen: Seen[] }> {
+    const seen: Seen[] = [];
+    server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk: Buffer) => { raw += chunk.toString(); });
+      req.on("end", () => {
+        const line = `${req.method} ${req.url}`;
+        seen.push({
+          line,
+          operator: req.headers["x-strada-operator-token"] as string | undefined,
+          authorization: req.headers["authorization"],
+          contentType: req.headers["content-type"],
+          body: raw ? JSON.parse(raw) : undefined,
+        });
+        const refuse = req.method === "POST"
+          ? req.headers["x-strada-operator-token"] !== OPERATOR
+          : bearer !== undefined && req.headers["authorization"] !== `Bearer ${bearer}`;
+        if (refuse) {
+          res.writeHead(req.method === "POST" ? 403 : 401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: req.method === "POST" ? "Trusted same-origin request required" : "Authentication required" }));
+          return;
+        }
+        const route = routes[line];
+        res.writeHead(route ? route.status ?? 200 : 404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(route ? route.body : { error: "Not found" }));
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    return { baseUrl: `http://127.0.0.1:${port}`, seen };
+  }
+
+  const operatorAt = (baseUrl: string, operatorToken = OPERATOR, bearer?: string) =>
+    async (): Promise<OperatorClientResolution> => ({
+      kind: "ok",
+      client: createDaemonOperatorClient({ baseUrl, operatorToken, credentialPath: CREDENTIAL, ...(bearer ? { token: bearer } : {}) }),
+    });
+  const readerAt = (baseUrl: string, bearer?: string) =>
+    (): DashboardClientResolution => ({ kind: "ok", client: createDaemonDashboardClient({ baseUrl, ...(bearer ? { token: bearer } : {}) }) });
+  const run = (args: string[], baseUrl: string, bearer?: string) =>
+    runDaemonCommand(() => undefined, args, readerAt(baseUrl, bearer), operatorAt(baseUrl, OPERATOR, bearer));
+
+  const ok = { body: { status: "done" } };
+
+  it("daemon trigger and reset post the trigger name with the operator token, and print what the in-process commands print", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/daemon/trigger": ok,
+      "POST /api/daemon/circuit/reset": ok,
+    });
+
+    const fired = await run(["trigger", "nightly-build"], baseUrl);
+    expect(fired.stderr).toBe("");
+    expect(fired.stdout).toBe("Trigger 'nightly-build' fired manually");
+
+    const reset = await run(["reset", "nightly-build"], baseUrl);
+    expect(reset.stdout).toBe("Circuit breaker for 'nightly-build' reset to CLOSED");
+
+    expect(seen.map((s) => [s.line, s.operator, s.contentType, s.body])).toEqual([
+      ["POST /api/daemon/trigger", OPERATOR, "application/json", { name: "nightly-build" }],
+      ["POST /api/daemon/circuit/reset", OPERATOR, "application/json", { name: "nightly-build" }],
+    ]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("daemon budget reset and digest post an empty JSON object, and send the dashboard bearer too when the install has one", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/daemon/budget/reset": ok,
+      "POST /api/daemon/digest/send": ok,
+    }, "bearer-1");
+
+    expect((await run(["budget", "reset"], baseUrl, "bearer-1")).stdout).toBe("Budget counter reset");
+    expect((await run(["digest"], baseUrl, "bearer-1")).stdout).toBe("Digest sent to active channel");
+    expect(seen.map((s) => [s.line, s.body, s.authorization])).toEqual([
+      ["POST /api/daemon/budget/reset", {}, "Bearer bearer-1"],
+      ["POST /api/daemon/digest/send", {}, "Bearer bearer-1"],
+    ]);
+  });
+
+  it("daemon notify checks the level before posting it", async () => {
+    const { baseUrl, seen } = await startRuntime({ "POST /api/daemon/notify": ok });
+
+    const bad = await run(["notify", "--level", "loud", "--message", "hi"], baseUrl);
+    expect(bad.stderr).toContain("Invalid level: loud");
+    expect(process.exitCode).toBe(1);
+    expect(seen).toEqual([]);
+    process.exitCode = undefined;
+
+    const sent = await run(["notify", "--level", "high", "--message", "disk almost full"], baseUrl);
+    expect(sent.stdout).toBe("Notification sent (level: high)");
+    expect(seen.map((s) => [s.line, s.body])).toEqual([["POST /api/daemon/notify", { level: "high", message: "disk almost full" }]]);
+  });
+
+  it("daemon agent stop, start and budget set post to the agent's route", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      [`POST /api/agents/${AGENT_ID}/stop`]: ok,
+      [`POST /api/agents/${AGENT_ID}/start`]: ok,
+      [`POST /api/agents/${AGENT_ID}/budget`]: ok,
+    });
+
+    expect((await run(["agent", "stop", AGENT_ID, "--force"], baseUrl)).stdout).toBe(`Agent '${AGENT_ID}' stopped (force).`);
+    expect((await run(["agent", "stop", AGENT_ID], baseUrl)).stdout).toBe(`Agent '${AGENT_ID}' stopped.`);
+    expect((await run(["agent", "start", AGENT_ID], baseUrl)).stdout).toBe(`Agent '${AGENT_ID}' started.`);
+    expect((await run(["agent", "budget", "set", AGENT_ID, "2.5"], baseUrl)).stdout).toBe(`Agent '${AGENT_ID}' budget cap set to $2.50.`);
+
+    const bad = await run(["agent", "budget", "set", AGENT_ID, "0"], baseUrl);
+    expect(bad.stderr).toContain("Invalid amount");
+    expect(process.exitCode).toBe(1);
+
+    expect(seen.map((s) => [s.line, s.body])).toEqual([
+      [`POST /api/agents/${AGENT_ID}/stop`, { force: true }],
+      [`POST /api/agents/${AGENT_ID}/stop`, {}],
+      [`POST /api/agents/${AGENT_ID}/start`, {}],
+      [`POST /api/agents/${AGENT_ID}/budget`, { usd: 2.5 }],
+    ]);
+  });
+
+  it("daemon delegation:tier checks the tier before posting it", async () => {
+    const { baseUrl, seen } = await startRuntime({ "POST /api/delegations/tier": ok });
+
+    expect((await run(["delegation:tier", "code_review", "gold"], baseUrl)).stderr).toContain("Invalid tier: gold");
+    expect(seen).toEqual([]);
+    process.exitCode = undefined;
+
+    const set = await run(["delegation:tier", "code_review", "cheap"], baseUrl);
+    expect(set.stdout).toBe("Tier override set: code_review -> cheap (immediate effect, no restart needed)");
+    expect(seen.map((s) => s.body)).toEqual([{ type: "code_review", tier: "cheap" }]);
+  });
+
+  it("daemon memory:consolidate runs one cycle and prints its result; consolidation-undo surfaces the runtime's refusal", async () => {
+    const { baseUrl } = await startRuntime({
+      "POST /api/consolidation/run": { body: { status: "completed", processed: 3, remaining: 1, clustersFound: 4, costUsd: 0.0123 } },
+      "POST /api/consolidation/undo": { status: 409, body: { error: "Failed to undo: Consolidation log entry not found: log-9" } },
+    });
+
+    const cycle = await run(["memory:consolidate", "--force"], baseUrl);
+    expect(cycle.stdout.split("\n")).toEqual([
+      "Running consolidation (forced)...",
+      "Status: completed",
+      "Processed: 3 clusters",
+      "Remaining: 1",
+      "Clusters found: 4",
+      "Cost: $0.0123",
+    ]);
+
+    const undo = await run(["memory:consolidation-undo", "log-9"], baseUrl);
+    expect(undo.stderr).toBe(
+      `Cannot undo consolidation 'log-9': the dashboard at ${baseUrl} refused POST /api/consolidation/undo: Failed to undo: Consolidation log entry not found: log-9`,
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon deploy:check asks the runtime to propose only with --execute --force, as in-process", async () => {
+    const ready = { ready: true, testPassed: true, gitClean: true, branchMatch: true, timestamp: 1, cached: false };
+    const { baseUrl, seen } = await startRuntime({ "POST /api/deployment/check": { body: { ...ready, proposed: true } } });
+
+    const check = await run(["deploy:check"], baseUrl);
+    expect(check.stdout).toContain("Ready: YES");
+    expect(check.stdout).not.toContain("propos");
+
+    const unconfirmed = await run(["deploy:check", "--execute"], baseUrl);
+    expect(unconfirmed.stdout).toContain("Use --force to propose deployment without interactive confirmation.");
+
+    const proposed = await run(["deploy:check", "--execute", "--force"], baseUrl);
+    expect(proposed.stdout).toContain("Deployment proposed via approval queue.");
+
+    expect(seen.map((s) => s.body)).toEqual([{}, {}, { propose: true }]);
+  });
+
+  it("daemon deploy:check reports deployment that is off in the running Strada", async () => {
+    const { baseUrl } = await startRuntime({ "POST /api/deployment/check": { body: { enabled: false } } });
+    const { stdout } = await run(["deploy:check"], baseUrl);
+    expect(stdout).toContain("Deployment is not active in the running Strada");
+  });
+
+  it("a refused operator token names the credential file, and exits non-zero", async () => {
+    const { baseUrl } = await startRuntime({ "POST /api/daemon/budget/reset": ok });
+    const { stdout, stderr } = await runDaemonCommand(() => undefined, ["budget", "reset"], undefined, operatorAt(baseUrl, "stale-token"));
+    expect(stderr).toContain(`Cannot reset the daemon budget: the dashboard at ${baseUrl} refused POST /api/daemon/budget/reset`);
+    expect(stderr).toContain(`the operator credential in ${CREDENTIAL} was not accepted`);
+    expect(stdout).toBe("");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("an unreachable dashboard is named, without claiming the daemon is down", async () => {
+    const { baseUrl } = await startRuntime({});
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+
+    const { stdout, stderr } = await run(["trigger", "nightly-build"], baseUrl);
+    expect(stderr).toContain(`Cannot fire trigger 'nightly-build': could not reach the dashboard at ${baseUrl} named in ${CREDENTIAL}`);
+    expect(`${stdout}\n${stderr}`.toLowerCase()).not.toContain("not running");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("a runtime that cannot do it says why (503), and the command exits non-zero", async () => {
+    const { baseUrl } = await startRuntime({
+      [`POST /api/agents/${AGENT_ID}/start`]: { status: 503, body: { error: "Multi-agent mode is not enabled in the running Strada" } },
+    });
+    const { stderr } = await run(["agent", "start", AGENT_ID], baseUrl);
+    expect(stderr).toContain("Multi-agent mode is not enabled in the running Strada");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("with no credential file, names the file and what that can mean", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "strada-cli-"));
+    try {
+      const file = join(dir, "k.operator.json");
+      const resolve = () => resolveDaemonOperatorClient(file, {
+        dashboard: { enabled: true, port: 3100 },
+        websocketDashboard: { enabled: false, port: 3101, authToken: undefined },
+      });
+      const { stdout, stderr } = await runDaemonCommand(() => undefined, ["budget", "reset"], undefined, resolve);
+      expect(stderr).toContain(`Cannot reset the daemon budget: no running Strada has published an operator credential at ${file}`);
+      expect(stderr).toContain("runs as another OS user, or uses a different config root");
+      expect(stdout).toBe("");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("daemon audit, notifications, digest --dry-run and memory:consolidation-preview read their GET endpoints", async () => {
+    const { baseUrl, seen } = await startRuntime({
+      "GET /api/daemon/audit?limit=20": {
+        body: { enabled: true, entries: [{ id: 1, toolName: "shell_exec", decision: "approved", decidedBy: "owner", timestamp: Date.UTC(2026, 8, 1) }] },
+      },
+      "GET /api/daemon/notifications?limit=5&level=high": {
+        body: { enabled: true, entries: [{ id: 2, urgency: "high", title: "Budget exceeded", message: "m", deliveredTo: ["chat"], createdAt: 1 }] },
+      },
+      "GET /api/daemon/digest/preview": { body: { enabled: true, markdown: "**3 tasks done**" } },
+      "GET /api/consolidation/preview": {
+        body: { enabled: true, clusters: [{ seedId: "seed-1", memberIds: ["a", "b"], avgSimilarity: 0.9123, tier: "working" }], estimatedCostPerCluster: 0.01, totalEstimatedCost: 0.01 },
+      },
+    }, "bearer-2");
+
+    const audit = await run(["audit"], baseUrl, "bearer-2");
+    expect(audit.stdout).toContain("shell_exec");
+    expect(audit.stdout).toContain("2026-09-01T00:00:00.000Z");
+
+    const notifications = await run(["notifications", "--level", "high", "--limit", "5"], baseUrl, "bearer-2");
+    expect(notifications.stdout).toContain("Budget exceeded");
+
+    const preview = await run(["digest", "--dry-run"], baseUrl, "bearer-2");
+    expect(preview.stdout.split("\n")).toEqual(["--- Digest Preview (dry-run) ---", "**3 tasks done**", "--- End Preview ---"]);
+
+    const clusters = await run(["memory:consolidation-preview"], baseUrl, "bearer-2");
+    expect(clusters.stdout).toContain("seed-1");
+    expect(clusters.stdout).toContain("0.912");
+
+    // Reads go as any dashboard client: the bearer, never the operator token, never a POST.
+    expect(seen.every((s) => s.line.startsWith("GET ") && s.operator === undefined && s.authorization === "Bearer bearer-2")).toBe(true);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("the reads say what is off in the running Strada", async () => {
+    const { baseUrl } = await startRuntime({
+      "GET /api/daemon/audit?limit=20": { body: { enabled: false, reason: "Daemon mode is not enabled in the running Strada (start it with --daemon)" } },
+      "GET /api/consolidation/preview": { body: { enabled: false } },
+    });
+    expect((await run(["audit"], baseUrl)).stdout).toContain("Daemon mode is not enabled in the running Strada");
+    expect((await run(["memory:consolidation-preview"], baseUrl)).stdout).toContain("Memory consolidation is not active in the running Strada");
+  });
+
+  it("daemon notifications checks the level filter before reading", async () => {
+    const { baseUrl, seen } = await startRuntime({});
+    const { stderr } = await run(["notifications", "--level", "loud"], baseUrl);
+    expect(stderr).toContain("Invalid level filter: loud");
+    expect(seen).toEqual([]);
     expect(process.exitCode).toBe(1);
   });
 });

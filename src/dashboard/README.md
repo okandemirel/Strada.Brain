@@ -24,6 +24,7 @@ Pure Node.js `http` module — no Express. Binds to `127.0.0.1` only (localhost)
 **API authentication defaults:**
 - If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, all `/api/*` dashboard endpoints require `Authorization: Bearer <token>`.
 - If it is unset, read-only local access still works, but mutating `/api/*` requests are accepted only from trusted same-origin browser requests. This keeps local CSRF closed even without a static token.
+- **Local operator credential.** While listening, the dashboard writes `{ baseUrl, pid, token }` (a fresh random token per run) to `<config root>/.strada/locks/<install hash>.operator.json`, mode 0600, and removes it on stop if it still holds that run's token. `strada daemon trigger|reset|budget reset|digest|notify|agent stop|start|budget set|delegation:tier|memory:consolidate|memory:consolidation-undo|deploy:check`, run from a shell, send it in the `X-Strada-Operator-Token` header. It is accepted only in that header and only on the POST routes those commands use (`LOCAL_OPERATOR_ROUTES` in `server-daemon-control-routes.ts`), where it stands in for the bearer, the same-origin check and the instance owner. Those routes are owner-only for every other caller.
 
 **Readiness states:**
 - 200: All components healthy

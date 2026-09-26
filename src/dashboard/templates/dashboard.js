@@ -905,7 +905,7 @@ function renderDeployment(data) {
   checkBtn.onclick = function() {
     checkBtn.disabled = true;
     checkBtn.textContent = 'Checking...';
-    apiFetch('/api/deployment/check', { method: 'POST' })
+    apiFetch('/api/deployment/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(function(r) { return r.json(); })
       .then(function(result) {
         checkBtn.textContent = result.ready ? 'Ready' : 'Not Ready';

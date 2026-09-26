@@ -433,6 +433,56 @@ const MUTATIONS: Readonly<Record<string, readonly MutationRoute[]>> = {
       },
     },
   ],
+  // COR-13: what `strada daemon …` changes from a shell. Owner-only for every
+  // browser identity; the local operator credential is the CLI's way through
+  // (server.operator-token.test.ts), and these probes prove it opens nothing
+  // for a guest.
+  "server-daemon-control-routes.ts": [
+    {
+      guard: `if (url === "/api/daemon/trigger" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/daemon/trigger" },
+    },
+    {
+      guard: `if (url === "/api/daemon/circuit/reset" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/daemon/circuit/reset" },
+    },
+    {
+      guard: `if (url === "/api/daemon/budget/reset" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/daemon/budget/reset" },
+    },
+    {
+      guard: `if (url === "/api/daemon/digest/send" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/daemon/digest/send" },
+    },
+    {
+      guard: `if (url === "/api/daemon/notify" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/daemon/notify" },
+    },
+    {
+      guard: `if (id && agentAction?.[2] === "stop" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/agents/123e4567-e89b-42d3-a456-426614174000/stop" },
+    },
+    {
+      guard: `if (id && agentAction?.[2] === "start" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/agents/123e4567-e89b-42d3-a456-426614174000/start" },
+    },
+    {
+      guard: `if (id && agentAction?.[2] === "budget" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/agents/123e4567-e89b-42d3-a456-426614174000/budget" },
+    },
+    {
+      guard: `if (url === "/api/delegations/tier" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/delegations/tier" },
+    },
+    {
+      guard: `if (url === "/api/consolidation/run" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/consolidation/run" },
+    },
+    {
+      guard: `if (url === "/api/consolidation/undo" && method === "POST") {`,
+      enforcement: { kind: "central-owner-only", surface: "instance:control", sample: "/api/consolidation/undo" },
+    },
+  ],
   "server-mcp-routes.ts": [
     {
       guard: `if (method !== "POST") {`,

@@ -47,7 +47,8 @@ import { CHANNEL_DEFAULTS } from "./common/constants.js";
 import { isValidChannelSpec, parseChannelSpec } from "./channels/channel-spec.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
-import { resolveDaemonDashboardClient } from "./core/daemon-dashboard-client.js";
+import { resolveDaemonDashboardClient, resolveDaemonOperatorClient } from "./core/daemon-dashboard-client.js";
+import { operatorCredentialPath } from "./core/operator-credential.js";
 import { registerPresetCommands } from "./config/preset-cli.js";
 import {
   getConfiguredDefaultChannel,
@@ -432,8 +433,9 @@ registerPresetCommands(program);
 // Register daemon management commands (status, trigger, reset, audit, config, budget)
 // Context is provided via callback since daemon may not be initialized at registration time.
 // A `strada daemon …` process never runs startApp, so its context is always
-// undefined: `daemon status` reads the running runtime over the dashboard API
-// that this install's config describes instead (COR-13).
+// undefined: its commands reach the running runtime over the dashboard API
+// instead (COR-13) — reads as any dashboard client, changes as the local
+// operator, with the credential that runtime published for this install.
 let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;
 registerDaemonCommands(program, () => appResult?.daemonContext, () => {
   const configResult = loadConfigSafe();
@@ -441,6 +443,15 @@ registerDaemonCommands(program, () => appResult?.daemonContext, () => {
     return { kind: "unavailable", message: `the configuration could not be loaded (${configResult.error})` };
   }
   return resolveDaemonDashboardClient(configResult.value);
+}, async () => {
+  const configResult = loadConfigSafe();
+  if (configResult.kind === "err") {
+    return { kind: "unavailable", message: `the configuration could not be loaded (${configResult.error})` };
+  }
+  return resolveDaemonOperatorClient(
+    operatorCredentialPath(runtimePaths.configRoot, runtimePaths.installRoot),
+    configResult.value,
+  );
 });
 
 // Register skill management commands (install, remove, list, update, search, info)

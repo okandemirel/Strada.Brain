@@ -8,6 +8,13 @@ import { isAllowedHostHeader, rejectDisallowedHost, resolveAllowedHosts } from "
 import { ownerOnlyProxySurface } from "../channels/web/instance-access.js";
 import { authorizeInstanceRequest } from "../channels/web/instance-authorization.js";
 import { resolveBindHost } from "../core/bind-host.js";
+import { dashboardBaseUrl } from "../core/daemon-dashboard-client.js";
+import {
+  OPERATOR_TOKEN_HEADER,
+  generateOperatorToken,
+  publishOperatorCredential,
+  withdrawOperatorCredential,
+} from "../core/operator-credential.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
@@ -62,6 +69,7 @@ import {
 } from "./server-types.js";
 // DASHBOARD_HTML and its CSP hash are built from dashboard/templates/ at module load
 import { handleDaemonRoutes } from "./server-daemon-routes.js";
+import { handleDaemonControlRoutes, isLocalOperatorRoute } from "./server-daemon-control-routes.js";
 import { handleMcpRoutes } from "./server-mcp-routes.js";
 import { handleProviderRoutes } from "./server-provider-routes.js";
 import { handlePersonalityRoutes } from "./server-personality-routes.js";
@@ -139,6 +147,8 @@ export class DashboardServer {
   private daemonHeartbeatLoop?: HeartbeatLoop;
   private daemonRegistry?: TriggerRegistry;
   private daemonApprovalQueue?: ApprovalQueue;
+  /** What the in-process `strada daemon` commands act on (COR-13). */
+  private daemonCliContext?: import("../daemon/daemon-cli.js").DaemonContext;
 
   // Webhook context (set when webhook triggers are registered)
   private webhookTriggers?: Map<string, WebhookTrigger>;
@@ -153,6 +163,12 @@ export class DashboardServer {
     VAULT_SEARCH_RATE_LIMIT_WINDOW_MS,
   );
   private dashboardToken?: string;
+  /** Where this run publishes its local operator credential (COR-13); unset = none. */
+  private readonly operatorCredentialFile?: string;
+  /** This run's operator token, set only once its file is written. Never logged, never served. */
+  private operatorToken?: string;
+  /** The exact bytes written, so stop() removes this run's file and no other. */
+  private operatorCredentialBytes?: string;
 
   // Identity and enrichment context (Plan 18-03)
   private identityManager?: IdentityStateManager;
@@ -246,8 +262,15 @@ export class DashboardServer {
     bindHost: string = resolveBindHost(),
     /** Extra Host names to serve (CHN-2); defaults to HTTP_ALLOWED_HOSTS. */
     allowedHosts: readonly string[] = resolveAllowedHosts(),
+    /**
+     * Where to publish the local operator credential while listening (COR-13):
+     * `operatorCredentialPath(configRoot, installRoot)`. Unset publishes none,
+     * and then no request is ever the local operator.
+     */
+    operatorCredentialFile?: string,
   ) {
     this.port = port;
+    this.operatorCredentialFile = operatorCredentialFile;
     this.bindHost = bindHost;
     this.allowedHosts = allowedHosts;
     this.trustedBrowserPorts = trustedBrowserPorts;
@@ -373,6 +396,8 @@ export class DashboardServer {
     triggerFireRetentionDays?: number;
     bootReport?: BootReport;
     autoUpdater?: AutoUpdater;
+    /** The in-process daemon CLI context; the shell's `strada daemon` routes act on it. */
+    cliContext?: import("../daemon/daemon-cli.js").DaemonContext;
   }): void {
     // Guarded (merge-only) like every other field below: setDaemonContext is
     // called more than once (e.g. a later non-daemon call wires only the
@@ -424,6 +449,9 @@ export class DashboardServer {
     }
     if (ctx.autoUpdater) {
       this.autoUpdater = ctx.autoUpdater;
+    }
+    if (ctx.cliContext) {
+      this.daemonCliContext = ctx.cliContext;
     }
   }
 
@@ -576,6 +604,7 @@ export class DashboardServer {
       startupNotices: this.startupNotices,
       bootReport: this.bootReport,
       autoUpdater: this.autoUpdater,
+      daemonCliContext: this.daemonCliContext,
 
       // Chain resilience
       chainResilienceConfig: this.chainResilienceConfig,
@@ -682,14 +711,21 @@ export class DashboardServer {
         method !== "OPTIONS" &&
         !isWebhookRoute;
 
+      // COR-13: `strada daemon …` from a shell, holding this run's operator
+      // credential, on one of the few routes those commands use. It is the
+      // local operator: the OS user that can read the config root. Anything
+      // short of that (no token, a wrong one, another route) falls through to
+      // the gates below unchanged.
+      const isLocalOperator = isDashboardApi && this.isLocalOperatorRequest(req, method, url);
+
       // Token-enabled dashboard APIs always require bearer auth.
-      if (isDashboardApi && this.dashboardToken && !isWebhookRoute) {
+      if (isDashboardApi && this.dashboardToken && !isWebhookRoute && !isLocalOperator) {
         if (!this.requireDashboardAuth(req, res)) return;
       }
 
       // Without a dashboard token, mutating dashboard APIs still require a trusted
       // same-origin browser request so local CSRF cannot drive daemon actions.
-      if (isMutableDashboardApi && !this.dashboardToken) {
+      if (isMutableDashboardApi && !this.dashboardToken && !isLocalOperator) {
         if (!this.requireTrustedDashboardMutation(req, res)) return;
       }
 
@@ -697,7 +733,8 @@ export class DashboardServer {
       // "did this come from a legitimate client of this machine" — the
       // shared-instance model answers "may this identity do it", and every
       // owner-only power is reachable here as well as through the portal proxy.
-      if (isMutableDashboardApi && !this.requireInstanceOwnership(req, res, url, method)) return;
+      // The local operator owns the instance whose files it can read.
+      if (isMutableDashboardApi && !isLocalOperator && !this.requireInstanceOwnership(req, res, url, method)) return;
 
       // --- Non-API routes (before building heavy route context) ---
 
@@ -742,6 +779,10 @@ export class DashboardServer {
 
       // Daemon routes: approvals, start/stop, status, update, webhook, triggers
       if (handleDaemonRoutes(url, method, req, res, ctx)) return;
+
+      // What `strada daemon …` does from a shell: trigger, circuit reset, budget
+      // reset, digest, notifications, agents, delegation tier, consolidation
+      if (handleDaemonControlRoutes(url, method, req, res, ctx)) return;
 
       // Provider routes: available, active, switch, intelligence, capabilities,
       // models/refresh, agent-activity, routing/preset, rag/status
@@ -825,7 +866,7 @@ export class DashboardServer {
       }
     });
 
-    return new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       this.server!.once("error", reject);
       this.server!.listen(this.port, this.bindHost, () => {
         this.server!.removeListener("error", reject);
@@ -839,6 +880,46 @@ export class DashboardServer {
         resolve();
       });
     });
+    await this.publishOperatorCredential();
+  }
+
+  /**
+   * Write this run's operator credential (COR-13) now that the port is known.
+   * Non-fatal: without it the dashboard serves as before and only the shell's
+   * state-changing `strada daemon` commands cannot reach this runtime.
+   */
+  private async publishOperatorCredential(): Promise<void> {
+    if (!this.operatorCredentialFile) return;
+    const token = generateOperatorToken();
+    try {
+      this.operatorCredentialBytes = await publishOperatorCredential(this.operatorCredentialFile, {
+        baseUrl: dashboardBaseUrl(this.bindHost, this.boundPort),
+        pid: process.pid,
+        token,
+      });
+      this.operatorToken = token;
+    } catch (error) {
+      getLogger().warn("Dashboard could not write the local operator credential; `strada daemon` commands that change state cannot reach this runtime", {
+        file: this.operatorCredentialFile,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * True for a request carrying this run's operator token in its header, on an
+   * allowlisted route. The token is read from that header only — never from a
+   * query string, which the whole-URL route match already refuses — and is
+   * compared in constant time. A browser page is never the local operator: a
+   * request with a foreign Origin is not, whatever it carries.
+   */
+  private isLocalOperatorRequest(req: IncomingMessage, method: string, url: string): boolean {
+    if (!this.operatorToken || !isLocalOperatorRoute(method, url)) return false;
+    const presented = req.headers[OPERATOR_TOKEN_HEADER];
+    if (typeof presented !== "string") return false;
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin !== undefined && !this.isTrustedBrowserOrigin(origin)) return false;
+    return timingSafeTokenCompare(presented, this.operatorToken);
   }
 
   /**
@@ -1153,9 +1234,20 @@ export class DashboardServer {
   // Data-building helpers have been extracted to server-system-routes.ts and
   // server-daemon-routes.ts as standalone functions.
 
+  /** Stop accepting this run's operator token and remove its file, if the file is still ours. */
+  private async withdrawOperatorCredential(): Promise<void> {
+    const file = this.operatorCredentialFile;
+    const bytes = this.operatorCredentialBytes;
+    this.operatorToken = undefined;
+    this.operatorCredentialBytes = undefined;
+    if (!file || bytes === undefined) return;
+    await withdrawOperatorCredential(file, bytes).catch(() => false);
+  }
+
   async stop(): Promise<void> {
     this.vaultWsUnsubscribe?.();
     this.vaultWsUnsubscribe = undefined;
+    await this.withdrawOperatorCredential();
     if (!this.server) return;
     return new Promise((resolve) => {
       this.server!.close(() => resolve());

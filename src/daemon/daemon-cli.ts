@@ -16,12 +16,11 @@
  * Uses callback-based DI: getDaemonContext() returns the daemon context when
  * these commands run inside the runtime process. `strada daemon …` typed at a
  * shell runs in a separate CLI process where it is always undefined (COR-13):
- * there, the read-only commands with a matching dashboard GET endpoint (status,
- * config, agent list/status, delegation:history/stats/watch, deploy:status/
- * history, chain:status, memory:decay-status, memory:consolidation-status) read
- * the running runtime over that API, and every other command says it is not
- * available from the CLI — none claims the daemon is "not running", which that
- * process cannot know.
+ * there, every command reaches the running runtime over its dashboard API. The
+ * read-only ones GET it like any dashboard client; the ones that change state
+ * POST with the runtime's local operator credential (a per-run token the
+ * runtime writes under the config root, readable by its OS user only). None
+ * claims the daemon is "not running", which that process cannot know.
  *
  * Requirements: DAEMON-01, DAEMON-04, RPT-01, RPT-03
  */
@@ -49,7 +48,7 @@ import {
 import { computeChainWaves } from "../learning/chains/chain-dag.js";
 import type { ChainResilienceConfig, ChainMetadataV2 } from "../learning/chains/chain-types.js";
 import { z } from "zod";
-import type { DashboardClientResolution } from "../core/daemon-dashboard-client.js";
+import type { DashboardClientResolution, OperatorClientResolution } from "../core/daemon-dashboard-client.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -76,7 +75,7 @@ export interface DaemonContext {
     getStats(): { perTier: Record<string, { clustered: number; pending: number; total: number }>; lifetimeSavings: number; totalRuns: number; totalCostUsd: number };
     preview(): Promise<{ clusters: Array<{ seedId: string; memberIds: string[]; avgSimilarity: number; tier: string }>; estimatedCostPerCluster: number; totalEstimatedCost: number }>;
     runCycle(signal: AbortSignal): Promise<{ status: string; processed: number; remaining: number; clustersFound: number; costUsd: number }>;
-    undo(logId: string): void;
+    undo(logId: string): void | Promise<void>;
   };
   deploymentExecutor?: {
     getHistory(limit?: number): Array<{ id: string; proposedAt: number; approvedAt?: number; approvedBy?: string; agentId?: string; status: string; scriptOutput?: string; duration?: number; error?: string }>;
@@ -97,12 +96,17 @@ export interface DaemonContext {
  * @param program - The root Commander program
  * @param getDaemonContext - Callback returning the in-process daemon context, or undefined outside the runtime process
  * @param getDashboardClient - Resolves a client for the running runtime's dashboard API (used when there is no in-process context)
+ * @param getOperatorClient - Resolves the local operator client that commands changing state post with (likewise)
  */
 export function registerDaemonCommands(
   program: Command,
   getDaemonContext: () => DaemonContext | undefined,
   getDashboardClient?: () => DashboardClientResolution,
+  getOperatorClient?: () => Promise<OperatorClientResolution>,
 ): void {
+  const post = <S extends z.ZodType>(what: string, path: string, body: Record<string, unknown>, schema: S, timeoutMs?: number) =>
+    postToDashboard(what, path, body, schema, getOperatorClient, timeoutMs);
+
   const daemon = program
     .command("daemon")
     .description("Daemon management commands");
@@ -199,10 +203,10 @@ export function registerDaemonCommands(
   daemon
     .command("trigger <name>")
     .description("Manually fire a named trigger")
-    .action((name: string) => {
+    .action(async (name: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon trigger");
+        if (await post(`fire trigger '${name}'`, "/api/daemon/trigger", { name }, RemoteStatusSchema)) printTriggerFired(name);
         return;
       }
 
@@ -213,7 +217,7 @@ export function registerDaemonCommands(
       }
 
       trigger.onFired(new Date());
-      console.log(`Trigger '${name}' fired manually`);
+      printTriggerFired(name);
     });
 
   // =========================================================================
@@ -222,10 +226,12 @@ export function registerDaemonCommands(
   daemon
     .command("reset <name>")
     .description("Reset circuit breaker for a named trigger to CLOSED")
-    .action((name: string) => {
+    .action(async (name: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon reset");
+        if (await post(`reset the circuit breaker for '${name}'`, "/api/daemon/circuit/reset", { name }, RemoteStatusSchema)) {
+          printCircuitReset(name);
+        }
         return;
       }
 
@@ -240,7 +246,7 @@ export function registerDaemonCommands(
       // Persist reset state
       persistCircuitState(ctx.storage, name, cb);
 
-      console.log(`Circuit breaker for '${name}' reset to CLOSED`);
+      printCircuitReset(name);
     });
 
   // =========================================================================
@@ -250,41 +256,21 @@ export function registerDaemonCommands(
     .command("audit")
     .description("Show recent approval/denial decisions")
     .option("--limit <n>", "Number of entries to show", "20")
-    .action((opts: { limit: string }) => {
+    .action(async (opts: { limit: string }) => {
       const ctx = getDaemonContext();
-      if (!ctx) {
-        reportNotAvailableFromCli("daemon audit");
-        return;
-      }
-
       const limit = parseInt(opts.limit, 10) || 20;
-      const entries = ctx.approvalQueue.getAuditLog(limit);
-
-      if (entries.length === 0) {
-        console.log("No audit entries found.");
+      if (!ctx) {
+        const read = await readFromDashboard("the audit log", `/api/daemon/audit?limit=${limit}`, RemoteAuditSchema, getDashboardClient);
+        if (!read) return;
+        if (!read.data.enabled) {
+          console.log(read.data.reason);
+          return;
+        }
+        printAuditLog(read.data.entries);
         return;
       }
 
-      console.log("Recent Audit Log:");
-      console.log(
-        padRight("Timestamp", 25) +
-        padRight("Tool", 20) +
-        padRight("Decision", 12) +
-        padRight("Decided By", 15) +
-        padRight("Trigger", 20),
-      );
-      console.log("-".repeat(92));
-
-      for (const entry of entries) {
-        const ts = new Date(entry.timestamp).toISOString();
-        console.log(
-          padRight(ts, 25) +
-          padRight(entry.toolName, 20) +
-          padRight(entry.decision, 12) +
-          padRight(entry.decidedBy ?? "-", 15) +
-          padRight(entry.triggerName ?? "-", 20),
-        );
-      }
+      printAuditLog(ctx.approvalQueue.getAuditLog(limit));
     });
 
   // =========================================================================
@@ -317,15 +303,15 @@ export function registerDaemonCommands(
   budgetCmd
     .command("reset")
     .description("Clear the budget counter")
-    .action(() => {
+    .action(async () => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon budget reset");
+        if (await post("reset the daemon budget", "/api/daemon/budget/reset", {}, RemoteStatusSchema)) printBudgetReset();
         return;
       }
 
       ctx.budgetTracker.resetBudget();
-      console.log("Budget counter reset");
+      printBudgetReset();
     });
 
   // =========================================================================
@@ -338,7 +324,18 @@ export function registerDaemonCommands(
     .action(async (opts: { dryRun?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon digest");
+        if (opts.dryRun) {
+          // A dry run only reads: the digest as it would be sent now.
+          const read = await readFromDashboard("the digest preview", "/api/daemon/digest/preview", RemoteDigestPreviewSchema, getDashboardClient);
+          if (!read) return;
+          if (!read.data.enabled) {
+            console.log(read.data.reason);
+            return;
+          }
+          printDigestPreview(read.data.markdown);
+        } else if (await post("send the digest", "/api/daemon/digest/send", {}, RemoteStatusSchema)) {
+          printDigestSent();
+        }
         return;
       }
 
@@ -348,13 +345,12 @@ export function registerDaemonCommands(
       }
 
       if (opts.dryRun) {
-        const markdown = await ctx.digestReporter.sendDigest();
-        console.log("--- Digest Preview (dry-run) ---");
-        console.log(markdown);
-        console.log("--- End Preview ---");
+        // --dry-run must not deliver: sendDigest() sends and moves the
+        // "since last digest" baseline.
+        printDigestPreview(ctx.digestReporter.previewDigest());
       } else {
         await ctx.digestReporter.sendDigest();
-        console.log("Digest sent to active channel");
+        printDigestSent();
       }
     });
 
@@ -366,10 +362,26 @@ export function registerDaemonCommands(
     .description("Show recent notification history")
     .option("--level <level>", "Filter by urgency level")
     .option("--limit <n>", "Number of entries to show", "20")
-    .action((opts: { level?: string; limit: string }) => {
+    .action(async (opts: { level?: string; limit: string }) => {
       const ctx = getDaemonContext();
+      const limit = parseInt(opts.limit, 10) || 20;
+      const levelFilter = opts.level && VALID_LEVELS.includes(opts.level as UrgencyLevel)
+        ? opts.level as UrgencyLevel
+        : undefined;
       if (!ctx) {
-        reportNotAvailableFromCli("daemon notifications");
+        if (opts.level && !levelFilter) {
+          console.error(`Invalid level filter: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
+          process.exitCode = 1;
+          return;
+        }
+        const query = new URLSearchParams({ limit: String(limit), ...(levelFilter ? { level: levelFilter } : {}) });
+        const read = await readFromDashboard("the notification history", `/api/daemon/notifications?${query.toString()}`, RemoteNotificationsSchema, getDashboardClient);
+        if (!read) return;
+        if (!read.data.enabled) {
+          console.log(read.data.reason);
+          return;
+        }
+        printNotifications(read.data.entries);
         return;
       }
 
@@ -378,41 +390,11 @@ export function registerDaemonCommands(
         return;
       }
 
-      const limit = parseInt(opts.limit, 10) || 20;
-      const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
-      const levelFilter = opts.level && VALID_LEVELS.includes(opts.level as UrgencyLevel)
-        ? opts.level as UrgencyLevel
-        : undefined;
       if (opts.level && !levelFilter) {
         console.error(`Invalid level filter: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
         return;
       }
-      const entries = ctx.notificationRouter.getHistory(limit, levelFilter);
-
-      if (entries.length === 0) {
-        console.log("No notification history found.");
-        return;
-      }
-
-      console.log("Recent Notifications:");
-      console.log(
-        padRight("Timestamp", 25) +
-        padRight("Level", 10) +
-        padRight("Title", 35) +
-        padRight("Delivered To", 20),
-      );
-      console.log("-".repeat(90));
-
-      for (const entry of entries) {
-        const ts = new Date(entry.createdAt).toISOString();
-        const delivered = entry.deliveredTo.join(", ") || "-";
-        console.log(
-          padRight(ts, 25) +
-          padRight(entry.urgency, 10) +
-          padRight(entry.title.slice(0, 34), 35) +
-          padRight(delivered, 20),
-        );
-      }
+      printNotifications(ctx.notificationRouter.getHistory(limit, levelFilter));
     });
 
   // =========================================================================
@@ -426,7 +408,13 @@ export function registerDaemonCommands(
     .action(async (opts: { level: string; message: string }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon notify");
+        if (!VALID_LEVELS.includes(opts.level as UrgencyLevel)) {
+          console.error(`Invalid level: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
+          process.exitCode = 1;
+          return;
+        }
+        const body = { level: opts.level, message: opts.message };
+        if (await post("send the notification", "/api/daemon/notify", body, RemoteStatusSchema)) printNotificationSent(opts.level);
         return;
       }
 
@@ -435,7 +423,6 @@ export function registerDaemonCommands(
         return;
       }
 
-      const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
       if (!VALID_LEVELS.includes(opts.level as UrgencyLevel)) {
         console.error(`Invalid level: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
         return;
@@ -447,7 +434,7 @@ export function registerDaemonCommands(
         message: opts.message,
         timestamp: Date.now(),
       });
-      console.log(`Notification sent (level: ${opts.level})`);
+      printNotificationSent(opts.level);
     });
 
   // =========================================================================
@@ -690,7 +677,8 @@ export function registerDaemonCommands(
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon agent stop");
+        const body = opts.force ? { force: true } : {};
+        if (await post(`stop agent '${id}'`, `/api/agents/${id}/stop`, body, RemoteStatusSchema)) printAgentStopped(id, opts.force);
         return;
       }
       if (!ctx.agentManager) {
@@ -700,7 +688,7 @@ export function registerDaemonCommands(
       }
       try {
         await ctx.agentManager.stopAgent(id as AgentId, opts.force);
-        console.log(`Agent '${id}' stopped${opts.force ? " (force)" : ""}.`);
+        printAgentStopped(id, opts.force);
       } catch (err) {
         console.error(`Failed to stop agent: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = 1;
@@ -715,7 +703,7 @@ export function registerDaemonCommands(
       if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon agent start");
+        if (await post(`start agent '${id}'`, `/api/agents/${id}/start`, {}, RemoteStatusSchema)) printAgentStarted(id);
         return;
       }
       if (!ctx.agentManager) {
@@ -725,7 +713,7 @@ export function registerDaemonCommands(
       }
       try {
         await ctx.agentManager.startAgent(id as AgentId);
-        console.log(`Agent '${id}' started.`);
+        printAgentStarted(id);
       } catch (err) {
         console.error(`Failed to start agent: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = 1;
@@ -737,11 +725,17 @@ export function registerDaemonCommands(
   agentBudgetCmd
     .command("set <id> <amount>")
     .description("Set per-agent budget cap (USD)")
-    .action((id: string, amount: string) => {
+    .action(async (id: string, amount: string) => {
       if (!isValidAgentId(id)) return;
+      const usd = parseFloat(amount);
+      if (!Number.isFinite(usd) || usd <= 0) {
+        console.error("Invalid amount. Must be a positive number.");
+        process.exitCode = 1;
+        return;
+      }
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon agent budget set");
+        if (await post(`set agent '${id}' budget cap`, `/api/agents/${id}/budget`, { usd }, RemoteStatusSchema)) printAgentBudgetSet(id, usd);
         return;
       }
       if (!ctx.agentManager) {
@@ -749,14 +743,8 @@ export function registerDaemonCommands(
         process.exitCode = 1;
         return;
       }
-      const usd = parseFloat(amount);
-      if (isNaN(usd) || usd <= 0) {
-        console.error("Invalid amount. Must be a positive number.");
-        process.exitCode = 1;
-        return;
-      }
       ctx.agentManager.setBudgetCap(id as AgentId, usd);
-      console.log(`Agent '${id}' budget cap set to $${usd.toFixed(2)}.`);
+      printAgentBudgetSet(id, usd);
     });
 
   // =========================================================================
@@ -892,10 +880,16 @@ export function registerDaemonCommands(
   daemon
     .command("delegation:tier <type> <tier>")
     .description("Set runtime tier override for a delegation type")
-    .action((type: string, tier: string) => {
+    .action(async (type: string, tier: string) => {
       const ctx = getDaemonContext();
+      const validTiers = ["local", "cheap", "standard", "premium"];
       if (!ctx) {
-        reportNotAvailableFromCli("daemon delegation:tier");
+        if (!validTiers.includes(tier)) {
+          console.error(`Invalid tier: ${tier}. Must be one of: ${validTiers.join(", ")}`);
+          process.exitCode = 1;
+          return;
+        }
+        if (await post("set the tier override", "/api/delegations/tier", { type, tier }, RemoteStatusSchema)) printTierOverrideSet(type, tier);
         return;
       }
       if (!ctx.tierRouter) {
@@ -903,7 +897,6 @@ export function registerDaemonCommands(
         return;
       }
 
-      const validTiers = ["local", "cheap", "standard", "premium"];
       if (!validTiers.includes(tier)) {
         console.error(`Invalid tier: ${tier}. Must be one of: ${validTiers.join(", ")}`);
         process.exitCode = 1;
@@ -911,7 +904,7 @@ export function registerDaemonCommands(
       }
 
       ctx.tierRouter.setOverride(type, tier as "local" | "cheap" | "standard" | "premium");
-      console.log(`Tier override set: ${type} -> ${tier} (immediate effect, no restart needed)`);
+      printTierOverrideSet(type, tier);
     });
 
   // =========================================================================
@@ -979,7 +972,14 @@ export function registerDaemonCommands(
     .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon memory:consolidation-preview");
+        const read = await readFromDashboard("the consolidation preview", "/api/consolidation/preview", RemoteConsolidationPreviewSchema, getDashboardClient);
+        if (!read) return;
+        if (!read.data.enabled) {
+          console.log(CONSOLIDATION_NOT_ACTIVE);
+          return;
+        }
+        const { clusters, estimatedCostPerCluster, totalEstimatedCost } = read.data;
+        printConsolidationPreview({ clusters, estimatedCostPerCluster, totalEstimatedCost }, opts.json);
         return;
       }
 
@@ -988,40 +988,7 @@ export function registerDaemonCommands(
         return;
       }
 
-      const preview = await ctx.consolidationEngine.preview();
-
-      if (opts.json) {
-        console.log(JSON.stringify(preview, null, 2));
-        return;
-      }
-
-      if (preview.clusters.length === 0) {
-        console.log("No clusters found for consolidation.");
-        return;
-      }
-
-      console.log("Consolidation Preview:");
-      console.log("");
-      console.log(
-        padRight("Cluster Seed", 38) +
-        padRight("Members", 10) +
-        padRight("Tier", 14) +
-        padRight("Similarity", 14),
-      );
-      console.log("-".repeat(76));
-
-      for (const c of preview.clusters) {
-        console.log(
-          padRight(c.seedId.slice(0, 36), 38) +
-          padRight(String(c.memberIds.length), 10) +
-          padRight(c.tier, 14) +
-          padRight(c.avgSimilarity.toFixed(3), 14),
-        );
-      }
-
-      console.log("");
-      console.log(`Total clusters: ${preview.clusters.length}`);
-      console.log(`Estimated cost: $${preview.totalEstimatedCost.toFixed(4)} ($${preview.estimatedCostPerCluster.toFixed(4)}/cluster)`);
+      printConsolidationPreview(await ctx.consolidationEngine.preview(), opts.json);
     });
 
   daemon
@@ -1031,7 +998,9 @@ export function registerDaemonCommands(
     .action(async (opts: { force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon memory:consolidate");
+        printConsolidationStart(opts.force);
+        const result = await post("run memory consolidation", "/api/consolidation/run", {}, RemoteConsolidationRunSchema, LONG_OPERATION_TIMEOUT_MS);
+        if (result) printConsolidationResult(result);
         return;
       }
 
@@ -1040,20 +1009,9 @@ export function registerDaemonCommands(
         return;
       }
 
-      if (!opts.force) {
-        console.log("Running consolidation (use --force to bypass idle check)...");
-      } else {
-        console.log("Running consolidation (forced)...");
-      }
-
+      printConsolidationStart(opts.force);
       const controller = new AbortController();
-      const result = await ctx.consolidationEngine.runCycle(controller.signal);
-
-      console.log(`Status: ${result.status}`);
-      console.log(`Processed: ${result.processed} clusters`);
-      console.log(`Remaining: ${result.remaining}`);
-      console.log(`Clusters found: ${result.clustersFound}`);
-      console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+      printConsolidationResult(await ctx.consolidationEngine.runCycle(controller.signal));
     });
 
   daemon
@@ -1062,7 +1020,9 @@ export function registerDaemonCommands(
     .action(async (logId: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon memory:consolidation-undo");
+        if (await post(`undo consolidation '${logId}'`, "/api/consolidation/undo", { logId }, RemoteStatusSchema)) {
+          printConsolidationUndone(logId);
+        }
         return;
       }
 
@@ -1073,7 +1033,7 @@ export function registerDaemonCommands(
 
       try {
         await ctx.consolidationEngine.undo(logId);
-        console.log(`Consolidation '${logId}' undone successfully.`);
+        printConsolidationUndone(logId);
       } catch (err) {
         console.error(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = 1;
@@ -1179,7 +1139,7 @@ export function registerDaemonCommands(
     .action(async (opts: { execute?: boolean; force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        reportNotAvailableFromCli("daemon deploy:check");
+        await runRemoteDeployCheck(opts, getOperatorClient);
         return;
       }
 
@@ -1190,14 +1150,7 @@ export function registerDaemonCommands(
 
       console.log("Running readiness check...");
       const result = await ctx.readinessChecker.checkReadiness(true);
-
-      console.log(`Ready: ${result.ready ? "YES" : "NO"}`);
-      console.log(`  Tests: ${result.testPassed ? "PASS" : "FAIL"}`);
-      console.log(`  Git clean: ${result.gitClean ? "YES" : "NO"}`);
-      console.log(`  Branch match: ${result.branchMatch ? "YES" : "NO"}`);
-      if (result.reason) {
-        console.log(`  Reason: ${result.reason}`);
-      }
+      printReadiness(result);
 
       if (opts.execute && result.ready && ctx.deployTrigger) {
         if (opts.force) {
@@ -1252,18 +1205,355 @@ function isValidAgentId(id: string): boolean {
   return true;
 }
 
+const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
+
 /**
- * A command that only works inside the runtime process, run from a shell
- * (COR-13). It used to print "Daemon is not running" and exit 0 whether or not
- * a daemon was running; the dashboard API has no read endpoint for these (or
- * they change state, which the CLI does not do remotely), so say so.
+ * How long a shell waits on a change that runs to completion in the runtime (a
+ * consolidation cycle, a readiness check that runs the tests). Node's fetch
+ * stops waiting for response headers after 300 s whatever the signal says.
  */
-function reportNotAvailableFromCli(command: string): void {
-  console.error(
-    `\`strada ${command}\` is not available from the CLI: the running daemon exposes no API for it. ` +
-    "Use the web portal or the dashboard to see and manage the running daemon.",
+const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * POST a state change to the running runtime as its local operator (COR-13).
+ * On any failure it says what could not be done and why, sets a non-zero exit
+ * code and returns undefined; it never guesses that the daemon is "not
+ * running", which this process cannot know.
+ */
+async function postToDashboard<S extends z.ZodType>(
+  what: string,
+  path: string,
+  body: Record<string, unknown>,
+  schema: S,
+  getOperatorClient?: () => Promise<OperatorClientResolution>,
+  timeoutMs?: number,
+): Promise<z.output<S> | undefined> {
+  const resolution: OperatorClientResolution = (await getOperatorClient?.())
+    ?? { kind: "unavailable", message: "no operator connection is configured for this CLI" };
+  if (resolution.kind === "unavailable") {
+    console.error(`Cannot ${what}: ${resolution.message}.`);
+    process.exitCode = 1;
+    return undefined;
+  }
+
+  const result = await resolution.client.postJson(path, body, timeoutMs !== undefined ? { timeoutMs } : {});
+  if (result.kind !== "ok") {
+    console.error(`Cannot ${what}: ${result.message}`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  const parsed = schema.safeParse(result.body);
+  if (!parsed.success) {
+    console.error(`Cannot ${what}: the dashboard at ${resolution.client.baseUrl} answered POST ${path} in an unexpected shape.`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  return parsed.data;
+}
+
+/** A state change the runtime carried out: it names what it did in `status`. */
+const RemoteStatusSchema = z.looseObject({ status: z.string() });
+
+// -----------------------------------------------------------------------------
+// Printers shared by the in-process path and the shell path (COR-13), so a
+// command prints the same thing wherever it runs.
+// -----------------------------------------------------------------------------
+
+function printTriggerFired(name: string): void {
+  console.log(`Trigger '${name}' fired manually`);
+}
+
+function printCircuitReset(name: string): void {
+  console.log(`Circuit breaker for '${name}' reset to CLOSED`);
+}
+
+function printBudgetReset(): void {
+  console.log("Budget counter reset");
+}
+
+function printDigestSent(): void {
+  console.log("Digest sent to active channel");
+}
+
+function printDigestPreview(markdown: string): void {
+  console.log("--- Digest Preview (dry-run) ---");
+  console.log(markdown);
+  console.log("--- End Preview ---");
+}
+
+function printNotificationSent(level: string): void {
+  console.log(`Notification sent (level: ${level})`);
+}
+
+function printAgentStopped(id: string, force: boolean | undefined): void {
+  console.log(`Agent '${id}' stopped${force ? " (force)" : ""}.`);
+}
+
+function printAgentStarted(id: string): void {
+  console.log(`Agent '${id}' started.`);
+}
+
+function printAgentBudgetSet(id: string, usd: number): void {
+  console.log(`Agent '${id}' budget cap set to $${usd.toFixed(2)}.`);
+}
+
+function printTierOverrideSet(type: string, tier: string): void {
+  console.log(`Tier override set: ${type} -> ${tier} (immediate effect, no restart needed)`);
+}
+
+function printConsolidationUndone(logId: string): void {
+  console.log(`Consolidation '${logId}' undone successfully.`);
+}
+
+interface AuditRow {
+  timestamp: number;
+  toolName: string;
+  decision: string;
+  decidedBy?: string | null;
+  triggerName?: string | null;
+}
+
+function printAuditLog(entries: ReadonlyArray<AuditRow>): void {
+  if (entries.length === 0) {
+    console.log("No audit entries found.");
+    return;
+  }
+
+  console.log("Recent Audit Log:");
+  console.log(
+    padRight("Timestamp", 25) +
+    padRight("Tool", 20) +
+    padRight("Decision", 12) +
+    padRight("Decided By", 15) +
+    padRight("Trigger", 20),
   );
-  process.exitCode = 1;
+  console.log("-".repeat(92));
+
+  for (const entry of entries) {
+    const ts = new Date(entry.timestamp).toISOString();
+    console.log(
+      padRight(ts, 25) +
+      padRight(entry.toolName, 20) +
+      padRight(entry.decision, 12) +
+      padRight(entry.decidedBy ?? "-", 15) +
+      padRight(entry.triggerName ?? "-", 20),
+    );
+  }
+}
+
+/** GET /api/daemon/audit: the approval queue's audit log, or why there is none. */
+const RemoteAuditSchema = z.union([
+  z.object({ enabled: z.literal(false), reason: z.string() }),
+  z.object({
+    enabled: z.literal(true),
+    entries: z.array(z.object({
+      timestamp: z.number(),
+      toolName: z.string(),
+      decision: z.string(),
+      decidedBy: z.string().nullable().optional(),
+      triggerName: z.string().nullable().optional(),
+    })),
+  }),
+]);
+
+interface NotificationRow {
+  urgency: string;
+  title: string;
+  deliveredTo: ReadonlyArray<string>;
+  createdAt: number;
+}
+
+function printNotifications(entries: ReadonlyArray<NotificationRow>): void {
+  if (entries.length === 0) {
+    console.log("No notification history found.");
+    return;
+  }
+
+  console.log("Recent Notifications:");
+  console.log(
+    padRight("Timestamp", 25) +
+    padRight("Level", 10) +
+    padRight("Title", 35) +
+    padRight("Delivered To", 20),
+  );
+  console.log("-".repeat(90));
+
+  for (const entry of entries) {
+    const ts = new Date(entry.createdAt).toISOString();
+    const delivered = entry.deliveredTo.join(", ") || "-";
+    console.log(
+      padRight(ts, 25) +
+      padRight(entry.urgency, 10) +
+      padRight(entry.title.slice(0, 34), 35) +
+      padRight(delivered, 20),
+    );
+  }
+}
+
+/** GET /api/daemon/notifications: the router's history, or why there is none. */
+const RemoteNotificationsSchema = z.union([
+  z.object({ enabled: z.literal(false), reason: z.string() }),
+  z.object({
+    enabled: z.literal(true),
+    entries: z.array(z.object({
+      urgency: z.string(),
+      title: z.string(),
+      deliveredTo: z.array(z.string()).default([]),
+      createdAt: z.number(),
+    })),
+  }),
+]);
+
+/** GET /api/daemon/digest/preview: the digest as it would be sent now. */
+const RemoteDigestPreviewSchema = z.union([
+  z.object({ enabled: z.literal(false), reason: z.string() }),
+  z.object({ enabled: z.literal(true), markdown: z.string() }),
+]);
+
+const CONSOLIDATION_NOT_ACTIVE =
+  "Memory consolidation is not active in the running Strada (MEMORY_CONSOLIDATION_ENABLED=false, or daemon mode is off)";
+
+interface ConsolidationPreviewView {
+  clusters: ReadonlyArray<{ seedId: string; memberIds: ReadonlyArray<string>; avgSimilarity: number; tier: string }>;
+  estimatedCostPerCluster: number;
+  totalEstimatedCost: number;
+}
+
+function printConsolidationPreview(preview: ConsolidationPreviewView, json: boolean | undefined): void {
+  if (json) {
+    console.log(JSON.stringify(preview, null, 2));
+    return;
+  }
+
+  if (preview.clusters.length === 0) {
+    console.log("No clusters found for consolidation.");
+    return;
+  }
+
+  console.log("Consolidation Preview:");
+  console.log("");
+  console.log(
+    padRight("Cluster Seed", 38) +
+    padRight("Members", 10) +
+    padRight("Tier", 14) +
+    padRight("Similarity", 14),
+  );
+  console.log("-".repeat(76));
+
+  for (const c of preview.clusters) {
+    console.log(
+      padRight(c.seedId.slice(0, 36), 38) +
+      padRight(String(c.memberIds.length), 10) +
+      padRight(c.tier, 14) +
+      padRight(c.avgSimilarity.toFixed(3), 14),
+    );
+  }
+
+  console.log("");
+  console.log(`Total clusters: ${preview.clusters.length}`);
+  console.log(`Estimated cost: $${preview.totalEstimatedCost.toFixed(4)} ($${preview.estimatedCostPerCluster.toFixed(4)}/cluster)`);
+}
+
+/** GET /api/consolidation/preview: the engine's preview(), or `enabled: false`. */
+const RemoteConsolidationPreviewSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    clusters: z.array(z.object({
+      seedId: z.string(),
+      memberIds: z.array(z.string()),
+      avgSimilarity: z.number(),
+      tier: z.string(),
+    })),
+    estimatedCostPerCluster: z.number(),
+    totalEstimatedCost: z.number(),
+  }),
+]);
+
+function printConsolidationStart(force: boolean | undefined): void {
+  console.log(force ? "Running consolidation (forced)..." : "Running consolidation (use --force to bypass idle check)...");
+}
+
+function printConsolidationResult(result: { status: string; processed: number; remaining: number; clustersFound: number; costUsd: number }): void {
+  console.log(`Status: ${result.status}`);
+  console.log(`Processed: ${result.processed} clusters`);
+  console.log(`Remaining: ${result.remaining}`);
+  console.log(`Clusters found: ${result.clustersFound}`);
+  console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+}
+
+/** POST /api/consolidation/run: the engine's runCycle() result. */
+const RemoteConsolidationRunSchema = z.object({
+  status: z.string(),
+  processed: z.number(),
+  remaining: z.number(),
+  clustersFound: z.number(),
+  costUsd: z.number(),
+});
+
+interface ReadinessView {
+  ready: boolean;
+  reason?: string | null;
+  testPassed: boolean;
+  gitClean: boolean;
+  branchMatch: boolean;
+}
+
+function printReadiness(result: ReadinessView): void {
+  console.log(`Ready: ${result.ready ? "YES" : "NO"}`);
+  console.log(`  Tests: ${result.testPassed ? "PASS" : "FAIL"}`);
+  console.log(`  Git clean: ${result.gitClean ? "YES" : "NO"}`);
+  console.log(`  Branch match: ${result.branchMatch ? "YES" : "NO"}`);
+  if (result.reason) {
+    console.log(`  Reason: ${result.reason}`);
+  }
+}
+
+/** POST /api/deployment/check: the readiness result (and whether it proposed), or `enabled: false`. */
+const RemoteDeployCheckSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    ready: z.boolean(),
+    reason: z.string().nullable().optional(),
+    testPassed: z.boolean(),
+    gitClean: z.boolean(),
+    branchMatch: z.boolean(),
+    proposed: z.boolean().optional(),
+  }),
+]);
+
+/**
+ * `deploy:check` from a shell. As in-process, --execute proposes only with
+ * --force: the shell asks the runtime to propose only then, so a check never
+ * turns into a proposal without the operator's explicit say-so.
+ */
+async function runRemoteDeployCheck(
+  opts: { execute?: boolean; force?: boolean },
+  getOperatorClient?: () => Promise<OperatorClientResolution>,
+): Promise<void> {
+  const propose = opts.execute === true && opts.force === true;
+  console.log("Running readiness check...");
+  const result = await postToDashboard(
+    "run the readiness check",
+    "/api/deployment/check",
+    propose ? { propose: true } : {},
+    RemoteDeployCheckSchema,
+    getOperatorClient,
+    LONG_OPERATION_TIMEOUT_MS,
+  );
+  if (!result) return;
+  if ("enabled" in result) {
+    console.log("Deployment is not active in the running Strada (DEPLOY_ENABLED=false, or daemon mode is off)");
+    return;
+  }
+  printReadiness(result);
+  if (!opts.execute || !result.ready) return;
+  if (!opts.force) {
+    console.log("Use --force to propose deployment without interactive confirmation.");
+  } else if (result.proposed) {
+    console.log("Proposing deployment...");
+    console.log("Deployment proposed via approval queue.");
+  }
 }
 
 /** The part of GET /api/daemon that `daemon status` prints. */

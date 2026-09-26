@@ -248,6 +248,28 @@ describe("instance access model — dashboard proxy classification", () => {
     }
   });
 
+  it("classifies what `strada daemon` changes from a shell as instance control (COR-13)", () => {
+    for (const path of [
+      "/api/daemon/trigger",
+      "/api/daemon/circuit/reset",
+      "/api/daemon/budget/reset",
+      "/api/daemon/digest/send",
+      "/api/daemon/notify",
+      "/api/agents/123e4567-e89b-42d3-a456-426614174000/stop",
+      "/api/agents/123e4567-e89b-42d3-a456-426614174000/start",
+      "/api/agents/123e4567-e89b-42d3-a456-426614174000/budget",
+      "/api/delegations/tier",
+      "/api/consolidation/run",
+      "/api/consolidation/undo",
+    ]) {
+      expect(ownerOnlyProxySurface(path), path).toBe("instance:control");
+    }
+    // Their reads stay reads.
+    for (const path of ["/api/agents", "/api/daemon/notifications", "/api/daemon/audit", "/api/daemon/digest/preview", "/api/consolidation/preview"]) {
+      expect(ownerOnlyProxySurface(path), path).toBeUndefined();
+    }
+  });
+
   it("leaves per-identity surfaces unclassified so they stay open to guests", () => {
     for (const path of ["/api/metrics", "/api/canvas", "/api/monitor/state", "/api/chat/history", "/api/skills/list", "/api/settingsnot"]) {
       expect(ownerOnlyProxySurface(path), path).toBeUndefined();

@@ -64,12 +64,21 @@ const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOTDIR"]);
  * root (COR-21). Windows paths are case-insensitive, so they hash lowercased.
  */
 export function installLockPath(configRoot: string, installRoot: string, kind: "runtime" | "update"): string {
+  return join(installStateDir(configRoot), `${installRootKey(installRoot)}.${kind}.lock`);
+}
+
+/** `<configRoot>/.strada/locks/`: where per-install runtime state files live. */
+export function installStateDir(configRoot: string): string {
+  return join(configRoot, ".strada", "locks");
+}
+
+/** The short hash of an install root that names its files in {@link installStateDir}. */
+export function installRootKey(installRoot: string): string {
   const root = resolve(installRoot);
-  const key = createHash("sha256")
+  return createHash("sha256")
     .update(process.platform === "win32" ? root.toLowerCase() : root)
     .digest("hex")
     .slice(0, 16);
-  return join(configRoot, ".strada", "locks", `${key}.${kind}.lock`);
 }
 
 /** Where versions before COR-21 keep the runtime lock; they look nowhere else. */

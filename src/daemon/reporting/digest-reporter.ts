@@ -188,6 +188,15 @@ export class DigestReporter {
   }
 
   /**
+   * The digest sendDigest() would send now, without sending it or moving the
+   * "since last digest" baseline: what `strada daemon digest --dry-run` shows.
+   */
+  previewDigest(): string {
+    const snapshot = this.gatherSnapshot(`http://localhost:${this.deps.dashboardPort ?? 3100}`);
+    return formatDigest(snapshot, this.calculateDeltas(snapshot));
+  }
+
+  /**
    * Stop the cron job.
    */
   stop(): void {

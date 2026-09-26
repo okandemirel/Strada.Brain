@@ -452,6 +452,12 @@ export interface RouteContext {
   startupNotices: string[];
   bootReport?: BootReport;
   autoUpdater?: AutoUpdater;
+  /**
+   * The context the in-process `strada daemon …` commands act on, so the routes
+   * those commands use from a shell do exactly the same thing (COR-13). Absent
+   * without daemon mode.
+   */
+  daemonCliContext?: import("../daemon/daemon-cli.js").DaemonContext;
 
   // Chain resilience
   chainResilienceConfig?: ChainResilienceConfig;

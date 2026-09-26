@@ -476,6 +476,9 @@ export const OWNER_ONLY_PROXY_ROUTES: readonly {
 }[] = [
   { pattern: /^\/api\/skills\/install$/, surface: "setup:write" },
   { pattern: /^\/api\/skills\/[^/]+\/(enable|disable)$/, surface: "setup:write" },
+  // COR-13: stopping, starting or re-budgeting an agent session acts on the
+  // shared runtime; `/api/agents` itself stays a read.
+  { pattern: /^\/api\/agents\/[^/]+\/(stop|start|budget)$/, surface: "instance:control" },
 ];
 
 /**
@@ -493,6 +496,18 @@ export const INSTANCE_CONTROL_PROXY_PATHS: readonly string[] = [
   "/api/daemon/approvals/",
   "/api/update",
   "/api/mcp/reconnect",
+  // COR-13: what `strada daemon …` changes from a shell — the one shared
+  // daemon's triggers, budget, digest, notifications, delegation routing and
+  // memory. The local operator reaches them with its own credential; every
+  // other caller needs to be the owner.
+  "/api/daemon/trigger",
+  "/api/daemon/circuit/reset",
+  "/api/daemon/budget/reset",
+  "/api/daemon/digest/send",
+  "/api/daemon/notify",
+  "/api/delegations/tier",
+  "/api/consolidation/run",
+  "/api/consolidation/undo",
 ];
 
 // ── The same powers, reached by typing (round 13 #11) ─────────────────────────

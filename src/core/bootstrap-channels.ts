@@ -10,6 +10,9 @@ import type { Config } from "../config/config.js";
 import { AuthManager } from "../security/auth.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
+import { resolveAllowedHosts } from "../security/host-validation.js";
+import { resolveRuntimePaths } from "../common/runtime-paths.js";
+import { operatorCredentialPath } from "./operator-credential.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { AppError } from "../common/errors.js";
 import { DEFAULT_RATE_LIMITS } from "../common/constants.js";
@@ -141,6 +144,7 @@ export async function initializeDashboard(
     return undefined;
   }
 
+  const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
   const dashboard = new DashboardServer(
     config.dashboard.port,
     metrics,
@@ -151,6 +155,10 @@ export async function initializeDashboard(
     // server's same-origin gate may trust.
     [config.web.port],
     config.bindHost,
+    resolveAllowedHosts(),
+    // COR-13: the credential `strada daemon …` in a shell uses to reach this
+    // runtime's state-changing routes, next to the runtime lock.
+    operatorCredentialPath(runtimePaths.configRoot, runtimePaths.installRoot),
   );
 
   try {

@@ -43,6 +43,7 @@ import type { IdentityState } from "../identity/identity-state.js";
 import type { MemoryHealth } from "../memory/memory.interface.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import { monitorReadScope } from "./monitor-read-scope.js";
+import { DEPLOYMENT_CHECK_BODY, readCommandBody } from "./server-daemon-control-routes.js";
 import type { RouteContext } from "./server-types.js";
 
 /** Only truly running statuses count toward activeTaskCount. */
@@ -233,15 +234,25 @@ export function handleSystemRoutes(
 
   // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
   if (url === "/api/deployment/check" && method === "POST") {
-    if (!ctx.readinessChecker) {
-      sendJson(res, { enabled: false });
-      return true;
-    }
-    const checker = ctx.readinessChecker;
-    void checker.checkReadiness(true).then((result) => {
-      sendJson(res, result);
+    // COR-13: `strada daemon deploy:check` posts here too, and with
+    // `{ propose: true }` (its --execute --force) proposes the deployment
+    // exactly as the in-process command does.
+    void readCommandBody(req, res, ctx, DEPLOYMENT_CHECK_BODY).then(async (body) => {
+      if (body === null) return;
+      if (!ctx.readinessChecker) {
+        sendJson(res, { enabled: false });
+        return;
+      }
+      const result = await ctx.readinessChecker.checkReadiness(true);
+      if (!body.propose) {
+        sendJson(res, result);
+        return;
+      }
+      const deployTrigger = ctx.daemonCliContext?.deployTrigger;
+      if (result.ready && deployTrigger) await deployTrigger.triggerReadinessCheck();
+      sendJson(res, { ...result, proposed: result.ready && deployTrigger !== undefined });
     }).catch((err) => {
-      sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
+      if (!res.headersSent) sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
     });
     return true;
   }
