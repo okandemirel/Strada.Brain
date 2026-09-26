@@ -15,6 +15,7 @@ import { GoalDecomposer } from "../../goals/index.js";
 import { ToolRegistry } from "../tool-registry.js";
 import { SoulLoader } from "../../agents/soul/index.js";
 import { AgentDBAdapter } from "../../memory/unified/agentdb-adapter.js";
+import { agentDbEmbeddingConfig } from "../bootstrap-memory.js";
 import { DMPolicy } from "../../security/dm-policy.js";
 import { TaskManager } from "../../tasks/index.js";
 import type { DaemonEventMap } from "../../daemon/daemon-events.js";
@@ -126,7 +127,21 @@ export async function initializeMultiAgentDelegationStage(
     getIdentityState: params.identityManager ? () => params.identityManager!.getState() : undefined,
     reRetrievalConfig: params.config.reRetrieval,
     embeddingProvider: params.cachedEmbeddingProvider,
-    memoryConfig: { dimensions: params.config.memory.unified.dimensions, dbBasePath: params.config.memory.dbPath },
+    memoryConfig: {
+      dimensions: params.config.memory.unified.dimensions,
+      dbBasePath: params.config.memory.dbPath,
+      // The root memory's embedder: agent memories were opened without one
+      // and held hash-fallback vectors only.
+      ...(params.cachedEmbeddingProvider
+        ? {
+            embedding: agentDbEmbeddingConfig(
+              params.cachedEmbeddingProvider,
+              params.config.memory.unified.dimensions,
+              params.logger,
+            ),
+          }
+        : {}),
+    },
     soulLoader: params.soulLoader,
     dmPolicy: params.dmPolicy,
     userProfileStore: params.userProfileStore,

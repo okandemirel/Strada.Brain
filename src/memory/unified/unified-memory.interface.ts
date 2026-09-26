@@ -616,6 +616,16 @@ export interface UnifiedMemoryConfig {
 }
 
 /**
+ * The embedder part of a memory config: built once from the process's
+ * embedding provider and given to the root memory and every per-agent memory,
+ * so their vectors share one size and one provenance.
+ */
+export type MemoryEmbeddingConfig = Pick<
+  UnifiedMemoryConfig,
+  "dimensions" | "embeddingProvider" | "embeddingProviderBatch" | "embeddingProviderId"
+>;
+
+/**
  * Default configuration for unified memory
  */
 export const DEFAULT_MEMORY_CONFIG: UnifiedMemoryConfig = {

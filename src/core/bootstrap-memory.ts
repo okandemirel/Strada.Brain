@@ -15,6 +15,7 @@ import { runAutomaticMigration } from "../memory/unified/migration.js";
 import type { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { isHnswAvailable } from "../rag/hnsw/hnsw-vector-store.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
+import type { MemoryEmbeddingConfig } from "../memory/unified/unified-memory.interface.js";
 import type * as winston from "winston";
 
 /**
@@ -104,6 +105,34 @@ export function embeddingProviderIdentity(
 }
 
 /**
+ * The AgentDB embedder fields for `embeddingProvider`: its size, single and
+ * batch forms, and provenance id. Shared by the root memory and the per-agent
+ * memories (stage-agents), so both embed with the same model and stamp the
+ * same provenance. Without a provider: hash fallback at `fallbackDimensions`.
+ */
+export function agentDbEmbeddingConfig(
+  embeddingProvider: CachedEmbeddingProvider | undefined,
+  fallbackDimensions: number,
+  logger?: Pick<winston.Logger, "warn">,
+): MemoryEmbeddingConfig {
+  if (!embeddingProvider) return { dimensions: fallbackDimensions };
+  return {
+    dimensions: embeddingProvider.dimensions,
+    embeddingProvider: async (text: string) => {
+      const batch = await embeddingProvider.embed([text]);
+      return batch.embeddings[0]!;
+    },
+    // Codex round 7 #21: the re-embed migration sends rows in chunks through
+    // the provider's array form instead of one serial call per row.
+    embeddingProviderBatch: async (texts: string[]) => (await embeddingProvider.embed(texts)).embeddings,
+    // Codex round 6 #17: every model's vectors used to share provenance
+    // "provider"; a model swap could then search one model's index with
+    // another's query. The provenance gate compares this id.
+    embeddingProviderId: embeddingProviderIdentity(embeddingProvider as unknown as EmbeddingIdentitySource, logger),
+  };
+}
+
+/**
  * Initialize memory backend.
  *
  * Flow:
@@ -139,7 +168,7 @@ export async function initializeMemory(
   const agentdbPath = join(config.memory.dbPath, "agentdb");
   const agentdbConfig = {
     dbPath: agentdbPath,
-    dimensions: embeddingProvider?.dimensions ?? config.memory.unified.dimensions,
+    ...agentDbEmbeddingConfig(embeddingProvider, config.memory.unified.dimensions, logger),
     maxEntriesPerTier: {
       working: config.memory.unified.tierLimits.working,
       ephemeral: config.memory.unified.tierLimits.ephemeral,
@@ -147,23 +176,6 @@ export async function initializeMemory(
     },
     enableAutoTiering: config.memory.unified.autoTiering,
     ephemeralTtlMs: (config.memory.unified.ephemeralTtlHours * 3600000) as DurationMs,
-    embeddingProvider: embeddingProvider
-      ? async (text: string) => {
-          const batch = await embeddingProvider.embed([text]);
-          return batch.embeddings[0]!;
-        }
-      : undefined,
-    // Codex round 7 #21: the re-embed migration sends rows in chunks through
-    // the provider's array form instead of one serial call per row.
-    embeddingProviderBatch: embeddingProvider
-      ? async (texts: string[]) => (await embeddingProvider.embed(texts)).embeddings
-      : undefined,
-    // Codex round 6 #17: every model's vectors used to share provenance
-    // "provider"; a model swap could then search one model's index with
-    // another's query. The provenance gate compares this id.
-    embeddingProviderId: embeddingProvider
-      ? embeddingProviderIdentity(embeddingProvider as unknown as EmbeddingIdentitySource, logger)
-      : undefined,
   };
 
   // Post-init steps shared between first attempt and repair path

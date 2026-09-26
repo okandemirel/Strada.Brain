@@ -516,10 +516,46 @@ export interface ReEmbedResult {
   unknownDetected: number;
   /** Entries embedded by a different provider id than the configured one (Codex round 6 #17). */
   foreignDetected: number;
+  /** Set when `shouldStop` ended the pass before every row was scanned (the marker is not set). */
+  stopped?: true;
 }
 
 /** Rows per provider call when the provider accepts arrays (Codex round 7 #21). */
 export const RE_EMBED_BATCH_SIZE = 64;
+
+/**
+ * Pacing for a pass that must not compete with live traffic (per-agent
+ * memories re-embed in the background while their agent answers turns).
+ * The defaults keep the bootstrap pass as it was: batches of
+ * RE_EMBED_BATCH_SIZE, back to back, logged at info.
+ */
+export interface ReEmbedOptions {
+  /** Rows scanned per batch, so at most this many texts per provider call. */
+  readonly batchSize?: number;
+  /** Wait after every batch that called the provider, before the next one. */
+  readonly pauseMs?: number;
+  /** Checked before every batch: true ends the pass there. Rows done so far stay done. */
+  readonly shouldStop?: () => boolean;
+  /** Scan progress at debug instead of info: the caller logs the pass itself. */
+  readonly quiet?: boolean;
+}
+
+/**
+ * Rows whose vector the provider index cannot hold until it is re-embedded —
+ * what a `reEmbedHashEntries` pass would send to the provider. Rows a pass
+ * already re-embedded carry the provider's provenance and are not counted,
+ * which is what lets an interrupted pass resume where it stopped.
+ */
+export function countEntriesNeedingReEmbedding(ctx: {
+  readonly config: UnifiedMemoryConfig;
+  readonly entries: Map<string, UnifiedMemoryEntry>;
+}): number {
+  let count = 0;
+  for (const entry of ctx.entries.values()) {
+    if (needsReEmbedding(ctx.config, entry) !== null) count++;
+  }
+  return count;
+}
 
 /**
  * A row as it was when its embedding was requested (Codex round 7 #22). The
@@ -615,14 +651,25 @@ async function embedRows(
  * version and content) — the check runs before the SQLite write and again
  * under the HNSW write mutex, so a delete that landed while the embedding
  * was in flight is not undone.
+ *
+ * `options` paces a background pass (smaller batches, a pause between them,
+ * a stop check); each batch persists before the next, so a stopped pass
+ * loses nothing and the next one skips what it finished.
  */
 export async function reEmbedHashEntries(
   ctx: AgentDBVectorContext,
   hasMigrationMarker: (key: string) => Promise<boolean>,
   setMigrationMarker: (key: string, metadata?: Record<string, unknown>) => Promise<void>,
+  options: ReEmbedOptions = {},
 ): Promise<ReEmbedResult> {
   const MARKER_KEY = "re_embed_complete_v1";
-  const BATCH_SIZE = RE_EMBED_BATCH_SIZE;
+  const BATCH_SIZE = Math.max(1, Math.floor(options.batchSize ?? RE_EMBED_BATCH_SIZE));
+  const pauseMs = Math.max(0, options.pauseMs ?? 0);
+  const logProgress = (message: string, meta?: Record<string, unknown>): void => {
+    const logger = getLoggerSafe();
+    if (options.quiet) logger.debug(message, meta);
+    else logger.info(message, meta);
+  };
 
   if (!ctx.config.embeddingProvider) {
     getLoggerSafe().warn("[AgentDB] Re-embed skipped — no embedding provider configured");
@@ -640,7 +687,7 @@ export async function reEmbedHashEntries(
   );
   const total = allEntries.length;
 
-  getLoggerSafe().info("[AgentDB] Starting hash-to-real embedding scan", {
+  logProgress("[AgentDB] Starting hash-to-real embedding scan", {
     totalEntries: total,
     previousPassCompleted: await hasMigrationMarker(MARKER_KEY),
   });
@@ -651,9 +698,20 @@ export async function reEmbedHashEntries(
   let unknownDetected = 0;
   let foreignDetected = 0;
   let hadPersistFailure = false;
+  let stopped = false;
+  let pauseBeforeNext = false;
 
   // Process in batches
   for (let batchStart = 0; batchStart < allEntries.length; batchStart += BATCH_SIZE) {
+    // A paced pass leaves the provider room between batches; the stop check
+    // follows the pause so a shutdown never waits on one more batch.
+    if (pauseBeforeNext && pauseMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, pauseMs));
+    }
+    if (options.shouldStop?.()) {
+      stopped = true;
+      break;
+    }
     const batch = allEntries.slice(batchStart, batchStart + BATCH_SIZE);
     const toEmbed: Array<Omit<InFlightRow, "newEmbedding">> = [];
 
@@ -671,6 +729,7 @@ export async function reEmbedHashEntries(
       toEmbed.push({ entry, version: rowVersion(entry), content: entry.content });
     }
 
+    pauseBeforeNext = toEmbed.length > 0;
     const { embedded, failed } = await embedRows(ctx, toEmbed);
     skipped += failed;
 
@@ -762,7 +821,14 @@ export async function reEmbedHashEntries(
       migrated += entriesToPersist.length;
     }
 
-    getLoggerSafe().info(`[AgentDB] Re-embedding: ${migrated}/${total} entries migrated`);
+    logProgress(`[AgentDB] Re-embedding: ${migrated}/${total} entries migrated`);
+  }
+
+  if (stopped) {
+    // Every finished batch is already persisted with the provider's
+    // provenance, so the next pass skips those rows; no marker for a partial pass.
+    logProgress("[AgentDB] Re-embed pass stopped early; the next pass resumes with the rows left", { migrated, total });
+    return { migrated, total, skipped, hashDetected, unknownDetected, foreignDetected, stopped: true };
   }
 
   if (!hadPersistFailure) {
@@ -778,7 +844,7 @@ export async function reEmbedHashEntries(
     });
   }
 
-  getLoggerSafe().info("[AgentDB] Hash-to-real embedding scan complete", {
+  logProgress("[AgentDB] Hash-to-real embedding scan complete", {
     migrated,
     total,
     skipped,

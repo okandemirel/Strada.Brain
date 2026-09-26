@@ -65,6 +65,7 @@ import {
   toVectorEntry,
   embedWithProvenance,
   canEnterIndex,
+  countEntriesNeedingReEmbedding,
   indexProvenance,
   inferProvenance,
   isHashBasedEmbedding,
@@ -72,6 +73,7 @@ import {
   providerProvenance,
   rebuildHnswIndex,
   reEmbedHashEntries,
+  type ReEmbedOptions,
   type ReEmbedResult,
 } from "./agentdb-vector.js";
 
@@ -184,6 +186,9 @@ export class AgentDBMemory implements IUnifiedMemory {
   private rebuildInProgress = false;
   /** Rebuild of the index for a new embedding size, while it runs (shutdown waits for it). */
   private sizeRebuild: Promise<void> | null = null;
+  /** Re-embed passes in flight: shutdown stops each at its next batch and waits for it. */
+  private readonly reEmbedPasses = new Set<Promise<ReEmbedResult>>();
+  private shuttingDown = false;
   /** The ignored caller-supplied query vector warning was logged (once per memory, not per search). */
   private callerVectorWarned = false;
   private cacheHits = 0;
@@ -354,6 +359,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   async initialize(): Promise<Result<void, Error>> {
     try {
       if (this.isInitialized) return ok(undefined);
+      this.shuttingDown = false;
 
       getLoggerSafe().info("[AgentDBMemory] Initializing unified memory", {
         dbPath: this.dbPath,
@@ -418,10 +424,14 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!this.isInitialized) return ok(undefined);
 
       getLoggerSafe().info("[AgentDBMemory] Shutting down");
+      this.shuttingDown = true;
 
       // A rebuild for a new embedding size writes SQLite and the index and
       // restarts auto-tiering when done; let it finish before closing them.
       if (this.sizeRebuild) await this.sizeRebuild;
+      // A re-embed pass writes both too: with shuttingDown set it stops at
+      // its next batch (the rest resumes on the next open); wait for that.
+      if (this.reEmbedPasses.size > 0) await Promise.allSettled([...this.reEmbedPasses]);
 
       // Stop auto-tiering timer before saving to prevent sweep during shutdown
       this.stopAutoTiering();
@@ -1676,12 +1686,36 @@ export class AgentDBMemory implements IUnifiedMemory {
   // Hash-to-Real Embedding Migration (delegates to agentdb-vector)
   // ---------------------------------------------------------------------------
 
-  async reEmbedHashEntries(): Promise<ReEmbedResult> {
-    return reEmbedHashEntries(
+  async reEmbedHashEntries(options: ReEmbedOptions = {}): Promise<ReEmbedResult> {
+    const pass = reEmbedHashEntries(
       this.getVectorCtx(),
       this.hasMigrationMarker.bind(this),
       this.setMigrationMarker.bind(this),
+      {
+        ...options,
+        // Shutdown ends a pass at its next batch instead of letting it write
+        // to a closing store, and a rebuild for a new embedding size
+        // re-embeds every row itself.
+        shouldStop: () => this.shuttingDown || this.rebuildInProgress || options.shouldStop?.() === true,
+      },
     );
+    this.reEmbedPasses.add(pass);
+    try {
+      return await pass;
+    } finally {
+      this.reEmbedPasses.delete(pass);
+    }
+  }
+
+  /**
+   * Rows the configured embedding provider still has to re-embed before its
+   * index can hold them (hash-fallback, unknown-origin or other-provider
+   * vectors); text search serves them meanwhile. 0 without a provider, or
+   * once the memory is shut down.
+   */
+  countEntriesAwaitingReEmbed(): number {
+    if (!this.config.embeddingProvider || !this.isInitialized || this.shuttingDown) return 0;
+    return countEntriesNeedingReEmbedding({ config: this.config, entries: this.entries });
   }
 
   // ---------------------------------------------------------------------------

@@ -282,6 +282,76 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     expect((createAgentManager.mock.calls[0]![0] as { streamingEnabled?: boolean }).streamingEnabled).toBe(false);
     expect((createDelegationManager.mock.calls[0]![0] as { streamingEnabled?: boolean }).streamingEnabled).toBe(false);
   });
+
+  describe("per-agent memory embedder", () => {
+    type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
+    type MemoryConfigSeen = {
+      dimensions: number;
+      embedding?: {
+        dimensions: number;
+        embeddingProvider?: (text: string) => Promise<number[]>;
+        embeddingProviderBatch?: (texts: string[]) => Promise<number[][]>;
+        embeddingProviderId?: string;
+      };
+    };
+
+    async function memoryConfigFor(cachedEmbeddingProvider: unknown): Promise<MemoryConfigSeen> {
+      const createAgentManager = vi.fn((_options: unknown) => ({
+        setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn(),
+      }));
+      await initializeMultiAgentDelegationStage(
+        {
+          config: makeConfig({ agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"] }),
+          logger: createMockLogger(),
+          daemonMode: false,
+          daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as StageParams["daemonStorage"],
+          daemonContext: {} as unknown as StageParams["daemonContext"],
+          taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
+          orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
+          providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
+          toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+          channel: {} as unknown as StageParams["channel"],
+          metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
+          soulLoader: {} as unknown as StageParams["soulLoader"],
+          dmPolicy: {} as unknown as StageParams["dmPolicy"],
+          stradaDeps: { coreInstalled: false } as unknown as StageParams["stradaDeps"],
+          cachedEmbeddingProvider: cachedEmbeddingProvider as StageParams["cachedEmbeddingProvider"],
+        },
+        {
+          createAgentRegistry: vi.fn(() => ({ initialize: vi.fn() })),
+          createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+          createAgentManager,
+        } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+      );
+      return (createAgentManager.mock.calls[0]![0] as { memoryConfig: MemoryConfigSeen }).memoryConfig;
+    }
+
+    it("hands agent memories the root memory's embedder: its size, both forms and its provenance id", async () => {
+      // Agent memories were opened with no provider, so they only ever held
+      // hash-fallback vectors.
+      const embed = vi.fn(async (texts: string[]) => ({
+        embeddings: texts.map(() => [0.5, -0.5, 0.25, -0.25]),
+        usage: { totalTokens: texts.length },
+      }));
+      const provider = { name: "fake", modelId: "fake-embed", dimensions: 4, embed };
+
+      const memoryConfig = await memoryConfigFor(provider);
+
+      expect(memoryConfig.dimensions).toBe(384);
+      expect(memoryConfig.embedding?.dimensions).toBe(4);
+      expect(memoryConfig.embedding?.embeddingProviderId).toBe("fake:fake-embed:4d");
+      await expect(memoryConfig.embedding?.embeddingProvider?.("one")).resolves.toEqual([0.5, -0.5, 0.25, -0.25]);
+      await expect(memoryConfig.embedding?.embeddingProviderBatch?.(["a", "b"])).resolves.toHaveLength(2);
+      expect(embed).toHaveBeenCalledWith(["one"]);
+      expect(embed).toHaveBeenCalledWith(["a", "b"]);
+    });
+
+    it("without an embedding provider agent memories stay as they were: no embedder, configured size", async () => {
+      const memoryConfig = await memoryConfigFor(undefined);
+      expect(memoryConfig.dimensions).toBe(384);
+      expect(memoryConfig.embedding).toBeUndefined();
+    });
+  });
 });
 
 describe("initializeMultiAgentDelegationStage — the root orchestrator's delegations", () => {

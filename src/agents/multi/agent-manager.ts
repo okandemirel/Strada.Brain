@@ -44,6 +44,8 @@ import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.j
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
+import { RE_EMBED_BATCH_SIZE } from "../../memory/unified/agentdb-vector.js";
+import type { MemoryEmbeddingConfig } from "../../memory/unified/unified-memory.interface.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { AgentBudgetTracker } from "./agent-budget-tracker.js";
 import { AgentDBAdapter } from "../../memory/unified/agentdb-adapter.js";
@@ -69,7 +71,23 @@ interface ToolRegistryLike {
 export interface MemoryConfig {
   readonly dimensions: number;
   readonly dbBasePath: string;
+  /**
+   * The root memory's embedder (bootstrap's agentDbEmbeddingConfig). Without
+   * it every agent memory held hash-fallback vectors only; absent (no
+   * provider configured), that stays the behaviour.
+   */
+  readonly embedding?: MemoryEmbeddingConfig;
+  /** Pacing of the background re-embed of rows written before the embedder was given. */
+  readonly reEmbed?: { readonly batchSize?: number; readonly pauseMs?: number };
 }
+
+/**
+ * Per-agent re-embed pacing: a quarter of the bootstrap pass's batch, with a
+ * pause between batches, one agent memory at a time — the agent is answering
+ * turns on the same provider meanwhile.
+ */
+const AGENT_MEMORY_RE_EMBED_BATCH_SIZE = RE_EMBED_BATCH_SIZE / 4;
+const AGENT_MEMORY_RE_EMBED_PAUSE_MS = 250;
 
 /** Options for constructing an AgentManager */
 export interface AgentManagerOptions {
@@ -213,6 +231,8 @@ export class AgentManager {
   private taskManager?: AgentTaskView;
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
+  /** Background re-embed passes of agent memories, chained so one runs at a time. */
+  private memoryReEmbedQueue: Promise<void> = Promise.resolve();
 
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
@@ -555,6 +575,13 @@ export class AgentManager {
 
     await Promise.allSettled(closePromises);
     this.agents.clear();
+    // The memories stopped their passes; queued ones find them closed.
+    await this.memoryReEmbedQueue;
+  }
+
+  /** @internal Settles once every queued agent-memory re-embed pass has ended. */
+  whenMemoryReEmbedIdle(): Promise<void> {
+    return this.memoryReEmbedQueue;
   }
 
   // ===========================================================================
@@ -717,9 +744,13 @@ export class AgentManager {
 
     // The per-agent maxMemoryEntries cap is enforced at the routing boundary via
     // enforceMemoryCap() (AgentDBMemory itself bounds growth per-tier).
+    // The root memory's embedder, when there is one: without it agent
+    // memories held hash-fallback vectors only, so recall was lexical.
+    const embedding = this.opts.memoryConfig.embedding;
     const memory = new AgentDBMemory({
       dbPath: agentMemoryDir,
       dimensions: this.opts.memoryConfig.dimensions,
+      ...embedding,
     });
     await memory.initialize();
 
@@ -812,7 +843,42 @@ export class AgentManager {
       }
     }
 
+    if (embedding?.embeddingProvider) {
+      this.queueMemoryReEmbed(agentId, memory);
+    }
+
     return { memory, orchestrator };
+  }
+
+  /**
+   * Re-embed, in the background, the rows an agent memory wrote before it had
+   * the root memory's embedder: hash-fallback vectors its index cannot hold,
+   * served by text search until then. Never awaited by agent start or a turn.
+   * Passes run one agent memory at a time in small paced batches, and each
+   * batch is persisted as it lands, so a restart resumes with the rows left
+   * instead of redoing finished ones.
+   */
+  private queueMemoryReEmbed(agentId: AgentId, memory: AgentDBMemory): void {
+    const batchSize = this.opts.memoryConfig.reEmbed?.batchSize ?? AGENT_MEMORY_RE_EMBED_BATCH_SIZE;
+    const pauseMs = this.opts.memoryConfig.reEmbed?.pauseMs ?? AGENT_MEMORY_RE_EMBED_PAUSE_MS;
+    this.memoryReEmbedQueue = this.memoryReEmbedQueue.then(async () => {
+      // Counted when the pass starts: an agent evicted while queued counts 0.
+      const pending = memory.countEntriesAwaitingReEmbed();
+      if (pending === 0) return;
+      getLoggerSafe().info(`[AgentManager] Agent memory re-embed started: ${pending} rows to re-embed`, {
+        agentId, pending, batchSize, pauseMs,
+      });
+      const result = await memory.reEmbedHashEntries({ batchSize, pauseMs, quiet: true });
+      getLoggerSafe().info(
+        `[AgentManager] Agent memory re-embed ${result.stopped ? "stopped" : "finished"}: ${result.migrated}/${pending} rows re-embedded`,
+        { agentId, migrated: result.migrated, pending, left: Math.max(0, pending - result.migrated) },
+      );
+    }).catch((error: unknown) => {
+      getLoggerSafe().warn("[AgentManager] Agent memory re-embed failed; its rows stay on text search", {
+        agentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private syncLiveAgentChatId(liveAgent: LiveAgent, chatId: string): LiveAgent {
