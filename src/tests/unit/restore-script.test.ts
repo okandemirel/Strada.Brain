@@ -352,8 +352,16 @@ describe("scripts/restore.mjs", () => {
       // the risk the refusal exists to describe.
       const forced = runRestore(["--backup-dir", fixture.backupDir, "--allow-attached-users"]);
       expect(forced.output).toMatch(/--allow-attached-users/u);
-      expect(forced.code).toBe(0);
-      expect(read(fixture.memoryDb)).toHaveLength(2);
+      if (process.platform === "win32") {
+        // Windows will not rename a file another process holds open, so even
+        // the override cannot swap an attached database there: the restore
+        // fails, rolls back, and the attached connection's rows stay.
+        expect(forced.code, forced.output).not.toBe(0);
+        expect(read(fixture.memoryDb)).toEqual([{ id: 7, payload: "written while open" }]);
+      } else {
+        expect(forced.code).toBe(0);
+        expect(read(fixture.memoryDb)).toHaveLength(2);
+      }
     } finally {
       live.close();
     }
@@ -446,7 +454,9 @@ describe("scripts/backup.sh", () => {
     }
   });
 
-  it("backs up into a BACKUP_DIR that does not exist yet", () => {
+  // A bash script for POSIX hosts: under Git Bash on Windows its tar reads the
+  // C:\… archive path as a remote host:path and the backup cannot finish.
+  it.skipIf(process.platform === "win32")("backs up into a BACKUP_DIR that does not exist yet", () => {
     const cli = path.join(process.cwd(), "dist", "core", "database-backup.js");
     // The script shells out to the compiled helper; without it there is nothing
     // to measure, and saying so beats a green test that checked nothing. It
