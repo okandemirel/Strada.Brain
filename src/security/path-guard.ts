@@ -234,6 +234,24 @@ async function resolveRealRoot(projectRoot: string): Promise<string> {
   return real;
 }
 
+/** `candidate` is `root` or under it; a root that already ends in the separator ("/", a drive root) included. */
+function isInsideOrEqual(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/** The realpath of `start` or of its nearest existing ancestor, up to AND including the filesystem root. */
+async function deepestExistingAncestor(start: string): Promise<string | undefined> {
+  for (let current = start; ; ) {
+    try {
+      return await realpath(current);
+    } catch {
+      const parent = resolve(current, "..");
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
 export async function validatePath(
   projectRoot: string,
   relativePath: string,
@@ -291,50 +309,26 @@ export async function validatePath(
       // Parent is valid; use the raw resolved path for the new file
       realFullPath = rawFullPath;
     } catch {
-      // Parent doesn't exist - check if this is because the path escapes the project
-      // Walk up the directory tree to find the first existing ancestor
-      let currentPath = resolve(rawFullPath, "..");
-      let foundExistingAncestor = false;
-      
-      while (currentPath !== resolve(currentPath, "..")) {
-        try {
-          const realCurrent = await realpath(currentPath);
-          // Found an existing ancestor - check if it's within project
-          if (realCurrent !== realRoot && !realCurrent.startsWith(realRoot + sep)) {
-            return {
-              valid: false,
-              fullPath: rawFullPath,
-              error: outsideProjectError(projectRoot),
-            };
-          }
-          foundExistingAncestor = true;
-          break;
-        } catch {
-          // This path component doesn't exist, go up one level
-          currentPath = resolve(currentPath, "..");
-        }
-      }
-      
-      // If we walked all the way to root without finding anything,
-      // or ended up outside the project
-      if (!foundExistingAncestor || (currentPath !== realRoot && !currentPath.startsWith(realRoot + sep))) {
-        // Double-check: if we reached project root via walking, it's valid (just missing parent)
-        // If we ended up elsewhere, it's outside
-        if (!foundExistingAncestor && currentPath === resolve(realRoot, "..")) {
-          // Walked up past project root - path is outside
-          return {
-            valid: false,
-            fullPath: rawFullPath,
-            error: outsideProjectError(projectRoot),
-          };
-        }
+      // Parent doesn't exist: judge containment by the deepest ancestor that
+      // DOES exist. The walk used to stop one short of the filesystem root, so
+      // a path whose only existing ancestor was the root (a drive root on
+      // Windows, where there is no /etc) was never compared with the project
+      // and came back "Parent directory does not exist" instead of the
+      // confinement refusal. No existing ancestor at all is outside, too.
+      const ancestor = await deepestExistingAncestor(resolve(rawFullPath, ".."));
+      if (ancestor === undefined || !isInsideOrEqual(realRoot, ancestor)) {
+        return {
+          valid: false,
+          fullPath: rawFullPath,
+          error: outsideProjectError(projectRoot),
+        };
       }
 
       // The walk above already did the security work: it realpath'd the deepest
       // EXISTING ancestor and confirmed it sits inside the project root. The
       // components below it do not exist, so they cannot be symlinks, and `..`
       // was resolved before the walk began — the target is provably contained.
-      // The loop's own comment says as much ("it's valid (just missing
+      // The old loop's own comment said as much ("it's valid (just missing
       // parent)"), and then the code rejected it anyway.
       //
       // Cost of that contradiction, measured: file_write could not create a
@@ -351,7 +345,7 @@ export async function validatePath(
       // tail so the blocklist is consulted like every other accepted path. The
       // missing components cannot be symlinks, so rawFullPath is the right
       // string to test.
-      if (!(options.allowMissingParents && foundExistingAncestor)) {
+      if (!options.allowMissingParents) {
         return {
           valid: false,
           fullPath: rawFullPath,

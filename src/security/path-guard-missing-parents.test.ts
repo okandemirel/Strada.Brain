@@ -20,7 +20,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { validatePath } from "./path-guard.js";
 
 let base: string;
@@ -90,6 +90,19 @@ describe("containment still holds with the option on", () => {
   it("still rejects null bytes", async () => {
     const result = await validatePath(project, "Assets/bad\0.cs", allow);
     expect(result.valid).toBe(false);
+  });
+
+  it("calls a path outside the project outside even when its only existing ancestor is the filesystem root", async () => {
+    // The Windows suite: `../../../etc/hosts` resolves to a drive root with no
+    // etc\ under it, and the walk stopped one short of that root, so the
+    // refusal said "Parent directory does not exist" (and file_read turned it
+    // into "file not found"). The same shape exists on POSIX.
+    const nowhere = join(parse(base).root, `strada-no-such-dir-${process.pid}`, "deeper", "pwned.txt");
+    for (const options of [allow, {}]) {
+      const result = await validatePath(project, nowhere, options);
+      expect(result.valid).toBe(false);
+      expect(result.error).toMatch(/outside the project/);
+    }
   });
 });
 
