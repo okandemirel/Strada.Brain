@@ -1,8 +1,9 @@
-import { mkdir, stat, open, realpath, type FileHandle } from "node:fs/promises";
+import { mkdir, stat, realpath, type FileHandle } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { sameNameElsewhere } from "./nearby-names.js";
 import { dirname, extname, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { openNoFollow } from "../../security/open-no-follow.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import {
   generateUnityGuid,
@@ -133,17 +134,15 @@ async function pathExists(fullPath: string): Promise<boolean> {
   }
 }
 
-/** O_NOFOLLOW where the platform has it (absent on Windows → 0, harmless there). */
-const NOFOLLOW_FLAG = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-
 /**
  * TOCTOU-contained write (measured 2026-08-23): `validatePath` resolves symlinks
  * at CHECK time, but a plain writeFile follows whatever sits at the path at WRITE
  * time — a symlink swapped in between escapes the project root. Two defenses:
  *   1. The parent directory is re-derived via realpath AFTER mkdir and must still
  *      sit inside the (real) project root — closes intermediate-component swaps.
- *   2. The file itself is opened with O_NOFOLLOW, so a swapped final component
- *      fails with ELOOP instead of being written through.
+ *   2. The file itself is opened with openNoFollow, so a swapped final
+ *      component fails with ELOOP instead of being written through — on
+ *      Windows too, which has no O_NOFOLLOW.
  * Exported for direct testing: the race it defends against cannot be staged
  * through execute() deterministically, because validatePath runs first.
  */
@@ -174,7 +173,7 @@ export async function openFileInsideRoot(
   if (!(realParent === realRoot || realParent.startsWith(realRoot + sep))) {
     throw new Error("parent directory escaped the project root");
   }
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | NOFOLLOW_FLAG
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT
     | (opts?.exclusive ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
-  return open(targetPath, flags, 0o644);
+  return openNoFollow(targetPath, flags, 0o644);
 }

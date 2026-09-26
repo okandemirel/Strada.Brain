@@ -11,10 +11,11 @@
 // ---------------------------------------------------------------------------
 
 import { constants as fsConstants } from "node:fs";
-import { open, opendir, type FileHandle } from "node:fs/promises";
+import { opendir, type FileHandle } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { ToolContext } from "../agents/tools/tool.interface.js";
+import { openNoFollow } from "../security/open-no-follow.js";
 import { isSensitivePath, validatePath } from "../security/path-guard.js";
 
 // ---------------------------------------------------------------------------
@@ -117,10 +118,13 @@ export async function* walkProjectFiles(
 // Reading
 // ---------------------------------------------------------------------------
 
-/** O_NOFOLLOW / O_NONBLOCK where the platform has them (absent on Windows → 0). */
+/**
+ * O_NONBLOCK where the platform has it (absent on Windows → 0). The final
+ * symlink is refused by openNoFollow, which also covers Windows: it has no
+ * O_NOFOLLOW, and a link swapped in after validation was read through.
+ */
 const READ_FLAGS =
   fsConstants.O_RDONLY |
-  (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0) |
   (typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0);
 
 export type RegularFileRead =
@@ -138,7 +142,7 @@ export type RegularFileRead =
 export async function readRegularFile(fullPath: string, maxBytes: number): Promise<RegularFileRead> {
   let handle: FileHandle;
   try {
-    handle = await open(fullPath, READ_FLAGS);
+    handle = await openNoFollow(fullPath, READ_FLAGS);
   } catch (err) {
     return { kind: "error", message: err instanceof Error ? err.message : String(err) };
   }

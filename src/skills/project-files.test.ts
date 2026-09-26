@@ -91,12 +91,14 @@ describe("readRegularFile", () => {
     expect(await readRegularFile(small, 4)).toEqual({ kind: "too-large", size: 5 });
     expect(await readRegularFile(project, 100)).toEqual({ kind: "not-a-file" });
     expect(await readRegularFile(join(project, "missing"), 100)).toMatchObject({ kind: "error" });
+    // A link is refused on Windows too (no O_NOFOLLOW there; see open-no-follow.ts).
+    await symlink(small, join(project, "link.txt"));
+    expect(await readRegularFile(join(project, "link.txt"), 100)).toMatchObject({ kind: "error" });
     if (process.platform !== "win32") {
+      // mkfifo: FIFOs are POSIX only.
       const pipe = join(project, "pipe");
       expect(spawnSync("mkfifo", [pipe]).status).toBe(0);
       expect(await readRegularFile(pipe, 100)).toEqual({ kind: "not-a-file" });
-      await symlink(small, join(project, "link.txt"));
-      expect(await readRegularFile(join(project, "link.txt"), 100)).toMatchObject({ kind: "error" });
     }
   });
 });
