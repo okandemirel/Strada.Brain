@@ -30,13 +30,28 @@ describe("index CLI lifecycle commands", () => {
     expect(output).toContain("restart");
   });
 
-  it("runs the status command without falling back to the launcher menu", () => {
+  // Runtime detection (and so the status report) does not exist on Windows: the
+  // command says so instead, covered by the case below.
+  it.skipIf(process.platform === "win32")("runs the status command without falling back to the launcher menu", () => {
     const output = runIndexCli(["status"]);
 
     expect(output).toContain("Install root:");
     expect(output).toContain("Version: v");
     expect(output).not.toContain("Strada Launcher");
   });
+
+  it.runIf(process.platform === "win32")("says status is unavailable on Windows instead of opening the launcher menu", () => {
+    const run = spawnSync(process.execPath, ["--import", "tsx", INDEX_ENTRY, "status"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" },
+      timeout: 60_000,
+    });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toContain("Runtime detection is not supported on Windows");
+    expect(run.stdout).not.toContain("Strada Launcher");
+  }, 90_000);
 
   it("exits non-zero when an async command fails (COR-8)", () => {
     const home = mkdtempSync(path.join(tmpdir(), "strada-cli-exit-"));
