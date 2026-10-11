@@ -7,7 +7,7 @@
  * indistinguishable from one that was never built.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,6 +91,61 @@ describe("MCP server config", () => {
 
   it("returns nothing when no config file exists", () => {
     expect(loadWith()).toEqual([]);
+  });
+});
+
+// security-config#4: mcp.json is JSON, so `enabled` arrives as a JSON boolean,
+// and the strict env-string parser rejected it — the entry was dropped and the
+// server's tools vanished behind a warning that gave no reason. Hosts such as
+// Cline and Roo write `"disabled": true` instead; zod stripped the unknown key,
+// `enabled` defaulted to true and Strada started a server the user had turned
+// off, handing it that entry's credentials.
+describe("MCP server on/off flags", () => {
+  it("reads a JSON boolean `enabled` rather than dropping the server", () => {
+    const servers = loadWith(
+      JSON.stringify([
+        { name: "on", command: "x", enabled: true },
+        { name: "off", command: "y", enabled: false },
+        { name: "legacy", command: "z", enabled: "false" },
+      ]),
+    );
+    expect(servers.map((s) => [s.name, s.enabled])).toEqual([
+      ["on", true],
+      ["off", false],
+      ["legacy", false],
+    ]);
+  });
+
+  it("keeps a server another host marked `disabled: true` off", () => {
+    const servers = loadWith(
+      JSON.stringify({
+        mcpServers: {
+          github: { command: "npx", env: { GITHUB_TOKEN: "t" }, disabled: true },
+          files: { command: "mcp-files", disabled: false },
+          // Contradictory flags resolve to off: a server the user disabled
+          // anywhere must not start with its credentials.
+          both: { command: "x", enabled: true, disabled: true },
+        },
+      }),
+    );
+    expect(servers.map((s) => [s.name, s.enabled])).toEqual([
+      ["github", false],
+      ["files", true],
+      ["both", false],
+    ]);
+    expect(servers[0]).not.toHaveProperty("disabled");
+  });
+
+  it("says why it skipped an entry", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(loadWith(JSON.stringify([{ name: "bad", command: "x", enabled: "maybe" }]))).toEqual([]);
+      const message = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(message).toMatch(/"bad".*skipping it/);
+      expect(message).toMatch(/enabled: expected a boolean/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

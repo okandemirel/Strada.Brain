@@ -53,7 +53,13 @@ export interface AccountingDeps {
     recordTokenUsage: (inputTokens: number, outputTokens: number, provider: string) => void;
   };
   readonly rateLimiter?: {
-    recordTokenUsage: (inputTokens: number, outputTokens: number, provider: string) => void;
+    recordTokenUsage: (
+      inputTokens: number,
+      outputTokens: number,
+      provider: string,
+      model?: string,
+      cache?: { cacheCreationInputTokens?: number; cacheReadInputTokens?: number },
+    ) => void;
   };
 }
 
@@ -173,22 +179,36 @@ export function recordMetricEnd(
   }
 }
 
+/**
+ * A reviewer/assessment call's spend. `modelId` is the model that answered
+ * (resolveServedIdentity): the limiter prices a "-free" model at $0 only when
+ * it is told the model, and without it every review was billed at the
+ * provider's table rate against the daily budget (security-config#6) — the
+ * defect recordProviderUsage fixed for model turns on 2026-09-02.
+ */
 export function recordAuxiliaryUsage(
   deps: AccountingDeps,
   provider: string,
   usage: ProviderResponse["usage"] | undefined,
   sink?: (usage: TaskUsageEvent) => void,
+  modelId?: string,
 ): void {
   if (!usage) {
     return;
   }
 
+  const cache = {
+    ...(usage.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
+    ...(usage.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+  };
   deps.metrics?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
-  deps.rateLimiter?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
+  deps.rateLimiter?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider, modelId, cache);
   sink?.({
     provider,
+    model: modelId,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
+    ...cache,
   });
 }
 

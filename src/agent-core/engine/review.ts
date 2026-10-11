@@ -28,7 +28,10 @@ import {
   buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
   resolveProviderModelId as resolveProviderModelIdHelper,
 } from "../../agents/orchestrator-supervisor-routing.js";
-import { buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel } from "../../agents/orchestrator-phase-telemetry.js";
+import {
+  buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
+  resolveServedIdentity,
+} from "../../agents/orchestrator-phase-telemetry.js";
 import { streamOrChatText } from "../../agents/providers/provider.interface.js";
 import {
   VISIBILITY_REVIEW_SYSTEM_PROMPT,
@@ -184,7 +187,8 @@ export async function runVisibilityReview(
     source: "visibility-review",
     task: params.task,
   });
-  recordAuxiliaryUsage(deps, reviewer.providerName, response.usage, params.usageHandler);
+  const billed = resolveServedIdentity(reviewer, response.servedBy);
+  recordAuxiliaryUsage(deps, billed.provider, response.usage, params.usageHandler, billed.model);
   const decision = sanitizeVisibilityReviewDecision(
     parseVisibilityReviewDecision(response.text),
   );
@@ -266,7 +270,8 @@ export async function reviewShellCommandWithProvider(
       task: reviewTask,
     });
 
-    recordAuxiliaryUsage(deps, provider.name, response.usage, options.onUsage ?? deps.onUsage);
+    const billed = resolveServedIdentity(reviewAssignment, response.servedBy);
+    recordAuxiliaryUsage(deps, billed.provider, response.usage, options.onUsage ?? deps.onUsage, billed.model);
     const decision = parseShellReviewDecision(response.text);
 
     if (

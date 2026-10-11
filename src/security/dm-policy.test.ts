@@ -509,3 +509,38 @@ describe("destructiveShellFlag reads programs, not substrings", () => {
     expect(destructiveShellFlag("echo 'a & b'", "win32")).toBe("shape");
   });
 });
+
+/**
+ * security-config#7: the 'home' protection named only Linux spellings
+ * (`/home/…`, `~/…`). On macOS the same writes into the user's shell startup
+ * files, ssh keys and LaunchAgents — `/Users/<me>/…`, `$HOME/…`, and
+ * `/private/etc`, which is where /etc points — came back null and lost the
+ * outright refusal in autonomous runs.
+ */
+describe("the home and system-config protection holds for macOS spellings", () => {
+  it.each([
+    "echo 'source /tmp/p' >> /Users/okan/.zshrc",
+    "echo key >> /Users/okan/.ssh/authorized_keys",
+    "cat /dev/null > /Users/okan/Library/LaunchAgents/a.plist",
+    'echo x > "$HOME/.zshrc"',
+    "echo x > $HOME/Documents/notes.txt",
+    "echo x > ${HOME}/.bash_profile",
+    "echo x > /private/etc/hosts",
+  ])("names the act in %j", (command) => {
+    expect(destructiveShellFlag(command, "darwin")).toBe("action");
+  });
+
+  // Tightening cuts both ways: on macOS the work itself lives under
+  // /Users/<me>, and runs name it by absolute path (measured: campaign
+  // commands write into /Users/okan/Documents/…/PixelFlow-Clean). Refusing
+  // every write under /Users would refuse the work.
+  it.each([
+    "dotnet build > /Users/okan/Documents/Game/build.log 2>&1",
+    "echo x > /Users/okan/Documents/Game/Assets/a.txt",
+    'echo x > "$OUT_DIR/report.txt"',
+    "echo x > $HOMEDIR/a.txt",
+    "echo x > /tmp/out.txt",
+  ])("leaves the work alone: %j", (command) => {
+    expect(destructiveShellFlag(command, "darwin")).toBeNull();
+  });
+});

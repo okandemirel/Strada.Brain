@@ -1143,7 +1143,8 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
       // config error.
       const good: unknown[] = [];
       for (const entry of entries) {
-        if (mcpServerEntrySchema.safeParse(entry).success) {
+        const checked = mcpServerEntrySchema.safeParse(entry);
+        if (checked.success) {
           good.push(entry);
           continue;
         }
@@ -1151,7 +1152,12 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
           entry && typeof entry === "object" && "name" in entry
             ? String((entry as { name: unknown }).name)
             : "(unnamed)";
-        warnAboutMcpConfig(`MCP server "${name}" in ${path} is not a valid entry — skipping it`);
+        // The reason goes in the line: without it the user sees a server's
+        // tools vanish and cannot tell which field to fix.
+        const reasons = checked.error.issues
+          .map((issue) => `${issue.path.join(".") || "(entry)"}: ${issue.message}`)
+          .join("; ");
+        warnAboutMcpConfig(`MCP server "${name}" in ${path} is not a valid entry — skipping it (${reasons})`);
       }
       return good;
     };

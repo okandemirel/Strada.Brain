@@ -2,6 +2,8 @@ import type { AgentState } from "../agent-state.js";
 import { extractPromptTargets as extractPromptTargetsHelper } from "../prompt-targets.js";
 import { PROGRESS_MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+import type { ProviderServedBy } from "../providers/provider-core.interface.js";
+import { resolveServedIdentity } from "../orchestrator-phase-telemetry.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -261,12 +263,13 @@ export async function runProgressAssessment(
         system: string,
         messages: Array<{ role: string; content: string }>,
         tools: unknown[],
-      ): Promise<{ text: string; usage?: unknown }>;
+      ): Promise<{ text: string; usage?: unknown; servedBy?: ProviderServedBy }>;
     };
     providerName: string;
+    modelId?: string;
   },
   deps: {
-    recordAuxiliaryUsage: (providerName: string, usage: unknown, handler?: unknown) => void;
+    recordAuxiliaryUsage: (providerName: string, usage: unknown, handler?: unknown, modelId?: string) => void;
     usageHandler?: unknown;
   },
 ): Promise<ProgressAssessment | null> {
@@ -276,7 +279,8 @@ export async function runProgressAssessment(
       [{ role: "user", content: buildProgressAssessmentRequest(snapshot) }],
       [],
     );
-    deps.recordAuxiliaryUsage(reviewer.providerName, response.usage, deps.usageHandler);
+    const billed = resolveServedIdentity(reviewer, response.servedBy);
+    deps.recordAuxiliaryUsage(billed.provider, response.usage, deps.usageHandler, billed.model);
     return parseProgressAssessment(response.text);
   } catch {
     return null;

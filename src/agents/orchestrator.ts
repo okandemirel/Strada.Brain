@@ -3180,7 +3180,7 @@ export class Orchestrator {
       interactionPolicy: this.interactionPolicy,
       formatPlanReviewMessage: (d) => this.sessionManager.formatPlanReviewMessage(d),
       recordExecutionTrace: (p) => this.recordExecutionTrace(p as Parameters<typeof this.recordExecutionTrace>[0]),
-      recordAuxiliaryUsage: (n, u, h) => this.recordAuxiliaryUsage(n, u, h),
+      recordAuxiliaryUsage: (n, u, h, m) => this.recordAuxiliaryUsage(n, u, h, m),
       recordPhaseOutcome: (p) => this.recordPhaseOutcome(p as Parameters<typeof this.recordPhaseOutcome>[0]),
       buildPhaseOutcomeTelemetry: (p) => this.buildPhaseOutcomeTelemetry(p),
       recordRuntimeArtifactEvaluation: (p) => this.recordRuntimeArtifactEvaluation(p as Parameters<typeof this.recordRuntimeArtifactEvaluation>[0]),
@@ -4945,8 +4945,9 @@ export class Orchestrator {
     provider: string,
     usage: ProviderResponse["usage"] | undefined,
     sink?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
   ): void {
-    this.engine.recordAuxiliaryUsage(provider, usage, sink);
+    this.engine.recordAuxiliaryUsage(provider, usage, sink, modelId);
   }
 
   /**

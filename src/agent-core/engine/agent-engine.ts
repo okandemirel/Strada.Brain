@@ -103,8 +103,9 @@ export class AgentEngine {
     provider: string,
     usage: ProviderResponse["usage"] | undefined,
     sink?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
   ): void {
-    recordAuxiliaryUsage(this.deps, provider, usage, sink);
+    recordAuxiliaryUsage(this.deps, provider, usage, sink, modelId);
   }
 
   classifyAgentCoreFailure(

@@ -76,6 +76,13 @@ const boolFromString = (defaultValue: boolean) =>
     .prefault(String(defaultValue));
 
 /**
+ * A boolean read from a JSON file: a JSON boolean, or any spelling
+ * boolFromString accepts. The env parser alone rejected JSON's own `true`.
+ */
+const boolFromJson = (defaultValue: boolean) =>
+  z.preprocess((v) => (typeof v === "boolean" ? String(v) : v), boolFromString(defaultValue));
+
+/**
  * A number from an env string that stays `undefined` when unset (absent or
  * empty), so the consumer can tell "use the default" apart from an explicit
  * value such as 0.
@@ -130,14 +137,20 @@ function isValidTimeZone(timeZone: string): boolean {
  * file fails the whole config parse and Strada refuses to start — which is
  * exactly the outcome the file-loading path documents that it prevents.
  */
-export const mcpServerEntrySchema = z.object({
-  name: z.string().min(1),
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}),
-  startupTimeoutMs: z.coerce.number().int().positive().default(30_000),
-  enabled: boolFromString(true),
-});
+export const mcpServerEntrySchema = z
+  .object({
+    name: z.string().min(1),
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string(), z.string()).default({}),
+    startupTimeoutMs: z.coerce.number().int().positive().default(30_000),
+    enabled: boolFromJson(true),
+    // Cline and Roo mark an entry off with `"disabled": true`. Stripped as an
+    // unknown key, it left `enabled` at its default and a server the user had
+    // turned off started with that entry's credentials. Off anywhere wins.
+    disabled: boolFromJson(false),
+  })
+  .transform(({ disabled, ...entry }) => ({ ...entry, enabled: entry.enabled && !disabled }));
 
 export const configSchema = z
   .object({

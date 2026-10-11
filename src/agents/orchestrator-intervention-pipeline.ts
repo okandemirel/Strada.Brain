@@ -87,6 +87,7 @@ import {
   stuckVerdictContradictedBy,
 } from "./autonomy/progress-assessment.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
+import { resolveServedIdentity } from "./orchestrator-phase-telemetry.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import { getLogger, type LogEntry, getLoggerSafe } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
@@ -170,6 +171,7 @@ export interface InterventionDeps {
     providerName: string,
     usage: ProviderResponse["usage"],
     handler?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
   ) => void;
   readonly recordPhaseOutcome: (params: {
     chatId: string;
@@ -585,7 +587,8 @@ export async function resolveLoopRecoveryReview(
       ],
       [],
     );
-    deps.recordAuxiliaryUsage(reviewer.providerName, response.usage, params.usageHandler);
+    const billed = resolveServedIdentity(reviewer, response.servedBy);
+    deps.recordAuxiliaryUsage(billed.provider, response.usage, params.usageHandler, billed.model);
     return sanitizeLoopRecoveryReviewDecision(
       parseLoopRecoveryReviewDecision(response.text),
     ) ?? { decision: "replan_local", reason: "Loop recovery review returned no usable decision." };
@@ -1616,7 +1619,8 @@ export async function reviewClarification(
       source: "clarification-review",
       task: reviewTask,
     });
-    deps.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
+    const billed = resolveServedIdentity(reviewer, reviewResponse.servedBy);
+    deps.recordAuxiliaryUsage(billed.provider, reviewResponse.usage, params.usageHandler, billed.model);
     const decision = sanitizeClarificationReviewDecision(
       parseClarificationReviewDecision(reviewResponse.text),
     );

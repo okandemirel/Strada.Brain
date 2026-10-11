@@ -480,10 +480,16 @@ function protectedTarget(target: string): boolean {
   const t = target.toLowerCase();
   // /dev is split: writing to /dev/sda is destructive, writing to /dev/null is
   // how every shell script discards output.
-  return /^\/etc\//.test(t)
+  // macOS spells these differently: /etc points into /private/etc, `$HOME` is
+  // `~` written as a parameter, and a home is /Users/<me>. Only that home's
+  // dotfiles and Library are refused there — the shell startup files, ssh keys
+  // and LaunchAgents — because on macOS the work itself lives under
+  // /Users/<me> and runs name it by absolute path.
+  return /^\/(?:private\/)?etc\//.test(t)
     || /^\/(?:proc|sys|boot|root|var|home)\//.test(t)
     || /^\/dev\/(?!(?:null|stdout|stderr)$)/.test(t)
-    || /^~\//.test(t)
+    || /^(?:~|\$home|\$\{home\})\//.test(t)
+    || /^\/users\/[^/]+\/(?:\.|library\/)/.test(t)
     || /^\.\.[\\/]/.test(t);
 }
 
