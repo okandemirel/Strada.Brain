@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeClock } from "../agent-core/control/clock.js";
@@ -48,6 +48,7 @@ vi.mock("../agents/context/strada-knowledge.js", () => ({
 const { Orchestrator } = await import("../agents/orchestrator.js");
 const { BackgroundExecutor } = await import("./background-executor.js");
 const { createSupervisorExecuteNodeBridge } = await import("../core/bootstrap.js");
+const { WorkspaceLeaseManager } = await import("../agents/multi/workspace-lease-manager.js");
 
 function resp(over: Partial<ProviderResponse> = {}): ProviderResponse {
   return {
@@ -135,7 +136,7 @@ describe("BackgroundExecutor - a reaped supervisor node settles failed on the re
       agentCoreClock: clock,
     } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
-    // What commitLease returns for a workspace directory that no longer exists.
+    // An empty commit: the reap alone must fail the node, whatever publication says.
     const commit = vi.fn().mockResolvedValue({
       written: [], conflicts: [], removed: [], deleted: [], failed: [],
       conflictsQuarantinedUnder: null, quarantined: 0,
@@ -177,6 +178,115 @@ describe("BackgroundExecutor - a reaped supervisor node settles failed on the re
     } finally {
       rmSync(leaseDir, { recursive: true, force: true });
       await executor.shutdown();
+    }
+  }, 30_000);
+});
+
+describe("BackgroundExecutor - a node whose worktree vanished before the reaper's tick does not settle ok", () => {
+  it("fails the node when its workspace is gone at commit, with no reap having happened", async () => {
+    // The reaper ticks every 5 minutes. A node whose directory went away
+    // during its last turn and that finished before the next tick was never
+    // reaped: the commit of the missing directory came back empty, which
+    // reads as "nothing to publish", and the node settled ok with a write
+    // that never reached the project. Real lease manager, real commit.
+    const project = mkdtempSync(join(tmpdir(), "node-vanished-project-"));
+    const leaseRoot = mkdtempSync(join(tmpdir(), "node-vanished-leases-"));
+    mkdirSync(join(project, "Assets"), { recursive: true });
+    writeFileSync(join(project, "Assets", "Board.cs"), "class Board {}");
+    const clock = new FakeClock(0);
+    let leasePath = "";
+    const editTool = {
+      name: "edit_file",
+      description: "Mock edit_file",
+      inputSchema: { type: "object", properties: {} },
+      isWrite: true,
+      execute: vi.fn(async () => {
+        writeFileSync(join(leasePath, "Assets", "LevelSelect.cs"), "class LevelSelect {}");
+        return { content: "edit_file result", metadata: { touchedFiles: ["Assets/LevelSelect.cs"] } };
+      }),
+    };
+    const provider = {
+      name: "mock",
+      capabilities: {
+        maxTokens: 4096, streaming: false, structuredStreaming: false,
+        toolCalling: true, vision: false, systemPrompt: true,
+      },
+      chat: vi.fn(async () => {
+        const call = provider.chat.mock.calls.length;
+        if (call === 1) return resp({ text: "the plan", stopReason: "end_turn" });
+        if (call === 2) {
+          return resp({
+            text: "",
+            stopReason: "tool_use",
+            toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "Assets/LevelSelect.cs" } }],
+          });
+        }
+        // The worktree goes away during the summary turn; nobody reaps it.
+        rmSync(leasePath, { recursive: true, force: true });
+        return resp({ text: "Level select screen is built.", stopReason: "end_turn" });
+      }),
+    };
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: vi.fn(() => provider),
+        getActiveInfo: () => ({ providerName: "mock", model: "mock-model", isDefault: true }),
+        shutdown: vi.fn(),
+      },
+      tools: [editTool],
+      channel: {
+        name: "mock",
+        connect: vi.fn().mockResolvedValue(undefined),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        onMessage: vi.fn(),
+        sendText: vi.fn().mockResolvedValue(undefined),
+        sendMarkdown: vi.fn().mockResolvedValue(undefined),
+        sendVisibleAssistantMarkdown: vi.fn().mockResolvedValue(undefined),
+        sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+        requestConfirmation: vi.fn().mockResolvedValue("Yes"),
+        isHealthy: vi.fn().mockReturnValue(true),
+      },
+      projectPath: project,
+      readOnly: false,
+      requireConfirmation: false,
+      agentCoreClock: clock,
+    } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
+
+    const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false });
+    const executor = new BackgroundExecutor({
+      orchestrator,
+      workspaceLeaseManager: {
+        acquireLease: async (opts: Parameters<typeof leases.acquireLease>[0]) => {
+          const lease = await leases.acquireLease(opts);
+          leasePath = lease.path;
+          return lease;
+        },
+      } as any,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn(() => null), listTasks: vi.fn(() => []), listStuckExecuting: vi.fn(() => []),
+    };
+    executor.setTaskManager(taskManager as any);
+    const bridge = createSupervisorExecuteNodeBridge({ backgroundExecutor: executor, orchestrator });
+
+    try {
+      const node = await drive(clock, bridge(
+        { id: "node_z", task: "Build the level select screen", dependsOn: [] } as any,
+        { chatId: "chat-node-z", taskRunId: "task_z", nodeWorkspaces: "per-node" } as any,
+        new AbortController().signal,
+      ));
+
+      // Premise: the node wrote into its worktree, then lost it — and no reap ran.
+      expect(editTool.execute).toHaveBeenCalledTimes(1);
+      expect(loggerStub.warn).not.toHaveBeenCalledWith("Reaping run whose workspace vanished", expect.anything());
+      expect(node.status).toBe("failed");
+      expect(node.output).toContain("no longer exists");
+    } finally {
+      await executor.shutdown();
+      await leases.dispose();
+      rmSync(project, { recursive: true, force: true });
+      rmSync(leaseRoot, { recursive: true, force: true });
     }
   }, 30_000);
 });

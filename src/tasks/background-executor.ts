@@ -1715,11 +1715,9 @@ export class BackgroundExecutor {
     const settled = outcome ?? { output: "" };
     // A REAPED RUN DID NOT FINISH, whatever it reports. The V2 runner reads
     // every abort of its external signal as a benign user-cancel and keeps
-    // "completed" for a node, and the commit of a directory that is gone
-    // returns empty, which judgePublication cannot tell from "nothing to
-    // publish": the node settled "ok" with artifacts that never landed and its
-    // dependents ran against missing work. The caller's own cancel is not a
-    // reap; that outcome stays the caller's to settle.
+    // "completed" for a node: the node settled "ok" with artifacts that never
+    // landed and its dependents ran against missing work. The caller's own
+    // cancel is not a reap; that outcome stays the caller's to settle.
     if (reapControl?.signal.aborted && !params.signal.aborted) {
       const cause = reapControl.signal.reason;
       const reaped = cause instanceof Error ? cause.message : String(cause);

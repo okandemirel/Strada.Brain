@@ -1958,8 +1958,25 @@ export class WorkspaceLeaseManager {
     const failedRels: string[] = [];
     let conflictsQuarantinedUnder: string | null = null;
     let quarantined = 0;
+    // A WORKSPACE THAT IS GONE PUBLISHED NOTHING; IT DID NOT HAVE NOTHING TO
+    // PUBLISH. An empty result here read as a clean commit, so a run whose
+    // directory vanished after its last write and which finished before the
+    // lost-workspace reaper's next tick settled ok, its files nowhere
+    // (tasks-supervisor#4 follow-up). Every caller judges `failed` as a loss.
     if (!existsSync(workspacePath)) {
-      return { written, conflicts, removed, deleted: [], failed, conflictsQuarantinedUnder, quarantined };
+      getLoggerSafe().error("Lease commit did NOT run — the workspace it publishes from no longer exists", {
+        sourceRoot,
+        workspacePath,
+      });
+      return {
+        written,
+        conflicts,
+        removed,
+        deleted: [],
+        failed: [`(the whole commit): the workspace this run worked in no longer exists — ${workspacePath}`],
+        conflictsQuarantinedUnder,
+        quarantined,
+      };
     }
     // A TREE THAT IS GONE IS NOT A TARGET. A lease seeded from another lease
     // outlives it when the parent is published and released first, and the

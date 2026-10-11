@@ -192,6 +192,22 @@ describe("workspace lease commit", () => {
     expect(existsSync(join(source, "Assets", "Scripts", "Existing.cs"))).toBe(true);
   });
 
+  it("reports a commit of a workspace that vanished as failed, not as nothing to publish", async () => {
+    // Every caller judges an all-empty result as a clean publication: a run
+    // whose directory went away after it wrote settled ok with its file
+    // nowhere (tasks-supervisor#4 follow-up).
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "New.cs"), "agent work", "utf8");
+    rmSync(lease.path, { recursive: true, force: true });
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toEqual([]);
+    expect(result.failed.join("\n")).toMatch(/workspace this run worked in no longer exists/);
+    expect(existsSync(join(source, "Assets", "Scripts", "New.cs"))).toBe(false);
+  });
+
   it("leaves a user's uncommitted edit alone on the default git-worktree lease", async () => {
     // The bug this exists to prevent, and the reason the first version of these
     // tests was worthless: they all forced temp-copy, and the DEFAULT kind on a
