@@ -58,6 +58,21 @@ describeIfHnsw("HNSWVectorStore", () => {
     return vec.map(v => v / (norm + 1e-10));
   }
 
+  function fileEntries(name: string, n: number): VectorEntry[] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `${name}-${i}`,
+      vector: createRandomVector(dimensions),
+      chunk: createMockChunk(`${name}-${i}`, `${name} ${i}`, `/test/${name}.cs`),
+      addedAt: Date.now(),
+      accessCount: 0,
+    }));
+  }
+
+  const reopen = (): Promise<HNSWVectorStore> =>
+    createHNSWVectorStore(tempDir, {
+      dimensions, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine", quantization: "none",
+    });
+
   describe("basic operations", () => {
     it("should initialize and shutdown", () => {
       expect(store.count()).toBe(0);
@@ -252,16 +267,6 @@ describeIfHnsw("HNSWVectorStore", () => {
   });
 
   describe("background compaction with no serializer (memory-rag#4)", () => {
-    function fileEntries(name: string, n: number): VectorEntry[] {
-      return Array.from({ length: n }, (_, i) => ({
-        id: `${name}-${i}`,
-        vector: createRandomVector(dimensions),
-        chunk: createMockChunk(`${name}-${i}`, `${name} ${i}`, `/test/${name}.cs`),
-        addedAt: Date.now(),
-        accessCount: 0,
-      }));
-    }
-
     it("a file removed while the rebuild is re-adding the index stays removed", async () => {
       // The 300 survivors are more than one 128-point slice, so the rebuild
       // yields with "kept" half re-added and "victim" not re-added yet.
@@ -302,11 +307,6 @@ describeIfHnsw("HNSWVectorStore", () => {
       expect(hits[0]?.id).toBe("kept-299");
       expect(hits[0]?.chunk.content).toBe("fresh body");
     });
-
-    const reopen = (): Promise<HNSWVectorStore> =>
-      createHNSWVectorStore(tempDir, {
-        dimensions, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine", quantization: "none",
-      });
 
     it("a shutdown while the rebuild is re-adding the index saves all of it (hnsw-shutdown)", async () => {
       await store.upsert([...fileEntries("gone", 200), ...fileEntries("a", 100), ...fileEntries("b", 100), ...fileEntries("c", 100)]);
@@ -359,6 +359,130 @@ describeIfHnsw("HNSWVectorStore", () => {
           const last = entries.find((e) => e.id === `${name}-99`)!;
           expect((await reopened.search(last.vector, 1))[0]?.id).toBe(`${name}-99`);
         }
+      } finally {
+        await reopened.shutdown();
+      }
+    });
+  });
+
+  describe("a save while a write is in flight (hnsw-writes-inflight)", () => {
+    it("a shutdown while an upsert is parked between slices saves all of it", async () => {
+      // One file of more than one 128-point slice, as RAGPipeline.indexFile
+      // upserts it, under the content hash it is indexed at.
+      const entries = fileEntries("big", 300).map((e) => ({
+        ...e,
+        chunk: { ...e.chunk, fileContentHash: "h-new" },
+      }));
+      // The native write runs off-thread while the parked batch resumes, so
+      // what it captures depends on timing. Pin it: capture the index the
+      // moment the save writes it, then stay open the way the real write does,
+      // long enough for the batch to finish before the metadata is read.
+      const index = (store as unknown as {
+        hnswIndex: { writeIndex(file: string): Promise<boolean>; writeIndexSync(file: string): void };
+      }).hnswIndex;
+      Object.defineProperty(index, "writeIndex", {
+        value: async (file: string) => {
+          index.writeIndexSync(file);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return true;
+        },
+      });
+      const upsert = store.upsert(entries);
+      await new Promise((resolve) => setImmediate(resolve));
+      // The race this test is about: the batch has parked with part of the file added.
+      expect(store.count()).toBeGreaterThan(0);
+      expect(store.count()).toBeLessThan(300);
+
+      await store.shutdown();
+      await upsert;
+
+      // A file cut short still carries its new content hash, so the next boot
+      // takes it as indexed and never re-embeds the chunks the save left out.
+      const reopened = await reopen();
+      try {
+        expect(reopened.listIndexedFiles()).toEqual([{ filePath: "/test/big.cs", fileContentHash: "h-new" }]);
+        expect(reopened.getFileChunkIds("/test/big.cs")).toHaveLength(300);
+        // The metadata is read after the native write, so it names every
+        // chunk while hnsw.index holds only the slices added before the write.
+        const missing: string[] = [];
+        for (const entry of entries) {
+          if ((await reopened.search(entry.vector, 1))[0]?.id !== entry.id) missing.push(entry.id);
+        }
+        expect(missing).toEqual([]);
+      } finally {
+        await reopened.shutdown();
+      }
+    });
+
+    it("an upsert that arrives while a save is writing waits for the save", async () => {
+      const a = fileEntries("a", 100);
+      await store.upsert(a);
+
+      // Hold the save open after the native write: hnsw.index already holds
+      // "a" alone, and the metadata the save writes next must name only it.
+      const index = (store as unknown as { hnswIndex: { writeIndex(file: string): Promise<boolean> } }).hnswIndex;
+      const write = index.writeIndex.bind(index);
+      let written!: () => void;
+      const indexWritten = new Promise<void>((resolve) => (written = resolve));
+      Object.defineProperty(index, "writeIndex", {
+        value: async (file: string) => {
+          const ok = await write(file);
+          written();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return ok;
+        },
+      });
+      const save = store.saveIndex(tempDir);
+      await indexWritten;
+      const b = fileEntries("b", 100);
+      await store.upsert(b);
+      await save;
+
+      // Labels on disk without their points: the reopened store counts "b"
+      // and every search for it answers with an "a" chunk.
+      const reopened = await reopen();
+      try {
+        expect(reopened.count()).toBe(100);
+        for (const entry of [...a, ...b]) {
+          if (!reopened.has(entry.id)) continue;
+          expect((await reopened.search(entry.vector, 1))[0]?.id).toBe(entry.id);
+        }
+      } finally {
+        await reopened.shutdown();
+      }
+      expect(store.count()).toBe(200);
+    });
+
+    it.each([
+      { first: "the shutdown", saved: 300 },
+      { first: "the upsert", saved: 600 },
+    ])("a shutdown and an upsert both waiting out a rebuild do not overlap, $first first", async ({ first, saved }) => {
+      const kept = [...fileEntries("a", 100), ...fileEntries("b", 100), ...fileEntries("c", 100)];
+      await store.upsert([...fileEntries("gone", 200), ...kept]);
+      await store.removeByFile("/test/gone.cs");
+      for (let i = 0; i < 100 && store.count() >= 300; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(store.count()).toBeLessThan(300);
+
+      // Both resume when the rebuild settles, in the order they began to
+      // wait. Whichever goes second has to see the first in the same turn it
+      // checked: the save already holding saveInFlight, or the upsert already
+      // counted in writesInFlight and the save draining it.
+      const late = fileEntries("late", 300);
+      await Promise.all(
+        first === "the shutdown" ? [store.shutdown(), store.upsert(late)] : [store.upsert(late), store.shutdown()],
+      );
+
+      const reopened = await reopen();
+      try {
+        expect(reopened.count()).toBe(saved);
+        const missing: string[] = [];
+        for (const entry of [...kept, ...late]) {
+          if (!reopened.has(entry.id)) continue;
+          if ((await reopened.search(entry.vector, 1))[0]?.id !== entry.id) missing.push(entry.id);
+        }
+        expect(missing).toEqual([]);
       } finally {
         await reopened.shutdown();
       }

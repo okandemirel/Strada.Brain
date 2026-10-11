@@ -414,10 +414,12 @@ export class HNSWVectorStore implements IHNSWVectorStore {
    */
   private rebuildInFlight: Promise<void> | null = null;
   /**
-   * The save now writing the index files; settles, never rejects. A rebuild
-   * waits it out: it swaps in a new index and maps while the native write is
-   * still on the old one, and the save then reads its metadata from the new,
-   * so the labels on disk no longer name the chunks saved with them.
+   * The save now draining writes and writing the index files; settles, never
+   * rejects. A rebuild and every public write wait it out: the native write
+   * runs off-thread and the metadata is read after it, so anything added,
+   * removed or swapped in meanwhile is named on disk without its point.
+   * Waited inline, never through a helper: the wait and the write it guards
+   * must run in one synchronous turn, or two waiters both find it clear.
    */
   private saveInFlight: Promise<void> | null = null;
   /** True when hnswlib-node is missing and the exact fallback index is in use. */
@@ -556,7 +558,20 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     }
 
     if (entries.length === 0) return;
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
+
+    // The quantized updates below await between entries; until the inserts
+    // land, a save there writes the upsert half done.
+    this.writesInFlight++;
+    try {
+      await this.applyUpsert(entries);
+    } finally {
+      this.writesInFlight--;
+    }
+  }
+
+  private async applyUpsert(entries: VectorEntry[]): Promise<void> {
+    if (!this.hnswIndex) throw new Error("HNSW index not initialized");
 
     // Separate into updates and inserts
     const updates: VectorEntry[] = [];
@@ -605,7 +620,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   }
 
   async upsertBatch(entries: VectorEntry[]): Promise<void> {
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
     await this.insertEntries(entries);
   }
 
@@ -677,7 +692,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     if (!this.isInitialized) {
       throw new Error("HNSWVectorStore not initialized");
     }
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
 
     const requiredCapacity = Math.max(this.config.maxElements, entries.length || 1);
     this.recreateIndex(requiredCapacity);
@@ -688,7 +703,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async remove(ids: string[]): Promise<void> {
     if (!this.isInitialized || !this.hnswIndex) return;
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
 
     for (const id of ids) {
       const index = this.idToIndex.get(id);
@@ -702,7 +717,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async removeByFile(filePath: string): Promise<void> {
     if (!this.isInitialized || !this.hnswIndex) return;
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
 
     // By index, not by id: an index saved before insertEntries retired
     // repeated ids can hold several points under one id, and a remove by id
@@ -1095,11 +1110,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // while the native write runs off-thread: a save in that window wrote an
     // index that no longer loaded, or the part as the whole, where a file cut
     // short keeps its own content hash and the next boot never re-embeds it.
-    // No timeout: a rebuild is CPU work that always settles, and saving
-    // before it does is the partial write this wait exists to prevent.
+    // An upsert parked between slices is the same partial write, and the one
+    // a shutdown during indexing lands in. No timeout: both are CPU work that
+    // always settles, and saving before they do is what these waits prevent.
+    // New writes wait for saveInFlight, so the drain cannot be starved.
     while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
 
-    const save = this.writeIndexFiles(path);
+    const save = this.drainWrites().then(() => this.writeIndexFiles(path));
     this.saveInFlight = save.then(
       () => undefined,
       () => undefined,
@@ -1109,6 +1126,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     } finally {
       this.saveInFlight = null;
     }
+  }
+
+  private async drainWrites(): Promise<void> {
+    while (this.writesInFlight > 0) await yieldToEventLoop();
   }
 
   private async writeIndexFiles(path: string): Promise<void> {
