@@ -182,10 +182,12 @@ function chooseVerificationProvider(
       continue;
     }
     // BARE provider, never a chain: cross-provider verification that can fall
-    // over to a sibling is not cross-provider verification.
-    const provider =
-      providerManager.getPrimaryProviderByName?.(canonicalName, candidate.defaultModel) ??
-      providerManager.getProviderByName(canonicalName, candidate.defaultModel);
+    // over to a sibling is not cross-provider verification. A bare build that
+    // fails is a refusal: the chain asked for instead skips the member it
+    // cannot create, so the remaining seats answered under this one's name.
+    const provider = providerManager.getPrimaryProviderByName
+      ? providerManager.getPrimaryProviderByName(canonicalName, candidate.defaultModel)
+      : providerManager.getProviderByName(canonicalName, candidate.defaultModel);
     if (provider) {
       return {
         providerName: canonicalName,

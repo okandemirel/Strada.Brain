@@ -15,6 +15,7 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import { canonicalizeProviderName, providerRecordKey } from "./providers/provider-identity.js";
+import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { createCatalogVersion } from "./supervisor/supervisor-types.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
@@ -665,42 +666,51 @@ export function resolveConsensusReviewAssignment(
   // while listRoutable names the same seat "claude", so the Claude seat was
   // picked to review its own work as the "cross-provider" reviewer.
   const currentSeat = providerRecordKey(currentAssignment.providerName);
+  // The reviewer runs BARE, as the node verifier's does. getProviderByName
+  // hands out a chain whose tail is the rest of the operator chain, the
+  // executor's seat among it: when the head failed at call time the executor
+  // answered its own review, still recorded under the head's name. A bare
+  // provider has no chain to step past a bench either, so a benched seat is
+  // not offered.
+  const health = ProviderHealthRegistry.getInstance();
   if (providerRecordKey(preferredReviewer.providerName) !== currentSeat) {
-    return preferredReviewer;
+    const provider = health.isAvailable(preferredReviewer.providerName)
+      ? ctx.providerManager.getPrimaryProviderByName?.(preferredReviewer.providerName, preferredReviewer.modelId)
+      : null;
+    if (provider) {
+      return { ...preferredReviewer, provider };
+    }
   }
 
   // What may route, not every credential: under a strict chain the first
   // credentialed outsider was picked, refused, and the review dropped while a
   // chain sibling could have given it.
   const fallbackReviewName = (ctx.providerManager.listRoutable?.() ?? ctx.providerManager.listAvailable())
-    .find((provider) => providerRecordKey(provider.name) !== currentSeat)?.name;
+    .find((provider) => providerRecordKey(provider.name) !== currentSeat && health.isAvailable(provider.name))?.name;
   if (!fallbackReviewName) {
     return null;
   }
 
+  const fallbackReviewProviderName =
+    canonicalizeProviderName(fallbackReviewName) ?? fallbackReviewName.trim().toLowerCase();
   const fallbackReviewModelId = resolveProviderModelId(ctx, fallbackReviewName, identityKey);
-  const fallbackReviewProvider = getProviderByNameOrFallback(
-    ctx,
-    fallbackReviewName,
-    fallbackReviewName,
-    currentAssignment.provider,
-    fallbackReviewModelId,
-  );
+  const fallbackReviewProvider =
+    ctx.providerManager.getPrimaryProviderByName?.(fallbackReviewProviderName, fallbackReviewModelId);
   // ORC-20: the alternate reviewer could not be built, so "cross-provider"
   // review would be the current provider checking itself under another name.
-  if (fallbackReviewProvider.usedFallback) {
+  if (!fallbackReviewProvider) {
     return null;
   }
   return buildStaticSupervisorAssignment(
     "reviewer",
-    fallbackReviewProvider.providerName,
+    fallbackReviewProviderName,
     fallbackReviewModelId,
-    fallbackReviewProvider.provider,
+    fallbackReviewProvider,
     "selected an alternate reviewer to keep consensus verification cross-provider",
     undefined,
     buildCatalogAssignmentMetadata(
       ctx,
-      fallbackReviewProvider.providerName,
+      fallbackReviewProviderName,
       fallbackReviewModelId,
       identityKey,
     ),

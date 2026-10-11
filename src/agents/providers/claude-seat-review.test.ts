@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { IAIProvider } from "./provider.interface.js";
+import type { IAIProvider, ProviderResponse } from "./provider.interface.js";
 
 /**
  * "anthropic" and "claude" are two spellings of one Claude seat. The manager
@@ -12,7 +12,10 @@ import type { IAIProvider } from "./provider.interface.js";
  * "anthropic" with no independent:false caveat.
  */
 
-const { buildProviderChainMock } = vi.hoisted(() => ({ buildProviderChainMock: vi.fn() }));
+const { buildProviderChainMock, createProviderMock } = vi.hoisted(() => ({
+  buildProviderChainMock: vi.fn(),
+  createProviderMock: vi.fn(),
+}));
 
 function makeProvider(name: string): IAIProvider {
   return {
@@ -34,7 +37,7 @@ vi.mock("./provider-registry.js", () => ({
     openai: { baseUrl: "https://example.test/openai", defaultModel: "gpt-5.4", label: "OpenAI" },
   },
   buildProviderChain: buildProviderChainMock,
-  createProvider: vi.fn(({ name }: { name: string }) => makeProvider(name)),
+  createProvider: createProviderMock,
 }));
 
 vi.mock("./provider-preferences.js", () => ({
@@ -59,6 +62,8 @@ import { ProviderManager } from "./provider-manager.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { providerRecordKey } from "./provider-identity.js";
 import { resolveConsensusReviewAssignment, type SupervisorAssignment } from "../orchestrator-supervisor-routing.js";
+import { runConsensusVerification } from "../orchestrator-consensus.js";
+import { ConsensusManager } from "../../agent-core/routing/consensus-manager.js";
 import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
 import type { NodeResult } from "../../supervisor/supervisor-types.js";
 
@@ -107,7 +112,80 @@ beforeEach(() => {
   ProviderHealthRegistry.resetInstance();
   buildProviderChainMock.mockReset();
   buildProviderChainMock.mockImplementation((order: string[]) => makeProvider(`chain(${order.join("->")})`));
+  createProviderMock.mockReset();
+  createProviderMock.mockImplementation(({ name }: { name: string }) => makeProvider(name));
 });
+
+/**
+ * Seats that answer the way the real registry builds them: every call is
+ * logged in `served`, a seat down at call time throws, one down at build time
+ * cannot be created, and a chain falls over member by member as
+ * FallbackChainProvider does after skipping the members it could not create.
+ */
+function liveSeats(down: { atCall?: string[]; atBuild?: string[] }): { served: string[] } {
+  const served: string[] = [];
+  const seat = (name: string): IAIProvider => {
+    if (down.atBuild?.includes(name)) throw new Error(`${name}: no usable credential`);
+    return {
+      ...makeProvider(name),
+      chat: vi.fn(async (): Promise<ProviderResponse> => {
+        served.push(name);
+        if (down.atCall?.includes(name)) throw new Error(`${name}: 503 service unavailable`);
+        return {
+          text: '{"verdict":"approve","approved":true,"reasoning":"looks right"}',
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        };
+      }),
+    };
+  };
+  createProviderMock.mockImplementation(({ name }: { name: string }) => seat(name));
+  buildProviderChainMock.mockImplementation((order: string[]) => {
+    const members = order.flatMap((name) => {
+      try {
+        return [{ name, provider: seat(name) }];
+      } catch {
+        return [];
+      }
+    });
+    return {
+      ...makeProvider(`chain(${order.join("->")})`),
+      chat: vi.fn(async (...args: Parameters<IAIProvider["chat"]>) => {
+        for (const member of members) {
+          try {
+            const response = await member.provider.chat(...args);
+            return { ...response, servedBy: { provider: member.name, model: "m" } };
+          } catch {
+            /* the next member answers */
+          }
+        }
+        throw new Error("chain exhausted");
+      }),
+    };
+  });
+  return { served };
+}
+
+async function consensusOn(executor: SupervisorAssignment, reviewer: SupervisorAssignment | null) {
+  const outcomes: Array<{ providerName: string; status: string }> = [];
+  const verdict = await runConsensusVerification({
+    consensusManager: new ConsensusManager({ mode: "always", reviewTimeoutMs: 0 }),
+    availableProviderCount: 2,
+    taskClass: { type: "code-generation", complexity: "simple", criticality: "critical" },
+    confidence: 0.9,
+    originalOutput: { text: "Implemented the endpoint." },
+    originalProviderName: executor.providerName,
+    prompt: "Add the endpoint",
+    reviewAssignment: reviewer,
+    identityKey: "chat:web:1",
+    recordExecutionTrace: () => {},
+    recordPhaseOutcome: (p) => outcomes.push({ providerName: p.assignment.providerName, status: p.status }),
+  });
+  return { verdict, outcomes };
+}
+
+const seatsOf = (served: string[]) => served.map((name) => providerRecordKey(name));
 
 describe("the consensus reviewer is never the executor's own seat", () => {
   it("PROVIDER_CHAIN=anthropic strict: no other seat exists, so no cross-provider reviewer is claimed", () => {
@@ -128,8 +206,8 @@ describe("the consensus reviewer is never the executor's own seat", () => {
 
     const reviewer = resolveConsensusReviewAssignment(ctx, executor, executor, "chat:web:1");
     expect(reviewer?.providerName).toBe("openai");
-    // getProviderByName hands out a chain; what matters here is its head.
-    expect(reviewer?.provider.name).toMatch(/^chain\(openai\b/);
+    // The head seat, whatever wraps it.
+    expect(reviewer?.provider.name).toMatch(/^(chain\()?openai\b/);
 
     const sameSeat = { ...executor, role: "reviewer" as const, providerName: "claude" };
     expect(resolveConsensusReviewAssignment(ctx, sameSeat, executor, "chat:web:1")?.providerName).toBe("openai");
@@ -138,8 +216,77 @@ describe("the consensus reviewer is never the executor's own seat", () => {
   it("a reviewer on another seat is kept as the strategy chose it", () => {
     const m = manager(["anthropic", "openai"], true);
     const executor = executorOf(m);
-    const openai = { role: "reviewer" as const, providerName: "openai", provider: makeProvider("openai"), reason: "routed" };
-    expect(resolveConsensusReviewAssignment({ providerManager: m } as any, openai, executor, "chat:web:1")).toBe(openai);
+    const openai = { role: "reviewer" as const, providerName: "openai", modelId: "gpt-5.4", provider: makeProvider("openai"), reason: "routed" };
+    expect(resolveConsensusReviewAssignment({ providerManager: m } as any, openai, executor, "chat:web:1")).toMatchObject({
+      role: "reviewer",
+      providerName: "openai",
+      modelId: "gpt-5.4",
+      reason: "routed",
+    });
+  });
+});
+
+describe("a consensus review recorded as openai is never answered by the executor's seat", () => {
+  it("the alternate reviewer: openai fails at call time, and the review fails closed instead of falling over", async () => {
+    const { served } = liveSeats({ atCall: ["openai"] });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+    expect(reviewer?.providerName).toBe("openai");
+
+    const { verdict, outcomes } = await consensusOn(executor, reviewer);
+
+    expect(seatsOf(served)).not.toContain(providerRecordKey(executor.providerName));
+    expect(verdict?.agreed).toBe(false);
+    expect(outcomes).toEqual([{ providerName: "openai", status: "continued" }]);
+  });
+
+  it("the strategy's reviewer on another seat: the chain resolveSupervisorAssignment built is not what reviews", async () => {
+    const { served } = liveSeats({ atCall: ["openai"] });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const routed: SupervisorAssignment = {
+      role: "reviewer",
+      providerName: "openai",
+      provider: m.getProviderByName("openai")!,
+      reason: "routed to openai for code review",
+    };
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, routed, executor, "chat:web:1");
+    expect(reviewer).toMatchObject({ providerName: "openai", reason: routed.reason });
+
+    const { verdict } = await consensusOn(executor, reviewer);
+
+    expect(seatsOf(served)).not.toContain(providerRecordKey(executor.providerName));
+    expect(verdict?.agreed).toBe(false);
+  });
+
+  it("a healthy openai reviews on its own and its approval stands", async () => {
+    const { served } = liveSeats({});
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+
+    const { verdict } = await consensusOn(executor, reviewer);
+
+    expect(served).toEqual(["openai"]);
+    expect(verdict?.agreed).toBe(true);
+  });
+
+  it("a benched openai is not picked: a bare reviewer has no chain to step past the bench", () => {
+    liveSeats({});
+    ProviderHealthRegistry.getInstance().recordCredentialRejected("openai", "401 invalid key");
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    expect(resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1")).toBeNull();
+  });
+
+  it("an openai that cannot be built gives no reviewer, not a chain of the seats that remain", () => {
+    liveSeats({ atBuild: ["openai"] });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    expect(resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1")).toBeNull();
   });
 });
 
@@ -164,6 +311,16 @@ describe("the node verifier never calls the worker's own seat independent", () =
     expect(verdict.verifierProvider).toBe("openai");
     expect(verdict.verdict).toBe("approve");
     expect(verdict.independent).toBeUndefined();
+  });
+
+  it("an openai that cannot be built bare is not the verifier: the chain of the seats that remain answered under its name", async () => {
+    const { served } = liveSeats({ atBuild: ["openai"] });
+    const verify = createSupervisorNodeVerifier(manager(["anthropic", "openai"], true));
+    const verdict = await verify(node("claude"), { chatId: "chat:web:1" } as any);
+
+    expect(verdict.verifierProvider).not.toBe("openai");
+    expect(verdict.independent).toBe(false);
+    expect(seatsOf(served)).toEqual(["claude"]);
   });
 
   it("an openai node on the same chain is verified by the Claude seat", async () => {

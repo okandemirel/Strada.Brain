@@ -182,7 +182,8 @@ describe("a routed provider that cannot be built (ORC-20)", () => {
     const ctx = {
       providerManager: {
         getActiveInfo: vi.fn().mockReturnValue(undefined),
-        getProviderByName: vi.fn().mockReturnValue(null),
+        // The consensus reviewer is built bare (claude-seat-review.test.ts).
+        getPrimaryProviderByName: vi.fn().mockReturnValue(null),
         listExecutionCandidates: vi.fn().mockReturnValue([]),
         listAvailable: vi.fn().mockReturnValue([{ name: "qwen" }, { name: "openai" }]),
       },
@@ -200,7 +201,7 @@ describe("a routed provider that cannot be built (ORC-20)", () => {
     const ctx = {
       providerManager: {
         getActiveInfo: vi.fn().mockReturnValue(undefined),
-        getProviderByName: vi.fn((name: string) => (name === "openai" ? null : makeProvider(name))),
+        getPrimaryProviderByName: vi.fn((name: string) => (name === "openai" ? null : makeProvider(name))),
         listExecutionCandidates: vi.fn().mockReturnValue([]),
         listAvailable: vi.fn().mockReturnValue([{ name: "openai" }, { name: "opencode" }, { name: "opencode2" }]),
         listRoutable: vi.fn().mockReturnValue([{ name: "opencode" }, { name: "opencode2" }]),
