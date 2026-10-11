@@ -6,8 +6,8 @@
 
 import type { Command } from "commander";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { stat, rm, readFile } from "node:fs/promises";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
 import { discoverSkills } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
@@ -103,7 +103,7 @@ export function registerSkillCommands(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      const skillDir = join(homedir(), ".strada", "skills", name);
+      const skillDir = join(resolveStradaHomeEntry("skills"), name);
 
       try {
         const s = await stat(skillDir);
@@ -279,7 +279,7 @@ export function registerSkillCommands(program: Command): void {
         return;
       }
 
-      const managedDir = join(homedir(), ".strada", "skills");
+      const managedDir = resolveStradaHomeEntry("skills");
 
       if (name) {
         if (!isValidSkillName(name)) {

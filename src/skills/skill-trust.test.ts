@@ -44,14 +44,21 @@ import {
 let fakeHome: string;
 let projectRoot: string;
 // os.homedir() reads USERPROFILE on Windows: with HOME alone the records went
-// into the real profile, shared by every test.
-const savedHome = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+// into the real profile, shared by every test. The record follows the app
+// home, so STRADA_HOME moves with them (the worker's own home is shared by
+// every file it runs).
+const savedHome = {
+  HOME: process.env["HOME"],
+  USERPROFILE: process.env["USERPROFILE"],
+  STRADA_HOME: process.env["STRADA_HOME"],
+};
 
 beforeEach(async () => {
   fakeHome = await mkdtemp(join(tmpdir(), "strada-trust-home-"));
   projectRoot = await mkdtemp(join(tmpdir(), "strada-trust-proj-"));
   process.env["HOME"] = fakeHome;
   process.env["USERPROFILE"] = fakeHome;
+  process.env["STRADA_HOME"] = join(fakeHome, ".strada");
 });
 
 afterEach(async () => {
@@ -107,7 +114,7 @@ function deadPid(): number {
 const lockLine = (pid: number, token = `${pid}-deadbeef`): string => `${pid} ${token} ${new Date().toISOString()}\n`;
 
 describe("trustedSkillsDbPath", () => {
-  it("lives under the user's home, resolved at call time — never inside the project", () => {
+  it("lives under the app home, resolved at call time — never inside the project", () => {
     expect(trustedSkillsDbPath()).toBe(join(fakeHome, ".strada", "trusted-skills.db"));
     expect(trustedSkillsDbPath().startsWith(projectRoot)).toBe(false);
     expect(legacyTrustedSkillsJsonPath()).toBe(join(fakeHome, ".strada", "trusted-skills.json"));

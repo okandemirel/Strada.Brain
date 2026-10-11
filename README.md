@@ -432,7 +432,7 @@ Skills are discovered from three locations, in priority order:
 | Tier | Location | Purpose |
 |------|----------|---------|
 | **workspace** | `skills/` in your project root | Project-specific skills, highest priority |
-| **managed** | `~/.strada/skills/` | User-installed skills via `strada skill install` |
+| **managed** | `skills/` in the app home (`~/.strada/skills/` on macOS/Linux unless `STRADA_HOME` is set) | User-installed skills via `strada skill install` |
 | **bundled** | `src/skills/bundled/` inside the Strada.Brain checkout | Shipped with the application, always available |
 
 Skills in a higher-priority tier override those with the same name in lower tiers. A skill whose `requires` conditions are not met is placed in `gated` status and excluded from the active tool surface until its prerequisites are satisfied.

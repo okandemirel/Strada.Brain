@@ -13,12 +13,17 @@
  *   <repo>/.strada-memory/*.db (measured 2026-10-11). Point them where the
  *   runtime would have put them: inside this worker's home. ProviderManager
  *   and the model catalog fall back to MEMORY_DB_PATH too.
+ * - The user's home, as os.homedir() answers it in this process, is an empty
+ *   directory per test file (see installDecoyHome).
  *
  * Set on every file, not defaulted: a file that changed one of them and did
  * not put it back must not hand that to the next file in the worker.
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import { join } from "node:path";
+import { afterAll } from "vitest";
 
 const runRoot = process.env["STRADA_VITEST_TMP_ROOT"];
 if (runRoot) {
@@ -27,4 +32,53 @@ if (runRoot) {
   process.env["STRADA_HOME"] = home;
   process.env["MEMORY_DB_PATH"] = join(home, ".strada-memory");
   process.env["MODEL_INTELLIGENCE_DB_PATH"] = join(home, ".strada-memory", "model-intelligence.db");
+  installDecoyHome(runRoot);
+}
+
+interface HomedirPatch {
+  readonly realHomedir: () => string;
+  /** What os.homedir() answered before the patch: the developer's own home. */
+  readonly realHome: string;
+  decoy: string;
+}
+
+/**
+ * A module that builds `homedir()/.strada` itself, instead of asking the app
+ * home (resolveStradaHomeEntry), writes the developer's own ~/.strada while
+ * every assertion stays green: test runs rewrote the real skills.json, Unity
+ * link and assets-local markers that way (2026-08-28, 2026-09-17,
+ * 2026-10-11). A run-level check on the real directory cannot tell a test from
+ * the live daemon writing it at the same time, so the home is moved instead:
+ * os.homedir() answers an empty directory, and a file that leaves `.strada…`
+ * in it fails, naming what it wrote.
+ *
+ * Only while HOME is the real one: a test that points HOME at its own
+ * directory still gets that directory. Child processes keep the real HOME
+ * (git, npm and the toolchains read their config from it); they get
+ * STRADA_HOME, which the runtime's own paths follow.
+ */
+function installDecoyHome(root: string): void {
+  const state = globalThis as typeof globalThis & { __stradaHomedirPatch?: HomedirPatch };
+  const patch = (state.__stradaHomedirPatch ??= { realHomedir: os.homedir, realHome: os.homedir(), decoy: "" });
+  mkdirSync(join(root, "user-home"), { recursive: true });
+  // Canonical, as a real home is: macOS's temp root is /var → /private/var,
+  // and code that realpaths a path under home must get back the same string.
+  const decoy = realpathSync(mkdtempSync(join(root, "user-home", "file-")));
+  patch.decoy = decoy;
+  os.homedir = () => {
+    const home = patch.realHomedir();
+    return home === patch.realHome ? patch.decoy : home;
+  };
+  // `import { homedir } from "node:os"` binds the ESM export, not the property.
+  syncBuiltinESMExports();
+
+  afterAll(() => {
+    const leaked = readdirSync(decoy).filter((name) => name.startsWith(".strada"));
+    if (leaked.length > 0) {
+      throw new Error(
+        `This test file wrote ${leaked.join(", ")} under the user's home (${decoy}); outside a test run ` +
+          "that is the developer's own ~/.strada. Resolve the path with resolveStradaHomeEntry().",
+      );
+    }
+  });
 }

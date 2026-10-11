@@ -4,38 +4,22 @@
 
 import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { resolveStradaHome } from "../common/runtime-paths.js";
+import { dirname } from "node:path";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import type { SkillConfig } from "./types.js";
 
 /**
- * The app home every other runtime file uses (STRADA_HOME, else `~/.strada`,
- * or `%LOCALAPPDATA%\Strada` on Windows). This was `homedir()/.strada`
- * whatever STRADA_HOME said, so a deployment with its own home shared the
- * user's file, and every test run's skill toggles rewrote the developer's own
- * ~/.strada/skills.json (measured 2026-10-11).
+ * `<app home>/skills.json` (STRADA_HOME, else `~/.strada`, or
+ * `%LOCALAPPDATA%\Strada` on Windows). This was `homedir()/.strada` whatever
+ * STRADA_HOME said, so a deployment with its own home shared the user's file,
+ * and every test run's skill toggles rewrote the developer's own
+ * ~/.strada/skills.json (measured 2026-10-11). A file left at ~/.strada while
+ * the app home is elsewhere stays the one read AND written: its
+ * `enabled: false` entries must not lapse on upgrade (SEC-15), whether the
+ * home moved with the platform default or with STRADA_HOME.
  */
-function stradaDir(): string {
-  return resolveStradaHome();
-}
-
-/** Full path to the skills configuration file. */
 function skillsJsonPath(): string {
-  return join(stradaDir(), "skills.json");
-}
-
-/**
- * Where the file was before it followed the app home, when that is somewhere
- * else: only the Windows default moved. Its `enabled: false` entries still
- * hold until the next write puts them in the app home; reading nothing there
- * would quietly re-enable those skills (SEC-15). An explicit STRADA_HOME names
- * the home, and is what keeps a test run off the user's own file.
- */
-function legacySkillsJsonPath(): string | null {
-  if (process.env["STRADA_HOME"]?.trim()) return null;
-  const legacy = join(homedir(), ".strada", "skills.json");
-  return legacy === skillsJsonPath() ? null : legacy;
+  return resolveStradaHomeEntry("skills.json");
 }
 
 /** The file's text, or null when it does not exist; any other failure throws. */
@@ -59,8 +43,6 @@ export async function readSkillConfig(): Promise<SkillConfig> {
   let raw: string | null;
   try {
     raw = await readIfPresent(skillsJsonPath());
-    const legacy = raw === null ? legacySkillsJsonPath() : null;
-    if (legacy) raw = await readIfPresent(legacy);
   } catch (err) {
     return { entries: {}, unreadable: err instanceof Error ? err.message : String(err) };
   }
@@ -91,15 +73,16 @@ export async function readSkillConfig(): Promise<SkillConfig> {
 }
 
 /**
- * Write the skill configuration to `<app home>/skills.json`.
- * Creates the app home if it does not exist. The file is
+ * Write the skill configuration to `<app home>/skills.json` (or the
+ * ~/.strada file that is still being read, see skillsJsonPath).
+ * Creates its directory if it does not exist. The file is
  * replaced atomically (temp file + rename, SEC-15): a crash mid-write leaves
  * the previous file, never a truncated one.
  */
 export async function writeSkillConfig(config: SkillConfig): Promise<void> {
   const { unreadable: _unreadable, ...persisted } = config;
-  await mkdir(stradaDir(), { recursive: true });
   const target = skillsJsonPath();
+  await mkdir(dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   await writeFile(temp, JSON.stringify(persisted, null, 2) + "\n", "utf-8");
   try {

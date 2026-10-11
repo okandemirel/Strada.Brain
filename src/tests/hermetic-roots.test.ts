@@ -10,8 +10,9 @@
  * temp root instead. These are the paths a test reaches through the
  * resolvers when it passes nothing of its own.
  */
-import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import os, { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -128,6 +129,49 @@ describe("the suite's runtime roots", () => {
     expect(readdirSync(decoy), `skills.json written under the user's home ${decoy}`).toEqual([]);
     const written = join(resolveStradaHome(), "skills.json");
     expect(JSON.parse(readFileSync(written, "utf8")).entries["hermetic-roots-probe"]).toEqual({ enabled: false });
+  });
+
+  it("answers os.homedir() with an empty directory inside the run root, so nothing reaches the user's own ~/.strada", () => {
+    // Both spellings: `import { homedir }` binds the ESM export, `os.homedir`
+    // reads the property.
+    // Canonical, as the decoy is (macOS: /var → /private/var).
+    const decoys = join(realpathSync(runRoot!), "user-home");
+    for (const home of [homedir(), os.homedir()]) {
+      expect(isInside(decoys, home), `homedir() is ${home}`).toBe(true);
+      expect(readdirSync(home)).toEqual([]);
+    }
+  });
+
+  it("still answers a HOME a test points elsewhere", () => {
+    const own = mkdtempSync(join(runRoot!, "own-home-"));
+    vi.stubEnv("HOME", own);
+    vi.stubEnv("USERPROFILE", own);
+    try {
+      expect(homedir()).toBe(own);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("has no production module that builds homedir()/.strada itself instead of asking the app home", () => {
+    // The decoy above covers this process; a module that skips
+    // resolveStradaHomeEntry still writes the real home from a child process,
+    // and on a deployment ignores STRADA_HOME.
+    const builds = /\b(?:join|resolve)\(\s*(?:os\.)?homedir\(\)\s*,\s*["'`]\.strada(?![\w-])|\$\{\s*(?:os\.)?homedir\(\)\s*\}[/\\]\.strada(?![\w-])/;
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+          readFileSync(full, "utf8").split("\n").forEach((line, index) => {
+            if (builds.test(line)) offenders.push(`${relative(repoRoot, full)}:${index + 1}`);
+          });
+        }
+      }
+    };
+    walk(join(repoRoot, "src"));
+    expect(offenders).toEqual([]);
   });
 
   it("takes the supervisor-death marker from the run's config root, never the checkout's", () => {

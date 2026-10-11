@@ -3,7 +3,7 @@
 //
 // Scan order (higher precedence first):
 //   1. workspace  — <projectRoot>/skills/
-//   2. managed    — ~/.strada/skills/
+//   2. managed    — <app home>/skills/
 //   3. bundled    — src/skills/bundled/ (relative to this package)
 //   4. extra      — any additional directories passed in
 // ---------------------------------------------------------------------------
@@ -11,10 +11,10 @@
 import { readdir, readFile, stat, lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import type { SkillManifest, SkillEntry } from "./types.js";
 import { namespaceRuntimeTool, type ITool } from "../agents/tools/tool.interface.js";
 import { describePinDrift } from "./skill-pin.js";
@@ -52,7 +52,7 @@ const TIERS: Array<{ tier: SkillEntry["tier"]; dir: (projectRoot?: string) => st
   },
   {
     tier: "managed",
-    dir: () => join(homedir(), ".strada", "skills"),
+    dir: () => resolveStradaHomeEntry("skills"),
   },
   {
     tier: "bundled",

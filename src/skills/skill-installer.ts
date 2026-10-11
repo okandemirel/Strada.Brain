@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { stat, rm } from "node:fs/promises";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
 import { setSkillEnabled } from "./skill-config.js";
 import { recordPinnedCommit } from "./skill-pin.js";
@@ -63,7 +63,9 @@ export async function installSkillFromRepo(
     return { success: false, error: "git is not installed or not in PATH." };
   }
 
-  const targetDir = join(homedir(), ".strada", "skills", name);
+  // The managed directory is resolved as a whole, never per skill: the loader
+  // scans one directory, so a skill must land beside the ones already there.
+  const targetDir = join(resolveStradaHomeEntry("skills"), name);
 
   // Check if already installed
   try {

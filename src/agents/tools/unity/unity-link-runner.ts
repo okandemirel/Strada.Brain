@@ -14,7 +14,7 @@
  *      standard Unity sign-in dialog appears once.
  *   3. Exchanges the code at POST {identity}/v1/oauth2/token.
  *   4. Writes {refreshToken, identityHost, packagesHost, clientSecret, linkedAt}
- *      to a JSON file this runner then moves to ~/.strada/unity-asset-store.json
+ *      to a JSON file this runner then moves to <app home>/unity-asset-store.json
  *      (chmod 600) — after that, everything is headless refresh.
  */
 
@@ -24,7 +24,10 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { getLoggerSafe } from "../../../utils/logger.js";
+import { resolveStradaHomeEntry } from "../../../common/strada-home-entry.js";
 import { resolveUnityCliPath, unityCliMissingHelp } from "./unity-cli-path.js";
+// The one place that names the link file: the runner writes what the client reads.
+import { unityLinkFilePath } from "./asset-store-cloud.js";
 
 // =============================================================================
 // CONSENT SCRIPT (self-contained C#, mirrors the proven reflection recipe)
@@ -277,7 +280,7 @@ export interface UnityLinkRunnerOptions {
   timeoutMs?: number;
   /**
    * Where the throwaway consent project lives. Defaults to the persistent
-   * ~/.strada/unity-link-project; tests MUST pass a temp dir — until
+   * <app home>/unity-link-project; tests MUST pass a temp dir — until
    * 2026-09-17 the scratch was built under the real home before the
    * test-mode guard ran, so the "refuses to write the REAL store" test still
    * wrote to the user's home (audit 15 D14).
@@ -299,7 +302,6 @@ export interface UnityLinkRunnerOptions {
 
 const DEFAULT_UNITY_BIN =
   process.env["STRADA_UNITY_BIN"] ?? "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
-const LINK_STORE = join(homedir(), ".strada", "unity-asset-store.json");
 
 /**
  * Wait for the consent output file. `unity open` is fire-and-forget (the Hub
@@ -353,7 +355,7 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
   // packages takes 3-4 minutes and repeatedly timed out the run when the
   // scratch was deleted every attempt (measured 2026-08-27). A stable path
   // pays that cost once; later runs boot in seconds.
-  const scratch = options.scratchDir ?? join(homedir(), ".strada", "unity-link-project");
+  const scratch = options.scratchDir ?? resolveStradaHomeEntry("unity-link-project");
   const outputPath = join(scratch, "link-result.json");
   const logPath = join(scratch, "editor.log");
   const timeoutMs = options.timeoutMs ?? 10 * 60_000;
@@ -457,8 +459,8 @@ export async function runUnityLink(options: UnityLinkRunnerOptions = {}): Promis
       return { ok: false, detail: `token exchange produced an invalid link: ${z.prettifyError(parsed.error).slice(0, 200)}` };
     }
 
-    const linkStore = options.linkStorePath ?? LINK_STORE;
-    if (linkStore === LINK_STORE && underTest) {
+    const linkStore = options.linkStorePath ?? unityLinkFilePath();
+    if (options.linkStorePath === undefined && underTest) {
       // Measured live 2026-08-28: the "stores the link" unit test overwrote
       // the user's REAL link store with fixture data and left it there —
       // silently killing the account link on every full-suite run. The early

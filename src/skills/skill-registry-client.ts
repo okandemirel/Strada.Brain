@@ -4,9 +4,9 @@
 // ---------------------------------------------------------------------------
 
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { getLoggerSafe } from "../utils/logger.js";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import type { SkillRegistry, RegistryEntry } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ const REGISTRY_URL =
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function cachePath(): string {
-  return join(homedir(), ".strada", "skill-registry.json");
+  return resolveStradaHomeEntry("skill-registry.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +125,9 @@ async function readCache(): Promise<CacheResult | null> {
 
 async function writeCache(data: SkillRegistry): Promise<void> {
   try {
-    const dir = join(homedir(), ".strada");
-    await mkdir(dir, { recursive: true });
-    await writeFile(cachePath(), JSON.stringify(data, null, 2) + "\n", "utf-8");
+    const path = cachePath();
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
   } catch {
     // Non-critical — cache write failure is silently ignored
   }

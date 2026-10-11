@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { join } from "node:path";
 import { isValidSkillName, isValidRepoUrl, installSkillFromRepo } from "./skill-installer.js";
 
-/** Where the installer clones a skill under the mocked home, as path.join spells it on this platform. */
+/** Where the installer clones a skill under the mocked app home, as path.join spells it on this platform. */
 const managedSkillDir = (name: string): string => join("/mock-home", ".strada", "skills", name);
 
 // =============================================================================
@@ -26,8 +26,8 @@ vi.mock("node:fs/promises", () => ({
   rm: (...args: unknown[]) => fsMock.rm(...args),
 }));
 
-vi.mock("node:os", () => ({
-  homedir: () => "/mock-home",
+vi.mock("../common/strada-home-entry.js", () => ({
+  resolveStradaHomeEntry: (...segments: string[]) => join("/mock-home", ".strada", ...segments),
 }));
 
 const execMock = {

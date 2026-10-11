@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -15,6 +15,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import { execFileSync } from "node:child_process";
 import { gitFallbackClone, stradaGitCacheRoot } from "./strada-api-sync.ts";
+import { resolveStradaHome } from "../common/runtime-paths.js";
 
 const git = vi.mocked(execFileSync);
 let root: string;
@@ -67,17 +68,17 @@ afterEach(() => {
 });
 
 describe("the strada sync git cache (LRN-21)", () => {
-  it("lives under the user's home directory, not a HOME-or-/tmp guess", async () => {
+  it("lives in the app home, not a HOME-or-/tmp guess", async () => {
     const saved = process.env["HOME"];
     delete process.env["HOME"]; // services, CI; Windows never sets it
     try {
       vi.resetModules();
       const fresh = await import("./strada-api-sync.ts");
-      expect(fresh.stradaGitCacheRoot()).toBe(join(homedir(), ".strada", "framework-cache"));
+      expect(fresh.stradaGitCacheRoot()).toBe(join(resolveStradaHome(), "framework-cache"));
     } finally {
       if (saved !== undefined) process.env["HOME"] = saved;
     }
-    expect(stradaGitCacheRoot()).toBe(join(homedir(), ".strada", "framework-cache"));
+    expect(stradaGitCacheRoot()).toBe(join(resolveStradaHome(), "framework-cache"));
   });
 
   it("reuses a fresh, valid clone without cloning", async () => {

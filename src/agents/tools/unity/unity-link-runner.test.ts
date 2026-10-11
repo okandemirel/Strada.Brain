@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { runUnityLink, CONSENT_SCRIPT } from "./unity-link-runner.js";
+import { resolveStradaHomeEntry } from "../../../common/strada-home-entry.js";
 import type { execFile } from "node:child_process";
 
 const VALID_CODE = "authcode-1234567890abcdef";
@@ -110,7 +111,7 @@ describe("runUnityLink", () => {
 
   it("refuses BEFORE building the scratch project under the real home (2026-09-17)", async () => {
     stubTokenExchange();
-    const realScratch = join(homedir(), ".strada", "unity-link-project", "Assets", "Editor", "StradaLinkConsent.cs");
+    const realScratch = join(resolveStradaHomeEntry("unity-link-project"), "Assets", "Editor", "StradaLinkConsent.cs");
     const before = existsSync(realScratch) ? statSync(realScratch).mtimeMs : undefined;
     const result = await runUnityLink({
       unityCli: fakeCli,

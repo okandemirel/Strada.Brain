@@ -11,7 +11,7 @@
 import { resolve, basename, join } from "node:path";
 import { stat, mkdir } from "node:fs/promises";
 import { existsSync, renameSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { execFileSync } from "node:child_process";
 import { createLogger } from "../utils/logger.js";
 import { StradaCoreExtractor } from "./strada-core-extractor.js";
@@ -46,7 +46,7 @@ const PACKAGE_PATH_ENV: Record<LegacyFrameworkPackageId, string> = {
  * unset (services, CI) and on the current drive's \tmp on Windows (LRN-21).
  */
 export function stradaGitCacheRoot(): string {
-  return join(homedir(), ".strada", "framework-cache");
+  return resolveStradaHomeEntry("framework-cache");
 }
 
 /** A cached clone older than this is refreshed (the daemon's default age). */

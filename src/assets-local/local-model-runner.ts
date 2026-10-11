@@ -23,7 +23,8 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, rmSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_REMOVAL_PACKAGES, LOCAL_MODEL_CATALOG, getModelSpec, type LocalModelSpec } from "./model-catalog.js";
 import { COMMIT_SHA_RE, WEIGHTS_LOCK_FILE, pinFor, readWeightsLock, recordWeightsPin } from "./weights-lock.js";
@@ -202,7 +203,7 @@ print("WROTE", a.out)
  * (Codex review 2026-09-07: the liveness probe accepted false === false).
  */
 function ROOT_DIR(): string {
-  return process.env["STRADA_ASSETS_LOCAL_ROOT"] ?? join(homedir(), ".strada", "assets-local");
+  return process.env["STRADA_ASSETS_LOCAL_ROOT"] ?? resolveStradaHomeEntry("assets-local");
 }
 const VENV = (): string => join(ROOT_DIR(), "venv");
 const SCRIPTS = (): string => join(ROOT_DIR(), "scripts");

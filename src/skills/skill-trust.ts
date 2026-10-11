@@ -9,7 +9,7 @@
 // checkout put in skills/*/index.js". This module is that approval step.
 //
 // The record lives OUTSIDE the project, in the SQLite database
-// `~/.strada/trusted-skills.db`, so a checkout cannot approve itself. It is
+// `<app home>/trusted-skills.db`, so a checkout cannot approve itself. It is
 // keyed by the canonical identity of the project (realpath of the project root)
 // and the skill's directory, and holds a sha256 over the skill's content: EVERY
 // regular file under the skill directory (path + bytes, sorted), excluding only
@@ -77,8 +77,8 @@ import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { open, readFile, readdir, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
 import { findOutsideImports, isSkillCodeFile } from "./skill-import-scan.js";
@@ -182,17 +182,21 @@ const SCAN_CHUNK_BYTES = 64 * 1024;
 export const SKILL_IMPORT_CHECK_MAX_FILE_BYTES = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// Record location — always under the user's home, never in the project.
+// Record location — always under the app home, never in the project.
 // ---------------------------------------------------------------------------
 
-/** `~/.strada/trusted-skills.db`. Resolved at call time so a test HOME applies. */
+/**
+ * `<app home>/trusted-skills.db` (an approval database left at ~/.strada
+ * stays in use, see resolveStradaHomeEntry). Resolved at call time so a test
+ * STRADA_HOME applies.
+ */
 export function trustedSkillsDbPath(): string {
-  return join(homedir(), ".strada", "trusted-skills.db");
+  return resolveStradaHomeEntry("trusted-skills.db");
 }
 
-/** `~/.strada/trusted-skills.json` — the pre-round-9 record, imported once. */
+/** `<app home>/trusted-skills.json` — the pre-round-9 record, imported once. */
 export function legacyTrustedSkillsJsonPath(): string {
-  return join(homedir(), ".strada", "trusted-skills.json");
+  return resolveStradaHomeEntry("trusted-skills.json");
 }
 
 // ---------------------------------------------------------------------------

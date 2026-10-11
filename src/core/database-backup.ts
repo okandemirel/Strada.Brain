@@ -129,7 +129,8 @@ export const MEMORY_DATABASE_FILES: readonly string[] = [
  * The databases the runtime creates in the Strada home (`~/.strada`).
  *
  * `hub-owners.db` is `HubOwnerStore.defaultPath()` — `<strada home>/` — and
- * `trusted-skills.db` is `trustedSkillsDbPath()` — `~/.strada/`. Losing them
+ * `trusted-skills.db` is `trustedSkillsDbPath()` — the same home, or a
+ * `~/.strada/` it predates (see USER_HOME_ROOT_NAME). Losing them
  * loses every chat→channel binding and every skill approval a project made,
  * which is exactly what a restore from the old backup did.
  */
@@ -181,10 +182,10 @@ export const STRADA_HOME_ROOT_NAME = "strada-home";
 /**
  * Root label for `~/.strada` when `STRADA_HOME` points somewhere else.
  *
- * `trustedSkillsDbPath()` is built from `homedir()`, not from
- * `resolveStradaHome()`, so with STRADA_HOME set the two diverge and the skill
- * approvals are under the home one. Both are inventoried; when they are the
- * same directory (the default) it is listed once.
+ * `trustedSkillsDbPath()` follows the app home, but an install that predates
+ * that keeps its approvals in `~/.strada` (resolveStradaHomeEntry leaves them
+ * there), so with STRADA_HOME set the two can diverge. Both are inventoried;
+ * when they are the same directory (the default) it is listed once.
  */
 export const USER_HOME_ROOT_NAME = "user-home";
 /** Root label for `<projectRoot>/.strada` — the databases a project owns (#19). */

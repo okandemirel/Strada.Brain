@@ -19,6 +19,7 @@ import { createLogger, getLoggerSafe } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { configureProviderConcurrency } from "../common/fetch-with-retry.js";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
@@ -652,7 +653,7 @@ async function bootstrapImpl(
     watchEnabled: config.strada?.frameworkSync?.watchEnabled ?? false,
     watchDebounceMs: config.strada?.frameworkSync?.watchDebounceMs ?? 2000,
     gitFallbackEnabled: config.strada?.frameworkSync?.gitFallbackEnabled ?? true,
-    gitCacheDir: config.strada?.frameworkSync?.gitCacheDir ?? join(homedir(), ".strada", "framework-cache"),
+    gitCacheDir: config.strada?.frameworkSync?.gitCacheDir ?? resolveStradaHomeEntry("framework-cache"),
     gitCacheMaxAgeMs: config.strada?.frameworkSync?.gitCacheMaxAgeMs ?? 24 * 60 * 60 * 1000,
     maxDriftScore: config.strada?.frameworkSync?.maxDriftScore ?? 30,
   };

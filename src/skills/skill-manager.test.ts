@@ -47,14 +47,20 @@ vi.mock("../utils/logger.js", () => ({
 // ---------------------------------------------------------------------------
 
 /**
- * Point the user's home at `home` until the returned restore runs. os.homedir()
- * reads USERPROFILE on Windows: with HOME alone, trust records went into the
- * real profile.
+ * Point the user's home, and the app home inside it, at `home` until the
+ * returned restore runs. os.homedir() reads USERPROFILE on Windows: with HOME
+ * alone, trust records went into the real profile. The records follow the app
+ * home (STRADA_HOME).
  */
 function redirectHome(home: string): () => void {
-  const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  const saved = {
+    HOME: process.env["HOME"],
+    USERPROFILE: process.env["USERPROFILE"],
+    STRADA_HOME: process.env["STRADA_HOME"],
+  };
   process.env["HOME"] = home;
   process.env["USERPROFILE"] = home;
+  process.env["STRADA_HOME"] = join(home, ".strada");
   return () => {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

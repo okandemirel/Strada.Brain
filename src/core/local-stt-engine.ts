@@ -15,7 +15,8 @@
 import { getLogger } from "../utils/logger.js";
 import { rm, writeFile, readFile, mkdtemp } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { tmpdir, homedir, platform } from "node:os";
+import { tmpdir, platform } from "node:os";
+import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -59,7 +60,7 @@ function sttModel(): string {
 function sttCacheDir(): string {
   const raw = process.env["STT_CACHE_DIR"]?.trim();
   if (raw) return resolve(raw); // resolve() normalizes any traversal segments
-  return join(homedir(), ".strada", "models");
+  return resolveStradaHomeEntry("models");
 }
 
 /* -------------------------------------------------------------------------- */

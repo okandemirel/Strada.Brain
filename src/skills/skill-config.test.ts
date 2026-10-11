@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { join } from "node:path";
 import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-config.js";
 import type { SkillConfig } from "./types.js";
@@ -23,26 +23,19 @@ vi.mock("node:fs/promises", () => ({
   unlink: (...args: unknown[]) => fsMock.unlink(...args),
 }));
 
-vi.mock("node:os", () => ({
-  homedir: () => "/mock-home",
-}));
-
-// The app home, as resolveStradaHome() answers it. By default the macOS/Linux
-// one with STRADA_HOME unset: the same directory homedir()/.strada names.
+// Where the app-home resolver puts skills.json: by default the macOS/Linux app
+// home with STRADA_HOME unset. Which directory it picks, and when an older
+// ~/.strada one is kept, is strada-home-entry.test.ts's job (on a real disk).
 const DEFAULT_APP_HOME = join("/mock-home", ".strada");
 const appHome = { dir: DEFAULT_APP_HOME };
-vi.mock("../common/runtime-paths.js", () => ({
-  resolveStradaHome: () => appHome.dir,
+vi.mock("../common/strada-home-entry.js", () => ({
+  resolveStradaHomeEntry: (...segments: string[]) => join(appHome.dir, ...segments),
 }));
 
 /** A missing file, as node:fs reports it (the code is what tells it from a broken one). */
 function enoent(): Error {
   return Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
 }
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 beforeEach(() => {
   appHome.dir = DEFAULT_APP_HOME;
@@ -197,10 +190,7 @@ describe("setSkillEnabled", () => {
 });
 
 describe("where skills.json lives", () => {
-  const legacy = join("/mock-home", ".strada", "skills.json");
-
-  it("follows the app home (STRADA_HOME), not homedir()/.strada", async () => {
-    vi.stubEnv("STRADA_HOME", "/srv/strada");
+  it("reads, writes and names the one file the app-home resolver picks", async () => {
     appHome.dir = "/srv/strada";
     fsMock.readFile.mockRejectedValue(enoent());
 
@@ -212,30 +202,15 @@ describe("where skills.json lives", () => {
     expect(fsMock.rename).toHaveBeenCalledWith(expect.any(String), target);
   });
 
-  it("keeps the entries left in ~/.strada when only the platform default moved (Windows), and writes them to the app home", async () => {
-    // A disabled skill there must stay disabled after the upgrade (SEC-15).
-    vi.stubEnv("STRADA_HOME", "");
-    appHome.dir = join("/mock-localappdata", "Strada");
-    fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === legacy) return JSON.stringify({ entries: { banned: { enabled: false } } });
-      throw enoent();
-    });
+  it("refuses a toggle over a file it cannot read, naming that file rather than an empty app home", async () => {
+    // The resolver hands back an older ~/.strada file when the app home has
+    // none: that is the file the operator must repair (SEC-15).
+    const legacy = join("/home/someone", ".strada");
+    appHome.dir = legacy;
+    fsMock.readFile.mockRejectedValue(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
 
-    expect((await readSkillConfig()).entries).toEqual({ banned: { enabled: false } });
-    await setSkillEnabled("other", true);
-
-    const [temp, text] = fsMock.writeFile.mock.calls[0] as [string, string];
-    expect(JSON.parse(text).entries).toEqual({ banned: { enabled: false }, other: { enabled: true } });
-    expect(fsMock.rename).toHaveBeenCalledWith(temp, join("/mock-localappdata", "Strada", "skills.json"));
-  });
-
-  it("fails closed when that ~/.strada file cannot be read", async () => {
-    vi.stubEnv("STRADA_HOME", "");
-    appHome.dir = join("/mock-localappdata", "Strada");
-    fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === legacy) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      throw enoent();
-    });
     expect((await readSkillConfig()).unreadable).toMatch(/EACCES/);
+    await expect(setSkillEnabled("other", true)).rejects.toThrow(join(legacy, "skills.json"));
+    expect(fsMock.writeFile).not.toHaveBeenCalled();
   });
 });

@@ -25,10 +25,10 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, chmodSync, statSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { getLoggerSafe } from "../../../utils/logger.js";
 import { acquireProjectWriteLock } from "../../../common/project-write-lock.js";
+import { resolveStradaHomeEntry } from "../../../common/strada-home-entry.js";
 
 // =============================================================================
 // TYPES
@@ -124,17 +124,20 @@ export class UnityLinkExpiredError extends Error {
 // LINK STORE
 // =============================================================================
 
-const LINK_DIR = join(homedir(), ".strada");
-const LINK_FILE = join(LINK_DIR, "unity-asset-store.json");
-
+/**
+ * `<app home>/unity-asset-store.json`. It holds the account's refresh token: a
+ * link made before the store followed the app home stays where it is (see
+ * resolveStradaHomeEntry) rather than reading as "not linked".
+ */
 export function unityLinkFilePath(): string {
-  return LINK_FILE;
+  return resolveStradaHomeEntry("unity-asset-store.json");
 }
 
 export function loadUnityLink(): UnityAssetStoreLink | undefined {
   try {
-    if (!existsSync(LINK_FILE)) return undefined;
-    const raw: unknown = JSON.parse(readFileSync(LINK_FILE, "utf8"));
+    const file = unityLinkFilePath();
+    if (!existsSync(file)) return undefined;
+    const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
     const link = raw as Partial<UnityAssetStoreLink>;
     if (
       typeof link.refreshToken !== "string" || link.refreshToken.length < 10 ||
@@ -323,7 +326,7 @@ export class UnityAssetStoreClient {
     // Cross-process guard for the read-rotate-write of the link file: a second
     // Strada process refreshing in parallel would race the same rotation.
     const lock = this.syncWithDisk
-      ? await acquireProjectWriteLock(LINK_DIR, { timeoutMs: 30_000 })
+      ? await acquireProjectWriteLock(dirname(unityLinkFilePath()), { timeoutMs: 30_000 })
       : null;
     try {
       if (this.accessToken && Date.now() < this.accessTokenExpiresAt) {
@@ -413,7 +416,7 @@ export function createUnityAssetStoreClient(fetchImpl?: FetchLike): UnityAssetSt
   }
   let mtimeMs = 0;
   try {
-    mtimeMs = statSync(LINK_FILE).mtimeMs;
+    mtimeMs = statSync(unityLinkFilePath()).mtimeMs;
   } catch {
     // Missing file falls through to loadUnityLink's undefined below.
   }
@@ -445,11 +448,12 @@ export function persistUnityLink(link: UnityAssetStoreLink): void {
       "persistUnityLink refused under test: writing the REAL ~/.strada link store from a test destroys the user's Unity link.",
     );
   }
-  mkdirSync(LINK_DIR, { recursive: true });
-  const tmp = `${LINK_FILE}.tmp-${process.pid}`;
+  const file = unityLinkFilePath();
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
   try {
     writeFileSync(tmp, JSON.stringify(link, null, 2), { mode: 0o600 });
-    renameSync(tmp, LINK_FILE);
+    renameSync(tmp, file);
   } catch (err) {
     try {
       rmSync(tmp, { force: true });
@@ -457,7 +461,7 @@ export function persistUnityLink(link: UnityAssetStoreLink): void {
     throw err;
   }
   try {
-    chmodSync(LINK_FILE, 0o600);
+    chmodSync(file, 0o600);
   } catch {
     // Permission fixing is best-effort; the rename already landed the content.
   }
@@ -467,7 +471,7 @@ export function persistUnityLink(link: UnityAssetStoreLink): void {
   // rotated AGAIN — the per-call-rotation loop the cache exists to prevent.
   if (cachedClient) {
     try {
-      cachedClient.linkMtimeMs = statSync(LINK_FILE).mtimeMs;
+      cachedClient.linkMtimeMs = statSync(file).mtimeMs;
     } catch { /* next call falls back to a clean rebuild */ }
   }
 }
