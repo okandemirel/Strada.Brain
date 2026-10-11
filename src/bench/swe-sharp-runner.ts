@@ -808,16 +808,22 @@ export interface TestCommand {
  * Builds the `dotnet test` invocation.
  *
  * Two non-obvious pieces. The TRX logger is the entire bridge to scoring, so
- * the file name and results directory are explicit rather than left to dotnet's
- * default (a timestamped name under the project's TestResults, which the
- * scorer would have to guess at). And `DOTNET_ROLL_FORWARD=LatestMajor` is what
- * lets a task pinned to net6.0/net7.0 run on a machine that only has the .NET
- * 10 runtime; without it every one of these tasks is `not-run`, which is
- * honest but measures nothing.
+ * the file prefix and results directory are explicit rather than left to
+ * dotnet's default (a timestamped name under the project's TestResults, which
+ * the scorer would have to guess at). It is a prefix, not a file name: a
+ * solution target runs one vstest per test project, and a fixed LogFileName is
+ * the same path for all of them, so the last project to finish replaced the
+ * others' reports (measured: an empty report from a project the filter matched
+ * nothing in scored a correct fix "unresolved: build failed"). With
+ * LogFilePrefix vstest writes `<prefix>_<tfm>_<timestamp>.trx` per project and
+ * steps the timestamp past a name already taken; `trxReportFiles` finds them.
+ * And `DOTNET_ROLL_FORWARD=LatestMajor` is what lets a task pinned to
+ * net6.0/net7.0 run on a machine that only has the .NET 10 runtime; without it
+ * every one of these tasks is `not-run`, which is honest but measures nothing.
  */
 export function buildTestCommand(options: {
   readonly target: string;
-  readonly trxName: string;
+  readonly trxPrefix: string;
   readonly resultsDir: string;
   readonly framework?: string;
   readonly filter?: string;
@@ -827,7 +833,7 @@ export function buildTestCommand(options: {
     "test",
     options.target,
     "--logger",
-    `trx;LogFileName=${options.trxName}`,
+    `trx;LogFilePrefix=${options.trxPrefix}`,
     "--results-directory",
     options.resultsDir,
     "--nologo",
@@ -875,8 +881,17 @@ export function buildBuildCommand(options: {
   if (options.framework) args.push("--framework", options.framework);
   return {
     args,
-    env: buildTestCommand({ target: options.target, trxName: "x.trx", resultsDir: "." }).env,
+    env: buildTestCommand({ target: options.target, trxPrefix: "x", resultsDir: "." }).env,
   };
+}
+
+/**
+ * The TRX reports one `dotnet test` run wrote under `trxPrefix`, in a stable
+ * order: one per test project (and target framework) the target ran. The `_`
+ * vstest puts after the prefix keeps `pre-1` from claiming `pre-10`'s reports.
+ */
+export function trxReportFiles(fileNames: readonly string[], trxPrefix: string): string[] {
+  return fileNames.filter((name) => name.startsWith(`${trxPrefix}_`) && name.endsWith(".trx")).sort();
 }
 
 /**

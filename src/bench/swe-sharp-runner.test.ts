@@ -42,6 +42,7 @@ import {
   renderRunReport,
   taskRunDir,
   testPatchPaths,
+  trxReportFiles,
   type AttemptInput,
   type CandidateResult,
   type MergedReport,
@@ -574,25 +575,44 @@ describe("chooseFramework", () => {
 });
 
 describe("buildTestCommand", () => {
-  it("names the TRX file and its directory instead of letting dotnet choose", () => {
+  it("names the TRX prefix and its directory instead of letting dotnet choose", () => {
     const cmd = buildTestCommand({
       target: "A.sln",
-      trxName: "post.trx",
+      trxPrefix: "post-0",
       resultsDir: "/tmp/r",
       framework: "net7.0",
       filter: "FullyQualifiedName~A",
     });
     expect(cmd.args).toContain("--logger");
-    expect(cmd.args).toContain("trx;LogFileName=post.trx");
+    // A prefix, never one LogFileName: a solution's test projects would all write that one path.
+    expect(cmd.args).toContain("trx;LogFilePrefix=post-0");
+    expect(cmd.args.join(" ")).not.toContain("LogFileName");
     expect(cmd.args.join(" ")).toContain("--results-directory /tmp/r");
     expect(cmd.args.join(" ")).toContain("--framework net7.0");
     expect(cmd.args.join(" ")).toContain("--filter FullyQualifiedName~A");
   });
 
   it("rolls forward so a net6/net7 task runs on a newer installed runtime", () => {
-    const cmd = buildTestCommand({ target: "A.sln", trxName: "t.trx", resultsDir: "/tmp/r" });
+    const cmd = buildTestCommand({ target: "A.sln", trxPrefix: "t", resultsDir: "/tmp/r" });
     expect(cmd.env.DOTNET_ROLL_FORWARD).toBe("LatestMajor");
     expect(cmd.env.DOTNET_CLI_UI_LANGUAGE).toBe("en");
+  });
+});
+
+describe("trxReportFiles", () => {
+  it("takes every report one run wrote under its prefix, and no other run's", () => {
+    const names = [
+      "post-1_net10.0_20261011210209.trx",
+      "post-1_net10.0_20261011210208.trx",
+      "post-10_net10.0_20261011210208.trx", // another target's run
+      "pre-1_net10.0_20261011210100.trx", // the other phase
+      "post-1_net10.0_20261011210208", // not a report
+      "post-1.trx", // no vstest suffix: not written by this logger setting
+    ];
+    expect(trxReportFiles(names, "post-1")).toEqual([
+      "post-1_net10.0_20261011210208.trx",
+      "post-1_net10.0_20261011210209.trx",
+    ]);
   });
 });
 
@@ -1070,4 +1090,136 @@ describe.skipIf(process.platform === "win32")("run-tasks.mjs — task rows reach
     expect(eoo).toBeGreaterThan(-1);
     expect(fetch!.slice(eoo + 1)).toEqual(["https://github.com/acme/thing.git", SHA]);
   });
+});
+
+// The script end to end over a real git checkout, with `dotnet` replaced by a
+// stand-in that names TRX files the way vstest does. When no test project roots
+// the required names the harness tests the whole solution, and a solution runs
+// one vstest per test project: a fixed LogFileName is the same path for all of
+// them, so the last project's report (here an empty one, because the filter
+// matched nothing in it) replaced the one holding the required tests, and a
+// correct fix scored "unresolved: build failed". LogFilePrefix makes vstest
+// write <prefix>_<tfm>_<timestamp>.trx per project, the timestamp stepped past a
+// name already taken (measured with dotnet 10.0.400 on a two-project slnx).
+describe.skipIf(process.platform === "win32")("run-tasks.mjs — a solution with several test projects is scored from every project's report", () => {
+  const SCRIPT = path.resolve("scripts/bench/swe-sharp/run-tasks.mjs");
+  let work: string;
+
+  const FAKE_DOTNET = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const argv = process.argv.slice(2);
+if (argv[0] === "--version") { process.stdout.write("10.0.400\\n"); process.exit(0); }
+if (argv[0] === "build") process.exit(0);
+if (argv[0] !== "test") process.exit(1);
+const opt = (name) => argv[argv.indexOf(name) + 1];
+const logger = opt("--logger");
+const resultsDir = opt("--results-directory");
+fs.mkdirSync(resultsDir, { recursive: true });
+const fixed = fs.readFileSync(path.join(process.cwd(), "src", "Lib.cs"), "utf8").includes("fixed");
+const projects = [
+  ["A.Tests", [["Ns.FormatterTests.Works", fixed ? "Passed" : "Failed"], ["Ns.OtherTests.Stays", "Passed"]]],
+  ["B.Tests", []],
+];
+const fileName = /LogFileName=([^;]+)/.exec(logger)?.[1];
+const prefix = /LogFilePrefix=([^;]+)/.exec(logger)?.[1];
+let stamp = 20261011120000;
+for (const [project, results] of projects) {
+  let file;
+  if (fileName) {
+    file = path.join(resultsDir, fileName);
+    if (fs.existsSync(file)) process.stdout.write("WARNING: Overwriting results file: " + file + "\\n");
+  } else if (prefix) {
+    do { file = path.join(resultsDir, prefix + "_net10.0_" + stamp++ + ".trx"); } while (fs.existsSync(file));
+  } else {
+    file = path.join(resultsDir, project + "_" + stamp++ + ".trx");
+  }
+  const passed = results.filter(([, o]) => o === "Passed").length;
+  fs.writeFileSync(file, '<?xml version="1.0" encoding="utf-8"?><TestRun><Results>' +
+    results.map(([n, o]) => '<UnitTestResult testName="' + n + '" outcome="' + o + '" />').join("") +
+    '</Results><ResultSummary><Counters total="' + results.length + '" passed="' + passed + '" failed="' + (results.length - passed) + '" /></ResultSummary></TestRun>');
+  process.stdout.write((results.length === 0 ? "No test matches the given testcase filter in " : "Passed! - ") + project + ".dll\\n");
+}
+process.exit(fixed ? 0 : 1);
+`;
+
+  const gitIn = (cwd: string, ...args: string[]): string =>
+    execSync(
+      ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-C", cwd, ...args]
+        .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
+        .join(" "),
+      { encoding: "utf8" },
+    );
+
+  beforeEach(() => {
+    work = mkdtempSync(path.join(tmpdir(), "swe-sharp-multi-"));
+  });
+
+  afterEach(() => {
+    rmSync(work, { recursive: true, force: true });
+  });
+
+  it("a correct gold fix is resolved when the empty report of the other project finishes last", () => {
+    const upstream = path.join(work, "upstream");
+    const csproj = '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" /></ItemGroup></Project>\n';
+    for (const [rel, body] of [
+      ["S.slnx", '<Solution><Project Path="A.Tests/A.Tests.csproj" /><Project Path="B.Tests/B.Tests.csproj" /></Solution>\n'],
+      ["A.Tests/A.Tests.csproj", csproj],
+      ["B.Tests/B.Tests.csproj", csproj],
+      ["src/Lib.cs", "broken\n"],
+    ] as const) {
+      mkdirSync(path.dirname(path.join(upstream, rel)), { recursive: true });
+      writeFileSync(path.join(upstream, rel), body);
+    }
+    gitIn(upstream, "init", "--quiet");
+    gitIn(upstream, "add", ".");
+    gitIn(upstream, "commit", "--quiet", "-m", "base");
+    const sha = gitIn(upstream, "rev-parse", "HEAD").trim();
+    // The per-repo bare cache already holds the commit, so nothing touches a network.
+    const cache = path.join(work, "cache");
+    mkdirSync(path.join(cache, "repos"), { recursive: true });
+    gitIn(work, "clone", "--quiet", "--bare", upstream, path.join(cache, "repos", "acme__thing.git"));
+
+    const fakeDotnet = path.join(work, "fake-dotnet");
+    writeFileSync(fakeDotnet, FAKE_DOTNET);
+    chmodSync(fakeDotnet, 0o755);
+    const tasksFile = path.join(work, "tasks.json");
+    writeFileSync(
+      tasksFile,
+      JSON.stringify({
+        tasks: [
+          {
+            instanceId: "acme__thing-1",
+            repo: "acme/thing",
+            baseCommit: sha,
+            problemStatement: "p",
+            goldPatch: ["diff --git a/src/Lib.cs b/src/Lib.cs", "--- a/src/Lib.cs", "+++ b/src/Lib.cs", "@@ -1 +1 @@", "-broken", "+fixed", ""].join("\n"),
+            testPatch: [
+              "diff --git a/A.Tests/FormatterTests.cs b/A.Tests/FormatterTests.cs",
+              "new file mode 100644",
+              "--- /dev/null",
+              "+++ b/A.Tests/FormatterTests.cs",
+              "@@ -0,0 +1 @@",
+              "+// Works",
+              "",
+            ].join("\n"),
+            // Rooted by neither project, so the harness tests the whole solution.
+            failToPass: ["Ns.FormatterTests.Works"],
+            passToPass: ["Ns.OtherTests.Stays"],
+          },
+        ],
+      }),
+    );
+
+    const res = spawnSync(process.execPath, [SCRIPT, "--tasks", tasksFile, "--candidate", "gold", "--cache-dir", cache, "--json"], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, STRADA_BENCH_DOTNET: fakeDotnet },
+    });
+    const payload = JSON.parse(res.stdout) as { attempts: TaskAttempt[] };
+    const attempt = payload.attempts[0]!;
+    expect({ status: attempt.status, reason: attempt.reason }, res.stderr).toEqual({ status: "resolved", reason: expect.any(String) });
+    expect(attempt.fixProven).toBe(true);
+    expect(attempt.trxCounters).toEqual({ total: 2, passed: 2, failed: 0 });
+  }, 120_000);
 });

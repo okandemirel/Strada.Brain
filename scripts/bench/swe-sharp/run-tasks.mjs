@@ -399,13 +399,13 @@ function runTests({ repoDir, targets, phase, task, args, api, logDir, resultsDir
   const required = [...task.failToPass, ...task.passToPass];
   const filter = args.filter ? buildRequiredTestFilter(required) : undefined;
   for (const [index, target] of targets.entries()) {
-    const trxName = `${phase}-${index}.trx`;
+    const trxPrefix = `${phase}-${index}`;
     const framework =
       args.framework ??
       (target.endsWith(".csproj") ? chooseFramework(targetFrameworksOf(path.join(repoDir, target))) : undefined);
     const cmd = buildTestCommand({
       target,
-      trxName,
+      trxPrefix,
       resultsDir,
       ...(framework ? { framework } : {}),
       ...(filter ? { filter } : {}),
@@ -423,11 +423,13 @@ function runTests({ repoDir, targets, phase, task, args, api, logDir, resultsDir
     if (res.timedOut) {
       return { timedOut: true, logs, reports, trxFilesFound, logText, detail: `${target} exceeded ${args.testTimeout}ms` };
     }
-    const trxPath = path.join(resultsDir, trxName);
-    if (fs.existsSync(trxPath)) {
+    // Every report this target wrote: a solution writes one per test project.
+    const trxFiles = api.runner.trxReportFiles(fs.readdirSync(resultsDir), trxPrefix);
+    for (const name of trxFiles) {
       trxFilesFound += 1;
-      reports.push(api.trx.parseTrx(fs.readFileSync(trxPath, "utf8")));
-    } else logs[logs.length - 1].missingTrx = true;
+      reports.push(api.trx.parseTrx(fs.readFileSync(path.join(resultsDir, name), "utf8")));
+    }
+    if (trxFiles.length === 0) logs[logs.length - 1].missingTrx = true;
   }
   return { timedOut: false, logs, reports, trxFilesFound, logText };
 }
