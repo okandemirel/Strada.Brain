@@ -551,33 +551,54 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
     ]);
   });
 
-  // A linked FILE is the other case: the restore replaces a destination that is
-  // itself a link rather than writing through it, so collapsing the two
-  // spellings onto the link's entry restored the link away, left the file the
-  // runtime reads stale, and reported success. Both entries stay, and the
-  // restore refuses them by name, touching neither.
-  it("keeps a database file linked into another root under both names, so the restore refuses it instead of replacing the link", async () => {
+  // A linked FILE is the other case. The restore replaces a destination that is
+  // itself a link rather than writing through it, and a link and its target
+  // both in the manifest are one file named twice, so the restore refused the
+  // WHOLE archive while the backup had reported success. The file is carried
+  // once, under the name that is not a link, and the manifest names the link.
+  it("carries a database file linked into another root once, under its real name, and restores it through the link", async () => {
     const userHome = path.join(root, "user");
     const real = path.join(userHome, ".strada", "trusted-skills.db");
     const link = path.join(stradaHome, "trusted-skills.db");
     mkdirSync(path.dirname(real), { recursive: true });
     seedDatabase(real, 5).close();
     symlinkSync(real, link);
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 2).close();
     await backupRuntimeData({ memoryRoot, stradaHome, userHome, destDir, timestamp: "ts" });
-    expect(readBackupManifest(destDir).databases.map((d) => `${d.root}:${d.relative}`)).toEqual([
-      "strada-home:trusted-skills.db",
+    const manifest = readBackupManifest(destDir);
+    expect(manifest.databases.map((d) => `${d.root}:${d.relative}`)).toEqual([
+      "memory:campaigns.db",
       "user-home:trusted-skills.db",
     ]);
+    expect(manifest.databases.find((d) => d.root === "user-home")?.links).toEqual([link]);
     seedDatabase(real, 1).close();
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 1).close();
 
-    await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(
-      /trusted-skills\.db is named twice/,
-    );
-    expect(countRows(real)).toBe(6);
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(real)).toBe(5);
+    expect(countRows(path.join(memoryRoot, "campaigns.db"))).toBe(2);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(countRows(link)).toBe(5);
+  });
+
+  it("carries the file once whichever root lists it first, the link's or the target's", async () => {
+    // The target in the memory root is listed before the link in the Strada home.
+    const real = path.join(memoryRoot, "hub-owners.db");
+    const link = path.join(stradaHome, "hub-owners.db");
+    seedDatabase(real, 3).close();
+    symlinkSync(real, link);
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    const manifest = readBackupManifest(destDir);
+    expect(manifest.databases.map((d) => `${d.root}:${d.relative}`)).toEqual(["memory:hub-owners.db"]);
+    expect(manifest.databases[0]?.links).toEqual([link]);
+    seedDatabase(real, 2).close();
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(real)).toBe(3);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
-  it("keeps an AgentDB file linked to another tree's under both names, so the restore refuses it instead of replacing the link", async () => {
+  it("restores an AgentDB file linked to another tree's even after the real file is gone, leaving the link a link", async () => {
     const real = path.join(memoryRoot, "agents", "a1", "memory.db");
     const link = path.join(memoryRoot, "agentdb", "memory.db");
     mkdirSync(path.dirname(real), { recursive: true });
@@ -586,16 +607,16 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
     symlinkSync(real, link);
     await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
     expect(readBackupManifest(destDir).databases.map((d) => d.relative)).toEqual([
-      path.join("agentdb", "memory.db"),
       path.join("agents", "a1", "memory.db"),
     ]);
-    seedDatabase(real, 1).close();
+    // Disaster recovery: the link dangles. Restoring it as a regular file would
+    // leave two copies that drift apart once the real one is back.
+    rmSync(real);
 
-    await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(
-      /memory\.db is named twice/,
-    );
-    expect(countRows(real)).toBe(6);
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(real)).toBe(5);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(countRows(link)).toBe(5);
   });
 });
 
@@ -1356,6 +1377,16 @@ describe("a manifest that has been modified (round 12 #19)", () => {
 
     expect(() => readBackupManifest(destDir)).toThrow(/relative/);
     await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(/relative/);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("refuses an entry whose links are not a list of paths", async () => {
+    await backupAndDiverge();
+    tamperManifest((m) => {
+      m.databases[0].links = [{ escape: "../../victim" }];
+    });
+
+    expect(() => readBackupManifest(destDir)).toThrow(/links\[0\]/);
     expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
   });
 

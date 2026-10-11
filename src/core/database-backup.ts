@@ -318,6 +318,8 @@ export interface RuntimeDatabaseFile {
   readonly rootPath: string;
   /** Path within the root — the filename, and the restore's relative target. */
   readonly relative: string;
+  /** Inventoried spellings that are symbolic links to this file ({@link foldFileLinks}). */
+  readonly links?: readonly string[];
 }
 
 /**
@@ -326,6 +328,7 @@ export interface RuntimeDatabaseFile {
  * Deduplicated by real directory and file name (the first root that holds a
  * file owns it), so overlapping roots — or one root reached under two
  * spellings — cannot produce two copies of one database ({@link fileIdentity}).
+ * A file that is a link to another listed file is folded into it.
  */
 export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): RuntimeDatabaseFile[] {
   const files: RuntimeDatabaseFile[] = [];
@@ -343,7 +346,46 @@ export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): Runtime
       });
     }
   }
-  return files;
+  return foldFileLinks(files);
+}
+
+/**
+ * Carry a linked database file once, under the name that is not a link.
+ *
+ * A link and its target are two destinations to the restore and one file to
+ * the filesystem: kept as two entries the restore refused the whole archive
+ * as naming one file twice, after the backup had reported success; kept as
+ * the link's entry the restore replaced the link with a regular file and left
+ * the target stale. The target's entry restores the bytes where they live, and
+ * the link, which no entry names, still reaches them. Matched on the target's
+ * inode, the key the restore's duplicate check uses ({@link destinationKeys}).
+ * A link to a file nothing else lists is left as it was.
+ */
+function foldFileLinks(files: readonly RuntimeDatabaseFile[]): RuntimeDatabaseFile[] {
+  const inodeKey = (stat: { dev: bigint; ino: bigint }): string => `${stat.dev}:${stat.ino}`;
+  const regular = new Map<string, RuntimeDatabaseFile>();
+  const linked = new Map<RuntimeDatabaseFile, string>();
+  for (const file of files) {
+    try {
+      const leaf = lstatSync(file.source, { bigint: true });
+      if (leaf.isFile()) regular.set(inodeKey(leaf), file);
+      else if (leaf.isSymbolicLink()) linked.set(file, inodeKey(statSync(file.source, { bigint: true })));
+    } catch {
+      // Gone or dangling: left as listed, for the copy to report by name.
+    }
+  }
+  const links = new Map<RuntimeDatabaseFile, string[]>();
+  const kept = files.filter((file) => {
+    const key = linked.get(file);
+    const target = key === undefined ? undefined : regular.get(key);
+    if (target === undefined) return true;
+    links.set(target, [...(links.get(target) ?? []), file.source]);
+    return false;
+  });
+  return kept.map((file) => {
+    const named = links.get(file);
+    return named === undefined ? file : { ...file, links: named };
+  });
 }
 
 /**
@@ -560,7 +602,7 @@ function walkedDirectories(rootName: string, rootPath: string): Set<string> {
  * file name as named. Following a linked FILE collapsed the link and its target
  * onto whichever was listed first; when that was the link, the restore replaced
  * the link with a regular file, left the real one stale and reported success.
- * Kept apart, the restore refuses the two by name instead.
+ * Kept apart here, {@link foldFileLinks} carries the pair under the real name.
  */
 function fileIdentity(file: string): string {
   try {
@@ -665,6 +707,12 @@ export interface BackupManifestEntry {
   /** The copy, relative to the backup directory. */
   readonly backup: string;
   readonly bytes: number;
+  /**
+   * Absolute paths that were symbolic links to this file when it was backed
+   * up. Carried by this entry instead of one of their own; the restore writes
+   * the file and leaves them links.
+   */
+  readonly links?: readonly string[];
 }
 
 /** One retained blob in the backup: bytes a row names, and their digest. */
@@ -792,13 +840,17 @@ export async function backupRuntimeData(opts: BackupRunOptions): Promise<BackupR
     createdAtIso: new Date().toISOString(),
     ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
     roots: Object.fromEntries(roots.map((root) => [root.name, root.path])),
-    databases: results.map((result) => ({
-      root: result.root,
-      relative: result.relative,
-      source: result.source,
-      backup: path.relative(opts.destDir, result.destination),
-      bytes: result.bytes,
-    })),
+    databases: results.map((result) => {
+      const links = copiedFrom.get(result)?.links;
+      return {
+        root: result.root,
+        relative: result.relative,
+        source: result.source,
+        backup: path.relative(opts.destDir, result.destination),
+        bytes: result.bytes,
+        ...(links === undefined ? {} : { links }),
+      };
+    }),
     blobs: blobs.map((blob) => ({
       root: blob.root,
       relative: blob.relative,
@@ -1054,12 +1106,19 @@ export function readBackupManifest(backupDir: string): BackupManifest {
       throw new Error(`${where}: not an object`);
     }
     const entry = raw as Record<string, unknown>;
+    if (entry.links !== undefined && !Array.isArray(entry.links)) {
+      throw new Error(`${where}: links is not a list`);
+    }
+    const links = (entry.links as unknown[] | undefined)?.map((link, j) =>
+      manifestString(link, `links[${j}]`, where),
+    );
     return {
       root: manifestString(entry.root, "root", where),
       relative: manifestRelative(entry.relative, "relative", where, "the root it belongs to"),
       source: manifestString(entry.source, "source", where),
       backup: manifestRelative(entry.backup, "backup", where, "the backup directory"),
       bytes: manifestBytes(entry.bytes, where),
+      ...(links === undefined ? {} : { links }),
     };
   });
   const blobs: BackupBlobEntry[] | undefined =
