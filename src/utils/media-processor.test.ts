@@ -297,6 +297,36 @@ describe("MediaProcessor", () => {
       expect(undiciFetch).not.toHaveBeenCalled();
     });
 
+    it("gives up on a body that stalls after the headers once the 30 s download deadline passes", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        // Like undici: the request's signal also governs the body, so an abort
+        // after the headers errors the stream a reader is waiting on.
+        undiciFetch.mockImplementation(async (_url: string, init: { signal?: AbortSignal }) => {
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([0xff, 0xd8, 0xff]));
+              init.signal?.addEventListener("abort", () =>
+                controller.error(new DOMException("This operation was aborted", "AbortError")),
+              );
+            },
+          });
+          return { ok: true, status: 200, headers: new Headers({ "content-type": "image/jpeg" }), body };
+        });
+
+        let outcome: unknown = "pending";
+        void downloadMedia("https://example.com/stall.jpg").then((r) => {
+          outcome = r;
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(outcome).toBe("pending");
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(outcome).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("connects through a pinned dispatcher and still refuses redirects", async () => {
       undiciFetch.mockResolvedValue({ ok: false, status: 302, headers: new Headers({ location: "http://127.0.0.1/" }) });
       const result = await downloadMedia("https://example.com/photo.jpg");

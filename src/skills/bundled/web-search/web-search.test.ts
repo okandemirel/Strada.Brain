@@ -564,6 +564,32 @@ describe("web_search", () => {
     expect(result.content).toContain("timed out");
   });
 
+  it("times out a results page that stalls after the headers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // Like fetch: the request's signal also governs the body read.
+      mockFetch.mockImplementation(async (_url: string, init: { signal?: AbortSignal }) => ({
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_, reject) => {
+            init.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")));
+          }),
+      }));
+
+      let outcome: { content: string; isError?: boolean } | "pending" = "pending";
+      void tool.execute({ query: "stall" }, dummyContext).then((r) => {
+        outcome = r;
+      });
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(outcome).not.toBe("pending");
+      expect((outcome as { content: string }).content).toContain("timed out");
+      expect((outcome as { isError?: boolean }).isError).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flags a search that could not connect as a failure", async () => {
     mockFetch.mockRejectedValue(new Error("getaddrinfo ENOTFOUND html.duckduckgo.com"));
 

@@ -262,10 +262,11 @@ export async function downloadMedia(
 
   let dispose: (() => Promise<void>) | undefined;
   let response: Response | undefined;
+  // The deadline covers the body too: cleared when the headers arrived, it left
+  // the read loop below to a server that sends headers and then stalls or drips.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
-
     // Through the shared address-pinned transport: the hostname is resolved,
     // every address it resolves to must be public, and the socket connects to
     // exactly those addresses, so a DNS name pointing inside (or rebinding
@@ -274,7 +275,7 @@ export async function downloadMedia(
       signal: controller.signal,
       headers: options?.headers,
       maxRedirects: 0,
-    }).finally(() => clearTimeout(timeout));
+    });
     dispose = fetched.dispose;
     response = fetched.response;
 
@@ -341,6 +342,7 @@ export async function downloadMedia(
     });
     return null;
   } finally {
+    clearTimeout(timeout);
     // An unread body keeps the pinned agent's request open; release it first.
     await discardBody(response);
     await dispose?.();

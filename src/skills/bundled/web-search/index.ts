@@ -213,18 +213,17 @@ const webSearch: ITool = {
 
     const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query.trim())}`;
 
+    // Cleared only once the page is read: stopped at the headers, it left
+    // response.text() to a server that answers and then stalls.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
       const response = await fetch(searchUrl, {
         signal: controller.signal,
         headers: {
           "User-Agent": "StradaBrain/1.0",
         },
       });
-
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         return { content: `Error: Search request failed with HTTP ${response.status}`, isError: true };
@@ -245,6 +244,8 @@ const webSearch: ITool = {
         return { content: "Error: Search request timed out after 10 seconds.", isError: true };
       }
       return { content: `Error: ${message}`, isError: true };
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 };
