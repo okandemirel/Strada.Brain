@@ -58,11 +58,15 @@ describe("codex second opinion", () => {
     });
 
     it("the deadline settles even when a descendant keeps the pipes open", async () => {
+      // The deadline must leave bash time to start and print: Git Bash on a
+      // loaded Windows runner took longer than 300 ms, so stdout was still
+      // empty when it fired. Settling well before the 8 s descendant exits is
+      // what proves the pipes did not hold the call open.
       const started = Date.now();
-      const r = await makeCodexSpawn("bash")(["-c", "sleep 8 & echo out"], { cwd: tmpdir(), timeoutMs: 300 });
+      const r = await makeCodexSpawn("bash")(["-c", "sleep 8 & echo out"], { cwd: tmpdir(), timeoutMs: 2000 });
       expect(r.timedOut).toBe(true);
       expect(r.stdout).toContain("out");
-      expect(Date.now() - started).toBeLessThan(3000);
+      expect(Date.now() - started).toBeLessThan(7000);
     });
 
     it("a process that ends normally settles on close with its exit code", async () => {
