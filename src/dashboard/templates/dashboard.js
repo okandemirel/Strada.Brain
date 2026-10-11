@@ -974,7 +974,7 @@ function renderDeployment(data) {
       var tdStatus = document.createElement('td');
       var statusBadge = document.createElement('span');
       var statusClass = 'badge-ok';
-      if (e.status === 'failed' || e.status === 'post_verify_failed') statusClass = 'badge-err';
+      if (e.status === 'failed' || e.status === 'post_verify_failed' || e.status === 'rollback_completed' || e.status === 'rollback_failed') statusClass = 'badge-err';
       else if (e.status === 'proposed' || e.status === 'executing') statusClass = 'badge-info';
       else if (e.status === 'cancelled') statusClass = 'badge-warn';
       statusBadge.className = 'badge ' + statusClass;

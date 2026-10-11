@@ -791,3 +791,43 @@ describe("initializeDeploymentStage — fully injected via deps", () => {
     expect(result).toEqual({});
   });
 });
+
+describe("initializeDeploymentStage — the executor reports the deploy breaker", () => {
+  it("deploy:status reads the breaker the trigger trips, not a constant CLOSED", async () => {
+    const { default: Database } = await import("better-sqlite3");
+    const { CircuitBreaker } = await import("../../daemon/resilience/circuit-breaker.js");
+    const db = new Database(":memory:");
+    const breaker = new CircuitBreaker(1, 60_000, 60_000);
+    const daemonContext = {} as Record<string, unknown>;
+    try {
+      const result = await initializeDeploymentStage(
+        {
+          config: makeConfig({ deployment: { enabled: true, testCommand: "npm test", targetBranch: "main", requireCleanGit: true, testTimeoutMs: 60000, executionTimeoutMs: 600000, cooldownMinutes: 30, notificationUrgency: "medium" } as Config["deployment"] }),
+          logger: createMockLogger(),
+          daemonConfig: { backoff: { failureThreshold: 1, baseCooldownMs: 60_000, maxCooldownMs: 60_000 } } as Config["daemon"],
+          daemonStorage: { getDatabase: vi.fn(() => db) } as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonStorage"],
+          approvalQueue: {} as unknown as Parameters<typeof initializeDeploymentStage>[0]["approvalQueue"],
+          triggerRegistry: { register: vi.fn() },
+          heartbeatLoop: { setDeployTrigger: vi.fn(), onTaskSettled: vi.fn() },
+          daemonEventBus: { emit: vi.fn(), on: vi.fn() } as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonEventBus"],
+          taskManager: { on: vi.fn() } as unknown as Parameters<typeof initializeDeploymentStage>[0]["taskManager"],
+          daemonContext: daemonContext as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonContext"],
+        },
+        {
+          createReadinessChecker: vi.fn(() => ({ validateScriptPath: vi.fn() })),
+          createDeployCircuitBreaker: vi.fn(() => breaker),
+          createDeployTrigger: vi.fn(() => ({})),
+          registerDeployApprovalBridge: vi.fn(),
+        } as unknown as Parameters<typeof initializeDeploymentStage>[1],
+      );
+      expect(result.deploymentExecutor!.getStats().circuitBreakerState).toBe("CLOSED");
+
+      breaker.recordFailure();
+
+      expect(result.deploymentExecutor!.getStats().circuitBreakerState).toBe("OPEN");
+      expect(daemonContext.deploymentExecutor).toBe(result.deploymentExecutor);
+    } finally {
+      db.close();
+    }
+  });
+});

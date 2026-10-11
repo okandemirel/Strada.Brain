@@ -34,6 +34,29 @@ export interface DeploymentExecutorLogger {
   error(msg: string, ...args: unknown[]): void;
 }
 
+/**
+ * Every status a deploy that did not go out ends in. A rollback runs only
+ * after a failed deploy or a failed post-verify, so its two statuses are
+ * failures too: counting them as neither made a rolled-back failure vanish
+ * from `Failed:`.
+ */
+const FAILED_STATUSES: readonly DeploymentStatus[] = [
+  "failed",
+  "post_verify_failed",
+  "cancelled",
+  "rollback_completed",
+  "rollback_failed",
+];
+
+export interface DeploymentExecutorOptions {
+  /**
+   * The deploy circuit breaker's state. The breaker belongs to DeployTrigger;
+   * without this getStats() reported CLOSED while the trigger had disabled
+   * itself after repeated failures.
+   */
+  readonly circuitState?: () => CircuitState;
+}
+
 /** Minimal database interface for deployment log */
 export interface DeploymentDatabase {
   exec(sql: string): void;
@@ -52,17 +75,20 @@ export class DeploymentExecutor {
   private activeProcess: ChildProcess | null = null;
   private activeProposalId: string | null = null;
   private deploymentInProgress = false;
+  private readonly circuitState?: () => CircuitState;
 
   constructor(
     config: DeploymentConfig,
     projectRoot: string,
     logger: DeploymentExecutorLogger,
     db: DeploymentDatabase,
+    options: DeploymentExecutorOptions = {},
   ) {
     this.config = config;
     this.projectRoot = path.resolve(projectRoot);
     this.logger = logger;
     this.db = db;
+    this.circuitState = options.circuitState;
     this.initSchema();
   }
 
@@ -104,8 +130,7 @@ export class DeploymentExecutor {
     this.deploymentInProgress = true;
     this.activeProposalId = proposal.id;
 
-    // Update log to executing
-    this.updateLogStatus(proposal.id, "executing");
+    this.markExecuting(proposal);
 
     const startTime = Date.now();
 
@@ -119,18 +144,23 @@ export class DeploymentExecutor {
         if (this.config.postScriptPath) {
           const postResult = await this.runPostVerify(proposal);
           if (!postResult.success) {
-            this.updateLogEntry(proposal.id, "post_verify_failed", postResult.stderr, durationMs);
+            const failure = { output: postResult.stderr, error: `Post-verify failed: ${postResult.stderr || "the script exited non-zero"}` };
+            this.updateLogEntry(proposal.id, "post_verify_failed", failure.output, durationMs, failure.error);
             this.logger.error("Post-verify script failed", { proposalId: proposal.id });
             // The new version is live and failed its health check: this is
             // the case a rollback exists for. It returned before reaching it.
-            await this.runRollback(proposal, durationMs);
+            await this.runRollback(proposal, durationMs, failure);
             return { ...deployResult, success: false };
           }
         }
         this.updateLogEntry(proposal.id, "completed", deployResult.stdout, durationMs);
         this.logger.info("Deployment completed successfully", { proposalId: proposal.id, durationMs });
       } else {
-        this.updateLogEntry(proposal.id, "failed", deployResult.stderr, durationMs, deployResult.stderr);
+        const failure = {
+          output: deployResult.stderr,
+          error: deployResult.stderr || `Deployment script ended with ${deployResult.signal ?? `exit code ${deployResult.exitCode}`}`,
+        };
+        this.updateLogEntry(proposal.id, "failed", failure.output, durationMs, failure.error);
         this.logger.error("Deployment failed", {
           proposalId: proposal.id,
           exitCode: deployResult.exitCode,
@@ -138,7 +168,7 @@ export class DeploymentExecutor {
         });
 
         // Automatic rollback if configured
-        await this.runRollback(proposal, durationMs);
+        await this.runRollback(proposal, durationMs, failure);
       }
 
       return deployResult;
@@ -149,28 +179,44 @@ export class DeploymentExecutor {
     }
   }
 
-  /** Run the configured rollback script, if any, and record its outcome. */
-  private async runRollback(proposal: { id: string; approvedBy?: string }, durationMs: number): Promise<void> {
+  /**
+   * Run the configured rollback script, if any, and record its outcome. The
+   * rollback is the second half of `failure`, not its replacement: the row
+   * keeps the deploy's error and output, and the rollback's is added to them.
+   * It used to overwrite both, erasing why the deploy failed.
+   */
+  private async runRollback(
+    proposal: { id: string; approvedBy?: string },
+    durationMs: number,
+    failure: { output: string; error: string },
+  ): Promise<void> {
     if (!this.config.rollbackScriptPath) return;
+    const withRollback = (rollbackOutput: string): string =>
+      rollbackOutput ? `${failure.output}${failure.output ? "\n" : ""}--- rollback ---\n${rollbackOutput}` : failure.output;
     try {
       const rollbackPath = this.validateScript(this.config.rollbackScriptPath);
       this.logger.info("Running rollback script", { proposalId: proposal.id, rollbackPath });
       const rollbackResult = await this.runScript(rollbackPath, proposal);
       if (rollbackResult.success) {
         this.logger.info("Rollback completed", { proposalId: proposal.id });
-        this.updateLogEntry(proposal.id, "rollback_completed", rollbackResult.stdout, durationMs);
+        this.updateLogEntry(proposal.id, "rollback_completed", withRollback(rollbackResult.stdout), durationMs, failure.error);
       } else {
         this.logger.error("Rollback failed", {
           proposalId: proposal.id,
           stderr: rollbackResult.stderr,
         });
-        this.updateLogEntry(proposal.id, "rollback_failed", rollbackResult.stderr, durationMs);
+        this.updateLogEntry(
+          proposal.id,
+          "rollback_failed",
+          withRollback(rollbackResult.stderr),
+          durationMs,
+          `${failure.error}\nRollback failed: ${rollbackResult.stderr || "the script exited non-zero"}`,
+        );
       }
     } catch (rollbackErr) {
-      this.logger.error("Rollback script error", {
-        proposalId: proposal.id,
-        error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
-      });
+      const message = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      this.logger.error("Rollback script error", { proposalId: proposal.id, error: message });
+      this.updateLogEntry(proposal.id, "rollback_failed", failure.output, durationMs, `${failure.error}\nRollback could not run: ${message}`);
     }
   }
 
@@ -210,11 +256,16 @@ export class DeploymentExecutor {
     return rows.map(this.rowToEntry);
   }
 
-  /** Get aggregate deployment statistics */
-  getStats(circuitBreakerState: CircuitState = "CLOSED"): DeploymentStats {
+  /**
+   * Get aggregate deployment statistics. The circuit breaker state is the
+   * deploy breaker's (see DeploymentExecutorOptions) unless one is passed.
+   */
+  getStats(circuitBreakerState?: CircuitState): DeploymentStats {
     const total = this.db.prepare("SELECT COUNT(*) as cnt FROM deployment_log").get() as { cnt: number } | undefined;
     const successful = this.db.prepare("SELECT COUNT(*) as cnt FROM deployment_log WHERE status = ?").get("completed") as { cnt: number } | undefined;
-    const failed = this.db.prepare("SELECT COUNT(*) as cnt FROM deployment_log WHERE status IN (?, ?, ?)").get("failed", "post_verify_failed", "cancelled") as { cnt: number } | undefined;
+    const failed = this.db
+      .prepare(`SELECT COUNT(*) as cnt FROM deployment_log WHERE status IN (${FAILED_STATUSES.map(() => "?").join(", ")})`)
+      .get(...FAILED_STATUSES) as { cnt: number } | undefined;
     const lastRow = this.db.prepare("SELECT * FROM deployment_log ORDER BY proposed_at DESC LIMIT 1").get();
 
     return {
@@ -222,7 +273,7 @@ export class DeploymentExecutor {
       successful: successful?.cnt ?? 0,
       failed: failed?.cnt ?? 0,
       lastDeployment: lastRow ? this.rowToEntry(lastRow as Record<string, unknown>) : undefined,
-      circuitBreakerState,
+      circuitBreakerState: circuitBreakerState ?? this.circuitState?.() ?? "CLOSED",
     };
   }
 
@@ -311,13 +362,19 @@ export class DeploymentExecutor {
   }
 
   private updateLogStatus(id: string, status: DeploymentStatus): void {
-    if (status === "approved") {
-      this.db
-        .prepare("UPDATE deployment_log SET status = ?, approved_at = ? WHERE id = ?")
-        .run(status, Date.now(), id);
-    } else {
-      this.db.prepare("UPDATE deployment_log SET status = ? WHERE id = ?").run(status, id);
-    }
+    this.db.prepare("UPDATE deployment_log SET status = ? WHERE id = ?").run(status, id);
+  }
+
+  /**
+   * The approved proposal starts running. execute() is called on the approval
+   * decision, so this is also when (and by whom) it was approved: nothing else
+   * wrote approved_by/approved_at, and deploy:history's "Approved By" was
+   * always "-".
+   */
+  private markExecuting(proposal: { id: string; approvedBy?: string }): void {
+    this.db
+      .prepare("UPDATE deployment_log SET status = ?, approved_at = ?, approved_by = ? WHERE id = ?")
+      .run("executing", Date.now(), proposal.approvedBy ?? null, proposal.id);
   }
 
   private updateLogEntry(

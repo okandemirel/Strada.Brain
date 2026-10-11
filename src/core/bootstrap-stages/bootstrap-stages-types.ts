@@ -487,6 +487,7 @@ export interface DeploymentStageDeps {
     projectPath: string,
     logger: winston.Logger,
     db: ReturnType<DaemonStorage["getDatabase"]>,
+    options: import("../../daemon/deployment/deployment-executor.js").DeploymentExecutorOptions,
   ) => DeploymentExecutorContract;
   createDeployCircuitBreaker?: (
     failureThreshold: number,

@@ -546,17 +546,6 @@ export async function initializeDeploymentStage(
       params.config.unityProjectPath,
       params.logger,
     );
-    const deploymentExecutor = deps.createDeploymentExecutor?.(
-      params.config.deployment,
-      params.config.unityProjectPath,
-      params.logger,
-      params.daemonStorage.getDatabase(),
-    ) ?? new DeploymentExecutor(
-      params.config.deployment,
-      params.config.unityProjectPath,
-      params.logger,
-      params.daemonStorage.getDatabase(),
-    );
     const deployCircuitBreaker = deps.createDeployCircuitBreaker?.(
       params.daemonConfig.backoff.failureThreshold,
       params.daemonConfig.backoff.baseCooldownMs,
@@ -565,6 +554,24 @@ export async function initializeDeploymentStage(
       params.daemonConfig.backoff.failureThreshold,
       params.daemonConfig.backoff.baseCooldownMs,
       params.daemonConfig.backoff.maxCooldownMs,
+    );
+    // deploy:status and GET /api/deployment read the breaker through the
+    // executor's stats; it lives in the trigger, so it is handed over here.
+    const executorOptions = {
+      circuitState: () => (deployCircuitBreaker as Pick<InstanceType<typeof DeployCircuitBreaker>, "getState">).getState(),
+    };
+    const deploymentExecutor = deps.createDeploymentExecutor?.(
+      params.config.deployment,
+      params.config.unityProjectPath,
+      params.logger,
+      params.daemonStorage.getDatabase(),
+      executorOptions,
+    ) ?? new DeploymentExecutor(
+      params.config.deployment,
+      params.config.unityProjectPath,
+      params.logger,
+      params.daemonStorage.getDatabase(),
+      executorOptions,
     );
     const deployTrigger = deps.createDeployTrigger?.(
       readinessChecker,
