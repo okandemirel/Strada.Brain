@@ -62,6 +62,10 @@ describe("grep_search and glob_search bound what a glob may cost", () => {
   const backtracking: [string, RegExp][] = [
     ["**/*?*?*?*?*?*?*?*?#", /segment '\*\?\*\?\*\?\*\?\*\?\*\?\*\?\*\?#' holds 8 '\*' wildcards/],
     ["**/+(?|??)#", /extglob/],
+    // glob's brace expansion follows bash, where `{a},b}` is the two
+    // alternatives `a}` and `b`: ten of them make one three-'*' segment into
+    // 1024, which ran 0.2-1 s per call over these trees (2-6 s in review).
+    [`**/*?*?*?#${"{a},b}".repeat(10)}`, /expands to more than 64 \{a,b\} alternatives/],
   ];
 
   it.each(backtracking)("glob_search refuses %j without walking the tree, saying why", async (pattern, why) => {
@@ -85,6 +89,7 @@ describe("grep_search and glob_search bound what a glob may cost", () => {
     "**/*?*?*?*?#",
     "Assets/**/*?*?*?#/*?*?#",
     `**/{${Array.from({ length: 9 }, (_, i) => `*?*?#${i}`).join(",")}}`,
+    "**/*?*?*?#{a},b}",
   ];
 
   it.each(justOver)("refuses %j, just past the limits, in both tools", async (pattern) => {

@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { braceExpand } from "minimatch";
 
 /**
  * SearchOptions.filePattern as a predicate over an indexed file path.
@@ -86,38 +87,47 @@ const MAX_GLOB_MULTI_STAR_COST = 8;
  * 100 Unity file names, and the extglob `+(?|??)` grows exponentially. On top
  * of filePatternProblem's limits, which refuse extglobs, this caps the `*` runs
  * in a segment and what segments with several of them may cost together.
+ *
+ * The alternatives counted are the ones glob compiles: minimatch's braceExpand,
+ * which hands a pattern holding a `{...}` to brace-expansion (called on any
+ * other, brace-expansion alone turns `\\*` into an escaped star). It follows
+ * bash, where `{a},b}` is the two alternatives `a}` and `b` and `{1..9}` a
+ * sequence; file-pattern's parser reads both as literal text, so ten `{a},b}`
+ * passed as one segment that glob compiled into 1024.
  */
 export function globPatternProblem(pattern: string, label = "file_pattern"): string | undefined {
   const problem = filePatternProblem(pattern, label);
   if (problem !== undefined) return problem;
-  try {
-    let cost = 0;
-    for (const alternative of expandBraces(pattern, label)) {
-      for (const part of alternative.split("/")) {
-        const segment = parseSegment(part, false);
-        if (segment.kind === "globstar") continue;
-        const stars = segment.tokens.filter((token) => token.kind === "star").length;
-        if (stars > MAX_GLOB_STARS_PER_SEGMENT) {
-          return (
-            `${label} segment '${part}' holds ${stars} '*' wildcards; one path segment may hold at most ` +
-            `${MAX_GLOB_STARS_PER_SEGMENT}, because glob tries every way of splitting each file name between them. ` +
-            "Use fewer '*' and narrow the results afterwards."
-          );
-        }
-        if (stars >= 2) cost += 8 ** (stars - 2);
+  const alternatives = braceExpand(pattern, { braceExpandMax: MAX_BRACE_ALTERNATIVES + 1 });
+  if (alternatives.length > MAX_BRACE_ALTERNATIVES) return tooManyAlternatives(label);
+  let cost = 0;
+  for (const alternative of alternatives) {
+    for (const part of alternative.split("/")) {
+      const segment = parseSegment(part, false);
+      if (segment.kind === "globstar") continue;
+      const stars = segment.tokens.filter((token) => token.kind === "star").length;
+      if (stars > MAX_GLOB_STARS_PER_SEGMENT) {
+        return (
+          `${label} segment '${part}' holds ${stars} '*' wildcards; one path segment may hold at most ` +
+          `${MAX_GLOB_STARS_PER_SEGMENT}, because glob tries every way of splitting each file name between them. ` +
+          "Use fewer '*' and narrow the results afterwards."
+        );
       }
+      if (stars >= 2) cost += 8 ** (stars - 2);
     }
-    if (cost > MAX_GLOB_MULTI_STAR_COST) {
-      return (
-        `${label} puts several '*' wildcards into too many path segments, counting every {a,b} alternative: ` +
-        `a segment with two counts 1 and one with three counts 8, at most ${MAX_GLOB_MULTI_STAR_COST} in all, ` +
-        "because glob tries every way of splitting each file name between them. Use fewer alternatives or fewer '*'."
-      );
-    }
-    return undefined;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
   }
+  if (cost > MAX_GLOB_MULTI_STAR_COST) {
+    return (
+      `${label} puts several '*' wildcards into too many path segments, counting every {a,b} alternative: ` +
+      `a segment with two counts 1 and one with three counts 8, at most ${MAX_GLOB_MULTI_STAR_COST} in all, ` +
+      "because glob tries every way of splitting each file name between them. Use fewer alternatives or fewer '*'."
+    );
+  }
+  return undefined;
+}
+
+function tooManyAlternatives(label: string): string {
+  return `${label} expands to more than ${MAX_BRACE_ALTERNATIVES} {a,b} alternatives`;
 }
 
 /** glob (grep_search) defaults to case-insensitive matching on these platforms. */
@@ -193,9 +203,7 @@ function expandBraces(pattern: string, label: string): string[] {
     if (!group) {
       out.push(p);
       expandedLength += p.length;
-      if (out.length > MAX_BRACE_ALTERNATIVES) {
-        throw new Error(`${label} expands to more than ${MAX_BRACE_ALTERNATIVES} {a,b} alternatives`);
-      }
+      if (out.length > MAX_BRACE_ALTERNATIVES) throw new Error(tooManyAlternatives(label));
       if (expandedLength > MAX_EXPANDED_LENGTH) {
         throw new Error(`${label}'s {a,b} alternatives expand past ${MAX_EXPANDED_LENGTH} characters`);
       }

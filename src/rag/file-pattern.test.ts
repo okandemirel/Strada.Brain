@@ -135,6 +135,23 @@ describe("globPatternProblem", () => {
     );
   });
 
+  // file-pattern's parser reads both of these as literal text; glob does not.
+  it("counts the alternatives glob's own brace expansion makes", () => {
+    // bash's rewrite: `{a},b}` is the alternatives `a}` and `b`.
+    expect(globPatternProblem("**/*?*?*?#{a},b}")).toMatch(/too many path segments/);
+    expect(globPatternProblem(`**/*?*?*?#${"{a},b}".repeat(10)}`)).toMatch(/expands to more than 64/);
+    // Sequences, refused on their own rather than only by the tools' '..' check.
+    expect(globPatternProblem("**/*{1..99999}.cs")).toMatch(/expands to more than 64/);
+    expect(globPatternProblem("**/*{a..i}*.cs")).toMatch(/too many path segments/);
+    expect(globPatternProblem("**/*{a..c}*.cs")).toBeUndefined();
+  });
+
+  // minimatch expands only a pattern holding a `{...}`; brace-expansion
+  // itself would read `\\*` as an escaped star and miss these four runs.
+  it("reads a pattern without braces the way glob does", () => {
+    expect(globPatternProblem(String.raw`**/\\*?\\*?\\*?\\*?#`)).toMatch(/holds 4 '\*' wildcards/);
+  });
+
   it("keeps filePatternProblem's limits and names the argument it was given", () => {
     expect(globPatternProblem("**/+(?|??)#", "pattern")).toMatch(/^pattern uses extglob syntax/);
     expect(globPatternProblem("{a,b}".repeat(12), "pattern")).toMatch(/^pattern expands to more than 64/);
