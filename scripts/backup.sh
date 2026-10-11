@@ -37,7 +37,12 @@ log() {
 
 info() { log "INFO" "$1"; }
 warn() { log "WARN" "${YELLOW}$1${NC}"; }
-error() { log "ERROR" "${RED}$1${NC}"; }
+# The first error of a run is its cause; on_exit sends it to the webhook.
+FAILURE_REASON=""
+error() {
+    [[ -n "$FAILURE_REASON" ]] || FAILURE_REASON="$1"
+    log "ERROR" "${RED}$1${NC}"
+}
 success() { log "SUCCESS" "${GREEN}$1${NC}"; }
 
 # Where the runtime keeps its data. MEMORY_DB_PATH is what the application
@@ -98,6 +103,7 @@ calculate_checksum() {
 # directories hold — and copies each with SQLite's own online backup API
 # (better-sqlite3 `db.backup()`), verifying integrity_check on every produced
 # file. It prints one path per line, the restore manifest last; we checksum those.
+# The manifest line is printed even when nothing was found: it is the receipt.
 backup_databases() {
     info "Backing up SQLite databases (online backup API)..."
 
@@ -138,9 +144,19 @@ backup_databases() {
     # the large-attachment rows point at — so they are checksummed like the rest.
     produced="$(node "$DB_BACKUP_CLI" --source "$memory_root" --dest "$BACKUP_TEMP_DIR" --timestamp "$TIMESTAMP" ${project_args[@]+"${project_args[@]}"})"
 
-    if [[ -z "$produced" ]]; then
+    # Exit 0 without the receipt means the helper's main() never ran (an entry
+    # guard that did not match, a stub left by a broken build). Empty output
+    # used to be read as "No databases found" and archived as a good backup.
+    # `-ef`, not string equality: the helper normalises the path it prints.
+    local manifest="${BACKUP_TEMP_DIR}/databases.manifest.json"
+    local receipt
+    receipt="$(printf '%s\n' "$produced" | tail -n 1)"
+    if [[ -z "$receipt" || ! -f "$manifest" || ! "$receipt" -ef "$manifest" ]]; then
+        error "Database backup helper exited 0 without its receipt ($manifest); no database was backed up"
+        return 1
+    fi
+    if [[ "$produced" == "$receipt" ]]; then
         warn "No databases found under $memory_root or the Strada home"
-        return 0
     fi
 
     local count=0
@@ -151,7 +167,8 @@ backup_databases() {
         local checksum
         checksum="$(calculate_checksum "$produced_file")"
         echo "$checksum  ${name}" > "${produced_file}.sha256"
-        success "Database backed up: ${name} ($(du -h "$produced_file" | cut -f1))"
+        # The path inside the backup: AgentDB and every agent each have a memory.db.
+        success "Database backed up: ${produced_file#"${BACKUP_TEMP_DIR}/"} ($(du -h "$produced_file" | cut -f1))"
         count=$((count + 1))
     done <<< "$produced"
 
@@ -388,7 +405,15 @@ cleanup_old_backups() {
 }
 
 # Remote sync (optional)
+#
+# Optional to configure, not to perform: once RCLONE_REMOTE or AWS_S3_BUCKET is
+# set, the off-site copy is part of what "Backup completed" means. A missing
+# tool (a rebuilt host) used to log a warning and report success, so the
+# off-site copy stopped for as long as nobody read the log. The other remote
+# is still attempted and the local archive is kept; the run then fails.
 remote_sync() {
+    local skipped=""
+
     if [[ -n "${RCLONE_REMOTE:-}" ]]; then
         info "Syncing to remote: $RCLONE_REMOTE"
         
@@ -396,7 +421,7 @@ remote_sync() {
             rclone sync "$BACKUP_DIR" "$RCLONE_REMOTE" --transfers 4 --checksum
             success "Remote sync completed"
         else
-            warn "rclone not found, skipping remote sync"
+            skipped="${skipped:+$skipped, }$RCLONE_REMOTE (rclone is not installed)"
         fi
     fi
     
@@ -407,8 +432,13 @@ remote_sync() {
             aws s3 sync "$BACKUP_DIR" "s3://$AWS_S3_BUCKET" --storage-class STANDARD_IA
             success "S3 sync completed"
         else
-            warn "AWS CLI not found, skipping S3 sync"
+            skipped="${skipped:+$skipped, }s3://$AWS_S3_BUCKET (the AWS CLI is not installed)"
         fi
+    fi
+
+    if [[ -n "$skipped" ]]; then
+        error "Off-site copy NOT made to $skipped; only the local archive ${BACKUP_NAME}.tar.gz exists"
+        return 1
     fi
 }
 
@@ -417,6 +447,11 @@ send_notification() {
     local status="$1"
     local message="$2"
     
+    # A failure message carries paths; a quote in one made the JSON invalid
+    # and the webhook dropped it while curl's `|| true` hid that.
+    # sed, not ${//}: bash 5.2's patsub_replacement changes backslash handling.
+    message="$(printf '%s' "$message" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+
     # Discord webhook
     if [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
         local color="$([[ "$status" == "success" ]] && echo "3066993" || echo "15158332")"
@@ -470,7 +505,22 @@ main() {
 }
 
 # Handle errors
-trap 'error "Backup failed at line $LINENO"' ERR
+#
+# An EXIT trap, not ERR: without `set -E` an ERR trap is not inherited by
+# functions, and every step runs inside main(), so the old one never fired and
+# a failed run sent no notification at all. The success path sends its own.
+on_exit() {
+    local status=$?
+    [[ $status -ne 0 ]] || return 0
+    # `set -e` still holds in a trap: when the failure is an unwritable backup
+    # directory, the log line fails too and would end the trap before the
+    # notification, on exactly the run that needs one.
+    set +e
+    local reason="${FAILURE_REASON:-exit status $status}"
+    log "ERROR" "${RED}Backup failed: ${reason}${NC}"
+    send_notification "failure" "${BACKUP_NAME}: ${reason}"
+}
+trap on_exit EXIT
 
 # Run main function
 main "$@"

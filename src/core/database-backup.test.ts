@@ -410,6 +410,54 @@ describe("a default installation's inventory (round 10 #22)", () => {
   });
 });
 
+describe("AgentDB and per-agent memory (core-rest#0)", () => {
+  // Where the runtime puts them: bootstrap-memory.ts gives AgentDB
+  // `<memory root>/agentdb`, agent-manager.ts gives each agent
+  // `<memory root>/agents/<agentId>`, and AgentDB opens `memory.db` inside.
+  const agentId = "21f1ad50-f7a4-4bcc-a027-7106a44d7bc5";
+  const agentDbFile = () => path.join(memoryRoot, "agentdb", "memory.db");
+  const agentMemoryFile = () => path.join(memoryRoot, "agents", agentId, "memory.db");
+
+  function seedAgentMemory(): void {
+    for (const file of [agentDbFile(), agentMemoryFile()]) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      // The HNSW directory beside it is a cache AgentDB rebuilds from SQLite.
+      mkdirSync(path.join(path.dirname(file), "hnsw"), { recursive: true });
+      writeFileSync(path.join(path.dirname(file), "hnsw", "hnsw.index"), "cache");
+    }
+    seedDatabase(agentDbFile(), 6).close();
+    seedDatabase(agentMemoryFile(), 4).close();
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 2).close();
+  }
+
+  it("backs up the AgentDB store and every agent's memory, not only top-level files", async () => {
+    seedAgentMemory();
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    const manifest = readBackupManifest(destDir);
+    expect(manifest.databases.map((d) => d.relative).sort()).toEqual([
+      path.join("agentdb", "memory.db"),
+      path.join("agents", agentId, "memory.db"),
+      "campaigns.db",
+    ]);
+    for (const entry of manifest.databases) {
+      expect(entry.source).toBe(path.join(memoryRoot, entry.relative));
+    }
+    expect(countRows(path.join(destDir, "memory", "agentdb", "memory_ts.db"))).toBe(6);
+    expect(countRows(path.join(destDir, "memory", "agents", agentId, "memory_ts.db"))).toBe(4);
+  });
+
+  it("restores both to where AgentDB opens them", async () => {
+    seedAgentMemory();
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    rmSync(path.join(memoryRoot, "agentdb"), { recursive: true, force: true });
+    rmSync(path.join(memoryRoot, "agents"), { recursive: true, force: true });
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(agentDbFile())).toBe(6);
+    expect(countRows(agentMemoryFile())).toBe(4);
+  });
+});
+
 describe("backup and restore of a default installation (round 10 #22)", () => {
   it("restores hub bindings and skill approvals to where the runtime reads them", async () => {
     // Real stores, real rows: the two things the finding says a "successful"
@@ -542,6 +590,37 @@ describe("the CLI scripts/backup.sh calls", () => {
 
   it("exits non-zero when the arguments are wrong", async () => {
     expect(await runBackupCli(["--dest", destDir])).toBe(2);
+  });
+
+  it("prints the manifest as its receipt even when it found nothing", async () => {
+    // backup.sh cannot tell "found nothing" from "never ran" unless the helper
+    // says which: silence on exit 0 was archived as a successful backup.
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      expect(
+        await runBackupCli([
+          "--source",
+          memoryRoot,
+          "--dest",
+          destDir,
+          "--strada-home",
+          stradaHome,
+          "--user-home",
+          root,
+        ]),
+      ).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(written.join("").split("\n").filter(Boolean)).toEqual([
+      path.join(destDir, BACKUP_MANIFEST_FILE),
+    ]);
+    expect(readBackupManifest(destDir).databases).toEqual([]);
   });
 });
 

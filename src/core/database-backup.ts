@@ -139,6 +139,20 @@ export const STRADA_HOME_DATABASE_FILES: readonly string[] = [
 ];
 
 /**
+ * Directories under the memory root whose whole tree holds databases.
+ *
+ * AgentDB — the default memory backend, the store of conversation and
+ * long-term memory — opens `memory.db` inside the directory it is given, and
+ * the runtime gives it `<memory root>/agentdb` (bootstrap-memory.ts) and, for
+ * each agent, `<memory root>/agents/<agentId>` (agent-manager.ts). Discovery
+ * read only the top level of a root, so a backup that reported success held
+ * no AgentDB memory at all, and a restore rolled campaigns and tasks back
+ * while leaving memory as it was (core-rest#0). The `hnsw` beside each
+ * `memory.db` is a cache AgentDB rebuilds from it.
+ */
+export const MEMORY_DATABASE_DIRECTORIES: readonly string[] = ["agentdb", "agents"];
+
+/**
  * The databases a PROJECT owns, under `<projectRoot>/.strada`.
  *
  * `delivery-packages.db` is what `CampaignManager.packageStore()` opens —
@@ -205,6 +219,8 @@ export interface DatabaseRoot {
   readonly path: string;
   /** Known filenames for this root. Discovery adds whatever else is there. */
   readonly known: readonly string[];
+  /** Subdirectories whose whole tree is searched for databases. */
+  readonly directories?: readonly string[];
 }
 
 /** Where to look. Both homes default to what the runtime itself resolves. */
@@ -234,7 +250,12 @@ export interface RuntimeDatabaseOptions {
  */
 export function runtimeDatabaseRoots(opts: RuntimeDatabaseOptions): DatabaseRoot[] {
   const candidates: DatabaseRoot[] = [
-    { name: MEMORY_ROOT_NAME, path: path.resolve(opts.memoryRoot), known: MEMORY_DATABASE_FILES },
+    {
+      name: MEMORY_ROOT_NAME,
+      path: path.resolve(opts.memoryRoot),
+      known: MEMORY_DATABASE_FILES,
+      directories: MEMORY_DATABASE_DIRECTORIES,
+    },
     {
       name: STRADA_HOME_ROOT_NAME,
       path: path.resolve(opts.stradaHome ?? resolveStradaHome()),
@@ -259,7 +280,10 @@ export function runtimeDatabaseRoots(opts: RuntimeDatabaseOptions): DatabaseRoot
   // directory would make a restore guess, but dropping the loser's names with
   // it would lose them from the survivor's list — a project checked out at the
   // Strada home would then only find `delivery-packages.db` by discovery.
-  const byPath = new Map<string, { name: string; path: string; known: string[] }>();
+  const byPath = new Map<
+    string,
+    { name: string; path: string; known: string[]; directories: string[] }
+  >();
   const order: string[] = [];
   for (const candidate of candidates) {
     const existing = byPath.get(candidate.path);
@@ -268,12 +292,16 @@ export function runtimeDatabaseRoots(opts: RuntimeDatabaseOptions): DatabaseRoot
         name: candidate.name,
         path: candidate.path,
         known: [...candidate.known],
+        directories: [...(candidate.directories ?? [])],
       });
       order.push(candidate.path);
       continue;
     }
     for (const name of candidate.known) {
       if (!existing.known.includes(name)) existing.known.push(name);
+    }
+    for (const dir of candidate.directories ?? []) {
+      if (!existing.directories.includes(dir)) existing.directories.push(dir);
     }
   }
   return order.map((dir) => byPath.get(dir)!);
@@ -301,7 +329,7 @@ export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): Runtime
   const files: RuntimeDatabaseFile[] = [];
   const seen = new Set<string>();
   for (const root of runtimeDatabaseRoots(opts)) {
-    for (const source of listRuntimeDatabases(root.path, root.known)) {
+    for (const source of listRuntimeDatabases(root.path, root.known, root.directories ?? [])) {
       if (seen.has(source)) continue;
       seen.add(source);
       files.push({
@@ -425,11 +453,13 @@ const SQLITE_SIDECAR = /\.db-(wal|shm|journal)$/;
  *
  * `known` defaults to every known name so an existing caller that only knows
  * about the memory root keeps its behaviour; {@link inventoryRuntimeDatabases}
- * passes each root's own list.
+ * passes each root's own list. `directories` likewise defaults to the memory
+ * root's — the trees AgentDB keeps its `memory.db` files in.
  */
 export function listRuntimeDatabases(
   dir: string,
   known: readonly string[] = RUNTIME_DATABASE_FILES,
+  directories: readonly string[] = MEMORY_DATABASE_DIRECTORIES,
 ): string[] {
   if (!existsSync(dir)) return [];
   const found: string[] = [];
@@ -446,7 +476,39 @@ export function listRuntimeDatabases(
     if (!entry.endsWith(".db") || SQLITE_SIDECAR.test(entry)) continue;
     add(entry);
   }
+  for (const sub of directories) {
+    for (const file of listNestedDatabases(path.join(dir, sub))) add(path.relative(dir, file));
+  }
   return found;
+}
+
+/**
+ * Every `*.db` in a tree, absolute, in a stable order.
+ *
+ * Symlinked directories are followed, because the runtime writes through them
+ * (an `agentdb` moved to a larger volume is still where AgentDB writes), but
+ * each real directory is walked once, so a link cycle ends.
+ */
+function listNestedDatabases(dir: string, visited: Set<string> = new Set()): string[] {
+  let real: string;
+  try {
+    if (!statSync(dir).isDirectory()) return [];
+    real = realpathSync(dir);
+  } catch {
+    return [];
+  }
+  if (visited.has(real)) return [];
+  visited.add(real);
+  const out: string[] = [];
+  for (const name of readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    if (name.endsWith(".db") && !SQLITE_SIDECAR.test(name)) {
+      out.push(full);
+      continue;
+    }
+    out.push(...listNestedDatabases(full, visited));
+  }
+  return out;
 }
 
 /** One copied file: the primitive both backup and restore are built from. */
@@ -2005,7 +2067,10 @@ export function parseBackupArgs(argv: readonly string[]): ParsedArgs {
   };
 }
 
-/** CLI entry: prints one produced path per line for the caller to checksum. */
+/**
+ * CLI entry: prints one produced path per line for the caller to checksum, the
+ * manifest last — the receipt `scripts/backup.sh` requires on exit 0.
+ */
 export async function runBackupCli(argv: readonly string[]): Promise<number> {
   let parsed: ParsedArgs;
   try {
@@ -2030,10 +2095,11 @@ export async function runBackupCli(argv: readonly string[]): Promise<number> {
       process.stdout.write(`${result.destination}\n`);
     }
     // The manifest is part of the backup — it is what a restore reads — so the
-    // caller checksums it like everything else.
-    if (run.databases.length > 0 || run.blobs.length > 0) {
-      process.stdout.write(`${backupManifestPath(parsed.dest)}\n`);
-    }
+    // caller checksums it like everything else. It is printed LAST and ALWAYS,
+    // a manifest of nothing included: it is the receipt that this ran. When
+    // nothing was found this printed nothing, which backup.sh could not tell
+    // from a helper that never ran, and archived either as a good backup.
+    process.stdout.write(`${backupManifestPath(parsed.dest)}\n`);
     return 0;
   } catch (err) {
     process.stderr.write(`database backup failed: ${(err as Error).message}\n`);
