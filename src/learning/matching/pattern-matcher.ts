@@ -204,6 +204,19 @@ export interface PatternMatcherOptions {
   eventBus?: import("../../core/event-bus.js").IEventBus;
 }
 
+/**
+ * What an error match is worth, as a fraction of the matched rule's confidence,
+ * by how it matched. Exported because a gate over these scores has to sit where
+ * a newly learned rule — which starts at CONFIDENCE_THRESHOLDS.MAX_INITIAL — can
+ * reach it (ErrorLearningHooks' recovery gate is derived from it).
+ */
+export const ERROR_MATCH_FACTOR = {
+  errorCode: 0.95,
+  exact: 0.9,
+  fuzzy: 0.8,
+  contextual: 0.6,
+} as const;
+
 // ─── Pattern Matcher Class ──────────────────────────────────────────────────────
 
 export class PatternMatcher {
@@ -667,7 +680,7 @@ export class PatternMatcher {
     if (input.errorCode && this.matchesErrorCode(instinct, input.errorCode)) {
       scores.push({
         type: "error_code",
-        confidence: 0.95 * instinct.confidence,
+        confidence: ERROR_MATCH_FACTOR.errorCode * instinct.confidence,
         relevance: 1.0,
         fields: ["errorCode"],
       });
@@ -677,7 +690,7 @@ export class PatternMatcher {
     if (normalizedMessage !== undefined && this.matchesMessage(instinct, normalizedMessage)) {
       scores.push({
         type: "exact",
-        confidence: 0.9 * instinct.confidence,
+        confidence: ERROR_MATCH_FACTOR.exact * instinct.confidence,
         relevance: 0.95,
         fields: ["errorMessage"],
       });
@@ -689,7 +702,7 @@ export class PatternMatcher {
       if (similarity >= this.FUZZY_THRESHOLD) {
         scores.push({
           type: "fuzzy",
-          confidence: similarity * 0.8 * instinct.confidence,
+          confidence: similarity * ERROR_MATCH_FACTOR.fuzzy * instinct.confidence,
           relevance: similarity,
           fields: ["errorMessage"],
         });
@@ -701,7 +714,7 @@ export class PatternMatcher {
     if (contextScore >= this.CONTEXTUAL_THRESHOLD) {
       scores.push({
         type: "contextual",
-        confidence: contextScore * 0.6 * instinct.confidence,
+        confidence: contextScore * ERROR_MATCH_FACTOR.contextual * instinct.confidence,
         relevance: contextScore,
         fields: ["context"],
       });

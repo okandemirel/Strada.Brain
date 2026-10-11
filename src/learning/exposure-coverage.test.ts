@@ -298,11 +298,15 @@ describe("the exposure and its judgement are keyed the same way (#13)", () => {
     // The repro: all three collapsed onto one row keyed by a blank run, which kept
     // the EARLIEST shown_at — so a window covering only recent activity found
     // nothing and printed NOT MEASURED while three exposures had just happened.
+    // Counted for RULE: the first episode's resolution teaches a fix of its own,
+    // and that rule is offered when the same error code comes back, so the
+    // store-wide total carries its exposure too.
+    const rule = (c: ReturnType<typeof exposureCoverage>) => c.perInstinct.find((r) => r.instinctId === RULE);
     const coverage = exposureCoverage(storage);
-    expect(coverage.shown).toBe(3);
+    expect(rule(coverage)?.shown).toBe(3);
     const recent = exposureCoverage(storage, { sinceMs: started - 1_000 });
     expect(recent.measured).toBe(true);
-    expect(recent.shown).toBe(3);
+    expect(rule(recent)?.shown).toBe(3);
   });
 });
 

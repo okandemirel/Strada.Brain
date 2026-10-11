@@ -6,7 +6,7 @@
  */
 
 import type { LearningPipeline } from "../pipeline/learning-pipeline.js";
-import type { PatternMatcher } from "../matching/pattern-matcher.js";
+import { ERROR_MATCH_FACTOR, type PatternMatcher } from "../matching/pattern-matcher.js";
 import type { ConfidenceScorer } from "../scoring/confidence-scorer.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { 
@@ -18,6 +18,7 @@ import type {
   Instinct,
   InstinctStatus,
 } from "../types.js";
+import { CONFIDENCE_THRESHOLDS } from "../types.js";
 import { createBrand, type JsonObject } from "../../types/index.js";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 
@@ -108,6 +109,19 @@ export interface ResolutionContext {
    */
   derivation?: "reported" | "observed-success";
 }
+
+/**
+ * The lowest match score recovery offers a rule at: what a rule at the
+ * initial-confidence cap scores when the error's message matches its trigger.
+ *
+ * The gate was a flat 0.5, and every learned rule starts AT the cap (0.5), so
+ * the identical error scored 0.475 by code or 0.45 by message and no learned
+ * fix was ever shown — and a rule never shown is never credited, so nothing
+ * could lift it past the gate either. Derived from the cap and the matcher's
+ * own weights so it cannot drift above what a fresh rule reaches; a fresh rule
+ * that only resembles the error (fuzzy, or the same tool) still stays below it.
+ */
+export const RECOVERY_MIN_MATCH_SCORE = ERROR_MATCH_FACTOR.exact * CONFIDENCE_THRESHOLDS.MAX_INITIAL;
 
 /**
  * Negative weight of ONE non-application (guidance shown, not used).
@@ -281,7 +295,7 @@ export class ErrorLearningHooks {
     };
 
     const matches = this.patternMatcher.findInstinctsForError(input, {
-      minConfidence: 0.5,
+      minConfidence: RECOVERY_MIN_MATCH_SCORE,
       maxResults: 3,
       // ROUND 13 #24 — A RULE THAT GRADUATED WAS NEVER OFFERED AGAIN. The default
       // filter is ["active", "proposed"], so `evolved` (a rule that earned its

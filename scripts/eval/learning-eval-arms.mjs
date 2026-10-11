@@ -71,8 +71,9 @@ function toolEvent({ sessionId, runId, tool, input, success, output, appliedInst
  * Teach one family the way a real run teaches: a failing call, then a call that
  * repairs the SAME target inside the SAME run (the only pair the pipeline will
  * mint an error_fix from), then the successful runs that give the new rule
- * enough confidence to clear the error-recovery threshold — which a
- * freshly-minted instinct does NOT (0.95 × 0.5 = 0.475 < 0.5).
+ * enough confidence to clear the error-recovery threshold for an error that
+ * only resembles its own — a freshly-minted instinct clears it by code or by
+ * message (0.9 × 0.5 = 0.45), never by a fuzzy match (≤ 0.8 × 0.5).
  */
 async function teachFamily({ pipeline, storage, family }) {
   const session = `train:${family.family}`;
@@ -97,8 +98,8 @@ async function teachFamily({ pipeline, storage, family }) {
     .filter((id) => !before.has(id));
 
   // A freshly minted instinct sits at 0.50, and the error-recovery path asks for
-  // 0.5 AFTER weighting (0.95 × 0.50 = 0.475) — so an unreinforced rule is never
-  // offered to a run. These are the successful runs that pay for it.
+  // 0.45 AFTER weighting — met by a code or message match, never by a fuzzy
+  // one (≤ 0.8 × 0.50). These are the successful runs that pay for that recall.
   for (let n = 0; n < (family.repairs ?? 4); n++) {
     const reinforceRun = `${family.family}:reinforce-${n}`;
     await pipeline.handleToolResult(
@@ -127,7 +128,7 @@ async function teachFamily({ pipeline, storage, family }) {
  * BOTH paths production uses:
  *
  *   recovery  ErrorLearningHooks.onBeforeErrorAnalysis — the learned-solutions
- *             block injected at the moment of the error (minConfidence 0.5).
+ *             block injected at the moment of the error (minConfidence 0.45).
  *   proactive InstinctRetriever.getMatchedInstincts — the insight retrieval that
  *             puts learning in front of the model (lexical similarity >= 0.4,
  *             deprecated/quarantined filtered, rival solutions kept apart).
