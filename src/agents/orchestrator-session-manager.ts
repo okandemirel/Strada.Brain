@@ -689,8 +689,8 @@ function shellResultExitedZero(content: string, command: string | undefined): bo
 
 /**
  * Did a write-capable tool succeed AFTER the rejection at (messageIndex,
- * blockIndex)? Tool names come from the assistant's tool_use blocks, matched
- * by id to the user's tool_result blocks.
+ * blockIndex)? Tool names come from the assistant's tool calls, matched by id
+ * to the user's tool_result blocks.
  */
 function writeSucceededAfter(
   session: Session,
@@ -699,13 +699,21 @@ function writeSucceededAfter(
   isWriteCapable: (toolName: string) => boolean,
 ): boolean {
   const useById = new Map<string, { name: string; input: Record<string, unknown> | undefined }>();
+  const remember = (id: unknown, name: unknown, input: unknown): void => {
+    if (typeof id !== "string" || typeof name !== "string") return;
+    useById.set(id, { name, input: input && typeof input === "object" ? (input as Record<string, unknown>) : undefined });
+  };
   for (const message of session.messages) {
-    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    if (!message || message.role !== "assistant") continue;
+    // A run stores its calls in `tool_calls` beside string content
+    // (executeAndTrackTools). Reading only tool_use content blocks, which no
+    // run writes, matched no later write at all, so a refused shell write
+    // redone with file_write still ended the run as stopped/blocked
+    // (orchestrator#2).
+    for (const call of message.tool_calls ?? []) remember(call?.id, call?.name, call?.input);
+    if (!Array.isArray(message.content)) continue;
     for (const block of message.content) {
-      if (block && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
-        const input = block.input && typeof block.input === "object" ? (block.input as Record<string, unknown>) : undefined;
-        useById.set(block.id, { name: block.name, input });
-      }
+      if (block && block.type === "tool_use") remember(block.id, block.name, block.input);
     }
   }
   for (let i = messageIndex; i < session.messages.length; i += 1) {

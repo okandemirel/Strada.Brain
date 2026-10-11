@@ -8,8 +8,12 @@
  * carry one — and the detector that produced it re-fired on old history.
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { SessionManager } from "./orchestrator-session-manager.js";
+import { executeAndTrackTools } from "./orchestrator-loop-shared.js";
+import { buildToolResultContentBlocks } from "./orchestrator-loop-utils.js";
+import { AgentPhase, createInitialState } from "./agent-state.js";
+import type { ConversationMessage, MessageContent, ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import { createLogger } from "../utils/logger.js";
 
 beforeAll(() => { createLogger("error", "test.log"); });
@@ -64,15 +68,21 @@ describe("reporting a refused write", () => {
     expect(text).toBeNull();
   });
 
-  /** A rejection followed by later tool activity; names resolve via the assistant's tool_use ids. */
+  /**
+   * A rejection followed by later tool activity, in the shape a run stores:
+   * string content with the calls in `tool_calls` (executeAndTrackTools).
+   * These sessions were once built from tool_use content blocks, which no run
+   * writes, so the tests passed while every real later write was ignored.
+   */
   function sessionAfterRejection(later: Array<{ name: string; content: string; is_error?: boolean; input?: Record<string, unknown> }>) {
     return {
       messages: [
-        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "shell_exec", input: {} }] },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: REJECTION }] },
+        { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "shell_exec", input: {} }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: REJECTION, is_error: true }] },
         {
           role: "assistant",
-          content: later.map((l, i) => ({ type: "tool_use", id: `t${i + 2}`, name: l.name, input: l.input ?? {} })),
+          content: "",
+          tool_calls: later.map((l, i) => ({ id: `t${i + 2}`, name: l.name, input: l.input ?? {} })),
         },
         {
           role: "user",
@@ -95,6 +105,44 @@ describe("reporting a refused write", () => {
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.")).toBeNull();
   });
 
+  it("is resolved in a session the run's own tool turns built (orchestrator#2: resolution never ran in production)", async () => {
+    // Built by the same two writers the v2 tool turn uses: executeAndTrackTools
+    // for the assistant turn, buildToolResultContentBlocks for the results. A
+    // shape written by hand is what let the resolution pass its tests and
+    // never fire in a run.
+    const session = { messages: [] as ConversationMessage[], lastActivity: new Date() };
+    const turn = async (call: ToolCall, result: Omit<ToolResult, "toolCallId">): Promise<void> => {
+      const { toolResults } = await executeAndTrackTools({
+        chatId: "c1",
+        responseText: "",
+        toolCalls: [call],
+        session,
+        executeToolCalls: async () => [{ toolCallId: call.id, ...result }],
+        executeOptions: {},
+        trackingParams: {
+          taskPlanner: { trackToolCall: vi.fn(), recordError: vi.fn() },
+          selfVerification: { track: vi.fn(), ingestWorkerResult: vi.fn() },
+          stradaConformance: { trackToolCall: vi.fn() },
+          errorRecovery: { analyze: vi.fn().mockReturnValue(null) },
+          executionJournal: { recordToolBatch: vi.fn() },
+          agentPhase: AgentPhase.EXECUTING,
+          providerName: "test-provider",
+          emitToolResult: vi.fn(),
+        } as never,
+      });
+      const blocks = buildToolResultContentBlocks(null, createInitialState("task"), toolResults);
+      session.messages.push({ role: "user", content: blocks as unknown as MessageContent[] });
+    };
+
+    await turn({ id: "call-1", name: "shell_exec", input: { command: "rm -rf Assets/Scripts/Hud.cs" } }, { content: REJECTION, isError: true });
+    // Before the later write the refusal is pending, so the check itself is live here.
+    const pending = structuredClone(session);
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(pending as never, "Done.")).toContain("Execution stopped");
+
+    await turn({ id: "call-2", name: "file_write", input: { path: "Assets/Scripts/Hud.cs", content: "class Hud {}" } }, { content: "Wrote Assets/Scripts/Hud.cs (1 lines)", isError: false });
+    expect(manager().getPendingSelfManagedWriteRejectionVisibleText(session as never, "Done.")).toBeNull();
+  });
+
   it("…but a later READ does not resolve it, and neither does a failed write", () => {
     const readOnly = sessionAfterRejection([{ name: "file_read", content: "namespace Game {}" }]);
     expect(manager().getPendingSelfManagedWriteRejectionVisibleText(readOnly, "Done.")).toContain("Execution stopped");
@@ -103,10 +151,12 @@ describe("reporting a refused write", () => {
   });
 
   it("uses the caller's tool metadata when given (a tool named like a read can still write)", () => {
-    const session = sessionAfterRejection([{ name: "unity_get_or_create", content: "created" }]);
-    const byName = manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.");
+    // One session each: the first report consumes the rejection, and a shared
+    // session made the second call null whatever the metadata said.
+    const later = [{ name: "unity_get_or_create", content: "created" }];
+    const byName = manager().getPendingSelfManagedWriteRejectionVisibleText(sessionAfterRejection(later), "Done.");
     expect(byName).toContain("Execution stopped"); // the heuristic reads "get" as read-only
-    const byMeta = manager().getPendingSelfManagedWriteRejectionVisibleText(session, "Done.", () => true);
+    const byMeta = manager().getPendingSelfManagedWriteRejectionVisibleText(sessionAfterRejection(later), "Done.", () => true);
     expect(byMeta).toBeNull();
   });
 
