@@ -2613,6 +2613,7 @@ async function initializeRAG(
     const pipeline = new RAGPipeline(cachedProvider, vectorStore, {
       useHNSW,
       hnswConfig,
+      contextMaxTokens: config.rag.contextMaxTokens,
     });
     await pipeline.initialize();
 

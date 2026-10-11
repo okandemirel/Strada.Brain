@@ -453,6 +453,26 @@ describe("RAGPipeline", () => {
 
       expect(output).toContain("0.820");
     });
+
+    it("budgets an unbudgeted call by RAG_CONTEXT_MAX_TOKENS, not a fixed 4000", () => {
+      // The in-run memory refresher formats with no budget of its own; the
+      // configured cap was stored and never read, so it always got 4000.
+      const capped = new RAGPipeline(embeddingProvider, vectorStore, { contextMaxTokens: 500 });
+      const longContent = "x".repeat(1500);
+      const results = [
+        { chunk: makeChunk({ id: "a", symbol: "First", content: longContent }), vectorScore: 0.9, finalScore: 0.9 },
+        { chunk: makeChunk({ id: "b", symbol: "Second", content: longContent }), vectorScore: 0.8, finalScore: 0.8 },
+      ];
+
+      const formatted = capped.formatContextWithSpans(results);
+
+      expect(capped.contextMaxTokens).toBe(500);
+      // 500 tokens * 4 = 2000 chars: the first 1500-char span fits, the second does not.
+      expect(formatted.included.map((r) => r.chunk.id)).toEqual(["a"]);
+      expect(formatted.dropped.map((r) => r.chunk.id)).toEqual(["b"]);
+      // Unconfigured, the documented default still holds.
+      expect(pipeline.contextMaxTokens).toBe(4000);
+    });
   });
 
   // -------------------------------------------------------------------------

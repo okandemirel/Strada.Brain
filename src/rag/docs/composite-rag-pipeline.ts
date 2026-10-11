@@ -63,6 +63,11 @@ export class CompositeRAGPipeline implements IRAGPipeline {
     await Promise.allSettled([this.codePipeline.initialize(), this.docPipeline.initialize()]);
   }
 
+  /** RAG_CONTEXT_MAX_TOKENS, held by the code pipeline bootstrap configured. */
+  get contextMaxTokens(): number {
+    return this.codePipeline.contextMaxTokens ?? DEFAULT_MAX_TOKENS;
+  }
+
   async shutdown(): Promise<void> {
     await Promise.allSettled([this.codePipeline.shutdown(), this.docPipeline.shutdown()]);
   }
@@ -182,7 +187,7 @@ export class CompositeRAGPipeline implements IRAGPipeline {
   formatContextWithSpans(results: SearchResult[], budget?: ContextBudget): FormattedContext {
     if (results.length === 0) return { text: "", included: [], dropped: [] };
 
-    const maxTokens = budget?.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const maxTokens = budget?.maxTokens ?? this.contextMaxTokens;
     const sources = new Set(results.map(sourceOf));
     // Reserve one guaranteed slice per source beyond the first; the greedy pass
     // spends the rest in rank order.

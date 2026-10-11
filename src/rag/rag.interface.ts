@@ -585,6 +585,13 @@ export interface IRAGPipeline {
    */
   formatContextWithSpans?(results: SearchResult[], budget?: ContextBudget): FormattedContext;
   
+  /**
+   * The most tokens of retrieved context one turn may inject
+   * (RAG_CONTEXT_MAX_TOKENS). Optional so third-party pipelines keep
+   * compiling; callers fall back to 4000.
+   */
+  readonly contextMaxTokens?: number;
+
   /** Get pipeline statistics */
   getStats(): IndexingStats;
 }

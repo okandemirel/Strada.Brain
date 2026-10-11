@@ -614,7 +614,12 @@ export async function buildSystemPromptWithContext(
   // 5. RAG injection
   if (ctx.ragPipeline && params.prompt) {
     try {
-      const ragBudget = Math.min(4000, Math.floor(effectiveContextWindow * 0.05));
+      // RAG_CONTEXT_MAX_TOKENS sets the cap; a hardcoded 4000 here made the
+      // documented setting do nothing. The 5% window share still bounds it.
+      const ragBudget = Math.min(
+        ctx.ragPipeline.contextMaxTokens ?? 4000,
+        Math.floor(effectiveContextWindow * 0.05),
+      );
       const ragResults = await ctx.ragPipeline.search(params.prompt, {
         topK: 6,
         minScore: 0.2,

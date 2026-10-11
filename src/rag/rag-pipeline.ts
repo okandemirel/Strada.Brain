@@ -59,6 +59,8 @@ export interface RAGPipelineConfig {
   };
   /** Force migration from legacy format */
   forceMigration?: boolean;
+  /** RAG_CONTEXT_MAX_TOKENS: the token budget of an unbudgeted format call (default 4000). */
+  contextMaxTokens?: number;
 }
 
 export class RAGPipeline implements IRAGPipeline {
@@ -96,6 +98,10 @@ export class RAGPipeline implements IRAGPipeline {
       ...config,
     };
     this.useHNSW = (this.config.useHNSW ?? true) && isHnswAvailable();
+  }
+
+  get contextMaxTokens(): number {
+    return this.config.contextMaxTokens ?? DEFAULT_BUDGET.maxTokens;
   }
 
   // ---------------------------------------------------------------------------
@@ -499,7 +505,9 @@ export class RAGPipeline implements IRAGPipeline {
   formatContextWithSpans(results: SearchResult[], budget?: ContextBudget): FormattedContext {
     if (results.length === 0) return { text: "", included: [], dropped: [] };
 
-    const b: ContextBudget = { ...DEFAULT_BUDGET, ...budget };
+    // The memory refresher formats with no budget of its own: the operator's
+    // cap, not the built-in 4000, is what it may inject.
+    const b: ContextBudget = { ...DEFAULT_BUDGET, maxTokens: this.contextMaxTokens, ...budget };
     const charBudget = b.maxTokens * 4;
 
     // Build chunks to include, respecting the character budget.
