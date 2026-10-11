@@ -5752,7 +5752,7 @@ export class Orchestrator {
       const archivedFailure = result.isError && typeof result.content === "string"
         ? archiveToolFailure({ tool: activeToolCall.name, chatId, input: activeToolCall.input, content: result.content })
         : undefined;
-      const content = sanitizeToolResult(result.content);
+      const content = sanitizeToolResult(result.content, undefined, activeToolCall.name);
       return {
         toolCallId: activeToolCall.id,
         content: learnedWarnings.length === 0

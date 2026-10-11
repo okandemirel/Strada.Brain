@@ -58,8 +58,8 @@ export class FileEditTool implements ITool {
     if (!newResult.ok) return newResult.error;
 
     const relPath = pathResult.value;
-    const oldString = oldResult.value;
-    const newString = newResult.value;
+    let oldString = oldResult.value;
+    let newString = newResult.value;
     const replaceAll = Boolean(input["replace_all"] ?? false);
 
     if (oldString === newString) {
@@ -99,6 +99,20 @@ export class FileEditTool implements ITool {
           };
         }
         throw e;
+      }
+
+      // file_read shows a CRLF file's \r, but a model writes old_string with
+      // bare \n, so every multi-line edit of a Windows-authored script missed
+      // (audit orchestrator#1). Match it against the file's own line endings,
+      // and give new_string the same ones so the file stays CRLF.
+      let matchedCrlf = false;
+      if (!content.includes(oldString) && oldString.includes("\n") && content.includes("\r\n")) {
+        const asCrlf = oldString.replace(/\r?\n/g, "\r\n");
+        if (content.includes(asCrlf)) {
+          oldString = asCrlf;
+          newString = newString.replace(/\r?\n/g, "\r\n");
+          matchedCrlf = true;
+        }
       }
 
       if (!content.includes(oldString)) {
@@ -145,7 +159,9 @@ export class FileEditTool implements ITool {
       await writeFileInsideRoot(context.projectPath, pathCheck.fullPath, newContent);
 
       return {
-        content: `File edited: ${relPath} (${replacementCount} replacement${replacementCount > 1 ? "s" : ""} made)`,
+        content:
+          `File edited: ${relPath} (${replacementCount} replacement${replacementCount > 1 ? "s" : ""} made` +
+          `${matchedCrlf ? "; matched with the file's CRLF line endings, which new_string now uses too" : ""})`,
         metadata: { path: relPath, replacementCount, originalContent: content.slice(0, 500_000) },
       };
     } catch (error) {

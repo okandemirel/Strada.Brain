@@ -136,4 +136,54 @@ describe("FileEditTool", () => {
     const updated = readFileSync(join(tempDir, "test.txt"), "utf-8");
     expect(updated).toBe(`hello world hello\n${newString}\nhello again\n`);
   });
+
+  // Audit orchestrator#1: a model writes old_string with bare \n even when
+  // file_read showed it the \r, so multi-line edits of CRLF files all missed.
+  describe("on a CRLF file", () => {
+    const CRLF = "public class A {\r\n    int x = 1;\r\n    int y = 1;\r\n}\r\n";
+
+    beforeEach(() => {
+      writeFileSync(join(tempDir, "crlf.cs"), CRLF);
+    });
+
+    it("matches a \\n old_string against the file's \\r\\n and writes new_string with \\r\\n", async () => {
+      const result = await tool.execute(
+        { path: "crlf.cs", old_string: "    int x = 1;\n    int y = 1;", new_string: "    int x = 2;\n    int y = 2;" },
+        ctx
+      );
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain("CRLF");
+      expect(readFileSync(join(tempDir, "crlf.cs"), "utf-8")).toBe(
+        "public class A {\r\n    int x = 2;\r\n    int y = 2;\r\n}\r\n",
+      );
+    });
+
+    it("does the same under replace_all", async () => {
+      const result = await tool.execute(
+        { path: "crlf.cs", old_string: "1;\n", new_string: "3;\n", replace_all: true },
+        ctx
+      );
+      expect(result.content).toContain("2 replacements");
+      expect(readFileSync(join(tempDir, "crlf.cs"), "utf-8")).toBe(
+        "public class A {\r\n    int x = 3;\r\n    int y = 3;\r\n}\r\n",
+      );
+    });
+
+    it("still reports a real miss, and leaves an LF file's own matches alone", async () => {
+      const miss = await tool.execute(
+        { path: "crlf.cs", old_string: "    int x = 1;\n    int z = 1;", new_string: "x" },
+        ctx
+      );
+      expect(miss.isError).toBe(true);
+      expect(miss.content).toContain("old_string not found");
+      expect(readFileSync(join(tempDir, "crlf.cs"), "utf-8")).toBe(CRLF);
+
+      const lf = await tool.execute(
+        { path: "test.txt", old_string: "foo bar baz\nhello", new_string: "a\nb" },
+        ctx
+      );
+      expect(lf.content).not.toContain("CRLF");
+      expect(readFileSync(join(tempDir, "test.txt"), "utf-8")).toBe("hello world hello\na\nb again\n");
+    });
+  });
 });

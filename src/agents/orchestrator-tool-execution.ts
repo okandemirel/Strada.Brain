@@ -207,7 +207,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       taskPlanner.recordError(analysis.summary);
       toolResults[i] = {
         toolCallId: tr.toolCallId,
-        content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+        content: sanitizeToolResult(tr.content + analysis.recoveryInjection, undefined, tc.name),
         isError: tr.isError,
         metadata: tr.metadata,
       };

@@ -108,6 +108,7 @@ Beyond the SecretSanitizer, the orchestrator applies an additional pass on every
 
 - Regex-based stripping of API key patterns (`sk-`, `key-`, `token-`, `ghp_`, `Bearer`, etc.).
 - Hard length cap at 8192 characters with truncation marker.
+- Prompt-injection stripping (NFKC, zero-width, base64 and directive markers, CR removal) on every result except file text (`file_read`, `grep_search`), which the model edits from: that arrives as the file holds it, with a note naming any directive-shaped wording. Only the API-key regex still rewrites it.
 - Learning event inputs are also sanitized and capped at 2048 characters before storage.
 - Prompt injection defense: embedded section markers (`<!-- section:start -->`) are stripped from memory/RAG content before injection into prompts.
 
