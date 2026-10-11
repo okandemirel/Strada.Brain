@@ -2,7 +2,7 @@ import http, { createServer, type Server } from "node:http";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setGlobalDispatcher, type Dispatcher } from "undici";
+import { fetch as undiciFetch, setGlobalDispatcher, type Dispatcher } from "undici";
 import { LOOPBACK_NO_PROXY, describeProxy, envProxySettings, installEnvProxy, reportEnvProxy } from "./env-proxy.js";
 
 describe("envProxySettings", () => {
@@ -83,8 +83,19 @@ describe("fetch through the environment's proxy", () => {
   afterEach(async () => {
     restoreGlobals?.();
     restoreGlobals = undefined;
+    vi.unstubAllEnvs();
     await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
   });
+
+  const slots = globalThis as unknown as Record<symbol, unknown>;
+
+  /** Every undici generation's global dispatcher, as it stands now. */
+  function dispatcherSlots(): Array<readonly [symbol, unknown]> {
+    void globalThis.Headers; // loads Node's bundled undici, so its key is there too
+    return Object.getOwnPropertySymbols(globalThis)
+      .filter((key) => /^undici\.globalDispatcher\.\d+$/u.test(key.description ?? ""))
+      .map((key) => [key, slots[key]] as const);
+  }
 
   /**
    * Node's bundled undici and the npm one keep their dispatchers under
@@ -92,17 +103,25 @@ describe("fetch through the environment's proxy", () => {
    * setGlobalDispatcher would leave the other's proxy in place for later tests.
    */
   function saveGlobals(): () => void {
-    void globalThis.Headers; // loads Node's bundled undici, so its key is saved too
-    const slots = globalThis as unknown as Record<symbol, unknown>;
-    const saved = Object.getOwnPropertySymbols(globalThis)
-      .filter((key) => /^undici\.globalDispatcher\.\d+$/u.test(key.description ?? ""))
-      .map((key) => [key, slots[key]] as const);
+    const saved = dispatcherSlots();
     const agents = { http: http.globalAgent, https: https.globalAgent };
     return () => {
       for (const [key, dispatcher] of saved) slots[key] = dispatcher;
       http.globalAgent = agents.http;
       https.globalAgent = agents.https;
     };
+  }
+
+  /**
+   * The process environment, as index.ts hands it to installEnvProxy: undici
+   * falls back to process.env for a proxy it is not given, so a test that
+   * passes its own object would not see a value set aside coming back.
+   */
+  function stubProxyEnv(vars: Record<string, string>): void {
+    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY"]) {
+      vi.stubEnv(name, undefined);
+    }
+    for (const [name, proxy] of Object.entries(vars)) vi.stubEnv(name, proxy);
   }
 
   async function listen(server: Server, host = "127.0.0.1"): Promise<number> {
@@ -186,12 +205,70 @@ describe("fetch through the environment's proxy", () => {
   it("leaves fetch and the global agents as they were when the proxy value is unusable", async () => {
     const directPort = await listen(createServer((_req, res) => res.end("direct")));
     restoreGlobals = saveGlobals();
-    const before = { http: http.globalAgent, https: https.globalAgent };
+    const before = { http: http.globalAgent, https: https.globalAgent, dispatchers: dispatcherSlots() };
     const setup = installEnvProxy({ HTTP_PROXY: "http://[not-an-address", HTTPS_PROXY: "http://[not-an-address" });
     expect(setup.kind).toBe("invalid");
     expect(http.globalAgent).toBe(before.http);
     expect(https.globalAgent).toBe(before.https);
-    expect(await (await fetch(`http://127.0.0.1:${directPort}/`)).text()).toBe("direct");
+    expect(dispatcherSlots().map(([key]) => key)).toEqual(before.dispatchers.map(([key]) => key));
+    for (const [key, dispatcher] of before.dispatchers) expect(slots[key], key.description).toBe(dispatcher);
+    // Loopback is direct even through an installed proxy; an address the
+    // no-proxy list does not name is not, so a proxy left in place shows here.
+    expect(await (await fetch(`http://[::ffff:127.0.0.1]:${directPort}/`)).text()).toBe("direct");
+  });
+
+  it("installs the usable proxy when the other variable is unusable, and names the one set aside", async () => {
+    // A typo in HTTP_PROXY used to drop a valid HTTPS_PROXY with it: every
+    // provider call went direct on a network that only lets the proxy out.
+    const { url: proxyUrl, tunnelled } = await startProxy();
+    restoreGlobals = saveGlobals();
+    stubProxyEnv({ HTTP_PROXY: "http://[not-an-address", HTTPS_PROXY: proxyUrl });
+    const setup = installEnvProxy();
+    expect(setup).toMatchObject({
+      kind: "installed",
+      httpsProxy: proxyUrl,
+      refused: { variable: "HTTP_PROXY", proxy: "http://[not-an-address" },
+    });
+    expect(setup).not.toHaveProperty("httpProxy");
+    // The stand-in proxy speaks no TLS, so the request fails after the CONNECT it records.
+    await fetch("https://upstream.example.test/ping").catch(() => undefined);
+    expect(tunnelled).toContain("connect upstream.example.test:443");
+  });
+
+  it("installs HTTP_PROXY when HTTPS_PROXY is the unusable one, and https goes through it", async () => {
+    const { url: proxyUrl, tunnelled } = await startProxy();
+    restoreGlobals = saveGlobals();
+    stubProxyEnv({ HTTPS_PROXY: "http://[not-an-address", HTTP_PROXY: proxyUrl });
+    const setup = installEnvProxy();
+    expect(setup).toMatchObject({
+      kind: "installed",
+      httpProxy: proxyUrl,
+      refused: { variable: "HTTPS_PROXY", proxy: "http://[not-an-address" },
+    });
+    expect(await (await fetch("http://upstream.example.test/ping")).text()).toBe("via-proxy");
+    expect(tunnelled.join("\n")).toContain("upstream.example.test");
+    // As with HTTPS_PROXY unset: the warning says so.
+    await fetch("https://upstream.example.test/ping").catch(() => undefined);
+    expect(tunnelled).toContain("connect upstream.example.test:443");
+  });
+
+  it("sets aside a scheme npm undici does not speak, and keeps the proxy it does", async () => {
+    // Node 22's route: npm undici's ProxyAgent refuses socks5://.
+    const { url: proxyUrl, tunnelled } = await startProxy();
+    stubProxyEnv({ HTTP_PROXY: "socks5://user:s3cret@127.0.0.1:1080", HTTPS_PROXY: proxyUrl });
+    const installed: Dispatcher[] = [];
+    const setup = installEnvProxy(process.env, (d) => installed.push(d));
+    expect(setup).toMatchObject({
+      httpsProxy: proxyUrl,
+      refused: { variable: "HTTP_PROXY", reason: "UND_ERR_INVALID_ARG" },
+    });
+    expect(installed).toHaveLength(1);
+    try {
+      await undiciFetch("https://upstream.example.test/ping", { dispatcher: installed[0] }).catch(() => undefined);
+    } finally {
+      await installed[0]!.close();
+    }
+    expect(tunnelled).toContain("connect upstream.example.test:443");
   });
 
   it("reports unrouted when node:http's installer leaves the dispatcher fetch reads as it was", () => {
@@ -264,6 +341,24 @@ describe("reportEnvProxy", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ level: "warn", meta: { httpsProxy: "(unparseable proxy URL)", reason: "ERR_INVALID_URL" } });
     expect(lines[0]!.message).toMatch(/connects directly/u);
+    expect(JSON.stringify(lines)).not.toContain("s3cret");
+  });
+
+  it("names the variable set aside next to the proxy installed, never its credentials", () => {
+    const { lines, logger } = capture();
+    reportEnvProxy({
+      kind: "installed",
+      httpsProxy: "http://proxy:3128",
+      noProxy: "localhost",
+      refused: { variable: "HTTP_PROXY", proxy: "socks5://user:s3cret@sock:1080", reason: "UND_ERR_INVALID_ARG" },
+    }, logger);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ level: "info", meta: { httpsProxy: "http://proxy:3128" } });
+    expect(lines[1]).toMatchObject({
+      level: "warn",
+      meta: { variable: "HTTP_PROXY", proxy: "socks5://sock:1080", reason: "UND_ERR_INVALID_ARG" },
+    });
+    expect(lines[1]!.message).toMatch(/^HTTP_PROXY .*http requests connect directly/u);
     expect(JSON.stringify(lines)).not.toContain("s3cret");
   });
 });

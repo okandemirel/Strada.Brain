@@ -435,6 +435,9 @@ async function main(argv) {
   } else if (envProxy.kind === "invalid") {
     console.error(`live-verify-providers: the proxy the environment names cannot be used (${envProxy.reason}); the checks connect directly`);
   }
+  if (envProxy.refused) {
+    console.error(`live-verify-providers: ${envProxy.refused.variable} cannot be used (${envProxy.refused.reason}) and was set aside; the other proxy variable carries the checks`);
+  }
   const registry = await importDist("agents/providers/provider-registry.js");
   const { supportsStreaming } = await importDist("agents/providers/provider.interface.js");
   const { HARDCODED_MODELS } = await importDist("agents/providers/model-intelligence.js");

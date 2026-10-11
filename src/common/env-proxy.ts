@@ -43,15 +43,30 @@ interface EnvProxyRoute {
   readonly noProxy: string;
 }
 
+/** A proxy variable the installer refused while it took the other one. */
+export interface RefusedProxy {
+  readonly variable: "HTTPS_PROXY" | "HTTP_PROXY";
+  readonly proxy: string;
+  /** The installer's error code. */
+  readonly reason: string;
+}
+
+/**
+ * Requests the refused variable would carry go as though it were unset: http
+ * connects directly, and https goes through HTTP_PROXY, as undici does when
+ * HTTPS_PROXY is unset.
+ */
+type SetAside = { readonly refused?: RefusedProxy };
+
 export type EnvProxySetup =
   /** No proxy variable is set: fetch connects directly, as before. */
   | { readonly kind: "none" }
   /** NODE_USE_ENV_PROXY is set: Node's own proxy support is in charge. */
   | { readonly kind: "node" }
-  | ({ readonly kind: "installed" } & EnvProxyRoute)
+  | ({ readonly kind: "installed" } & EnvProxyRoute & SetAside)
   /** A proxy is named, but fetch does not read the dispatcher: it still connects directly. */
-  | ({ readonly kind: "unrouted" } & EnvProxyRoute)
-  /** A proxy value the installer refused (`reason`, its error code): fetch connects directly. */
+  | ({ readonly kind: "unrouted" } & EnvProxyRoute & SetAside)
+  /** Every proxy value named was refused (`reason`, its error code): fetch connects directly. */
   | ({ readonly kind: "invalid"; readonly reason: string } & EnvProxyRoute);
 
 function value(upper: string | undefined, lower?: string): string | undefined {
@@ -98,6 +113,24 @@ function fetchDispatcher(): unknown {
 
 type SetGlobalProxyFromEnv = (env: NodeJS.ProcessEnv) => () => void;
 
+const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
+
+/**
+ * undici's EnvHttpProxyAgent reads process.env for a proxy it is not handed,
+ * and node:http hands it none for a variable left out: a value set aside came
+ * back from there and was refused again. The installer is synchronous, so
+ * nothing else sees the variables gone.
+ */
+function withoutProcessProxyEnv<T>(run: () => T): T {
+  const saved = PROXY_VARIABLES.map((name) => [name, process.env[name]] as const);
+  for (const name of PROXY_VARIABLES) delete process.env[name];
+  try {
+    return run();
+  } finally {
+    for (const [name, proxy] of saved) if (proxy !== undefined) process.env[name] = proxy;
+  }
+}
+
 /**
  * Point fetch at the environment's proxy when one is set. Returns what was
  * decided, and "installed" only when fetch reads the new dispatcher. `install`
@@ -112,40 +145,62 @@ export function installEnvProxy(
   if (setup.kind !== "installed") return setup;
   const before = fetchDispatcher();
   const viaNode = (http as { setGlobalProxyFromEnv?: SetGlobalProxyFromEnv }).setGlobalProxyFromEnv;
-  let reached: boolean;
-  // This runs at index.ts's top level, so a value an installer refuses (no
-  // valid URL, a scheme it does not speak) used to stop startup. Both refuse
-  // before they install anything: run direct and say why instead.
-  try {
+  /** Whether fetch now reads the route's dispatcher; throws, having installed nothing, on a refused value. */
+  const attempt = (route: EnvProxyRoute): boolean => {
     if (install === undefined && typeof viaNode === "function") {
       // It also points http/https.globalAgent at the proxy; this module routes
       // fetch only, and the SDKs on those agents keep their own proxy handling.
       const agents = { http: http.globalAgent, https: https.globalAgent };
       try {
-        viaNode({
-          ...(setup.httpsProxy !== undefined ? { HTTPS_PROXY: setup.httpsProxy } : {}),
-          ...(setup.httpProxy !== undefined ? { HTTP_PROXY: setup.httpProxy } : {}),
-          NO_PROXY: setup.noProxy,
-        });
+        withoutProcessProxyEnv(() => viaNode({
+          ...(route.httpsProxy !== undefined ? { HTTPS_PROXY: route.httpsProxy } : {}),
+          ...(route.httpProxy !== undefined ? { HTTP_PROXY: route.httpProxy } : {}),
+          NO_PROXY: route.noProxy,
+        }));
       } finally {
         http.globalAgent = agents.http;
         https.globalAgent = agents.https;
       }
       const after = fetchDispatcher();
-      reached = after !== undefined && after !== before;
-    } else {
-      const dispatcher = new EnvHttpProxyAgent({
-        ...(setup.httpsProxy !== undefined ? { httpsProxy: setup.httpsProxy } : {}),
-        ...(setup.httpProxy !== undefined ? { httpProxy: setup.httpProxy } : {}),
-        noProxy: setup.noProxy,
-      });
-      (install ?? setGlobalDispatcher)(dispatcher);
-      reached = fetchDispatcher() === dispatcher;
+      return after !== undefined && after !== before;
     }
+    // "" and not left out, or undici would read the variable from process.env.
+    const dispatcher = new EnvHttpProxyAgent({
+      httpsProxy: route.httpsProxy ?? "",
+      httpProxy: route.httpProxy ?? "",
+      noProxy: route.noProxy,
+    });
+    (install ?? setGlobalDispatcher)(dispatcher);
+    return fetchDispatcher() === dispatcher;
+  };
+  const settle = (route: EnvProxyRoute & SetAside, reached: boolean): EnvProxySetup =>
+    reached ? { ...route, kind: "installed" } : { ...route, kind: "unrouted" };
+  // This runs at index.ts's top level, so a value an installer refuses (no
+  // valid URL, a scheme it does not speak) used to stop startup. Both refuse
+  // before they install anything: run direct and say why instead.
+  try {
+    return settle(setup, attempt(setup));
   } catch (error) {
-    return { ...setup, kind: "invalid", reason: errorCode(error) };
+    const reason = errorCode(error);
+    // One refused variable used to take the other down with it, so a typo in
+    // HTTP_PROXY sent every https provider call direct. Only the refused one
+    // can have thrown: install the other alone, https first.
+    const { httpsProxy, httpProxy, noProxy } = setup;
+    if (httpsProxy !== undefined && httpProxy !== undefined) {
+      const alone: ReadonlyArray<readonly [EnvProxyRoute, RefusedProxy]> = [
+        [{ httpsProxy, noProxy }, { variable: "HTTP_PROXY", proxy: httpProxy, reason }],
+        [{ httpProxy, noProxy }, { variable: "HTTPS_PROXY", proxy: httpsProxy, reason }],
+      ];
+      for (const [route, refused] of alone) {
+        try {
+          return settle({ ...route, refused }, attempt(route));
+        } catch {
+          // Refused too; the other one may still go in.
+        }
+      }
+    }
+    return { ...setup, kind: "invalid", reason };
   }
-  return reached ? setup : { ...setup, kind: "unrouted" };
 }
 
 /** The error's code, never its message: the installers echo the proxy URL, credentials included. */
@@ -172,19 +227,28 @@ export function reportEnvProxy(setup: EnvProxySetup, logger: ProxyLogger): void 
   switch (setup.kind) {
     case "installed":
       logger.info("Outbound HTTP(S) goes through the proxy the environment names", proxyFields);
-      return;
+      break;
     case "unrouted":
       logger.warn("The environment names a proxy, but this Node's fetch does not read the dispatcher; outbound HTTP(S) connects directly (NODE_USE_ENV_PROXY=1 hands it to Node)", {
         ...proxyFields,
         node: process.version,
       });
-      return;
+      break;
     case "invalid":
       logger.warn("The environment names a proxy this process cannot use; outbound HTTP(S) connects directly. Set HTTPS_PROXY/HTTP_PROXY to a URL such as http://host:port", {
         ...proxyFields,
         reason: setup.reason,
       });
       return;
+  }
+  if (setup.refused !== undefined) {
+    const { variable, proxy, reason } = setup.refused;
+    const effect = variable === "HTTP_PROXY" ? "http requests connect directly" : "https requests go through HTTP_PROXY";
+    logger.warn(`${variable} names a proxy this process cannot use and was set aside: ${effect}`, {
+      variable,
+      proxy: describeProxy(proxy),
+      reason,
+    });
   }
 }
 
