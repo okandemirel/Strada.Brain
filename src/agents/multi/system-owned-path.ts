@@ -83,6 +83,9 @@ export async function systemOwnedDeletionReason(
 ): Promise<string | undefined> {
   const bare = rel.replace(/\.meta$/i, "");
   const ledger = readLeaseLedger(sourceRoot);
+  // Present but unreadable: the one record of what the system wrote cannot be
+  // consulted, so nothing that depends on it may call a file the system's.
+  const ledgerUnreadable = ledger === undefined && existsSync(join(sourceRoot, LEASE_WRITTEN_LEDGER));
   // The scaffolding rule is about SCENES. Review 2026-09-07: applied to every
   // path, it called any file under Assets/Editor/ or Assets/Tests/ (the
   // user's own build pipeline, their own tests) a scaffolding scene and
@@ -101,15 +104,20 @@ export async function systemOwnedDeletionReason(
     // measurably the system's (a lease wrote it). Review 2026-09-07: the
     // basename alone deleted a user's Assets/Scripts/Utils.cs because some
     // module held an unrelated Utils.cs.
+    // NO LEDGER IS NOT "THE SYSTEM WROTE IT": a project has none until its
+    // first lease commit that writes a file finishes, so the very first
+    // publication deleted that same Utils.cs. Without one, the history rule
+    // below decides, as the ledger's own contract says.
     if (twin) {
       if (sameBytes(join(sourceRoot, bare), join(sourceRoot, twin))) {
         return `loose duplicate of ${twin} by the framework-paths rule's own definition`;
       }
-      if (ledger === undefined || ledger.has(normalized)) {
-        return `loose duplicate of ${twin} by the framework-paths rule's own definition${ledger ? " (written by a lease)" : ""}`;
+      if (ledger?.has(normalized)) {
+        return `loose duplicate of ${twin} by the framework-paths rule's own definition (written by a lease)`;
       }
     }
   }
+  if (ledgerUnreadable) return undefined;
   // With a ledger, the history rule needs the ledger to agree: an envelope
   // commit makes a user's file look system-authored, the ledger does not.
   if (ledger !== undefined && !ledger.has(normalized) && !ledger.has(rel.replace(/\\/g, "/"))) return undefined;

@@ -85,6 +85,56 @@ describe("deletions: only the system's own files go, and every applied deletion 
     expect(readFileSync(join(result.conflictsQuarantinedUnder!, "deleted", "Assets/Scripts/Dup.cs"), "utf8")).toBe("same bytes");
   });
 
+  // The ledger is written only AFTER a commit's deletion loop, and only when
+  // it wrote something — so a project's first publishing commit has none. The
+  // twin rule read "no ledger" as "the system wrote everything" and deleted
+  // the user's Utils.cs on its basename alone.
+  it("with no ledger yet, a loose script that merely shares a module file's NAME stays", async () => {
+    put(source, "Assets/Scripts/Utils.cs", "the user's utils");
+    put(source, "Assets/Modules/Core/Utils.cs", "unrelated module utils");
+    put(source, "Assets/Scripts/Dup.cs", "same bytes");
+    put(source, "Assets/Modules/Core/Dup.cs", "same bytes");
+    expect(existsSync(join(source, LEASE_WRITTEN_LEDGER))).toBe(false);
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    rmSync(join(lease.path, "Assets/Scripts/Utils.cs"));
+    rmSync(join(lease.path, "Assets/Scripts/Dup.cs"));
+    const result = await lease.commit();
+    await lease.release();
+    expect(readFileSync(join(source, "Assets/Scripts/Utils.cs"), "utf8")).toBe("the user's utils");
+    expect(result.removed).toEqual([join("Assets", "Scripts", "Utils.cs")]);
+    expect(existsSync(join(source, "Assets/Scripts/Dup.cs"))).toBe(false); // byte-identical: still goes
+  });
+
+  it("with no ledger, a twin whose history is the user's own stays — the history rule decides", async () => {
+    put(source, "Assets/Scripts/Utils.cs", "the user's utils");
+    put(source, "Assets/Modules/Core/Utils.cs", "unrelated module utils");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "feat: my own utils");
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    rmSync(join(lease.path, "Assets/Scripts/Utils.cs"));
+    const result = await lease.commit();
+    await lease.release();
+    expect(readFileSync(join(source, "Assets/Scripts/Utils.cs"), "utf8")).toBe("the user's utils");
+    expect(result.deleted).toEqual([]);
+  });
+
+  it("a ledger that exists but cannot be read is not a licence to delete", async () => {
+    put(source, "Assets/Scripts/Utils.cs", "the user's utils");
+    put(source, "Assets/Modules/Core/Utils.cs", "unrelated module utils");
+    git(source, "init", "-q");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "campaign: Sprint 1 — envelope");
+    // A directory where the ledger file should be: existsSync says yes, the read throws.
+    mkdirSync(join(source, LEASE_WRITTEN_LEDGER), { recursive: true });
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    rmSync(join(lease.path, "Assets/Scripts/Utils.cs"));
+    const result = await lease.commit();
+    await lease.release();
+    expect(readFileSync(join(source, "Assets/Scripts/Utils.cs"), "utf8")).toBe("the user's utils");
+    expect(result.deleted).toEqual([]);
+  });
+
   it("a user's file swept into a 'campaign:' envelope commit is not the system's without the ledger's word", async () => {
     put(source, "Assets/Scripts/MyLevelDesign.cs", "the user's uncommitted design");
     put(source, "Assets/Scripts/Generated.cs", "lease output");
