@@ -6088,6 +6088,14 @@ export class Orchestrator {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
+    // A daemon run's prompt (agent-core, a heartbeat trigger, the guardian's
+    // repair brief) is the instance's own text, not a person's sentence. No
+    // roster describes the "daemon" channel, so the owner rule refused it at
+    // setup, and the guardian runs in the operator's chat, whose profile its
+    // brief must not rewrite.
+    if (channelType === "daemon") {
+      return;
+    }
 
     const latestProfile = this.userProfileStore.getProfile(profileKey);
     const updates = extractNaturalLanguageDirectiveUpdates({
@@ -6098,9 +6106,13 @@ export class Orchestrator {
         ...(this.soulLoader?.getProfiles() ?? []),
       ],
     });
-    // `/persona switch` and `/autonomous on|off` said in words. The commands
-    // are the instance owner's; the sentences set them for anyone on a shared
-    // roster or portal, past the rule the command answers to.
+    // `/persona switch` and `/autonomous on` said in words. The commands are
+    // the instance owner's; the sentences set them for anyone on a shared
+    // roster or portal, past the rule the command answers to. Turning autonomy
+    // off is not asked: the sentence only brings back this caller's own write
+    // confirmations (`/autonomous off` also lifts the daemon's override), and
+    // its reading is loose ("What does approval require here?"), so asking
+    // refused everyday questions and could only keep a caller unconfirmed.
     const caller: ChatCaller = {
       chatId,
       ...(userId !== undefined ? { userId } : {}),
@@ -6109,10 +6121,7 @@ export class Orchestrator {
     if (updates.activePersona && (await this.directiveRefused(caller, prompt, "persona", ["switch", updates.activePersona]))) {
       delete updates.activePersona;
     }
-    if (
-      updates.autonomousMode
-      && (await this.directiveRefused(caller, prompt, "autonomous", [updates.autonomousMode.enabled ? "on" : "off"]))
-    ) {
+    if (updates.autonomousMode?.enabled && (await this.directiveRefused(caller, prompt, "autonomous", ["on"]))) {
       delete updates.autonomousMode;
     }
     const profileUpdates: Record<string, unknown> = {};

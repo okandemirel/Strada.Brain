@@ -368,6 +368,31 @@ export function detectAssistantPersonalityPreference(text: string): string | und
   return undefined;
 }
 
+// A persona switch is `/persona switch`, which the owner rule refuses a guest,
+// so like an autonomy directive it must be a whole sentence: a switch verb and
+// the persona, with only courtesy words before and scope words after. Any
+// sentence holding a persona name within 40 characters of "use", "set",
+// "mode" or "profile" used to count, and the built-in names are everyday
+// words: "Use the default settings for the build.", "Set the default
+// resolution to 1080p." and "Add a casual mode for new players." each
+// switched the persona, or drew "Refused" for a guest.
+const PERSONA_NOUN_SRC = String.raw`(?:persona|personality|profile)`;
+const PERSONA_ARTICLE_SRC = String.raw`(?:(?:the|your|my|a)\s+)?`;
+const PERSONA_TR_VERB_SRC = String.raw`(?:geri\s+)?(?:kullan(?:[ıi]n|al[ıi]m)?|ge[çc](?:in|elim)?|se[çc](?:in)?|d[öo]n(?:[üu]n|elim)?|aktif\s+et(?:in)?|etkinle[şs]tir(?:in)?)`;
+const personaSwitchSentenceRe = (persona: string): RegExp => {
+  const name = escapeRegExp(persona);
+  return autonomySentenceRe([
+    // "Switch to casual mode", "Go back to default"
+    String.raw`(?:switch|change|go|revert|return)\s+(?:back\s+)?to\s+${PERSONA_ARTICLE_SRC}${name}(?:\s+(?:${PERSONA_NOUN_SRC}|mode))?`,
+    // "Use the formal persona"
+    String.raw`(?:use|activate|enable|select|choose|pick|apply|load|adopt)\s+${PERSONA_ARTICLE_SRC}${name}\s+${PERSONA_NOUN_SRC}`,
+    // "Set your persona to minimal"
+    String.raw`(?:set|change|switch)\s+${PERSONA_ARTICLE_SRC}${PERSONA_NOUN_SRC}\s+to\s+${PERSONA_ARTICLE_SRC}${name}`,
+    // "Formal persona kullan", "Casual moda geç"
+    String.raw`${name}\s+(?:persona|profil|mod)[\p{L}'’]*\s+${PERSONA_TR_VERB_SRC}`,
+  ].join("|"));
+};
+
 export function detectActivePersonaPreference(
   text: string,
   availablePersonas: string[] = [],
@@ -381,19 +406,20 @@ export function detectActivePersonaPreference(
     return undefined;
   }
 
-  const lowered = text.toLowerCase();
+  // "İ" has no simple case folding, so /i never matches it to "i".
+  const normalized = text.normalize("NFC").replace(/İ/gu, "i");
+  const lowered = normalized.toLowerCase();
+  const sentences = (normalized.match(/[^.!?\n]+[.!?]*/gu) ?? [])
+    .filter((sentence) => sentence.length <= AUTONOMY_SENTENCE_MAX_CHARS)
+    // A trailing "?" stays and fails the match: a question never switches.
+    .map((sentence) => sentence.trim().replace(/[\s.!…]+$/u, ""));
   const ordered = [...uniquePersonas].sort((left, right) => right.length - left.length);
   for (const persona of ordered) {
     if (!lowered.includes(persona.toLowerCase())) {
       continue;
     }
-    const escapedPersona = escapeRegExp(persona);
-    const patterns = [
-      new RegExp(`\\b(?:persona|profile|profil|mode|mod)\\b[^.!?\\n]{0,40}${escapedPersona}`, "iu"),
-      new RegExp(`${escapedPersona}[^.!?\\n]{0,40}\\b(?:persona|profile|profil|mode|mod)\\b`, "iu"),
-      new RegExp(`\\b(?:switch|use|kullan|activate|set|geç|gec|dön|don|go\\s+back(?:\\s+to)?|geri\\s+dön)\\b[^.!?\\n]{0,40}${escapedPersona}`, "iu"),
-    ];
-    if (patterns.some((pattern) => pattern.test(text))) {
+    const directiveRe = personaSwitchSentenceRe(persona);
+    if (sentences.some((sentence) => directiveRe.test(sentence))) {
       return persona;
     }
   }

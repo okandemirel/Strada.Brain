@@ -1324,6 +1324,19 @@ describe("One owner rule for every chat command and its plain-language form (own
     expect(owner.replies).toEqual([]);
   });
 
+  // The refusal is the verdict and the notice a courtesy. The orchestrator asks
+  // this rule while a run is set up, so a notice the platform rejects (a chat
+  // it cannot reach) failed the whole run instead of refusing one directive.
+  it("keeps a refusal whose notice cannot be delivered, without throwing", async () => {
+    const handler = new CommandHandler(
+      {} as never,
+      { sendText: async () => { throw new Error("400: Bad Request: chat not found"); } } as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { instanceAuthority: shared() },
+    );
+    await expect(handler.commandGate(GUEST, "autonomous", ["on"])).resolves.toBe(true);
+  });
+
   it("asks the portal who a web caller is, because the portal gates only typed commands", async () => {
     // The portal's identities live in its identity store; the handler used to
     // call every web caller the owner because the portal gates `/token`. The

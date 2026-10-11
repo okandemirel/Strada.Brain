@@ -224,6 +224,46 @@ describe("orchestrator-text-utils", () => {
     });
   });
 
+  // A persona switch is `/persona switch`, which the owner rule refuses a
+  // guest, so a sentence that merely names a persona ("default", "casual")
+  // near "use", "set", "mode" or "profile" drew "Refused" on an everyday line.
+  describe("natural-language persona switch", () => {
+    const PERSONAS = ["default", "formal", "casual", "minimal"];
+    const personaFor = (prompt: string) =>
+      extractNaturalLanguageDirectiveUpdates({ latestProfile: null, prompt, availablePersonas: PERSONAS }).activePersona;
+
+    it.each([
+      "Use the default settings for the build.",
+      "Set the default resolution to 1080p.",
+      "Add a casual mode for new players.",
+      "Implement level 3. Use the default camera profile.",
+      "Set up the default scene for level 2.",
+      "Use the default profile for new users.",
+      "Can you switch to the formal persona?",
+      "Oyuna casual mod ekle.",
+      "Oyuncu ölünce casual moda geç.",
+      "Formal persona kullanma.",
+    ])("switches nothing for %j", (prompt) => {
+      expect(personaFor(prompt)).toBeUndefined();
+    });
+
+    it.each([
+      ["Use the formal persona.", "formal"],
+      ["Please use the casual persona from now on.", "casual"],
+      ["Switch to casual mode.", "casual"],
+      ["Switch back to the default persona.", "default"],
+      ["Go back to default.", "default"],
+      ["Set your persona to minimal.", "minimal"],
+      ["My name is Okan. Use the formal persona. Reply briefly.", "formal"],
+      ["Formal persona kullan.", "formal"],
+      ["Lütfen formal persona kullan.", "formal"],
+      ["Casual moda geç.", "casual"],
+      ["Kendine Nova de. Formal persona kullan.", "formal"],
+    ])("switches %j to %s", (prompt, persona) => {
+      expect(personaFor(prompt)).toBe(persona);
+    });
+  });
+
   // The detected language is written into the profile and English is never
   // detected, so a stray asset name or localized string must not decide it.
   describe("detectLanguageFromText", () => {

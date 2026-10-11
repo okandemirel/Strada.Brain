@@ -8,7 +8,7 @@ import type { IEventEmitter, LearningEventMap, ToolResultEvent } from "../core/e
 import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
-import { CommandHandler, chatInstanceAuthority } from "../tasks/command-handler.js";
+import { CommandHandler, chatChannelAccessFromConfig, chatInstanceAuthority } from "../tasks/command-handler.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
 import { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
@@ -3598,6 +3598,120 @@ describe("Orchestrator", () => {
     expect(dmPolicy.isAutonomousActive("chat-111", "111")).toBe(true);
     expect(userProfileStore.getProfile("111")?.activePersona).toBe("formal");
     expect(replies.slice(before)).toEqual([]);
+    db.close();
+  });
+
+  // The other direction. The persona and "approval" readings were loose: an
+  // everyday line drew "Refused … /persona switch default" or "/autonomous off"
+  // for a guest, and for the operator of a shared roster that names no owner.
+  it("draws no refusal for an everyday sentence that only names a persona or approval", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy: new DMPolicy(mockChannel as any),
+    });
+    // Every multi-id deployment after upgrade: a shared roster, nobody named.
+    const replies: string[] = [];
+    const handler = new CommandHandler(
+      {} as never,
+      { sendText: async (_chatId: string, text: string) => { replies.push(text); }, sendMarkdown: async () => undefined } as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig({ telegram: { allowedUserIds: [111, 222] } } as never)) },
+    );
+    profileOrch.setCommandGate(handler.commandGate);
+    mockProvider.chat.mockResolvedValue({
+      text: "Done.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 10 },
+    });
+
+    for (const userId of ["111", "222"]) {
+      for (const text of [
+        "Use the default settings for the build.",
+        "Set the default resolution to 1080p.",
+        "Add a casual mode for new players.",
+        "What does approval require here?",
+      ]) {
+        const turn = profileOrch.handleMessage({ channelType: "telegram", chatId: `chat-${userId}`, userId, text, timestamp: new Date() });
+        await vi.advanceTimersByTimeAsync(100);
+        await turn;
+      }
+      expect(userProfileStore.getProfile(userId)?.activePersona ?? "default").toBe("default");
+    }
+    expect(replies.filter((text) => text.startsWith("Refused"))).toEqual([]);
+    db.close();
+  });
+
+  // A daemon run (agent-core, a heartbeat trigger, the guardian's repair) has
+  // channel "daemon", which no roster describes, so the rule judged its prompt
+  // "unidentified" and refused it at setup — and the notice went to
+  // "agent-core", which Telegram cannot send to, so the throw failed the run.
+  // The prompt is the instance's own text, and the guardian's chat is the
+  // operator's: it is nobody's directive and rewrites nobody's profile.
+  it("never refuses a daemon run at setup and never reads its prompt into a profile", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    userProfileStore.upsertProfile("111", { displayName: "Operator" });
+    const sent: string[] = [];
+    const telegramLike = {
+      ...mockChannel,
+      sendText: vi.fn(async (chatId: string, text: string) => {
+        sent.push(`${chatId}: ${text}`);
+        if (!/^\d+$/.test(chatId)) throw new Error("400: Bad Request: chat not found");
+      }),
+    };
+    const build = () => new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: telegramLike as any,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy: new DMPolicy(telegramLike as any),
+    });
+    const gated = build();
+    const handler = new CommandHandler(
+      {} as never,
+      telegramLike as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig({ telegram: { allowedUserIds: [111] } } as never)) },
+    );
+    gated.setCommandGate(handler.commandGate);
+    const brief = "Proceed without asking for approval. Use the formal persona. Fix the compile errors in PlayerController.cs.";
+
+    // agent-core's own chat, then the guardian's (the operator's), with the
+    // rule installed and, as in embedded use, without it.
+    for (const [orchestrator, chatId] of [[gated, "agent-core"], [gated, "111"], [build(), "111"]] as const) {
+      await expect(runBackgroundTask(orchestrator, brief, {
+        signal: AbortSignal.timeout(5_000),
+        chatId,
+        channelType: "daemon",
+      })).resolves.toBeTypeOf("string");
+    }
+    expect(sent).toEqual([]);
+    for (const key of ["agent-core", "111"]) {
+      expect(userProfileStore.getProfile(key)?.activePersona ?? "default").toBe("default");
+      expect((await userProfileStore.isAutonomousMode(key)).enabled).toBe(false);
+    }
     db.close();
   });
 

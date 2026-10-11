@@ -99,7 +99,8 @@ export interface ChatInstanceAuthority {
 /**
  * The owner rule a chat command answers to, for a layer that reads its
  * plain-language form itself. Resolves true when it refused, and the caller
- * has been told why.
+ * has been told why if the notice could be delivered; it never rejects for an
+ * undelivered notice.
  */
 export type ChatCommandGate = (caller: ChatCaller, command: TaskCommand, args: readonly string[]) => Promise<boolean>;
 
@@ -448,7 +449,18 @@ export class CommandHandler {
     const what = `/${command} ${args.join(" ")}`.trim();
     const decision = this.decideForCaller(caller, privilege.surface, what);
     if (decision.allowed) return false;
-    await this.channel.sendText(caller.chatId, `Refused: ${decision.reason}.`);
+    // The refusal stands whether or not the notice arrives: the orchestrator
+    // asks this rule while it sets a run up, and a notice the platform rejects
+    // failed the whole run.
+    try {
+      await this.channel.sendText(caller.chatId, `Refused: ${decision.reason}.`);
+    } catch (error) {
+      getLoggerSafe().warn("[CommandHandler] refusal notice not delivered", {
+        chatId: caller.chatId,
+        channelType: caller.channelType ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
 

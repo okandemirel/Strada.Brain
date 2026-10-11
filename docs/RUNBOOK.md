@@ -171,7 +171,10 @@ open access opens) is shared, and there only the ids named in
 `/model` changes, `/vault init|sync`, `/campaign revive`, `/run`) and the
 sentences that stand in for them ("I raised the budget to 100000k", "full
 autonomy please", "kampanya devam"). Everyone else gets `Refused: guest identity
-<id> may not …`. With no id named, nobody on a shared roster has these powers,
+<id> may not …`. Only a whole-sentence instruction counts ("Use the formal
+persona."), never a line that merely names one ("Add a casual mode for new
+players."); a sentence that turns autonomy off for its speaker is never refused,
+and a daemon task's own prompt is never judged at all. With no id named, nobody on a shared roster has these powers,
 the operator included, and a failed campaign then revives only by itself.
 Each named id must also be admitted by the channel's allowlist.
 
