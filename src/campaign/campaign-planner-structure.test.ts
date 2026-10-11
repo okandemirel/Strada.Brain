@@ -56,6 +56,17 @@ describe("CampaignPlanner.planMilestones", () => {
     expect([ladder.minMilestones, ladder.maxMilestones]).toEqual([4, 8]);
   });
 
+  it("names the GDD's path when it has one, and says there is none rather than inventing one (audit campaign#1)", async () => {
+    const ladder = JSON.stringify({ milestones: [sprint("A", ["Pigs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
+    const onDisk = fakeProvider([ladder]);
+    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Pigs_GDD.md");
+    expect(onDisk.calls[0]).toContain("GDD project-relative path: docs/Pigs_GDD.md\n");
+    const textOnly = fakeProvider([ladder]);
+    await new CampaignPlanner(textOnly.provider as never).planMilestones(GDD, undefined);
+    expect(textOnly.calls[0]).toContain("GDD project-relative path: none — this design is not saved in the project");
+    expect(textOnly.calls[0]).not.toContain("undefined");
+  });
+
   it("keeps the first ladder when the second round covers no more, and records what stays unclaimed", async () => {
     const first = JSON.stringify({ milestones: [sprint("A", ["1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["2. Levels"])] });
     const worse = JSON.stringify({ milestones: [sprint("A", ["1. Core Loop"]), sprint("B", []), sprint("C", [])] });

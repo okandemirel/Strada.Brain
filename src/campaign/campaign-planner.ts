@@ -267,7 +267,7 @@ export class CampaignPlanner {
    * — a campaign that cannot plan must not silently degrade into one giant
    * sprint, which is exactly the failure mode the ladder exists to prevent).
    */
-  async planMilestones(gddText: string, gddPath: string, styleNote?: string): Promise<PlannedLadder> {
+  async planMilestones(gddText: string, gddPath: string | undefined, styleNote?: string): Promise<PlannedLadder> {
     if (!this.provider) {
       throw new Error("campaign planning requires an LLM provider");
     }
@@ -275,8 +275,14 @@ export class CampaignPlanner {
     const system = plannerSystem(scope);
     const planning = await this.gddForPlanning(gddText);
 
+    // NO FILE, NO PATH: a supplied design that could not be saved into the
+    // project has none, and naming a default sent sprints to a file that
+    // was absent or held another document (audit campaign#1).
+    const pathLine = gddPath !== undefined
+      ? `GDD project-relative path: ${gddPath}`
+      : "GDD project-relative path: none — this design is not saved in the project, so each sprint prompt must restate what it needs from it";
     const userMessage =
-      `GDD project-relative path: ${gddPath}\n\n` +
+      `${pathLine}\n\n` +
       (styleNote ? `Derived style profile (stored at style.json — generators read it): ${styleNote}\n\n` : "") +
       (planning.briefed
         ? `<gdd-briefs sections="${planning.sections}" original-chars="${gddText.length}">\n${planning.text}\n</gdd-briefs>\n\n`

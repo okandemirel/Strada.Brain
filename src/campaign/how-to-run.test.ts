@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { extractCoreLoop, readUnityVersion, renderHowToRun, suiteCommand, testPlatformFromVerdict } from "./how-to-run.js";
+import { assessSceneHygiene } from "./scene-hygiene.js";
 
 /**
  * The person who opened the delivered PixelFlow tree (2026-09-03) had 20
@@ -159,6 +160,51 @@ describe("HOW_TO_RUN.md rendering", () => {
     // Nothing invented: no scene name, no version, no verb.
     expect(text).not.toContain(".unity");
     expect(text).not.toMatch(/\d{4}\.\d\.\d+f\d/);
+  });
+
+  it("states no Build Settings fact when no entry scene was named (audit campaign#6)", () => {
+    // writeHowToRun's own mapping, off the real measurement. Every hygiene
+    // return without an entry scene carried `otherEnabled` 0 (unreadable, no
+    // enabled scene) or the whole enabled count (no usable scene), and the
+    // file then said "enables the entry scene and nothing else" or "N scenes
+    // besides the entry scene" under a header that promises every line is
+    // measured.
+    const factsFor = (root: string) => {
+      const h = assessSceneHygiene(root);
+      return {
+        projectRoot: root,
+        entryScene: h.entry?.path,
+        entryObjects: h.entry?.objects,
+        entryNote: h.refusal?.detail ?? h.note,
+        scaffolding: h.scaffolding.map((s) => s.path),
+        unclassified: h.unclassified.map((s) => s.path),
+        otherEnabled: h.otherEnabled,
+      };
+    };
+    const settings = (root: string, entries: ReadonlyArray<[string, 0 | 1]>): void => {
+      mkdirSync(join(root, "ProjectSettings"), { recursive: true });
+      mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
+      const lines = ["%YAML 1.1", "EditorBuildSettings:", "  m_Scenes:"];
+      for (const [rel, enabled] of entries) {
+        writeFileSync(join(root, rel), "");
+        lines.push(`  - enabled: ${enabled}`, `    path: ${rel}`);
+      }
+      writeFileSync(join(root, "ProjectSettings", "EditorBuildSettings.asset"), lines.join("\n"));
+    };
+    const unread = tmp();
+    const noneEnabled = tmp();
+    settings(noneEnabled, [["Assets/Scenes/Main.unity", 0]]);
+    const allEmpty = tmp();
+    settings(allEmpty, [["Assets/Scenes/A.unity", 1], ["Assets/Scenes/B.unity", 1]]);
+
+    for (const root of [unread, noneEnabled, allEmpty]) {
+      const facts = factsFor(root);
+      expect(facts.entryScene).toBeUndefined();
+      const scaffoldingSection = renderHowToRun(facts).split("## What is scaffolding")[1] ?? "";
+      expect(scaffoldingSection).not.toContain("nothing else");
+      expect(scaffoldingSection).not.toContain("besides the entry scene");
+      expect(scaffoldingSection).toContain(`Unknown — ${facts.entryNote}`);
+    }
   });
 
   it("does not claim the suite is the whole suite when the green was filtered", () => {

@@ -234,7 +234,13 @@ export function renderHowToRun(facts: HowToRunFacts): string {
   }
 
   lines.push("", "## What is scaffolding", "");
-  if (facts.otherEnabled === 0) {
+  if (!facts.entryScene) {
+    // NO ENTRY SCENE, NOTHING "BESIDES" IT. Build Settings unread, no scene
+    // enabled, or none usable: the count is 0 or every enabled scene, and
+    // either sentence below would state a fact nothing measured (audit
+    // campaign#6).
+    lines.push(`${unknown(facts.entryNote)}. With no entry scene named, no other scene is judged as scaffolding.`);
+  } else if (facts.otherEnabled === 0) {
     lines.push(
       "Build Settings enables the entry scene and nothing else — there is no scratch scene to remove.",
     );

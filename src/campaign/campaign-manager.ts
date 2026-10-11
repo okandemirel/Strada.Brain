@@ -2349,33 +2349,46 @@ export class CampaignManager {
       return;
     }
     campaign.state = "planning";
-    if (!campaign.gddPath) {
+    // DISCOVERY IS FOR A ROW THAT CARRIES NO DOCUMENT. A campaign holding its
+    // intake text with no path is an intake whose docs/ write failed, and the
+    // newest GDD in docs/ is some other document: the wrong game, and a drift
+    // every delivery is refused for (audit campaign#1).
+    if (!campaign.gddPath && campaign.gddText === undefined) {
       campaign.gddPath = this.findNewestGddPath();
     }
     this.persist(campaign);
 
     try {
-      const gddPath = campaign.gddPath ?? "docs/GDD.md";
-      const textForPlanning = campaign.gddText ?? readGddFile(this.projectRoot, gddPath);
+      const textForPlanning =
+        campaign.gddText ?? (campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
       if (!textForPlanning) {
-        throw new Error(`GDD not readable at ${gddPath} — cannot plan the ladder`);
+        throw new Error(`GDD not readable at ${campaign.gddPath ?? "docs/ (no GDD document found)"} — cannot plan the ladder`);
       }
-      campaign.gddPath = gddPath;
       // Every sprint prompt references the GDD by this path instead of
       // restating it — a dangling pointer means agents building with no
       // design at all. Audited 2026-08-29: the fallback path was handed out
       // with no existence check. Materialize the text we planned from.
-      try {
-        const absGdd = join(this.projectRoot, gddPath);
-        if (!existsSync(absGdd) && campaign.gddText) {
-          mkdirSync(join(this.projectRoot, "docs"), { recursive: true });
-          writeFileSync(absGdd, campaign.gddText, "utf8");
-          getLoggerSafe().warn("GDD file was missing at its referenced path — materialized from campaign text", {
-            id: campaign.id,
-            gddPath,
-          });
+      // …INSIDE THE PROJECT, and a path is adopted only when its file holds
+      // THIS text: the write went through a docs/ symlinked out of the
+      // project, and the default path was kept whatever the file there held
+      // (audit campaign#1). Nowhere to put it: the intake stays text-only.
+      if (campaign.gddText !== undefined) {
+        const target = campaign.gddPath ?? "docs/GDD.md";
+        try {
+          const absGdd = join(this.projectRoot, target);
+          if (!existsSync(absGdd) && pathIsInsideProject(this.projectRoot, target)) {
+            mkdirSync(dirname(absGdd), { recursive: true });
+            writeFileSync(absGdd, campaign.gddText, "utf8");
+            getLoggerSafe().warn("GDD file was missing at its referenced path — materialized from campaign text", {
+              id: campaign.id,
+              gddPath: target,
+            });
+          }
+        } catch { /* best-effort; planning proceeds on in-memory text */ }
+        if (campaign.gddPath === undefined && readGddFile(this.projectRoot, target) === campaign.gddText) {
+          campaign.gddPath = target;
         }
-      } catch { /* best-effort; planning proceeds on in-memory text */ }
+      }
 
       // Derive the game's style from its own GDD (post-approval — the design
       // is confirmed, so the profile now means something). Never a universal
@@ -2400,7 +2413,7 @@ export class CampaignManager {
 
       const ladder = await this.planner.planMilestones(
         textForPlanning,
-        gddPath,
+        campaign.gddPath,
         styleSummary.trim() || undefined,
       );
       campaign.milestones = ladder.milestones.map((m, i) => ({
@@ -4595,7 +4608,7 @@ export class CampaignManager {
               campaign.deliveryReported = true;
               this.persist(campaign);
             }
-            await this.attachDeliveryEvidence(campaign);
+            await this.attachDeliveryEvidence(campaign, milestone);
             return;
           }
           // A DELIVERY ROUND IS CHARGED, and the charge is durable. This
@@ -4667,7 +4680,7 @@ export class CampaignManager {
               campaign.deliveryReported = true;
               this.persist(campaign);
             }
-            await this.attachDeliveryEvidence(campaign);
+            await this.attachDeliveryEvidence(campaign, milestone);
             return;
           }
           const resumeMs = this.deliveryResumeDelayMs;
@@ -4683,7 +4696,7 @@ export class CampaignManager {
               "Reply **kampanya devam** to resume now, or change the GDD if this is the game you wanted.",
           );
           this.scheduleAutoRevive(campaign.id, resumeMs, campaign.autoReviveAt);
-          await this.attachDeliveryEvidence(campaign);
+          await this.attachDeliveryEvidence(campaign, milestone);
           return;
         }
         // …and DELIVERY is a transition too: a stop recorded while this
@@ -4743,7 +4756,7 @@ export class CampaignManager {
           campaign.deliveryReported = true;
           this.persist(campaign);
         }
-        await this.attachDeliveryEvidence(campaign);
+        await this.attachDeliveryEvidence(campaign, milestone);
         return;
       }
       // WHAT THE SCENES HOLD, EVERY SPRINT (2026-09-10). The structural
@@ -5587,10 +5600,14 @@ export class CampaignManager {
    * delivery (or NOT DELIVERED) report. Best-effort: a channel without file
    * delivery, or a project with no frame, changes nothing about the report.
    */
-  private async attachDeliveryEvidence(campaign: Campaign): Promise<void> {
+  private async attachDeliveryEvidence(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
     if (!this.attach) return;
     try {
-      const frame = selectGameplayFrame(this.projectRoot, 0);
+      // FROM THE FINAL SPRINT, as the look check reads it. Unbounded, the
+      // newest file anywhere under Recordings/ — an earlier campaign's frame —
+      // went out uncaptioned after a report that said this sprint captured
+      // nothing (audit campaign#7). No frame of its own: no picture.
+      const frame = selectGameplayFrame(this.projectRoot, this.sprintStartMs(milestone));
       if (!frame.path) return;
       const abs = frame.path; // absolute — visual-conformance reads it as such
       const size = existsSync(abs) ? statSync(abs).size : undefined;

@@ -3,7 +3,7 @@ import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync } from "node:fs";
 import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
@@ -1483,8 +1483,32 @@ describe("CampaignManager", () => {
   });
 
   it("hands the newest gameplay frame to the chat with the delivery report (portal file delivery 2026-09-10)", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    // Captured by the final sprint: the frame the report is about.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
+    await waitFor(() => expect(attached).toHaveLength(1));
+    expect(attached[0]).toMatchObject({ chatId: "cli-local", name: "frame_00012.png", type: "image" });
+    expect(attached[0]!.url).toBe(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"));
+  });
+
+  it("never hands over a frame an earlier run captured as this delivery's picture (audit campaign#7)", async () => {
+    // Recordings/ keeps every earlier run's frames. With no frame from the
+    // final sprint, the newest file anywhere under it went out right after
+    // the report, uncaptioned, as "the game the sentences describe".
+    const stale = join(projectRoot, "Recordings", "old-campaign", "frame_00001.png");
+    mkdirSync(join(projectRoot, "Recordings", "old-campaign"), { recursive: true });
+    writeFileSync(stale, Buffer.from("89504e470d0a1a0a", "hex"));
+    const anHourAgo = new Date(Date.now() - 60 * 60_000);
+    utimesSync(stale, anHourAgo, anHourAgo);
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1494,9 +1518,21 @@ describe("CampaignManager", () => {
     tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
-    await waitFor(() => expect(attached).toHaveLength(1));
-    expect(attached[0]).toMatchObject({ chatId: "cli-local", name: "frame_00012.png", type: "image" });
-    expect(attached[0]!.url).toBe(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"));
+    await waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true));
+    // The handler's own attachment has no signal of its own to wait on, so
+    // the same call is awaited here against the delivered row.
+    const evidence = manager as unknown as {
+      attachDeliveryEvidence(c: import("./types.js").Campaign, m: import("./types.js").CampaignMilestone): Promise<void>;
+    };
+    const delivered = storage.get(campaign.id)!;
+    await evidence.attachDeliveryEvidence(delivered, delivered.milestones[2]!);
+    expect(attached).toEqual([]);
+    // A frame the final sprint did capture still goes out.
+    const fresh = join(projectRoot, "Recordings", "playthrough", "frame_00002.png");
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(fresh, Buffer.from("89504e470d0a1a0a", "hex"));
+    await evidence.attachDeliveryEvidence(delivered, delivered.milestones[2]!);
+    expect(attached.map((a) => a.url)).toEqual([fresh]);
   });
 
   it("plays the built player at delivery: its frame rate answers the GDD, and a failed run bounces (2026-09-10)", async () => {
@@ -4678,6 +4714,49 @@ describe("CampaignManager", () => {
       expect(internals(manager).gddDriftOf(textOnly)).toBeUndefined();
       expect(internals(manager).gddTextOf(textOnly)).toBe("# GDD\n\nText only.");
     });
+
+    it("a shared GDD that could not be saved is never given another document's path, nor written outside the project (audit campaign#1)", async () => {
+      // persistSuppliedGdd fails closed (a write error, a docs/ that leaves
+      // the project) and the campaign starts on the text alone. Planning then
+      // took the newest GDD in docs/ — another game's — or wrote docs/GDD.md
+      // through the symlink, and every delivery was refused for drift.
+      const supplied = "# Space GDD\n\n" + "Pilot a ship through three asteroid fields; the game ships 3 levels. ".repeat(4);
+      const share = (name: string): IncomingMessage =>
+        ({
+          channelType: "cli", chatId: "cli-local", userId: "u1", text: "",
+          attachments: [{ type: "document", name, data: Buffer.from(supplied, "utf8") }],
+          timestamp: new Date(),
+        }) as unknown as IncomingMessage;
+
+      // 1. The save fails (a folder squats on docs/Space_GDD.md); docs/ holds
+      //    another game's document, docs/Game_GDD.md.
+      mkdirSync(join(projectRoot, "docs", "Space_GDD.md"), { recursive: true });
+      const otherGame = readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8");
+      expect(await manager.tryHandleIncoming(share("Space_GDD.md"))).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const first = storage.listActive()[0]!;
+      expect(first.gddPath).not.toBe("docs/Game_GDD.md");
+      expect(internals(manager).gddTextOf(first)).toBe(supplied);
+      expect(internals(manager).gddDriftOf(first)).toBeUndefined();
+      expect(readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8")).toBe(otherGame);
+      // Whatever path it holds, the file there IS the shared document.
+      if (first.gddPath !== undefined) expect(readFileSync(join(projectRoot, first.gddPath), "utf8")).toBe(supplied);
+      first.state = "cancelled";
+      storage.save(first);
+
+      // 2. docs/ is a link out of the project: nothing is written there.
+      const outside = join(dir, "outside-docs");
+      mkdirSync(outside, { recursive: true });
+      rmSync(join(projectRoot, "docs"), { recursive: true, force: true });
+      symlinkSync(outside, join(projectRoot, "docs"));
+      expect(await manager.tryHandleIncoming(share("Space_GDD.md"))).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      const second = storage.listActive()[0]!;
+      expect(readdirSync(outside)).toEqual([]);
+      expect(second.gddPath).toBeUndefined();
+      expect(internals(manager).gddTextOf(second)).toBe(supplied);
+      expect(internals(manager).gddDriftOf(second)).toBeUndefined();
+    });
   });
 
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {
@@ -6273,12 +6352,21 @@ describe("CampaignManager", () => {
       const id = c.milestones[2]!.taskId!;
       tasks.verifications.set(id, green);
       tasks.emit("task:completed", id, "green, shipping");
-      await new Promise((r) => setTimeout(r, 150));
+      // THE GATE ANSWERED, not "150 ms passed". On a loaded machine the gate
+      // outlived the sleep, the next round completed the SAME task again, and
+      // the record that completion leaves overwrote the campaign's own suite
+      // run mid-gate: "the suite record does not carry the run id the campaign
+      // issued", and the player was never reached.
+      await waitFor(() => {
+        const now = storage.get(campaign.id)!;
+        expect(now.state !== "executing" || now.milestones[2]!.taskId !== id).toBe(true);
+      });
     }
 
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
-    expect(messages.map((m) => m.text).join("\n")).toContain("never run on a machine that can run it");
+    // The row is saved before the report leaves: wait for the report itself.
+    await waitFor(() => expect(messages.map((m) => m.text).join("\n")).toContain("never run on a machine that can run it"));
   });
 
   it("an audit that could not RUN is not an audit that passed (Codex 2026-09-12 R#11)", async () => {
@@ -6315,12 +6403,17 @@ describe("CampaignManager", () => {
       const id = c.milestones[2]!.taskId!;
       tasks.verifications.set(id, green);
       tasks.emit("task:completed", id, "green, shipping");
-      await new Promise((r) => setTimeout(r, 150));
+      // The gate answered (see R#13 above): a sleep let the next round
+      // complete the same task mid-gate and overwrite the suite record.
+      await waitFor(() => {
+        const now = storage.get(campaign.id)!;
+        expect(now.state !== "executing" || now.milestones[2]!.taskId !== id).toBe(true);
+      });
     }
 
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
-    expect(messages.map((m) => m.text).join("\n")).toContain("coverage audit did not run");
+    await waitFor(() => expect(messages.map((m) => m.text).join("\n")).toContain("coverage audit did not run"));
   });
 
   it("a proof this MACHINE cannot produce stops the campaign and asks a person, instead of reviving forever (Codex 2026-09-11 C#2)", async () => {
@@ -6351,13 +6444,18 @@ describe("CampaignManager", () => {
       const id = storage.get(campaign.id)!.milestones[2]!.taskId!;
       tasks.verifications.set(id, green);
       tasks.emit("task:completed", id, "green, shipping");
-      await new Promise((r) => setTimeout(r, 150));
+      // The gate answered — a new attempt, or the stop — not a fixed sleep a
+      // slow gate outlives (see R#13).
+      await waitFor(() => {
+        const now = storage.get(campaign.id)!;
+        expect((now.state === "failed" && now.autoReviveAt === undefined) || now.milestones[2]!.taskId !== id).toBe(true);
+      });
     }
     const stopped = storage.get(campaign.id)!;
     expect(stopped.state).toBe("failed");
     // No appointment: retrying cannot change a missing tool.
     expect(stopped.autoReviveAt).toBeUndefined();
-    expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
+    await waitFor(() => expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof"));
     // The report landed, so a restart does not send it again (campaign#3).
     expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(campaign.id);
     // A stop SHORT of delivery is recoverable — by a person, or by the
