@@ -14,12 +14,17 @@ import {
   GitStashTool,
 } from "./git-tools.js";
 import type { ToolContext } from "./tool.interface.js";
+import { WorkspaceLeaseManager, type WorkspaceLease } from "../multi/workspace-lease-manager.js";
 
 let tempDir: string;
 let ctx: ToolContext;
 
+// GIT_DIR and friends (set when this runs under a git hook) would aim the
+// fixture's writes at the real repository; the temp repo is the only target.
+const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+
 function git(args: string) {
-  execSync(`git ${args}`, { cwd: tempDir, stdio: "pipe" });
+  execSync(`git ${args}`, { cwd: tempDir, stdio: "pipe", env: gitEnv });
 }
 
 beforeEach(async () => {
@@ -431,11 +436,8 @@ describe("GitStashTool", () => {
     let leaseRoot: string;
     let lease: string;
     let leaseCtx: ToolContext;
-    // GIT_DIR and friends (set when this runs under a git hook) would aim these
-    // at the real repository's stash; the temp repo is the only target.
-    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
     const gitIn = (cwd: string, ...args: string[]): string =>
-      execFileSync("git", args, { cwd, stdio: "pipe", env }).toString().trim();
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv }).toString().trim();
 
     beforeEach(async () => {
       leaseRoot = await mkdtemp(join(tmpdir(), "git-stash-lease-"));
@@ -727,6 +729,91 @@ describe("the sensitive-file blocklist holds for the git tools", () => {
     const staged = await new GitDiffTool().execute({ staged: true }, ctx);
     expect(staged.content).toContain("+changed");
     expect(staged.content).not.toContain("sk-live");
+  });
+
+  // For two blobs or two trees `git diff --name-only` names only the right
+  // side, relative to the subtree, so the listing never saw the secret.
+  it("git_diff refuses a blob pair or a subtree, whatever names the listing would show", async () => {
+    await writeFile(join(tempDir, ".env"), "OPENAI_API_KEY=sk-live-ONE\n");
+    await mkdir(join(tempDir, ".ssh"));
+    await writeFile(join(tempDir, ".ssh", "config"), "IdentityFile sk-live-SSH\n");
+    git("add .env .ssh");
+    git('commit -m "secrets"');
+    const emptyTree = execSync("git mktree", { cwd: tempDir, input: "" }).toString().trim();
+    const blob = (spec: string) => execSync(`git rev-parse ${spec}`, { cwd: tempDir }).toString().trim();
+
+    for (const ref of [
+      "HEAD:.env..HEAD:file.txt",
+      `${emptyTree}..HEAD:.ssh`,
+      `${blob("HEAD:.env")}..${blob("HEAD:file.txt")}`,
+      "HEAD^{tree}",
+    ]) {
+      const result = await new GitDiffTool().execute({ ref }, ctx);
+      expect(result.content, ref).not.toContain("sk-live");
+      expect(result.isError, ref).toBe(true);
+    }
+
+    await writeFile(join(tempDir, "file.txt"), "changed\n");
+    git("add file.txt");
+    git('commit -m "change"');
+    const range = await new GitDiffTool().execute({ ref: "HEAD~1..HEAD" }, ctx);
+    expect(range.isError).toBeUndefined();
+    expect(range.content).toContain("+changed");
+  });
+});
+
+// Every git-worktree lease holds the lease manager's owner file, untracked, at
+// its top level, and the blocklist covers it so the agent cannot forge it. A
+// commit check that read it as a secret refused every `files: ["."]` in a lease.
+describe("git_commit in a workspace lease", () => {
+  let leaseRoot: string;
+  let lease: WorkspaceLease;
+  let leaseCtx: ToolContext;
+  const inLease = (...args: string[]): string =>
+    execFileSync("git", args, { cwd: lease.path, stdio: "pipe", env: gitEnv }).toString().trim();
+
+  beforeEach(async () => {
+    leaseRoot = await mkdtemp(join(tmpdir(), "git-commit-lease-"));
+    lease = await new WorkspaceLeaseManager({ projectRoot: tempDir, leaseRoot }).acquireLease();
+    expect(lease.kind, "these assertions only mean anything on the worktree path").toBe("git-worktree");
+    expect(inLease("status", "--porcelain")).toContain("?? .strada-lease-owner.json");
+    leaseCtx = { projectPath: lease.path, workingDirectory: lease.path, readOnly: false };
+  });
+
+  afterEach(async () => {
+    await lease.release();
+    await rm(leaseRoot, { recursive: true, force: true });
+  });
+
+  it("commits '.' and '*' without the lease's own bookkeeping", async () => {
+    for (const [name, files] of [["Player.cs", ["."]], ["Enemy.cs", ["*"]]] as const) {
+      await writeFile(join(lease.path, name), "class C {}\n");
+      const result = await new GitCommitTool().execute({ message: `add ${name}`, files: [...files] }, leaseCtx);
+      expect(result.content, name).not.toMatch(/sensitive/i);
+      expect(result.isError, name).toBeUndefined();
+      expect(inLease("show", "--name-only", "--format=", "HEAD")).toBe(name);
+    }
+    expect(inLease("status", "--porcelain")).toBe("?? .strada-lease-owner.json");
+  });
+
+  it("commits what a shell `git add -A` staged, and leaves the owner file out of it", async () => {
+    await writeFile(join(lease.path, "Player.cs"), "class Player {}\n");
+    inLease("add", "-A");
+    const result = await new GitCommitTool().execute({ message: "add player" }, leaseCtx);
+    expect(result.content).not.toMatch(/sensitive/i);
+    expect(result.isError).toBeUndefined();
+    expect(inLease("show", "--name-only", "--format=", "HEAD")).toBe("Player.cs");
+    expect(inLease("status", "--porcelain")).toBe("?? .strada-lease-owner.json");
+  });
+
+  it("still refuses a file of that name anywhere but the lease's top level", async () => {
+    await mkdir(join(lease.path, "Assets"));
+    await writeFile(join(lease.path, "Assets", ".strada-lease-owner.json"), "{}\n");
+    const head = inLease("rev-parse", "HEAD");
+    const result = await new GitCommitTool().execute({ message: "wip", files: ["."] }, leaseCtx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Assets/.strada-lease-owner.json");
+    expect(inLease("rev-parse", "HEAD")).toBe(head);
   });
 });
 

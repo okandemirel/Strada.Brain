@@ -89,6 +89,35 @@ function diffNames(args: string[], cwd: string) {
   return runGit(["-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "-z", ...args], cwd);
 }
 
+/**
+ * The lease manager's own files at a lease's top level (LEASE_SIDECAR_FILES in
+ * workspace-lease-manager.ts). The blocklist covers them so the agent cannot
+ * forge them, not because they hold a secret, and every git-worktree lease has
+ * the owner file there, untracked: read as a secret, it refused every
+ * `git_commit {files: ["."]}` in a lease. They are kept out of the commit by
+ * this exact path; the same name anywhere else is still refused.
+ */
+const LEASE_SIDECAR_FILES: readonly string[] = [".strada-lease-owner.json", ".strada-lease-seed.json"];
+
+/**
+ * Why `ref` is not a diff between commits, or undefined when it is. For a
+ * `<rev>:<path>`, a blob or tree id or `^{tree}`, git diffs the two objects and
+ * `--name-only` names only the right-hand one, relative to its subtree:
+ * `HEAD:.env..HEAD:file.txt` printed .env as `file.txt`, and `<tree>..HEAD:.ssh`
+ * printed .ssh/config as `config`, past every name check git_diff makes.
+ */
+async function notACommitRange(ref: string, cwd: string): Promise<string | undefined> {
+  const parsed = await runGit(["rev-parse", ref, "--"], cwd);
+  if (parsed.exitCode !== 0) return parsed.stderr.trim() || `git rev-parse failed (exit ${parsed.exitCode})`;
+  const ids = parsed.stdout.split("\n").map((line) => line.trim().replace(/^\^/, "")).filter((line) => line && line !== "--");
+  const commits = ids.length > 0 && ids.every((id) => /^[0-9a-f]{40,64}$/.test(id))
+    ? await runGit(["rev-parse", ...ids.map((id) => `${id}^{commit}`), "--"], cwd)
+    : undefined;
+  if (commits?.exitCode === 0) return undefined;
+  return `'${ref}' does not name commits; git_diff compares commits only. ` +
+    "Give the commit as 'ref' and the file as 'path', not a '<rev>:<path>' or an object id.";
+}
+
 // ─── git_status ───────────────────────────────────────────────────────────────
 
 export class GitStatusTool implements ITool {
@@ -158,6 +187,8 @@ export class GitDiffTool implements ITool {
     if (input["ref"]) {
       const ref = sanitizeGitArg(String(input["ref"]), "ref");
       if (!ref.valid) return { content: `Error: ${ref.error}`, isError: true };
+      const notCommits = await notACommitRange(ref.value, context.projectPath);
+      if (notCommits) return { content: `Error: ${notCommits}`, isError: true };
       revs.push(ref.value);
     }
     const pathspec: string[] = [];
@@ -181,7 +212,7 @@ export class GitDiffTool implements ITool {
     const omitted = sensitiveNames(listed.stdout, root.path);
     if (omitted.length > 0) {
       for (const name of omitted) pathspec.push(`:(top,exclude,literal)${name}`);
-      // A blob range (`A:.env..B:.env`) takes no pathspec, so confirm the exclusion took.
+      // Confirm the exclusion took before anything is printed.
       const recheck = await diffNames([...revs, "--", ...pathspec], context.projectPath);
       if (recheck.exitCode !== 0 || sensitiveNames(recheck.stdout, root.path).length > 0) {
         return {
@@ -331,9 +362,10 @@ export class GitCommitTool implements ITool {
       // a glob reaches secret files that no name check on `files` sees, and a
       // refused file left staged would ride along with the user's next commit.
       // A deletion carries no content, so removing a tracked secret still works.
+      const pathspec = [...staged, ...LEASE_SIDECAR_FILES.map((name) => `:(top,exclude,literal)${name}`)];
       const [tracked, untracked] = await Promise.all([
-        diffNames(["--diff-filter=d", "--", ...staged], context.projectPath),
-        runGit(["ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--", ...staged], context.projectPath),
+        diffNames(["--diff-filter=d", "--", ...pathspec], context.projectPath),
+        runGit(["ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--", ...pathspec], context.projectPath),
       ]);
       const failed = [tracked, untracked].find((result) => result.exitCode !== 0);
       if (failed) {
@@ -347,9 +379,23 @@ export class GitCommitTool implements ITool {
           isError: true,
         };
       }
-      const addResult = await runGit(["add", "--", ...staged], context.projectPath);
+      const addResult = await runGit(["add", "--", ...pathspec], context.projectPath);
       if (addResult.exitCode !== 0) {
         return { content: `Error staging files: ${addResult.stderr}`, isError: true };
+      }
+    }
+
+    // A shell `git add -A` in a lease stages the lease's own files: they are
+    // unstaged, neither committed nor a reason to refuse the rest.
+    const index = await diffNames(["--cached", "--diff-filter=d"], context.projectPath);
+    if (index.exitCode !== 0) {
+      return { content: `Error: ${index.stderr || "git diff --cached failed"}`, isError: true };
+    }
+    const sidecars = index.stdout.split("\0").filter((name) => LEASE_SIDECAR_FILES.includes(name));
+    if (sidecars.length > 0) {
+      const reset = await runGit(["reset", "-q", "--", ...sidecars.map((name) => `:(top,literal)${name}`)], context.projectPath);
+      if (reset.exitCode !== 0) {
+        return { content: `Error: could not unstage ${sidecars.join(", ")}: ${reset.stderr}`, isError: true };
       }
     }
 
@@ -359,11 +405,7 @@ export class GitCommitTool implements ITool {
       return { content: "Nothing to commit: no staged changes. Stage files first.", isError: true };
     }
     // ...and that none of them is a secret file something else staged.
-    const index = await diffNames(["--cached", "--diff-filter=d"], context.projectPath);
-    if (index.exitCode !== 0) {
-      return { content: `Error: ${index.stderr || "git diff --cached failed"}`, isError: true };
-    }
-    const stagedSecrets = sensitiveNames(index.stdout, root.path);
+    const stagedSecrets = sensitiveNames(index.stdout, root.path).filter((name) => !sidecars.includes(name));
     if (stagedSecrets.length > 0) {
       return {
         content: `Error: refusing to commit: the index holds files on the sensitive-file blocklist: ${stagedSecrets.join(", ")}. ` +
