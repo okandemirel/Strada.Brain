@@ -923,6 +923,7 @@ async function runStatusCommand(): Promise<void> {
     const report = await gatherStatusReport({
       memoryDbPath: configResult.value.memory.dbPath,
       installRoot: inspection.installRoot,
+      updateRecordsRoot: updater.getUpdateRecordsRoot(),
       healthUrl: `http://127.0.0.1:${configResult.value.web.port}/health`,
     });
     for (const line of renderStatusReport(report)) console.log(line);

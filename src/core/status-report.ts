@@ -52,6 +52,8 @@ export interface StatusReport {
 export interface GatherOptions {
   memoryDbPath: string;
   installRoot: string;
+  /** Where the updater keeps its history and hold (AutoUpdater.getUpdateRecordsRoot()); default installRoot. */
+  updateRecordsRoot?: string;
   healthUrl?: string;
   now?: number;
   fetchImpl?: typeof fetch;
@@ -74,8 +76,8 @@ export async function gatherStatusReport(opts: GatherOptions): Promise<StatusRep
     campaigns: readCampaigns(campaignsPath, opts.loadCampaigns ?? loadCampaignsFromDb),
     update: {
       path: opts.installRoot,
-      last: readUpdateHistory(opts.installRoot).at(-1),
-      hold: readUpdateHold(opts.installRoot) ?? undefined,
+      last: readUpdateHistory(opts.updateRecordsRoot ?? opts.installRoot).at(-1),
+      hold: readUpdateHold(opts.updateRecordsRoot ?? opts.installRoot) ?? undefined,
     },
   };
 }

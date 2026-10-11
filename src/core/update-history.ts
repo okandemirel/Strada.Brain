@@ -6,12 +6,35 @@
  * "did the daemon update last night, and did it roll back?" had to grep the
  * log. The updater now appends every outcome here; `strada status` prints the
  * last one. Kept short (last HISTORY_LIMIT events), written atomically.
+ *
+ * Every function takes the root whose `.strada/` holds the files: a git
+ * checkout's own root, a package install's writable config root
+ * (AutoUpdater.getUpdateRecordsRoot()).
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 export type UpdateEventKind = "pulled" | "rolled-back" | "deferred" | "failed" | "rollback-refused";
+
+/**
+ * What became of the checkout (or install) after an update failed: put back,
+ * left as it was because putting it back would discard someone's work, a
+ * rollback that broke off, or nothing to put back.
+ */
+export type RollbackOutcome = "rolled-back" | "refused" | "incomplete" | "none";
+
+const ROLLBACK_NOTES: Record<RollbackOutcome, string> = {
+  "rolled-back": "and was rolled back",
+  refused: "and was NOT rolled back: the rollback was refused, so the checkout still holds it",
+  incomplete: "and the rollback did not complete",
+  none: "and nothing was rolled back",
+};
+
+/** " and was rolled back", or what happened instead; "" for a hold that does not say. */
+export function describeRollback(outcome: RollbackOutcome | undefined): string {
+  return outcome ? ` ${ROLLBACK_NOTES[outcome]}` : "";
+}
 
 export interface UpdateEvent {
   at: number;
@@ -24,13 +47,13 @@ export interface UpdateEvent {
 export const UPDATE_HISTORY_FILE = "auto-update.json";
 export const HISTORY_LIMIT = 20;
 
-export function updateHistoryPath(installRoot: string): string {
-  return path.join(installRoot, ".strada", UPDATE_HISTORY_FILE);
+export function updateHistoryPath(root: string): string {
+  return path.join(root, ".strada", UPDATE_HISTORY_FILE);
 }
 
-export function readUpdateHistory(installRoot: string): UpdateEvent[] {
+export function readUpdateHistory(root: string): UpdateEvent[] {
   try {
-    const raw = fs.readFileSync(updateHistoryPath(installRoot), "utf8");
+    const raw = fs.readFileSync(updateHistoryPath(root), "utf8");
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
@@ -43,11 +66,11 @@ export function readUpdateHistory(installRoot: string): UpdateEvent[] {
 }
 
 /** Append one event; never throws (a history write must not fail an update). */
-export function recordUpdateEvent(installRoot: string, event: UpdateEvent): void {
+export function recordUpdateEvent(root: string, event: UpdateEvent): void {
   try {
-    const file = updateHistoryPath(installRoot);
+    const file = updateHistoryPath(root);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const events = [...readUpdateHistory(installRoot), event].slice(-HISTORY_LIMIT);
+    const events = [...readUpdateHistory(root), event].slice(-HISTORY_LIMIT);
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(events, null, 2));
     fs.renameSync(tmp, file);
@@ -73,39 +96,46 @@ export interface UpdateHold {
   /** Consecutive failed updates, whatever their target. */
   failures: number;
   retryAfter: number;
+  /** Absent in holds written before 2026-10-11. */
+  rollback?: RollbackOutcome;
 }
 
 export const UPDATE_HOLD_FILE = "auto-update-hold.json";
 
-function updateHoldPath(installRoot: string): string {
-  return path.join(installRoot, ".strada", UPDATE_HOLD_FILE);
+function updateHoldPath(root: string): string {
+  return path.join(root, ".strada", UPDATE_HOLD_FILE);
 }
 
-export function readUpdateHold(installRoot: string): UpdateHold | null {
+export function readUpdateHold(root: string): UpdateHold | null {
   try {
-    const hold = JSON.parse(fs.readFileSync(updateHoldPath(installRoot), "utf8")) as UpdateHold;
+    const hold = JSON.parse(fs.readFileSync(updateHoldPath(root), "utf8")) as UpdateHold;
     return typeof hold?.target === "string" && typeof hold.retryAfter === "number" ? hold : null;
   } catch {
     return null;
   }
 }
 
-/** Never throws: a hold that cannot be written must not mask the failure itself. */
-export function writeUpdateHold(installRoot: string, hold: UpdateHold): void {
+/**
+ * Never throws: a hold that cannot be written must not mask the failure
+ * itself. Returns whether it was written, so nobody reports a hold that is
+ * not there.
+ */
+export function writeUpdateHold(root: string, hold: UpdateHold): boolean {
   try {
-    const file = updateHoldPath(installRoot);
+    const file = updateHoldPath(root);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(hold, null, 2));
     fs.renameSync(tmp, file);
+    return true;
   } catch {
-    /* advisory */
+    return false;
   }
 }
 
-export function clearUpdateHold(installRoot: string): void {
+export function clearUpdateHold(root: string): void {
   try {
-    fs.rmSync(updateHoldPath(installRoot), { force: true });
+    fs.rmSync(updateHoldPath(root), { force: true });
   } catch {
     /* advisory */
   }
@@ -115,7 +145,8 @@ export function describeUpdateHold(hold: UpdateHold, now: number): string {
   const cause = hold.cause.split("\n", 1)[0]!.slice(0, 160);
   const failures = hold.failures === 1 ? "1 failure" : `${hold.failures} failures in a row`;
   const next = hold.retryAfter > now ? `a newer one not before ${describeWhen(hold.retryAfter, now)}` : "a newer one at the next check";
-  return `Auto-update held back: ${hold.target.slice(0, 8)} failed at ${hold.step} ${describeAgo(now - hold.at)} — ${cause} (${failures}; never retrying it automatically, ${next}; \`strada update\` retries now)`;
+  const rollback = hold.rollback === "rolled-back" ? "" : describeRollback(hold.rollback);
+  return `Auto-update held back: ${hold.target.slice(0, 8)} failed at ${hold.step} ${describeAgo(now - hold.at)}${rollback} — ${cause} (${failures}; never retrying it automatically, ${next}; \`strada update\` retries now)`;
 }
 
 export function describeUpdateEvent(event: UpdateEvent | undefined, now: number): string {

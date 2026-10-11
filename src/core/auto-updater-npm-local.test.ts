@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AutoUpdater } from "./auto-updater.js";
+import { readUpdateHistory, readUpdateHold } from "./update-history.js";
 
 const tmpDirs: string[] = [];
 
@@ -45,6 +46,7 @@ interface Call {
   cmd: string;
   args: string[];
   cwd: string | undefined;
+  timeoutMs?: number;
 }
 
 /** An owner project with strada-brain installed underneath it. */
@@ -82,14 +84,17 @@ function makeUpdater(opts: {
   /** Observer run mid-install; unlike `onInstall` it does not fail the install. */
   onInstallSuccess?: () => void;
   channel?: "stable" | "latest";
+  stateRoot?: string;
+  healthChecker?: () => Promise<void>;
+  buildTimeoutMin?: number;
 }): AutoUpdater {
   const commandRunner = async (
     cmd: string,
     args: string[],
-    _timeoutMs: number,
+    timeoutMs: number,
     cwd?: string,
   ): Promise<string> => {
-    opts.calls.push({ cmd, args, cwd });
+    opts.calls.push({ cmd, args, cwd, timeoutMs });
     if (cmd === "npm" && args[0] === "view") return `${opts.latest ?? "2.0.0"}\n`;
     if (cmd === "npm" && args[0] === "install" && args[1]?.startsWith("strada-brain@")) {
       opts.onInstallSuccess?.();
@@ -99,17 +104,22 @@ function makeUpdater(opts: {
     return "";
   };
   const updater = new AutoUpdater(
-    { autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: opts.channel ?? "latest", notify: true, autoRestart: false } },
+    {
+      autoUpdate: {
+        enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: opts.channel ?? "latest", notify: true, autoRestart: false,
+        ...(opts.buildTimeoutMin ? { buildTimeoutMin: opts.buildTimeoutMin } : {}),
+      },
+    },
     { isIdle: () => true, getActiveChatIds: () => [], getLastActivityTime: () => 0, recordActivity: () => {} } as never,
     { hasRunningTasks: () => false },
     {
       installRoot: opts.installRoot,
       // The update lock's state root (COR-21): a temp dir, not the real ~/.strada.
-      stateRoot: makeTmpDir(),
+      stateRoot: opts.stateRoot ?? makeTmpDir(),
       commandRunner,
       // Force the npm-local branch: the global root is somewhere else entirely.
       globalNpmRootResolver: () => path.join(os.tmpdir(), "definitely-not-here"),
-      healthChecker: async () => {},
+      healthChecker: opts.healthChecker ?? (async () => {}),
     },
   );
   if (opts.notices) updater.setNotifyFn((m) => opts.notices!.push(m));
@@ -273,5 +283,73 @@ describe("npm-local update runs in the owning package", () => {
     expect(
       calls.some((c) => c.cmd === "npm" && c.args[0] === "install" && c.args[1] === "strada-brain@latest"),
     ).toBe(true);
+  });
+});
+
+/**
+ * Audit core-bootstrap#5 and the review of 7fc26d9f. An npm update recorded
+ * nothing, so `strada status` said "Last auto-update: none recorded" through
+ * updates and rollbacks alike; its hold was written into the install root,
+ * which `npm install` replaces and a root-owned prefix refuses; and its
+ * package installs kept the fixed 5-minute budget the git builds outgrew.
+ */
+describe("an npm update is recorded, held and budgeted like a git one", () => {
+  it("records a successful update in the history `strada status` reads", async () => {
+    const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const stateRoot = makeTmpDir();
+    const updater = makeUpdater({ installRoot, calls: [], latest: "2.0.0", stateRoot });
+
+    await expect(updater.performUpdate()).resolves.toBe(true);
+    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "pulled", from: "1.0.0" });
+  });
+
+  it("records a failed install's rollback", async () => {
+    const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const stateRoot = makeTmpDir();
+    const updater = makeUpdater({ installRoot, calls: [], latest: "2.0.0", stateRoot, failInstall: true });
+
+    await expect(updater.performUpdate()).rejects.toThrow(/npm install failed/);
+    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "rolled-back", from: "2.0.0", to: "1.0.0" });
+  });
+
+  it("holds a version whose health check failed back under the writable state root, and records the rollback", async () => {
+    const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const stateRoot = makeTmpDir();
+    const updater = makeUpdater({
+      installRoot,
+      calls: [],
+      latest: "2.0.0",
+      stateRoot,
+      healthChecker: async () => { throw new Error("boot smoke failed: /health never answered"); },
+    });
+
+    await expect(updater.performUpdate()).rejects.toThrow("/health never answered");
+    expect(readUpdateHold(stateRoot)).toMatchObject({
+      target: "2.0.0",
+      step: "the post-update health check",
+      rollback: "rolled-back",
+    });
+    expect(readUpdateHold(installRoot)).toBeNull();
+    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "rolled-back" });
+  });
+
+  it("gives the package install the operator's AUTO_UPDATE_BUILD_TIMEOUT_MIN, not a fixed 5 minutes", async () => {
+    const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const calls: Call[] = [];
+    const updater = makeUpdater({ installRoot, calls, latest: "2.0.0", buildTimeoutMin: 25 });
+
+    await expect(updater.performUpdate()).resolves.toBe(true);
+    const install = calls.find((c) => c.cmd === "npm" && c.args[0] === "install" && c.args[1]?.startsWith("strada-brain@"));
+    expect(install?.timeoutMs).toBe(25 * 60_000);
+  });
+
+  it("gives the rollback's reinstall the same budget", async () => {
+    const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
+    const calls: Call[] = [];
+    const updater = makeUpdater({ installRoot, calls, latest: "2.0.0", buildTimeoutMin: 25, failInstall: true });
+
+    await expect(updater.performUpdate()).rejects.toThrow(/npm install failed/);
+    const reinstall = calls.find((c) => c.cmd === "npm" && c.args.length === 1 && c.args[0] === "install");
+    expect(reinstall?.timeoutMs).toBe(25 * 60_000);
   });
 });

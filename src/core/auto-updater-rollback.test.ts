@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AutoUpdater } from "./auto-updater.js";
-import { readUpdateHistory } from "./update-history.js";
+import { AutoUpdater, spawnWithTimeout } from "./auto-updater.js";
+import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
+import { readUpdateHistory, readUpdateHold } from "./update-history.js";
 
 /**
  * Measured live 2026-09-04. The updater pulled at 12:21:27 (1b527dbf →
@@ -17,7 +19,7 @@ const POST = "235e5f9f0000000000000000000000000000aaaa";
 const MINE = "dde791790000000000000000000000000000bbbb";
 
 /** A git the test can move under the updater's feet, as a real commit does. */
-function fakeGit(opts: { commitDuringWindow: boolean }): {
+function fakeGit(opts: { commitDuringWindow: boolean; rebuildFails?: boolean; resetFails?: boolean }): {
   run: (cmd: string, args: string[]) => Promise<string>;
   head: () => string;
   resets: string[];
@@ -30,8 +32,10 @@ function fakeGit(opts: { commitDuringWindow: boolean }): {
     run: async (cmd: string, args: string[]): Promise<string> => {
       if (cmd === "npm") {
         // The build is what fails, and it is also when the outside world gets
-        // to commit: the real window was nine minutes wide.
+        // to commit: the real window was nine minutes wide. The rolled-back
+        // source builds, as it did before the update.
         if (args[0] === "run" && args[1] === "build") {
+          if (head === PRE && !opts.rebuildFails) return "";
           if (opts.commitDuringWindow) head = MINE;
           throw new Error("build failed");
         }
@@ -46,6 +50,7 @@ function fakeGit(opts: { commitDuringWindow: boolean }): {
         return "";
       }
       if (sub.startsWith("reset --hard")) {
+        if (opts.resetFails) throw new Error("fatal: Unable to create '.git/index.lock': File exists.");
         resets.push(args[2] ?? "");
         head = args[2] ?? head;
         return "";
@@ -62,6 +67,7 @@ function updater(git: ReturnType<typeof fakeGit>, notices: string[], installRoot
   const u = Object.create(AutoUpdater.prototype) as AutoUpdater;
   Object.assign(u, {
     installRoot,
+    installMethod: "git",
     commandRunner: (cmd: string, args: string[]) => git.run(cmd, args),
     notifyFn: (m: string) => notices.push(m),
   });
@@ -117,6 +123,221 @@ describe("auto-update rollback", () => {
     expect(git.resets).toEqual([PRE]);
     expect(git.head()).toBe(PRE);
     expect(readUpdateHistory(root).at(-1)).toMatchObject({ kind: "rolled-back", to: PRE });
+  });
+
+  // `strada status` reads the last event. A rollback whose rebuild failed said
+  // "rolled-back" while dist/ held the rejected build, and a reset that threw
+  // left the update before it as the last word (audit core-bootstrap#5).
+  it("records a rollback whose rebuild fails as failed, not rolled-back", async () => {
+    const git = fakeGit({ commitDuringWindow: false, rebuildFails: true });
+    const root = mkdtempSync(join(tmpdir(), "strada-upd-"));
+    await performUpdate(updater(git, [], root));
+
+    expect(git.resets).toEqual([PRE]);
+    const last = readUpdateHistory(root).at(-1);
+    expect(last).toMatchObject({ kind: "failed" });
+    expect(last?.reason).toContain("rollback did not complete");
+  });
+
+  it("records a reset that throws as a failed rollback", async () => {
+    const git = fakeGit({ commitDuringWindow: false, resetFails: true });
+    const root = mkdtempSync(join(tmpdir(), "strada-upd-"));
+    await performUpdate(updater(git, [], root));
+
+    const last = readUpdateHistory(root).at(-1);
+    expect(last).toMatchObject({ kind: "failed" });
+    expect(last?.reason).toContain("index.lock");
+  });
+});
+
+/**
+ * Audit core-bootstrap#0 (2026-10-11). The update starts only on a clean
+ * tree, but then runs for many minutes (pull, installs, build, boot smoke)
+ * while agents and the operator keep working in the same checkout. A failed
+ * step ran `git reset --hard` over whatever they had changed meanwhile: no
+ * stash, no reflog entry, gone. Reproduced with real git and an npm whose
+ * build edits a tracked file and fails. These tests use real git, too.
+ */
+describe("a rollback never discards uncommitted work", () => {
+  const dirs: string[] = [];
+  beforeEach(() => {
+    // The operator's own git config (pull.ff, signing, hooks) is not the test's.
+    const empty = join(realpathSync(mkdtempSync(join(tmpdir(), "strada-upd-gitcfg-"))), "config");
+    dirs.push(join(empty, ".."));
+    writeFileSync(empty, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", empty);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  /** A checkout one commit behind its origin, as the daemon's is after every push. */
+  function behindCheckout(): { checkout: string; seed: string; pre: string; next: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "strada-upd-git-")));
+    dirs.push(base);
+    const origin = join(base, "origin.git");
+    const seed = join(base, "seed");
+    const checkout = join(base, "checkout");
+    git(base, "init", "-q", "--bare", "-b", "main", origin);
+    mkdirSync(seed);
+    git(seed, "init", "-q", "-b", "main");
+    for (const repo of [seed]) {
+      git(repo, "config", "user.name", "Strada Test");
+      git(repo, "config", "user.email", "test@example.invalid");
+    }
+    writeFileSync(join(seed, ".gitignore"), ".strada/\n.strada-update.lock\nnode_modules/\n");
+    writeFileSync(join(seed, "app.ts"), "export const version = 1;\n");
+    writeFileSync(join(seed, "README.md"), "# app\n");
+    writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "app", version: "1.0.0" }));
+    writeFileSync(join(seed, "package-lock.json"), JSON.stringify({ name: "app", lockfileVersion: 3, packages: { "": { name: "app" } } }));
+    git(seed, "add", ".");
+    git(seed, "commit", "-q", "-m", "one");
+    git(seed, "push", "-q", origin, "main");
+    git(base, "clone", "-q", origin, checkout);
+    git(checkout, "config", "user.name", "Strada Test");
+    git(checkout, "config", "user.email", "test@example.invalid");
+    writeFileSync(join(seed, "app.ts"), "export const version = 2;\n");
+    git(seed, "commit", "-q", "-am", "two");
+    git(seed, "push", "-q", origin, "main");
+    return { checkout, seed, pre: git(checkout, "rev-parse", "HEAD"), next: git(seed, "rev-parse", "HEAD") };
+  }
+
+  function realUpdater(
+    checkout: string,
+    notices: string[],
+    hooks: {
+      npm?: (args: string[]) => Promise<string>;
+      beforeGit?: (args: string[]) => void;
+      healthChecker?: () => Promise<void>;
+    } = {},
+  ): AutoUpdater {
+    const stateRoot = realpathSync(mkdtempSync(join(tmpdir(), "strada-upd-state-")));
+    dirs.push(stateRoot);
+    const u = new AutoUpdater(
+      {
+        autoUpdate: {
+          enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "latest", notify: true, autoRestart: false,
+        },
+      },
+      { isIdle: () => true, getActiveChatIds: () => [] } as unknown as ChannelActivityRegistry,
+      { hasRunningTasks: () => false },
+      {
+        installRoot: checkout,
+        stateRoot,
+        commandRunner: async (cmd, args, timeoutMs, cwd) => {
+          if (cmd === "npm") return (hooks.npm ?? (async () => ""))(args);
+          if (cmd === "git") hooks.beforeGit?.(args);
+          return spawnWithTimeout(cmd, args, timeoutMs, cwd);
+        },
+        sourceLauncherRefresher: async () => {},
+        healthChecker: hooks.healthChecker ?? (async () => {}),
+        isDaemonProcess: () => false,
+      },
+    );
+    u.setNotifyFn((m) => notices.push(m));
+    return u;
+  }
+
+  it("keeps an edit made while the build ran, and says the rollback was refused", async () => {
+    const repo = behindCheckout();
+    const notices: string[] = [];
+    const edit = "# app\nhalf-done edit\n";
+    let edited = false;
+    const u = realUpdater(repo.checkout, notices, {
+      npm: async (args) => {
+        if (args[0] === "run" && args[1] === "build" && !edited) {
+          // An agent working in the checkout during the update window.
+          edited = true;
+          writeFileSync(join(repo.checkout, "README.md"), edit);
+          throw new Error("npm exited with code 2: src/app.ts(1,1): error TS1005: ';' expected.");
+        }
+        return "";
+      },
+    });
+
+    await expect(u.performUpdate()).rejects.toThrow("TS1005");
+
+    expect(readFileSync(join(repo.checkout, "README.md"), "utf8")).toBe(edit);
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.next);
+    expect(notices.join("\n")).toMatch(/rollback REFUSED[\s\S]*README\.md/);
+    expect(readUpdateHistory(repo.checkout).at(-1)).toMatchObject({ kind: "rollback-refused" });
+    expect(readUpdateHold(repo.checkout)).toMatchObject({ target: repo.next, rollback: "refused" });
+  });
+
+  it("keeps an edit made during the health check to a file the update itself changed", async () => {
+    const repo = behindCheckout();
+    const edit = "export const version = 3; // work in progress\n";
+    const u = realUpdater(repo.checkout, [], {
+      healthChecker: async () => {
+        writeFileSync(join(repo.checkout, "app.ts"), edit);
+        throw new Error("boot smoke failed: /health never answered");
+      },
+    });
+
+    await expect(u.performUpdate()).rejects.toThrow("/health never answered");
+
+    expect(readFileSync(join(repo.checkout, "app.ts"), "utf8")).toBe(edit);
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.next);
+  });
+
+  it("does not reset after a pull that never landed, so the edit the pull refused to overwrite survives", async () => {
+    const repo = behindCheckout();
+    const edit = "export const version = 1; // mine\n";
+    const u = realUpdater(repo.checkout, [], {
+      beforeGit: (args) => {
+        if (args[0] === "pull") writeFileSync(join(repo.checkout, "app.ts"), edit);
+      },
+    });
+
+    await expect(u.performUpdate()).rejects.toThrow(/would be overwritten/);
+
+    expect(readFileSync(join(repo.checkout, "app.ts"), "utf8")).toBe(edit);
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.pre);
+    expect(readUpdateHistory(repo.checkout).at(-1)).toMatchObject({ kind: "failed" });
+  });
+
+  it("undoes the merge a conflicting pull left behind, without a reset", async () => {
+    const repo = behindCheckout();
+    writeFileSync(join(repo.checkout, "app.ts"), "export const version = 10;\n");
+    git(repo.checkout, "commit", "-q", "-am", "an unpushed local commit");
+    const local = git(repo.checkout, "rev-parse", "HEAD");
+    const resets: string[][] = [];
+    const u = realUpdater(repo.checkout, [], {
+      beforeGit: (args) => {
+        if (args[0] === "reset") resets.push(args);
+      },
+    });
+
+    await expect(u.performUpdate()).rejects.toThrow(/conflict/i);
+
+    expect(resets).toEqual([]);
+    expect(() => git(repo.checkout, "rev-parse", "-q", "--verify", "MERGE_HEAD")).toThrow();
+    expect(git(repo.checkout, "status", "--porcelain")).toBe("");
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(local);
+  });
+
+  it("still rolls back over the lockfile its own npm install rewrote", async () => {
+    const repo = behindCheckout();
+    const lock = readFileSync(join(repo.checkout, "package-lock.json"), "utf8");
+    const u = realUpdater(repo.checkout, [], {
+      npm: async (args) => {
+        if (args[0] === "install") writeFileSync(join(repo.checkout, "package-lock.json"), `${lock}\n`);
+        if (args[0] === "run" && git(repo.checkout, "rev-parse", "HEAD") === repo.next) {
+          throw new Error("npm exited with code 2: error TS2304");
+        }
+        return "";
+      },
+    });
+
+    await expect(u.performUpdate()).rejects.toThrow("TS2304");
+
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.pre);
+    expect(readUpdateHistory(repo.checkout).at(-1)).toMatchObject({ kind: "rolled-back" });
   });
 });
 
