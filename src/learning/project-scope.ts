@@ -7,6 +7,31 @@
  */
 
 /**
+ * The scope fingerprint of a project root: "root" and the path's folders,
+ * lowercased and space-separated.
+ *
+ * Only a path separator may become a space, because a space is where
+ * {@link isScopePrefix} lets one scope end and a child begin. Punctuation
+ * inside a folder name becomes "_", a word character: folding "-", "_", "."
+ * and spaces into the same space as "/" made `/work/Tower` the parent of its
+ * sibling `/work/Tower-Defense`, so guidance learned in one project reached the
+ * other. The run's fingerprint (buildProjectWorldMemorySection) opens with this
+ * same string, so both sides fold a name the same way.
+ */
+export function createProjectScopeFingerprint(projectPath: string | null | undefined): string | undefined {
+  const trimmed = projectPath?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const folders = trimmed
+    .toLowerCase()
+    .split(/[\\/]+/)
+    .map((folder) => folder.replace(/[^\p{L}\p{N}]+/gu, "_"))
+    .filter((folder) => folder.length > 0);
+  return ["root", ...folders].join(" ").slice(0, 220);
+}
+
+/**
  * Returns true when `artifactFingerprint` and `runtimeFingerprint` refer to
  * the same project scope (or one is a parent scope of the other).
  *

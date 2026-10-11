@@ -455,6 +455,7 @@ import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.j
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { createProjectScopeFingerprint } from "../../learning/project-scope.js";
 
 
 /**
@@ -757,8 +758,14 @@ export function buildProjectWorldMemorySection(params: {
     "Treat this as durable project context. Use it to stay grounded in the real repo structure and cached world facts.",
   ];
   const contentHashes: string[] = [params.projectPath];
-  const summary = buildProjectWorldRecoverySummary(params.projectPath, params.analysis);
-  const fingerprint = normalizeProjectWorldFingerprint(summary);
+  const details = buildProjectWorldDetails(params.analysis);
+  const summary = [`root=${params.projectPath}`, ...details].join(" | ");
+  // The root is folded as the artifact scope gate folds it; normalizing the
+  // whole summary as text made a "-" in a folder name read as a "/".
+  const fingerprint = [
+    createProjectScopeFingerprint(params.projectPath) ?? "root",
+    normalizeProjectWorldFingerprint(details.join(" | ")),
+  ].join(" ").trim().slice(0, 220);
 
   if (params.analysis) {
     const analysisSummary = buildAnalysisSummary(params.analysis).trim();
@@ -779,11 +786,8 @@ export function buildProjectWorldMemorySection(params: {
   };
 }
 
-function buildProjectWorldRecoverySummary(
-  projectPath: string,
-  analysis?: StradaProjectAnalysis | null,
-): string {
-  const parts = [`root=${projectPath}`];
+function buildProjectWorldDetails(analysis?: StradaProjectAnalysis | null): string[] {
+  const parts: string[] = [];
   if (analysis) {
     const moduleNames = analysis.modules
       .slice(0, 4)
@@ -801,7 +805,7 @@ function buildProjectWorldRecoverySummary(
   } else {
     parts.push("analysis=unavailable");
   }
-  return parts.join(" | ");
+  return parts;
 }
 
 function normalizeProjectWorldFingerprint(text: string): string {

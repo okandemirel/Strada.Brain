@@ -14,8 +14,8 @@ import type {
 } from "./types.js";
 import { createRuntimeArtifactId } from "./types.js";
 import type { LearningStorage } from "./storage/learning-storage.js";
-import { projectScopeMatches } from "./project-scope.js";
-export { projectScopeMatches } from "./project-scope.js";
+import { createProjectScopeFingerprint, projectScopeMatches } from "./project-scope.js";
+export { createProjectScopeFingerprint, projectScopeMatches } from "./project-scope.js";
 
 const PROMOTION_MIN_SAMPLES = 5;
 const PROMOTION_MIN_CLEAN_RATE = 0.8;
@@ -93,14 +93,6 @@ export function runtimeArtifactVisibleTo(
   if (scope !== "user") return false;
   const asking = userId?.trim();
   return Boolean(asking) && artifact.ownerUserId === asking;
-}
-
-export function createProjectScopeFingerprint(projectPath: string | null | undefined): string | undefined {
-  const normalizedPath = projectPath?.trim();
-  if (!normalizedPath) {
-    return undefined;
-  }
-  return normalizeArtifactFingerprint(`root=${normalizedPath}`);
 }
 
 export class RuntimeArtifactManager {
@@ -738,14 +730,6 @@ function tokenize(value: string): Set<string> {
 
 function mergeIds<T extends string>(current: readonly T[], incoming: readonly T[]): T[] {
   return [...new Set([...current, ...incoming])];
-}
-
-function normalizeArtifactFingerprint(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .slice(0, 220);
 }
 
 function asTrimmedString(value: unknown): string | undefined {
