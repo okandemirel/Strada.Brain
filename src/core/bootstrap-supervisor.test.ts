@@ -624,3 +624,78 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(onLiveness).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("the node bridge carries how the worker's run ended (GDD-drift W01)", () => {
+  // In campaign 18d4t a node whose run stopped on "loop detected" came back as
+  // a plain `status: "ok"`: the ok return carried no reason, so the only trace
+  // of the stop was the localized sentence in its output.
+  const bridgeOver = (runWorkerEnvelope: ReturnType<typeof vi.fn>) =>
+    createSupervisorExecuteNodeBridge({ backgroundExecutor: { runWorkerEnvelope } as any, orchestrator: {} as any, defaultChannelType: "cli" });
+  const run = (bridge: ReturnType<typeof bridgeOver>, task = "Build the board") =>
+    bridge(
+      { id: "node-1", task, assignedProvider: "p", assignedModel: "m" } as any,
+      { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
+      new AbortController().signal,
+    );
+
+  it("a run that completed on a loop stop is ok, and says it was stuck", async () => {
+    const bridge = bridgeOver(vi.fn().mockResolvedValue({
+      output: "I got stuck on this task after multiple approaches.",
+      workerResult: { status: "completed", reason: "verdict-stop:loop-detected", toolTrace: [], model: "glm-5" },
+    }));
+    const result = await run(bridge);
+    expect(result.status).toBe("ok");
+    expect(result.terminalKey).toBe("task_stuck");
+  });
+
+  it("a clean finish says done", async () => {
+    const bridge = bridgeOver(vi.fn().mockResolvedValue({ output: "done", workerResult: { status: "completed", reason: "end_turn", toolTrace: [] } }));
+    expect((await run(bridge)).terminalKey).toBe("done");
+  });
+
+  it("a run that reported no worker result names no terminal rather than a clean one", async () => {
+    const bridge = bridgeOver(vi.fn().mockResolvedValue({ output: "some text" }));
+    const result = await run(bridge);
+    expect(result.status).toBe("ok");
+    expect(result.terminalKey).toBeUndefined();
+  });
+
+  it("blocked and failed runs carry their cause", async () => {
+    const blocked = bridgeOver(vi.fn().mockResolvedValue({ output: "", workerResult: { status: "blocked", reason: "blocked:ask_user", toolTrace: [] } }));
+    const blockedResult = await run(blocked);
+    expect(blockedResult.status).toBe("failed");
+    expect(blockedResult.terminalKey).toBe("provider_ask_user");
+
+    const failed = bridgeOver(vi.fn().mockResolvedValue({ output: "", workerResult: { status: "failed", reason: "hard-timeout:task", toolTrace: [] } }));
+    const failedResult = await run(failed);
+    expect(failedResult.status).toBe("failed");
+    expect(failedResult.terminalKey).toBe("cut_short");
+  });
+
+  it("a run rejected for missing evidence keeps the key its run ended on", async () => {
+    const bridge = bridgeOver(vi.fn().mockResolvedValue({
+      output: "Driver registered.",
+      workerResult: { status: "completed", reason: "end_turn", toolTrace: [] },
+    }));
+    const result = await run(bridge, "Register the driver, then run unity_playthrough and report its verdict.");
+    expect(result.status).toBe("failed");
+    expect(result.terminalKey).toBe("done");
+  });
+
+  it("a throw around the run is an error the worker never made, and says so", async () => {
+    // Nothing the worker did reaches this catch — the spine returns a
+    // terminal; a throw is the lease, the MCP or a provider SDK.
+    const bridge = bridgeOver(vi.fn().mockRejectedValue(new Error("worktree add failed: index.lock exists")));
+    const result = await run(bridge);
+    expect(result.status).toBe("failed");
+    expect(result.terminalKey).toBe("error");
+    expect(result.infrastructureFault).toBe(true);
+  });
+
+  it("a run that ended on its own says nothing about infrastructure", async () => {
+    const bridge = bridgeOver(vi.fn().mockResolvedValue({ output: "", workerResult: { status: "failed", reason: "terminal-failure", toolTrace: [] } }));
+    const result = await run(bridge);
+    expect(result.terminalKey).toBe("task_stuck");
+    expect(result.infrastructureFault).toBeUndefined();
+  });
+});

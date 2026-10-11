@@ -7,6 +7,24 @@
  * actually printed, and rides on the Task row for any settle-side consumer.
  */
 
+import {
+  isTerminalKey,
+  worstTerminal,
+  type RunIntegrity,
+  type TerminalKey,
+} from "../agents/autonomy/terminal-key.js";
+import { terminalKeyOf } from "../agents/autonomy/terminal-outcome.js";
+
+/**
+ * `RunIntegrity` as a settled task carries it. An `error` key has two sources
+ * that must be told apart: the worker's run, and a throw around it (lease, MCP,
+ * provider SDK) the worker never saw. Only the second is counted here.
+ */
+export interface TaskRunIntegrity extends RunIntegrity {
+  /** How many of `terminalKeys`' `error` entries were thrown outside the worker's run. */
+  readonly infrastructureErrors?: number;
+}
+
 export interface TaskTestVerdict {
   /** undefined = no test run observed in the evidence. */
   testsGreen?: boolean;
@@ -52,6 +70,110 @@ export interface TaskTestVerdict {
    * real-art source was dead for the entire build and nobody was told.
    */
   assetSourcingBlind?: string;
+  /**
+   * How the run ended, as data from the runtime. In campaign 18d4t five of six
+   * milestone tips ended on the system's own "task_stuck" notice and all six
+   * went green: the only record of the stop was that sentence (GDD-drift W01).
+   */
+  runIntegrity?: TaskRunIntegrity;
+}
+
+/** The shape a supervisor node settles in, as far as the run's integrity reads it. */
+interface SettledNode {
+  readonly status: "ok" | "failed" | "skipped" | "cancelled";
+  readonly model: string;
+  readonly terminalKey?: TerminalKey;
+  readonly infrastructureFault?: true;
+}
+
+/** A model name that identifies a worker; "unknown" names nobody. */
+const namesAModel = (model: string | undefined): model is string =>
+  typeof model === "string" && model.trim() !== "" && model !== "unknown";
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/**
+ * A supervisor run's integrity: one key per node that ran, folded to the worst.
+ * A node that never ran (skipped) adds nothing — the failure that skipped it
+ * has its own key. A cancelled node was interrupted; a failed node that names
+ * no key failed for a reason nobody recorded, which is not a clean finish; an
+ * ok node that names none adds no key rather than an invented "done".
+ * Undefined when no node left a key: there is no terminal to carry, and
+ * inventing a clean one is how a run nobody measured would read as done.
+ */
+export function runIntegrityOfNodes(
+  nodes: readonly SettledNode[],
+  unverifiedNodes?: number,
+): TaskRunIntegrity | undefined {
+  const terminalKeys: TerminalKey[] = [];
+  const workerModels = new Set<string>();
+  let infrastructureErrors = 0;
+  for (const node of nodes) {
+    if (node.status === "skipped") continue;
+    // Every model that ran counts, keyed or not: a check's writer is
+    // independent only of models that never touched the work.
+    if (namesAModel(node.model)) workerModels.add(node.model);
+    const key = node.terminalKey
+      ?? (node.status === "cancelled" ? "interrupted" : node.status === "failed" ? "error" : undefined);
+    if (key === undefined) continue;
+    terminalKeys.push(key);
+    if (key === "error" && node.infrastructureFault === true) infrastructureErrors++;
+  }
+  const worst = worstTerminal(terminalKeys);
+  if (worst === undefined) return undefined;
+  return {
+    terminalKeys,
+    worst,
+    source: "spine",
+    workerModels: [...workerModels],
+    nodes: nodes.length,
+    ...(isCount(unverifiedNodes) ? { unverifiedNodes } : {}),
+    ...(infrastructureErrors > 0 ? { infrastructureErrors } : {}),
+  };
+}
+
+/** A direct worker run's integrity: the one key its terminal reads as. */
+export function runIntegrityOfRun(run: {
+  readonly status: "completed" | "failed" | "blocked";
+  readonly reason?: string;
+  readonly model?: string;
+}): TaskRunIntegrity {
+  const key = terminalKeyOf(run.reason, run.status);
+  return {
+    terminalKeys: [key],
+    worst: key,
+    source: "spine",
+    workerModels: namesAModel(run.model) ? [run.model] : [],
+  };
+}
+
+/**
+ * A stored integrity read back, or undefined when it does not read as one.
+ * Every key must be a known key: a stuck run must never come back as a clean
+ * one because a field was malformed.
+ */
+export function parseRunIntegrity(raw: unknown): TaskRunIntegrity | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const value = raw as Record<string, unknown>;
+  const keys = value.terminalKeys;
+  if (!Array.isArray(keys) || !keys.every(isTerminalKey)) return undefined;
+  if (!isTerminalKey(value.worst)) return undefined;
+  if (value.source !== "spine" && value.source !== "legacy-stamp") return undefined;
+  const models = value.workerModels;
+  if (!Array.isArray(models) || !models.every((m): m is string => typeof m === "string")) return undefined;
+  return {
+    terminalKeys: keys,
+    // Recomputed, not trusted: a stored "done" beside a stuck key reads stuck.
+    worst: worstTerminal(keys) ?? value.worst,
+    source: value.source,
+    workerModels: models,
+    ...(isCount(value.nodes) ? { nodes: value.nodes } : {}),
+    ...(isCount(value.unverifiedNodes) ? { unverifiedNodes: value.unverifiedNodes } : {}),
+    ...(isCount(value.infrastructureErrors) && value.infrastructureErrors > 0
+      ? { infrastructureErrors: value.infrastructureErrors }
+      : {}),
+  };
 }
 
 /** The two sentences asset-store-cloud.ts throws for a missing/dead link. */

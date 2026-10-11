@@ -25,7 +25,7 @@ import {
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { rememberUserAuthorizedPaths } from "../security/user-authorized-paths.js";
-import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
+import { isFailedTerminalKey, terminalMessageKeyOf } from "./autonomy/terminal-outcome.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { isQuotaStop, QUOTA_LIMIT_RE } from "./orchestrator-runtime-utils.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
@@ -3024,51 +3024,9 @@ export class Orchestrator {
     reason: string | undefined,
     status: TerminalStatus | undefined,
   ): MessageKey | undefined {
-    if (reason) {
-      // budget-exhausted:tokens | budget-exhausted:cost — the spending limit is not a provider
-      // outage, and "switch to a different provider" is the wrong advice for it.
-      if (reason.startsWith("budget-exhausted")) {
-        return reason.endsWith(":tokens") ? "token_budget_exceeded" : "cost_budget_exceeded";
-      }
-      // provider-stall:* | hard-timeout:* | task-inactivity → provider not responding.
-      if (
-        reason.startsWith("provider-stall") ||
-        reason.startsWith("hard-timeout") ||
-        reason === "task-inactivity"
-      ) {
-        return "provider_abort";
-      }
-      // verdict-stop:health → abort; verdict-stop:loop-detected → stuck.
-      if (reason.startsWith("verdict-stop")) {
-        return reason.endsWith(":loop-detected") ? "task_stuck" : "provider_abort";
-      }
-      // ask_user terminals (gate or failure yielded "blocked").
-      if (reason.includes("ask_user")) return "provider_ask_user";
-      // A fleet outage with a known expiry: same localized escalation text,
-      // but the TAG is no longer ask_user, so the mission keep-alive retries
-      // (and waits out the cooldown) instead of parking the sprint on a
-      // question no human needs to answer.
-      if (reason.includes("provider_unavailable")) return "provider_ask_user";
-      // persistent provider failure / max_tokens runaway / epoch-budget exhaustion → stuck.
-      if (
-        reason === "provider-failure" ||
-        reason === "max-tokens-runaway" ||
-        reason === "epoch-budget-exhausted"
-      ) {
-        return "task_stuck";
-      }
-      // 3.4 — background never reaches max-iterations here (it's interactive-only via the adapter),
-      // but map it defensively to the localized notice rather than a false success.
-      if (reason === "max-iterations") return "max_steps_reached";
-      // A parent-cancelled wrapping a genuine cause → treat as abort (benign roots never reach here:
-      // benign terminals carry a benign reason string but with a clean status, handled below).
-      if (reason.startsWith("parent-cancelled")) return "provider_abort";
-    }
-    // Clean reasons (done / end_turn / plan-review / goal-handoff / user-cancel / task-winddown /
-    // first-success-satisfied) → no message key (neutral fallback). But a hard-FAILED status with no
-    // recognized reason must still avoid a false success.
-    if (status === "failed") return this.quotaStopped() ? "provider_quota" : "provider_abort";
-    return undefined;
+    // The table lives beside terminalKeyOf, which reads the same reasons into
+    // the key a task records (GDD-drift W01); the sentence is unchanged.
+    return terminalMessageKeyOf(reason, status, () => this.quotaStopped());
   }
 
 

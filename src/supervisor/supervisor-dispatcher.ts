@@ -767,23 +767,34 @@ export class SupervisorDispatcher {
         if (attempt === 0 && !(err instanceof NodeTimeoutError) && isTransientError(err)) {
           const { allProvidersCoolingDownMs } = await import("../agents/providers/provider-outage.js");
           if (allProvidersCoolingDownMs() > 0) {
-            return this.makeResult(
-              node,
-              "failed",
-              `All providers are in cooldown: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`,
-            );
+            return {
+              ...this.makeResult(
+                node,
+                "failed",
+                `All providers are in cooldown: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`,
+              ),
+              terminalKey: "provider_abort",
+            };
           }
           // 2s backoff before retry
           await this.delay(2000);
           continue;
         }
 
-        // Non-transient or second attempt: fail
-        return this.makeResult(
-          node,
-          "failed",
-          err instanceof Error ? err.message : String(err),
-        );
+        // Non-transient or second attempt: fail. A worker's run settles inside
+        // executeNode (the production bridge catches every throw), so what
+        // reaches here is the node's time budget or a throw no worker made
+        // (GDD-drift W01).
+        return {
+          ...this.makeResult(
+            node,
+            "failed",
+            err instanceof Error ? err.message : String(err),
+          ),
+          ...(err instanceof NodeTimeoutError
+            ? { terminalKey: "cut_short" as const }
+            : { terminalKey: "error" as const, infrastructureFault: true as const }),
+        };
       }
     }
 
@@ -954,6 +965,9 @@ export class SupervisorDispatcher {
               `(${settled.artifacts.length} file change(s)); dependents run against it. ` +
               `Last report: ${settled.output.slice(0, 600)}`,
             duration: Date.now() - startedAt,
+            // Kept is not finished: whatever the aborted run reported, the
+            // budget cut it off (GDD-drift W01).
+            terminalKey: "cut_short",
           };
         }
       }

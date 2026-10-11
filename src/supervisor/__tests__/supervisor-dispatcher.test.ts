@@ -598,3 +598,42 @@ describe("a node that ran out of time with work in hand (measured 2026-09-10: 13
   });
 });
 
+describe("a node the dispatcher settles says how it ended (GDD-drift W01)", () => {
+  it("work kept past the time budget is ok, and was cut short — whatever the aborted run itself reported", async () => {
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode, signal?: AbortSignal) => {
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      return { ...makeOkResult(node.id), status: "failed", terminalKey: "done", artifacts: [{ path: "Assets/Art/A.png", action: "modify" }] } as NodeResult;
+    });
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 50, maxFailureBudget: 3, abandonGraceMs: 2_000 },
+    });
+    const [a] = await dispatcher.dispatch([makeAssignedNode("A", "Batch 1", "claude")]);
+    expect(a!.status).toBe("ok");
+    expect(a!.terminalKey).toBe("cut_short");
+  });
+
+  it("a node that ran out of time with nothing kept was cut short", async () => {
+    const executeNode = vi.fn().mockImplementation(() => new Promise<NodeResult>(() => undefined));
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 50, maxFailureBudget: 3, abandonGraceMs: 0 },
+    });
+    const [a] = await dispatcher.dispatch([makeAssignedNode("A", "Stuck tool", "claude")]);
+    expect(a!.status).toBe("failed");
+    expect(a!.terminalKey).toBe("cut_short");
+  });
+
+  it("a node whose executor threw is an infrastructure error, not the worker's", async () => {
+    const executeNode = vi.fn().mockRejectedValue(new Error("bridge exploded: lease root vanished"));
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5_000, maxFailureBudget: 3 },
+    });
+    const [a] = await dispatcher.dispatch([makeAssignedNode("A", "Build", "claude")]);
+    expect(a!.status).toBe("failed");
+    expect(a!.terminalKey).toBe("error");
+    expect(a!.infrastructureFault).toBe(true);
+  });
+});
+

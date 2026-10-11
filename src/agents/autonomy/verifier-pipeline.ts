@@ -15,6 +15,7 @@ import {
   verificationStepVerdict,
 } from "./completion-review.js";
 import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verification.js";
+import { FAILED_TERMINAL_KEYS, systemStampsIn } from "./terminal-outcome.js";
 
 export type VerifierName =
   | "build"
@@ -488,9 +489,25 @@ const RUN_FAILURE_PATTERNS: readonly RegExp[] = [
   /\bunable\s+to\s+(?:complete|finish|fix|build|compile|verify|run|proceed|continue|deliver)\b/,
 ];
 
-export function isTerminalFailureReport(text: string | null | undefined): boolean {
+export function isTerminalFailureReport(
+  text: string | null | undefined,
+  options?: {
+    /**
+     * Also read the system's own terminal notices (systemStampsIn). Off by
+     * default: the campaign settles a completed milestone as failed on this
+     * predicate, and the English task_stuck notice ("I'll share what I
+     * tried…") reads as a run that keeps working, so turning it on everywhere
+     * would flip settled sprints before the scope gate decides how to use it
+     * (GDD-drift W01 changes no decision; W09 opts in).
+     */
+    systemStamps?: boolean;
+  },
+): boolean {
   if (!text) {
     return false;
+  }
+  if (options?.systemStamps && systemStampsIn(text).some((key) => FAILED_TERMINAL_KEYS.has(key))) {
+    return true;
   }
 
   const normalized = text.toLowerCase();

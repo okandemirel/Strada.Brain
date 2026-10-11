@@ -3793,7 +3793,7 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
     await executor.shutdown();
   });
 
-  it("a run that wrote NO files records nothing — absence there is not a claim about tests", async () => {
+  it("a run that wrote NO files makes no claim about tests — the row carries only how the run ended", async () => {
     const orchestrator = {
       evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
       runWorkerTask: vi.fn().mockResolvedValue({
@@ -3822,7 +3822,11 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
     );
 
     await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 5000 });
-    expect(taskManager.setVerification).not.toHaveBeenCalled();
+    expect(taskManager.setVerification).toHaveBeenCalledTimes(1);
+    const [, verdict] = taskManager.setVerification.mock.calls[0]!;
+    expect(verdict.testsGreen).toBeUndefined();
+    expect(verdict.detail).toBe("no test run observed");
+    expect(verdict.runIntegrity).toMatchObject({ terminalKeys: ["done"], worst: "done", source: "spine" });
     await executor.shutdown();
   });
 
@@ -3864,6 +3868,132 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
     expect(verdict.testsGreen).toBe(false);
     expect(verdict.detail).toContain("3 of 40 tests failed");
     await executor.shutdown();
+  });
+});
+
+describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)", () => {
+  // In campaign 18d4t five of six milestone tips ended on the system's own
+  // "task_stuck" notice and all six went green. The only record of how a run
+  // ended was that sentence; the task row carried nothing a gate could read.
+  function makeVerdictTaskManager() {
+    return {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      setVerification: vi.fn(), appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn().mockReturnValue(null),
+      listTasks: vi.fn().mockReturnValue([]),
+    };
+  }
+  const node = (id: string, overrides: Record<string, unknown>) => ({
+    nodeId: id, status: "ok", output: "", artifacts: [], toolResults: [],
+    provider: "p", model: "unknown", cost: 0, duration: 0, ...overrides,
+  });
+  const supervisorRun = (nodeResults: unknown[], extra: Record<string, unknown> = {}) => ({
+    evaluateSupervisorAdmission: vi.fn().mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true, partial: false, output: "sprint done",
+        totalNodes: nodeResults.length, succeeded: nodeResults.length, failed: 0, blocked: 0, skipped: 0,
+        totalCost: 0, totalDuration: 0, nodeResults, ...extra,
+      },
+    }),
+    synthesizeGoalExecutionResult: vi.fn().mockResolvedValue("sprint done"),
+  });
+  async function settle(orchestrator: unknown, goalTree: unknown, id: string) {
+    const executor = new BackgroundExecutor({
+      orchestrator: orchestrator as any,
+      decomposer: createMockDecomposer() as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = makeVerdictTaskManager();
+    executor.setTaskManager(taskManager as any);
+    executor.enqueue(createTestTask(goalTree as any, { id: id as any }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(taskManager.setVerification).toHaveBeenCalled(), { timeout: 5000 });
+    await executor.shutdown();
+    return taskManager.setVerification.mock.calls[0]![1];
+  }
+
+  it("supervisor path: one stuck node makes the run's worst key task_stuck, with the models that worked", async () => {
+    const verdict = await settle(supervisorRun([
+      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+      node("n2", { terminalKey: "task_stuck", model: "glm-5" }),
+    ]), buildTestGoalTree(), "task_sup_stuck");
+    expect(verdict.runIntegrity).toEqual({
+      terminalKeys: ["done", "task_stuck"],
+      worst: "task_stuck",
+      source: "spine",
+      workerModels: ["kimi-k2", "glm-5"],
+      nodes: 2,
+    });
+  });
+
+  it("supervisor path: a node that never ran adds no key, a cancelled one is interrupted, a keyless failure is an error", async () => {
+    const verdict = await settle(supervisorRun([
+      node("n1", { terminalKey: "done", model: "kimi-k2" }),
+      node("n2", { status: "skipped", output: "Skipped: dependency failed", model: "never-ran" }),
+      node("n3", { status: "cancelled", model: "glm-5" }),
+      node("n4", { status: "failed", model: "" }),
+      // An ok node with no key adds none, but the model that did its work still counts.
+      node("n5", { model: "qwen-3" }),
+    ]), buildTestGoalTree(), "task_sup_mixed");
+    expect(verdict.runIntegrity.terminalKeys).toEqual(["done", "interrupted", "error"]);
+    expect(verdict.runIntegrity.worst).toBe("error");
+    expect(verdict.runIntegrity.workerModels).toEqual(["kimi-k2", "glm-5", "qwen-3"]);
+    expect(verdict.runIntegrity.nodes).toBe(5);
+    expect(verdict.runIntegrity.infrastructureErrors).toBeUndefined();
+  });
+
+  it("supervisor path: an error thrown around a node is counted as infrastructure's", async () => {
+    const verdict = await settle(supervisorRun([
+      node("n1", { terminalKey: "done", model: "kimi-k2" }),
+      node("n2", { status: "failed", terminalKey: "error", infrastructureFault: true }),
+    ]), buildTestGoalTree(), "task_sup_infra");
+    expect(verdict.runIntegrity.worst).toBe("error");
+    expect(verdict.runIntegrity.infrastructureErrors).toBe(1);
+  });
+
+  it("supervisor path: the verifier's unreviewed count rides along when the result reports it", async () => {
+    const verdict = await settle(supervisorRun(
+      [node("n1", { terminalKey: "done", model: "kimi-k2" })],
+      { verification: { candidates: 1, verified: 0, approved: 0, flagged: 0, rejected: 0, notVerified: 1 } },
+    ), buildTestGoalTree(), "task_sup_unverified");
+    expect(verdict.runIntegrity.unverifiedNodes).toBe(1);
+  });
+
+  it("supervisor path: a run with no node that ran carries no integrity rather than a clean finish", async () => {
+    const verdict = await settle(supervisorRun([
+      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+    ]), buildTestGoalTree(), "task_sup_control");
+    expect(verdict.runIntegrity).toBeDefined();
+    const none = await settle(supervisorRun([
+      node("n1", { status: "skipped", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+    ]), buildTestGoalTree(), "task_sup_none");
+    expect(none.runIntegrity).toBeUndefined();
+  });
+
+  it("direct path: a worker that stopped on a loop carries task_stuck and its model", async () => {
+    const verdict = await settle({
+      evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ path: "direct_worker", reason: "low_complexity" }),
+      runWorkerTask: vi.fn().mockResolvedValue({
+        status: "completed",
+        reason: "verdict-stop:loop-detected",
+        model: "glm-5",
+        visibleResponse: "I got stuck on this task after multiple approaches.",
+        finalSummary: "stuck",
+        provider: "mock",
+        touchedFiles: ["Assets/Player.cs"],
+        toolTrace: [],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      }),
+    }, undefined, "task_worker_stuck");
+    expect(verdict.testsGreen).toBeUndefined();
+    expect(verdict.runIntegrity).toEqual({
+      terminalKeys: ["task_stuck"],
+      worst: "task_stuck",
+      source: "spine",
+      workerModels: ["glm-5"],
+    });
   });
 });
 

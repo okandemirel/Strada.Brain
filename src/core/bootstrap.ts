@@ -76,6 +76,7 @@ import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { createResponseFeedbackPort } from "../learning/feedback/response-attribution.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
+import { terminalKeyOf } from "../agents/autonomy/terminal-outcome.js";
 import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
@@ -329,6 +330,13 @@ export function createSupervisorExecuteNodeBridge(params: {
         },
         supervisorMode: "off",
       });
+      // HOW THE RUN ENDED rides on every return below. The ok return carried
+      // no reason at all, so a node whose run stopped on "loop detected" came
+      // back as a plain "ok" and only its prose said otherwise (GDD-drift W01).
+      // No worker result is no terminal to read, not a clean one.
+      const terminalKey = result.workerResult
+        ? terminalKeyOf(result.workerResult.reason, result.workerResult.status)
+        : undefined;
 
       // Evidence the task demanded by name (see supervisor/required-evidence.ts):
       // a "completed" run whose trace holds no successful call of a tool the
@@ -379,6 +387,7 @@ export function createSupervisorExecuteNodeBridge(params: {
             model: result.workerResult.model ?? node.assignedModel ?? "unknown",
             cost: nodeCost,
             duration: Date.now() - startedAt,
+            terminalKey,
           };
         }
       }
@@ -395,6 +404,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
           cost: nodeCost,
           duration: Date.now() - startedAt,
+          terminalKey,
         };
       }
 
@@ -409,6 +419,7 @@ export function createSupervisorExecuteNodeBridge(params: {
           model: result.workerResult.model ?? node.assignedModel ?? "unknown",
           cost: nodeCost,
           duration: Date.now() - startedAt,
+          terminalKey,
         };
       }
 
@@ -422,6 +433,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         model: result.workerResult?.model ?? node.assignedModel ?? "unknown",
         cost: nodeCost,
         duration: Date.now() - startedAt,
+        terminalKey,
       };
     } catch (err) {
       return {
@@ -434,6 +446,12 @@ export function createSupervisorExecuteNodeBridge(params: {
         model: node.assignedModel ?? "unknown",
         cost: nodeCost,
         duration: Date.now() - startedAt,
+        // The spine returns a terminal rather than throwing, so nothing the
+        // worker did lands here: this is the lease, the MCP or a provider SDK.
+        // Still `error`, so it is never read as a clean finish, but marked as
+        // infrastructure's so a gate can tell it from the worker's own error.
+        terminalKey: "error" as const,
+        infrastructureFault: true as const,
       };
     }
   };

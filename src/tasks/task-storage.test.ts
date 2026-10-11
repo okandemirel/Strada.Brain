@@ -126,6 +126,40 @@ describe("TaskStorage", () => {
     expect(storage.load(root.id)?.verification).toEqual({ detail: "", failedTests: ["Game.Tests.A"] });
   });
 
+  it("the run's integrity comes back through findLatestDescendant, where the campaign reads the tip (GDD-drift W01)", () => {
+    const root = makeTask(TaskStatus.failed, { createdAt: 1000, updatedAt: 1000 });
+    const retry = makeTask(TaskStatus.completed, { parentId: root.id, createdAt: 2000, updatedAt: 2000 });
+    storage.save(root);
+    storage.save(retry);
+    const verdict = {
+      detail: "no test run observed",
+      runIntegrity: {
+        terminalKeys: ["done", "task_stuck", "error"],
+        worst: "task_stuck",
+        source: "spine",
+        workerModels: ["kimi-k2", "glm-5"],
+        nodes: 4,
+        unverifiedNodes: 1,
+        infrastructureErrors: 1,
+      },
+    };
+    storage.setVerification(retry.id, JSON.stringify(verdict));
+    expect(storage.findLatestDescendant(root.id)?.verification).toEqual(verdict);
+
+    // An integrity that does not read as one is dropped, never passed through:
+    // a stuck run must not come back as a clean one.
+    storage.setVerification(retry.id, JSON.stringify({
+      detail: "no test run observed",
+      runIntegrity: { terminalKeys: ["stuck-ish"], worst: "done", source: "spine", workerModels: [] },
+    }));
+    expect(storage.load(retry.id)?.verification).toEqual({ detail: "no test run observed" });
+    storage.setVerification(retry.id, JSON.stringify({
+      detail: "no test run observed",
+      runIntegrity: { terminalKeys: ["task_stuck"], worst: "done", source: "spine", workerModels: [] },
+    }));
+    expect(storage.load(retry.id)?.verification?.runIntegrity?.worst).toBe("task_stuck");
+  });
+
   it("markCancelled persists the reason its descendants read; a plain cancel leaves none", () => {
     const superseded = makeTask(TaskStatus.executing);
     const plain = makeTask(TaskStatus.executing);

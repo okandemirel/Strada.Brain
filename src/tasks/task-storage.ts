@@ -12,6 +12,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Task, TaskId, ProgressEntry } from "./types.js";
 import { TaskStatus } from "./types.js";
+import { parseRunIntegrity } from "./test-verdict.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { Attachment } from "../channels/channel.interface.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
@@ -479,6 +480,9 @@ export class TaskStorage {
         ? parsed.failedTests.filter((name): name is string => typeof name === "string")
         : [];
       const omitted = parsed.failedTestsOmitted;
+      // The campaign reads a tip's integrity off the reloaded task; a reader
+      // that dropped it would carry the key all the way here and lose it.
+      const runIntegrity = parseRunIntegrity(parsed.runIntegrity);
       return {
         testsGreen: typeof parsed.testsGreen === "boolean" ? parsed.testsGreen : undefined,
         detail: typeof parsed.detail === "string" ? parsed.detail : "",
@@ -488,6 +492,7 @@ export class TaskStorage {
         ...(typeof parsed.assetSourcingBlind === "string" && parsed.assetSourcingBlind !== ""
           ? { assetSourcingBlind: parsed.assetSourcingBlind }
           : {}),
+        ...(runIntegrity ? { runIntegrity } : {}),
       };
     } catch {
       return undefined;

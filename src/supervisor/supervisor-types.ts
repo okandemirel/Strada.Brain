@@ -87,6 +87,17 @@ export interface NodeResult {
   readonly model: string;
   readonly cost: number;
   readonly duration: number;
+  /**
+   * How the node's run ended, as data. `status` says what the supervisor
+   * made of the node; this says why the run stopped — before it existed a
+   * run that stopped on a loop came back as a plain "ok" (GDD-drift W01).
+   */
+  readonly terminalKey?: import("../agents/autonomy/terminal-key.js").TerminalKey;
+  /**
+   * The `error` key came from a throw around the worker's run (lease, MCP,
+   * provider SDK) that the worker never saw, not from anything it did.
+   */
+  readonly infrastructureFault?: true;
 }
 
 /** A file change produced by node execution */

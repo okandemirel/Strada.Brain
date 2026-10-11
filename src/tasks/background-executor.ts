@@ -29,7 +29,12 @@ import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
-import { deriveTestVerdict } from "./test-verdict.js";
+import {
+  deriveTestVerdict,
+  runIntegrityOfNodes,
+  runIntegrityOfRun,
+  type TaskRunIntegrity,
+} from "./test-verdict.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -782,7 +787,8 @@ export class BackgroundExecutor {
    * storage" — both are an absent row, and only one of them is a finding. A
    * run that WROTE files and observed no test run now records that as data,
    * naming the scope it measured (how many files it wrote). A run that wrote
-   * nothing records nothing: there the absence is not a claim about tests.
+   * nothing makes no claim about tests: its row exists only to carry what
+   * else was measured — a dead Unity link, or how the run ended.
    *
    * The row is deliberately `testsGreen: undefined` — it is the ABSENCE of a
    * test run, never a pass. The campaign's red gate (testsGreen === false) and
@@ -793,18 +799,22 @@ export class BackgroundExecutor {
     taskId: TaskId,
     verdict: ReturnType<typeof deriveTestVerdict>,
     filesWritten: number,
+    integrity?: TaskRunIntegrity,
   ): void {
-    const row: ReturnType<typeof deriveTestVerdict> | undefined =
+    const base: ReturnType<typeof deriveTestVerdict> | undefined =
       verdict.testsGreen !== undefined
         ? verdict
         : filesWritten > 0
           ? { ...verdict, testsGreen: undefined, detail: `no test run observed (${filesWritten} file(s) written)` }
           // A dead Unity link is evidence even when the run wrote nothing and
           // ran no test — that is exactly the run it stops (audited 2026-09-06).
-          : verdict.assetSourcingBlind !== undefined
+          // So is how the run ended: a stuck run that wrote nothing is still
+          // a stuck run (GDD-drift W01).
+          : verdict.assetSourcingBlind !== undefined || integrity !== undefined
             ? { ...verdict, testsGreen: undefined, detail: "no test run observed" }
             : undefined;
-    if (!row) return;
+    if (!base) return;
+    const row = integrity === undefined ? base : { ...base, runIntegrity: integrity };
     (this.taskManager as { setVerification?: (id: string, v: typeof row) => void })
       .setVerification?.(taskId, row);
   }
@@ -1909,10 +1919,18 @@ export class BackgroundExecutor {
               })),
             ),
           );
+          // The verifier's report rides on the result once the supervisor
+          // returns it (GDD-drift W02); read structurally until then.
+          const notVerified = (supervisorResult as { verification?: { notVerified?: unknown } })
+            .verification?.notVerified;
           this.recordTestVerdict(
             task.id,
             verdict,
             new Set(supervisorResult.nodeResults.flatMap((n) => n.artifacts.map((a) => a.path))).size,
+            runIntegrityOfNodes(
+              supervisorResult.nodeResults,
+              typeof notVerified === "number" ? notVerified : undefined,
+            ),
           );
         } catch { /* verdict carriage is best-effort */ }
         try {
@@ -2050,6 +2068,8 @@ export class BackgroundExecutor {
           task.id,
           verdict,
           new Set(result.workerResult?.touchedFiles ?? []).size,
+          // No worker result means the run reported nothing to read.
+          result.workerResult ? runIntegrityOfRun(result.workerResult) : undefined,
         );
       } catch { /* verdict carriage is best-effort */ }
       try {

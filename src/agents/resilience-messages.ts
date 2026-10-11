@@ -99,6 +99,15 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
   },
 };
 
+/**
+ * Every locale's raw template for `key`, `{param}` placeholders unfilled. A
+ * stored result is read for the system's own stamps against exactly these
+ * strings (terminal-outcome.ts systemStampsIn), never against loose wording.
+ */
+export function renderingsOf(key: MessageKey): string[] {
+  return Object.values(MESSAGES).map((messages) => messages[key]);
+}
+
 export function getResilienceMessage(
   key: MessageKey,
   language: string,

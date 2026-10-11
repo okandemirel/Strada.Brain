@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import { getResilienceMessage } from "./resilience-messages.js";
-import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
+import { isFailedTerminalKey, terminalMessageKeyOf } from "./autonomy/terminal-outcome.js";
 import { readFileSync } from "node:fs";
 
 import { isQuotaStop } from "./orchestrator-runtime-utils.js";
@@ -59,11 +59,15 @@ describe("the quota notice", () => {
 
   it("is what a failed terminal actually consults", () => {
     // The decision above is proved; without this, routing the terminal back to
-    // provider_abort would restore the wrong sentence and fail nothing.
+    // provider_abort would restore the wrong sentence and fail nothing. The
+    // reason-to-sentence mapping moved to terminal-outcome.ts (GDD-drift W01);
+    // the orchestrator must still hand it the registry's answer.
     const source = readFileSync("src/agents/orchestrator.ts", "utf8");
-    const line = source.split("\n").find((l) => l.includes('status === "failed"') && l.includes("return"));
+    const line = source.split("\n").find((l) => l.includes("terminalMessageKeyOf(") && l.includes("return"));
 
     expect(line, "the failed terminal no longer chooses a message").toBeDefined();
-    expect(line, "a quota stop is reported as a provider that did not respond").toContain("provider_quota");
+    expect(line, "a quota stop is reported as a provider that did not respond").toContain("this.quotaStopped()");
+    expect(terminalMessageKeyOf(undefined, "failed", () => true)).toBe("provider_quota");
+    expect(terminalMessageKeyOf(undefined, "failed", () => false)).toBe("provider_abort");
   });
 });
