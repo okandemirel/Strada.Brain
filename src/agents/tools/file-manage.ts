@@ -114,6 +114,14 @@ export class FileDeleteTool implements ITool {
             metadata: { guid: safetyCheck.guid, referenceCount: safetyCheck.references.length },
           };
         }
+        if (safetyCheck.guid) {
+          // A bare "Deleted:" read as an all-clear for every kind of
+          // reference; the check reads only Unity's text asset types
+          // (vault-intelligence#2).
+          checkNote =
+            `\nAsset-reference (GUID) check: no reference found in ${safetyCheck.scannedFileTypes.length} Unity text asset types ` +
+            `under ${safetyCheck.scannedRoots.map((r) => `${r}/`).join(", ")}; scripts and binary files were not searched.`;
+        }
       } catch (error) {
         // Was: swallowed and proceeded, so a check that never ran read exactly
         // like a check that passed. A delete on an unverified verdict is refused

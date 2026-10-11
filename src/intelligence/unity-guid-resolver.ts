@@ -36,6 +36,11 @@ export interface SafetyCheckResult {
    */
   scannedRoots: string[];
   /**
+   * File extensions the walk read under those roots (empty when no scan ran).
+   * `safe: true` says nothing about a reference held in any other type.
+   */
+  scannedFileTypes: string[];
+  /**
    * Reasons the walk stopped early (depth cap, unreadable directory, result
    * cap). Non-empty means the verdict is unverified; `safe` is then false.
    * Audited 2026-09-02.
@@ -86,18 +91,50 @@ export function extractGuidFromContent(content: string): string | null {
 
 // ─── Reference Finding ─────────────────────────────────────────────────────
 
-const GUID_REF_PATTERN = /guid:\s*([0-9a-f]{32})/g;
+/**
+ * Occurrences of `guid` in `line` as a whole 32-hex token, in any case. Unity
+ * spells a reference `guid: g` (YAML), `guid=g` (UXML/USS/TSS URLs),
+ * `"guid": "g"` or `\"guid\":\"g\"` (Shader Graph JSON), `GUID:g`
+ * (asmdef/asmref) and `m_GUID: g` / `m_AssetGUID: g` (Addressables). The old
+ * `/guid:\s*([0-9a-f]{32})/` saw only the first, so the rest read as "no
+ * reference" and file_delete unlinked the asset (vault-intelligence#2).
+ */
+function countGuidTokens(line: string, guid: string): number {
+  if (!guid) return 0;
+  const haystack = line.toLowerCase();
+  let count = 0;
+  for (let at = haystack.indexOf(guid); at !== -1; at = haystack.indexOf(guid, at + guid.length)) {
+    if (!isHexChar(haystack[at - 1]) && !isHexChar(haystack[at + guid.length])) count++;
+  }
+  return count;
+}
+
+function isHexChar(c: string | undefined): boolean {
+  return c !== undefined && ((c >= "0" && c <= "9") || (c >= "a" && c <= "f"));
+}
+
 // LOWER-CASE, because the lookups below lower-case the entry's extension.
 // `.overrideController` and `.renderTexture` were listed in Unity's own
 // mixed case and therefore NEVER matched: an asset referenced only from an
 // animator override controller scanned as unreferenced and file-manage
-// deleted it (audit U5, 2026-09-13).
+// deleted it (audit U5, 2026-09-13). The second block is every other text
+// format Unity writes asset references into; none was read, so a .uss, an
+// .asmdef or a sprite referenced only from them was "safe" to delete
+// (vault-intelligence#2).
 const SEARCHABLE_EXTENSIONS = new Set([
   ".prefab", ".unity", ".asset", ".mat", ".controller",
   ".anim", ".overridecontroller", ".meta", ".playable",
   ".mask", ".flare", ".rendertexture", ".cubemap",
   ".spriteatlas", ".lighting", ".terrainlayer",
+  ".uxml", ".uss", ".tss", ".asmdef", ".asmref",
+  ".shadergraph", ".shadersubgraph", ".spriteatlasv2",
+  ".vfx", ".vfxoperator", ".vfxblock", ".guiskin", ".fontsettings",
+  ".preset", ".shadervariants", ".mixer", ".physicmaterial",
+  ".physicsmaterial2d", ".signal", ".brush", ".giparams", ".scenetemplate",
 ]);
+
+/** The file types a reference scan reads, for the verdict to name. */
+export const GUID_SCAN_FILE_TYPES: readonly string[] = [...SEARCHABLE_EXTENSIONS].sort();
 
 export interface GuidScanResult {
   references: GuidReference[];
@@ -181,6 +218,7 @@ async function scanDirectory(
 ): Promise<void> {
   if (visited.has(dirPath)) return;
   visited.add(dirPath);
+  const guid = targetGuid.toLowerCase();
   // Was: three silent `return`s (depth cap, readdir failure, result cap) that
   // left the caller unable to tell "searched everything" from "stopped early".
   // Each early exit now records why. Audited 2026-09-02.
@@ -248,16 +286,12 @@ async function scanDirectory(
         const lines = content.split("\n");
 
         for (let i = 0; i < lines.length && references.length < maxResults; i++) {
-          GUID_REF_PATTERN.lastIndex = 0;
-          let match;
-          while ((match = GUID_REF_PATTERN.exec(lines[i]!)) !== null) {
-            if (match[1] === targetGuid) {
-              references.push({
-                filePath: relPath,
-                lineNumber: i + 1,
-                guid: targetGuid,
-              });
-            }
+          for (let n = countGuidTokens(lines[i]!, guid); n > 0; n--) {
+            references.push({
+              filePath: relPath,
+              lineNumber: i + 1,
+              guid: targetGuid,
+            });
           }
         }
       } catch (err) {
@@ -289,12 +323,13 @@ export async function checkSafeToDelete(
   const guid = await extractGuid(metaPath);
   if (!guid) {
     // No .meta file or no GUID — safe to delete (not a Unity-tracked asset)
-    return { safe: true, guid: null, references: [], scannedRoots: [] };
+    return { safe: true, guid: null, references: [], scannedRoots: [], scannedFileTypes: [] };
   }
 
   // Was: maxResults=6, which capped the reported count at 5 external refs and
   // dropped the "... and N more" line for 20 referrers. Audited 2026-09-02.
   const { references, scannedRoots, incomplete } = await scanGuidReferences(projectPath, guid, GUID_SCAN_MAX_DEPTH, 100);
+  const scannedFileTypes = scannedRoots.length > 0 ? [...GUID_SCAN_FILE_TYPES] : [];
 
   // Filter out self-references (the file's own .meta). Normalize separators
   // before comparing: `ref.filePath` comes from `path.relative()` (native
@@ -345,6 +380,7 @@ export async function checkSafeToDelete(
       references: externalRefs,
       warning,
       scannedRoots,
+      scannedFileTypes,
       ...(incomplete.length > 0 ? { scanIncomplete: incomplete } : {}),
     };
   }
@@ -362,8 +398,27 @@ export async function checkSafeToDelete(
       guid,
       scanIncomplete: incomplete.length,
     });
-    return { safe: false, guid, references: [], warning, scannedRoots, scanIncomplete: incomplete };
+    return { safe: false, guid, references: [], warning, scannedRoots, scannedFileTypes, scanIncomplete: incomplete };
   }
 
-  return { safe: true, guid, references: [], scannedRoots };
+  if (scannedRoots.length === 0) {
+    // No scan root under projectPath (the Unity project sits in a subfolder
+    // of the workspace): nothing was read, and "no reference found" in
+    // nothing was returned as safe (vault-intelligence#2).
+    const roots = GUID_SCAN_ROOTS.map((r) => `${r}/`).join(", ");
+    const warning =
+      `WARNING: ${filePath} (GUID: ${guid}) is a Unity-tracked asset, but none of ${roots} ` +
+      `exists under the project path, so references to it were never looked for. ` +
+      `Not deleting on an unverified verdict.`;
+    logger.warn("GUID safety check: no scan root under the project path, refusing to call delete safe", {
+      filePath,
+      guid,
+    });
+    return {
+      safe: false, guid, references: [], warning, scannedRoots, scannedFileTypes,
+      scanIncomplete: [`no scan root (${roots}) under the project path`],
+    };
+  }
+
+  return { safe: true, guid, references: [], scannedRoots, scannedFileTypes };
 }

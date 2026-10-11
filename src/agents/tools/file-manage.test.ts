@@ -349,5 +349,9 @@ describe("FileDeleteTool force skips the GUID check only on request (audited 202
     expect(result.content).not.toMatch(/SKIPPED/);
     expect(result.metadata).toMatchObject({ guidCheckSkipped: false });
     await expect(stat(mat)).rejects.toThrow();
+    // vault-intelligence#2: a passed check names what it read, so an
+    // all-clear is not taken to cover scripts or binary assets.
+    expect(result.content).toMatch(/no reference found in \d+ Unity text asset types under Assets\//);
+    expect(result.content).toMatch(/scripts and binary files were not searched/);
   });
 });

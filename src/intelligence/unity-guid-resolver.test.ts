@@ -318,3 +318,135 @@ describe("checkSafeToDelete follows symlinked folders (LRN-13)", () => {
     expect(res.safe).toBe(true);
   });
 });
+
+/**
+ * vault-intelligence#2: the walk read only YAML-serialized types and matched
+ * only the lower-case `guid: <g>` spelling, so an asset referenced from UI
+ * Toolkit, an assembly definition, Shader Graph, a v2 sprite atlas or an
+ * Addressables group came back `safe: true` and file_delete unlinked it.
+ */
+describe("checkSafeToDelete sees Unity's other reference spellings and file types (vault-intelligence#2)", () => {
+  let root: string;
+  const guid = "4f2c9a1b7d3e4c5f8a9b0c1d2e3f4a5b";
+
+  beforeAll(() => {
+    try {
+      createLogger("error", "/tmp/strada-unity-guid-resolver-test.log");
+    } catch {
+      /* already initialized */
+    }
+  });
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "guid-spellings-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function put(rel: string, body: string): Promise<void> {
+    const abs = join(root, ...rel.split("/"));
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, body);
+  }
+
+  const cases: Array<[string, string, string, string]> = [
+    [
+      "a stylesheet referenced from a UXML project:// URL",
+      "Assets/UI/Main.uss",
+      "Assets/UI/Main.uxml",
+      `<ui:UXML><Style src="project://database/Assets/UI/Main.uss?fileID=7433441132597879392&amp;guid=${guid}&amp;type=3#Main" /></ui:UXML>\n`,
+    ],
+    [
+      "a stylesheet imported by a theme (.tss)",
+      "Assets/UI/Base.uss",
+      "Assets/UI/Dark.tss",
+      `@import url("project://database/Assets/UI/Base.uss?fileID=7433441132597879392&guid=${guid}&type=3#Base");\n`,
+    ],
+    [
+      "an assembly definition referenced as GUID:<g> (Use GUIDs)",
+      "Assets/Scripts/Core/Core.asmdef",
+      "Assets/Scripts/Game/Game.asmdef",
+      `{\n  "name": "Game",\n  "references": [\n    "GUID:${guid}"\n  ]\n}\n`,
+    ],
+    [
+      "an assembly definition referenced from an .asmref",
+      "Assets/Scripts/Core/Core.asmdef",
+      "Assets/Scripts/Ext/Ext.asmref",
+      `{\n  "reference": "GUID:${guid}"\n}\n`,
+    ],
+    [
+      "a texture referenced from Shader Graph JSON",
+      "Assets/Textures/Noise.png",
+      "Assets/Shaders/Water.shadergraph",
+      `    "m_SerializedTexture": "{\\"texture\\":{\\"fileID\\":2800000,\\"guid\\":\\"${guid}\\",\\"type\\":3}}",\n`,
+    ],
+    [
+      "a sprite packed only by a v2 sprite atlas",
+      "Assets/Sprites/Hero.png",
+      "Assets/Sprites/Characters.spriteatlasv2",
+      `SpriteAtlasAsset:\n  m_ImporterData:\n    packables:\n    - {fileID: 102900000, guid: ${guid}, type: 3}\n`,
+    ],
+    [
+      "a prefab listed in an Addressables group (m_GUID)",
+      "Assets/Prefabs/Boss.prefab",
+      "Assets/AddressableAssetsData/AssetGroups/Default Local Group.asset",
+      `  m_SerializeEntries:\n  - m_GUID: ${guid}\n    m_Address: Boss\n`,
+    ],
+    [
+      "a prefab held by an AssetReference field (m_AssetGUID)",
+      "Assets/Prefabs/Boss.prefab",
+      "Assets/Scenes/Arena.unity",
+      `  bossRef:\n    m_AssetGUID: ${guid}\n    m_SubObjectName:\n`,
+    ],
+  ];
+
+  it.each(cases)("finds %s", async (_label, asset, referrer, body) => {
+    await put(asset, "x");
+    await put(`${asset}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
+    await put(referrer, body);
+
+    const res = await checkSafeToDelete(root, asset);
+
+    expect(res.safe).toBe(false);
+    expect(res.references.map((r) => r.filePath.replace(/\\/g, "/"))).toContain(referrer);
+  });
+
+  it("a GUID inside a longer hex run is not a reference, and an unreferenced asset stays safe", async () => {
+    await put("Assets/UI/Main.uss", "x");
+    await put("Assets/UI/Main.uss.meta", `fileFormatVersion: 2\nguid: ${guid}\n`);
+    await put("Assets/UI/Other.uxml", `<Style src="project://database/Assets/UI/X.uss?guid=${guid}0&amp;type=3" />\n`);
+
+    const res = await checkSafeToDelete(root, "Assets/UI/Main.uss");
+
+    expect(res.safe).toBe(true);
+    expect(res.references).toHaveLength(0);
+  });
+
+  it("a Unity asset under a project path with no scan root is unverified, not safe", async () => {
+    // The workspace holds the Unity project in a subfolder: none of Assets/,
+    // ProjectSettings/, Packages/ exists at the root the check walks.
+    await put("Game/Assets/Hero.png", "x");
+    await put("Game/Assets/Hero.png.meta", `fileFormatVersion: 2\nguid: ${guid}\n`);
+    await put("Game/Assets/Hero.prefab", `m_Sprite: {fileID: 21300000, guid: ${guid}, type: 3}\n`);
+
+    const res = await checkSafeToDelete(root, "Game/Assets/Hero.png");
+
+    expect(res.safe).toBe(false);
+    expect(res.scannedRoots).toEqual([]);
+    expect(res.warning).toMatch(/never looked for/);
+  });
+
+  it("a safe verdict names the file types it read", async () => {
+    await put("Assets/UI/Main.uss", "x");
+    await put("Assets/UI/Main.uss.meta", `fileFormatVersion: 2\nguid: ${guid}\n`);
+
+    const res = await checkSafeToDelete(root, "Assets/UI/Main.uss");
+
+    expect(res.safe).toBe(true);
+    expect(res.scannedFileTypes).toEqual(
+      expect.arrayContaining([".prefab", ".unity", ".asset", ".uxml", ".uss", ".asmdef", ".shadergraph", ".spriteatlasv2"]),
+    );
+  });
+});
