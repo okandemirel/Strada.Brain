@@ -25,7 +25,10 @@ const CODEX_BIN = "codex";
 function codexBin(platform: NodeJS.Platform): string {
   return platform === "win32" ? "codex.cmd" : CODEX_BIN;
 }
-const AUTH_URL_RE = /(https?:\/\/[^\s"']+)/;
+/** A URL that whitespace or a quote has ended, so a chunk boundary cannot cut it short. */
+const ENDED_URL_RE = /https?:\/\/[^\s"'<>]+(?=[\s"'<>])/g;
+/** What codex prints before the sign-in URL is a few lines; this only bounds a runaway stream. */
+const MAX_LOGIN_OUTPUT_CHARS = 16_384;
 /** A login attempt is considered "in flight" for this long before we allow a new spawn. */
 const LOGIN_DEDUP_MS = 5 * 60_000;
 
@@ -136,6 +139,32 @@ export function getCodexInstallHint(platform: NodeJS.Platform = process.platform
   return `Codex CLI not found. Install it with \`${npm}\`, then sign in again.`;
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || host === "0.0.0.0" || /^127\./.test(host);
+}
+
+/**
+ * The sign-in page in what `codex login` has printed so far.
+ *
+ * Codex prints its own callback server first ("Starting local login server on
+ * http://localhost:1455.") and the OpenAI page after it, so the first URL is
+ * the one that cannot sign anyone in. A loopback host is skipped (the real
+ * page's redirect_uri names localhost too, but only inside its query), and a
+ * sentence's closing period is not part of the URL.
+ */
+function findSignInUrl(output: string): string | undefined {
+  for (const match of output.matchAll(ENDED_URL_RE)) {
+    const candidate = match[0].replace(/[.,;:!?)\]]+$/, "");
+    try {
+      if (!isLoopbackHost(new URL(candidate).hostname)) return candidate;
+    } catch {
+      // not a URL after all
+    }
+  }
+  return undefined;
+}
+
 // Module-level tracker so repeated button presses do not spawn duplicate logins.
 let activeLogin: { startedAtMs: number } | null = null;
 
@@ -185,6 +214,7 @@ export function startCodexLogin(options: StartCodexLoginOptions = {}): Promise<C
     activeLogin = { startedAtMs: nowMs };
     let settled = false;
     let url: string | undefined;
+    let output = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (): void => {
@@ -201,13 +231,13 @@ export function startCodexLogin(options: StartCodexLoginOptions = {}): Promise<C
       resolve({ started: true, url });
     };
 
+    // Rust writes the message in pieces, so one chunk can hold half a URL:
+    // read the output so far, not the chunk.
     const onData = (buf: Buffer): void => {
-      if (url) return;
-      const match = buf.toString("utf8").match(AUTH_URL_RE);
-      if (match) {
-        url = match[1];
-        finish();
-      }
+      if (url || output.length >= MAX_LOGIN_OUTPUT_CHARS) return;
+      output = (output + buf.toString("utf8")).slice(0, MAX_LOGIN_OUTPUT_CHARS);
+      url = findSignInUrl(output);
+      if (url) finish();
     };
 
     child.stdout?.on("data", onData);
@@ -220,8 +250,18 @@ export function startCodexLogin(options: StartCodexLoginOptions = {}): Promise<C
         resolve({ started: false, error: err.message });
       }
     });
-    child.on("exit", () => {
+    child.on("exit", (code: number | null) => {
       activeLogin = null;
+      url ??= findSignInUrl(`${output}\n`);
+      // A login that failed before it showed a page (port 1455 taken, say) is
+      // not one in progress: the wizard would poll for a token that never comes.
+      if (!settled && !url && code !== null && code !== 0) {
+        settled = true;
+        if (timer) clearTimeout(timer);
+        const said = output.trim();
+        resolve({ started: false, error: said ? said.slice(-500) : `codex login exited with code ${code}` });
+        return;
+      }
       finish();
     });
 

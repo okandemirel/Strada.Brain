@@ -143,3 +143,57 @@ describe("startCodexLogin", () => {
     expect(spawnFn).toHaveBeenCalledTimes(1);
   });
 });
+
+// What codex 0.153's cli/src/login.rs prints: its own callback server first, the
+// OpenAI page after it. The redirect_uri inside the real URL names localhost too.
+const REAL_AUTH_URL =
+  "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_test" +
+  "&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access" +
+  "&code_challenge=abc&code_challenge_method=S256&state=xyz&originator=codex_cli_rs";
+const REAL_OUTPUT =
+  "Starting local login server on http://localhost:1455.\n" +
+  "If your browser did not open, navigate to this URL to authenticate:\n\n" +
+  `${REAL_AUTH_URL}\n\n` +
+  "On a remote or headless machine? Use `codex login --device-auth` instead.\n";
+
+describe("startCodexLogin with codex's real output", () => {
+  function start(child: FakeChild) {
+    return startCodexLogin({
+      spawnFn: vi.fn().mockReturnValue(child) as never,
+      isAvailable: () => true,
+      graceMs: 10_000,
+      nowMs: 1000,
+      platform: "linux",
+    });
+  }
+
+  it("links the OpenAI sign-in page, not the local callback server, when it arrives in one write", async () => {
+    const child = makeFakeChild();
+    const promise = start(child);
+    child.stderr.emit("data", Buffer.from(REAL_OUTPUT));
+    const result = await promise;
+    expect(result.started).toBe(true);
+    expect(result.url).toBe(REAL_AUTH_URL);
+  });
+
+  it("links the whole sign-in page when the output arrives piece by piece and the URL is split", async () => {
+    const child = makeFakeChild();
+    const promise = start(child);
+    const at = REAL_OUTPUT.indexOf(REAL_AUTH_URL) + 40;
+    child.stderr.emit("data", Buffer.from("Starting local login server on http://localhost:"));
+    child.stderr.emit("data", Buffer.from(REAL_OUTPUT.slice("Starting local login server on http://localhost:".length, at)));
+    child.stderr.emit("data", Buffer.from(REAL_OUTPUT.slice(at)));
+    const result = await promise;
+    expect(result.url).toBe(REAL_AUTH_URL);
+  });
+
+  it("reports a codex login that exits with an error before any sign-in page as not started", async () => {
+    const child = makeFakeChild();
+    const promise = start(child);
+    child.stderr.emit("data", Buffer.from("Error: Address already in use (os error 48)\n"));
+    child.emit("exit", 1, null);
+    const result = await promise;
+    expect(result.started).toBe(false);
+    expect(result.error).toContain("Address already in use");
+  });
+});
