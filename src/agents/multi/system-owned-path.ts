@@ -17,10 +17,11 @@
  * still left in place.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { isScaffoldingScene } from "../../agents/autonomy/built-as-specified.js";
 import { findModuleTwin } from "../../agents/orchestrator.js";
+import { ACCEPTANCE_DIR } from "../../campaign/scope-types.js";
 
 /**
  * Every path a lease commit ever wrote into this project, one per line. This
@@ -132,5 +133,67 @@ export async function systemOwnedDeletionReason(
     return undefined;
   } catch {
     return undefined;
+  }
+}
+
+export { ACCEPTANCE_DIR };
+
+const ACCEPTANCE_SEGMENTS = ACCEPTANCE_DIR.toLowerCase().split("/");
+
+/**
+ * Whether `path` is one of the campaign's acceptance checks: the folder, a
+ * file under it, or the folder's .meta. A worker's lease may read and run
+ * them, never write or delete them (GDD-drift plan W07).
+ *
+ * A project-relative path is judged by its spelling — separators, `..` and
+ * letter case do not change the answer, since APFS and NTFS are
+ * case-insensitive by default. With `projectRoot`, the path is ALSO judged by
+ * its real name against the root's real name: leases live under /var/folders,
+ * which is /private/var, and a comparison that mixed the two forms judged
+ * lease paths "outside the project" three times before. A link inside the
+ * project that leads into the folder is the folder. Without a root, an
+ * absolute path is the system's when it runs through an Assets/StradaAcceptance
+ * folder.
+ */
+export function isSystemOwnedCheckPath(path: string, projectRoot?: string): boolean {
+  if (path === "") return false;
+  if (!isAbsolute(path) && insideAcceptanceDir(path)) return true;
+  if (projectRoot === undefined) return isAbsolute(path) && runsThroughAcceptanceDir(path);
+  const full = resolve(projectRoot, path);
+  const roots = [resolve(projectRoot), realpathOfNearest(projectRoot)];
+  const fulls = [full, realpathOfNearest(full)];
+  return roots.some((root) => fulls.some((candidate) => insideAcceptanceDir(relative(root, candidate))));
+}
+
+function insideAcceptanceDir(projectRelative: string): boolean {
+  if (projectRelative === "" || isAbsolute(projectRelative) || /^[A-Za-z]:/.test(projectRelative)) return false;
+  const segments = posix
+    .normalize(projectRelative.replace(/\\/g, "/"))
+    .toLowerCase()
+    .split("/")
+    .filter((s) => s !== "" && s !== ".");
+  const [top, folder] = ACCEPTANCE_SEGMENTS as [string, string];
+  if (segments[0] !== top) return false;
+  return segments[1] === folder || (segments.length === 2 && segments[1] === `${folder}.meta`);
+}
+
+function runsThroughAcceptanceDir(absolute: string): boolean {
+  const spelled = `${posix.normalize(absolute.replace(/\\/g, "/")).toLowerCase()}/`;
+  const folder = `/${ACCEPTANCE_SEGMENTS.join("/")}`;
+  return spelled.includes(`${folder}/`) || spelled.endsWith(`${folder}.meta/`);
+}
+
+/** The real path of `p`, or of its nearest existing ancestor with the rest re-attached. */
+function realpathOfNearest(p: string): string {
+  const rest: string[] = [];
+  for (let current = resolve(p); ; ) {
+    try {
+      return join(realpathSync.native(current), ...rest);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(p);
+      rest.unshift(basename(current));
+      current = parent;
+    }
   }
 }

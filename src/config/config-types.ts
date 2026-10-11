@@ -21,6 +21,7 @@ import type { AgentConfig } from "../agents/multi/agent-types.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
 import type { SupervisorConfig } from "../supervisor/supervisor-types.js";
+import type { ScopeGateMode } from "../campaign/scope-types.js";
 
 // =============================================================================
 // ENVIRONMENT VARIABLE TYPES
@@ -359,7 +360,12 @@ export type EnvVarName =
   | "STRADA_VAULT_ENABLED"
   | "STRADA_VAULT_SELF_ENABLED"
   | "STRADA_VAULT_WRITE_HOOK_BUDGET_MS"
-  | "STRADA_VAULT_DEBOUNCE_MS";
+  | "STRADA_VAULT_DEBOUNCE_MS"
+
+  // Campaign scope gate
+  | "CAMPAIGN_SCOPE_GATE"
+  | "CAMPAIGN_ACCEPTANCE_WRITER"
+  | "CAMPAIGN_MAX_REQUIREMENT_ROWS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -717,6 +723,16 @@ export interface VaultConfig {
   };
 }
 
+/** The campaign scope gate (GDD-drift plan M2/M3). */
+export interface CampaignConfig {
+  /** CAMPAIGN_SCOPE_GATE: off (default, today's behaviour), shadow (recorded only) or on. */
+  readonly scopeGate: ScopeGateMode;
+  /** CAMPAIGN_ACCEPTANCE_WRITER: who writes the acceptance checks; absent = auto. */
+  readonly acceptanceWriter?: { readonly provider: string; readonly model?: string };
+  /** CAMPAIGN_MAX_REQUIREMENT_ROWS: rows a ledger holds; the rest are counted and disclosed. */
+  readonly maxRequirementRows: number;
+}
+
 /** Obsidian vault integration configuration */
 export interface ObsidianConfig {
   readonly enabled: boolean;
@@ -949,4 +965,7 @@ export interface Config {
 
   // Obsidian Integration
   readonly obsidian: ObsidianConfig;
+
+  // Campaign scope gate
+  readonly campaign: CampaignConfig;
 }

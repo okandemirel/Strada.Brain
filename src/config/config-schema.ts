@@ -473,6 +473,36 @@ export const configSchema = z
     // third-party server never silently hands it every key the agent holds.
     mcpServers: z.array(mcpServerEntrySchema).default([]),
 
+    // Campaign scope gate (GDD-drift plan M2/M3). The mode is read leniently in
+    // validateConfig (parseScopeGateMode): an unreadable value is off with a
+    // warning, never a boot failure and never enforcement.
+    campaignScopeGate: z.string().optional(),
+    // provider[:model]; unset, empty or "auto" picks a healthy model that did
+    // not work on the milestone. Only the first colon splits: model ids carry
+    // their own colons and slashes.
+    campaignAcceptanceWriter: z
+      .string()
+      .optional()
+      .transform((s, ctx) => {
+        const value = s?.trim() ?? "";
+        if (value === "" || value.toLowerCase() === "auto") return undefined;
+        const match = /^([A-Za-z0-9][A-Za-z0-9_-]*)(?::(\S.*))?$/.exec(value);
+        if (match === null) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `expected provider[:model] or auto, got ${JSON.stringify(value.slice(0, 40))}`,
+          });
+          return z.NEVER;
+        }
+        const model = match[2]?.trim();
+        return { provider: match[1]!.toLowerCase(), ...(model ? { model } : {}) };
+      }),
+    campaignMaxRequirementRows: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(50).max(2000))
+      .prefault("400"),
+
     // Obsidian Integration
     obsidian: z.object({
       enabled: boolFromString(false),

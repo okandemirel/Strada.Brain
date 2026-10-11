@@ -22,6 +22,14 @@ import { z } from "zod";
 // Type-only: visual-conformance.ts owns the visual-acceptance verdict and
 // imports nothing from here, so there is no cycle.
 import type { VisualAcceptance } from "./visual-conformance.js";
+// Type-only, and scope-types imports nothing from here.
+import type {
+  JudgementBasis,
+  ParkedRecord,
+  RequirementLedger,
+  ScopeVerdictRecord,
+  WriterRepairs,
+} from "./scope-types.js";
 
 // =============================================================================
 // STATE
@@ -329,6 +337,29 @@ export interface CampaignMilestone {
   attemptStartedAtMs?: number;
   /** How many times the time-box has forced a scope-narrowing escalation. */
   timeBoxEscalations?: number;
+  /**
+   * The requirement rows this milestone owns (`RequirementRow.rid`), in GDD
+   * order. Its green has to come from these passing (GDD-drift plan M3).
+   */
+  requirementIds?: string[];
+  /** Project-relative path of this milestone's acceptance file, under ACCEPTANCE_DIR. */
+  acceptanceFile?: string;
+  /** The scope gate's last verdict on this milestone; in shadow it is recorded and not acted on. */
+  scopeVerdict?: ScopeVerdictRecord;
+  /** Bounces the scope gate has sent back; the first is free. */
+  scopeBounces?: number;
+  /**
+   * Set when the milestone's budget ran out on failing rows. A parked
+   * milestone is `failed`, its rows are queued and the ladder moves on;
+   * delivery stays held by the queued rows.
+   */
+  parked?: ParkedRecord;
+  /** How its green was judged: on the carried terminal key and owned rows, or before the gate existed. */
+  judgementBasis?: JudgementBasis;
+  /** The milestone this one was split from when that one's time box ran out. */
+  timeBoxSplitFrom?: string;
+  /** Writer calls spent repairing this milestone's acceptance checks. */
+  writerRepairs?: WriterRepairs;
 }
 
 export interface Campaign {
@@ -466,6 +497,21 @@ export interface Campaign {
    * a readable queue is written.
    */
   coverageQueueUnreadable?: boolean;
+  /**
+   * The GDD's requirement rows, read from the approved `gddText` (never the
+   * copy on disk), with each row's owner, checks and last result.
+   */
+  requirements?: RequirementLedger;
+  /**
+   * Set when the persisted ledger could not be read — derived at load like
+   * `coverageQueueUnreadable`, never a column. An unreadable ledger is not an
+   * empty one.
+   */
+  requirementsUnreadable?: boolean;
+  /** Row ids whose system-written check could not be made to work; a person decides. */
+  checkFaults?: string[];
+  /** When this campaign first ran under the scope gate (epoch ms). */
+  scopeGateSince?: number;
   /**
    * Which sessions have been PLAYED TO AN OUTCOME, accumulated across runs,
    * and the artifact they were measured on.

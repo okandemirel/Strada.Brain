@@ -91,6 +91,7 @@ import type { Campaign, CampaignMilestone,
 } from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
+import { DEFAULT_SCOPE_GATE_MODE, type AcceptanceAuthorLike, type AcceptanceSuiteRunner, type ScopeGateMode } from "./scope-types.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
 export type CampaignMessenger = (chatId: string, markdown: string) => Promise<void>;
@@ -233,6 +234,19 @@ export interface CampaignManagerOptions {
    * style defaults.
    */
   styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
+  /**
+   * Writes the acceptance checks for a milestone's GDD rows, on a model that
+   * did not work on it when one is healthy (GDD-drift plan M3). Absent or
+   * null: no check is written, and the rows stay unmeasured.
+   */
+  acceptanceAuthor?: AcceptanceAuthorLike | null;
+  /**
+   * Runs a filtered acceptance batch under a ticket this campaign issued.
+   * Absent: the acceptance run is not admitted ("no-runner"), never a pass.
+   */
+  runAcceptanceSuite?: AcceptanceSuiteRunner;
+  /** Whether the scope gate is off (default: today's behaviour), shadow (recorded only) or on. */
+  scopeGateMode?: ScopeGateMode;
 }
 
 /**
@@ -1017,6 +1031,9 @@ export class CampaignManager {
   private readonly milestoneTimeBoxMs: number;
   private readonly projectLockTimeoutMs: number;
   private readonly styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
+  private readonly acceptanceAuthor: AcceptanceAuthorLike | null;
+  private readonly runAcceptanceSuite?: AcceptanceSuiteRunner;
+  private readonly scopeGateMode: ScopeGateMode;
   private eventsAttached = false;
 
   constructor(options: CampaignManagerOptions) {
@@ -1043,6 +1060,22 @@ export class CampaignManager {
     this.milestoneTimeBoxMs = options.milestoneTimeBoxMs ?? 6 * 60 * 60_000;
     this.projectLockTimeoutMs = options.projectLockTimeoutMs ?? 60_000;
     this.styleAnalysis = options.styleAnalysis;
+    this.acceptanceAuthor = options.acceptanceAuthor ?? null;
+    this.runAcceptanceSuite = options.runAcceptanceSuite;
+    this.scopeGateMode = options.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
+  }
+
+  /**
+   * What the scope gate runs with. Read by status and by the production
+   * wiring test: a dependency the construction site never passed has to be
+   * visible as absent, not discovered when no check was ever written.
+   */
+  scopeGateWiring(): { mode: ScopeGateMode; writer: string | null; runner: boolean } {
+    return {
+      mode: this.scopeGateMode,
+      writer: this.acceptanceAuthor?.describe() ?? null,
+      runner: this.runAcceptanceSuite !== undefined,
+    };
   }
 
   /** Subscribe to task lifecycle events. Idempotent. */

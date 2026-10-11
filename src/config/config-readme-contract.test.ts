@@ -62,6 +62,42 @@ describe("src/config/README.md matches the schema it documents", () => {
     expect(config.websocketDashboard.port).not.toBe(config.dashboard.port);
   });
 
+  it("CAMPAIGN_SCOPE_GATE / CAMPAIGN_ACCEPTANCE_WRITER: documented defaults are the schema's", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(row("CAMPAIGN_SCOPE_GATE")).toMatch(
+      new RegExp(`\`CAMPAIGN_SCOPE_GATE\` \\(default ${config.campaign.scopeGate}[;)]`),
+    );
+    // The documented modes are the ones the parser takes, and an unreadable
+    // value is documented as what it does.
+    for (const mode of ["off", "shadow", "on"]) {
+      expect(loadConfig({ ...baseEnv, CAMPAIGN_SCOPE_GATE: mode }).campaign.scopeGate).toBe(mode);
+      expect(row("CAMPAIGN_SCOPE_GATE")).toContain(`\`${mode}\``);
+    }
+    expect(row("CAMPAIGN_SCOPE_GATE")).toMatch(/any other value reads as `off`/);
+    expect(config.campaign.acceptanceWriter).toBeUndefined();
+    expect(row("CAMPAIGN_ACCEPTANCE_WRITER")).toMatch(/`CAMPAIGN_ACCEPTANCE_WRITER` \(default auto[;)]/);
+  });
+
+  it("CAMPAIGN_MAX_REQUIREMENT_ROWS: documented default and range are the schema's", () => {
+    const match = /`CAMPAIGN_MAX_REQUIREMENT_ROWS` \(default (\d+), range (\d+)\.\.(\d+)[;)]/.exec(
+      row("CAMPAIGN_MAX_REQUIREMENT_ROWS"),
+    );
+    expect(match, "README row states a default and a range").not.toBeNull();
+    const [, def, min, max] = match as RegExpExecArray;
+    expect(loadConfig({ ...baseEnv }).campaign.maxRequirementRows).toBe(Number(def));
+    const okAt = (value: string): boolean => {
+      try {
+        return loadConfig({ ...baseEnv, CAMPAIGN_MAX_REQUIREMENT_ROWS: value }).campaign.maxRequirementRows === Number(value);
+      } catch {
+        return false;
+      }
+    };
+    expect(okAt(min)).toBe(true);
+    expect(okAt(max)).toBe(true);
+    expect(okAt(String(Number(max) + 1))).toBe(false);
+    expect(okAt(String(Number(min) - 1))).toBe(false);
+  });
+
   it("Validation Helpers section does not present uncalled helpers as the boot gate", () => {
     // hasRequiredApiKeys / checkChannelConfig have no callers; the enforced
     // credential gate is the schema superRefine inside validateConfig.

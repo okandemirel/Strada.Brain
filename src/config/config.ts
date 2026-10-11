@@ -20,6 +20,7 @@ import { mcpServerEntrySchema } from "./config-schema.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import { getPreset } from "./presets.js";
 import { findRetiredSettings } from "./retired-settings.js";
+import { parseScopeGateMode } from "../campaign/scope-types.js";
 import type { Config } from "./config-types.js";
 import { configSchema } from "./config-schema.js";
 export * from "./config-types.js";
@@ -110,6 +111,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   };
   const explicitParallelNodes = explicitInt("stradaSupervisorMaxParallelNodes");
   const explicitDelegationConcurrency = explicitInt("agentMaxConcurrentDelegations");
+  // An unreadable gate mode boots with the gate off, and says which setting
+  // it ignored: silence would read as "the gate is on" to whoever set it.
+  const scopeGate = parseScopeGateMode(rawConfig.campaignScopeGate);
+  if (scopeGate.warning !== undefined) warnAboutConfig(scopeGate.warning);
   const config: Config = {
     anthropicApiKey: rawConfig.anthropicApiKey,
     anthropicAuthMode: rawConfig.anthropicAuthMode,
@@ -566,6 +571,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     vault: rawConfig.vault,
     mcpServers: rawConfig.mcpServers,
     obsidian: rawConfig.obsidian,
+
+    campaign: {
+      scopeGate: scopeGate.mode,
+      ...(rawConfig.campaignAcceptanceWriter ? { acceptanceWriter: rawConfig.campaignAcceptanceWriter } : {}),
+      maxRequirementRows: rawConfig.campaignMaxRequirementRows,
+    },
   };
 
   // Cross-field validation: dashboardPort and websocketDashboardPort must differ when both enabled
@@ -1100,6 +1111,10 @@ interface EnvVars {
     vaultPath: string | undefined;
     certPath: string | undefined;
   };
+  // Campaign scope gate
+  campaignScopeGate: string | undefined;
+  campaignAcceptanceWriter: string | undefined;
+  campaignMaxRequirementRows: string | undefined;
 }
 
 /**
@@ -1157,7 +1172,7 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
         const reasons = checked.error.issues
           .map((issue) => `${issue.path.join(".") || "(entry)"}: ${issue.message}`)
           .join("; ");
-        warnAboutMcpConfig(`MCP server "${name}" in ${path} is not a valid entry — skipping it (${reasons})`);
+        warnAboutConfig(`MCP server "${name}" in ${path} is not a valid entry — skipping it (${reasons})`);
       }
       return good;
     };
@@ -1176,10 +1191,10 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
         );
       }
     }
-    warnAboutMcpConfig(`MCP config at ${path} has an unrecognised shape — ignoring it`);
+    warnAboutConfig(`MCP config at ${path} has an unrecognised shape — ignoring it`);
     return [];
   } catch (err) {
-    warnAboutMcpConfig(
+    warnAboutConfig(
       `MCP config at ${path} could not be read — ignoring it: ${err instanceof Error ? err.message : String(err)}`,
     );
     return [];
@@ -1190,9 +1205,9 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
  * Config is parsed before the logger is constructed, so this cannot go through
  * getLogger(). stderr is the only channel that exists this early, and staying
  * silent would leave a user with a typo'd MCP config wondering why none of
- * their tools appeared.
+ * their tools appeared, or a typo'd setting wondering why it did nothing.
  */
-function warnAboutMcpConfig(message: string): void {
+function warnAboutConfig(message: string): void {
   // eslint-disable-next-line no-console -- see above: no logger exists yet
   console.warn(`[config] ${message}`);
 }
@@ -1325,6 +1340,10 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
       vaultPath: env["OBSIDIAN_VAULT_PATH"],
       certPath: env["OBSIDIAN_CERT_PATH"],
     },
+    // Campaign scope gate
+    campaignScopeGate: env["CAMPAIGN_SCOPE_GATE"],
+    campaignAcceptanceWriter: env["CAMPAIGN_ACCEPTANCE_WRITER"],
+    campaignMaxRequirementRows: env["CAMPAIGN_MAX_REQUIREMENT_ROWS"],
     logLevel: env["LOG_LEVEL"],
     logFile: env["LOG_FILE"],
     webChannelPort: env["WEB_CHANNEL_PORT"],
