@@ -91,7 +91,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command`, gelecekte acilacak terminallerin `strada` komutunu dogrudan gormesi icin shell profilinizi de otomatik gunceller; ayrica PATH export yazmaniz gerekmez.
 Windows'ta checkout icinden `.\strada.ps1` kullanilir. `install-command`, `strada.cmd` ve `strada.ps1` dosyalarini `%LOCALAPPDATA%\Strada\bin` altina yazar ve kullanici PATH'ini gunceller.
 
-Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz aktif runtime root altindaki `.env`, `.strada-memory`, loglar ve `HEARTBEAT.md` gibi Strada runtime dosyalari temizlenir. Source checkout kullaniyorsaniz ayni `--purge-config` secenegi `node_modules/`, `dist/`, `web-portal/node_modules` ve `web-portal/dist` gibi uretilen artefact'lari da siler; boylece checkout'u gercek bir sifir-kurulum durumuna dondurup tekrar test edebilirsiniz. Repository checkout'unun kendisi otomatik olarak silinmez.
+Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz aktif runtime root altindaki `.env`, `.strada-memory` ve loglar gibi Strada runtime dosyalari temizlenir. Source checkout kullaniyorsaniz ayni `--purge-config` secenegi `node_modules/`, `dist/`, `web-portal/node_modules` ve `web-portal/dist` gibi uretilen artefact'lari da siler; boylece checkout'u gercek bir sifir-kurulum durumuna dondurup tekrar test edebilirsiniz. Silmeden once her yolu tek tek listeler. Source checkout'ta once sorar (`--force` soruyu atlar) ve git'in takip ettigi hicbir seyi (checkout'taki `HEARTBEAT.md` gibi), git'in kendi metadata'sini ya da `.env` dosyanizin Strada'nin varsayilan konumu disinda gosterdigi bir klasoru asla silmez. git neyi takip ettigini soyleyemezse (git kurulu degil, Xcode lisansi kabul edilmemis, git depoya guvenmiyor) hicbir sey silinmez, git'in verdigi sebep yazilir ve komut sifir olmayan bir cikis koduyla biter. Hicbir sey silinmediginde, yeniden calistirma komutunu checkout'un kendi launcher'i uzerinden yazar; cunku o noktada bare `strada` komutu zaten kaldirilmistir. Repository checkout'unun kendisi otomatik olarak silinmez.
 
 Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin veya komutu `cd Strada.Brain && ...` ile calistirin.
 
@@ -216,7 +216,7 @@ strada.cmd               # Windows Command Prompt yardimci launcher'i
 ./strada install-command  # Kullanici-local bare `strada` komutunu kur
 ./strada uninstall        # Kurulmus bare komutu ve yonetilen PATH/profile degisikliklerini kaldir
 .\strada.ps1 uninstall   # Windows checkout icinden bare komutu kaldir
-strada uninstall --purge-config # Runtime dosyalarini ve source checkout'ta uretilen artefact'lari sifir-kurulum yeniden testi icin temizle
+strada uninstall --purge-config # Runtime dosyalarini ve source checkout'ta uretilen artefact'lari sifir-kurulum yeniden testi icin temizle (checkout'ta once sorar; --force soruyu atlar; git'in takip ettigi dosyalar hep kalir)
 strada                    # install-command sonrasinda akilli launcher
 strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
 strada --web              # Web kanalini ac veya yeni makinada web-oncelikli kuruluma devam et

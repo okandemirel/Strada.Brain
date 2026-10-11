@@ -93,7 +93,7 @@ Si vous sautez `./strada install-command`, continuez a utiliser `./Strada.Brain/
 `./strada install-command` met aussi a jour automatiquement votre profil shell afin que les prochains terminaux trouvent `strada` sans modification manuelle du PATH.
 Sous Windows, utilisez `.\strada.ps1` depuis le checkout. `install-command` ecrit `strada.cmd` et `strada.ps1` dans `%LOCALAPPDATA%\Strada\bin` et met a jour le PATH utilisateur.
 
-Si vous voulez supprimer plus tard la commande user-local, lancez `strada uninstall` (ou `./strada uninstall` / `.\strada.ps1 uninstall` depuis le checkout). Avec `--purge-config`, Strada supprime aussi les fichiers runtime locaux au repo comme `.env`, `.strada-memory`, les logs et `HEARTBEAT.md`. Le checkout du depot lui-meme n'est jamais efface automatiquement.
+Si vous voulez supprimer plus tard la commande user-local, lancez `strada uninstall` (ou `./strada uninstall` / `.\strada.ps1 uninstall` depuis le checkout). Avec `--purge-config`, Strada supprime aussi les fichiers runtime sous la racine runtime active comme `.env`, `.strada-memory` et les logs, et dans un source checkout les artefacts generes comme `node_modules/`, `dist/`, `web-portal/node_modules` et `web-portal/dist`. Chaque chemin est liste avant d'etre supprime. Dans un source checkout, Strada demande d'abord (`--force` saute la question) et ne supprime jamais un fichier suivi par git (comme le `HEARTBEAT.md` du checkout), les metadonnees de git, ni un dossier vers lequel votre `.env` pointe en dehors de l'emplacement par defaut de Strada. Si git ne peut pas dire ce qu'il suit (git absent, licence Xcode non acceptee, depot auquel git ne fait pas confiance), rien n'est supprime, la raison donnee par git est affichee et la commande se termine avec un code d'erreur. Quand rien n'a ete supprime, Strada affiche la commande a relancer via le launcher du checkout, car la commande `strada` nue est deja retiree a ce moment-la. Le checkout du depot lui-meme n'est jamais efface automatiquement.
 
 `strada-brain` n'est pas encore publi&eacute; sur le registre npm public. `npm install -g strada-brain` renverra donc `E404` pour le moment. En attendant une publication npm, utilisez le flux source ci-dessus.
 
@@ -212,7 +212,7 @@ strada.cmd               # Companion launcher pour l'invite de commandes Windows
 ./strada install-command  # Installe une commande bare `strada` pour l'utilisateur
 ./strada uninstall        # Retire la commande bare installee et les changements PATH/profile geres
 .\strada.ps1 uninstall   # Idem depuis le checkout Windows
-strada uninstall --purge-config # Supprime aussi les fichiers runtime locaux au repo crees par Strada
+strada uninstall --purge-config # Supprime aussi les fichiers runtime de Strada et les artefacts generes du checkout (demande d'abord dans un checkout ; --force saute la question ; les fichiers suivis par git restent toujours)
 strada                    # Launcher intelligent apres install-command
 strada --daemon           # Demarrer le canal par defaut en mode daemon
 strada --web              # Ouvrir le canal web ou poursuivre la configuration web sur une nouvelle machine

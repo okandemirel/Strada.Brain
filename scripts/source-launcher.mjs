@@ -15,16 +15,19 @@ const SERVED_PORTAL_MARKER = path.join(ROOT_DIR, "dist", "channels", "web", "sta
 const MANAGED_BLOCK_START = "# >>> Strada command >>>";
 const MANAGED_BLOCK_END = "# <<< Strada command <<<";
 const STRADA_LAUNCH_CWD_ENV = "STRADA_LAUNCH_CWD";
+// `keys` are the .env names that move a target, first match wins. The app reads
+// STRADA_DAEMON_HEARTBEAT_FILE (src/config/config.ts); DAEMON_HEARTBEAT_FILE is
+// the name this purge used to read, kept so an older .env still finds its file.
 const DEFAULT_RUNTIME_PURGE_TARGETS = [
-  { key: "MEMORY_DB_PATH", fallback: ".strada-memory" },
-  { key: "WHATSAPP_SESSION_PATH", fallback: ".whatsapp-session" },
-  { key: "LOG_FILE", fallback: "strada-brain.log" },
-  { key: "DAEMON_HEARTBEAT_FILE", fallback: "./HEARTBEAT.md" },
-  { key: "", fallback: "strada-brain-error.log" },
-  { key: "", fallback: "strada-brain-sync.log" },
-  { key: "", fallback: ".strada-update.lock" },
-  { key: "", fallback: "data/tasks.db" },
-  { key: "", fallback: "data/learning.db" },
+  { keys: ["MEMORY_DB_PATH"], fallback: ".strada-memory" },
+  { keys: ["WHATSAPP_SESSION_PATH"], fallback: ".whatsapp-session" },
+  { keys: ["LOG_FILE"], fallback: "strada-brain.log" },
+  { keys: ["STRADA_DAEMON_HEARTBEAT_FILE", "DAEMON_HEARTBEAT_FILE"], fallback: "./HEARTBEAT.md" },
+  { keys: [], fallback: "strada-brain-error.log" },
+  { keys: [], fallback: "strada-brain-sync.log" },
+  { keys: [], fallback: ".strada-update.lock" },
+  { keys: [], fallback: "data/tasks.db" },
+  { keys: [], fallback: "data/learning.db" },
 ];
 const DEFAULT_SOURCE_PREPARED_PURGE_TARGETS = [
   { fallback: "dist" },
@@ -794,8 +797,10 @@ function resolveManagedPath(rootDir, configuredValue, fallback) {
 }
 
 /**
- * Whether git tracks `targetPath` or anything under it; null when git cannot
- * answer (not installed, not a repository), which a purge reads as "keep it".
+ * Whether git tracks `targetPath` or anything under it, as `{ tracked }`, or
+ * `{ gitError }` when git cannot answer (not installed, the Xcode-licence shim,
+ * dubious ownership, not a repository). git's stderr is captured for that
+ * reason and never reaches the terminal.
  */
 function gitTracksPath(repoRoot, targetPath) {
   const relative = path.relative(repoRoot, targetPath).split(path.sep).join("/");
@@ -803,11 +808,44 @@ function gitTracksPath(repoRoot, targetPath) {
     const listed = execFileSync(
       "git",
       ["--literal-pathspecs", "-C", repoRoot, "ls-files", "-z", "--", relative],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     );
-    return listed.length > 0;
+    return { tracked: listed.length > 0 };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { gitError: "git is not installed or not on PATH" };
+    }
+    const firstLine = String(error?.stderr ?? "").split(/\r?\n/u).map((line) => line.trim()).find(Boolean);
+    return { gitError: firstLine || error?.message || "git failed" };
+  }
+}
+
+/**
+ * `targetPath` spelled the way the filesystem stores it. macOS and Windows
+ * volumes are case-insensitive by default, so `.GIT/config` opens git's config
+ * and `heartbeat.md` the tracked HEARTBEAT.md, while a path comparison and
+ * git's pathspecs are case-sensitive. Only the parent is resolved: a symlink
+ * stays the link a purge would delete, not the file it points at.
+ */
+function storedPath(targetPath) {
+  try {
+    const parent = realpathSync.native(path.dirname(targetPath));
+    const name = path.basename(targetPath);
+    const entries = readdirSync(parent);
+    const stored = entries.includes(name)
+      ? name
+      : entries.find((entry) => entry.toLowerCase() === name.toLowerCase());
+    return path.join(parent, stored ?? name);
   } catch {
-    return null;
+    return targetPath;
+  }
+}
+
+function realDirectory(dirPath) {
+  try {
+    return realpathSync.native(dirPath);
+  } catch {
+    return dirPath;
   }
 }
 
@@ -825,28 +863,35 @@ function isDirectoryEntry(targetPath) {
  * A .env value can name any folder (`MEMORY_DB_PATH=src` took a source tree
  * with it), so a folder is only Strada's when it is where Strada would put it.
  * In a source checkout the root is the developer's working tree: anything git
- * tracks (the default HEARTBEAT.md is) and git's own metadata stay.
+ * tracks (the default HEARTBEAT.md is) and git's own metadata stay, judged on
+ * the stored spelling of both paths.
  */
 function purgeRefusal(candidate, root, sourceCheckout) {
   if (candidate.namedBy && isDirectoryEntry(candidate.path)) {
-    return `folder named by ${candidate.namedBy} in .env is not a Strada default location`;
+    return { reason: `folder named by ${candidate.namedBy} in .env is not a Strada default location` };
   }
   if (!sourceCheckout) {
     return null;
   }
-  if (isWithinPath(candidate.path, path.join(root, ".git"))) {
-    return "git metadata is never removed";
+  const realRoot = realDirectory(root);
+  const stored = storedPath(candidate.path);
+  if (!isWithinPath(stored, realRoot)) {
+    return { reason: "resolves outside the checkout through a symlink" };
   }
-  const tracked = gitTracksPath(root, candidate.path);
-  if (tracked === null) {
-    return "could not ask git whether it is tracked";
+  if (isWithinPath(stored, path.join(realRoot, ".git"))) {
+    return { reason: "git metadata is never removed" };
   }
-  return tracked ? "tracked by git; never removed" : null;
+  const answer = gitTracksPath(realRoot, stored);
+  if (answer.gitError) {
+    return { reason: "could not ask git whether it is tracked", gitError: answer.gitError };
+  }
+  return answer.tracked ? { reason: "tracked by git; never removed" } : null;
 }
 
 function planPurgeTargets(root, candidates, sourceCheckout, rootLabel) {
   const targets = [];
   const skipped = [];
+  let gitError = null;
   for (const candidate of candidates) {
     if (pathsEqual(candidate.path, root)) {
       skipped.push(`${candidate.path} (${rootLabel} is never removed)`);
@@ -861,12 +906,13 @@ function planPurgeTargets(root, candidates, sourceCheckout, rootLabel) {
     }
     const refusal = purgeRefusal(candidate, root, sourceCheckout);
     if (refusal) {
-      skipped.push(`${candidate.path} (${refusal})`);
+      skipped.push(`${candidate.path} (${refusal.reason})`);
+      gitError ??= refusal.gitError ?? null;
       continue;
     }
     targets.push(candidate.path);
   }
-  return { targets, skipped };
+  return { targets, skipped, gitError };
 }
 
 function planRuntimePurge(options = {}) {
@@ -876,7 +922,8 @@ function planRuntimePurge(options = {}) {
   const candidates = [];
 
   for (const target of DEFAULT_RUNTIME_PURGE_TARGETS) {
-    const configured = target.key ? envConfig[target.key]?.trim() : undefined;
+    const namedKey = target.keys.find((key) => envConfig[key]?.trim());
+    const configured = namedKey ? envConfig[namedKey].trim() : undefined;
     const resolvedPath = resolveManagedPath(configRoot, configured, target.fallback);
     if (!resolvedPath) {
       continue;
@@ -884,7 +931,7 @@ function planRuntimePurge(options = {}) {
     const defaultPath = resolveManagedPath(configRoot, undefined, target.fallback);
     candidates.push({
       path: resolvedPath,
-      namedBy: configured && !pathsEqual(resolvedPath, defaultPath) ? target.key : null,
+      namedBy: configured && !pathsEqual(resolvedPath, defaultPath) ? namedKey : null,
     });
   }
   candidates.push({ path: envPath, namedBy: null });
@@ -902,6 +949,22 @@ function planSourcePreparedPurge(options = {}) {
     }
   }
   return planPurgeTargets(installRoot, candidates, true, "install root");
+}
+
+/**
+ * The command that runs `args` through the checkout's own launcher. The bare
+ * `strada` this run was started through can be one of the bindings it has
+ * just removed, so a rerun hint that says `strada ...` names a missing command.
+ */
+function checkoutLauncherCommand(installRoot, wrapperKind, platform, args) {
+  const kind = wrapperKind || (isWindows(platform) ? "powershell" : "posix");
+  if (kind === "powershell") {
+    return `& ${quotePowerShellSingle(path.join(installRoot, "strada.ps1"))} ${args}`;
+  }
+  if (kind === "cmd") {
+    return `${quoteCmdDouble(path.join(installRoot, "strada.cmd"))} ${args}`;
+  }
+  return `${quotePosixSingle(path.join(installRoot, "strada"))} ${args}`;
 }
 
 /**
@@ -1153,16 +1216,20 @@ export function uninstallCommand(options = {}) {
   }
 
   let purged = false;
+  let gitError = null;
   if (purgeConfig) {
     const { configRoot, installRoot, sourceCheckout } = runtimeRoots;
     const runtimePlan = planRuntimePurge({ configRoot, sourceCheckout });
     const preparedPlan = sourceCheckout
       ? planSourcePreparedPurge({ installRoot })
-      : { targets: [], skipped: [] };
+      : { targets: [], skipped: [], gitError: null };
     const targets = [...runtimePlan.targets, ...preparedPlan.targets];
     skipped.push(...runtimePlan.skipped, ...preparedPlan.skipped);
+    // Without git's answer no path can be shown to be untracked, so the plan
+    // is not trusted at all: nothing goes, and the run says so.
+    gitError = runtimePlan.gitError ?? preparedPlan.gitError;
 
-    if (targets.length > 0) {
+    if (targets.length > 0 && !gitError) {
       console.log("--purge-config will delete:");
       for (const target of targets) {
         console.log(`  ${target}`);
@@ -1170,8 +1237,8 @@ export function uninstallCommand(options = {}) {
     }
     // A checkout's .env is the developer's own configuration with no backup,
     // so deleting from a working tree takes a yes or an explicit --force.
-    purged = !sourceCheckout || targets.length === 0 || force
-      || confirm(`Delete these ${targets.length} path(s) from ${configRoot}? [y/N] `);
+    purged = !gitError && (!sourceCheckout || targets.length === 0 || force
+      || confirm(`Delete these ${targets.length} path(s) from ${configRoot}? [y/N] `));
 
     if (purged) {
       for (const target of targets) {
@@ -1212,13 +1279,25 @@ export function uninstallCommand(options = {}) {
     if (runtimeRoots.sourceCheckout) {
       console.log("Generated source-checkout dependencies and build artifacts were also removed for a zero-install rerun.");
     }
+  } else if (gitError) {
+    console.log("");
+    console.log(`Nothing under ${runtimeRoots.configRoot} was purged: git could not say which of these paths it tracks, and a tracked path is never deleted.`);
+    console.log(`git said: ${gitError}`);
+    console.log("Once git answers in this checkout, rerun:");
+    console.log(`  ${checkoutLauncherCommand(runtimeRoots.installRoot, options.wrapperKind, platform, "uninstall --purge-config")}`);
   } else if (purgeConfig) {
     console.log("");
-    console.log(`Nothing under ${runtimeRoots.configRoot} was purged. Rerun with --force to delete the paths listed above without being asked.`);
+    console.log(`Nothing under ${runtimeRoots.configRoot} was purged. To delete the paths listed above without being asked, run:`);
+    console.log(`  ${checkoutLauncherCommand(runtimeRoots.installRoot, options.wrapperKind, platform, "uninstall --purge-config --force")}`);
   }
 
   console.log("The repository checkout itself was not deleted.");
-  return { removed, skipped, purgeDeclined: purgeConfig && !purged };
+  return {
+    removed,
+    skipped,
+    purgeDeclined: purgeConfig && !purged && !gitError,
+    purgeBlocked: gitError,
+  };
 }
 
 export function shouldRunFromSource(args) {
@@ -1392,7 +1471,7 @@ export function main(argv = process.argv.slice(2)) {
       purgeConfig,
       force: userArgs.includes("--force"),
     });
-    if (result.purgeDeclined) {
+    if (result.purgeDeclined || result.purgeBlocked) {
       process.exitCode = 1;
     }
     return;

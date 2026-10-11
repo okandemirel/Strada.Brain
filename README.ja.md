@@ -93,7 +93,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` はシェルプロファイルも自動更新するため、次に開くターミナルでは PATH を手で編集せずに `strada` を使えます。
 Windows では checkout から `.\strada.ps1` を使います。`install-command` は `strada.cmd` と `strada.ps1` を `%LOCALAPPDATA%\Strada\bin` に配置し、ユーザー PATH を更新します。
 
-あとで user-local コマンドを削除したい場合は、`strada uninstall`（または checkout から `./strada uninstall` / `.\strada.ps1 uninstall`）を実行してください。`--purge-config` を付けると、`.env`、`.strada-memory`、ログ、`HEARTBEAT.md` などの repo-local runtime state も一緒に削除します。リポジトリの checkout 自体は自動では削除されません。
+あとで user-local コマンドを削除したい場合は、`strada uninstall`（または checkout から `./strada uninstall` / `.\strada.ps1 uninstall`）を実行してください。`--purge-config` を付けると、アクティブな runtime root 配下の `.env`、`.strada-memory`、ログなどの runtime state も削除し、source checkout では `node_modules/`、`dist/`、`web-portal/node_modules`、`web-portal/dist` などの生成物も削除します。削除する前にすべてのパスを一覧表示します。source checkout では先に確認を求め（`--force` で確認を省略）、git が追跡しているもの（checkout の `HEARTBEAT.md` など）、git 自身のメタデータ、`.env` が Strada の既定の場所以外に指しているフォルダは決して削除しません。git が何を追跡しているか答えられない場合（git が無い、Xcode のライセンスに未同意、git がリポジトリを信頼していない）は何も削除せず、git が示した理由を表示して 0 以外の終了コードで終わります。何も削除しなかった場合は、checkout 自身のランチャーを使った再実行コマンドを表示します。その時点で bare の `strada` コマンドはすでに削除されているためです。リポジトリの checkout 自体は自動では削除されません。
 
 `strada-brain` はまだ public npm registry に公開されていないため、`npm install -g strada-brain` は現在 `E404` になります。npm 公開が行われるまでは、上の source checkout 手順を使ってください。
 
@@ -212,7 +212,7 @@ strada.cmd               # Windows Command Prompt 用 companion launcher
 ./strada install-command  # bare `strada` コマンドをユーザー用にインストール
 ./strada uninstall        # インストール済み bare コマンドと PATH/profile 変更を削除
 .\strada.ps1 uninstall   # Windows checkout から同じ処理を実行
-strada uninstall --purge-config # Strada が作成した repo-local runtime state も削除
+strada uninstall --purge-config # Strada の runtime state と checkout の生成物も削除（checkout では先に確認、--force で省略、git が追跡するファイルは常に残る）
 strada                    # install-command 後のスマートランチャー
 strada --daemon           # 保存済みの既定チャネルをデーモンモードで起動
 strada --web              # Web チャネルを開く、または新しいマシンで Web 優先セットアップを続行

@@ -93,7 +93,7 @@ Wenn Sie `./strada install-command` ueberspringen, verwenden Sie den Checkout we
 `./strada install-command` aktualisiert auch Ihr Shell-Profil automatisch, damit neue Terminals `strada` ohne manuelle PATH-Aenderung finden.
 Unter Windows verwenden Sie `.\strada.ps1` aus dem Checkout. `install-command` schreibt `strada.cmd` und `strada.ps1` nach `%LOCALAPPDATA%\Strada\bin` und aktualisiert den Benutzer-PATH.
 
-Wenn Sie den benutzerlokalen Befehl spaeter entfernen moechten, fuehren Sie `strada uninstall` aus (oder `./strada uninstall` / `.\strada.ps1 uninstall` direkt aus dem Checkout). Mit `--purge-config` entfernt Strada zusaetzlich repo-lokale Runtime-Dateien wie `.env`, `.strada-memory`, Logs und `HEARTBEAT.md`. Das Repository-Checkout selbst wird dabei niemals automatisch geloescht.
+Wenn Sie den benutzerlokalen Befehl spaeter entfernen moechten, fuehren Sie `strada uninstall` aus (oder `./strada uninstall` / `.\strada.ps1 uninstall` direkt aus dem Checkout). Mit `--purge-config` entfernt Strada zusaetzlich Runtime-Dateien unter dem aktiven Runtime-Root wie `.env`, `.strada-memory` und Logs, in einem Source-Checkout ausserdem erzeugte Artefakte wie `node_modules/`, `dist/`, `web-portal/node_modules` und `web-portal/dist`. Jeder Pfad wird vor dem Loeschen aufgelistet. In einem Source-Checkout fragt Strada vorher nach (`--force` ueberspringt die Frage) und loescht nie etwas, das git verfolgt (etwa die `HEARTBEAT.md` des Checkouts), git-eigene Metadaten oder einen Ordner, auf den Ihre `.env` ausserhalb von Stradas Standardort zeigt. Kann git nicht sagen, was es verfolgt (git fehlt, die Xcode-Lizenz ist nicht akzeptiert, git vertraut dem Repository nicht), wird nichts geloescht, die Begruendung von git ausgegeben und der Befehl endet mit einem Fehlercode. Wurde nichts geloescht, nennt Strada den Befehl zum erneuten Ausfuehren ueber den Launcher des Checkouts, denn der bare `strada`-Befehl ist dann bereits entfernt. Das Repository-Checkout selbst wird dabei niemals automatisch geloescht.
 
 `strada-brain` ist derzeit nicht in der öffentlichen npm-Registry veröffentlicht. Deshalb liefert `npm install -g strada-brain` aktuell `E404`. Bis es eine Registry-Veröffentlichung gibt, nutze bitte den obigen Source-Checkout-Weg.
 
@@ -212,7 +212,7 @@ strada.cmd               # Windows-Companion fuer die Eingabeaufforderung
 ./strada install-command  # Benutzerlokalen bare `strada`-Befehl installieren
 ./strada uninstall        # Installierten bare-Befehl und verwaltete PATH/Profile-Aenderungen entfernen
 .\strada.ps1 uninstall   # Dasselbe aus dem Windows-Checkout
-strada uninstall --purge-config # Auch repo-lokale Runtime-Dateien von Strada entfernen
+strada uninstall --purge-config # Auch Strada-Runtime-Dateien und erzeugte Checkout-Artefakte entfernen (fragt im Checkout vorher; --force ueberspringt die Frage; von git verfolgte Dateien bleiben immer)
 strada                    # Smarter Launcher nach install-command
 strada --daemon           # Gespeicherten Standardkanal im Daemon-Modus starten
 strada --web              # Web-Kanal oeffnen oder auf einer frischen Maschine web-gefuertetes Setup fortsetzen

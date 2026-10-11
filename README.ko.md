@@ -93,7 +93,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` 는 셸 프로필도 자동으로 갱신하므로 다음에 여는 터미널에서는 PATH 를 수동으로 고치지 않아도 `strada` 를 바로 찾을 수 있습니다.
 Windows 에서는 checkout 안에서 `.\strada.ps1` 를 사용합니다. `install-command` 는 `strada.cmd` 와 `strada.ps1` 를 `%LOCALAPPDATA%\Strada\bin` 에 설치하고 사용자 PATH 를 갱신합니다.
 
-나중에 user-local 명령을 제거하려면 `strada uninstall`(또는 checkout 안에서 `./strada uninstall` / `.\strada.ps1 uninstall`)을 실행하세요. `--purge-config` 를 붙이면 `.env`, `.strada-memory`, 로그, `HEARTBEAT.md` 같은 repo-local runtime state 도 함께 지웁니다. 저장소 checkout 자체는 자동으로 삭제되지 않습니다.
+나중에 user-local 명령을 제거하려면 `strada uninstall`(또는 checkout 안에서 `./strada uninstall` / `.\strada.ps1 uninstall`)을 실행하세요. `--purge-config` 를 붙이면 활성 runtime root 아래의 `.env`, `.strada-memory`, 로그 같은 runtime state 도 지우고, source checkout 에서는 `node_modules/`, `dist/`, `web-portal/node_modules`, `web-portal/dist` 같은 생성물도 지웁니다. 지우기 전에 모든 경로를 하나씩 보여 줍니다. source checkout 에서는 먼저 묻고(`--force` 로 질문을 건너뜀), git 이 추적하는 것(checkout 의 `HEARTBEAT.md` 등), git 자체의 메타데이터, `.env` 가 Strada 기본 위치가 아닌 곳으로 가리키는 폴더는 절대 지우지 않습니다. git 이 무엇을 추적하는지 답하지 못하면(git 미설치, Xcode 라이선스 미동의, git 이 저장소를 신뢰하지 않음) 아무것도 지우지 않고 git 이 알려 준 이유를 출력한 뒤 0 이 아닌 종료 코드로 끝납니다. 아무것도 지우지 않았을 때는 checkout 자체의 launcher 로 다시 실행하는 명령을 보여 줍니다. 그 시점에는 bare `strada` 명령이 이미 제거되어 있기 때문입니다. 저장소 checkout 자체는 자동으로 삭제되지 않습니다.
 
 `strada-brain` 패키지는 아직 public npm registry 에 배포되지 않았습니다. 그래서 `npm install -g strada-brain` 은 현재 `E404` 를 반환합니다. npm 배포가 생기기 전까지는 위의 source checkout 흐름을 사용해야 합니다.
 
@@ -212,7 +212,7 @@ strada.cmd               # Windows 명령 프롬프트용 companion launcher
 ./strada install-command  # bare `strada` 명령을 사용자용으로 설치
 ./strada uninstall        # 설치된 bare 명령과 관리되는 PATH/profile 변경 제거
 .\strada.ps1 uninstall   # Windows checkout 에서 같은 작업 수행
-strada uninstall --purge-config # Strada 가 만든 repo-local runtime state 도 제거
+strada uninstall --purge-config # Strada runtime state 와 checkout 생성물도 제거 (checkout 에서는 먼저 묻고, --force 로 건너뜀, git 이 추적하는 파일은 항상 남김)
 strada                    # install-command 이후의 스마트 런처
 strada --daemon           # 저장된 기본 채널을 daemon 모드로 시작
 strada --web              # 웹 채널을 열거나 새 머신에서 웹 우선 설정을 이어감

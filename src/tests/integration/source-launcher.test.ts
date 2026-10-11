@@ -10,6 +10,17 @@ async function loadSourceLauncherModule() {
   return import(pathToFileURL(path.join(process.cwd(), "scripts", "source-launcher.mjs")).href);
 }
 
+/** Whether the volume holding the temp dir opens a file by a differently-cased name. */
+function tempVolumeIsCaseInsensitive() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "strada-case-probe-"));
+  try {
+    writeFileSync(path.join(dir, "Probe"), "", "utf8");
+    return existsSync(path.join(dir, "PROBE"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("source launcher isServedPortalStale", () => {
   const tempDirs: string[] = [];
 
@@ -383,7 +394,10 @@ describe("source launcher install-command", () => {
     };
 
     const { installCommand, uninstallCommand } = await loadSourceLauncherModule();
+    // POSIX bindings on every host: on the Windows runner the host platform
+    // installed into its real %LOCALAPPDATA% and rewrote its real user PATH.
     installCommand({
+      platform: "linux",
       env,
       homeDir: tempHome,
       launcherPath: path.join(process.cwd(), "strada"),
@@ -417,6 +431,7 @@ describe("source launcher install-command", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       uninstallCommand({
+        platform: "linux",
         env,
         homeDir: tempHome,
         rootDir: tempRepo,
@@ -463,7 +478,10 @@ describe("source launcher install-command", () => {
     };
 
     const { installCommand, uninstallCommand } = await loadSourceLauncherModule();
+    // POSIX bindings on every host: on the Windows runner the host platform
+    // installed into its real %LOCALAPPDATA% and rewrote its real user PATH.
     installCommand({
+      platform: "linux",
       env,
       homeDir: tempHome,
       launcherPath: path.join(process.cwd(), "strada"),
@@ -476,6 +494,7 @@ describe("source launcher install-command", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       uninstallCommand({
+        platform: "linux",
         env,
         homeDir: tempHome,
         rootDir: tempInstallRoot,
@@ -511,7 +530,10 @@ describe("source launcher install-command", () => {
     };
 
     const { installCommand, uninstallCommand } = await loadSourceLauncherModule();
+    // POSIX bindings on every host: on the Windows runner the host platform
+    // installed into its real %LOCALAPPDATA% and rewrote its real user PATH.
     installCommand({
+      platform: "linux",
       env,
       homeDir: tempHome,
       launcherPath: path.join(process.cwd(), "strada"),
@@ -524,6 +546,7 @@ describe("source launcher install-command", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       uninstallCommand({
+        platform: "linux",
         env,
         homeDir: tempHome,
         rootDir: tempInstallRoot,
@@ -670,28 +693,52 @@ describe("uninstall --purge-config in a source checkout", () => {
     expect(existsSync(path.join(repo, "notes", "todo.txt"))).toBe(true);
   }
 
-  it("names what it would delete, asks, and deletes nothing on a no", async () => {
+  /**
+   * The platform is pinned and the Windows PATH and deferred-delete hooks are
+   * stubbed: unpinned, the Windows CI runner removed bindings from its real
+   * %LOCALAPPDATA% and its real user PATH.
+   */
+  async function uninstallFrom(home: string, repo: string, extra: Record<string, unknown> = {}) {
     const { uninstallCommand } = await loadSourceLauncherModule();
-    const { home, repo } = makeCheckout();
-    let namedBeforeAsking = "";
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const confirm = vi.fn(() => {
-      namedBeforeAsking = consoleSpy.mock.calls.map((call) => call.join(" ")).join("\n");
-      return false;
-    });
-    let result: { removed: string[] };
     try {
-      result = uninstallCommand({
-        env: { ...process.env, HOME: home, XDG_BIN_HOME: path.join(home, ".local", "bin"), SHELL: "/bin/zsh" },
+      const result = uninstallCommand({
+        platform: "linux",
+        env: {
+          ...process.env,
+          HOME: home,
+          ZDOTDIR: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          XDG_BIN_HOME: path.join(home, ".local", "bin"),
+          LOCALAPPDATA: path.join(home, "AppData", "Local"),
+          SHELL: "/bin/zsh",
+        },
         homeDir: home,
         rootDir: repo,
         sourceCheckout: true,
         purgeConfig: true,
-        confirm,
+        windowsPathRemoveSync: vi.fn().mockReturnValue({ updated: false, path: "" }),
+        windowsDeferredDelete: vi.fn().mockReturnValue(true),
+        ...extra,
       });
+      return { result, output: printedSoFar() };
     } finally {
       consoleSpy.mockRestore();
     }
+  }
+
+  function printedSoFar() {
+    return vi.mocked(console.log).mock.calls.map((call) => call.join(" ")).join("\n");
+  }
+
+  it("names what it would delete, asks, and deletes nothing on a no", async () => {
+    const { home, repo } = makeCheckout();
+    let namedBeforeAsking = "";
+    const confirm = vi.fn(() => {
+      namedBeforeAsking = printedSoFar();
+      return false;
+    });
+    const { result } = await uninstallFrom(home, repo, { confirm });
 
     expect(confirm).toHaveBeenCalledTimes(1);
     for (const doomed of [".env", "strada-brain-sync.log", "dist"]) {
@@ -702,27 +749,13 @@ describe("uninstall --purge-config in a source checkout", () => {
     expect(readFileSync(path.join(repo, ".env"), "utf8")).toContain("MEMORY_DB_PATH=src");
     expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(true);
     expect(existsSync(path.join(repo, "dist"))).toBe(true);
-    expect(result!.removed.filter((entry) => entry.startsWith(repo))).toEqual([]);
+    expect((result.removed as string[]).filter((entry) => entry.startsWith(repo))).toEqual([]);
   });
 
   it("with --force deletes Strada's state and the .env but never a tracked path or a folder the .env names", async () => {
-    const { uninstallCommand } = await loadSourceLauncherModule();
     const { home, repo } = makeCheckout();
     const confirm = vi.fn(() => true);
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      uninstallCommand({
-        env: { ...process.env, HOME: home, XDG_BIN_HOME: path.join(home, ".local", "bin"), SHELL: "/bin/zsh" },
-        homeDir: home,
-        rootDir: repo,
-        sourceCheckout: true,
-        purgeConfig: true,
-        force: true,
-        confirm,
-      });
-    } finally {
-      consoleSpy.mockRestore();
-    }
+    await uninstallFrom(home, repo, { force: true, confirm });
 
     expect(confirm).not.toHaveBeenCalled();
     expectDeveloperFilesKept(repo);
@@ -730,6 +763,126 @@ describe("uninstall --purge-config in a source checkout", () => {
     expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(false);
     expect(existsSync(path.join(repo, "dist"))).toBe(false);
   });
+
+  // The bare `strada` the developer typed is one of the bindings this run has
+  // just removed, so "rerun with --force" sent them to a command that is gone.
+  for (const [platform, wrapperKind, launcher] of [
+    ["linux", "posix", (repo: string) => `'${path.join(repo, "strada")}'`],
+    ["win32", "powershell", (repo: string) => `& '${path.join(repo, "strada.ps1")}'`],
+    ["win32", "cmd", (repo: string) => `"${path.join(repo, "strada.cmd")}"`],
+  ] as const) {
+    it(`after a no it names the checkout's own ${wrapperKind} launcher to rerun with --force`, async () => {
+      const { home, repo } = makeCheckout();
+      const { output, result } = await uninstallFrom(home, repo, { platform, wrapperKind, confirm: () => false });
+
+      expect(output).toContain(`${launcher(repo)} uninstall --purge-config --force`);
+      expect(result.purgeDeclined).toBe(true);
+      expect(existsSync(path.join(repo, ".env"))).toBe(true);
+    });
+  }
+
+  // A git that cannot answer (missing, the Xcode-licence shim, dubious
+  // ownership, a .git that points nowhere) kept every path, which is right,
+  // and then reported that the runtime files "were purged", which is not.
+  it("says nothing was purged, and git's reason, when git cannot say what it tracks", async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "strada-purge-home-"));
+    const repo = mkdtempSync(path.join(os.tmpdir(), "strada-purge-nogit-"));
+    tempDirs.push(home, repo);
+    writeFileSync(path.join(repo, ".git"), `gitdir: ${path.join(repo, "moved-away")}\n`, "utf8");
+    writeFileSync(path.join(repo, ".env"), "KIMI_API_KEY=k\n", "utf8");
+    writeFileSync(path.join(repo, "strada-brain-sync.log"), "sync\n", "utf8");
+    mkdirSync(path.join(repo, "dist"), { recursive: true });
+
+    const { output, result } = await uninstallFrom(home, repo, { force: true });
+
+    expect(output).not.toContain("were purged");
+    expect(output).toContain(`Nothing under ${repo} was purged`);
+    expect(output).toContain("not a git repository");
+    expect(result.purgeBlocked).toBeTruthy();
+    expect(existsSync(path.join(repo, ".env"))).toBe(true);
+    expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(true);
+    expect(existsSync(path.join(repo, "dist"))).toBe(true);
+  });
+
+  // macOS and Windows volumes are case-insensitive by default: `.GIT/config`
+  // opens git's config and `heartbeat.md` the tracked HEARTBEAT.md, while the
+  // .git check compared strings and git matches pathspecs case-sensitively.
+  it.runIf(tempVolumeIsCaseInsensitive())("keeps tracked files and git metadata that a differently-cased .env value names", async () => {
+    const { home, repo } = makeCheckout();
+    writeFileSync(path.join(repo, ".env"), [
+      "LOG_FILE=.GIT/config",
+      "MEMORY_DB_PATH=heartbeat.md",
+      "WHATSAPP_SESSION_PATH=SRC/index.ts",
+    ].join("\n"), "utf8");
+
+    await uninstallFrom(home, repo, { force: true });
+
+    expectDeveloperFilesKept(repo);
+    expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(false);
+  });
+
+  // The app reads STRADA_DAEMON_HEARTBEAT_FILE (src/config/config.ts) and the
+  // purge read DAEMON_HEARTBEAT_FILE, so the app's heartbeat file stayed behind.
+  it("finds the heartbeat file under the app's STRADA_DAEMON_HEARTBEAT_FILE, and under the old name too", async () => {
+    for (const key of ["STRADA_DAEMON_HEARTBEAT_FILE", "DAEMON_HEARTBEAT_FILE"]) {
+      const { home, repo } = makeCheckout();
+      writeFileSync(path.join(repo, ".env"), `${key}=triggers.md\n`, "utf8");
+      writeFileSync(path.join(repo, "triggers.md"), "# mine\n", "utf8");
+
+      await uninstallFrom(home, repo, { force: true });
+
+      expect(existsSync(path.join(repo, "triggers.md")), key).toBe(false);
+      expectDeveloperFilesKept(repo);
+    }
+  });
+});
+
+/**
+ * POSIX only: on Windows the real launcher would rewrite the runner's user
+ * PATH, and a child process cannot be handed a stub for that.
+ */
+describe.skipIf(process.platform === "win32")("uninstall --purge-config through the launcher", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("exits non-zero and keeps git's error off the terminal when git cannot answer", () => {
+    const parent = realpathSync(mkdtempSync(path.join(os.tmpdir(), "strada-purge-launcher-")));
+    tempDirs.push(parent);
+    const home = path.join(parent, "home");
+    const root = path.join(parent, "checkout");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    copyFileSync(path.join(process.cwd(), "scripts", "source-launcher.mjs"), path.join(root, "scripts", "source-launcher.mjs"));
+    // STRADA_SOURCE_CHECKOUT=true forced over a tree with no .git.
+    writeFileSync(path.join(root, ".env"), "KIMI_API_KEY=k\n", "utf8");
+    writeFileSync(path.join(root, "strada-brain-sync.log"), "sync\n", "utf8");
+
+    const run = spawnSync(process.execPath, [path.join(root, "scripts", "source-launcher.mjs"), "uninstall", "--purge-config", "--force"], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: home,
+        ZDOTDIR: home,
+        XDG_CONFIG_HOME: path.join(home, ".config"),
+        XDG_BIN_HOME: path.join(home, ".local", "bin"),
+        SHELL: "/bin/zsh",
+        STRADA_SOURCE_CHECKOUT: "true",
+        // No repository above the fixture may answer for it.
+        GIT_CEILING_DIRECTORIES: parent,
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+
+    expect(run.stdout).toContain(`Nothing under ${root} was purged`);
+    expect(run.stdout).toContain("not a git repository");
+    expect(run.stderr).not.toContain("fatal:");
+    expect(run.status).toBe(1);
+    expect(existsSync(path.join(root, ".env"))).toBe(true);
+    expect(existsSync(path.join(root, "strada-brain-sync.log"))).toBe(true);
+  }, 60_000);
 });
 
 /**

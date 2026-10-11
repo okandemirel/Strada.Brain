@@ -93,7 +93,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command` 还会自动更新你的 shell profile，这样以后新开的终端无需手动编辑 PATH 就能直接使用 `strada`。
 在 Windows 上，请在 checkout 中使用 `.\strada.ps1`。`install-command` 会把 `strada.cmd` 和 `strada.ps1` 写入 `%LOCALAPPDATA%\Strada\bin`，并更新用户 PATH。
 
-如果之后你想移除 user-local 命令，请运行 `strada uninstall`（或者在 checkout 里运行 `./strada uninstall` / `.\strada.ps1 uninstall`）。如果再加上 `--purge-config`，Strada 还会删除 `.env`、`.strada-memory`、日志以及 `HEARTBEAT.md` 等 repo-local runtime state。仓库 checkout 本身永远不会被自动删除。
+如果之后你想移除 user-local 命令，请运行 `strada uninstall`（或者在 checkout 里运行 `./strada uninstall` / `.\strada.ps1 uninstall`）。如果再加上 `--purge-config`，Strada 还会删除当前 runtime root 下的 `.env`、`.strada-memory`、日志等 runtime state；在 source checkout 中还会删除 `node_modules/`、`dist/`、`web-portal/node_modules`、`web-portal/dist` 等生成产物。删除前会逐条列出每个路径。在 source checkout 中会先询问（加 `--force` 跳过询问），并且绝不删除 git 跟踪的任何内容（例如 checkout 里的 `HEARTBEAT.md`）、git 自身的元数据，以及 `.env` 指向的、不在 Strada 默认位置的文件夹。如果 git 无法说明它跟踪了哪些文件（未安装 git、未同意 Xcode 许可、git 不信任该仓库），则什么都不删除，打印 git 给出的原因，并以非零退出码结束。只要没有删除任何内容，它都会打印通过 checkout 自带启动器重新运行的命令，因为此时 bare `strada` 命令已经被移除。仓库 checkout 本身永远不会被自动删除。
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
@@ -212,7 +212,7 @@ strada.cmd               # Windows Command Prompt companion launcher
 ./strada install-command  # 为用户安装 bare `strada` 命令
 ./strada uninstall        # 移除已安装的 bare 命令以及托管的 PATH/profile 改动
 .\strada.ps1 uninstall   # 从 Windows checkout 执行同样的卸载
-strada uninstall --purge-config # 同时移除 Strada 创建的 repo-local runtime state
+strada uninstall --purge-config # 同时移除 Strada 的 runtime state 和 checkout 生成产物（在 checkout 中先询问，--force 跳过，git 跟踪的文件始终保留）
 strada                    # install-command 之后的智能启动器
 strada --daemon           # 以 daemon 模式启动已保存的默认通道
 strada --web              # 打开 Web 通道，或在新机器上继续 Web 优先安装

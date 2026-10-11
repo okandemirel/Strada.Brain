@@ -93,7 +93,7 @@ Si omites `./strada install-command`, sigue usando `./Strada.Brain/strada ...` d
 `./strada install-command` tambien actualiza tu perfil de shell automaticamente para que los proximos terminales detecten `strada` sin editar PATH a mano.
 En Windows usa `.\strada.ps1` desde el checkout. `install-command` escribe `strada.cmd` y `strada.ps1` en `%LOCALAPPDATA%\Strada\bin` y actualiza el PATH del usuario.
 
-Si mas adelante quieres quitar el comando user-local, ejecuta `strada uninstall` (o `./strada uninstall` / `.\strada.ps1 uninstall` desde el checkout). Si anades `--purge-config`, Strada tambien elimina runtime state local al repo como `.env`, `.strada-memory`, logs y `HEARTBEAT.md`. El checkout del repositorio nunca se borra automaticamente.
+Si mas adelante quieres quitar el comando user-local, ejecuta `strada uninstall` (o `./strada uninstall` / `.\strada.ps1 uninstall` desde el checkout). Si anades `--purge-config`, Strada tambien elimina el runtime state bajo el runtime root activo, como `.env`, `.strada-memory` y logs, y en un source checkout los artefactos generados como `node_modules/`, `dist/`, `web-portal/node_modules` y `web-portal/dist`. Lista cada ruta antes de borrarla. En un source checkout pregunta primero (`--force` omite la pregunta) y nunca borra nada que git rastree (como el `HEARTBEAT.md` del checkout), los metadatos de git ni una carpeta a la que tu `.env` apunte fuera de la ubicacion por defecto de Strada. Si git no puede decir que rastrea (git no instalado, licencia de Xcode sin aceptar, un repositorio en el que git no confia), no se borra nada, se muestra el motivo que da git y el comando termina con un codigo de error. Cuando no se borro nada, imprime el comando para volver a ejecutarlo con el launcher del propio checkout, porque para entonces el comando `strada` ya no existe. El checkout del repositorio nunca se borra automaticamente.
 
 `strada-brain` todavia no esta publicado en el registro publico de npm, por lo que `npm install -g strada-brain` devolvera `E404`. Hasta que exista una publicacion en npm, usa el flujo de checkout de codigo fuente mostrado arriba.
 
@@ -213,7 +213,7 @@ node strada.js            # Punto de entrada universal Node.js (funciona en cual
 ./strada install-command  # Instala un comando bare `strada` para el usuario
 ./strada uninstall        # Elimina el bare command instalado y los cambios gestionados en PATH/profile
 .\strada.ps1 uninstall   # Lo mismo desde el checkout en Windows
-strada uninstall --purge-config # Tambien borra runtime state local al repo creado por Strada
+strada uninstall --purge-config # Tambien borra el runtime state de Strada y los artefactos generados del checkout (pregunta primero en un checkout; --force omite la pregunta; los archivos rastreados por git siempre se conservan)
 strada                    # Launcher inteligente despues de install-command
 strada --daemon           # Inicia el canal por defecto en modo daemon
 strada --web              # Abre el canal web o continua la configuracion web en una maquina nueva
