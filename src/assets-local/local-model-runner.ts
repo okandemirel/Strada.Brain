@@ -834,6 +834,20 @@ export class LocalModelRunner {
     onProgress?: (line: string) => void,
   ): Promise<{ ok: boolean; detail: string }> {
     const repoDir = join(ROOT_DIR(), "src", spec.id);
+    if (existsSync(repoDir) && spec.repoCommit !== undefined) {
+      // An existing tree is reused only as a finished checkout of the pin. An
+      // interrupted fetch (Ctrl-C kills node, not the detached git) left .git
+      // alone, and every later install trusted it and died on ENOENT for its
+      // requirements; a clone from before the pin imports whatever HEAD was then.
+      const at = await this.spawn("git", ["-C", repoDir, "rev-parse", "HEAD"], { timeoutMs: 60_000, env });
+      // -1 is git that never answered: nothing measured, so nothing is deleted.
+      if (at.code === -1) return { ok: false, detail: `cannot check ${repoDir} against the pinned commit: ${at.stderr.slice(0, 300)}` };
+      const head = at.code === 0 ? at.stdout.trim() : "";
+      if (head !== spec.repoCommit) {
+        onProgress?.(`discarding ${repoDir}: at ${head.slice(0, 12) || "no commit"}, not the pinned ${spec.repoCommit.slice(0, 12)}`);
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    }
     if (!existsSync(repoDir) && spec.repoCommit !== undefined) {
       // THE PINNED COMMIT, not whatever HEAD is today (CMP-13): pip installs
       // this tree's requirements and every lift imports its code.

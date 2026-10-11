@@ -993,6 +993,63 @@ describe("isModelInstalled measures the weights, not just the marker (item 2.15)
     expect(existsSync(join(dir, "src", "triposr"))).toBe(false);
   });
 
+  it("an existing source tree that is not a finished checkout of the pin is fetched again, not trusted (CMP-13)", async () => {
+    const spec = getModelSpec("triposr")!;
+    const repoDir = join(dir, "src", "triposr");
+    // What an interrupted pinned fetch leaves: `git init` ran, the fetch was cut
+    // off (Ctrl-C kills node, not the detached git) and nothing was checked out.
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+    writeFileSync(join(repoDir, ".git", "HEAD"), "ref: refs/heads/master\n");
+    let head: string | undefined;
+    const git: string[][] = [];
+    const spawn: SpawnImpl = async (cmd, args) => {
+      if (cmd !== "git") return { code: 0, stdout: "ok", stderr: "" };
+      git.push(args);
+      if (args.includes("rev-parse")) {
+        return head === undefined
+          ? { code: 128, stdout: "", stderr: "fatal: ambiguous argument 'HEAD': unknown revision" }
+          : { code: 0, stdout: `${head}\n`, stderr: "" };
+      }
+      if (args[0] === "init") {
+        mkdirSync(args[2]!, { recursive: true });
+        head = undefined;
+      }
+      if (args.includes("checkout")) {
+        mkdirSync(join(repoDir, "tsr"), { recursive: true });
+        writeFileSync(join(repoDir, "requirements.txt"), "numpy\n");
+        head = spec.repoCommit!;
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    const runner = new LocalModelRunner(spawn);
+
+    const recovered = await runner.install(spec);
+    expect(recovered.ok, recovered.detail).toBe(true);
+    expect(git.some((a) => a.includes("fetch"))).toBe(true);
+
+    // A tree at another commit (a clone made before the pin) is replaced too…
+    git.length = 0;
+    head = "f".repeat(40);
+    const repinned = await runner.install(spec);
+    expect(repinned.ok, repinned.detail).toBe(true);
+    expect(git.some((a) => a.includes("fetch"))).toBe(true);
+    expect(head).toBe(spec.repoCommit);
+
+    // …while a finished checkout of the pin is reused as it is (guard).
+    git.length = 0;
+    const reused = await runner.install(spec);
+    expect(reused.ok, reused.detail).toBe(true);
+    expect(git.some((a) => a.includes("fetch") || a[0] === "init")).toBe(false);
+
+    // A git that never answered measured nothing, so it deletes nothing.
+    const silent = await new LocalModelRunner(async (cmd) =>
+      cmd === "git" ? { code: -1, stdout: "", stderr: "spawn git ENOENT" } : { code: 0, stdout: "ok", stderr: "" },
+    ).install(spec);
+    expect(silent.ok).toBe(false);
+    expect(silent.detail).toContain("spawn git ENOENT");
+    expect(existsSync(join(repoDir, "requirements.txt"))).toBe(true);
+  });
+
   it("a failed weights download is an honest failure, not a marker", async () => {
     // Everything up to the download works; the download itself does not.
     const spawn: SpawnImpl = async (_cmd, args) =>
