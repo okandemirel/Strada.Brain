@@ -12,6 +12,7 @@ const reg = {
   })),
   list: vi.fn(() => [{ id: 'unity:abc' }]),
   ids: vi.fn(() => ['unity:abc']),
+  trackInit: vi.fn(),
 } as any;
 // The tools resolve rather than look up exactly, so the stub answers both.
 (reg as { resolve: unknown }).resolve = reg.get;
@@ -29,17 +30,20 @@ describe('vault tools', () => {
       startWatch: vi.fn().mockResolvedValue(undefined),
     };
     const createAndRegister = vi.fn().mockResolvedValue(vault);
+    const trackInit = vi.fn();
     const t = new VaultInitTool({
       get: vi.fn(() => undefined),
       resolve: vi.fn(() => undefined),
       ids: vi.fn(() => []),
       createAndRegister,
+      trackInit,
     } as any);
 
     const r = await t.execute({ rootPath: '/tmp/project' });
 
     expect(createAndRegister).toHaveBeenCalledWith('/tmp/project');
     expect(vault.init).toHaveBeenCalled();
+    expect(trackInit).toHaveBeenCalledWith(vault, expect.any(Promise));
     expect(vault.startWatch).toHaveBeenCalled();
     expect(r.content).toMatch(/unity:new initialized/i);
   });
