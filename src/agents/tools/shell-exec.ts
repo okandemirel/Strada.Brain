@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeToolPathInput, validatePath } from "../../security/path-guard.js";
 import { lexShell, type ShellLex, type ShellWord } from "../../security/shell-lexer.js";
 import { runProcess } from "../../utils/process-runner.js";
+import { shellDotnet } from "./dotnet-tools.js";
 import { buildShellEnv } from "./shell-env-policy.js";
 import { sensitiveCommandPaths } from "./shell-sensitive-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -289,6 +290,13 @@ export class ShellExecTool implements ITool {
         isError: true,
       };
     }
+    // `dotnet test --no-build` runs what bin/ holds, which a failed build left
+    // older than the code on disk; the dotnet tools keep that record and this
+    // line reads and adds to it (dotnet-tools.ts).
+    const dotnet = await shellDotnet(command, cwd, context.projectPath);
+    if (dotnet?.refusal) {
+      return { content: dotnet.refusal, isError: false, metadata: { verdict: "NOT MEASURED" } };
+    }
     const startedAt = Date.now();
     try {
       const shell = resolvePlatformShell();
@@ -299,12 +307,14 @@ export class ShellExecTool implements ITool {
         timeoutMs,
         env: childEnv,
       });
+      const stale = await dotnet?.settle(result);
+      const body = stale ? `${stale}\n\n${formatResult(command, result)}` : formatResult(command, result);
       return {
         content: redirected
           ? `Note: this command named the project's source path, which does not hold your work. ` +
             `It was redirected to your workspace at ${context.projectPath} — use that path directly.\n\n` +
-            formatResult(command, result)
-          : formatResult(command, result),
+            body
+          : body,
         // A non-zero exit or a timeout IS an error. The flag was missing, so
         // `exit 7` reached the orchestrator as isError undefined and every
         // consumer that reads only the flag — the learning observation, the
@@ -317,11 +327,14 @@ export class ShellExecTool implements ITool {
         // and tripped the breaker after three (Codex 2026-09-17 on 43c43f1e).
         // The caller can name its own accepted codes; the common predicates
         // are known.
+        // A test of a stale bin/ is NOT MEASURED (the notice above), but the
+        // exit stays an error: under `&&` it may be the line's own failed build.
         isError: result.timedOut || !okExitCodes.has(result.exitCode),
         metadata: {
           exitCode: result.exitCode,
           timedOut: result.timedOut,
           durationMs: result.durationMs,
+          ...(stale ? { verdict: "NOT MEASURED" } : {}),
         },
       };
     } catch (error) {

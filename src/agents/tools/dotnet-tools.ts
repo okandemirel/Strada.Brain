@@ -1,8 +1,9 @@
 import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { runProcess } from "../../utils/process-runner.js";
 import { validatePath, normalizeToolPathInput } from "../../security/path-guard.js";
+import { lexShell, type ShellLex } from "../../security/shell-lexer.js";
 import { buildShellEnv } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
@@ -64,27 +65,33 @@ const failedBuilds = new Map<string, Map<string, string>>();
 const MAX_TRACKED_WORKSPACES = 256;
 
 /**
- * A compile (CS1002), restore (NU1101) or MSBuild (MSB3027) error line. A
- * `dotnet test` whose tests failed prints none, only "Build FAILED.", so this
- * is what tells its failed build from its failed tests (measured, 10.0.400).
+ * An MSBuild error line: compile (CS1002), analyzer (xUnit1001), restore
+ * (NU1101), MSBuild (MSB3027), or one with no code (`error :`, an <Error>
+ * task without Code). A `dotnet test` whose tests failed prints none, only
+ * "Build FAILED.", so this tells its failed build from its failed tests
+ * (measured, 10.0.400). The code was `[A-Z]{2,}\d+`, and xunit's own
+ * `error xUnit1001:` failed a compile that was never recorded.
  */
-const MSBUILD_ERROR_LINE = /^.*?:\s+error\s+[A-Z]{2,}\d+:.*$/m;
+const MSBUILD_ERROR_LINE = /^.*?:\s+error\s+(?:[A-Za-z]+\d+)?:.*$/m;
 
 /** The real path, so a lexical and a resolved spelling of one root agree. */
 async function workspaceKey(projectPath: string): Promise<string> {
   return realpath(projectPath).catch(() => resolve(projectPath));
 }
 
+type BuildTarget = { fullPath?: string; label: string };
+
 function recordBuild(
   workspace: string,
-  by: "dotnet_build" | "dotnet_test",
-  target: { fullPath?: string; label: string },
+  by: string,
+  target: BuildTarget,
   config: string,
   result: { exitCode: number; timedOut: boolean; output: string },
+  failed: boolean,
 ): void {
   const key = `${target.fullPath ?? ""}\0${config}`;
   let failures = failedBuilds.get(workspace);
-  if (result.exitCode === 0 && !result.timedOut) {
+  if (!failed) {
     failures?.delete(key);
     if (failures?.size === 0) failedBuilds.delete(workspace);
     return;
@@ -95,11 +102,150 @@ function recordBuild(
     if (failedBuilds.size > MAX_TRACKED_WORKSPACES) failedBuilds.delete(failedBuilds.keys().next().value!);
   }
   const firstError = MSBUILD_ERROR_LINE.exec(result.output)?.[0].trim().slice(0, 300);
-  failures.set(
-    key,
-    `${by} of ${target.label} (${config}): ${result.timedOut ? "timed out" : `exit code ${result.exitCode}`}`
-      + (firstError ? ` — ${firstError}` : ""),
-  );
+  const outcome = result.timedOut ? "timed out" : result.exitCode !== 0 ? `exit code ${result.exitCode}` : "failed";
+  failures.set(key, `${by} of ${target.label} (${config}): ${outcome}` + (firstError ? ` — ${firstError}` : ""));
+}
+
+function outstandingFailures(workspace: string): string[] {
+  return [...(failedBuilds.get(workspace)?.values() ?? [])];
+}
+
+// ─── dotnet through shell_exec ────────────────────────────────────────────────
+
+/** Options of `dotnet build|test` that take the next word as their value. */
+const DOTNET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-c", "--configuration", "-f", "--framework", "-o", "--output", "-r", "--runtime", "-v", "--verbosity",
+  "-a", "--arch", "--os", "-s", "--source", "--settings", "--filter", "-l", "--logger", "--results-directory",
+  "--collect", "-e", "--environment", "-d", "--diag", "--test-adapter-path", "--blame-crash-dump-type",
+  "--blame-hang-dump-type", "--blame-hang-timeout", "--version-suffix", "--artifacts-path", "-p", "--property",
+]);
+
+interface ShellDotnetCommand {
+  verb: string;
+  /** Compiles first: `dotnet build`, and `dotnet test` without --no-build. */
+  builds: boolean;
+  /** Runs test DLLs as bin/ holds them: `dotnet test --no-build`, `dotnet test X.dll`, `dotnet vstest`. */
+  runsBuiltTests: boolean;
+  target: BuildTarget;
+  config: string;
+}
+
+/**
+ * The `dotnet build|test|vstest` commands of a shell line run in `cwd`, keyed
+ * as dotnet_build keys the same target, so either one clears the other's
+ * failure. `cd` moves the directory the later commands run in.
+ */
+async function dotnetCommandsIn(read: ShellLex, cwd: string, workspace: string): Promise<ShellDotnetCommand[]> {
+  const found: ShellDotnetCommand[] = [];
+  let dir = cwd;
+  for (const words of read.commands) {
+    const values = words.map((word) => word.value);
+    let at = 0;
+    while (at < values.length && /^[A-Za-z_]\w*=/.test(values[at]!)) at += 1;
+    const name = (values[at]?.split(/[/\\]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+    if (name === "cd") {
+      const to = values.slice(at + 1).find((value) => !value.startsWith("-") && value.toLowerCase() !== "/d");
+      if (to) dir = resolve(dir, to);
+      continue;
+    }
+    const verb = values[at + 1];
+    if (name !== "dotnet" || (verb !== "build" && verb !== "test" && verb !== "vstest")) continue;
+    let config = "Debug";
+    let targetWord: string | undefined;
+    let noBuild = false;
+    const rest = values.slice(at + 2);
+    for (let i = 0; i < rest.length; i += 1) {
+      const word = rest[i]!;
+      if (!word.startsWith("-")) {
+        targetWord ??= word;
+        continue;
+      }
+      if (word === "--no-build") noBuild = true;
+      const attached = /^(-{1,2}[^:=]+)[:=](.*)$/.exec(word);
+      const option = attached?.[1] ?? word;
+      const value = attached ? attached[2] : DOTNET_VALUE_OPTIONS.has(word) ? rest[++i] : undefined;
+      if ((option === "-c" || option === "--configuration") && value) config = value;
+    }
+    const runsDll = targetWord !== undefined && /\.(?:dll|exe)$/i.test(targetWord);
+    const target: BuildTarget = { label: "the project root" };
+    const named = targetWord === undefined ? dir : resolve(dir, targetWord);
+    const real = await realpath(named).catch(() => named);
+    if (targetWord !== undefined || real !== workspace) {
+      target.fullPath = real;
+      target.label = targetWord ?? relative(workspace, real);
+    }
+    found.push({
+      verb,
+      builds: verb === "build" || (verb === "test" && !noBuild && !runsDll),
+      runsBuiltTests: verb === "vstest" || (verb === "test" && (noBuild || runsDll)),
+      target,
+      config,
+    });
+  }
+  return found;
+}
+
+function staleBinNotice(head: string, failures: readonly string[]): string {
+  return [
+    "Result: NOT MEASURED",
+    `${head} the DLLs the last successful build left in bin/, and a build that failed after it means they are not the code on disk:`,
+    ...failures.map((failure) => `  ${failure}`),
+    "Fix the build and build again, or run dotnet test without --no-build so it compiles what it tests.",
+  ].join("\n");
+}
+
+export interface ShellDotnet {
+  /** Why the line must not run at all: it would only test a stale bin/. */
+  readonly refusal: string | undefined;
+  /** Records the line's builds; returns the NOT MEASURED notice when it tested a stale bin/. */
+  settle(result: { exitCode: number; timedOut: boolean; stdout: string; stderr: string }): Promise<string | undefined>;
+}
+
+/**
+ * `dotnet build` and `dotnet test --no-build` through shell_exec, judged
+ * against the same record as dotnet_build and dotnet_test. Without it a
+ * failed dotnet_build followed by shell `dotnet test --no-build`, or a failed
+ * shell build followed by dotnet_test {no_build}, read the stale DLL as
+ * PASSED (review of d02df154). Undefined for a line with neither.
+ */
+export async function shellDotnet(command: string, cwd: string, projectPath: string): Promise<ShellDotnet | undefined> {
+  if (!/\bdotnet/i.test(command)) return undefined;
+  const workspace = await workspaceKey(projectPath);
+  const read = lexShell(command);
+  const commands = await dotnetCommandsIn(read, cwd, workspace);
+  if (commands.length === 0) return undefined;
+  const firstRunner = commands.findIndex((c) => c.runsBuiltTests);
+  const firstBuild = commands.findIndex((c) => c.builds);
+  const before = outstandingFailures(workspace);
+  // A build earlier in the line may clear the record, so that line runs and
+  // is judged after.
+  const refusal = firstRunner >= 0 && before.length > 0 && (firstBuild < 0 || firstBuild > firstRunner)
+    ? `$ ${command}\n\n${staleBinNotice("Not run: this command tests", before)}`
+    : undefined;
+  return {
+    refusal,
+    async settle(result) {
+      const output = `${result.stdout}\n${result.stderr}`;
+      // One exit status and one output for the whole line, so every build in
+      // it shares the verdict. An error line or a timeout fails them all,
+      // whatever the status says (`dotnet build; true`); only an all-`&&`
+      // line that exited 0 proves each of them compiled. A redirection moves
+      // the output, not the status.
+      const failed = result.timedOut || MSBUILD_ERROR_LINE.test(output);
+      const clean = !failed
+        && result.exitCode === 0
+        && read.operators.every((op) => op === "&&")
+        && [...read.hazards].every((hazard) => hazard === "redirection")
+        && read.commands.every((words) => words.length > 0);
+      if (failed || clean) {
+        for (const c of commands) {
+          if (c.builds) recordBuild(workspace, `shell_exec dotnet ${c.verb}`, c.target, c.config, { ...result, output }, failed);
+        }
+      }
+      const after = firstRunner >= 0 ? outstandingFailures(workspace) : [];
+      return after.length > 0 ? staleBinNotice("Not measured: the tests this command ran read", after) : undefined;
+    },
+  };
 }
 
 // ─── dotnet_build ─────────────────────────────────────────────────────────────
@@ -208,7 +354,10 @@ export class DotnetBuildTool implements ITool {
 
     const combined = result.stdout + "\n" + result.stderr;
     const parsed = parseBuildOutput(combined);
-    recordBuild(await workspaceKey(context.projectPath), "dotnet_build", target, config, { ...result, output: combined });
+    recordBuild(
+      await workspaceKey(context.projectPath), "dotnet_build", target, config,
+      { ...result, output: combined }, result.exitCode !== 0 || result.timedOut,
+    );
 
     const parts: string[] = [];
     parts.push(`dotnet build (${config})`);
@@ -470,7 +619,7 @@ export class DotnetTestTool implements ITool {
     if (noBuild) {
       // Any failed build in the workspace, not only this target's: a test
       // project's bin/ holds a copy of every library it references.
-      const stale = [...(failedBuilds.get(workspace)?.values() ?? [])];
+      const stale = outstandingFailures(workspace);
       if (stale.length > 0) {
         return {
           content: [
@@ -498,13 +647,20 @@ export class DotnetTestTool implements ITool {
     try {
       const result = await run("dotnet", args, context.projectPath, TEST_TIMEOUT_MS);
       const combined = result.stdout + "\n" + result.stderr;
-      // A run that built is a build: a clean exit leaves bin/ current, and a
-      // compile error leaves it as stale as a failed dotnet_build. A run whose
-      // tests failed says nothing about the build either way.
-      if (!noBuild && ((result.exitCode === 0 && !result.timedOut) || MSBUILD_ERROR_LINE.test(combined))) {
-        recordBuild(workspace, "dotnet_test", target, config, { ...result, output: combined });
-      }
       const { reports, unreadable } = await readTrxReports(resultsDir);
+      // A run that built is a build: a clean exit leaves bin/ current, and a
+      // compile error leaves it as stale as a failed dotnet_build. A test host
+      // writes a report, so a failed run that left none never got past its
+      // build (or was stopped in it), whatever its error lines look like. One
+      // that left a report failed its tests, which say nothing about the
+      // build, unless an error line says another project in it did not compile.
+      if (!noBuild) {
+        const clean = result.exitCode === 0 && !result.timedOut;
+        const tested = reports.length + unreadable > 0;
+        if (clean || !tested || MSBUILD_ERROR_LINE.test(combined)) {
+          recordBuild(workspace, "dotnet_test", target, config, { ...result, output: combined }, !clean);
+        }
+      }
       const summary: TestSummary = { total: 0, passed: 0, failed: 0, skipped: 0 };
       for (const report of reports) {
         summary.total += report.summary.total;

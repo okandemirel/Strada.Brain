@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTrxReport } from "./dotnet-tools.js";
+import { ShellExecTool } from "./shell-exec.js";
 import type { ToolContext } from "./tool.interface.js";
 import { checkReadOnlyBlock, getReadOnlySystemPrompt } from "../../security/read-only-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
@@ -375,23 +376,53 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
   /**
    * dotnet over one project: a build (or a building test) compiles the source
    * as it is now; `--no-build` runs the last DLL that compiled, whose one
-   * test passes.
+   * test passes. `compileFailure` is what a failed compile prints, or a run
+   * stopped at its time limit before it printed anything. A shell_exec line
+   * runs its `&&`/`;` commands the way bash would.
    */
-  function dotnetOnDisk(source: { compiles: boolean; testsFail?: boolean }): { calls: () => string[][] } {
+  function dotnetOnDisk(source: {
+    compiles: boolean;
+    testsFail?: boolean;
+    compileFailure?: { stdout: string } | "timeout";
+  }): { calls: () => string[][] } {
     const calls: string[][] = [];
-    vi.mocked(runProcess).mockImplementation(async (call) => {
-      calls.push(call.args);
-      const done = { stderr: "", timedOut: false, durationMs: 5 };
-      if (!call.args.includes("--no-build") && !source.compiles) return { ...done, stdout: COMPILE_ERROR, exitCode: 1 };
-      if (call.args[0] === "build") return { ...done, stdout: "  Game.Tests -> /work/bin/Game.Tests.dll\n\nBuild succeeded.", exitCode: 0 };
-      const at = call.args.indexOf("--results-directory");
-      mkdirSync(call.args[at + 1]!, { recursive: true });
-      writeFileSync(join(call.args[at + 1]!, "host_net10.0.trx"), source.testsFail ? FAILING_TRX : PASSING_TRX);
+    const dotnet = (args: string[]): { stdout: string; exitCode: number; timedOut: boolean } => {
+      calls.push(args);
+      if (!args.includes("--no-build") && !source.compiles) {
+        const failure = source.compileFailure ?? { stdout: COMPILE_ERROR };
+        return failure === "timeout" ? { stdout: "", exitCode: 124, timedOut: true } : { stdout: failure.stdout, exitCode: 1, timedOut: false };
+      }
+      if (args[0] === "build") return { stdout: "  Game.Tests -> /work/bin/Game.Tests.dll\n\nBuild succeeded.", exitCode: 0, timedOut: false };
+      const at = args.indexOf("--results-directory");
+      if (at >= 0) {
+        mkdirSync(args[at + 1]!, { recursive: true });
+        writeFileSync(join(args[at + 1]!, "host_net10.0.trx"), source.testsFail ? FAILING_TRX : PASSING_TRX);
+      }
       // What 10.0.400 printed for a run whose tests failed: "Build FAILED.",
       // and no MSBuild error line.
       return source.testsFail
-        ? { ...done, stdout: "  Failed Game.Tests.BoardTests.BoardSwapFails [1 ms]\n\nBuild FAILED.\n    0 Warning(s)\n    0 Error(s)", exitCode: 1 }
-        : { ...done, stdout: "", exitCode: 0 };
+        ? {
+            stdout: "  Failed Game.Tests.BoardTests.BoardSwapFails [1 ms]\nFailed!  - Failed:     1, Passed:     3, Skipped:     1, Total:     5, Duration: 9 ms - Game.Tests.dll (net10.0)\n\nBuild FAILED.\n    0 Warning(s)\n    0 Error(s)",
+            exitCode: 1,
+            timedOut: false,
+          }
+        : { stdout: "Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1, Duration: 6 ms - Game.Tests.dll (net10.0)", exitCode: 0, timedOut: false };
+    };
+    vi.mocked(runProcess).mockImplementation(async (call) => {
+      const done = { stderr: "", durationMs: 5 };
+      if (call.command === "dotnet") return { ...done, ...dotnet(call.args) };
+      const parts = call.args.at(-1)!.split(/\s*(&&|;)\s*/);
+      let stdout = "";
+      let exitCode = 0;
+      for (let i = 0; i < parts.length; i += 2) {
+        if (i > 0 && parts[i - 1] === "&&" && exitCode !== 0) continue;
+        const words = parts[i]!.split(/\s+/);
+        const ran = words[0] === "dotnet" ? dotnet(words.slice(1)) : { stdout: "", exitCode: 0, timedOut: false };
+        stdout += `${ran.stdout}\n`;
+        exitCode = ran.exitCode;
+        if (ran.timedOut) return { ...done, stdout, exitCode, timedOut: true };
+      }
+      return { ...done, stdout, exitCode, timedOut: false };
     });
     return { calls: () => calls };
   }
@@ -421,7 +452,8 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
     expect(result.content).toContain("Result: NOT MEASURED");
     expect(result.content).not.toContain("PASSED");
     expect(result.content).toContain("CS1002");
-    expect(result.content).toContain(testsProject);
+    // The label is the path as normalized for this platform: backslashes on Windows.
+    expect(result.content).toContain(normalize(testsProject));
     expect(result.isError).toBe(false);
     // Nothing ran: the DLL in bin/ is not the code on disk.
     expect(dotnet.calls().filter((args) => args[0] === "test")).toEqual([]);
@@ -452,7 +484,7 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
 
     const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
     expect(result.content).toContain("Result: NOT MEASURED");
-    expect(result.content).toContain("Game.Core/Game.Core.csproj");
+    expect(result.content).toContain(normalize("Game.Core/Game.Core.csproj"));
   });
 
   it("treats a building dotnet_test that failed to compile as a failed build, and one that exited 0 as a clean one", async () => {
@@ -481,6 +513,103 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
     await new DotnetBuildTool().execute({ project: testsProject }, workspace());
     const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, workspace());
     expect(result.content).toContain("Result: PASSED");
+  });
+
+  /**
+   * Measured with dotnet 10.0.400 (review of d02df154): `[Fact] void
+   * NewFails(int x)` failed the compile on xunit's own analyzer, `error
+   * xUnit1001:`, which a `[A-Z]{2,}\d+` code pattern does not read. The
+   * building run wrote no TRX, was not recorded, and the next no_build run
+   * read "Result: PASSED, Total: 1" from the old DLL.
+   */
+  it.each([
+    ["an analyzer error whose code is mixed-case", { stdout: "/work/Game.Tests/UnitTest1.cs(9,17): error xUnit1001: Fact methods cannot have parameters. [/work/Game.Tests/Game.Tests.csproj]\n\nBuild FAILED.\n    0 Warning(s)\n    1 Error(s)" }, "xUnit1001"],
+    ["an error with no code", { stdout: "/work/Game.Tests/Game.Tests.csproj : error : The project file could not be loaded.\n\nBuild FAILED." }, "error : The project file"],
+    ["a run stopped at its time limit before any test host started", "timeout" as const, "timed out"],
+  ])("treats a building dotnet_test that wrote no report and failed (%s) as a failed build", async (_case, compileFailure, named) => {
+    const at = workspace();
+    dotnetOnDisk({ compiles: false, compileFailure });
+    expect((await new DotnetTestTool().execute({ project: testsProject }, at)).content).toContain("Result: FAILED");
+
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).not.toContain("PASSED");
+    expect(result.content).toContain(named);
+  });
+
+  describe("through shell_exec", () => {
+    const shell = new ShellExecTool();
+
+    it("does not run `dotnet test --no-build` after dotnet_build failed, and the gate keeps the debt", async () => {
+      const at = workspace();
+      const dotnet = dotnetOnDisk({ compiles: false });
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Game.Tests/UnitTest1.cs" }, { toolCallId: "w", content: "written", isError: false });
+      await new DotnetBuildTool().execute({ project: testsProject }, at);
+
+      const input = { command: `dotnet test ${testsProject} --no-build` };
+      const result = await shell.execute(input, at);
+      expect(result.content).toContain("Result: NOT MEASURED");
+      expect(result.content).toContain("CS1002");
+      expect(result.content).not.toContain("Passed!");
+      expect(dotnet.calls().filter((args) => args[0] === "test")).toEqual([]);
+
+      verifier.track("shell_exec", input, { toolCallId: "s", content: result.content, isError: result.isError, metadata: result.metadata });
+      expect(verifier.needsVerification()).toBe(true);
+    });
+
+    it("records a shell `dotnet build` that failed, so dotnet_test {no_build} is refused", async () => {
+      const at = workspace();
+      dotnetOnDisk({ compiles: false });
+      expect((await shell.execute({ command: `dotnet build ${testsProject}` }, at)).isError).toBe(true);
+
+      const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+      expect(result.content).toContain("Result: NOT MEASURED");
+      expect(result.content).toContain("dotnet build");
+      expect(result.content).toContain("CS1002");
+    });
+
+    it("says NOT MEASURED when the line's own build failed before its no-build test ran", async () => {
+      const at = workspace();
+      dotnetOnDisk({ compiles: false });
+      // `;` runs the test whatever the build did, and the line exits with the test's 0.
+      const result = await shell.execute({ command: "dotnet build; dotnet test --no-build" }, at);
+      expect(result.content).toContain("Result: NOT MEASURED");
+      expect(result.metadata?.["verdict"]).toBe("NOT MEASURED");
+    });
+
+    it("runs a line that rebuilds before its no-build test, and a clean shell build clears the failure for dotnet_test too", async () => {
+      const at = workspace();
+      const source = { compiles: false };
+      dotnetOnDisk(source);
+      await new DotnetBuildTool().execute({ project: testsProject }, at);
+      source.compiles = true;
+
+      // A redirection moves the build's output, not its status.
+      const line = await shell.execute({ command: `dotnet build ${testsProject} 2>&1 && dotnet test ${testsProject} --no-build` }, at);
+      expect(line.isError).toBe(false);
+      expect(line.content).toContain("Passed!");
+      expect(line.content).not.toContain("NOT MEASURED");
+      expect((await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at)).content).toContain("Result: PASSED");
+    });
+
+    it("keeps a line whose own build failed under && an error, and says its tests were not measured", async () => {
+      const at = workspace();
+      const dotnet = dotnetOnDisk({ compiles: false });
+      const result = await shell.execute({ command: "dotnet build && dotnet test --no-build" }, at);
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("Result: NOT MEASURED");
+      expect(dotnet.calls().filter((args) => args[0] === "test")).toEqual([]);
+    });
+
+    it("does not read a shell `dotnet test` whose TESTS failed as a failed build", async () => {
+      const at = workspace();
+      dotnetOnDisk({ compiles: true, testsFail: true });
+      expect((await shell.execute({ command: `dotnet test ${testsProject}` }, at)).isError).toBe(true);
+      const result = await shell.execute({ command: `dotnet test ${testsProject} --no-build` }, at);
+      expect(result.content).not.toContain("NOT MEASURED");
+      expect(result.content).toContain("Failed!");
+    });
   });
 });
 
