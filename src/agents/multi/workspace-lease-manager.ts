@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
-import { appendLeaseLedger, systemOwnedDeletionReason } from "./system-owned-path.js";
+import { appendLeaseLedger, isSystemOwnedCheckPath, systemOwnedDeletionReason } from "./system-owned-path.js";
 import { isDerivedBuildOutput } from "./derived-build-output.js";
 import {
   changeReviewDir,
@@ -49,6 +49,13 @@ export interface WorkspaceCommitResult {
    * caller is told instead.
    */
   readonly conflicts: string[];
+  /**
+   * The part of `conflicts` that the agent wrote into the campaign's
+   * acceptance folder (Assets/StradaAcceptance, see system-owned-path.ts).
+   * The checks a milestone is judged by are the system's: a lease reads and
+   * runs them, never publishes them. Absent when there were none.
+   */
+  readonly refusedSystemOwned?: string[];
   /**
    * Paths the agent deleted inside its workspace that still exist in the
    * project. They are LEFT IN PLACE — removing a user's files is not something a
@@ -1653,6 +1660,11 @@ export class WorkspaceLeaseManager {
           // under it; an excluded top-level name (Library, UserSettings, …)
           // never enters the project's history either (Codex 2026-09-11 #4, #7).
           if (isHeld(rel)) continue;
+          // No lease commit carries a check into the project's history, not
+          // even one whose working copy ended where the project's is (GDD-drift
+          // plan W07). A git path cannot pass through a link, so its spelling
+          // decides.
+          if (isSystemOwnedCheckPath(rel)) continue;
           if (!this.shouldCommitEntry(workspacePath, join(workspacePath, rel))) continue;
           if (entry.status === "D") {
             if (deletedRels.has(rel)) removes.push(posixPath);
@@ -2007,7 +2019,7 @@ export class WorkspaceLeaseManager {
     // it by stripping " (reason)" off the report string, which cut a name such
     // as "Hero (1).png (EACCES)" down to "Hero" and let its .meta travel alone
     // (report 2026-09-10 #34).
-    type FileOutcome = { written?: string; conflict?: string; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string; targetExisted: boolean } };
+    type FileOutcome = { written?: string; conflict?: string; systemOwned?: true; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string; targetExisted: boolean } };
     const outcomes: Array<FileOutcome | undefined> = [];
 
     const quarantine = async (rel: string, full: string): Promise<void> => {
@@ -2052,6 +2064,18 @@ export class WorkspaceLeaseManager {
               ? now.mtimeMs === leaseSeeded.m
               : stampUnchanged(leaseSeeded, now);
             if (untouched) return {}; // present at seed time and never written to — not agent work
+          }
+
+          // THE ACCEPTANCE CHECKS ARE THE SYSTEM'S (GDD-drift plan W07): a
+          // worker that could publish an edited or added check could write
+          // its own green. Judged against the project by both of its names,
+          // so a link in the project that leads into the folder is the folder.
+          // A rewrite that left the bytes as the project has them is no
+          // refusal — there is nothing to publish.
+          if (isSystemOwnedCheckPath(rel, sourceRoot)) {
+            if ((await pathExists(target)) && (await sameContent(target, full))) return {};
+            await quarantine(rel, full);
+            return { conflict: rel, systemOwned: true };
           }
 
           // Quarantine-only mode (orphan salvage): nothing is written into the
@@ -2421,10 +2445,12 @@ export class WorkspaceLeaseManager {
     }
     clearCommitLedger(workspacePath);
 
+    const refusedSystemOwned: string[] = [];
     for (const outcome of outcomes) {
       if (!outcome) continue;
       if (outcome.written !== undefined) written.push(outcome.written);
       if (outcome.conflict !== undefined) conflicts.push(outcome.conflict);
+      if (outcome.conflict !== undefined && outcome.systemOwned) refusedSystemOwned.push(outcome.conflict);
       if (outcome.failed !== undefined) failed.push(outcome.failed);
       if (outcome.failedRel !== undefined) failedRels.push(outcome.failedRel);
     }
@@ -2561,6 +2587,12 @@ export class WorkspaceLeaseManager {
         sample: failed.slice(0, 5),
       });
     }
+    if (refusedSystemOwned.length > 0) {
+      getLoggerSafe().warn("Workspace commit refused writes into the system-owned acceptance folder", {
+        count: refusedSystemOwned.length,
+        sample: refusedSystemOwned.slice(0, 5),
+      });
+    }
 
     // The copy-back above just added this run's captures to the project;
     // the same step retires the oldest so Recordings/ stays a recent window,
@@ -2651,6 +2683,7 @@ export class WorkspaceLeaseManager {
     return {
       written,
       conflicts,
+      ...(refusedSystemOwned.length > 0 ? { refusedSystemOwned } : {}),
       removed,
       deleted,
       failed,
@@ -2683,7 +2716,10 @@ export class WorkspaceLeaseManager {
    *  the seed filter rejects are skipped together with their whole subtree,
    *  exactly as cpSync's filter did. */
   private async copyTree(sourceRoot: string, source: string, target: string): Promise<void> {
-    const stats = await fsp.lstat(source);
+    // The ROOT is followed: a project reached through a symlink was "copied"
+    // as a link to itself, so the worker wrote straight into the project past
+    // every rule commit() applies, the acceptance folder's included.
+    const stats = source === sourceRoot ? await fsp.stat(source) : await fsp.lstat(source);
 
     if (stats.isDirectory()) {
       await fsp.mkdir(target, { recursive: true });

@@ -12,7 +12,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACCEPTANCE_DIR, isSystemOwnedCheckPath } from "./system-owned-path.js";
+import {
+  ACCEPTANCE_DIR,
+  isSystemOwnedCheckPath,
+  systemOwnedDeletionReason,
+  type CommandRunnerLike,
+} from "./system-owned-path.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -104,5 +109,54 @@ describe("isSystemOwnedCheckPath", () => {
     expect(isSystemOwnedCheckPath("/proj/Assets/StradaAcceptance.meta")).toBe(true);
     expect(isSystemOwnedCheckPath("/proj/Assets/Scripts/x.cs")).toBe(false);
     expect(isSystemOwnedCheckPath("/proj/Assets/StradaAcceptanceExtra/x.cs")).toBe(false);
+  });
+
+  it("a root never makes an absolute path LESS protected: a lease's copy of the folder lives outside the project", () => {
+    // W00 review: with projectRoot given, a lease path under /var/folders was
+    // "outside the project" by both names and the folder test was never tried.
+    const root = project();
+    const lease = project();
+    const leaseCheck = join(lease, "Assets", "StradaAcceptance", "M1", "Acceptance_M1.cs");
+    expect(isSystemOwnedCheckPath(leaseCheck, root)).toBe(true);
+    expect(isSystemOwnedCheckPath(realpathSync.native(leaseCheck), root)).toBe(true);
+    expect(isSystemOwnedCheckPath(join(lease, "ASSETS", "stradaacceptance", "M1", "New.cs"), root)).toBe(true);
+    expect(isSystemOwnedCheckPath(join(lease, "Assets", "StradaAcceptance.meta"), root)).toBe(true);
+    // A link in the lease that leads into its folder is the folder.
+    symlinkSync(join(lease, "Assets", "StradaAcceptance"), join(lease, "Assets", "Scripts", "Shortcut"), "dir");
+    expect(isSystemOwnedCheckPath(join(lease, "Assets", "Scripts", "Shortcut", "M1", "Acceptance_M1.cs"), root)).toBe(true);
+    // The rest of the lease is still the worker's.
+    expect(isSystemOwnedCheckPath(join(lease, "Assets", "Scripts", "Player.cs"), root)).toBe(false);
+    expect(isSystemOwnedCheckPath(join(lease, "Assets", "StradaAcceptanceExtra", "x.cs"), root)).toBe(false);
+  });
+});
+
+describe("systemOwnedDeletionReason never applies a deletion of a check", () => {
+  const campaignOnly: CommandRunnerLike = async () => ({
+    exitCode: 0,
+    stdout: "campaign: acceptance checks for M1 (system-owned)\n",
+  });
+
+  it("declines a check, its .meta and the folder's .meta, where the history rule applies a campaign leftover", async () => {
+    // No lease ledger: the history rule decides, and every commit that ever
+    // touched a check IS a campaign: commit.
+    const root = project();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "Assets/Scripts/Leftover.cs")).toContain("system's own");
+    expect(await systemOwnedDeletionReason(campaignOnly, root, join("Assets", "StradaAcceptance", "M1", "Acceptance_M1.cs"))).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "Assets/StradaAcceptance/M1/Acceptance_M1.cs.meta")).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "Assets/StradaAcceptance.meta")).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "assets/stradaacceptance/M1/Acceptance_M1.cs")).toBeUndefined();
+    // The scaffolding-scene rule does not reach into the folder either.
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "Assets/StradaAcceptance/InitTestScene4abd18f9.unity")).toBeUndefined();
+  });
+
+  it("declines a check reached through a symlinked root or a link in the project", async () => {
+    const real = project();
+    const link = `${real}-link`;
+    symlinkSync(real, link, "dir");
+    dirs.push(link);
+    symlinkSync(join(real, "Assets", "StradaAcceptance"), join(real, "Assets", "Scripts", "Shortcut"), "dir");
+    expect(await systemOwnedDeletionReason(campaignOnly, link, "Assets/StradaAcceptance/M1/Acceptance_M1.cs")).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, link, "Assets/Scripts/Shortcut/M1/Acceptance_M1.cs")).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, link, "Assets/Scripts/Leftover.cs")).toContain("system's own");
   });
 });

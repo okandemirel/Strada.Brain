@@ -83,6 +83,10 @@ export async function systemOwnedDeletionReason(
   rel: string,
 ): Promise<string | undefined> {
   const bare = rel.replace(/\.meta$/i, "");
+  // A check the campaign judges the worker by is never the worker's to delete
+  // (GDD-drift plan W07). Every commit that touched one IS a campaign: commit,
+  // so on a project without the ledger the history rule below applied it.
+  if (isSystemOwnedCheckPath(bare, sourceRoot)) return undefined;
   const ledger = readLeaseLedger(sourceRoot);
   // Present but unreadable: the one record of what the system wrote cannot be
   // consulted, so nothing that depends on it may call a file the system's.
@@ -151,14 +155,20 @@ const ACCEPTANCE_SEGMENTS = ACCEPTANCE_DIR.toLowerCase().split("/");
  * its real name against the root's real name: leases live under /var/folders,
  * which is /private/var, and a comparison that mixed the two forms judged
  * lease paths "outside the project" three times before. A link inside the
- * project that leads into the folder is the folder. Without a root, an
- * absolute path is the system's when it runs through an Assets/StradaAcceptance
- * folder.
+ * project that leads into the folder is the folder. An absolute path that
+ * runs through an Assets/StradaAcceptance folder, by either of its names, is
+ * the system's with or without a root: a root only adds evidence. A lease's
+ * copy of the folder lives under /var/folders, outside the project by both
+ * names, and judging it against the root alone called it the worker's.
  */
 export function isSystemOwnedCheckPath(path: string, projectRoot?: string): boolean {
   if (path === "") return false;
-  if (!isAbsolute(path) && insideAcceptanceDir(path)) return true;
-  if (projectRoot === undefined) return isAbsolute(path) && runsThroughAcceptanceDir(path);
+  if (isAbsolute(path)) {
+    if (runsThroughAcceptanceDir(path) || runsThroughAcceptanceDir(realpathOfNearest(path))) return true;
+  } else if (insideAcceptanceDir(path)) {
+    return true;
+  }
+  if (projectRoot === undefined) return false;
   const full = resolve(projectRoot, path);
   const roots = [resolve(projectRoot), realpathOfNearest(projectRoot)];
   const fulls = [full, realpathOfNearest(full)];
