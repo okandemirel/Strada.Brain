@@ -121,6 +121,25 @@ export function isRepairOf(failure: RepairTarget | null, success: RepairTarget |
   return failedOperation.length > 0 && failedOperation === commandOperation(success.value);
 }
 
+const UNVERIFIED_REPAIR_ACTIONS = [
+  // Before D39 any later success on the same tool was booked as the repair, and
+  // its command or file body became the action.
+  /^When \S+ fails with this pattern, the resolution involved: /,
+  // A repair with no target: it names nothing a run would not try anyway.
+  /^When \S+ fails with this pattern, the resolution was to retry with corrected input$/,
+];
+
+/**
+ * Whether an auto-resolved error_fix action carries no repair the pipeline saw
+ * act on the failure's target. The live store on 2026-10-11 held 359 such rules
+ * of 364 (329 of them "the resolution involved: retrying with corrected input"),
+ * so it earns nothing a verified or reported fix is given.
+ */
+export function isUnverifiedRepairAction(action: string): boolean {
+  const text = String(action ?? "").trim();
+  return UNVERIFIED_REPAIR_ACTIONS.some((pattern) => pattern.test(text));
+}
+
 const VERDICT_SCORE = {
   HIGH: 0.7,
   PERFECT: 1.0,

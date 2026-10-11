@@ -44,9 +44,9 @@ arm has to generalise rather than remember.
 
 Both production retrieval paths are exercised: `ErrorLearningHooks
 .onBeforeErrorAnalysis` (the learned-solutions block injected at the moment of
-the error, `minConfidence` 0.45) and `InstinctRetriever.getMatchedInstincts` (the
-proactive insight retrieval, lexical similarity ≥ 0.4, deprecated/quarantined
-filtered). The proactive path is queried with the failing output itself — the
+the error, match score ≥ 0.5, or ≥ 0.45 for a same-error match — see below) and
+`InstinctRetriever.getMatchedInstincts` (the proactive insight retrieval,
+lexical similarity ≥ 0.4, deprecated/quarantined filtered). The proactive path is queried with the failing output itself — the
 strongest query a run could give it, deliberately generous to the system.
 
 After the probes settle, `src/learning/ledger.ts` is asked the plan 6.4 question
@@ -146,11 +146,13 @@ The thresholds are pre-registered **for that probe set**, not universal claims:
 the harmful-recall budget in particular depends on how many traps the set holds
 (4 of 7 in the pinned dataset).
 
-`repairs` is not decoration. A freshly minted instinct sits at confidence 0.50,
-and the error-recovery gate (0.45 after weighting, `RECOVERY_MIN_MATCH_SCORE`)
-admits it only when the error matches its trigger by code (0.95 × 0.50) or by
-message (0.9 × 0.50). A probe that only resembles a trained error (a fuzzy match,
-≤ 0.8 × confidence) is offered nothing until the rule has earned more confidence,
+`repairs` is not decoration. A freshly minted instinct sits at confidence 0.50.
+The error-recovery gate is 0.5 after weighting (`RECOVERY_MIN_MATCH_SCORE`),
+with one allowance: a rule whose trigger matches the error by code (0.95 × 0.50)
+or by message (0.9 × 0.50), and whose action names a repair rather than only a
+retry, is admitted from 0.45 (`RECOVERY_SAME_ERROR_MIN_SCORE`). A probe that only
+resembles a trained error (a fuzzy match, ≤ 0.8 × confidence) or only shares its
+tool (0.6 × confidence) is offered nothing until the rule clears 0.5 on its own,
 so the warm arm has to pay for that recall with successful runs, exactly as
 production does.
 

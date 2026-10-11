@@ -236,7 +236,7 @@ export interface PatternMatcherOptions {
  * What an error match is worth, as a fraction of the matched rule's confidence,
  * by how it matched. Exported because a gate over these scores has to sit where
  * a newly learned rule — which starts at CONFIDENCE_THRESHOLDS.MAX_INITIAL — can
- * reach it (ErrorLearningHooks' recovery gate is derived from it).
+ * reach it (ErrorLearningHooks' same-error allowance is derived from it).
  */
 export const ERROR_MATCH_FACTOR = {
   errorCode: 0.95,
@@ -271,6 +271,13 @@ export class PatternMatcher {
     input: PatternMatchInput,
     options: {
       minConfidence?: number;
+      /**
+       * A further test a match must pass, applied before `maxResults`: a gate
+       * that depends on HOW a rule matched, not only how well, has to drop what
+       * it refuses before the slice, or a refused match holds a slot an
+       * admitted one needed.
+       */
+      admit?: (match: PatternMatch) => boolean;
       maxResults?: number;
       statusFilter?: InstinctStatus[];
       /**
@@ -283,6 +290,7 @@ export class PatternMatcher {
   ): PatternMatch[] {
     const {
       minConfidence = 0.3,
+      admit,
       maxResults = 10,
       statusFilter = ["active", "proposed"],
       userId,
@@ -302,7 +310,7 @@ export class PatternMatcher {
     for (const instinct of candidates) {
       const match = this.matchInstinct(instinct, input, normalizedMessage);
       
-      if (match.confidence >= minConfidence) {
+      if (match.confidence >= minConfidence && (admit === undefined || admit(match))) {
         matches.push(match);
       }
     }

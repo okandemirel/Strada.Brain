@@ -5,7 +5,7 @@
  * learning pipeline. Provides callbacks for error analysis and resolution.
  */
 
-import type { LearningPipeline } from "../pipeline/learning-pipeline.js";
+import { isUnverifiedRepairAction, type LearningPipeline } from "../pipeline/learning-pipeline.js";
 import { ERROR_MATCH_FACTOR, type PatternMatcher } from "../matching/pattern-matcher.js";
 import type { ConfidenceScorer } from "../scoring/confidence-scorer.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
@@ -110,26 +110,51 @@ export interface ResolutionContext {
   derivation?: "reported" | "observed-success";
 }
 
+/** The lowest match score recovery offers a rule at, however it matched. */
+export const RECOVERY_MIN_MATCH_SCORE = 0.5;
+
 /**
- * The lowest match score recovery offers a rule at: what a rule at the
- * initial-confidence cap scores when the error's message matches its trigger.
+ * The lower gate for an error_fix rule whose trigger IS this error (by code or
+ * by message) and whose action is a repair someone verified or reported: what
+ * such a rule scores at the initial-confidence cap.
  *
- * The gate was a flat 0.5, and every learned rule starts AT the cap (0.5), so
- * the identical error scored 0.475 by code or 0.45 by message and no learned
- * fix was ever shown — and a rule never shown is never credited, so nothing
- * could lift it past the gate either. Derived from the cap and the matcher's
- * own weights so it cannot drift above what a fresh rule reaches; a fresh rule
- * that only resembles the error (fuzzy, or the same tool) still stays below it.
+ * Every learned rule starts AT the cap (0.5), so under the general gate the
+ * identical error scored 0.475 by code or 0.45 by message and no learned fix
+ * was ever shown — and a rule never shown is never credited, so nothing could
+ * lift it past the gate either. Only that evidence is let in early. Lowering
+ * the gate for every match type offered a rule reinforced to 0.75 for any error
+ * on its tool (0.6 x 0.81 = 0.486, the eval's p5 trap), and let the store's
+ * unverified rules (359 of 364 live, 329 of them "retrying with corrected
+ * input") fill the learned-solutions slots: replaying the live store's 5221
+ * tool errors, 890 were offered a rule and 1131 of the 1192 offers were
+ * retry-only filler that no observed-success resolution credits or penalises.
+ * Other rule types keep the general gate: the store's corrections at the cap
+ * are "Auto-resolved: …" rows keyed on a SUCCESS output (audited 2026-09-02).
  */
-export const RECOVERY_MIN_MATCH_SCORE = ERROR_MATCH_FACTOR.exact * CONFIDENCE_THRESHOLDS.MAX_INITIAL;
+export const RECOVERY_SAME_ERROR_MIN_SCORE = ERROR_MATCH_FACTOR.exact * CONFIDENCE_THRESHOLDS.MAX_INITIAL;
+
+const SAME_ERROR_MATCH_TYPES: ReadonlySet<PatternMatch["type"]> = new Set(["error_code", "exact"]);
+
+/** Whether recovery may offer this match (see {@link RECOVERY_SAME_ERROR_MIN_SCORE}). */
+export function admittedByRecovery(match: PatternMatch): boolean {
+  if (match.confidence >= RECOVERY_MIN_MATCH_SCORE) return true;
+  return (
+    match.confidence >= RECOVERY_SAME_ERROR_MIN_SCORE &&
+    SAME_ERROR_MATCH_TYPES.has(match.type) &&
+    match.instinct?.type === "error_fix" &&
+    !isUnverifiedRepairAction(match.instinct.action)
+  );
+}
 
 /**
  * Negative weight of ONE non-application (guidance shown, not used).
  *
  * A real failed application adds ~0.8 to beta; this is a third of that, so a
- * rule needs several cost-only misfires before its confidence drops under the
- * recovery gate, and a single coincidence never silences a good rule
- * (tightening a gate cuts both ways).
+ * rule that has earned its place needs several cost-only misfires before its
+ * confidence drops under the recovery gate, and a single coincidence never
+ * silences it (tightening a gate cuts both ways). A fresh rule, offered only on
+ * the same-error allowance, has no such margin: one demonstrated misfire takes
+ * it from 0.5 to 0.444, under that allowance.
  */
 export const NON_APPLICATION_BETA = 0.25;
 
@@ -295,7 +320,8 @@ export class ErrorLearningHooks {
     };
 
     const matches = this.patternMatcher.findInstinctsForError(input, {
-      minConfidence: RECOVERY_MIN_MATCH_SCORE,
+      minConfidence: RECOVERY_SAME_ERROR_MIN_SCORE,
+      admit: admittedByRecovery,
       maxResults: 3,
       // ROUND 13 #24 — A RULE THAT GRADUATED WAS NEVER OFFERED AGAIN. The default
       // filter is ["active", "proposed"], so `evolved` (a rule that earned its
