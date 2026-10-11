@@ -411,6 +411,41 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
     expect(reviewed?.sourceProjectPath).toBe(project);
   });
 
+  // Each delegated run wrote its trajectory under its temporary lease path,
+  // a key no replay read ever matches: rows piled up in learning storage
+  // under throwaway project ids (review delegation-wiring P3).
+  it("records a leased delegate's trajectory under the project, not the lease", async () => {
+    const recordTrajectory = vi.fn();
+    const shared = {
+      ...sharedDeps(),
+      learningPipeline: { recordTrajectory, isTrajectoryLevelCreditEnabled: () => false } as never,
+    };
+    const manager = buildManager({ sharedOrchestratorDeps: shared, workspaceLeaseManager: leaseManager() as never });
+
+    await delegateAndInspect(manager, (orchestrator) => {
+      (orchestrator as unknown as { recordInRunTrajectoryCredit(params: unknown): void }).recordInRunTrajectoryCredit({
+        chatId: "delegation-sub",
+        sessionId: "delegation-sub",
+        taskDescription: "Review MatchResolver",
+        success: true,
+        stepResults: [{ toolName: "file_read", success: true, summary: "read MatchResolver.cs", timestamp: Date.now() }],
+      });
+    });
+
+    expect(recordTrajectory).toHaveBeenCalledTimes(1);
+    expect(recordTrajectory.mock.calls[0]?.[0]).toMatchObject({ projectId: project });
+  });
+
+  it("builds a leased delegate's replay context on the project's world, not the lease's", async () => {
+    const manager = buildManager({ workspaceLeaseManager: leaseManager() as never });
+
+    const replay = await delegateAndInspect(manager, (orchestrator) =>
+      orchestrator.buildTrajectoryReplayContext({ chatId: "delegation-sub" }));
+
+    expect(replay?.projectWorldSummary).toContain(`root=${project}`);
+    expect(replay?.projectWorldSummary).not.toContain(lease);
+  });
+
   it("bootstrap hands the delegation manager the unified budget manager", () => {
     // bootstrap's daemon block cannot run in a unit test; the setter is not
     // type-enforced, so its call is checked where it is made.

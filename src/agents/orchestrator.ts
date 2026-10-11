@@ -4075,7 +4075,9 @@ export class Orchestrator {
       taskRunId: taskContext?.taskRunId,
       // ORC-9: the owner replay retrieval reads it back under.
       userId: taskContext?.userId,
-      projectId: this.projectPath,
+      // The project, not a delegate's lease: a lease path is a key no read
+      // ever matches, and it is gone once the delegation ends.
+      projectId: this.sourceProjectPath,
       taskDescription: params.taskDescription,
       steps,
       outcome,
@@ -6447,7 +6449,9 @@ export class Orchestrator {
       taskExecutionStore: this.taskExecutionStore,
       userProfileStore: this.userProfileStore,
       memoryManager: this.memoryManager,
-      projectPath: this.projectPath,
+      // The project's world (its cached analysis and fingerprint), as for the
+      // trajectory it replays — not the lease a delegate is rooted in.
+      projectPath: this.sourceProjectPath,
       providerRouter: this.providerRouter,
       resolveTaskRunId: (chatId, taskRunId) => this.resolveTaskRunId(chatId, taskRunId),
     };
