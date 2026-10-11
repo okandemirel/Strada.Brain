@@ -83,6 +83,7 @@ import {
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified, asksForFlatArt, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
 import { assessSpecScopeOfText } from "../agents/autonomy/spec-scope.js";
+import type { RunDesignDoc } from "../agents/autonomy/run-design-doc.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import { describeMedia } from "../agents/autonomy/gdd-media.js";
 import type { Campaign, CampaignMilestone,
@@ -6496,6 +6497,15 @@ export class CampaignManager {
     // (gddDriftOf), never a silent choice between versions (plan 1.9).
     const onDisk = campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined;
     return onDisk ?? campaign.gddText;
+  }
+
+  /**
+   * The document a campaign task's runs are held to: the same text the
+   * delivery gate judges. A campaign this manager does not know has none.
+   */
+  designDocOf(campaignId: string): RunDesignDoc {
+    const text = this.gddTextOf(this.storage.get(campaignId));
+    return text === undefined ? {} : { text };
   }
 
   /**

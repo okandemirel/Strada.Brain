@@ -7,6 +7,7 @@ import os from "node:os";
 import { hostname } from "node:os";
 import { BackgroundExecutor } from "./background-executor.js";
 import { notifyTaskLiveness } from "../agents/liveness-hub.js";
+import { currentRunDesignDoc } from "../agents/autonomy/run-design-doc.js";
 import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
 import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
@@ -4768,5 +4769,73 @@ describe("BackgroundExecutor - shutdown clears its timers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// A campaign worker's conformance guard found its design document by itself,
+// the largest markdown under docs/: another game's GDD in a project holding
+// one (review campaign-text-only P2). The executor now runs a campaign task
+// inside its campaign's GDD; the guard of every run the task starts (the
+// direct worker, each supervisor node, a delegate) reads it from there.
+describe("BackgroundExecutor - a campaign task's runs are held to its GDD", () => {
+  it("runs the campaign task inside its GDD, and a task submitted from inside it inside none", async () => {
+    const seen = new Map<string, unknown>();
+    let executor!: BackgroundExecutor;
+    const orchestrator = {
+      evaluateSupervisorAdmission: vi.fn(async (opts: { taskRunId?: string }) => {
+        seen.set(`admission ${opts.taskRunId}`, currentRunDesignDoc());
+        return { path: "direct_worker", reason: "low_complexity" };
+      }),
+      runBackgroundTask: vi.fn(async (_prompt: string, opts: { taskRunId?: string }) => {
+        seen.set(`run ${opts.taskRunId}`, currentRunDesignDoc());
+        if (opts.taskRunId === "task_campaign") {
+          // Started from inside the campaign task's own run, as a retry is.
+          executor.enqueue(
+            createTestTask(undefined, { id: "task_plain" as any, chatId: "chat2" }),
+            new AbortController().signal,
+            vi.fn(),
+          );
+        }
+        return "done";
+      }),
+    };
+    executor = new BackgroundExecutor({ orchestrator: orchestrator as any, concurrencyLimit: 2 });
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+    executor.setCampaignDesignDocs((campaignId) => (campaignId === "cmp_1" ? { text: "# This game's GDD" } : {}));
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_campaign" as any, campaignId: "cmp_1" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+    await vi.waitFor(() => expect(mockTaskManager.complete).toHaveBeenCalledTimes(2), { timeout: 5000 });
+
+    expect(Object.fromEntries(seen)).toEqual({
+      "admission task_campaign": { text: "# This game's GDD" },
+      "run task_campaign": { text: "# This game's GDD" },
+      "admission task_plain": undefined,
+      "run task_plain": undefined,
+    });
+  });
+
+  it("a campaign it cannot look up leaves the run to find its document", async () => {
+    const docs: unknown[] = [];
+    const orchestrator = {
+      runBackgroundTask: vi.fn(async () => {
+        docs.push(currentRunDesignDoc());
+        return "done";
+      }),
+    };
+    const executor = new BackgroundExecutor({ orchestrator: orchestrator as any });
+    const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+    executor.setTaskManager(mockTaskManager as any);
+    executor.setCampaignDesignDocs(() => {
+      throw new Error("campaigns.db is closed");
+    });
+
+    executor.enqueue(createTestTask(undefined, { campaignId: "cmp_1" }), new AbortController().signal, vi.fn());
+    await vi.waitFor(() => expect(mockTaskManager.complete).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    expect(docs).toEqual([undefined]);
   });
 });

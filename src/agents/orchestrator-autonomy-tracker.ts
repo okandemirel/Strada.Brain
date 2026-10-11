@@ -46,6 +46,8 @@ export interface CreateAutonomyBundleParams {
   /** Absolute project root — lets the conformance guard inspect a written
    *  module directory. Omitted, that check stays quiet. */
   readonly projectPath?: string;
+  /** The campaign GDD this run is held to (see ConformanceGuardOptions.designDoc). */
+  readonly designDoc?: import("./autonomy/run-design-doc.js").RunDesignDoc;
   readonly projectWorldSummary?: string;
   readonly projectWorldFingerprint?: string;
   readonly includeControlLoopTracker?: boolean;
@@ -147,6 +149,7 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
     // Needed to inspect a written module directory on disk; without it the
     // incomplete-module check cannot run and simply stays quiet.
     projectPath: params.projectPath,
+    designDoc: params.designDoc,
   });
   stradaConformance.trackPrompt(params.prompt);
   // One line per guard, so a run that produced no gate can be told apart from a

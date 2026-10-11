@@ -1,6 +1,7 @@
 import { existsSync, promises as fsp, readdirSync, readFileSync, statSync } from "node:fs";
-import { assessSpecScope } from "./spec-scope.js";
+import { assessSpecScopeOfText } from "./spec-scope.js";
 import { elementCodeTokens, extractScheduledElements, findDesignDoc } from "./spec-scope.js";
+import type { RunDesignDoc } from "./run-design-doc.js";
 import { createHash } from "node:crypto";
 import { getLogger } from "../../utils/logger.js";
 import { join as joinPath, resolve as resolvePath } from "node:path";
@@ -268,6 +269,11 @@ export interface ConformanceGuardOptions {
   readonly readSourceSizes?: (dir: string) => Array<{ path: string; lines: number }>;
   /** Contents of the .cs files under a test assembly's directory. */
   readonly readTestSources?: (dir: string) => string[];
+  /**
+   * The design document a campaign run is held to. Absent (the run serves no
+   * campaign), the largest markdown under docs/ stands in for it.
+   */
+  readonly designDoc?: RunDesignDoc;
 }
 
 /**
@@ -1057,7 +1063,9 @@ export class StradaConformanceGuard {
     if (!projectPath) return null;
     if (!existsSync(joinPath(projectPath, "Assets"))) return null;
     try {
-      const report = assessSpecScope(projectPath);
+      const text = this.designDocText(projectPath);
+      if (text === null) return null;
+      const report = assessSpecScopeOfText(projectPath, text, null);
       // A partial code corpus cannot prove an element absent.
       if (report.scheduled === 0 || report.missing.length === 0 || report.corpusPartial === true) return null;
       const names = report.missing
@@ -1075,6 +1083,20 @@ export class StradaConformanceGuard {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The text the schedule rules judge against, or null when there is none.
+   *
+   * A campaign's own GDD, never a discovered one: the largest markdown under
+   * docs/ can be another game's document, and its schedule told a text-only
+   * campaign's workers to build that game (review campaign-text-only P2).
+   */
+  private designDocText(projectPath: string): string | null {
+    const campaign = this.opts?.designDoc;
+    if (campaign) return campaign.text ?? null;
+    const docPath = findDesignDoc(projectPath);
+    return docPath ? readFileSync(docPath, "utf8") : null;
   }
 
   private nothingDrawnReason(): string | null {
@@ -1541,9 +1563,9 @@ export class StradaConformanceGuard {
 
     let elements;
     try {
-      const docPath = findDesignDoc(projectPath);
-      if (!docPath) return null;
-      elements = extractScheduledElements(readFileSync(docPath, "utf8"));
+      const text = this.designDocText(projectPath);
+      if (text === null) return null;
+      elements = extractScheduledElements(text);
     } catch {
       return null;
     }

@@ -43,6 +43,7 @@ import {
 import { canonicalizeProviderName } from "../../agents/providers/provider-identity.js";
 import { conformanceAppliesTo, createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
 import { conformanceProjectPath } from "../../agents/autonomy/strada-conformance.js";
+import { currentRunDesignDoc } from "../../agents/autonomy/run-design-doc.js";
 import { getRecommendedMaxMessages, type ModelIntelligenceLookup } from "../../agents/providers/provider-knowledge.js";
 import { getLogger } from "../../utils/logger.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -472,6 +473,10 @@ export async function setupAgentCoreRun(
       // run just created, the test it just wrote, or the scene it just
       // assembled. It has to read the same tree the tools are writing to.
       projectPath: conformanceProjectPath(request.workspaceLease?.path, deps.projectPath?.()),
+      // A campaign task's GDD (set by the executor around the whole task, so a
+      // supervisor node or a delegate inherits it); left to discovery, the
+      // guard judged a text-only campaign against another game's docs/ GDD.
+      designDoc: currentRunDesignDoc(),
       projectWorldSummary,
       projectWorldFingerprint,
       includeControlLoopTracker: true,

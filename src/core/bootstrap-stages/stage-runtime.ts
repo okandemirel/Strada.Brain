@@ -489,6 +489,10 @@ export async function initializeTaskRuntimeStage(
       }),
     });
     campaignManager.attachEvents();
+    // Each campaign task's runs are held to its own GDD; without this their
+    // conformance guards judge the largest markdown under docs/ instead.
+    const designDocs = campaignManager;
+    backgroundExecutor.setCampaignDesignDocs((campaignId) => designDocs.designDocOf(campaignId));
     messageRouter.setCampaignManager(campaignManager);
     // Re-attach campaigns that were mid-sprint when the process last stopped.
     void campaignManager.resumeActive().catch((error: unknown) => {

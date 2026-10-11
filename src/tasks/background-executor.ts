@@ -29,6 +29,7 @@ import { existsSync } from "node:fs";
 import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
+import { withRunDesignDoc, type RunDesignDoc } from "../agents/autonomy/run-design-doc.js";
 import {
   deriveTestVerdict,
   runIntegrityOfNodes,
@@ -349,6 +350,8 @@ export class BackgroundExecutor {
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
+  /** A campaign's GDD by campaign id (see setCampaignDesignDocs). */
+  private campaignDesignDocs?: (campaignId: string) => RunDesignDoc;
   private _unifiedBudgetManager?: UnifiedBudgetManager;
   /**
    * Budget reservation held by each in-flight run, keyed by task id (plan
@@ -661,6 +664,31 @@ export class BackgroundExecutor {
 
   setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
     this.monitorLifecycle = lifecycle;
+  }
+
+  /**
+   * How a campaign task finds its campaign's GDD. Every run inside the task
+   * is held to that document instead of the largest markdown under docs/.
+   */
+  setCampaignDesignDocs(resolve: (campaignId: string) => RunDesignDoc): void {
+    this.campaignDesignDocs = resolve;
+  }
+
+  /** The GDD a task's runs are held to; null for a task that serves no campaign. */
+  private designDocFor(task: Task): RunDesignDoc | null {
+    if (task.campaignId === undefined || !this.campaignDesignDocs) return null;
+    try {
+      return this.campaignDesignDocs(task.campaignId);
+    } catch (err) {
+      // An unreadable campaign row must not stop the queue; the guard falls
+      // back to finding the document itself, as it did before.
+      getLogger().warn("Campaign GDD lookup failed", {
+        taskId: task.id,
+        campaignId: task.campaignId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
 
   /**
@@ -1374,7 +1402,10 @@ export class BackgroundExecutor {
         },
       };
 
-      this.executeTask(timedEntry)
+      // Set for every task, campaign or not: a task submitted from inside
+      // another one (a retry, a resumed goal) starts here in that task's
+      // context, whose document must not carry over.
+      withRunDesignDoc(this.designDocFor(entry.task), () => this.executeTask(timedEntry))
         .catch((err) => {
           // Catch any unhandled rejection that escapes executeTask's own try/catch
           const rawMsg = err instanceof Error ? err.message : String(err);
