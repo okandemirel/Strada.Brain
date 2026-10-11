@@ -4,6 +4,7 @@ import type { Dirent } from "node:fs";
 import { resolve, join, dirname, sep, relative, basename } from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
@@ -394,6 +395,12 @@ function leaseSeedPath(leasePath: string): string {
   return `${leasePath}${LEASE_SEED_SUFFIX}`;
 }
 
+/** `<leaseRoot>/<lease-name>.tick` — the probe waitForSeedTick writes beside the workspace, removed before the lease is handed out. */
+const LEASE_TICK_SUFFIX = ".tick";
+/** FAT's two-second tick and a margin; past it the lease is handed out with a warning. */
+const SEED_TICK_WAIT_MS = 3_000;
+const SEED_TICK_POLL_MS = 20;
+
 const LEASE_COMMIT_LEDGER_SUFFIX = ".commit.json";
 
 function leaseCommitLedgerPath(leasePath: string): string {
@@ -457,14 +464,30 @@ export interface SeedStamp {
   readonly c: number;
   /** The path did NOT exist at the baseline — recorded, not omitted. */
   readonly absent?: true;
+  /**
+   * sha256 of the bytes, for a project file that changed less than a settle
+   * window before the snapshot began ("" when they could not be read). A
+   * filesystem stamps in ticks — NTFS ~15.6 ms, HFS+ a second, FAT two — so a
+   * same-length rewrite inside the tick of the write before it keeps size,
+   * mtime and ctime: such a stamp cannot vouch for the bytes, and an
+   * unchanged one is checked against this (980b16d5's racily clean rule).
+   */
+  readonly h?: string;
 }
+
+/** Wider than FAT's two-second tick, with room for a clock a little ahead. */
+const SEED_SETTLED_MS = 5_000;
 
 /** Did this path exist when the lease was taken? An unrecorded path answers nothing. */
 export function existedAtSeed(stamp: SeedStamp | undefined): boolean {
   return stamp !== undefined && stamp.absent !== true;
 }
 
-/** Unchanged means ALL of them, and an absent stamp answers nothing. */
+/**
+ * Unchanged means ALL of them, and an absent stamp answers nothing. A stamp
+ * that carries `h` was taken too soon after its file's last write to vouch
+ * alone: the caller checks the bytes as well.
+ */
 export function stampUnchanged(stamp: SeedStamp | undefined, now: { mtimeMs: number; size: number; ctimeMs?: number }): boolean {
   if (stamp === undefined || stamp.absent === true) return false;
   if (stamp.m !== now.mtimeMs || stamp.s !== now.size) return false;
@@ -494,7 +517,9 @@ export function reconcileSeedBaseline(
   let reconciled = 0;
   for (const [rel, before] of beforeSeed) {
     const after = sourceSeed.get(rel);
-    if (after !== undefined && after.m === before.m && after.s === before.s && after.c === before.c) continue;
+    // A rewrite inside the tick of the file's last write moves no stamp; only its bytes say it moved.
+    const sameBytes = before.h === undefined || after?.h === undefined || before.h === after.h;
+    if (after !== undefined && after.m === before.m && after.s === before.s && after.c === before.c && sameBytes) continue;
     sourceSeed.set(rel, before); // moved, or deleted: the pre-seed stamp is the baseline
     reconciled += 1;
   }
@@ -513,13 +538,15 @@ export interface PersistedLeaseSeed {
 }
 
 export function writeLeaseSeed(leasePath: string, seed: PersistedLeaseSeed): void {
+  const entry = ([rel, st]: [string, SeedStamp]): unknown[] =>
+    st.h === undefined ? [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0] : [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0, st.h];
   try {
     writeFileSync(
       leaseSeedPath(leasePath),
       JSON.stringify({
         seedHead: seed.seedHead ?? null,
-        leaseSeed: [...seed.leaseSeed.entries()].map(([rel, st]) => [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0]),
-        sourceSeed: [...seed.sourceSeed.entries()].map(([rel, st]) => [rel, st.m, st.s, st.c, st.absent === true ? 1 : 0]),
+        leaseSeed: [...seed.leaseSeed.entries()].map(entry),
+        sourceSeed: [...seed.sourceSeed.entries()].map(entry),
       }),
       "utf8",
     );
@@ -544,9 +571,9 @@ export function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined
       if (!Array.isArray(v)) return undefined;
       const m = new Map<string, SeedStamp>();
       for (const e of v) {
-        // [rel, mtime, size, ctime, absent] — and the shorter forms from
-        // leases taken before those fields were recorded, which keep behaving
-        // exactly as they did.
+        // [rel, mtime, size, ctime, absent, hash?] — and the shorter forms
+        // from leases taken before those fields were recorded, which keep
+        // behaving exactly as they did.
         if (!Array.isArray(e) || typeof e[0] !== "string") continue;
         // EXPLICIT ABSENCE CARRIES NO TIMESTAMPS. Its NaNs serialise as null,
         // and requiring a numeric mtime dropped the entry on reload — so a
@@ -561,6 +588,7 @@ export function readLeaseSeed(leasePath: string): PersistedLeaseSeed | undefined
           m: e[1],
           s: typeof e[2] === "number" ? e[2] : Number.NaN,
           c: typeof e[3] === "number" ? e[3] : Number.NaN,
+          ...(typeof e[5] === "string" ? { h: e[5] } : {}),
         });
       }
       return m;
@@ -977,7 +1005,7 @@ export class WorkspaceLeaseManager {
     // seeded recorded its new state as the baseline — and the worker's version,
     // made from the old bytes, overwrote that edit with no conflict reported
     // (Codex 2026-09-11 N#4).
-    const beforeSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
+    const beforeSeed = await this.snapshotMtimes(sourceRoot, sourceRoot, { hashFresh: true });
 
     try {
       if (useWorktree) {
@@ -1028,8 +1056,11 @@ export class WorkspaceLeaseManager {
     //                is unchanged here was not touched by the agent.
     //   sourceSeed — the project as it stood when the lease was taken, so an
     //                edit the user makes DURING the run is detectable.
+    //   Project files that changed just before a snapshot carry their bytes'
+    //   hash (SeedStamp.h); the lease's own files do not, because nobody can
+    //   write into the lease before waitForSeedTick below lets it go.
     const leaseSeed = await this.snapshotMtimes(workspacePath, workspacePath);
-    const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot);
+    const sourceSeed = await this.snapshotMtimes(sourceRoot, sourceRoot, { hashFresh: true });
     const movedWhileSeeding = reconcileSeedBaseline(beforeSeed, sourceSeed);
     if (movedWhileSeeding > 0) {
       getLoggerSafe().info("Files changed in the project while the lease was being seeded", {
@@ -1046,6 +1077,7 @@ export class WorkspaceLeaseManager {
     // Persist them: a crashed owner's salvage commits by these same rules
     // instead of quarantining everything (see LEASE_SEED_FILE).
     writeLeaseSeed(workspacePath, { seedHead, leaseSeed, sourceSeed });
+    await this.waitForSeedTick(workspacePath, leaseSeed);
 
     let released = false;
     const lease: WorkspaceLease = {
@@ -2150,7 +2182,13 @@ export class WorkspaceLeaseManager {
             // published the worker's version over it (Codex 2026-09-12 S#7).
             // The agent's work is preserved in quarantine either way; the
             // person's file is not recoverable once overwritten.
-            const userChanged = mtimeMoved ? atSeed !== "same" : ctimeMoved && atSeed !== "same";
+            // …AND NO STAMP MOVED BUT THE BYTES DID. A same-length save inside
+            // the tick of the file's last write keeps every stamp; a stamp the
+            // snapshot took inside that window carries the bytes' hash, and
+            // the bytes answer for it.
+            const bytesMoved = !mtimeMoved && !ctimeMoved && sourceSeeded?.h !== undefined
+              && (await hashFile(target)) !== sourceSeeded.h;
+            const userChanged = (mtimeMoved ? atSeed !== "same" : ctimeMoved && atSeed !== "same") || bytesMoved;
             if (userChanged) {
               // The agent's version used to be destroyed together with the
               // released workspace — hours of autonomous work lost to a single
@@ -2492,7 +2530,9 @@ export class WorkspaceLeaseManager {
       if (stamp?.absent === true) return false; // it appeared while we were seeding — not ours to delete
       if (stamp === undefined || Number.isNaN(stamp.s)) return true; // nothing recorded: as before
       try {
-        return stampUnchanged(stamp, await fsp.stat(join(sourceRoot, rel)));
+        if (!stampUnchanged(stamp, await fsp.stat(join(sourceRoot, rel)))) return false;
+        // A stamp taken inside the tick of the file's last write cannot see a same-length save in it.
+        return stamp.h === undefined || (await hashFile(join(sourceRoot, rel))) === stamp.h;
       } catch {
         return false;
       }
@@ -2811,8 +2851,12 @@ export class WorkspaceLeaseManager {
     }
   }
 
-  private async snapshotMtimes(root: string, excludeRoot: string): Promise<Map<string, SeedStamp>> {
+  private async snapshotMtimes(root: string, excludeRoot: string, opts?: { hashFresh?: boolean }): Promise<Map<string, SeedStamp>> {
     const seeded = new Map<string, SeedStamp>();
+    // Measured before the walk, as git measures a racily clean entry: a file
+    // that changed after this minus the window may change again inside the
+    // same filesystem tick without moving a stamp (SeedStamp.h).
+    const freshAfterMs = Date.now() - SEED_SETTLED_MS;
     // This walk runs against the LIVE project (sourceSeed), where the editor,
     // a build or the user deletes and locks files while it runs. It used to be
     // bare, so one ENOENT/EACCES between the readdir and its stat threw out of
@@ -2843,7 +2887,9 @@ export class WorkspaceLeaseManager {
         if (!entry.isFile()) return;
         try {
           const st = await fsp.stat(full);
-          seeded.set(relative(root, full), { m: st.mtimeMs, s: st.size, c: st.ctimeMs });
+          const fresh = opts?.hashFresh === true && Math.max(st.mtimeMs, st.ctimeMs) > freshAfterMs;
+          const h = fresh ? ((await hashFile(full)) ?? "") : undefined;
+          seeded.set(relative(root, full), { m: st.mtimeMs, s: st.size, c: st.ctimeMs, ...(h === undefined ? {} : { h }) });
         } catch (err) {
           skipped.push(`${relative(root, full)} (${err instanceof Error ? err.message : String(err)})`);
         }
@@ -2858,6 +2904,48 @@ export class WorkspaceLeaseManager {
       });
     }
     return seeded;
+  }
+
+  /**
+   * Let the lease go only once its filesystem's clock has passed every stamp
+   * the seed wrote.
+   *
+   * commit() reads "the agent never touched it" off an unchanged leaseSeed
+   * stamp, and every one of those stamps is the seed's own write of a moment
+   * ago. A filesystem stamps in ticks — NTFS ~15.6 ms, HFS+ a second, FAT two —
+   * so an agent's same-length rewrite inside the seed's tick kept size, mtime
+   * and ctime, read as untouched, and was deleted with the lease. Reading the
+   * whole lease back at commit would cost a full read of the tree; instead,
+   * since the agent cannot write before acquireLease returns, the hand-out
+   * waits until a probe beside the workspace gets a later ctime than the
+   * newest seed stamp: every write after it gets a later one too. On a
+   * filesystem with a fine clock the first probe already does.
+   */
+  private async waitForSeedTick(workspacePath: string, leaseSeed: ReadonlyMap<string, SeedStamp>): Promise<void> {
+    let newest = Number.NEGATIVE_INFINITY;
+    for (const st of leaseSeed.values()) if (st.c > newest) newest = st.c;
+    if (newest === Number.NEGATIVE_INFINITY) return;
+    const probe = `${workspacePath}${LEASE_TICK_SUFFIX}`;
+    try {
+      // Counted, not timed: a test's fake clock must not stop the count.
+      for (let poll = 1; ; poll++) {
+        await fsp.writeFile(probe, String(poll));
+        if ((await fsp.stat(probe)).ctimeMs > newest) return;
+        if (poll * SEED_TICK_POLL_MS >= SEED_TICK_WAIT_MS) break;
+        await sleep(SEED_TICK_POLL_MS);
+      }
+      getLoggerSafe().warn("The lease's filesystem clock never passed its seed — an edit inside that tick can read as untouched", {
+        workspacePath,
+        waitedMs: SEED_TICK_WAIT_MS,
+      });
+    } catch (err) {
+      getLoggerSafe().warn("Could not read the lease's filesystem clock — an edit inside the seed's tick can read as untouched", {
+        workspacePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      await fsp.rm(probe, { force: true }).catch(() => {});
+    }
   }
 
   /**
