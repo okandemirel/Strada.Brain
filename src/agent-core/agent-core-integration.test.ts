@@ -788,6 +788,45 @@ describe("AgentCore — a trigger fire does not become a second task", () => {
     // The fire is dropped (it is a report); the build failure is held for another round.
     expect(engine.getDeferredCount()).toBe(1);
   });
+
+  it("a goal that names nothing in a batch holding a fire and a real failure is refused, and only the failure comes back", async () => {
+    // Naming no in-batch id, the goal was judged against the whole batch, which held the failure:
+    // "Deploy now" was submitted, the fire's work ran a second time, and the no-ids rule then
+    // marked the build failure handled and dropped it.
+    const answers: Array<Record<string, unknown>> = [
+      { action: "execute", goal: "Deploy now", reasoning: "ready" },
+      { action: "execute", goal: "Deploy now", batchObservationIds: ["obs-not-in-this-batch"], reasoning: "ready" },
+      { action: "batch", goal: "Deploy now", batchObservationIds: ["obs-not-in-this-batch"], reasoning: "ready" },
+    ];
+    for (const answer of answers) {
+      const failure = createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
+      const { bus, engine, submit, core } = setup(() => answer, [failure]);
+      const deferred = vi.spyOn(engine, "defer");
+      bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", timestamp: Date.now() });
+
+      await core.tick();
+
+      expect(submit, JSON.stringify(answer)).not.toHaveBeenCalled();
+      expect(deferred.mock.calls.map(([obs]) => obs.source), JSON.stringify(answer)).toEqual(["build"]);
+    }
+  });
+
+  it("an informational observation under the threshold does not hold back a goal that names nothing", async () => {
+    // What the threshold already silenced did not prompt the goal; the failure is the batch's work.
+    const failure = createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
+    const idle = createObservation("user", "User has been idle for 20 minutes", { priority: 10, actionable: false });
+    const { engine, submit, core } = setup(
+      () => ({ action: "execute", goal: "Fix the build", reasoning: "broken" }),
+      [failure, idle],
+    );
+    const deferred = vi.spyOn(engine, "defer");
+
+    await core.tick();
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]![2]).toBe("Fix the build");
+    expect(deferred).not.toHaveBeenCalled();
+  });
 });
 
 /* ------------------------------------------------------------------ */

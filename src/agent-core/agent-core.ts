@@ -308,7 +308,7 @@ export class AgentCore {
       switch (decision.action) {
         case "execute":
           if (decision.goal) {
-            if (!answersActionableWork(ranked, decision.batchObservationIds)) {
+            if (!answersActionableWork(ranked, decision.batchObservationIds, effectivePriorityThreshold)) {
               this.refuseInformationalGoal(decision.action, decision.goal, ranked);
               break;
             }
@@ -368,7 +368,7 @@ export class AgentCore {
 
         case "batch":
           if (decision.batchObservationIds && decision.batchObservationIds.length > 0 && decision.goal) {
-            if (!answersActionableWork(ranked, decision.batchObservationIds)) {
+            if (!answersActionableWork(ranked, decision.batchObservationIds, effectivePriorityThreshold)) {
               this.refuseInformationalGoal(decision.action, decision.goal, ranked);
               break;
             }
@@ -727,14 +727,24 @@ export class AgentCore {
  * approval is marked actionable:false, and a goal built only on it ran that work a second time
  * (review of 254fa61a: one deploy fire, one reasoning call, one task submitted against its label —
  * the run heartbeat-loop stopped starting on 2026-09-02).
+ *
+ * A goal that names nothing in the batch cannot say which observation it answers, so a batch that
+ * also holds an informational observation loud enough to have prompted it is refused: judged
+ * against the whole batch, "Deploy now" beside a real build failure was submitted, the fire's
+ * work ran a second time, and the failure was marked handled and dropped. The requeue brings the
+ * actionable observations back without the fire. One the threshold already silenced did not prompt
+ * the goal, and does not hold back the batch's work.
  */
 function answersActionableWork(
-  ranked: ReadonlyArray<{ id: string; actionable: boolean }>,
+  ranked: ReadonlyArray<{ id: string; actionable: boolean; priority: number }>,
   namedIds: readonly string[] | undefined,
+  threshold: number,
 ): boolean {
   const named = new Set(namedIds ?? []);
   const answered = ranked.filter((o) => named.has(o.id));
-  return (answered.length > 0 ? answered : ranked).some((o) => o.actionable);
+  if (answered.length > 0) return answered.some((o) => o.actionable);
+  if (ranked.some((o) => !o.actionable && o.priority >= threshold)) return false;
+  return ranked.some((o) => o.actionable);
 }
 
 /**
