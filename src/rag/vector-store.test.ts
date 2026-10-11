@@ -562,6 +562,65 @@ describe("FileVectorStore", () => {
       await store.shutdown();
     });
 
+    // Rebuilding the graph inside a write stalled one re-index of one file for
+    // seconds at 5000x64 (minutes at the sizes that use the graph), at
+    // whichever write crossed the removed-outnumber-live line. Every graph
+    // insertion draws its level from Math.random, so the draws count the
+    // insertions a write performs: a write may insert its own chunks, never
+    // the store's.
+    it("never rebuilds the graph inside a write, and still answers after the writes", async () => {
+      const dims = 8;
+      const store = new FileVectorStore(tmpDir, dims, GRAPH);
+      await store.initialize();
+      const next = seeded(17);
+      const centers = Array.from({ length: 20 }, () => Array.from({ length: dims }, next));
+      const near = (file: number, spread: number) => centers[file]!.map((c) => c + spread * next());
+      const fileChunks = (file: number, round: number) =>
+        Array.from({ length: 100 }, (_, i) =>
+          makeEntry(`r${round}-f${file}-${i}`, `/src/F${file}.cs`, near(file, 0.15)),
+        );
+      const live = new Map<number, VectorEntry[]>();
+      for (let f = 0; f < 20; f++) live.set(f, fileChunks(f, 0));
+      await store.upsert([...live.values()].flat());
+      let q = 0;
+      const nearAFile = () => near(q++ % 20, 0.2);
+      await store.search(nearAFile(), K); // builds the graph before the re-indexing
+
+      const draws = vi.spyOn(Math, "random");
+      try {
+        let worstWrite = 0;
+        for (let round = 1; round <= 2; round++) {
+          for (let f = 0; f < 20; f++) {
+            const chunks = fileChunks(f, round);
+            draws.mockClear();
+            await store.removeByFile(`/src/F${f}.cs`);
+            worstWrite = Math.max(worstWrite, draws.mock.calls.length);
+            draws.mockClear();
+            await store.upsert(chunks);
+            worstWrite = Math.max(worstWrite, draws.mock.calls.length);
+            live.set(f, chunks);
+          }
+        }
+        // One level draw per inserted chunk, plus a 1-in-16 chance of each extra.
+        expect(worstWrite).toBeLessThanOrEqual(400);
+
+        // A wholesale removal tombstones; it does not rebuild from the rest.
+        const doomed = [...live.values()].slice(0, 18).flat().map((e) => e.id);
+        draws.mockClear();
+        await store.remove(doomed);
+        expect(draws.mock.calls.length).toBe(0);
+      } finally {
+        draws.mockRestore();
+      }
+
+      const rest = [...live.values()].slice(18).flat();
+      expect(store.count()).toBe(rest.length);
+      let r = 0;
+      const nearARemainingFile = () => near(18 + (r++ % 2), 0.2);
+      expect(await recall(store, rest, nearARemainingFile)).toBeGreaterThanOrEqual(0.95);
+      await store.shutdown();
+    });
+
     // Below EXACT_SCAN_MAX_FLOATS a search scans every vector: exact answers,
     // and no graph to build on every boot.
     it("answers a store under the scan budget exactly", async () => {

@@ -337,19 +337,16 @@ class HNSWIndex {
     if (idx === undefined) return;
 
     // The node stays in the graph as a waypoint: dropping it cut off every
-    // node that was only reached through it. The graph is rebuilt once the
-    // removed nodes outnumber the live ones.
+    // node that was only reached through it. Its owner discards the graph
+    // once the removed nodes outnumber the live ones (see isStale).
     this.idToIndex.delete(id);
     this.nodes[idx]!.deleted = true;
     this.deletedCount++;
-    if (this.deletedCount > this.idToIndex.size) this.compact();
   }
 
-  /** Rebuilds the graph from the live nodes alone. */
-  private compact(): void {
-    const live = this.nodes.filter((node) => !node.deleted);
-    this.clear();
-    for (const node of live) this.add(node.id, node.vector);
+  /** True once the removed nodes outnumber the live ones. */
+  isStale(): boolean {
+    return this.deletedCount > this.idToIndex.size;
   }
 
   /**
@@ -550,7 +547,7 @@ export class FileVectorStore implements IVectorStore {
   private readonly dimensions: number;
   private chunks: CodeChunk[] = [];
   private vectors: Float32Array = new Float32Array(0);
-  /** Built on demand by search(); kept in step with the store once built. */
+  /** Built on demand by search(); kept in step with the store once built, until dropStaleGraph() discards it. */
   private hnswIndex: HNSWIndex | null = null;
   private readonly exactScanMaxFloats: number;
 
@@ -725,6 +722,7 @@ export class FileVectorStore implements IVectorStore {
         this.hnswIndex?.add(entry.id, new Float32Array(entry.vector));
       }
     }
+    this.dropStaleGraph();
   }
 
   async remove(ids: string[]): Promise<void> {
@@ -760,6 +758,7 @@ export class FileVectorStore implements IVectorStore {
     this.chunks = keepChunks;
     this.vectors = keepVectors;
     this.idIndex = newIdIndex;
+    this.dropStaleGraph();
     this.markDirty();
   }
 
@@ -855,6 +854,16 @@ export class FileVectorStore implements IVectorStore {
       this.idIndex.set(chunk.id, i);
       this.addToFileIndex(chunk.filePath, chunk.id);
     }
+  }
+
+  /**
+   * A graph mostly made of removed nodes is discarded, and the next graph
+   * search builds it from the live chunks. Rebuilding it here instead put a
+   * full build inside whichever write crossed the line: one file's re-index
+   * stalled the event loop for as long as a build of the whole store takes.
+   */
+  private dropStaleGraph(): void {
+    if (this.hnswIndex?.isStale()) this.hnswIndex = null;
   }
 
   private buildHnswIndex(): HNSWIndex {
