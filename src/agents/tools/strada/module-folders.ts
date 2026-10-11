@@ -15,6 +15,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { basename, join } from "node:path";
+import { isIncompleteCheckout, SUBMODULE_INIT_COMMAND } from "../../../config/package-checkout.js";
 
 /** One folder entry of Strada.Core's module layout. */
 export interface DeclaredFolder {
@@ -134,10 +135,13 @@ const NODE_FS: LayoutFs = { exists: existsSync, read: (path) => readFileSync(pat
 
 // "unreadable" is a framework that is there but whose layout this reader cannot
 // follow; `reason` says what each candidate file lacked. "incomplete" is a
-// framework directory holding none of the candidate files at all — what a
-// clone made without --recursive leaves: an empty submodule directory.
-// Calling that "installed" sent the agent looking for a layout format problem
-// when the checkout had simply never happened.
+// framework directory with no package.json — what a clone made without
+// --recursive leaves: an empty submodule directory. Calling that "installed"
+// sent the agent looking for a layout format problem when the checkout had
+// simply never happened. It is the reading checkStradaDeps uses
+// (isIncompleteCheckout), so the doctor and this tool agree; "no layout file"
+// alone is not it, since a full checkout that moved its layout again has none
+// this reader knows and `git submodule update` would fix nothing there.
 export type LayoutLookup =
   | { status: "declared"; layout: DeclaredLayout }
   | { status: "not-installed" }
@@ -148,14 +152,12 @@ export type LayoutLookup =
 export function readLayoutAt(coreRoot: string, fs: LayoutFs = NODE_FS): LayoutLookup {
   if (!fs.exists(coreRoot)) return { status: "not-installed" };
   const problems: string[] = [];
-  let anyFound = false;
   for (const relative of LAYOUT_DECLARATION_FILES) {
     const file = join(coreRoot, relative);
     if (!fs.exists(file)) {
       problems.push(`${relative}: not found`);
       continue;
     }
-    anyFound = true;
     let source: string;
     try {
       source = fs.read(file);
@@ -170,15 +172,14 @@ export function readLayoutAt(coreRoot: string, fs: LayoutFs = NODE_FS): LayoutLo
     }
     return { status: "declared", layout: { file, folders, folderOwners: parseFolderOwners(source) } };
   }
-  if (!anyFound) return { status: "incomplete" };
+  if (isIncompleteCheckout(coreRoot, fs.exists)) return { status: "incomplete" };
   return { status: "unreadable", reason: problems.join("; ") };
 }
 
 /** What to do about a framework directory whose checkout never finished. */
 export const INCOMPLETE_CHECKOUT_HINT =
-  `none of its module layout files (${LAYOUT_DECLARATION_FILES.map((f) => basename(f)).join(", ")}) ` +
-  "are there, as with a submodule that was never checked out — run " +
-  "`git submodule update --init --recursive` in the project";
+  `it holds no package.json and no readable module layout (${LAYOUT_DECLARATION_FILES.map((f) => basename(f)).join(", ")}), ` +
+  `as with a submodule that was never checked out — run \`${SUBMODULE_INIT_COMMAND}\` in the project`;
 
 /**
  * Read the layout the Strada.Core installed in this project declares.

@@ -400,6 +400,24 @@ describe("describeFrameworkInstall — the runtime says what the project is", ()
     expect(msg).toContain("this is a Strada project");
   });
 
+  it("keeps 'unreadable' for a populated checkout whose layout file moved", () => {
+    // Incomplete means the checkout never happened, read the way
+    // checkStradaDeps reads it: no package.json. A full checkout that moved its
+    // layout again is a reader problem, and `git submodule update` fixes
+    // nothing there.
+    const projectPath = tempProject("notice-moved-layout");
+    const coreRoot = join(projectPath, CORE_INSTALL_PATH);
+    mkdirSync(join(coreRoot, "Runtime"), { recursive: true });
+    writeFileSync(join(coreRoot, "package.json"), JSON.stringify({ name: "com.strada.core" }));
+
+    const lookup = readModuleLayout(projectPath);
+    expect(lookup.status).toBe("unreadable");
+    const msg = describeFrameworkInstall(projectPath);
+    expect(msg).not.toMatch(/checkout is incomplete/);
+    expect(msg).not.toContain("git submodule update");
+    expect(msg).toContain("module layout could not be read");
+  });
+
   it("reports absence without a framework directory", () => {
     expect(describeFrameworkInstall(tempProject("notice-plain"))).toContain("No Strada.Core");
   });

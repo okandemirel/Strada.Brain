@@ -55,7 +55,6 @@ describe("strada_create_module in a module that already holds code", () => {
     // What the gate asked for is now there.
     expect(existsSync(join(root, MODULE, "Board.asmdef"))).toBe(true);
     expect(read(root, `${MODULE}/Scripts/BoardModuleConfig.cs`)).toContain("class BoardModuleConfig");
-    expect(existsSync(join(root, MODULE, "Scripts", "Services", "IBoardService.cs"))).toBe(true);
 
     // And the report says which files were kept, instead of calling them created.
     expect(result.content).not.toContain("created successfully");
@@ -69,6 +68,111 @@ describe("strada_create_module in a module that already holds code", () => {
       ]),
     );
     expect(meta.createdFiles).not.toContain(`${MODULE}/Scripts/Systems/BoardSystem.cs`);
+  });
+
+  // The service pair is one unit: Strada.Core constrains
+  // RegisterService<TInterface, TImplementation> with
+  // `where TImplementation : class, TInterface`, so a stub half generated next
+  // to a hand-written half either duplicates a type or fails that constraint.
+  // Measured: a kept `class BoardService { int Score; }` got a stub
+  // IBoardService.cs beside it and a config registering the two together.
+  it("creates neither half of the service pair when the service is already there", async () => {
+    const root = project();
+    put(root, `${MODULE}/Scripts/Services/BoardService.cs`, "class BoardService { int Score; }");
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(root, MODULE, "Scripts", "Services", "IBoardService.cs"))).toBe(false);
+    expect(read(root, `${MODULE}/Scripts/Services/BoardService.cs`)).toBe("class BoardService { int Score; }");
+    // The config it did create registers nothing it did not create, and the
+    // result says the registration is left to the author.
+    expect(read(root, `${MODULE}/Scripts/BoardModuleConfig.cs`)).not.toContain("RegisterService");
+    expect(result.content).toContain("RegisterService<IBoardService, BoardService>");
+    expect(result.content).toMatch(/not registered/);
+    const meta = result.metadata as { createdFiles: string[]; keptFiles: string[] };
+    expect(meta.createdFiles.some((f) => /Service\.cs$/.test(f))).toBe(false);
+  });
+
+  it("finds the interface where the framework's own layout files it", async () => {
+    // Strada.Core declares ServiceInterface's folder as Scripts/Interfaces; a
+    // module laid out that way already declares IBoardService, and a second
+    // one in Scripts/Services is a duplicate type in the same namespace.
+    const root = project();
+    put(
+      root,
+      `${MODULE}/Scripts/Interfaces/IBoardService.cs`,
+      "namespace Game.Modules.Board { public interface IBoardService { void Reset(); } }",
+    );
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(root, MODULE, "Scripts", "Services", "IBoardService.cs"))).toBe(false);
+    expect(existsSync(join(root, MODULE, "Scripts", "Services", "BoardService.cs"))).toBe(false);
+    expect(read(root, `${MODULE}/Scripts/BoardModuleConfig.cs`)).not.toContain("RegisterService");
+    expect(result.content).toContain(`${MODULE}/Scripts/Interfaces/IBoardService.cs`);
+  });
+
+  it("does not generate a system the module already declares under another file name", async () => {
+    const root = project();
+    put(
+      root,
+      `${MODULE}/Scripts/Systems/Gameplay/Systems.cs`,
+      "namespace Game.Modules.Board { public sealed class BoardSystem : SystemBase { } }",
+    );
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(root, MODULE, "Scripts", "Systems", "BoardSystem.cs"))).toBe(false);
+    expect(result.content).toContain(`${MODULE}/Scripts/Systems/Gameplay/Systems.cs`);
+  });
+
+  it("still creates and registers the whole pair in a fresh module", async () => {
+    const root = project();
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(read(root, `${MODULE}/Scripts/Services/IBoardService.cs`)).toContain("interface IBoardService");
+    expect(read(root, `${MODULE}/Scripts/Services/BoardService.cs`)).toContain("class BoardService");
+    expect(read(root, `${MODULE}/Scripts/BoardModuleConfig.cs`)).toContain(
+      "RegisterService<IBoardService, BoardService>",
+    );
+  });
+
+  it("points the test assemblies at the module assembly it kept", async () => {
+    // A kept root .asmdef named something else is the module's assembly; test
+    // assemblies referencing Game.Modules.Board reference nothing.
+    const root = project();
+    put(root, `${MODULE}/PixelFlow.Board.asmdef`, JSON.stringify({ name: "PixelFlow.Board" }));
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    const runtime = readdirSync(join(root, MODULE, "Tests", "Runtime")).filter((f) => f.endsWith(".asmdef"));
+    expect(runtime).toEqual(["PixelFlow.Board.Tests.asmdef"]);
+    const asmdef = JSON.parse(read(root, `${MODULE}/Tests/Runtime/PixelFlow.Board.Tests.asmdef`)) as {
+      name: string;
+      references: string[];
+    };
+    expect(asmdef.name).toBe("PixelFlow.Board.Tests");
+    expect(asmdef.references).toContain("PixelFlow.Board");
+    expect(asmdef.references).not.toContain("Game.Modules.Board");
+  });
+
+  it("keeps a test assembly the Tests folder already has above the mode folder", async () => {
+    // Tests/Runtime compiles into the nearest .asmdef above it; a second one
+    // claiming the same assembly name is a duplicate assembly.
+    const root = project();
+    put(root, `${MODULE}/Tests/Game.Modules.Board.Tests.asmdef`, JSON.stringify({ name: "Game.Modules.Board.Tests" }));
+
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(root, MODULE, "Tests", "Runtime", "Game.Modules.Board.Tests.asmdef"))).toBe(false);
+    expect(result.content).toContain(`${MODULE}/Tests/Game.Modules.Board.Tests.asmdef`);
   });
 
   it("keeps a hand-written ModuleConfig wherever in the module it sits", async () => {

@@ -18,6 +18,7 @@ import {
   DEFAULT_STRADA_MODULES_REPO_URL,
   type StradaDependencyConfig,
 } from "./config.js";
+import { isIncompleteCheckout, SUBMODULE_INIT_COMMAND } from "./package-checkout.js";
 
 export interface StradaDepsStatus {
   readonly coreInstalled: boolean;
@@ -28,6 +29,13 @@ export interface StradaDepsStatus {
   readonly modulesPath: string | null;
   readonly modulesVersion?: string | null;
   readonly modulesSource?: StradaDepInstallSource | null;
+  /**
+   * A reference to the package that was found but is not a package Unity can
+   * load (an empty submodule directory, a manifest `file:` path with nothing
+   * there), and where. null when the package is installed or nothing was found.
+   */
+  readonly coreIncomplete?: string | null;
+  readonly modulesIncomplete?: string | null;
   readonly mcpInstalled: boolean;
   readonly mcpPath: string | null;
   readonly mcpVersion: string | null;
@@ -225,22 +233,37 @@ export function checkStradaDeps(
     };
   }
 
-  const corePath = findPackage(packagesDir, CORE_NAMES);
-  const modulesPath = findPackage(packagesDir, MODULES_NAMES);
-  const coreVersion = corePath ? readPackageVersion(corePath) : null;
-  const modulesVersion = modulesPath ? readPackageVersion(modulesPath) : null;
+  const coreDir = findPackage(packagesDir, CORE_NAMES);
+  const modulesDir = findPackage(packagesDir, MODULES_NAMES);
 
   // Fallback: check manifest.json
-  const coreInManifest = !corePath && checkManifest(packagesDir, CORE_NAMES);
-  const modulesInManifest = !modulesPath && checkManifest(packagesDir, MODULES_NAMES);
+  const coreRef = coreDir.path ? NO_MANIFEST_REF : checkManifest(packagesDir, CORE_NAMES);
+  const modulesRef = modulesDir.path ? NO_MANIFEST_REF : checkManifest(packagesDir, MODULES_NAMES);
 
-  if (!corePath && !coreInManifest) {
+  const corePath = coreDir.path ?? coreRef.path;
+  const modulesPath = modulesDir.path ?? modulesRef.path;
+  const coreInstalled = coreDir.path !== null || coreRef.installed;
+  const modulesInstalled = modulesDir.path !== null || modulesRef.installed;
+  const coreVersion = corePath ? readPackageVersion(corePath) : null;
+  const modulesVersion = modulesPath ? readPackageVersion(modulesPath) : null;
+  const coreIncomplete = coreInstalled ? null : (coreDir.incomplete ?? coreRef.incomplete);
+  const modulesIncomplete = modulesInstalled ? null : (modulesDir.incomplete ?? modulesRef.incomplete);
+
+  if (coreIncomplete) {
+    warnings.push(
+      `Strada.Core checkout is incomplete: ${coreIncomplete}. Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish it.`,
+    );
+  } else if (!coreInstalled) {
     warnings.push(
       `Strada.Core not found. Searched: ${CORE_NAMES.join(", ")} in Packages/ and manifest.json`,
     );
   }
 
-  if (!modulesPath && !modulesInManifest) {
+  if (modulesIncomplete) {
+    warnings.push(
+      `Strada.Modules checkout is incomplete: ${modulesIncomplete}. Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish it.`,
+    );
+  } else if (!modulesInstalled) {
     warnings.push(
       "Strada.Modules not installed (optional). Module-specific APIs will not be available.",
     );
@@ -253,14 +276,16 @@ export function checkStradaDeps(
   const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
 
   return {
-    coreInstalled: corePath !== null || coreInManifest,
+    coreInstalled,
     corePath,
     coreVersion,
-    coreSource: corePath ? "package-directory" : coreInManifest ? "manifest" : null,
-    modulesInstalled: modulesPath !== null || modulesInManifest,
+    coreSource: coreDir.path ? "package-directory" : coreRef.installed ? "manifest" : null,
+    coreIncomplete,
+    modulesInstalled,
     modulesPath,
     modulesVersion,
-    modulesSource: modulesPath ? "package-directory" : modulesInManifest ? "manifest" : null,
+    modulesSource: modulesDir.path ? "package-directory" : modulesRef.installed ? "manifest" : null,
+    modulesIncomplete,
     mcpInstalled: mcp.installed,
     mcpPath: mcp.path,
     mcpVersion: mcp.version,
@@ -289,6 +314,14 @@ export async function installStradaDep(
   const fullManifestPath = join(unityProjectPath, "Packages", "manifest.json");
 
   if (existsSync(fullTargetPath)) {
+    // A clone made without its submodules leaves this path empty: adding the
+    // submodule again cannot work there, finishing the checkout can.
+    if (isIncompleteCheckout(fullTargetPath)) {
+      return err(
+        `${fullTargetPath} exists but holds no package.json — the submodule was never checked out. ` +
+          `Run \`${SUBMODULE_INIT_COMMAND}\` in ${unityProjectPath} to finish it.`,
+      );
+    }
     return err(`Target path already exists: ${fullTargetPath}`);
   }
 
@@ -490,29 +523,69 @@ function readPackageVersion(packagePath: string): string | null {
   return readPackageMetadata(join(packagePath, "package.json"))?.version ?? null;
 }
 
-function findPackage(packagesDir: string, names: readonly string[]): string | null {
+/** A package directory under Packages/, or the directory found there that is not one yet. */
+function findPackage(
+  packagesDir: string,
+  names: readonly string[],
+): { path: string | null; incomplete: string | null } {
+  let incomplete: string | null = null;
   for (const name of names) {
     const candidate = join(packagesDir, name);
     try {
       if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-        return candidate;
+        if (!isIncompleteCheckout(candidate)) return { path: candidate, incomplete: null };
+        incomplete ??= `${candidate} exists but holds no package.json (a submodule that was never checked out)`;
       }
     } catch { /* TOCTOU: directory removed between existsSync and statSync */ }
   }
-  return null;
+  return { path: null, incomplete };
 }
 
-function checkManifest(packagesDir: string, names: readonly string[]): boolean {
-  const manifestPath = join(packagesDir, "manifest.json");
-  if (!existsSync(manifestPath)) return false;
+interface ManifestRef {
+  readonly installed: boolean;
+  /** The package a `file:` reference resolves to; null for a git or registry dependency. */
+  readonly path: string | null;
+  readonly incomplete: string | null;
+}
+const NO_MANIFEST_REF: ManifestRef = { installed: false, path: null, incomplete: null };
 
+/**
+ * The manifest dependency on one of `names`, judged the way Unity resolves it.
+ *
+ * Only the dependencies' keys name a dependency: the file's text also carries
+ * scoped-registry scopes and other packages' paths, and a substring match on it
+ * counted those. A git URL or registry version is fetched by Unity into
+ * Library/PackageCache, so the line is the install. A `file:` reference is a
+ * path relative to Packages/ and counts only when a package is there — an
+ * uninitialised submodule leaves the line and an empty directory.
+ */
+function checkManifest(packagesDir: string, names: readonly string[]): ManifestRef {
+  let dependencies: Record<string, unknown>;
   try {
-    const content = readFileSync(manifestPath, "utf-8");
-    const lowerContent = content.toLowerCase();
-    return names.some((name) => lowerContent.includes(name.toLowerCase()));
+    const parsed = JSON.parse(readFileSync(join(packagesDir, "manifest.json"), "utf-8")) as {
+      dependencies?: unknown;
+    };
+    if (!parsed.dependencies || typeof parsed.dependencies !== "object") return NO_MANIFEST_REF;
+    dependencies = parsed.dependencies as Record<string, unknown>;
   } catch {
-    return false;
+    return NO_MANIFEST_REF;
   }
+
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  for (const [key, value] of Object.entries(dependencies)) {
+    if (!wanted.has(key.toLowerCase()) || typeof value !== "string") continue;
+    if (!value.startsWith("file:")) return { installed: true, path: null, incomplete: null };
+    const target = resolvePath(packagesDir, value.slice("file:".length));
+    try {
+      // A tarball is a file; a directory must be a package.
+      if (statSync(target).isFile()) return { installed: true, path: null, incomplete: null };
+      if (!isIncompleteCheckout(target)) return { installed: true, path: target, incomplete: null };
+      return { ...NO_MANIFEST_REF, incomplete: `Packages/manifest.json points ${key} at ${target}, which holds no package.json` };
+    } catch {
+      return { ...NO_MANIFEST_REF, incomplete: `Packages/manifest.json points ${key} at ${target}, which does not exist` };
+    }
+  }
+  return NO_MANIFEST_REF;
 }
 
 function isGitRepo(dir: string): boolean {
@@ -915,6 +988,7 @@ function evaluatePackageRow(
   version: string | null | undefined,
   source: StradaDepInstallSource | null | undefined,
   scanned = true,
+  incomplete: string | null = null,
 ): ProjectMatrixRow {
   // NOTHING WAS LOOKED AT (Codex round 12 #27). With no project configured
   // there is no Packages/ to search, so reporting the package "missing"
@@ -932,6 +1006,18 @@ function evaluatePackageRow(
   const floor = spec.minVersion
     ? `Minimum ${spec.minVersion}.`
     : "No version floor is enforced by Brain — the version is recorded, not gated.";
+  // The second-machine case this matrix exists for: the reference is there,
+  // the package is not, and adding it again is not the fix.
+  if (!installed && incomplete) {
+    return {
+      id: spec.id,
+      label: spec.label,
+      requirement: spec.requirement,
+      status: "missing",
+      detail: `${spec.label} is not installed — its checkout is incomplete: ${incomplete}. Without it, ${spec.withoutIt}.`,
+      fix: `Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish the checkout, or restore the package the manifest points at.`,
+    };
+  }
   if (!installed) {
     return {
       id: spec.id,
@@ -1146,8 +1232,8 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
 
   const rows: ProjectMatrixRow[] = [
     ...projectRows,
-    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned),
-    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned),
+    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned, deps.coreIncomplete ?? null),
+    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned, deps.modulesIncomplete ?? null),
     evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource, scanned),
     ...(scanned
       ? [

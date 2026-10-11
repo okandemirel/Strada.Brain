@@ -399,19 +399,23 @@ function declaresTest(source: string): boolean {
   return declaresCsTest(source);
 }
 
+// The whole module, as strada_create_module searches it: the gate's remedy is
+// that tool, which keeps a *ModuleConfig.cs at any depth and makes no second
+// one. Two levels down, Scripts/Config/Board/BoardModuleConfig.cs was "missing"
+// here and kept there, so the advised call could never close the gate.
 function defaultListDir(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const names: string[] = [];
-  const walk = (current: string, depth: number): void => {
+  const walk = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (depth > 0) walk(joinPath(current, entry.name), depth - 1);
+        walk(joinPath(current, entry.name));
         continue;
       }
       names.push(entry.name);
     }
   };
-  walk(dir, 2);
+  walk(dir);
   return names;
 }
 

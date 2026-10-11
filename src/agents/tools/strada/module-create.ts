@@ -1,5 +1,5 @@
-import { mkdir, readdir } from "node:fs/promises";
-import { basename, join, sep } from "node:path";
+import { mkdir, readdir, readFile } from "node:fs/promises";
+import { basename, join, relative, sep } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import { createGeneratedFile } from "./generated-file.js";
 import {
@@ -18,7 +18,8 @@ export class ModuleCreateTool implements ITool {
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
     "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions), so they always match what the Unity generator produces. " +
-    "Safe on a module folder that already holds code: files already there are kept as they are, never overwritten, and only the missing ones are created; the result lists which were kept.";
+    "Safe on a module folder that already holds code: files already there are kept as they are, never overwritten, and only the missing ones are created. " +
+    "A type the module already declares anywhere is not generated again, and when either half of the I<Name>Service/<Name>Service pair exists neither half is generated or registered; the result lists what was kept and what is left to register.";
 
   readonly inputSchema = {
     type: "object",
@@ -265,24 +266,51 @@ export class ModuleCreateTool implements ITool {
       // the agent here for a module folder that holds code but lacks its
       // config or assembly, so this call has to fill those gaps and leave the
       // code alone — it used to truncate every template path it shared.
+      //
+      // "Already there" is judged by what the module declares, not by the
+      // template's own path: an IBoardService in Scripts/Interfaces (where the
+      // framework's layout files it) is the same type a stub in
+      // Scripts/Services would declare a second time.
+      const existing = await readModuleSources(fullBase);
       const keptFiles: string[] = [];
+      const keep = (rel: string): void => {
+        if (!keptFiles.includes(`${modulePath}/${rel}`)) keptFiles.push(`${modulePath}/${rel}`);
+      };
       const place = async (rel: string, content: string): Promise<boolean> => {
         const outcome = await createGeneratedFile(context.projectPath, join(fullBase, ...rel.split("/")), content);
-        (outcome === "created" ? createdFiles : keptFiles).push(`${modulePath}/${rel}`);
+        if (outcome === "created") createdFiles.push(`${modulePath}/${rel}`);
+        else keep(rel);
         return outcome === "created";
       };
-      // Unity takes one .asmdef per folder; a second one beside a hand-written
-      // assembly stops every assembly in the project from compiling.
-      const placeAssembly = async (folder: string, fileName: string, content: string): Promise<void> => {
-        const existing = await assemblyIn(join(fullBase, ...folder.split("/").filter(Boolean)));
-        if (existing) keptFiles.push(`${modulePath}/${folder ? `${folder}/` : ""}${existing}`);
-        else await place(`${folder ? `${folder}/` : ""}${fileName}`, content);
+      // A folder compiles into the nearest .asmdef at or above it, so one in
+      // the folder or between it and the module root already owns it; and an
+      // assembly name the module already declares is a duplicate assembly a
+      // second time. Either stops every assembly in the project compiling.
+      // Returns the assembly the folder ends up in.
+      const placeAssembly = async (
+        folder: string,
+        fileName: string,
+        assemblyName: string,
+        content: string,
+      ): Promise<string> => {
+        const segments = folder.split("/").filter(Boolean);
+        const owners = segments.length === 0 ? [""] : segments.map((_, i) => segments.slice(0, i + 1).join("/"));
+        const owning =
+          existing.assemblies.find((a) => owners.includes(folderOf(a.rel))) ??
+          existing.assemblies.find((a) => a.name === assemblyName);
+        if (owning) {
+          keep(owning.rel);
+          return owning.name ?? assemblyName;
+        }
+        await place(`${folder ? `${folder}/` : ""}${fileName}`, content);
+        return assemblyName;
       };
 
       // 1. Assembly Definition
-      await placeAssembly(
+      const moduleAssembly = await placeAssembly(
         "",
         `${name}.asmdef`,
+        `Game.Modules.${name}`,
         JSON.stringify(
           {
             name: `Game.Modules.${name}`,
@@ -310,8 +338,11 @@ export class ModuleCreateTool implements ITool {
       // which cannot see the module's own assembly — so the tests do not
       // reference the code they test. Unity needs the TestRunner references and
       // the editor-only platform constraint spelled out per mode.
+      //
+      // They reference the assembly the module root really has: a kept root
+      // .asmdef under another name is the module's assembly, and a reference
+      // to Game.Modules.<Name> would name one that does not exist.
       if (includeTests) {
-        const moduleAssembly = `Game.Modules.${name}`;
         const testAssemblies: Array<{ dir: string; suffix: string; editorOnly: boolean }> = [
           { dir: "Runtime", suffix: "Tests", editorOnly: false },
           { dir: "Editor", suffix: "Editor.Tests", editorOnly: true },
@@ -320,6 +351,7 @@ export class ModuleCreateTool implements ITool {
           await placeAssembly(
             `Tests/${spec.dir}`,
             `${moduleAssembly}.${spec.suffix}.asmdef`,
+            `${moduleAssembly}.${spec.suffix}`,
             JSON.stringify(
               {
                 name: `${moduleAssembly}.${spec.suffix}`,
@@ -345,23 +377,41 @@ export class ModuleCreateTool implements ITool {
         }
       }
 
-      // 2. ModuleConfig — one per module, wherever in it the author put it: a
-      // second <Name>ModuleConfig class is a duplicate definition.
-      const existingConfig = await moduleConfigIn(fullBase);
-      if (existingConfig) keptFiles.push(`${modulePath}/${existingConfig}`);
-      else await place(`Scripts/${name}ModuleConfig.cs`, generateModuleConfig(name, namespace, includeService));
-
-      // 3. Optional System
+      // 2. Optional System
       if (includeSystem) {
-        await place(`Scripts/Systems/${name}System.cs`, generateSystem(name, namespace));
+        const declared = declarationOf(existing, `${name}System`);
+        if (declared) keep(declared);
+        else await place(`Scripts/Systems/${name}System.cs`, generateSystem(name, namespace));
       }
 
-      // 4. Optional Service
+      // 3. Optional Service — the interface and its implementation are one
+      // unit. Strada.Core constrains RegisterService<TInterface, TImplementation>
+      // with `where TImplementation : class, TInterface`, so a stub half next to
+      // a hand-written half either declares a type twice or fails that
+      // constraint: the module stops compiling. With either half there, neither
+      // is generated and the author's pair is left to the author.
       let serviceCreated = false;
+      const keptServiceHalves: string[] = [];
       if (includeService) {
-        await place(`Scripts/Services/I${name}Service.cs`, generateServiceInterface(name, namespace));
-        serviceCreated = await place(`Scripts/Services/${name}Service.cs`, generateServiceImpl(name, namespace));
+        for (const type of [`I${name}Service`, `${name}Service`]) {
+          const declared = declarationOf(existing, type);
+          if (declared && !keptServiceHalves.includes(declared)) keptServiceHalves.push(declared);
+        }
+        keptServiceHalves.forEach(keep);
+        if (keptServiceHalves.length === 0) {
+          const interfaceCreated = await place(`Scripts/Services/I${name}Service.cs`, generateServiceInterface(name, namespace));
+          const implCreated = await place(`Scripts/Services/${name}Service.cs`, generateServiceImpl(name, namespace));
+          serviceCreated = interfaceCreated && implCreated;
+        }
       }
+
+      // 4. ModuleConfig — one per module, wherever in it the author put it: a
+      // second <Name>ModuleConfig class is a duplicate definition. It registers
+      // the service pair only when this call made both halves; registering a
+      // pair it did not make is a compile error waiting on someone else's code.
+      const existingConfig = existing.files.find((f) => /ModuleConfig\.cs$/i.test(f)) ?? null;
+      if (existingConfig) keep(existingConfig);
+      else await place(`Scripts/${name}ModuleConfig.cs`, generateModuleConfig(name, namespace, serviceCreated));
 
       const headline =
         keptFiles.length === 0
@@ -379,6 +429,15 @@ export class ModuleCreateTool implements ITool {
           : []),
         ...(existingConfig && serviceCreated
           ? ["", `The kept ${existingConfig} was not changed: register I${name}Service there yourself.`]
+          : []),
+        ...(keptServiceHalves.length > 0
+          ? [
+              "",
+              `Service: ${keptServiceHalves.map((f) => `${modulePath}/${f}`).join(", ")} already declare(s) part of the I${name}Service/${name}Service ` +
+                `pair, so neither half was generated — a stub beside a hand-written half would not compile against it. ` +
+                `The pair was not registered by this call: once ${name}Service implements I${name}Service, make sure ` +
+                `the module config's Configure calls builder.RegisterService<I${name}Service, ${name}Service>().`,
+            ]
           : []),
         "",
         "Folder structure:",
@@ -405,21 +464,57 @@ export class ModuleCreateTool implements ITool {
   }
 }
 
-/** The .asmdef a folder already holds, if any. */
-async function assemblyIn(dir: string): Promise<string | null> {
-  const entries = await readdir(dir).catch(() => [] as string[]);
-  return entries.sort().find((entry) => /\.asmdef$/i.test(entry)) ?? null;
+/** What a module already holds, read before this tool writes anything. */
+interface ModuleSources {
+  /** Every file, module-relative with "/" separators, sorted. */
+  files: string[];
+  /** C# sources by module-relative path, comments stripped. */
+  csharp: Map<string, string>;
+  /** Every .asmdef and the assembly name it declares (null when unreadable). */
+  assemblies: Array<{ rel: string; name: string | null }>;
 }
 
-/** A *ModuleConfig.cs anywhere in the module, module-relative with "/" separators. */
-async function moduleConfigIn(moduleRoot: string): Promise<string | null> {
-  const entries = await readdir(moduleRoot, { recursive: true }).catch(() => [] as string[]);
-  return (
-    entries
-      .map((entry) => entry.split(sep).join("/"))
-      .sort()
-      .find((entry) => /ModuleConfig\.cs$/i.test(entry)) ?? null
-  );
+async function readModuleSources(moduleRoot: string): Promise<ModuleSources> {
+  const entries = await readdir(moduleRoot, { recursive: true, withFileTypes: true }).catch(() => []);
+  const files = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(moduleRoot, join(entry.parentPath, entry.name)).split(sep).join("/"))
+    .sort();
+  const read = (rel: string) => readFile(join(moduleRoot, ...rel.split("/")), "utf-8").catch(() => "");
+  const csharp = new Map<string, string>();
+  const assemblies: ModuleSources["assemblies"] = [];
+  for (const rel of files) {
+    if (/\.cs$/i.test(rel)) {
+      csharp.set(rel, (await read(rel)).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""));
+    } else if (/\.asmdef$/i.test(rel)) {
+      let assemblyName: string | null = null;
+      try {
+        const parsed = JSON.parse(await read(rel)) as { name?: unknown };
+        if (typeof parsed.name === "string") assemblyName = parsed.name;
+      } catch {
+        // An unreadable .asmdef still owns its folder.
+      }
+      assemblies.push({ rel, name: assemblyName });
+    }
+  }
+  return { files, csharp, assemblies };
+}
+
+/** The module file that already declares `type`: one named for it, or any C# source declaring it. */
+function declarationOf(module: ModuleSources, type: string): string | null {
+  const named = module.files.find((rel) => rel === `${type}.cs` || rel.endsWith(`/${type}.cs`));
+  if (named) return named;
+  const declares = new RegExp(`\\b(?:class|interface|struct|record|enum)\\s+${type}\\b`);
+  for (const [rel, source] of module.csharp) {
+    if (declares.test(source)) return rel;
+  }
+  return null;
+}
+
+/** The module-relative folder of a module-relative file; "" for the module root. */
+function folderOf(rel: string): string {
+  const slash = rel.lastIndexOf("/");
+  return slash < 0 ? "" : rel.slice(0, slash);
 }
 
 function generateModuleConfig(

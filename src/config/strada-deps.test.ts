@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -73,6 +74,7 @@ describe("checkStradaDeps", () => {
 
   it("detects com.strada.core directory", () => {
     mkdirSync(join(testDir, "Packages", "com.strada.core"), { recursive: true });
+    writeFileSync(join(testDir, "Packages", "com.strada.core", "package.json"), JSON.stringify({ name: "com.strada.core" }));
     const result = checkStradaDeps(testDir);
     expect(result.coreInstalled).toBe(true);
     expect(result.corePath).toBe(join(testDir, "Packages", "com.strada.core"));
@@ -82,6 +84,7 @@ describe("checkStradaDeps", () => {
     // On case-insensitive filesystems (macOS), the first matching name
     // in CORE_NAMES search order wins, so we only check coreInstalled
     mkdirSync(join(testDir, "Packages", "Strada.Core"), { recursive: true });
+    writeFileSync(join(testDir, "Packages", "Strada.Core", "package.json"), JSON.stringify({ name: "com.strada.core" }));
     const result = checkStradaDeps(testDir);
     expect(result.coreInstalled).toBe(true);
     expect(result.corePath).not.toBeNull();
@@ -90,6 +93,7 @@ describe("checkStradaDeps", () => {
   it("detects strada.modules directory", () => {
     mkdirSync(join(testDir, "Packages", "strada.core"), { recursive: true });
     mkdirSync(join(testDir, "Packages", "strada.modules"), { recursive: true });
+    writeFileSync(join(testDir, "Packages", "strada.modules", "package.json"), JSON.stringify({ name: "com.strada.modules" }));
     const result = checkStradaDeps(testDir);
     expect(result.modulesInstalled).toBe(true);
     expect(result.modulesPath).toBe(join(testDir, "Packages", "strada.modules"));
@@ -114,6 +118,7 @@ describe("checkStradaDeps", () => {
 
   it("produces no core warning when core is installed", () => {
     mkdirSync(join(testDir, "Packages", "strada.core"), { recursive: true });
+    writeFileSync(join(testDir, "Packages", "strada.core", "package.json"), JSON.stringify({ name: "com.strada.core" }));
     const result = checkStradaDeps(testDir);
     expect(result.warnings.some((w) => w.includes("Strada.Core not found"))).toBe(false);
   });
@@ -122,6 +127,75 @@ describe("checkStradaDeps", () => {
     mkdirSync(join(testDir, "Packages", "strada.core"), { recursive: true });
     const result = checkStradaDeps(testDir);
     expect(result.warnings.some((w) => w.includes("Strada.Modules"))).toBe(true);
+  });
+
+  // A clone made without --recurse-submodules leaves each gitlink path an
+  // empty directory while manifest.json still points at it. The doctor said
+  // [OK] Strada.Core, the setup flow was skipped and the agent was told to
+  // treat the empty directory as the framework's authoritative source (audit
+  // security-config#2).
+  it("does not count an uninitialised submodule directory as installed", () => {
+    mkdirSync(join(testDir, "Packages", "Submodules", "Strada.Core"), { recursive: true });
+    writeFileSync(
+      join(testDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {
+          "com.strada.core": "file:Submodules/Strada.Core",
+          "com.strada.modules": "file:Submodules/Strada.Modules",
+        },
+      }),
+    );
+
+    const result = checkStradaDeps(testDir);
+
+    expect(result.coreInstalled).toBe(false);
+    expect(result.corePath).toBeNull();
+    expect(result.coreSource).toBeNull();
+    // The manifest line alone, with the directory absent, is not an install either.
+    expect(result.modulesInstalled).toBe(false);
+    expect(result.coreIncomplete).toMatch(/Submodules[\\/]Strada\.Core/);
+    expect(result.coreIncomplete).toMatch(/package\.json/);
+    expect(result.modulesIncomplete).toMatch(/Submodules[\\/]Strada\.Modules/);
+    const warnings = result.warnings.join("\n");
+    expect(warnings).toMatch(/incomplete/);
+    expect(warnings).toContain("git submodule update --init");
+
+    const verdict = evaluateProjectSupport({ unityProjectPath: testDir, deps: result });
+    const coreRow = verdict.rows.find((r) => r.id === "strada-core");
+    expect(coreRow?.status).toBe("missing");
+    expect(coreRow?.detail).toMatch(/incomplete/);
+    expect(coreRow?.fix).toContain("git submodule update --init");
+  });
+
+  it("counts a manifest file: reference whose target is a package", () => {
+    const external = join(testDir, "External", "Strada.Core");
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, "package.json"), JSON.stringify({ name: "com.strada.core", version: "1.2.0" }));
+    mkdirSync(join(testDir, "Packages"), { recursive: true });
+    writeFileSync(
+      join(testDir, "Packages", "manifest.json"),
+      JSON.stringify({ dependencies: { "com.strada.core": "file:../External/Strada.Core" } }),
+    );
+
+    const result = checkStradaDeps(testDir);
+
+    expect(result.coreInstalled).toBe(true);
+    expect(result.coreSource).toBe("manifest");
+    expect(result.corePath).toBe(external);
+    expect(result.coreVersion).toBe("1.2.0");
+  });
+
+  it("does not count a package name that appears in manifest.json outside its dependencies", () => {
+    mkdirSync(join(testDir, "Packages"), { recursive: true });
+    writeFileSync(
+      join(testDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {},
+        scopedRegistries: [{ name: "strada", url: "https://example.com", scopes: ["com.strada.core"] }],
+      }),
+    );
+
+    expect(checkStradaDeps(testDir).coreInstalled).toBe(false);
   });
 
   it("detects Strada.MCP from configured path", () => {
@@ -197,6 +271,18 @@ describe("installStradaDep", () => {
     const result = await installStradaDep(testDir, "core");
     expect(result.kind).toBe("err");
     expect(result.kind === "err" && result.error).toContain("not a git repository");
+  });
+
+  it("names the submodule command for a target an unfinished clone left empty", async () => {
+    // Adding the submodule again cannot work — the path is taken — so the
+    // setup flow has to say what finishes the checkout instead.
+    execFileSync("git", ["init", "-q"], { cwd: testDir, stdio: "ignore" });
+    mkdirSync(join(testDir, "Packages", "Submodules", "Strada.Core"), { recursive: true });
+
+    const result = await installStradaDep(testDir, "core", TEST_STRADA_CONFIG);
+
+    expect(result.kind).toBe("err");
+    expect(result.kind === "err" && result.error).toContain("git submodule update --init");
   });
 
   it("returns err when installing Strada.MCP into a project that is not a git repo", async () => {

@@ -18,7 +18,9 @@
  * module stays legitimate as long as the result is a module.
  */
 
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { StradaConformanceGuard } from "./strada-conformance.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -110,6 +112,27 @@ describe("module completeness gate", () => {
     const guard = new StradaConformanceGuard(DEPS, {});
     writeCs(guard, "Assets/Modules/GameModule/Scripts/Services/BoardService.cs");
     expect(guard.getPrompt()).toBeNull();
+  });
+
+  it("finds a ModuleConfig wherever strada_create_module finds one", () => {
+    // The gate sends the agent to strada_create_module, which keeps a config
+    // at any depth of the module and creates none beside it. A gate that looks
+    // only two levels down then asks for a config the tool will never make.
+    const root = mkdtempSync(join(tmpdir(), "module-depth-"));
+    const mod = join(root, "Assets", "Modules", "BoardModule");
+    mkdirSync(join(mod, "Scripts", "Config", "Board"), { recursive: true });
+    writeFileSync(join(mod, "Board.asmdef"), "{}");
+    const deep = join(mod, "Scripts", "Config", "Board", "BoardModuleConfig.cs");
+
+    // Control: without the config, this same disk view does trip the gate.
+    const before = new StradaConformanceGuard(DEPS, { projectPath: root });
+    writeCs(before, "Assets/Modules/BoardModule/Scripts/Systems/BoardSystem.cs");
+    expect(before.getPrompt() ?? "").toContain("STRADA MODULE INCOMPLETE");
+
+    writeFileSync(deep, "class BoardModuleConfig {}");
+    const after = new StradaConformanceGuard(DEPS, { projectPath: root });
+    writeCs(after, "Assets/Modules/BoardModule/Scripts/Systems/BoardSystem.cs");
+    expect(after.getPrompt() ?? "").not.toContain("STRADA MODULE INCOMPLETE");
   });
 
   it("reports every incomplete module it touched", () => {

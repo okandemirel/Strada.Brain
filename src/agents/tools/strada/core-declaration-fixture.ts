@@ -14,7 +14,8 @@ import { dirname, join } from "node:path";
 
 // Deliberately not imported from module-folders.js: a suite that mocks that
 // module would otherwise import it back through this file and deadlock.
-const CONFIG_DIR = "Packages/Submodules/Strada.Core/Editor/ModuleGenerator/Config";
+const CORE_ROOT = "Packages/Submodules/Strada.Core";
+const CONFIG_DIR = `${CORE_ROOT}/Editor/ModuleGenerator/Config`;
 const DECLARATION_RELATIVE_PATH = `${CONFIG_DIR}/DirectoryStructureConfig.cs`;
 const LAYOUT_RELATIVE_PATH = `${CONFIG_DIR}/ModuleLayout.cs`;
 
@@ -194,6 +195,12 @@ function install(projectPath: string, relativePath: string, source: string): voi
   const target = join(projectPath, ...relativePath.split("/"));
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, source);
+  // Every real checkout carries its package.json; without it the directory
+  // reads as a submodule that was never checked out.
+  writeFileSync(
+    join(projectPath, ...CORE_ROOT.split("/"), "package.json"),
+    JSON.stringify({ name: "com.strada.core" }),
+  );
 }
 
 /** Install the older declaration into a project, as such a Strada.Core checkout would. */
