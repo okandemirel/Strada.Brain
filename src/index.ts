@@ -38,7 +38,7 @@ import { reloadEnvAfterSetup } from "./core/setup-env-reload.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { installEnvProxy, reportEnvProxy } from "./common/env-proxy.js";
-import { acquireRuntimeLock } from "./core/runtime-lock.js";
+import { acquireRuntimeLock, STALE_AFTER_MS as RUNTIME_LOCK_STALE_AFTER_MS } from "./core/runtime-lock.js";
 import {
   getSafeCurrentWorkingDirectory,
   initializeRuntimeEnvironment,
@@ -658,10 +658,21 @@ async function startApp(
       logger,
     });
     if (!lock.acquired) {
+      if (lock.recoveryFile) {
+        console.error(
+          `Another start (PID ${lock.holder.pid}${lock.holder.host ? ` on ${lock.holder.host}` : ""}) is taking over this install's stale runtime lock and has not finished (${lock.recoveryFile}).`,
+        );
+        console.error(`If no other Strada start is running, delete ${lock.recoveryFile} and start again.`);
+        process.exit(1);
+      }
       console.error(
-        `Strada is already running for this install (PID ${lock.holder.pid}, channel ${lock.holder.channel || "unknown"}, started ${lock.holder.startedAtIso || "at an unknown time"}).`,
+        `Strada is already running for this install (PID ${lock.holder.pid}${lock.local ? "" : ` on ${lock.holder.host ?? "another host"}, in another container or host`}, channel ${lock.holder.channel || "unknown"}, started ${lock.holder.startedAtIso || "at an unknown time"}).`,
       );
-      console.error("Use `strada restart` to replace it or `strada kill` to stop it first.");
+      console.error(
+        lock.local
+          ? "Use `strada restart` to replace it or `strada kill` to stop it first."
+          : `Stop it where it runs. If it crashed, its lock is taken over once it has gone ${Math.round(RUNTIME_LOCK_STALE_AFTER_MS / 1000)}s without a refresh.`,
+      );
       process.exit(1);
     }
 

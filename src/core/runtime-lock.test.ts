@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync, unlinkSync, statSync, utimesSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -12,6 +12,13 @@ import { kernelEnforcesPermissions } from "../tests/helpers/permission-faults.js
 // global npm install). Root ignores chmod, so the write calls under it are
 // failed the way that filesystem fails them; reads still work.
 const unwritable = vi.hoisted(() => ({ root: undefined as string | undefined, code: "EROFS" }));
+
+// Runs once, right after the next rename of `from` lands: the moment a
+// rename-then-compare removal has left the lock's pathname vacant.
+const renameHook = vi.hoisted(() => ({
+  from: undefined as string | undefined,
+  run: undefined as (() => Promise<void>) | undefined,
+}));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -28,7 +35,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => (refuse("open", args[0]), actual.writeFile(...args)),
     open: async (...args: Parameters<typeof actual.open>) => (refuse("open", args[0]), actual.open(...args)),
     link: async (...args: Parameters<typeof actual.link>) => (refuse("link", args[1]), actual.link(...args)),
-    rename: async (...args: Parameters<typeof actual.rename>) => (refuse("rename", args[0]), actual.rename(...args)),
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      refuse("rename", args[0]);
+      await actual.rename(...args);
+      if (renameHook.run && String(args[0]) === renameHook.from) {
+        const run = renameHook.run;
+        renameHook.run = undefined;
+        await run();
+      }
+    },
     unlink: async (...args: Parameters<typeof actual.unlink>) => (refuse("unlink", args[0]), actual.unlink(...args)),
   };
 });
@@ -43,8 +58,11 @@ describe("acquireRuntimeLock — one install gets exactly one live runtime", () 
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     unwritable.root = undefined;
     unwritable.code = "EROFS";
+    renameHook.from = undefined;
+    renameHook.run = undefined;
     rmSync(configRoot, { recursive: true, force: true });
     rmSync(installRoot, { recursive: true, force: true });
   });
@@ -240,6 +258,129 @@ describe("acquireRuntimeLock — one install gets exactly one live runtime", () 
       } finally {
         child.kill("SIGKILL");
       }
+    });
+  });
+
+  describe("owner identity: a pid is an identity only on its own host and pid namespace", () => {
+    const tenMinutesAgo = () => new Date(Date.now() - 10 * 60_000);
+    /** A runtime in a sibling container on the same volume: same hostname, its own pid namespace. */
+    const otherContainerLock = (token: string) => JSON.stringify({
+      pid: process.pid,
+      host: hostname(),
+      pidNamespace: "another-container",
+      startedAtIso: new Date().toISOString(),
+      channel: "web",
+      token,
+    });
+
+    it("refuses a live lock that another container wrote with this process's own pid", async () => {
+      // Each fresh container starts node at the same small pid.
+      const theirs = otherContainerLock("container-A");
+      writeLock(lockPath(), theirs);
+      const result = await acquire("web");
+      expect(result.acquired).toBe(false);
+      expect(readFileSync(lockPath(), "utf-8")).toBe(theirs);
+    });
+
+    it("refuses that container's lock at the legacy path too", async () => {
+      const theirs = otherContainerLock("container-A");
+      writeLock(legacyPath(), theirs);
+      const result = await acquire("web");
+      expect(result.acquired).toBe(false);
+      expect(readFileSync(legacyPath(), "utf-8")).toBe(theirs);
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("refuses a live lock from another host, whatever its pid looks like here", async () => {
+      // kill(pid, 0) answers for this machine only: ESRCH here says nothing about there.
+      const theirs = JSON.stringify({ pid: 134217728, host: "another-host", startedAtIso: new Date().toISOString(), channel: "web", token: "host-B" });
+      writeLock(lockPath(), theirs);
+      const result = await acquire("web");
+      expect(result.acquired).toBe(false);
+      if (!result.acquired) expect(result.holder).toMatchObject({ pid: 134217728, host: "another-host" });
+      expect(readFileSync(lockPath(), "utf-8")).toBe(theirs);
+    });
+
+    it("takes over a foreign lock once its owner stopped refreshing it (a crashed container restarting)", async () => {
+      writeLock(lockPath(), otherContainerLock("crashed-container"));
+      utimesSync(lockPath(), tenMinutesAgo(), tenMinutesAgo());
+      const result = await acquire("web");
+      expect(result.acquired).toBe(true);
+      if (result.acquired) await result.release();
+    });
+
+    it("takes over its own pid's lock in its own namespace when this process did not write it", async () => {
+      // An earlier process that had this pid here is gone: this process is the one with it now.
+      const first = await acquire("web");
+      if (!first.acquired) throw new Error("expected acquisition");
+      const ours = JSON.parse(readFileSync(lockPath(), "utf-8")) as Record<string, unknown>;
+      await first.release();
+      writeLock(lockPath(), JSON.stringify({ ...ours, token: "an-earlier-incarnation" }));
+
+      const result = await acquire("discord");
+      expect(result.acquired).toBe(true);
+      expect(JSON.parse(readFileSync(lockPath(), "utf-8"))).toMatchObject({ channel: "discord" });
+      if (result.acquired) await result.release();
+    });
+
+    it("the holder keeps its locks fresh, so a starter elsewhere can tell it from a crashed one", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const result = await acquire("web");
+      if (!result.acquired) throw new Error("expected acquisition");
+      try {
+        for (const path of [lockPath(), legacyPath()]) utimesSync(path, tenMinutesAgo(), tenMinutesAgo());
+        vi.advanceTimersByTime(60_000);
+        await vi.waitFor(() => {
+          for (const path of [lockPath(), legacyPath()]) {
+            expect(Date.now() - statSync(path).mtimeMs).toBeLessThan(60_000);
+          }
+        });
+      } finally {
+        await result.release();
+      }
+    });
+  });
+
+  describe("stale takeover is serialized: rename-then-compare is not mutual exclusion", () => {
+    const STALE = JSON.stringify({ pid: 134217728, startedAtIso: "2026-01-01T00:00:00Z", channel: "telegram" });
+
+    it("three starters on one stale lock yield one runtime, even while a removal leaves the path vacant", async () => {
+      // A read-only install root skips the legacy mirror, the only other gate.
+      unwritable.root = installRoot;
+      writeLock(lockPath(), STALE);
+      let b: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
+      let c: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
+      const a = await acquire("web", {
+        afterJudging: async () => {
+          // B judged the same stale lock and took it over first.
+          b = await acquire("discord");
+          // C arrives the moment anything renames the lock away.
+          renameHook.from = lockPath();
+          renameHook.run = async () => {
+            c = await acquire("slack");
+          };
+        },
+      });
+      c ??= await acquire("slack");
+
+      const winners = [a, b, c].filter((r) => r?.acquired);
+      expect(winners).toHaveLength(1);
+      expect(b?.acquired).toBe(true);
+      expect(JSON.parse(readFileSync(lockPath(), "utf-8"))).toMatchObject({ channel: "discord" });
+      for (const r of [a, b, c]) if (r?.acquired) await r.release();
+    });
+
+    it("a takeover that a crashed starter left unfinished is refused, never broken", async () => {
+      writeLock(lockPath(), STALE);
+      const recoveryFile = `${lockPath()}.recovery`;
+      writeFileSync(recoveryFile, JSON.stringify({ pid: 134217728, host: hostname(), startedAtIso: "2026-01-01T00:00:00Z", channel: "web" }));
+
+      const result = await acquire("web");
+      expect(result.acquired).toBe(false);
+      if (!result.acquired) expect(result.recoveryFile).toBe(recoveryFile);
+      // Nothing was taken: a person decides whether that starter is gone.
+      expect(readFileSync(lockPath(), "utf-8")).toBe(STALE);
+      expect(existsSync(recoveryFile)).toBe(true);
     });
   });
 });
