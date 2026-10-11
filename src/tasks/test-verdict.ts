@@ -117,9 +117,12 @@ export function isTestCapableTool(toolName: string | undefined): boolean {
   return TEST_CAPABLE_TOOL_RE.test(bare) || GENERIC_RUNNER_RE.test(bare);
 }
 
+// "tests all passed, but the game threw" is the Unity MCP's RED verdict for a
+// run whose assertions passed while the game logged exceptions. Unrecognised,
+// that observation was skipped and an earlier green stood (audit 2026-10-11).
 const TEST_RUN_RE =
-  /(PlayMode|EditMode) verification (FAILED|passed)|(\d+) of (\d+) tests? failed|All (\d+) tests? passed/i;
-const RED_RE = /verification FAILED|\d+ of \d+ tests? failed/i;
+  /(PlayMode|EditMode) verification (FAILED|passed)|(\d+) of (\d+) tests? failed|All (\d+) tests? passed|(PlayMode|EditMode) tests all passed, but the game threw/i;
+const RED_RE = /verification FAILED|\d+ of \d+ tests? failed|tests all passed, but the game threw/i;
 
 /**
  * A GENERIC RUNNER ECHOES WHAT IT WAS TOLD TO RUN, and that echo is the

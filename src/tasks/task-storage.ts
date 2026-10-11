@@ -465,13 +465,29 @@ export class TaskStorage {
     }
   }
 
+  /**
+   * Every field of the verdict, each type-checked. This read back only
+   * testsGreen and detail, written before the other fields existed, so the
+   * campaign (which reads the verdict off a RELOADED task) never saw the dead
+   * Unity link, the failing test names or the suite scope (audit 2026-10-11).
+   */
   private parseVerification(raw: string | null | undefined): import("./test-verdict.js").TaskTestVerdict | undefined {
     if (!raw) return undefined;
     try {
-      const parsed = JSON.parse(raw) as { testsGreen?: unknown; detail?: unknown };
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const failedTests = Array.isArray(parsed.failedTests)
+        ? parsed.failedTests.filter((name): name is string => typeof name === "string")
+        : [];
+      const omitted = parsed.failedTestsOmitted;
       return {
         testsGreen: typeof parsed.testsGreen === "boolean" ? parsed.testsGreen : undefined,
         detail: typeof parsed.detail === "string" ? parsed.detail : "",
+        ...(typeof parsed.unfiltered === "boolean" ? { unfiltered: parsed.unfiltered } : {}),
+        ...(failedTests.length > 0 ? { failedTests } : {}),
+        ...(typeof omitted === "number" && Number.isFinite(omitted) && omitted > 0 ? { failedTestsOmitted: omitted } : {}),
+        ...(typeof parsed.assetSourcingBlind === "string" && parsed.assetSourcingBlind !== ""
+          ? { assetSourcingBlind: parsed.assetSourcingBlind }
+          : {}),
       };
     } catch {
       return undefined;

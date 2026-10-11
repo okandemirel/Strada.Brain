@@ -91,6 +91,41 @@ describe("TaskStorage", () => {
     expect(storage.load(solo.id)?.campaignId).toBeUndefined();
   });
 
+  it("a stored test verdict comes back WHOLE through load and findLatestDescendant", () => {
+    // The campaign reads the verdict off a reloaded task (findLatestLineageTask
+    // -> findLatestDescendant). The reader kept only testsGreen and detail, so
+    // the dead-Unity-link notice never fired and failing test names never
+    // reached the delivery report.
+    const root = makeTask(TaskStatus.failed, { createdAt: 1000, updatedAt: 1000 });
+    const retry = makeTask(TaskStatus.completed, { parentId: root.id, createdAt: 2000, updatedAt: 2000 });
+    storage.save(root);
+    storage.save(retry);
+    const verdict = {
+      testsGreen: false,
+      detail: "PlayMode verification FAILED: 6 of 173 tests failed (unfiltered — the whole PlayMode suite).",
+      unfiltered: true,
+      failedTests: ["Game.Tests.WinLevel_ReachesWonState", "Game.Tests.Board_Fills"],
+      failedTestsOmitted: 4,
+      assetSourcingBlind: "Unity account link expired or was revoked — re-run the Unity Link step",
+    };
+    storage.setVerification(retry.id, JSON.stringify(verdict));
+
+    expect(storage.load(retry.id)?.verification).toEqual(verdict);
+    expect(storage.findLatestDescendant(root.id)?.verification).toEqual(verdict);
+
+    // A row that only carries the dead link (no test ran) keeps it too.
+    const blindOnly = { detail: "no test run observed", assetSourcingBlind: verdict.assetSourcingBlind };
+    storage.setVerification(root.id, JSON.stringify(blindOnly));
+    expect(storage.load(root.id)?.verification).toEqual(blindOnly);
+
+    // Fields of the wrong shape are dropped, not passed through.
+    storage.setVerification(root.id, JSON.stringify({
+      testsGreen: "yes", detail: 7, unfiltered: "true",
+      failedTests: ["Game.Tests.A", 3, null], failedTestsOmitted: "2", assetSourcingBlind: 1,
+    }));
+    expect(storage.load(root.id)?.verification).toEqual({ detail: "", failedTests: ["Game.Tests.A"] });
+  });
+
   it("markCancelled persists the reason its descendants read; a plain cancel leaves none", () => {
     const superseded = makeTask(TaskStatus.executing);
     const plain = makeTask(TaskStatus.executing);

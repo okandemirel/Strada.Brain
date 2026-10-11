@@ -48,6 +48,29 @@ describe("deriveTestVerdict", () => {
     const v = deriveTestVerdict([{ toolName: "unity_test_run", content: "EditMode verification passed", isError: true }]);
     expect(v.testsGreen).toBe(false);
   });
+
+  it("the MCP's 'tests all passed, but the game threw' run is red, so an earlier green does not stand", () => {
+    // unity_playmode_verify's red verdict for a run whose assertions passed
+    // while the game logged exceptions (Strada.MCP playmode-verify.ts, reason
+    // "threw"). Its headline matched neither pattern, so the observation was
+    // skipped before its error flag was read and the earlier green won.
+    const green = "PlayMode verification passed: 40 of 40 tests ran clean.\ntotal=40 passed=40 failed=0 skipped=0 runResult=Passed unityExit=0";
+    const threw = [
+      "PlayMode tests all passed, but the game threw while running. A passing assertion does not mean nothing broke.",
+      "total=40 passed=40 failed=0 skipped=0 runResult=Passed unityExit=0",
+      "",
+      "Exceptions logged during play:",
+      "  NullReferenceException: Object reference not set to an instance of an object",
+    ].join("\n");
+    const v = deriveTestVerdict([
+      { toolName: "mcp__unity__unity_playmode_verify", content: green, isError: false },
+      { toolName: "mcp__unity__unity_playmode_verify", content: threw, isError: true },
+    ]);
+    expect(v.testsGreen).toBe(false);
+    expect(v.detail).toContain("the game threw while running");
+    // The body says it on its own, as a FAILED headline does.
+    expect(deriveTestVerdict([{ toolName: "unity_playmode_verify", content: threw }]).testsGreen).toBe(false);
+  });
 });
 
 describe("findTestRunLines", () => {
