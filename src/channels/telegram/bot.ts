@@ -104,6 +104,11 @@ export class TelegramChannel implements IChannelAdapter {
    */
   private readonly sendChains = new Map<string, Promise<void>>();
   /**
+   * Per-chatId inbound tail-chain: one chat's messages reach the handler in the
+   * order they were sent, without holding grammY's update loop (see routeInChatOrder).
+   */
+  private readonly inboundChains = new Map<string, Promise<void>>();
+  /**
    * Whether long-polling is actually running. grammY's `isInited()` stays true
    * forever after the first init, so a fatal poll error (most commonly 409
    * Conflict — a second poller alive during a restart overlap, or a webhook
@@ -174,7 +179,10 @@ export class TelegramChannel implements IChannelAdapter {
         // A successful (re)start proves the conflict/condition cleared.
         this.pollingRetryMs = 30_000;
       },
-      drop_pending_updates: true,
+      // Keep what users sent while the daemon was restarting or a 409 retry
+      // waited: dropping it deleted those messages on Telegram's side, unanswered.
+      // A clean stop() confirms the offset, so handled updates do not come back.
+      drop_pending_updates: false,
     });
     void Promise.resolve(startResult).catch((err: unknown) => {
       this.pollingAlive = false;
@@ -528,6 +536,8 @@ export class TelegramChannel implements IChannelAdapter {
           await ctx.answerCallbackQuery({ text: `Selected: ${selectedOption}` });
           return;
         }
+        // Timed out, already answered, or asked by the process before a restart.
+        await ctx.answerCallbackQuery({ text: "This confirmation is no longer pending." });
       } catch (error) {
         getLogger().error("Telegram callback query handler error", {
           error: error instanceof Error ? error.message : String(error),
@@ -552,7 +562,7 @@ export class TelegramChannel implements IChannelAdapter {
     });
 
     // Handle /help command
-    this.bot.command("help", async (ctx) => {
+    this.bot.command("help", (ctx) => this.routeInChatOrder(ctx, "help", async () => {
       await ctx.reply(
         "*Strada Brain Help*\n\n" +
           "I can help you with your Unity/Strada.Core project:\n\n" +
@@ -569,7 +579,7 @@ export class TelegramChannel implements IChannelAdapter {
       // The full, current command list lives in the shared CommandHandler —
       // forward so Telegram's /help never drifts from what the daemon accepts.
       await this.routeMessage(ctx);
-    });
+    }));
 
     // Handle /feedback command for instinct-level thumbs up/down
     this.bot.command("feedback", async (ctx) => {
@@ -620,16 +630,33 @@ export class TelegramChannel implements IChannelAdapter {
       { event: "message:audio" as const, type: "audio" as const },
     ];
     for (const { event, type } of mediaEvents) {
-      this.bot.on(event, async (ctx) => {
-        try { await this.routeMediaMessage(ctx, type); }
-        catch (e) { getLogger().error(`Telegram ${type} handler error`, { error: e instanceof Error ? e.message : String(e) }); }
-      });
+      this.bot.on(event, (ctx) => this.routeInChatOrder(ctx, type, () => this.routeMediaMessage(ctx, type)));
     }
 
     // Handle all text messages -> route to orchestrator
-    this.bot.on("message:text", async (ctx) => {
-      try { await this.routeMessage(ctx); }
-      catch (e) { getLogger().error("Telegram text handler error", { error: e instanceof Error ? e.message : String(e) }); }
+    this.bot.on("message:text", (ctx) => this.routeInChatOrder(ctx, "text", () => this.routeMessage(ctx)));
+  }
+
+  /**
+   * Run one inbound message's routing after the chat's earlier messages, and
+   * return to grammY at once. bot.start() handles one update at a time and
+   * fetches no more until the middleware returns, so awaiting the daemon's
+   * handler there left a /run confirmation waiting for a click the poller
+   * could never fetch: the approval always timed out as "Command cancelled",
+   * and every chat went unanswered for the 2-minute prompt. Button clicks are
+   * not chained, so they still reach a prompt whose message is mid-route.
+   */
+  private routeInChatOrder(ctx: Context, label: string, route: () => Promise<void>): void {
+    const chatId = String(ctx.chat?.id ?? "");
+    const prev = this.inboundChains.get(chatId) ?? Promise.resolve();
+    const tail = prev.then(route).catch((e: unknown) => {
+      getLogger().error(`Telegram ${label} handler error`, { error: e instanceof Error ? e.message : String(e) });
+    });
+    this.inboundChains.set(chatId, tail);
+    void tail.then(() => {
+      if (this.inboundChains.get(chatId) === tail) {
+        this.inboundChains.delete(chatId);
+      }
     });
   }
 

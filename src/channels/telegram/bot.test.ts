@@ -72,6 +72,16 @@ vi.mock("node:crypto", () => ({
 
 import { AuthManager } from "../../security/auth.js";
 
+/**
+ * The channel routes an inbound message off grammY's update loop, so the
+ * registered handler returns before routing ends: wait for the chat's routing.
+ */
+async function deliver(channel: TelegramChannel, handler: (ctx: any) => unknown, ctx: unknown): Promise<void> {
+  await handler(ctx);
+  const chains = (channel as unknown as { inboundChains: Map<string, Promise<void>> }).inboundChains;
+  await Promise.all([...chains.values()]);
+}
+
 describe("TelegramChannel", () => {
   let channel: TelegramChannel;
   let auth: AuthManager;
@@ -275,7 +285,7 @@ describe("TelegramChannel", () => {
     const textHandler = mockHandlers.get("message:text");
     expect(textHandler).toBeDefined();
 
-    await textHandler!({
+    await deliver(channel, textHandler!, {
       chat: { id: 42 },
       from: { id: 123 },
       message: { text: "hello", date: 1700000000 },
@@ -377,6 +387,8 @@ describe("TelegramChannel", () => {
       // The retry backoff (30s initial) fires and polling restarts.
       await vi.advanceTimersByTimeAsync(30_000);
       expect(start).toHaveBeenCalledTimes(2);
+      // What users sent during the backoff is kept, not deleted by the restart.
+      expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ drop_pending_updates: false }));
       expect(channel.isHealthy()).toBe(true);
     });
 
@@ -422,7 +434,7 @@ describe("TelegramChannel", () => {
       channel.onMessage(handler);
 
       const photoHandler = mockHandlers.get("message:photo")!;
-      await photoHandler({
+      await deliver(channel, photoHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -462,7 +474,7 @@ describe("TelegramChannel", () => {
       channel.onMessage(handler);
 
       const docHandler = mockHandlers.get("message:document")!;
-      await docHandler({
+      await deliver(channel, docHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -500,7 +512,7 @@ describe("TelegramChannel", () => {
     it("replies not ready when no handler is set", async () => {
       const photoHandler = mockHandlers.get("message:photo")!;
       const replyMock = vi.fn();
-      await photoHandler({
+      await deliver(channel, photoHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -529,7 +541,7 @@ describe("TelegramChannel", () => {
       const replyMock = vi.fn().mockResolvedValue(undefined);
 
       const photoHandler = mockHandlers.get("message:photo")!;
-      await photoHandler({
+      await deliver(channel, photoHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -566,7 +578,7 @@ describe("TelegramChannel", () => {
       const replyMock = vi.fn().mockResolvedValue(undefined);
 
       const docHandler = mockHandlers.get("message:document")!;
-      await docHandler({
+      await deliver(channel, docHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -601,7 +613,7 @@ describe("TelegramChannel", () => {
       const replyMock = vi.fn().mockResolvedValue(undefined);
 
       const photoHandler = mockHandlers.get("message:photo")!;
-      await photoHandler({
+      await deliver(channel, photoHandler, {
         chat: { id: 42 },
         from: { id: 123 },
         message: {
@@ -708,7 +720,7 @@ describe("Telegram command menu (2026-09-09)", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     channel.onMessage(handler);
     const reply = vi.fn().mockResolvedValue(undefined);
-    await mockHandlers.get("command:help")!({
+    await deliver(channel, mockHandlers.get("command:help")!, {
       chat: { id: 42 },
       from: { id: 123 },
       message: { text: "/help", date: 1700000000 },
