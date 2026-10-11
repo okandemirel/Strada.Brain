@@ -2,7 +2,7 @@ import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getLogger } from "../../utils/logger.js";
-import type { ITool } from "../tools/tool.interface.js";
+import { namespaceRuntimeTool, type ITool } from "../tools/tool.interface.js";
 
 /**
  * Plugin manifest file (plugin.json).
@@ -204,12 +204,9 @@ export class PluginLoader {
 
     // Prefix tool names with plugin namespace to avoid collisions
     // Mark tools as plugin-loaded for filtering
-    const namespacedTools: ITool[] = tools.map((tool) => ({
-      ...tool,
-      name: `plugin_${manifest.name}_${tool.name}`,
-      execute: tool.execute.bind(tool),
-      isPlugin: true,
-    }));
+    const namespacedTools: ITool[] = tools.map((tool) =>
+      namespaceRuntimeTool(tool, `plugin_${manifest.name}_${tool.name}`),
+    );
 
     return { manifest, tools: namespacedTools, path: pluginRootPath };
   }

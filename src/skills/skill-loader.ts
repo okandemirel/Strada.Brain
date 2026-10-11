@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { SkillManifest, SkillEntry } from "./types.js";
-import type { ITool } from "../agents/tools/tool.interface.js";
+import { namespaceRuntimeTool, type ITool } from "../agents/tools/tool.interface.js";
 import { describePinDrift } from "./skill-pin.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
 
@@ -248,12 +248,7 @@ export async function loadSkillTools(skill: DiscoveredSkill): Promise<ITool[]> {
     }
     seen.add(nsName);
 
-    namespacedTools.push({
-      ...tool,
-      name: nsName,
-      execute: tool.execute.bind(tool),
-      isPlugin: true,
-    });
+    namespacedTools.push(namespaceRuntimeTool(tool, nsName));
   }
 
   return namespacedTools;

@@ -110,6 +110,58 @@ describe("runtime-registered tool classification (audited 2026-09-02)", () => {
   });
 });
 
+describe("a class plugin's declared metadata reaches registration (multi-agent#3)", () => {
+  let pluginRoot: string;
+
+  beforeAll(() => {
+    createLogger("error", "test.log");
+    pluginRoot = mkdtempSync(join(tmpdir(), "strada-plugin-class-meta-"));
+    const pluginDir = join(pluginRoot, "paint");
+    mkdirSync(pluginDir);
+    writeFileSync(
+      join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "paint", version: "1.0.0", entry: "index.js" }),
+    );
+    // Neither name nor shape reads as a write ({objectName, value}, no write
+    // verb): only the declaration says this tool changes the scene.
+    writeFileSync(
+      join(pluginDir, "index.js"),
+      [
+        "class SetColor {",
+        '  name = "set_color";',
+        '  description = "sets an object color";',
+        '  inputSchema = { type: "object", properties: { objectName: { type: "string" }, value: { type: "string" } } };',
+        "  getMetadata() {",
+        '    return { name: "set_color", description: "d", category: "custom", riskLevel: "dangerous",',
+        "      isReadOnly: false, requiresConfirmation: true };",
+        "  }",
+        '  async execute() { return { content: "ok" }; }',
+        "}",
+        "export const tools = [new SetColor()];",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(pluginRoot, { recursive: true, force: true });
+  });
+
+  it("registers a writer declared through getMetadata() as a write that needs confirmation", async () => {
+    const registry = new ToolRegistry([pluginRoot]);
+    await registry.initialize({ shellEnabled: false } as unknown as Parameters<ToolRegistry["initialize"]>[0]);
+
+    const metadata = registry.getMetadata("plugin_paint_set_color");
+    expect(metadata).toBeDefined();
+    expect(metadata).toMatchObject({
+      readOnly: false,
+      readOnlyInferred: false,
+      dangerous: true,
+      requiresConfirmation: true,
+    });
+  });
+});
+
 describe("plugin tool registration (PRV-19)", () => {
   let pluginRoot: string;
 

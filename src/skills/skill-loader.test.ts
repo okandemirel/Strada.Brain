@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { basename, join, sep } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
+import { getToolMetadata } from "../agents/tools/tool.interface.js";
 
 // ---------------------------------------------------------------------------
 // Mock dependencies
@@ -312,5 +314,47 @@ describe("loadSkillTools", () => {
 
     await expect(loadSkillTools(skill)).rejects.toThrow(/"Index\.js" is not named exactly index\.ts or index\.js/);
     expect(fsMock.stat).not.toHaveBeenCalled();
+  });
+
+  // multi-agent#3 (the skill sibling): the namespaced copy was a spread, so a
+  // class tool's getMetadata() — on the prototype, not the instance — never
+  // reached it, and the declared writer was classified read-only by its name.
+  it("keeps metadata a class tool declares through getMetadata()", async () => {
+    const { tmpdir } = await vi.importActual<typeof import("node:os")>("node:os");
+    const skillDir = mkdtempSync(join(tmpdir(), "skill-class-meta-"));
+    try {
+      writeFileSync(join(skillDir, "index.js"), [
+        "class SetColor {",
+        '  #meta = { name: "set_color", description: "d", category: "custom", riskLevel: "dangerous",',
+        "    isReadOnly: false, requiresConfirmation: true };",
+        '  name = "set_color";',
+        '  description = "sets an object color";',
+        '  inputSchema = { type: "object", properties: { objectName: { type: "string" } } };',
+        "  getMetadata() { return this.#meta; }",
+        '  async execute() { return { content: "ok" }; }',
+        "}",
+        "export const tools = [new SetColor()];",
+        "",
+      ].join("\n"));
+      fsMock.readdir.mockImplementation(async (path: string) => {
+        if (path === skillDir) return [dirent("SKILL.md"), dirent("index.js")];
+        throw new Error("ENOENT");
+      });
+      fsMock.stat.mockImplementation(async (path: string) => {
+        if (path === join(skillDir, "index.js")) return fileStat;
+        throw new Error("ENOENT");
+      });
+
+      const tools = await loadSkillTools({
+        manifest: { name: "paint", version: "1.0.0", description: "Paint" },
+        tier: "workspace",
+        path: skillDir,
+      });
+
+      expect(tools.map((t) => t.name)).toEqual(["skill_paint_set_color"]);
+      expect(getToolMetadata(tools[0]!)).toMatchObject({ isReadOnly: false, requiresConfirmation: true });
+    } finally {
+      rmSync(skillDir, { recursive: true, force: true });
+    }
   });
 });

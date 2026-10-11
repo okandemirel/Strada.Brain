@@ -77,6 +77,43 @@ export function getToolMetadata(tool: ITool): ToolMetadata | undefined {
   return undefined;
 }
 
+/**
+ * The copy a loader registers, under its namespaced name, for a tool Strada did
+ * not write (plugin, skill).
+ *
+ * This was a bare spread, which keeps only own enumerable properties: a class
+ * tool declaring its metadata through getMetadata() or a `get metadata()`
+ * accessor — both on the prototype — reached classification with no
+ * declaration, and a writer whose name and shape look harmless (set_color
+ * {objectName, value}) was registered read-only and ran with no confirmation.
+ * The declaration is read from the original, where its `this` and private
+ * fields work, and pinned on the copy. One that throws is unknown, not absent:
+ * the name heuristic for undeclared tools could call it read-only, so it is
+ * recorded as a writer that asks first.
+ */
+export function namespaceRuntimeTool(tool: ITool, name: string): ITool {
+  let metadata: ToolMetadata | undefined;
+  try {
+    metadata = getToolMetadata(tool);
+  } catch {
+    metadata = {
+      name,
+      description: tool.description,
+      category: "custom",
+      riskLevel: "dangerous",
+      isReadOnly: false,
+      requiresConfirmation: true,
+    };
+  }
+  return {
+    ...tool,
+    name,
+    execute: tool.execute.bind(tool),
+    isPlugin: true,
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
 // Re-export all types
 export type {
   IToolBase,

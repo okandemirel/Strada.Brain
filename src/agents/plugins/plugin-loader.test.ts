@@ -1,4 +1,5 @@
 import { PluginLoader } from "./plugin-loader.js";
+import { getToolMetadata } from "../tools/tool.interface.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +79,68 @@ export const tools = [{
         readOnly: false,
       });
       expect(result.content).toBe("hi");
+    });
+
+    // multi-agent#3: the namespaced copy was a spread, which keeps only own
+    // enumerable properties. A class tool declaring its metadata through the
+    // documented getMetadata() method or a `get metadata()` accessor lost it,
+    // so classification saw no declaration and the name heuristic called
+    // set_color {objectName, value} read-only: a declared writer ran with no
+    // confirmation.
+    it("keeps metadata a class tool declares through getMetadata() or a getter", async () => {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, "cls");
+      mkdirSync(pluginDir, { recursive: true });
+      writeFileSync(
+        join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "cls", version: "1.0.0", description: "Test", entry: "index.mjs" }),
+      );
+      writeFileSync(join(pluginDir, "index.mjs"), `
+const writer = (name) => ({
+  name, description: "d", category: "custom", riskLevel: "dangerous",
+  isReadOnly: false, requiresConfirmation: true,
+});
+const schema = { type: "object", properties: { objectName: { type: "string" }, value: { type: "string" } } };
+class SetColor {
+  #meta = writer("set_color");
+  name = "set_color";
+  description = "sets a color";
+  inputSchema = schema;
+  getMetadata() { return this.#meta; }
+  async execute() { return { content: "ok" }; }
+}
+class Recolor {
+  #meta = writer("recolor");
+  name = "recolor";
+  description = "recolors";
+  inputSchema = schema;
+  get metadata() { return this.#meta; }
+  async execute() { return { content: "ok" }; }
+}
+class Broken {
+  name = "tint";
+  description = "tints";
+  inputSchema = schema;
+  getMetadata() { throw new Error("metadata unavailable"); }
+  async execute() { return { content: "ok" }; }
+}
+export const tools = [new SetColor(), new Recolor(), new Broken()];
+`);
+
+      const tools = await new PluginLoader([pluginsDir]).loadAll();
+      const byName = new Map(tools.map((t) => [t.name, t]));
+
+      for (const name of ["plugin_cls_set_color", "plugin_cls_recolor"]) {
+        const tool = byName.get(name);
+        expect(tool, name).toBeDefined();
+        expect(getToolMetadata(tool!), name).toMatchObject({ isReadOnly: false, requiresConfirmation: true });
+      }
+      // A declaration that cannot be read is not an absent one: it lands on the
+      // side that asks first.
+      expect(getToolMetadata(byName.get("plugin_cls_tint")!)).toMatchObject({
+        isReadOnly: false,
+        requiresConfirmation: true,
+      });
     });
 
     it("skips non-directory entries", async () => {
