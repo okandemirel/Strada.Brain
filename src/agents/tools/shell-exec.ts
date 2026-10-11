@@ -82,6 +82,21 @@ const INJECTION_PATTERNS: [RegExp, string][] = [
 
 export { sensitiveCommandPaths };
 
+/**
+ * The command as shell_exec runs it in `projectRoot`: the source project's
+ * path, named inside it, is pointed at the workspace (see execute). The shell
+ * review reads the command through this too, so what it judges is what runs.
+ */
+export function redirectSourceProjectPath(
+  command: string,
+  sourceRoot: string | undefined,
+  projectRoot: string,
+): string {
+  return sourceRoot && sourceRoot !== projectRoot && command.includes(sourceRoot)
+    ? command.split(sourceRoot).join(projectRoot)
+    : command;
+}
+
 export class ShellExecTool implements ITool {
   readonly name = "shell_exec";
   readonly description =
@@ -156,10 +171,8 @@ export class ShellExecTool implements ITool {
     // unchanged by saying so in the preamble. That path is not a different
     // place; it is a stale name for the tree the agent is working in, so point
     // it at the workspace and say so in the result.
-    const source = context.sourceProjectPath;
-    const redirected =
-      source && source !== context.projectPath && requested.includes(source);
-    const command = redirected ? requested.split(source).join(context.projectPath) : requested;
+    const command = redirectSourceProjectPath(requested, context.sourceProjectPath, context.projectPath);
+    const redirected = command !== requested;
     if (!command) {
       return {
         content: "Error: 'command' is required (must be a non-empty string)",

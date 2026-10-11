@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { matchProjectScopedAllowlist } from "./project-shell-allowlist.js";
 
 describe("project-scoped shell allowlist — canonical build/test/run pre-approval", () => {
@@ -273,5 +276,66 @@ describe("the Unity batchmode rule on Windows and Linux (AUT-17)", () => {
     `/tmp/Unity/Hub/Editor/6000/Editor/Unity -batchmode -quit -projectPath "$PWD"`,
   ])("does not approve %j on Linux", (cmd) => {
     expect(matchProjectScopedAllowlist(cmd, linuxRoot)).toBeNull();
+  });
+});
+
+describe("a command run in a workspace lease (autonomy#4)", () => {
+  // A leased worker's shell runs in the lease, and shell_exec points the
+  // source path at the lease before it runs. The allowlist judged the line
+  // against the source tree instead, so a file that exists only in the lease
+  // read as a branch and `git checkout <it>` was pre-approved.
+  const unity = '"/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity"';
+  let base = "";
+  let source = "";
+  let lease = "";
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "allowlist-lease-"));
+    source = join(base, "source");
+    mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
+    mkdirSync(join(base, "lease-real", "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(base, "lease-real", "Assets", "Scripts", "New.cs"), "");
+    // Two names for one tree, as macOS /var and /private/var are: the lease
+    // is handed over by one, and the shell in it prints the other (`pwd`).
+    lease = join(base, "lease");
+    symlinkSync(join(base, "lease-real"), lease, "dir");
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("reads a file only the lease has as a path, not a branch", () => {
+    expect(matchProjectScopedAllowlist("git checkout Assets/Scripts/New.cs", lease, source)).toBeNull();
+    expect(matchProjectScopedAllowlist("git checkout main", lease, source)?.rule).toContain("integration");
+  });
+
+  it("reads the source path as the lease, the way shell_exec runs it", () => {
+    expect(
+      matchProjectScopedAllowlist(`${unity} -batchmode -runTests -projectPath ${source}`, lease, source)?.rule,
+    ).toContain("unity-batchmode");
+    expect(matchProjectScopedAllowlist(`cat ${source}/Assets/Scripts/New.cs | wc -l`, lease, source)).not.toBeNull();
+  });
+
+  it("knows the lease by its real path too", () => {
+    const real = realpathSync.native(lease);
+    expect(
+      matchProjectScopedAllowlist(`${unity} -batchmode -runTests -projectPath ${real}`, lease, source)?.rule,
+    ).toContain("unity-batchmode");
+    expect(matchProjectScopedAllowlist(`cat ${real}/Assets/Scripts/New.cs | wc -l`, lease, source)).not.toBeNull();
+  });
+
+  it("still refuses what lies outside the lease, under either name", () => {
+    const realBase = realpathSync.native(base);
+    for (const command of [
+      `${unity} -batchmode -runTests -projectPath ${realBase}`,
+      `${unity} -batchmode -runTests -projectPath ${join(realBase, "other")}`,
+      `cat ${realBase}/lease-real/../source/Assets/x`,
+      `cat ${base}/lease/../source/Assets/x`,
+      // The rewrite turns this into <lease>-secrets, a sibling of the lease.
+      `cat ${source}-secrets/key`,
+    ]) {
+      expect(matchProjectScopedAllowlist(command, lease, source), command).toBeNull();
+    }
   });
 });

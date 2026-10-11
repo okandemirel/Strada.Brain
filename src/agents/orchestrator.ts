@@ -555,6 +555,8 @@ interface ToolExecutionOptions {
   goalContext?: import("../tasks/types.js").GoalContext;
   /** Project root for the deterministic shell-review allowlist (review.ts). */
   projectPath?: string;
+  /** The source project a lease was cut from; shell_exec points its path at the lease. */
+  sourceProjectPath?: string;
   /** The calling run's cancel signal and budget/clock scope, handed on to the tools (ToolContext). */
   signal?: AbortSignal;
   parentRun?: import("../agent-core/runner/agent-runner.js").ParentRunScope;
@@ -4721,8 +4723,18 @@ export class Orchestrator {
         // Thread the project root so the deterministic project-scoped allowlist
         // can pre-approve canonical build/test/run commands (Unity batchmode,
         // dotnet build) before the LLM reviewer — the gate/reviewer deadlock
-        // measured on 2026-08-23 must not recur.
-        return this.reviewShellCommandWithProvider(chatId, command, mode, { ...options, projectPath: this.projectPath }, input);
+        // measured on 2026-08-23 must not recur. The root is the one shell_exec
+        // runs in (executeToolCalls): scoped to the source tree under a lease,
+        // a file only the lease had read as a branch, and `git checkout <it>`
+        // overrode a reviewer rejection and discarded the lease's edits.
+        const projectPath = options.projectPathOverride ?? options.workspaceLease?.path ?? this.projectPath;
+        return this.reviewShellCommandWithProvider(
+          chatId,
+          command,
+          mode,
+          { ...options, projectPath, sourceProjectPath: this.projectPath },
+          input,
+        );
       }
       case "file_rename": {
         const oldPath = this.normalizeInteractiveText(input["old_path"]);

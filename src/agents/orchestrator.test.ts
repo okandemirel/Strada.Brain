@@ -5880,6 +5880,96 @@ DONE`,
     expect(toolResults.some((content) => content.includes("shell command looks destructive"))).toBe(true);
   });
 
+  describe("shell review in a workspace lease (autonomy#4)", () => {
+    // A leased worker's shell_exec runs in the lease, but the review scoped
+    // its deterministic allowlist to the source tree: a file that exists only
+    // in the lease read as a branch there, so `git checkout <file>` overrode a
+    // reviewer rejection and threw away the lease's edits to it.
+    const unity = "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
+    let base: string;
+    let source: string;
+    let lease: string;
+
+    beforeEach(() => {
+      base = mkdtempSync(join(tmpdir(), "strada-lease-review-"));
+      source = join(base, "source");
+      lease = join(base, "lease");
+      mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
+      mkdirSync(join(lease, "Assets", "Scripts"), { recursive: true });
+      // Created and committed by the worker: only the lease has it.
+      writeFileSync(join(lease, "Assets", "Scripts", "New.cs"), "public class New {}\n");
+    });
+
+    afterEach(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    async function runLeasedShell(chatId: string, command: string) {
+      const shellTool = createMockTool("shell_exec", true);
+      const leasedOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [shellTool],
+        channel: mockChannel,
+        projectPath: source,
+        readOnly: false,
+        requireConfirmation: true,
+      });
+      const usage = { inputTokens: 10, outputTokens: 10 };
+      const turns = [
+        { text: "Working in the workspace.", toolCalls: [], stopReason: "end_turn", usage },
+        {
+          text: "",
+          toolCalls: [{ id: `tc-${chatId}`, name: "shell_exec", input: { command } }],
+          stopReason: "tool_use",
+          usage,
+        },
+      ];
+      mockProvider.chat.mockImplementation(async (systemPrompt: unknown) => {
+        if (String(systemPrompt).includes("shell safety arbiter")) {
+          return {
+            text: JSON.stringify({ decision: "reject", reason: "looks destructive", taskAligned: true, bounded: false }),
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage,
+          };
+        }
+        return turns.shift() ?? { text: "Stopped.", toolCalls: [], stopReason: "end_turn", usage };
+      });
+
+      await runBackgroundTask(leasedOrch, "Work on the game", {
+        chatId,
+        channelType: "cli",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+        workspaceLease: { id: "lease-review", path: lease, release: vi.fn() } as any,
+        workspaceLeaseRetained: false,
+      });
+      return shellTool;
+    }
+
+    it("leaves `git checkout <a file only the lease has>` to the reviewer", async () => {
+      const shellTool = await runLeasedShell("bg-lease-checkout", "git checkout Assets/Scripts/New.cs");
+
+      expect(shellTool.execute).not.toHaveBeenCalled();
+      const toolResults = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
+      expect(toolResults.some((content) => content.includes("Self-managed write review rejected"))).toBe(true);
+    });
+
+    it("pre-approves Unity batchmode against the lease, by its own path or the source path", async () => {
+      // The redirect note tells the agent to use the lease path directly.
+      const byLease = await runLeasedShell("bg-lease-unity", `${unity} -batchmode -runTests -projectPath ${lease}`);
+      expect(byLease.execute).toHaveBeenCalledTimes(1);
+
+      // shell_exec points the source path at the lease before it runs.
+      const bySource = await runLeasedShell("bg-lease-unity-src", `${unity} -batchmode -runTests -projectPath ${source}`);
+      expect(bySource.execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("returns error result for unknown tool", async () => {
     const toolResponse: ProviderResponse = {
       text: "",

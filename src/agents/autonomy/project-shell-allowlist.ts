@@ -21,10 +21,11 @@
  * substitution, a redirection, an expansion other than $PWD) is not matched.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { destructiveShellFlag } from "../../security/dm-policy.js";
 import { plainCommands, type ShellWord } from "../../security/shell-lexer.js";
+import { redirectSourceProjectPath } from "../tools/shell-exec.js";
 
 export interface ProjectShellAllowlistMatch {
   /** Human-readable rule that approved the command. */
@@ -36,6 +37,12 @@ type Invocation = readonly ShellWord[];
 
 interface Scope {
   readonly root: string;
+  /**
+   * The root as given, and its real path when that differs. A lease lives
+   * under macOS /var/folders, a symlink to /private/var, and the shell in it
+   * prints the real form (`pwd`), so a command can name it either way.
+   */
+  readonly names: readonly string[];
   /** Path semantics of the root: a drive-letter or UNC root reads as Windows on any host. */
   readonly paths: path.PlatformPath;
 }
@@ -50,11 +57,25 @@ function pathsFor(root: string): path.PlatformPath {
   return /^[A-Za-z]:[\\/]|^\\\\/.test(root) ? path.win32 : path.posix;
 }
 
-/** True when `candidate`, resolved against the root, stays inside it. */
+function namesFor(root: string): string[] {
+  try {
+    const real = realpathSync.native(root);
+    return real === root ? [root] : [root, real];
+  } catch {
+    // A root this host cannot resolve (a Windows root here, a project not
+    // yet on disk) is known by the name it was given.
+    return [root];
+  }
+}
+
+/** True when `candidate`, resolved against the root, stays inside it under one of its names. */
 function inside(candidate: string, scope: Scope): boolean {
   const { paths, root } = scope;
-  const rel = paths.relative(root, paths.resolve(root, candidate));
-  return rel === "" || (!paths.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${paths.sep}`));
+  const resolved = paths.resolve(root, candidate);
+  return scope.names.some((name) => {
+    const rel = paths.relative(name, resolved);
+    return rel === "" || (!paths.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${paths.sep}`));
+  });
 }
 
 /** The pieces of a word that can name a path: `--out=x`, `-p:x`, `a,b`; a drive colon stays whole. */
@@ -283,7 +304,7 @@ const RULES: readonly AllowlistRule[] = [
       const project = at < 0 ? undefined : flags[at + 1];
       if (project === undefined) return false;
       if (project === "$PWD" || project === "${PWD}") return true;
-      return scope.paths.isAbsolute(project) && scope.paths.relative(scope.root, project) === "";
+      return scope.paths.isAbsolute(project) && scope.names.some((name) => scope.paths.relative(name, project) === "");
     },
   },
   {
@@ -336,16 +357,22 @@ const RULES: readonly AllowlistRule[] = [
 /**
  * Return the matching rule when the command is pre-approved without an LLM
  * review; null when it must go to the reviewer as before.
+ *
+ * `projectRoot` is where the command runs: under a workspace lease, the
+ * lease. `sourceRoot` is the project the lease was cut from; shell_exec
+ * points a command's mention of it at the lease, and so does this.
  */
 export function matchProjectScopedAllowlist(
-  command: string,
+  requested: string,
   projectRoot: string | undefined,
+  sourceRoot?: string,
 ): ProjectShellAllowlistMatch | null {
-  if (!projectRoot || !command.trim()) return null;
+  if (!projectRoot || !requested.trim()) return null;
+  const command = redirectSourceProjectPath(requested, sourceRoot, projectRoot);
   // Nothing destructiveShellFlag names or suspects is pre-approved: a match
   // overrides the reviewer, so it must rest on a command read in full.
   if (destructiveShellFlag(command) !== null) return null;
-  const scope: Scope = { root: projectRoot, paths: pathsFor(projectRoot) };
+  const scope: Scope = { root: projectRoot, names: namesFor(projectRoot), paths: pathsFor(projectRoot) };
   const stages = plainCommands(command.trim(), ["|"], {
     cmd: process.platform === "win32" || scope.paths === path.win32,
   });

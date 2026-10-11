@@ -75,6 +75,8 @@ export interface ReviewShellOptions {
   onUsage?: (usage: TaskUsageEvent) => void;
   /** The project the command runs against — enables the deterministic project-scoped allowlist. */
   projectPath?: string;
+  /** The project a workspace lease was cut from: shell_exec points the command's mentions of it at projectPath. */
+  sourceProjectPath?: string;
 }
 
 export interface SelfManagedWriteReview {
@@ -233,7 +235,7 @@ export async function reviewShellCommandWithProvider(
   // demanded ("looks destructive"), deadlocking delivery. The review still
   // runs — its evidence stays in the trace — but an allowlisted command cannot
   // end in "rejected"/"inconclusive".
-  const allowlisted = matchProjectScopedAllowlist(command, options.projectPath);
+  const allowlisted = matchProjectScopedAllowlist(command, options.projectPath, options.sourceProjectPath);
 
   try {
     const response = await streamOrChatText(
