@@ -188,12 +188,12 @@ const jsonFormat: ITool = {
   ): Promise<ToolExecutionResult> {
     const raw = typeof input["json"] === "string" ? input["json"] : "";
     if (!raw) {
-      return { content: "Error: json parameter is required." };
+      return { content: "Error: json parameter is required.", isError: true };
     }
 
     const parsed = safeParse(raw);
     if (!parsed.ok) {
-      return { content: `Error: ${parsed.error}` };
+      return { content: `Error: ${parsed.error}`, isError: true };
     }
 
     const minify = typeof input["minify"] === "boolean" ? input["minify"] : false;
@@ -228,23 +228,23 @@ const jsonQuery: ITool = {
   ): Promise<ToolExecutionResult> {
     const raw = typeof input["json"] === "string" ? input["json"] : "";
     if (!raw) {
-      return { content: "Error: json parameter is required." };
+      return { content: "Error: json parameter is required.", isError: true };
     }
 
     const path = typeof input["path"] === "string" ? input["path"] : "";
     if (!path) {
-      return { content: "Error: path parameter is required." };
+      return { content: "Error: path parameter is required.", isError: true };
     }
 
     const parsed = safeParse(raw);
     if (!parsed.ok) {
-      return { content: `Error: ${parsed.error}` };
+      return { content: `Error: ${parsed.error}`, isError: true };
     }
 
     const segments = parsePath(path);
     const result = traversePath(parsed.value, segments);
     if (!result.ok) {
-      return { content: `Error: ${result.error}` };
+      return { content: `Error: ${result.error}`, isError: true };
     }
 
     const value = result.value;
@@ -279,22 +279,22 @@ const jsonDiff: ITool = {
   ): Promise<ToolExecutionResult> {
     const rawA = typeof input["a"] === "string" ? input["a"] : "";
     if (!rawA) {
-      return { content: "Error: a parameter is required." };
+      return { content: "Error: a parameter is required.", isError: true };
     }
 
     const rawB = typeof input["b"] === "string" ? input["b"] : "";
     if (!rawB) {
-      return { content: "Error: b parameter is required." };
+      return { content: "Error: b parameter is required.", isError: true };
     }
 
     const parsedA = safeParse(rawA);
     if (!parsedA.ok) {
-      return { content: `Error in a: ${parsedA.error}` };
+      return { content: `Error in a: ${parsedA.error}`, isError: true };
     }
 
     const parsedB = safeParse(rawB);
     if (!parsedB.ok) {
-      return { content: `Error in b: ${parsedB.error}` };
+      return { content: `Error in b: ${parsedB.error}`, isError: true };
     }
 
     const diffs: Difference[] = [];

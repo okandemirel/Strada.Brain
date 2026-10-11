@@ -77,6 +77,7 @@ describe("file_stats", () => {
   it("returns error when path parameter is missing", async () => {
     const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
@@ -84,18 +85,21 @@ describe("file_stats", () => {
     await mkdir(join(project, "somedir"));
     const result = await tool.execute({ path: "somedir" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("not a file");
   });
 
   it("returns error when file does not exist", async () => {
     const result = await tool.execute({ path: "missing.txt" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("ENOENT");
   });
 
   it("rejects path with null byte", async () => {
     const result = await tool.execute({ path: "evil\0file.txt" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("invalid characters");
   });
 
@@ -106,14 +110,17 @@ describe("file_stats", () => {
     for (const path of [join(outside, "secret.txt"), "../outside/secret.txt", "link.txt", "/etc/passwd"]) {
       const result = await tool.execute({ path }, context);
       expect(result.content, path).toContain("outside the project directory");
+      expect(result.isError, path).toBe(true);
     }
     const env = await tool.execute({ path: ".env" }, context);
     expect(env.content).toContain("sensitive files is not permitted");
+    expect(env.isError).toBe(true);
   });
 
   it("refuses without a project directory", async () => {
     const result = await tool.execute({ path: "test.txt" }, { ...context, projectPath: "" });
     expect(result.content).toContain("No project directory");
+    expect(result.isError).toBe(true);
   });
 });
 
@@ -127,6 +134,7 @@ describe("file_find_large", () => {
   it("returns error when directory parameter is missing", async () => {
     const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
@@ -160,8 +168,10 @@ describe("file_find_large", () => {
   it("rejects directories outside the project and null bytes", async () => {
     const result = await tool.execute({ directory: outside }, context);
     expect(result.content).toContain("outside the project directory");
+    expect(result.isError).toBe(true);
     const nul = await tool.execute({ directory: "sub\0evil" }, context);
     expect(nul.content).toContain("invalid characters");
+    expect(nul.isError).toBe(true);
   });
 
   it("does not follow symlinks out of the project", async () => {
@@ -183,12 +193,14 @@ describe("file_line_search", () => {
   it("returns error when directory parameter is missing", async () => {
     const result = await tool.execute({ pattern: "test" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error when pattern parameter is missing", async () => {
     const result = await tool.execute({ directory: "." }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
@@ -212,6 +224,7 @@ describe("file_line_search", () => {
   it("returns error for invalid regex", async () => {
     const result = await tool.execute({ directory: ".", pattern: "[invalid" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("Invalid regex");
   });
 

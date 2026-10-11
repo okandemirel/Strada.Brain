@@ -38,11 +38,11 @@ async function listFilesByExtension(
 ): Promise<ToolExecutionResult> {
   const directory = typeof input["directory"] === "string" ? input["directory"] : "";
   if (!directory) {
-    return { content: "Error: directory parameter is required." };
+    return { content: "Error: directory parameter is required.", isError: true };
   }
   const validation = await resolveProjectPath(context, directory);
   if (!validation.ok) {
-    return { content: `Error: ${validation.error}` };
+    return { content: `Error: ${validation.error}`, isError: true };
   }
   const walk: ProjectWalk = { truncated: false };
   const files = await findFilesByExtension(validation.fullPath, ext, walk);

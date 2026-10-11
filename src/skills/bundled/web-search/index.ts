@@ -146,7 +146,7 @@ const webFetchUrl: ITool = {
     const urlInput = typeof input["url"] === "string" ? input["url"] : "";
     const validation = validateUrl(urlInput);
     if (!validation.ok) {
-      return { content: `Error: ${validation.error}` };
+      return { content: `Error: ${validation.error}`, isError: true };
     }
 
     const controller = new AbortController();
@@ -164,7 +164,7 @@ const webFetchUrl: ITool = {
         // Codex round 6 #14: a body nobody reads keeps the request in flight and
         // `Agent.close()` (in dispose) would wait on it. Release it first.
         await discardBody(response);
-        return { content: `Error: HTTP ${response.status} ${response.statusText}` };
+        return { content: `Error: HTTP ${response.status} ${response.statusText}`, isError: true };
       }
 
       const { text, complete } = await readBodyCapped(response, MAX_FETCH_BYTES);
@@ -175,13 +175,13 @@ const webFetchUrl: ITool = {
       return { content: text.slice(0, MAX_CONTENT_LENGTH) + `\n\n[Truncated — ${total}]` };
     } catch (error) {
       if (error instanceof ForbiddenTargetError) {
-        return { content: `Error: Access to internal/private network addresses is blocked. ${error.message}` };
+        return { content: `Error: Access to internal/private network addresses is blocked. ${error.message}`, isError: true };
       }
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("abort")) {
-        return { content: "Error: Request timed out after 10 seconds." };
+        return { content: "Error: Request timed out after 10 seconds.", isError: true };
       }
-      return { content: `Error: ${message}` };
+      return { content: `Error: ${message}`, isError: true };
     } finally {
       clearTimeout(timeoutId);
       if (dispose) await dispose();
@@ -208,7 +208,7 @@ const webSearch: ITool = {
   ): Promise<ToolExecutionResult> {
     const query = typeof input["query"] === "string" ? input["query"] : "";
     if (!query.trim()) {
-      return { content: "Error: query parameter is required." };
+      return { content: "Error: query parameter is required.", isError: true };
     }
 
     const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query.trim())}`;
@@ -227,7 +227,7 @@ const webSearch: ITool = {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        return { content: `Error: Search request failed with HTTP ${response.status}` };
+        return { content: `Error: Search request failed with HTTP ${response.status}`, isError: true };
       }
 
       const html = await response.text();
@@ -242,9 +242,9 @@ const webSearch: ITool = {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("abort")) {
-        return { content: "Error: Search request timed out after 10 seconds." };
+        return { content: "Error: Search request timed out after 10 seconds.", isError: true };
       }
-      return { content: `Error: ${message}` };
+      return { content: `Error: ${message}`, isError: true };
     }
   },
 };

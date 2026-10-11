@@ -129,8 +129,10 @@ async function runGh(
   // SEC-18: the project's repository, not whatever the bot process was started in.
   const cwd = typeof context?.projectPath === "string" && context.projectPath ? context.projectPath : undefined;
   const result = await execFileNoThrow("gh", [...subcommand, ...filtered.args], 15_000, undefined, { cwd });
+  // Without the flag the orchestrator counts a failed gh as a success and clears
+  // the tool's error counters, so an unauthenticated gh never trips the breaker.
   if (result.exitCode !== 0) {
-    return { content: `${label} failed (exit ${result.exitCode}): ${result.stderr || result.stdout}` };
+    return { content: `${label} failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`, isError: true };
   }
   return { content: result.stdout || whenEmpty };
 }

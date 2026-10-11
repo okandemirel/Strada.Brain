@@ -133,23 +133,23 @@ const fileStats: ITool = {
   ): Promise<ToolExecutionResult> {
     const filePath = typeof input["path"] === "string" ? input["path"] : "";
     if (!filePath) {
-      return { content: "Error: path parameter is required." };
+      return { content: "Error: path parameter is required.", isError: true };
     }
 
     const validation = await resolveProjectPath(context, filePath);
     if (!validation.ok) {
-      return { content: `Error: ${validation.error}` };
+      return { content: `Error: ${validation.error}`, isError: true };
     }
 
     const read = await readRegularFile(validation.fullPath, MAX_STATS_FILE_BYTES);
     if (read.kind === "error") {
-      return { content: `Error: ${read.message}` };
+      return { content: `Error: ${read.message}`, isError: true };
     }
     if (read.kind === "not-a-file") {
-      return { content: "Error: path is not a file." };
+      return { content: "Error: path is not a file.", isError: true };
     }
     if (read.kind === "too-large") {
-      return { content: `Error: file is too large to analyze (${formatBytes(read.size)}; limit ${formatBytes(MAX_STATS_FILE_BYTES)}).` };
+      return { content: `Error: file is too large to analyze (${formatBytes(read.size)}; limit ${formatBytes(MAX_STATS_FILE_BYTES)}).`, isError: true };
     }
 
     const content = read.text;
@@ -192,12 +192,12 @@ const fileFindLarge: ITool = {
   ): Promise<ToolExecutionResult> {
     const directory = typeof input["directory"] === "string" ? input["directory"] : "";
     if (!directory) {
-      return { content: "Error: directory parameter is required." };
+      return { content: "Error: directory parameter is required.", isError: true };
     }
 
     const validation = await resolveProjectPath(context, directory);
     if (!validation.ok) {
-      return { content: `Error: ${validation.error}` };
+      return { content: `Error: ${validation.error}`, isError: true };
     }
 
     const minSizeKb = typeof input["minSizeKb"] === "number" ? input["minSizeKb"] : 1024;
@@ -246,12 +246,12 @@ const fileLineSearch: ITool = {
   ): Promise<ToolExecutionResult> {
     const directory = typeof input["directory"] === "string" ? input["directory"] : "";
     if (!directory) {
-      return { content: "Error: directory parameter is required." };
+      return { content: "Error: directory parameter is required.", isError: true };
     }
 
     const patternStr = typeof input["pattern"] === "string" ? input["pattern"] : "";
     if (!patternStr) {
-      return { content: "Error: pattern parameter is required." };
+      return { content: "Error: pattern parameter is required.", isError: true };
     }
     if (patternStr.length > MAX_SEARCH_PATTERN_LENGTH) {
       return { content: `Error: pattern too long (max ${MAX_SEARCH_PATTERN_LENGTH} characters)`, isError: true };
@@ -265,7 +265,7 @@ const fileLineSearch: ITool = {
 
     const validation = await resolveProjectPath(context, directory);
     if (!validation.ok) {
-      return { content: `Error: ${validation.error}` };
+      return { content: `Error: ${validation.error}`, isError: true };
     }
 
     const maxResults = 50;

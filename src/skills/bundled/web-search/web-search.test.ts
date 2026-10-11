@@ -164,13 +164,16 @@ describe("web_fetch_url", () => {
   it("rejects URLs without http/https scheme", async () => {
     const result1 = await tool.execute({ url: "file:///etc/passwd" }, dummyContext);
     expect(result1.content).toContain("Error");
+    expect(result1.isError).toBe(true);
     expect(result1.content).toContain("http://");
 
     const result2 = await tool.execute({ url: "data:text/html,<h1>test</h1>" }, dummyContext);
     expect(result2.content).toContain("Error");
+    expect(result2.isError).toBe(true);
 
     const result3 = await tool.execute({ url: "javascript:alert(1)" }, dummyContext);
     expect(result3.content).toContain("Error");
+    expect(result3.isError).toBe(true);
 
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -178,10 +181,12 @@ describe("web_fetch_url", () => {
   it("rejects empty or missing URL", async () => {
     const result1 = await tool.execute({}, dummyContext);
     expect(result1.content).toContain("Error");
+    expect(result1.isError).toBe(true);
     expect(result1.content).toContain("required");
 
     const result2 = await tool.execute({ url: "" }, dummyContext);
     expect(result2.content).toContain("Error");
+    expect(result2.isError).toBe(true);
 
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -196,6 +201,7 @@ describe("web_fetch_url", () => {
 
     const result = await tool.execute({ url: "https://example.com/missing" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("404");
   });
 
@@ -204,6 +210,7 @@ describe("web_fetch_url", () => {
 
     const result = await tool.execute({ url: "https://slow.example.com" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("timed out");
   });
 
@@ -212,6 +219,7 @@ describe("web_fetch_url", () => {
 
     const result = await tool.execute({ url: "https://unreachable.example.com" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("ECONNREFUSED");
   });
 
@@ -249,6 +257,7 @@ describe("web_fetch_url", () => {
     ]);
 
     expect(result.content).toContain("HTTP 404");
+    expect(result.isError).toBe(true);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(agentInstances).toHaveLength(1);
     expect(agentInstances[0]!.closed).toBe(true);
@@ -262,6 +271,7 @@ describe("web_fetch_url", () => {
       setDns("public-looking.example", [{ address: "10.0.0.1", family: 4 }]);
       const result = await tool.execute({ url: "https://public-looking.example/secret" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("blocked");
       expect(result.content).toContain("10.0.0.1");
       expect(mockFetch).not.toHaveBeenCalled();
@@ -276,6 +286,7 @@ describe("web_fetch_url", () => {
       setDns("meta.example", [{ address, family: address.includes(":") ? 6 : 4 }]);
       const result = await tool.execute({ url: "http://meta.example/latest/meta-data/" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain(reason);
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -287,6 +298,7 @@ describe("web_fetch_url", () => {
       ]);
       const result = await tool.execute({ url: "https://dual.example/" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -305,6 +317,7 @@ describe("web_fetch_url", () => {
     ])("refuses IP literal spelling %s without DNS and without fetching", async (url) => {
       const result = await tool.execute({ url }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("blocked");
       expect(mockLookup).not.toHaveBeenCalled();
       expect(mockFetch).not.toHaveBeenCalled();
@@ -314,6 +327,7 @@ describe("web_fetch_url", () => {
       mockLookup.mockRejectedValue(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
       const result = await tool.execute({ url: "https://nxdomain.example/" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("could not be resolved");
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -329,6 +343,7 @@ describe("web_fetch_url", () => {
 
       const second = await tool.execute({ url: "https://rebind.example/" }, dummyContext);
       expect(second.content).toContain("Error");
+      expect(second.isError).toBe(true);
       expect(second.content).toContain("127.0.0.1");
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
@@ -340,6 +355,7 @@ describe("web_fetch_url", () => {
 
       const result = await tool.execute({ url: "https://example.com/start" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("10.1.2.3");
       expect(result.content).not.toContain("SHOULD NOT BE FETCHED");
       // Only the first hop was requested; the Location was refused before any fetch.
@@ -351,6 +367,7 @@ describe("web_fetch_url", () => {
       mockFetch.mockResolvedValueOnce(redirectResponse(301, "http://169.254.169.254/latest/meta-data/"));
       const result = await tool.execute({ url: "https://example.com/start" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("169.254.169.254");
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
@@ -375,6 +392,7 @@ describe("web_fetch_url", () => {
       mockFetch.mockResolvedValue(redirectResponse(302, "https://example.com/loop"));
       const result = await tool.execute({ url: "https://example.com/start" }, dummyContext);
       expect(result.content).toContain("Error");
+      expect(result.isError).toBe(true);
       expect(result.content).toContain("Too many redirects");
       expect(mockFetch).toHaveBeenCalledTimes(6); // initial + 5 hops
     });
@@ -500,10 +518,12 @@ describe("web_search", () => {
   it("rejects empty query", async () => {
     const result1 = await tool.execute({}, dummyContext);
     expect(result1.content).toContain("Error");
+    expect(result1.isError).toBe(true);
     expect(result1.content).toContain("required");
 
     const result2 = await tool.execute({ query: "   " }, dummyContext);
     expect(result2.content).toContain("Error");
+    expect(result2.isError).toBe(true);
 
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -531,6 +551,7 @@ describe("web_search", () => {
 
     const result = await tool.execute({ query: "test" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("503");
   });
 
@@ -539,7 +560,16 @@ describe("web_search", () => {
 
     const result = await tool.execute({ query: "timeout test" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("timed out");
+  });
+
+  it("flags a search that could not connect as a failure", async () => {
+    mockFetch.mockRejectedValue(new Error("getaddrinfo ENOTFOUND html.duckduckgo.com"));
+
+    const result = await tool.execute({ query: "offline" }, dummyContext);
+    expect(result.content).toContain("ENOTFOUND");
+    expect(result.isError).toBe(true);
   });
 
   it("strips HTML tags from snippets", async () => {

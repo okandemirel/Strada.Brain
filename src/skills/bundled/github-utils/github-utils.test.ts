@@ -58,6 +58,7 @@ describe("gh_pr_status", () => {
 
     const result = await tool.execute({}, dummyContext);
     expect(result.content).toContain("failed");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("not a git repo");
   });
 });
@@ -106,6 +107,7 @@ describe("gh_issue_list", () => {
 
     const result = await tool.execute({}, dummyContext);
     expect(result.content).toContain("failed");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("auth required");
   });
 });
@@ -141,6 +143,7 @@ describe("gh_repo_view", () => {
 
     const result = await tool.execute({}, dummyContext);
     expect(result.content).toContain("failed");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("exit 128");
   });
 });

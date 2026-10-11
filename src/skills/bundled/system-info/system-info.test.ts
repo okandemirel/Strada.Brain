@@ -204,3 +204,28 @@ describe("system_network", () => {
     expect(result.content).not.toContain("en0");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A tool that could not read the system says so: the orchestrator's breaker
+// and failure archive go by isError, not by the words in the text.
+// ---------------------------------------------------------------------------
+
+describe("system-info failures are flagged", () => {
+  it.each([
+    ["system_uptime", () => mockUptime.mockImplementation(() => { throw new Error("uptime unavailable"); })],
+    ["system_resources", () => mockCpus.mockImplementation(() => { throw new Error("cpus unavailable"); })],
+    ["system_network", () => mockNetworkInterfaces.mockImplementation(() => { throw new Error("uv_interface_addresses failed"); })],
+  ])("%s returns isError when the os call throws", async (name, arrange) => {
+    arrange();
+    const result = await findTool(name).execute({}, dummyContext);
+    expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
+  });
+
+  it("does not flag a successful read", async () => {
+    mockUptime.mockReturnValue(60);
+    mockLoadavg.mockReturnValue([0, 0, 0]);
+    const result = await findTool("system_uptime").execute({}, dummyContext);
+    expect(result.isError).toBeFalsy();
+  });
+});

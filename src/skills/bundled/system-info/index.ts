@@ -63,7 +63,7 @@ const systemUptime: ITool = {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { content: `Error: ${message}` };
+      return { content: `Error: ${message}`, isError: true };
     }
   },
 };
@@ -107,7 +107,7 @@ const systemResources: ITool = {
       return { content: lines.join("\n") };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { content: `Error: ${message}` };
+      return { content: `Error: ${message}`, isError: true };
     }
   },
 };
@@ -143,7 +143,7 @@ const systemNetwork: ITool = {
       return { content: entries.join("\n") };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { content: `Error: ${message}` };
+      return { content: `Error: ${message}`, isError: true };
     }
   },
 };

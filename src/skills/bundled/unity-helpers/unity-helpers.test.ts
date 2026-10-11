@@ -51,6 +51,7 @@ describe("unity_find_scripts", () => {
   it("returns error when directory parameter is missing", async () => {
     const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("directory");
   });
 
@@ -98,6 +99,7 @@ describe("unity_list_scenes", () => {
   it("returns error when directory parameter is missing", async () => {
     const result = await tool.execute({}, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("directory");
   });
 
@@ -140,6 +142,7 @@ describe("security: confined to the project", () => {
     for (const directory of [outside, "..", "linked", "/etc"]) {
       const result = await scriptsTool.execute({ directory }, context);
       expect(result.content, directory).toContain("outside the project directory");
+      expect(result.isError, directory).toBe(true);
     }
   });
 
@@ -163,11 +166,13 @@ describe("security: confined to the project", () => {
   it("rejects path with null byte", async () => {
     const result = await scriptsTool.execute({ directory: "Assets\0evil" }, context);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("invalid characters");
   });
 
   it("refuses without a project directory", async () => {
     const result = await scriptsTool.execute({ directory: "." }, { ...context, projectPath: "" });
     expect(result.content).toContain("No project directory");
+    expect(result.isError).toBe(true);
   });
 });

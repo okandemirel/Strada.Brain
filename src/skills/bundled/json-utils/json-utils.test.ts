@@ -33,12 +33,14 @@ describe("json_format", () => {
   it("returns error for missing json parameter", async () => {
     const result = await tool.execute({}, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error for invalid JSON", async () => {
     const result = await tool.execute({ json: "{broken" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("Invalid JSON");
   });
 
@@ -101,18 +103,21 @@ describe("json_query", () => {
   it("returns error for missing json parameter", async () => {
     const result = await tool.execute({ path: "name" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error for missing path parameter", async () => {
     const result = await tool.execute({ json: '{"a":1}' }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error for invalid JSON", async () => {
     const result = await tool.execute({ json: "not-json", path: "a" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("Invalid JSON");
   });
 
@@ -120,6 +125,7 @@ describe("json_query", () => {
     const json = JSON.stringify({ items: [1, 2] });
     const result = await tool.execute({ json, path: "items[5]" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("out of bounds");
   });
 
@@ -127,6 +133,7 @@ describe("json_query", () => {
     const json = JSON.stringify({ value: 42 });
     const result = await tool.execute({ json, path: "value.nested" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("non-object");
   });
 
@@ -146,6 +153,7 @@ describe("json_query", () => {
     const json = JSON.stringify({ data: null });
     const result = await tool.execute({ json, path: "data.child" }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("null/undefined");
   });
 });
@@ -232,24 +240,28 @@ describe("json_diff", () => {
   it("returns error for missing a parameter", async () => {
     const result = await tool.execute({ b: '{"x":1}' }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error for missing b parameter", async () => {
     const result = await tool.execute({ a: '{"x":1}' }, dummyContext);
     expect(result.content).toContain("Error");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("required");
   });
 
   it("returns error for invalid JSON in a", async () => {
     const result = await tool.execute({ a: "broken", b: '{"x":1}' }, dummyContext);
     expect(result.content).toContain("Error in a");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("Invalid JSON");
   });
 
   it("returns error for invalid JSON in b", async () => {
     const result = await tool.execute({ a: '{"x":1}', b: "broken" }, dummyContext);
     expect(result.content).toContain("Error in b");
+    expect(result.isError).toBe(true);
     expect(result.content).toContain("Invalid JSON");
   });
 
