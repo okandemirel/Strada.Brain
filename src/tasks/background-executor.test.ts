@@ -4380,17 +4380,20 @@ describe("BackgroundExecutor - the settle phase is not part of the run", () => {
 // forgot the path — the node flailed on against the vanished worktree until
 // its node budget ran out, while the log said it had been reaped.
 describe("BackgroundExecutor - the lost-workspace reaper stops a supervisor node (tasks-supervisor#4)", () => {
-  it("aborts the node whose own worktree vanished, and fails no task by the node's run id", async () => {
+  it("aborts the node whose own worktree vanished, settles it failed, and fails no task by the node's run id", async () => {
     const leaseDir = mkdtempSync(join(os.tmpdir(), "node-lease-lost-"));
     let nodeSignal: AbortSignal | undefined;
     const runWorkerTask = vi.fn((req: { signal: AbortSignal }) => new Promise((resolve) => {
       nodeSignal = req.signal;
-      // A node working against a deleted directory never ends on its own.
+      // A node working against a deleted directory never ends on its own. On
+      // the abort it answers as the V2 runner does: whatever the signal's
+      // reason, the run reads it as a benign user-cancel and keeps
+      // "completed" (stoppedStatus, supervisor-node mode).
       req.signal.addEventListener("abort", () => resolve({
-        status: "failed", reason: String((req.signal.reason as Error)?.message ?? req.signal.reason),
-        finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
-        assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
-        reviewFindings: [], artifacts: [],
+        status: "completed", reason: "user-cancel",
+        finalSummary: "Task completed.", visibleResponse: "Task completed.", provider: "mock",
+        catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: ["Assets/LevelSelect.cs"],
+        toolTrace: [], verificationResults: [], reviewFindings: [], artifacts: [],
       }), { once: true });
     }));
     const workerOrchestrator = { runWorkerTask } as any;
@@ -4430,10 +4433,65 @@ describe("BackgroundExecutor - the lost-workspace reaper stops a supervisor node
       expect(settled).toBe("settled");
       expect(nodeSignal?.aborted).toBe(true);
       expect(String((nodeSignal?.reason as Error)?.message)).toContain("workspace directory is gone");
+      // The worker's own "completed" is not the node's outcome: it was
+      // stopped half-way and its worktree is gone (the empty commit there is
+      // not a publication).
+      const { workerResult, output } = await run;
+      expect(workerResult?.status).toBe("failed");
+      expect(workerResult?.reason).toContain("workspace directory is gone");
+      expect(output).toContain("workspace directory is gone");
       // The node is stopped, not its supervisor run, and no terminal is
       // written for an id that matches no task row.
       expect(supervisorSignal.aborted).toBe(false);
       expect(taskManager.fail).not.toHaveBeenCalled();
+    } finally {
+      rmSync(leaseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a node its supervisor cancelled to the supervisor, even when the reaper also fires", async () => {
+    const leaseDir = mkdtempSync(join(os.tmpdir(), "node-lease-cancelled-"));
+    const runWorkerTask = vi.fn((req: { signal: AbortSignal }) => new Promise((resolve) => {
+      req.signal.addEventListener("abort", () => resolve({
+        status: "completed", reason: "user-cancel",
+        finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+        assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+        reviewFindings: [], artifacts: [],
+      }), { once: true });
+    }));
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: {
+        acquireLease: vi.fn().mockResolvedValue({
+          id: "lease-node", path: leaseDir,
+          commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
+          release: vi.fn().mockResolvedValue(undefined),
+        }),
+      } as any,
+    });
+    executor.setTaskManager({
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      getStatus: vi.fn(() => null), listTasks: vi.fn(() => []), listStuckExecuting: vi.fn(() => []),
+    } as any);
+    const supervisor = new AbortController();
+
+    try {
+      const run = executor.runWorkerEnvelope(workerOrchestrator, {
+        mode: "delegated", prompt: "Build the level select screen", signal: supervisor.signal,
+        onProgress: vi.fn(), chatId: "chat-node", taskRunId: "task_x:node_z", channelType: "cli",
+        supervisorMode: "off",
+      });
+      await vi.waitFor(() => expect(runWorkerTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+      supervisor.abort(new Error("first success satisfied"));
+      rmSync(leaseDir, { recursive: true, force: true });
+      (executor as unknown as { reapLostWorkspaces(): void }).reapLostWorkspaces();
+
+      const { workerResult, output } = await run;
+      expect(workerResult?.status).toBe("completed");
+      expect(workerResult?.reason).toBe("user-cancel");
+      expect(output).not.toContain("RUN STOPPED");
     } finally {
       rmSync(leaseDir, { recursive: true, force: true });
     }

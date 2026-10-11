@@ -1660,6 +1660,27 @@ export class BackgroundExecutor {
     // whose bytes never reached the project settled green and its dependents
     // ran against work that was not there (Codex 2026-09-11 N#1).
     const settled = outcome ?? { output: "" };
+    // A REAPED RUN DID NOT FINISH, whatever it reports. The V2 runner reads
+    // every abort of its external signal as a benign user-cancel and keeps
+    // "completed" for a node, and the commit of a directory that is gone
+    // returns empty, which judgePublication cannot tell from "nothing to
+    // publish": the node settled "ok" with artifacts that never landed and its
+    // dependents ran against missing work. The caller's own cancel is not a
+    // reap; that outcome stays the caller's to settle.
+    if (reapControl?.signal.aborted && !params.signal.aborted) {
+      const cause = reapControl.signal.reason;
+      const reaped = cause instanceof Error ? cause.message : String(cause);
+      const lost = publicationLoss === undefined
+        ? ""
+        : `\n\nPUBLICATION FAILED: ${publicationLoss}. The workspace is kept for salvage.`;
+      return {
+        ...settled,
+        output: `${settled.output}\n\nRUN STOPPED: ${reaped}${lost}`,
+        ...(settled.workerResult
+          ? { workerResult: { ...settled.workerResult, status: "failed" as const, reason: reaped.slice(0, 300) } }
+          : {}),
+      };
+    }
     if (publicationLoss === undefined) {
       return publicationNote === undefined
         ? settled
@@ -2625,7 +2646,8 @@ export class BackgroundExecutor {
         // A run that is not a task this process executes — a supervisor
         // node's own worktree. There is no row to fail (fail() on its run id
         // emitted task:failed for an id that matches nothing): stop the run
-        // itself, and its supervisor settles the node as failed.
+        // itself. runWorkerEnvelope settles it failed on this abort — the
+        // runner alone would read it as a benign cancel and keep "completed".
         const run = this.inflightWorkspaceRuns.get(taskId);
         this.inflightWorkspaceRuns.delete(taskId);
         getLoggerSafe().warn("Reaping run whose workspace vanished", { runId: taskId, workspacePath, aborted: Boolean(run) });
