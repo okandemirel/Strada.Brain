@@ -205,17 +205,48 @@ run_pre_checks() {
         log WARN "UNITY_PROJECT_PATH does not exist: $unity_project_path"
     fi
     
-    # Check disk space
-    local available_space=$(df -BG "$PROJECT_ROOT" | awk 'NR==2 {print $4}' | tr -d 'G')
-    if [[ "$available_space" -lt 5 ]]; then
-        error_exit "Insufficient disk space. At least 5GB required."
+    # Check disk space. `df -P -k` is POSIX: GNU and BSD (macOS) df print the
+    # same columns. `df -BG` was GNU-only; BSD df refused it, `local` hid the
+    # failure from set -e, and the empty result compared as 0, so every macOS
+    # deploy was refused as "insufficient disk space" with tens of GB free.
+    # A df that yields no number is reported as unmeasured, never as a full disk.
+    local df_output available_kb available_gb
+    df_output="$(df -P -k "$PROJECT_ROOT" 2>&1)" || true
+    # Available is the column before Capacity ("NN%"); anchoring on it keeps a
+    # space in the filesystem name or mount point from shifting the fields.
+    available_kb="$(printf '%s\n' "$df_output" | awk 'NR == 2 { for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+%$/) { print $(i - 1); exit } }')"
+    if [[ ! "$available_kb" =~ ^[0-9]+$ ]]; then
+        error_exit "Could not measure free disk space at $PROJECT_ROOT, so the 5GB minimum was NOT checked (df -P -k said: ${df_output//$'\n'/ })"
     fi
-    log INFO "Disk space check passed (${available_space}GB available)"
-    
-    # Check memory
-    local available_memory=$(free -g 2>/dev/null | awk 'NR==2{print $7}' || echo "4")
-    if [[ "$available_memory" -lt 1 ]]; then
-        log WARN "Low memory detected (${available_memory}GB). Deployment may fail."
+    available_gb=$((available_kb / 1024 / 1024))
+    if (( available_kb < 5 * 1024 * 1024 )); then
+        error_exit "Insufficient disk space at $PROJECT_ROOT: ${available_gb}GB available, at least 5GB required."
+    fi
+    log INFO "Disk space check passed (${available_gb}GB available)"
+
+    # Check memory. `free` is Linux-only and `|| echo "4"` invented 4GB wherever
+    # it was missing, so macOS was never warned. Linux reports what is available
+    # now; elsewhere the Docker daemon reports the memory its containers get
+    # (Docker Desktop's VM on macOS). With neither, the warning says so.
+    local memory_kb="" memory_source="" docker_memory
+    if [[ -r /proc/meminfo ]]; then
+        memory_kb="$(awk '$1 == "MemAvailable:" { print $2; exit }' /proc/meminfo 2>/dev/null)" || memory_kb=""
+        memory_source="available per /proc/meminfo MemAvailable"
+    fi
+    if [[ ! "$memory_kb" =~ ^[0-9]+$ ]]; then
+        memory_kb=""
+        docker_memory="$(docker info --format '{{.MemTotal}}' 2>/dev/null)" || docker_memory=""
+        if [[ "$docker_memory" =~ ^[0-9]+$ ]]; then
+            memory_kb=$((docker_memory / 1024))
+            memory_source="total per docker info MemTotal"
+        fi
+    fi
+    if [[ -z "$memory_kb" ]]; then
+        log WARN "Memory was NOT measured (no /proc/meminfo MemAvailable, no docker info MemTotal); the 1GB minimum was not checked."
+    elif (( memory_kb < 1024 * 1024 )); then
+        log WARN "Low memory detected: $((memory_kb / 1024))MB ${memory_source}. Deployment may fail."
+    else
+        log INFO "Memory check passed: $((memory_kb / 1024))MB ${memory_source}"
     fi
     
     # Check SSL certificates
@@ -274,11 +305,18 @@ create_backup() {
     
     log SUCCESS "Backup created at $backup_path"
     
-    # Cleanup old backups (keep last 10)
+    # Cleanup old backups (keep last 10). A read loop, not `xargs -I {}`: BSD
+    # xargs refuses a replacement longer than 255 bytes ("command line cannot be
+    # assembled"), which aborted the deploy under set -e for a project under a
+    # long path once an eleventh backup existed.
     local backup_count=$(ls -1 "$BACKUP_DIR" | wc -l)
     if [[ "$backup_count" -gt 10 ]]; then
         log INFO "Cleaning up old backups..."
-        ls -1t "$BACKUP_DIR" | tail -n +11 | xargs -I {} rm -rf "$BACKUP_DIR/{}"
+        local old_backup
+        while IFS= read -r old_backup; do
+            [[ -n "$old_backup" ]] || continue
+            rm -rf "${BACKUP_DIR:?}/$old_backup"
+        done < <(ls -1t "$BACKUP_DIR" | tail -n +11)
     fi
 }
 
