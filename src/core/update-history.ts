@@ -56,6 +56,68 @@ export function recordUpdateEvent(installRoot: string, event: UpdateEvent): void
   }
 }
 
+/**
+ * What the last failed update holds back (2026-09-18 .. 09-20: seven cycles
+ * pulled, timed out in `npm run build` and reset, every 6 h, because nothing
+ * remembered the previous failure). The scheduled check never attempts
+ * `target` again, and attempts nothing newer before `retryAfter`; a
+ * successful update deletes the file.
+ */
+export interface UpdateHold {
+  /** The commit (git) or version (npm) that failed. */
+  target: string;
+  step: string;
+  /** The end of the failing command's output. */
+  cause: string;
+  at: number;
+  /** Consecutive failed updates, whatever their target. */
+  failures: number;
+  retryAfter: number;
+}
+
+export const UPDATE_HOLD_FILE = "auto-update-hold.json";
+
+function updateHoldPath(installRoot: string): string {
+  return path.join(installRoot, ".strada", UPDATE_HOLD_FILE);
+}
+
+export function readUpdateHold(installRoot: string): UpdateHold | null {
+  try {
+    const hold = JSON.parse(fs.readFileSync(updateHoldPath(installRoot), "utf8")) as UpdateHold;
+    return typeof hold?.target === "string" && typeof hold.retryAfter === "number" ? hold : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Never throws: a hold that cannot be written must not mask the failure itself. */
+export function writeUpdateHold(installRoot: string, hold: UpdateHold): void {
+  try {
+    const file = updateHoldPath(installRoot);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(hold, null, 2));
+    fs.renameSync(tmp, file);
+  } catch {
+    /* advisory */
+  }
+}
+
+export function clearUpdateHold(installRoot: string): void {
+  try {
+    fs.rmSync(updateHoldPath(installRoot), { force: true });
+  } catch {
+    /* advisory */
+  }
+}
+
+export function describeUpdateHold(hold: UpdateHold, now: number): string {
+  const cause = hold.cause.split("\n", 1)[0]!.slice(0, 160);
+  const failures = hold.failures === 1 ? "1 failure" : `${hold.failures} failures in a row`;
+  const next = hold.retryAfter > now ? `a newer one not before ${describeWhen(hold.retryAfter, now)}` : "a newer one at the next check";
+  return `Auto-update held back: ${hold.target.slice(0, 8)} failed at ${hold.step} ${describeAgo(now - hold.at)} — ${cause} (${failures}; never retrying it automatically, ${next}; \`strada update\` retries now)`;
+}
+
 export function describeUpdateEvent(event: UpdateEvent | undefined, now: number): string {
   if (!event) return "Last auto-update: none recorded";
   const ago = describeAgo(now - event.at);

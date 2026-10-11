@@ -56,4 +56,30 @@ describe("spawnWithTimeout (COR-20)", () => {
       spawnWithTimeout(process.execPath, ["-e", "process.stderr.write('bad'); process.exit(3)"], 10_000),
     ).rejects.toThrow(/exited with code 3: bad/);
   });
+
+  // 2026-09-17 15:15 and 20:22: "npm exited with code 2: [strada] Portal build
+  // FAILED. Refusing to produce a package with a missing web UI." and nothing
+  // else — the portal's `tsc -b` writes its diagnostics to stdout.
+  it("keeps the end of stdout too, where tsc writes its diagnostics", async () => {
+    const script =
+      "process.stdout.write('src/App.tsx(1,32): error TS2307: Cannot find module \\'react\\'\\n');" +
+      "process.stderr.write('[strada] Portal build FAILED.\\n'); process.exit(2)";
+    const message = await spawnWithTimeout(process.execPath, ["-e", script], 10_000)
+      .then(() => "resolved", (error: Error) => error.message);
+    expect(message).toMatch(/exited with code 2: \[strada\] Portal build FAILED/);
+    expect(message).toContain("error TS2307: Cannot find module 'react'");
+  });
+
+  // 2026-09-18 .. 2026-09-20: seven rollbacks whose only words were
+  // "Command timed out: npm run build" — not the budget, not where it was.
+  it.skipIf(process.platform === "win32")(
+    "a timed-out command says what budget it had and what it printed last",
+    async () => {
+      const script = "process.stdout.write('transforming (1200) src/App.tsx\\n'); setInterval(() => {}, 1000);";
+      const message = await spawnWithTimeout(process.execPath, ["-e", script], 2_000, undefined, { killGraceMs: 300 })
+        .then(() => "resolved", (error: Error) => error.message);
+      expect(message).toContain("Command timed out after 2 s");
+      expect(message).toContain("transforming (1200) src/App.tsx");
+    },
+  );
 });

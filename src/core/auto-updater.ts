@@ -5,7 +5,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { getLoggerSafe } from "../utils/logger.js";
-import { recordUpdateEvent } from "./update-history.js";
+import {
+  clearUpdateHold, describeUpdateHold, describeWhen, readUpdateHold, recordUpdateEvent, writeUpdateHold,
+  type UpdateHold,
+} from "./update-history.js";
 import { planTreeKill } from "../utils/process-runner.js";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
 import { installLockPath } from "./runtime-lock.js";
@@ -19,6 +22,20 @@ const STALE_LOCK_MAX_AGE = 30 * 60 * 1000;
  * runner without letting a wedged boot hold the updater open forever.
  */
 const BOOT_SMOKE_TIMEOUT = 5 * 60 * 1000;
+/**
+ * Default budget, in minutes, for each `npm install` / `npm run build` after a
+ * pull (AUTO_UPDATE_BUILD_TIMEOUT_MIN). A fixed 5 minutes timed out seven
+ * builds in a row on the daemon host (2026-09-18 21:55 .. 09-20 10:34), after
+ * two installs that took ~5 minutes apiece; the same build measured 69 s at
+ * load average 30-106 there (2026-10-11). Three times the budget they overran.
+ */
+const DEFAULT_BUILD_TIMEOUT_MIN = 15;
+/** After N consecutive failed updates the next one waits 2^(N-1) check intervals, at most 2^this. */
+const MAX_BACKOFF_DOUBLINGS = 3;
+/** How much of a failed command's output its error keeps: the end, where the cause is. */
+const OUTPUT_TAIL_CHARS = 1500;
+/** The files whose change makes a package's node_modules stale. */
+const DEPENDENCY_MANIFESTS = ["package.json", "package-lock.json"];
 
 export type InstallMethod = "npm-global" | "npm-local" | "git";
 
@@ -30,13 +47,36 @@ export interface AutoUpdateConfig {
   notify: boolean;
   autoRestart: boolean;
   autoRestartDelayMs?: number;
+  /** Minutes each post-pull install/build step may take. Default DEFAULT_BUILD_TIMEOUT_MIN. */
+  buildTimeoutMin?: number;
 }
 
 export interface UpdateCheckResult {
   available: boolean;
   currentVersion: string;
   latestVersion: string | null;
+  /** The remote commit a git check found; what a failed update is remembered by. */
+  latestRevision?: string | null;
+  /** Set when an update is available but a failed one holds it back: why, and until when. */
+  heldBack?: string;
   error: string | null;
+}
+
+function tailOf(text: string, max = OUTPUT_TAIL_CHARS): string {
+  const trimmed = text.trim();
+  return trimmed.length <= max ? trimmed : `…${trimmed.slice(-max)}`;
+}
+
+/**
+ * A failure for a log line or a notice: its first line (which command) and
+ * the END of the rest. Keeping the first 600 characters, as before, kept npm's
+ * warnings and dropped the compiler error after them.
+ */
+function describeFailure(err: unknown, max = 1200): string {
+  const message = (err instanceof Error ? err.message : String(err)).trim();
+  if (message.length <= max) return message;
+  const firstLine = message.split("\n", 1)[0]!.slice(0, 200);
+  return `${firstLine} … ${message.slice(-(max - firstLine.length - 3))}`;
 }
 
 export interface RuntimeProcessInfo {
@@ -148,6 +188,10 @@ export class AutoUpdater {
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
+  /** The commit (git) or version (npm) the last check found; null for a pending update resumed from disk. */
+  private pendingTarget: string | null = null;
+  /** The hold this process last announced, so a held-back check says so once, not every interval. */
+  private announcedHoldAt: number | null = null;
   private idleCheckHandle: ReturnType<typeof setInterval> | null = null;
   private notifyFn: ((msg: string) => void) | null = null;
 
@@ -190,6 +234,7 @@ export class AutoUpdater {
 
   private clearPendingVersion(): void {
     this.pendingVersion = null;
+    this.pendingTarget = null;
     this.savePendingVersion();
   }
 
@@ -465,16 +510,58 @@ export class AutoUpdater {
     );
   }
 
-  private async installProjectDependencies(): Promise<void> {
-    await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
-    const portalPkgPath = path.join(this.installRoot, "web-portal", "package.json");
-    if (fs.existsSync(portalPkgPath)) {
-      await this.runCommand(
-        "npm",
-        ["install"],
-        UPDATE_TIMEOUT,
-        path.join(this.installRoot, "web-portal"),
-      );
+  /** The budget for each post-pull install and build step (AUTO_UPDATE_BUILD_TIMEOUT_MIN). */
+  private stepTimeoutMs(): number {
+    // `config` is absent on updaters the tests build without a constructor.
+    const minutes = (this.config as AutoUpdateConfig | undefined)?.buildTimeoutMin;
+    return (typeof minutes === "number" && minutes > 0 ? minutes : DEFAULT_BUILD_TIMEOUT_MIN) * 60_000;
+  }
+
+  /**
+   * The packages (the root, and web-portal with its own lockfile) whose
+   * dependencies `toSha` needs installed: those whose package.json or
+   * package-lock.json differ from `fromSha`, and those with no completed
+   * install. Both installs used to run on every update — about 5 minutes
+   * apiece on the daemon host in September, two thirds of each failed update.
+   * `npm install` leaves node_modules/.package-lock.json behind; a portal
+   * build run without dependencies leaves only node_modules/.tmp, which is
+   * not an install.
+   */
+  private async packagesNeedingInstall(fromSha: string, toSha: string): Promise<string[]> {
+    const portal = path.join(this.installRoot, "web-portal");
+    const packages = [
+      { dir: this.installRoot, manifests: DEPENDENCY_MANIFESTS },
+      ...(fs.existsSync(path.join(portal, "package.json"))
+        ? [{ dir: portal, manifests: DEPENDENCY_MANIFESTS.map((name) => `web-portal/${name}`) }]
+        : []),
+    ];
+    let changed: string[] | null = [];
+    if (fromSha !== toSha) {
+      try {
+        const output = await this.runCommand(
+          "git",
+          ["diff", "--name-only", fromSha, toSha, "--", ...packages.flatMap((p) => p.manifests)],
+          VERSION_CHECK_TIMEOUT,
+          this.installRoot,
+        );
+        changed = output.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      } catch {
+        changed = null; // unknown: reinstalling costs minutes, building on stale dependencies costs the update
+      }
+    }
+    const changedManifests = changed;
+    return packages
+      .filter((p) => (
+        !fs.existsSync(path.join(p.dir, "node_modules", ".package-lock.json"))
+        || changedManifests === null
+        || p.manifests.some((manifest) => changedManifests.includes(manifest))
+      ))
+      .map((p) => p.dir);
+  }
+
+  private async installProjectDependencies(packages: string[]): Promise<void> {
+    for (const dir of packages) {
+      await this.runCommand("npm", ["install"], this.stepTimeoutMs(), dir);
     }
   }
 
@@ -731,6 +818,7 @@ export class AutoUpdater {
           available: behind > 0,
           currentVersion,
           latestVersion: remoteVersion,
+          latestRevision: remoteRev.length > 0 ? remoteRev : null,
           error: null,
         };
       } else {
@@ -780,15 +868,66 @@ export class AutoUpdater {
 
     try {
       const method = this.detectInstallMethod();
-
-      if (method === "git") {
-        return await this.performGitUpdate();
-      } else {
-        return await this.performNpmUpdate(method);
-      }
+      const updated = method === "git"
+        ? await this.performGitUpdate()
+        : await this.performNpmUpdate(method);
+      if (updated) clearUpdateHold(this.installRoot);
+      return updated;
     } finally {
       this.releaseLock();
     }
+  }
+
+  /**
+   * Remember a failed update (see UpdateHold): the scheduled check will not
+   * attempt `target` again, and waits out a backoff that doubles with each
+   * consecutive failure before attempting anything newer. Until 2026-09-20 a
+   * failure only said "Will retry next check", and every check did.
+   */
+  private holdBack(target: string, step: string, err: unknown): void {
+    const now = Date.now();
+    const failures = (readUpdateHold(this.installRoot)?.failures ?? 0) + 1;
+    const intervalMs = ((this.config as AutoUpdateConfig | undefined)?.intervalHours || 6) * 60 * 60 * 1000;
+    const hold: UpdateHold = {
+      target,
+      step,
+      cause: describeFailure(err, 600),
+      at: now,
+      failures,
+      retryAfter: now + intervalMs * 2 ** Math.min(failures - 1, MAX_BACKOFF_DOUBLINGS),
+    };
+    writeUpdateHold(this.installRoot, hold);
+    getLoggerSafe().warn("Auto-update held back", {
+      target,
+      step,
+      failures,
+      retryAfter: new Date(hold.retryAfter).toISOString(),
+    });
+  }
+
+  /** The hold that keeps the scheduled updater away from `target` now, if any. */
+  private activeHold(target: string | null): UpdateHold | null {
+    const hold = readUpdateHold(this.installRoot);
+    if (!hold) return null;
+    return (target !== null && target === hold.target) || Date.now() < hold.retryAfter ? hold : null;
+  }
+
+  /** Drop the pending update a hold forbids, and say so once per hold. */
+  private standDown(hold: UpdateHold): void {
+    if (this.idleCheckHandle) {
+      clearInterval(this.idleCheckHandle);
+      this.idleCheckHandle = null;
+    }
+    this.clearPendingVersion();
+    if (this.announcedHoldAt === hold.at) return;
+    this.announcedHoldAt = hold.at;
+    getLoggerSafe().warn("Auto-update skipped — the last update failed and is held back", {
+      target: hold.target,
+      step: hold.step,
+      failures: hold.failures,
+      retryAfter: new Date(hold.retryAfter).toISOString(),
+    });
+    if (this.config.notify && this.notifyFn) this.notifyFn(describeUpdateHold(hold, Date.now()));
   }
 
   /** Told once per dirty stretch; cleared when the tree is clean again. */
@@ -860,7 +999,7 @@ export class AutoUpdater {
         // from 2026-08-25 sat unrestored, and nothing in the log said so —
         // the only notice went to a chat channel.
         getLoggerSafe().warn("Auto-update could not restore the stashed working tree", {
-          detail: (popErr as Error).message.slice(0, 400),
+          detail: describeFailure(popErr, 400),
           recovery: "git stash list / git stash pop",
         });
         // Check if working tree has conflict markers
@@ -927,6 +1066,9 @@ export class AutoUpdater {
       recordUpdateEvent(this.installRoot, { at: Date.now(), kind: "rolled-back", from: postPullSha, to: prePullSha, reason: why });
     };
 
+    // The packages whose dependencies the update reinstalled; a rollback
+    // reinstalls the same ones to put the old dependencies back.
+    let reinstalled: string[] = [];
     try {
       await this.runCommand(
         "git",
@@ -939,9 +1081,10 @@ export class AutoUpdater {
       ).trim();
       getLoggerSafe().info("Auto-update pulled", { remote, branch, from: prePullSha, to: postPullSha });
       step = "npm install";
-      await this.installProjectDependencies();
+      reinstalled = await this.packagesNeedingInstall(prePullSha, postPullSha);
+      await this.installProjectDependencies(reinstalled);
       step = "npm run build";
-      await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
+      await this.runCommand("npm", ["run", "build"], this.stepTimeoutMs(), this.installRoot);
     } catch (buildErr) {
       // Three rollbacks in three days said "the build failed" and nothing
       // else (2026-09-04 18:51, 2026-09-06 12:45 and 18:41, 2026-09-07 01:40)
@@ -950,26 +1093,29 @@ export class AutoUpdater {
       // timed-out `npm install`.
       getLoggerSafe().warn("Auto-update step failed", {
         step,
-        detail: (buildErr as Error).message.slice(0, 600),
+        detail: describeFailure(buildErr),
       });
       try {
         await rollbackTo(postPullSha, `${step} failed`);
         // Restore old dependencies after source rollback
-        await this.installProjectDependencies();
+        await this.installProjectDependencies(reinstalled);
         // A failed build still writes dist/: tsc emits despite type errors,
         // and a failed portal build leaves the new server code behind. Until
         // the rolled-back source is built again, the next start (and every
         // lazy import) runs the version that was just rejected (COR-4).
         if (step === "npm run build") {
-          await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
+          await this.runCommand("npm", ["run", "build"], this.stepTimeoutMs(), this.installRoot);
         }
       } catch (rollbackErr) {
         // Rollback failed — nothing more we can do; say so for the operator.
         getLoggerSafe().warn("Auto-update rollback did not complete", {
-          detail: (rollbackErr as Error).message.slice(0, 600),
+          detail: describeFailure(rollbackErr),
         });
       }
       await popStash();
+      // A pull that never landed (no network, divergent history) says nothing
+      // about the commit, so only a landed one is held back.
+      if (postPullSha !== prePullSha) this.holdBack(postPullSha, step, buildErr);
       throw buildErr;
     }
 
@@ -986,19 +1132,28 @@ export class AutoUpdater {
     try {
       await this.runPostUpdateHealthCheck();
     } catch (healthErr) {
+      // 2026-09-18 15:51 logged only "rolling back … the post-update health
+      // check failed"; what the check saw reached a chat notice, if anything.
+      getLoggerSafe().warn("Auto-update step failed", {
+        step: "the post-update health check",
+        detail: describeFailure(healthErr),
+      });
       if (this.notifyFn) {
         this.notifyFn(
-          `Update build succeeded but health check failed: ${(healthErr as Error).message}. Rolling back...`,
+          `Update build succeeded but health check failed: ${describeFailure(healthErr, 600)}. Rolling back...`,
         );
       }
       try {
         await rollbackTo(postPullSha, "the post-update health check failed");
-        await this.installProjectDependencies();
-        await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
-      } catch {
-        // Rollback failed
+        await this.installProjectDependencies(reinstalled);
+        await this.runCommand("npm", ["run", "build"], this.stepTimeoutMs(), this.installRoot);
+      } catch (rollbackErr) {
+        getLoggerSafe().warn("Auto-update rollback did not complete", {
+          detail: describeFailure(rollbackErr),
+        });
       }
       await popStash();
+      if (postPullSha !== prePullSha) this.holdBack(postPullSha, "the post-update health check", healthErr);
       throw healthErr;
     }
 
@@ -1017,6 +1172,8 @@ export class AutoUpdater {
     // For npm-local, every npm command and every backup belongs to the OWNING
     // package, not to the installed copy the process is running from (14F4/D73).
     let ownerRoot: string | undefined;
+    // The version a failed health check holds back, as the check reported it.
+    let target = this.pendingVersion ?? `strada-brain@${tag}`;
 
     if (method === "npm-local") {
       const resolvedOwner = AutoUpdater.resolveOwningPackageRoot(this.installRoot);
@@ -1045,6 +1202,7 @@ export class AutoUpdater {
         }
         return false;
       }
+      if (publishedVersion) target = publishedVersion;
 
       const pkgBackup = path.join(ownerRoot, ".strada-update-backup-package.json");
       const lockBackup = path.join(ownerRoot, ".strada-update-backup-package-lock.json");
@@ -1150,9 +1308,13 @@ export class AutoUpdater {
     try {
       await this.runPostUpdateHealthCheck();
     } catch (healthErr) {
+      getLoggerSafe().warn("Auto-update step failed", {
+        step: "the post-update health check",
+        detail: describeFailure(healthErr),
+      });
       if (this.notifyFn) {
         this.notifyFn(
-          `Update installed but health check failed: ${(healthErr as Error).message}. Rolling back...`,
+          `Update installed but health check failed: ${describeFailure(healthErr, 600)}. Rolling back...`,
         );
       }
       if (rollbackCommand) {
@@ -1164,6 +1326,8 @@ export class AutoUpdater {
           }
         }
       }
+      // The package installed, so this is the version failing, not the registry.
+      this.holdBack(target, "the post-update health check", healthErr);
       throw healthErr;
     }
 
@@ -1365,6 +1529,15 @@ export class AutoUpdater {
   async requestImmediateCheck(): Promise<UpdateCheckResult> {
     const result = await this.checkForUpdate();
     if (!result.error && result.available && result.latestVersion) {
+      // A push is no reason to skip the hold: in September a push landed
+      // between every pair of failed attempts.
+      const target = result.latestRevision ?? result.latestVersion;
+      const hold = this.activeHold(target);
+      if (hold) {
+        this.standDown(hold);
+        return { ...result, heldBack: describeUpdateHold(hold, Date.now()) };
+      }
+      this.pendingTarget = target;
       this.pendingVersion = result.latestVersion;
       this.savePendingVersion();
       if (this.config.notify && this.notifyFn) {
@@ -1387,6 +1560,13 @@ export class AutoUpdater {
     }
     if (!result.available || !result.latestVersion) return;
 
+    const target = result.latestRevision ?? result.latestVersion;
+    const hold = this.activeHold(target);
+    if (hold) {
+      this.standDown(hold);
+      return;
+    }
+    this.pendingTarget = target;
     this.pendingVersion = result.latestVersion;
     this.savePendingVersion();
 
@@ -1413,6 +1593,14 @@ export class AutoUpdater {
         this.idleCheckHandle = null;
       }
 
+      // A pending update resumed after a restart has had no check to judge it.
+      const hold = this.activeHold(this.pendingTarget);
+      if (hold) {
+        this.standDown(hold);
+        return;
+      }
+
+      const attemptedAt = Date.now();
       try {
         const success = await this.performUpdate();
         if (!success) {
@@ -1439,12 +1627,21 @@ export class AutoUpdater {
         }
         this.clearPendingVersion();
       } catch (err) {
-        if (this.notifyFn) {
-          this.notifyFn(
-            `Update failed: ${(err as Error).message}. Will retry next check.`,
+        const held = readUpdateHold(this.installRoot);
+        if (held && held.at >= attemptedAt) {
+          // The hold decides when to try again, not the pending version.
+          this.announcedHoldAt = held.at;
+          this.clearPendingVersion();
+          this.notifyFn?.(
+            `Update to ${held.target.slice(0, 8)} failed at ${held.step} and was rolled back: ${held.cause}\n` +
+            `${held.target.slice(0, 8)} will not be retried automatically; the next automatic attempt at anything newer is ` +
+            `${describeWhen(held.retryAfter, Date.now())} (${held.failures} failed update${held.failures === 1 ? "" : "s"} in a row). ` +
+            "Run `strada update` to retry now.",
           );
+          return;
         }
-        // Don't clear pendingVersion — let next periodic check re-trigger
+        // Nothing landed (the pull itself failed): the next check tries again.
+        this.notifyFn?.(`Update failed: ${describeFailure(err, 600)}. Will retry next check.`);
       }
     }, 30_000);
 
@@ -1494,6 +1691,10 @@ export function spawnWithTimeout(
     const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd, shell, windowsHide: true });
     let stdoutData = "";
     let stderrData = "";
+    // Both streams in arrival order, bounded: what a timed-out command was
+    // doing when it was killed. Seven rollbacks (2026-09-18..20) said only
+    // "Command timed out: npm run build".
+    let recentOutput = "";
     let timedOut = false;
     let settled = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1507,7 +1708,24 @@ export function spawnWithTimeout(
       if (abandonTimer) clearTimeout(abandonTimer);
       finish();
     };
-    const timeoutError = (): Error => new Error(`Command timed out: ${cmd} ${args.join(" ")}`);
+    const timeoutError = (): Error => {
+      const last = tailOf(recentOutput);
+      return new Error(
+        `Command timed out after ${Math.round(timeoutMs / 1000)} s: ${cmd} ${args.join(" ")}` +
+        (last ? `\nlast output: ${last}` : ""),
+      );
+    };
+    // tsc writes its diagnostics to stdout: a failed portal build's stderr
+    // held only "[strada] Portal build FAILED" (2026-09-17 15:15 and 20:22).
+    const exitError = (code: number | null): Error => {
+      const stdoutTail = tailOf(stdoutData);
+      return new Error(
+        `${cmd} exited with code ${code}: ${tailOf(stderrData)}` + (stdoutTail ? `\nstdout: ${stdoutTail}` : ""),
+      );
+    };
+    const remember = (chunk: string): void => {
+      recentOutput = (recentOutput + chunk).slice(-2 * OUTPUT_TAIL_CHARS);
+    };
 
     const killTree = (signal: NodeJS.Signals): void => {
       if (platform === "win32" && proc.pid !== undefined) {
@@ -1535,10 +1753,14 @@ export function spawnWithTimeout(
     }, timeoutMs);
 
     proc.stdout.on("data", (data: Buffer) => {
-      stdoutData += data.toString();
+      const chunk = data.toString();
+      stdoutData += chunk;
+      remember(chunk);
     });
     proc.stderr.on("data", (data: Buffer) => {
-      stderrData += data.toString();
+      const chunk = data.toString();
+      stderrData += chunk;
+      remember(chunk);
     });
 
     // 'exit', not 'close': a grandchild that inherited the pipes can keep them
@@ -1550,7 +1772,7 @@ export function spawnWithTimeout(
       settle(() => {
         if (timedOut) reject(timeoutError());
         else if (code === 0) resolve(stdoutData);
-        else reject(new Error(`${cmd} exited with code ${code}: ${stderrData}`));
+        else reject(exitError(code));
       });
     });
 

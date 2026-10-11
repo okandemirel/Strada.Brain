@@ -119,4 +119,19 @@ describe("Auto-Update Config", () => {
     const config = loadConfig(process.env);
     expect(config.autoUpdate.autoRestart).toBe(true);
   });
+
+  it("should parse AUTO_UPDATE_BUILD_TIMEOUT_MIN as number", () => {
+    process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
+    process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
+    process.env["AUTO_UPDATE_BUILD_TIMEOUT_MIN"] = "40";
+    const config = loadConfig(process.env);
+    expect(config.autoUpdate.buildTimeoutMin).toBe(40);
+  });
+
+  it("should default AUTO_UPDATE_BUILD_TIMEOUT_MIN to 15", () => {
+    process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
+    process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
+    const config = loadConfig(process.env);
+    expect(config.autoUpdate.buildTimeoutMin).toBe(15);
+  });
 });

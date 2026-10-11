@@ -13,7 +13,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CampaignStorage } from "../campaign/campaign-storage.js";
 import { CONTEXT_CEILINGS_FILE, readContextCeilings } from "../agents/context-ceilings.js";
-import { describeAgo, describeSpan, describeWhen, describeUpdateEvent, readUpdateHistory, type UpdateEvent } from "./update-history.js";
+import {
+  describeAgo, describeSpan, describeWhen, describeUpdateEvent, describeUpdateHold, readUpdateHistory, readUpdateHold,
+  type UpdateEvent, type UpdateHold,
+} from "./update-history.js";
 
 export interface ProviderBench {
   name: string;
@@ -43,7 +46,7 @@ export interface StatusReport {
   /** Context ceilings learned from hard-timeouts (context-ceilings.ts). */
   ceilings: Record<string, { ceiling: number; observedTokens: number; learnedAt: number }>;
   campaigns: { readable: boolean; path: string; active: CampaignSnapshot[]; awaitingRevive: CampaignSnapshot[]; lastTerminal?: CampaignSnapshot };
-  update: { path: string; last?: UpdateEvent };
+  update: { path: string; last?: UpdateEvent; hold?: UpdateHold };
 }
 
 export interface GatherOptions {
@@ -69,7 +72,11 @@ export async function gatherStatusReport(opts: GatherOptions): Promise<StatusRep
     providers: readProviderBenches(providerPath, now),
     ceilings: readContextCeilings(join(opts.memoryDbPath, CONTEXT_CEILINGS_FILE)),
     campaigns: readCampaigns(campaignsPath, opts.loadCampaigns ?? loadCampaignsFromDb),
-    update: { path: opts.installRoot, last: readUpdateHistory(opts.installRoot).at(-1) },
+    update: {
+      path: opts.installRoot,
+      last: readUpdateHistory(opts.installRoot).at(-1),
+      hold: readUpdateHold(opts.installRoot) ?? undefined,
+    },
   };
 }
 
@@ -203,6 +210,7 @@ export function renderStatusReport(r: StatusReport): string[] {
   }
 
   lines.push(describeUpdateEvent(r.update.last, now));
+  if (r.update.hold) lines.push(describeUpdateHold(r.update.hold, now));
   return lines;
 }
 

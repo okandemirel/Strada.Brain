@@ -159,6 +159,25 @@ describe("strada status read-out", () => {
     );
   });
 
+  it("says when the auto-updater is holding back after a failed update, and why", async () => {
+    const d = dir();
+    mkdirSync(join(d, ".strada"), { recursive: true });
+    writeFileSync(join(d, ".strada", "auto-update-hold.json"), JSON.stringify({
+      target: "5836de7887cdc16efe33b5ad5b4b5ba75f553ab5",
+      step: "npm run build",
+      cause: "Command timed out after 900 s: npm run build\nlast output: transforming (1200) src/App.tsx",
+      at: NOW - 3_600_000,
+      failures: 2,
+      retryAfter: NOW + 11 * 3_600_000,
+    }));
+    const report = await gatherStatusReport({ memoryDbPath: d, installRoot: d, now: NOW });
+    const line = renderStatusReport(report).find((l) => l.startsWith("Auto-update held back")) ?? "";
+    expect(line).toContain("5836de78 failed at npm run build 1 h ago");
+    expect(line).toContain("Command timed out after 900 s");
+    expect(line).toContain("2 failures in a row");
+    expect(line).toContain("in 11 h");
+  });
+
   it("update history: a corrupt file reads as empty and is overwritten, never thrown", () => {
     const d = dir();
     mkdirSync(join(d, ".strada"), { recursive: true });

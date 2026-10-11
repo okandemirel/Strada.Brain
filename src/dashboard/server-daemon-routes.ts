@@ -215,9 +215,12 @@ export function handleDaemonRoutes(
         return;
       }
       sendJson(res, {
-        status: result.available ? "update_pending" : "up_to_date",
+        // "update_pending" for an update a failed one holds back was a promise
+        // nothing would keep.
+        status: result.heldBack ? "held_back" : result.available ? "update_pending" : "up_to_date",
         currentVersion: result.currentVersion,
         latestVersion: result.latestVersion,
+        ...(result.heldBack ? { detail: result.heldBack } : {}),
       });
     }).catch((err) => {
       sendJsonError(res, 500, (err as Error).message);

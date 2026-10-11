@@ -331,6 +331,7 @@ export type EnvVarName =
   | "AUTO_UPDATE_ENABLED"
   | "AUTO_UPDATE_INTERVAL_HOURS"
   | "AUTO_UPDATE_IDLE_TIMEOUT_MIN"
+  | "AUTO_UPDATE_BUILD_TIMEOUT_MIN"
   | "AUTO_UPDATE_CHANNEL"
   | "AUTO_UPDATE_NOTIFY"
   | "AUTO_UPDATE_AUTO_RESTART"
@@ -945,6 +946,8 @@ export interface Config {
     readonly enabled: boolean;
     readonly intervalHours: number;
     readonly idleTimeoutMin: number;
+    /** Minutes each post-pull install/build step may take (AUTO_UPDATE_BUILD_TIMEOUT_MIN). */
+    readonly buildTimeoutMin?: number;
     readonly channel: "stable" | "latest";
     readonly notify: boolean;
     readonly autoRestart: boolean;

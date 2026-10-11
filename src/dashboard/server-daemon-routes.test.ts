@@ -317,6 +317,27 @@ describe("handleDaemonRoutes — POST /api/update", () => {
     await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
     expect(responseJson(res)).toMatchObject({ status: "up_to_date" });
   });
+
+  it("says held_back, not update_pending, when a failed update holds the new one back", async () => {
+    const heldBack = "Auto-update held back: 5836de78 failed at npm run build 2 h ago — Command timed out after 900 s";
+    const updater = {
+      requestImmediateCheck: vi.fn().mockResolvedValue({
+        available: true,
+        currentVersion: "4.2.300",
+        latestVersion: "4.2.301",
+        heldBack,
+        error: null,
+      }),
+    };
+    const ctx = makeCtx({
+      autoUpdater: updater as unknown as RouteContext["autoUpdater"],
+      lastUpdateCheckMs: 0,
+    });
+    const res = createMockRes();
+    handleDaemonRoutes("/api/update", "POST", createMockReq(), res, ctx);
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(responseJson(res)).toMatchObject({ status: "held_back", detail: heldBack });
+  });
 });
 
 // =============================================================================

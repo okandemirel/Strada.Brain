@@ -537,6 +537,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       enabled: rawConfig.autoUpdateEnabled,
       intervalHours: rawConfig.autoUpdateIntervalHours,
       idleTimeoutMin: rawConfig.autoUpdateIdleTimeoutMin,
+      buildTimeoutMin: rawConfig.autoUpdateBuildTimeoutMin,
       channel: rawConfig.autoUpdateChannel,
       notify: rawConfig.autoUpdateNotify,
       autoRestart: rawConfig.autoUpdateAutoRestart,
@@ -1074,6 +1075,7 @@ interface EnvVars {
   autoUpdateEnabled: string | undefined;
   autoUpdateIntervalHours: string | undefined;
   autoUpdateIdleTimeoutMin: string | undefined;
+  autoUpdateBuildTimeoutMin: string | undefined;
   autoUpdateChannel: string | undefined;
   autoUpdateNotify: string | undefined;
   autoUpdateAutoRestart: string | undefined;
@@ -1511,6 +1513,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     autoUpdateEnabled: env["AUTO_UPDATE_ENABLED"],
     autoUpdateIntervalHours: env["AUTO_UPDATE_INTERVAL_HOURS"],
     autoUpdateIdleTimeoutMin: env["AUTO_UPDATE_IDLE_TIMEOUT_MIN"],
+    autoUpdateBuildTimeoutMin: env["AUTO_UPDATE_BUILD_TIMEOUT_MIN"],
     autoUpdateChannel: env["AUTO_UPDATE_CHANNEL"],
     autoUpdateNotify: env["AUTO_UPDATE_NOTIFY"],
     autoUpdateAutoRestart: env["AUTO_UPDATE_AUTO_RESTART"],

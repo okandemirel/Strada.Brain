@@ -1077,6 +1077,14 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().positive())
       .prefault("5"),
+    // Budget for each install and build step after a pull, in minutes. The
+    // fixed 5 minutes timed out seven builds in a row (2026-09-18..20); the
+    // same build measured 69 s at load average 30-106 on that host (2026-10-11).
+    autoUpdateBuildTimeoutMin: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().positive().max(240))
+      .prefault("15"),
     autoUpdateChannel: z.enum(["stable", "latest"]).default("latest"),
     autoUpdateNotify: boolFromString(true),
     autoUpdateAutoRestart: boolFromString(true),
