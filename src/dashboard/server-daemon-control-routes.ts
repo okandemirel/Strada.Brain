@@ -25,10 +25,13 @@
  *   POST /api/consolidation/run           {}            202 { jobId }
  *   POST /api/consolidation/undo          { logId }
  * plus the existing POST /api/deployment/check (server-system-routes.ts),
- * also 202 { jobId }, and POST /api/daemon/approvals/:id/(approve|deny)
- * (server-daemon-routes.ts), which `strada daemon approve|deny` post to. Those two can outrun any one HTTP answer (an LLM pass
+ * also 202 { jobId }. Those two can outrun any one HTTP answer (an LLM pass
  * over memory, the project's test command), so they run as jobs: one running
  * per kind, a second start answers 409 with that job's id.
+ *
+ * `strada daemon approve|deny` post to the existing
+ * POST /api/daemon/approvals/:id/(approve|deny) (server-daemon-routes.ts),
+ * which answers at once.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";

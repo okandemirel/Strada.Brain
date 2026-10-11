@@ -25,7 +25,6 @@ export const URGENCY_ORDER: Record<UrgencyLevel, number> = {
 // NOTIFICATION PAYLOADS
 // =============================================================================
 
-/** Payload for a single notification */
 /**
  * What notify() did with one notification, now: where it went, and why it did
  * not reach every channel its level routes to (grouped, dropped over the rate
@@ -39,6 +38,7 @@ export interface NotificationOutcome {
   readonly missed?: string;
 }
 
+/** Payload for a single notification */
 export interface NotificationPayload {
   readonly level: UrgencyLevel;
   readonly title: string;
