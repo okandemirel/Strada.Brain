@@ -100,7 +100,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@slack/bolt": "^4.6.0",
     "@slack/types": "^2.20.0",
     "better-sqlite3": "^12.10.0",
@@ -118,7 +118,7 @@
     "tree-sitter-c-sharp": "^0.23.5",
     "tree-sitter-typescript": "^0.23.2",
     "tsx": "4.21.0",
-    "undici": "^6.27.0",
+    "undici": "^6.28.1",
     "web-tree-sitter": "^0.26.9",
     "winston": "^3.17.0",
     "winston-transport": "^4.9.0",
@@ -148,8 +148,8 @@
   "overrides": {
     "protobufjs": "^7.5.5",
     "esbuild": "0.28.1",
-    "undici": "^6.27.0",
-    "sharp": "^0.35.4",
+    "undici": "^6.28.1",
+    "sharp": "^0.35.5",
     "@azure/msal-node": {
       "uuid": "^11.1.1"
     },
