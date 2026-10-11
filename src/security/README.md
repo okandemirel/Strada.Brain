@@ -102,7 +102,7 @@ When rate limiting is enabled, an unset limit takes the built-in default (`DEFAU
 4. For new files: walk up to first existing ancestor, validate it's within root. With `allowMissingParents` (write tools that `mkdir -p`) a missing parent chain is accepted once the deepest existing ancestor is proven inside the root.
 5. Block sensitive patterns on every accepted path, including the missing-parent case: `.env` and any `.env.*` suffix chain, `.git/config`, `.git/credentials`, SSH keys, `.pem`, `.key`, certificates, `node_modules/`, service account files
 
-The blocklist matches names, not content. It is a per-tool guardrail: `shell_exec` runs a model-authored command string and does not consult it.
+The blocklist matches names, not content. It is a per-tool guardrail, so each tool that can reach a file by another route consults `isSensitivePath()` itself: `shell_exec` checks the paths a command names (best-effort, `src/agents/tools/shell-sensitive-paths.ts`), `git_commit` refuses to stage or commit a blocklisted file (a deletion is allowed), and `git_diff` leaves blocklisted files out of its output.
 
 Also exports `isValidCSharpIdentifier()` and `isValidCSharpType()` for code injection prevention in scaffold tools.
 

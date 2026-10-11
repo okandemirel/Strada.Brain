@@ -421,6 +421,77 @@ describe("GitStashTool", () => {
     // list is not a write operation, should not be blocked
     expect(result.isError).toBeUndefined();
   });
+
+  // A workspace lease is a linked worktree of the user's checkout, and
+  // refs/stash is shared by every worktree of a repository. A push on the
+  // lease's clean tree stashed nothing yet reported success, and the pop that
+  // followed took the USER's entry into the lease and dropped it from their
+  // list (audit tools#2).
+  describe("in a linked worktree (refs/stash is shared)", () => {
+    let leaseRoot: string;
+    let lease: string;
+    let leaseCtx: ToolContext;
+    // GIT_DIR and friends (set when this runs under a git hook) would aim these
+    // at the real repository's stash; the temp repo is the only target.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+    const gitIn = (cwd: string, ...args: string[]): string =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env }).toString().trim();
+
+    beforeEach(async () => {
+      leaseRoot = await mkdtemp(join(tmpdir(), "git-stash-lease-"));
+      lease = join(leaseRoot, "lease");
+      gitIn(tempDir, "worktree", "add", "--detach", lease, "HEAD");
+      leaseCtx = { projectPath: lease, workingDirectory: lease, readOnly: false };
+    });
+
+    afterEach(async () => {
+      await rm(leaseRoot, { recursive: true, force: true });
+    });
+
+    it("a push that saved nothing says so, and the pop after it leaves the user's entry alone", async () => {
+      await writeFile(join(tempDir, "file.txt"), "USER WIP\n");
+      gitIn(tempDir, "stash", "push", "-m", "USER WIP");
+
+      // The lease tree is clean, as it is right after the seed commit.
+      const push = await tool.execute({ action: "push" }, leaseCtx);
+      const pop = await tool.execute({ action: "pop" }, leaseCtx);
+      expect(await readFile(join(lease, "file.txt"), "utf-8")).toBe("hello\n");
+      expect(gitIn(tempDir, "stash", "list")).toContain("USER WIP");
+      expect(pop.isError).toBe(true);
+      expect(push.content).toMatch(/nothing was stashed/i);
+    });
+
+    it("never drops or lists the user's stash entry", async () => {
+      await writeFile(join(tempDir, "file.txt"), "USER WIP\n");
+      gitIn(tempDir, "stash", "push", "-m", "USER WIP");
+
+      const drop = await tool.execute({ action: "drop" }, leaseCtx);
+      expect(gitIn(tempDir, "stash", "list")).toContain("USER WIP");
+      expect(drop.isError).toBe(true);
+
+      const list = await tool.execute({ action: "list" }, leaseCtx);
+      expect(list.isError).toBeUndefined();
+      expect(list.content).not.toContain("USER WIP");
+      expect(list.content).toContain("1 other stash entry");
+    });
+
+    it("pops the entry it pushed here, not a newer one another checkout pushed", async () => {
+      await writeFile(join(lease, "file.txt"), "lease work\n");
+      const push = await tool.execute({ action: "push", message: "lease work" }, leaseCtx);
+      expect(push.isError).toBeFalsy();
+      expect(await readFile(join(lease, "file.txt"), "utf-8")).toBe("hello\n");
+
+      await writeFile(join(tempDir, "file.txt"), "USER LATER\n");
+      gitIn(tempDir, "stash", "push", "-m", "USER LATER");
+
+      const pop = await tool.execute({ action: "pop" }, leaseCtx);
+      expect(pop.isError).toBeFalsy();
+      expect(await readFile(join(lease, "file.txt"), "utf-8")).toBe("lease work\n");
+      const left = gitIn(tempDir, "stash", "list");
+      expect(left).toContain("USER LATER");
+      expect(left).not.toContain("lease work");
+    });
+  });
 });
 
 describe("GitPushTool", () => {
@@ -558,6 +629,104 @@ describe("Git argument injection", () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("must not start with '-'");
+  });
+});
+
+// file_read refuses `.env` and shell_exec refuses `git add .env`, yet
+// git_commit staged and committed it and git_diff printed it (audit tools#3).
+describe("the sensitive-file blocklist holds for the git tools", () => {
+  const SECRET = "OPENAI_API_KEY=sk-live-XXXX";
+  const head = () => execSync("git rev-parse HEAD", { cwd: tempDir }).toString().trim();
+  const stagedNames = () => execSync("git diff --cached --name-only", { cwd: tempDir }).toString().trim();
+
+  it("git_commit refuses a named secret file and one reached through '.'", async () => {
+    await writeFile(join(tempDir, ".env"), `${SECRET}\n`);
+    await writeFile(join(tempDir, "server.pem"), "-----BEGIN EC PRIVATE KEY-----\n");
+    await writeFile(join(tempDir, "Player.cs"), "class Player {}\n");
+    const before = head();
+    for (const files of [[".env"], ["server.pem"], ["."], ["Player.cs", "*"]]) {
+      const result = await new GitCommitTool().execute({ message: "wip", files }, ctx);
+      expect(result.isError, JSON.stringify(files)).toBe(true);
+      expect(result.content).toMatch(/sensitive/i);
+      expect(head()).toBe(before);
+      expect(stagedNames()).toBe("");
+    }
+  });
+
+  it("git_commit refuses a secret file something else already staged", async () => {
+    await writeFile(join(tempDir, ".env"), `${SECRET}\n`);
+    await writeFile(join(tempDir, "Player.cs"), "class Player {}\n");
+    git("add .env");
+    const before = head();
+    const result = await new GitCommitTool().execute({ message: "wip", files: ["Player.cs"] }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(".env");
+    expect(head()).toBe(before);
+  });
+
+  it("git_commit still commits the files it was asked to beside an untracked secret", async () => {
+    await writeFile(join(tempDir, ".env"), `${SECRET}\n`);
+    await writeFile(join(tempDir, "Player.cs"), "class Player {}\n");
+    const result = await new GitCommitTool().execute({ message: "add player", files: ["Player.cs"] }, ctx);
+    expect(result.isError).toBeUndefined();
+    expect(execSync("git show --name-only --format= HEAD", { cwd: tempDir }).toString().trim()).toBe("Player.cs");
+  });
+
+  // A deletion carries none of the secret, and removing a tracked one is the fix.
+  it("git_commit commits the removal of a tracked secret file", async () => {
+    await writeFile(join(tempDir, ".env"), `${SECRET}\n`);
+    git("add .env");
+    git('commit -m "leaked"');
+    await rm(join(tempDir, ".env"));
+    const named = await new GitCommitTool().execute({ message: "remove env", files: [".env"] }, ctx);
+    expect(named.content).not.toMatch(/sensitive/i);
+    expect(named.isError).toBeUndefined();
+    expect(execSync("git show --name-status --format= HEAD", { cwd: tempDir }).toString().trim()).toBe("D\t.env");
+
+    await writeFile(join(tempDir, "server.pem"), "-----BEGIN EC PRIVATE KEY-----\n");
+    git("add server.pem");
+    git('commit -m "leaked pem"');
+    git("rm --cached server.pem");
+    const staged = await new GitCommitTool().execute({ message: "untrack pem" }, ctx);
+    expect(staged.isError).toBeUndefined();
+    expect(execSync("git show --name-status --format= HEAD", { cwd: tempDir }).toString().trim()).toBe("D\tserver.pem");
+  });
+
+  it("git_diff never prints a secret file, named, by ref, or as a blob range", async () => {
+    await writeFile(join(tempDir, ".env"), "OPENAI_API_KEY=sk-live-ONE\n");
+    git("add .env");
+    git('commit -m "env one"');
+    await writeFile(join(tempDir, ".env"), "OPENAI_API_KEY=sk-live-TWO\n");
+    git("add .env");
+    git('commit -m "env two"');
+    await writeFile(join(tempDir, ".env"), "OPENAI_API_KEY=sk-live-THREE\n");
+    await writeFile(join(tempDir, "file.txt"), "changed\n");
+
+    const named = await new GitDiffTool().execute({ path: ".env" }, ctx);
+    expect(named.isError).toBe(true);
+    expect(named.content).not.toContain("sk-live");
+
+    const all = await new GitDiffTool().execute({}, ctx);
+    expect(all.content).toContain("+changed");
+    expect(all.content).not.toContain("sk-live");
+    expect(all.content).toContain(".env");
+
+    const byRef = await new GitDiffTool().execute({ ref: "HEAD~2" }, ctx);
+    expect(byRef.content).toContain("+changed");
+    expect(byRef.content).not.toContain("sk-live");
+
+    const blobs = await new GitDiffTool().execute({ ref: "HEAD~1:.env..HEAD:.env" }, ctx);
+    expect(blobs.isError).toBe(true);
+    expect(blobs.content).not.toContain("sk-live");
+
+    const dir = await new GitDiffTool().execute({ path: "." }, ctx);
+    expect(dir.content).toContain("+changed");
+    expect(dir.content).not.toContain("sk-live");
+
+    git("add .env file.txt");
+    const staged = await new GitDiffTool().execute({ staged: true }, ctx);
+    expect(staged.content).toContain("+changed");
+    expect(staged.content).not.toContain("sk-live");
   });
 });
 

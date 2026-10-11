@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
+import { isSensitivePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { integerArg } from "./tool-input.js";
 import { buildShellEnv, GIT_ENV_NAMES } from "./shell-env-policy.js";
@@ -58,6 +61,32 @@ async function runGit(args: string[], cwd: string): Promise<{ stdout: string; st
     stderr: scrubCredentials(result.stderr),
     exitCode: result.exitCode,
   };
+}
+
+async function topLevel(cwd: string): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  const result = await runGit(["rev-parse", "--show-toplevel"], cwd);
+  const path = result.stdout.trim();
+  if (result.exitCode !== 0 || !path) {
+    return { ok: false, error: result.stderr.trim() || `git rev-parse failed (exit ${result.exitCode})` };
+  }
+  return { ok: true, path };
+}
+
+/**
+ * The paths in NUL-separated, repository-relative git output that the
+ * sensitive-file blocklist covers. file_read and shell_exec refuse these by
+ * name, so a git tool that stages or prints them was the way around both
+ * (audit tools#3).
+ */
+function sensitiveNames(nulSeparated: string, root: string): string[] {
+  const names = nulSeparated.split("\0").filter((name) => name.length > 0);
+  return [...new Set(names.filter((name) => isSensitivePath(resolve(root, name))))];
+}
+
+/** Repository-relative names of the files a `git diff` with these arguments covers. */
+function diffNames(args: string[], cwd: string) {
+  // diff.relative would hide changes outside cwd from this listing, not from a commit.
+  return runGit(["-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "-z", ...args], cwd);
 }
 
 // ─── git_status ───────────────────────────────────────────────────────────────
@@ -124,28 +153,53 @@ export class GitDiffTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
-    const args = ["diff", "--stat", "--patch"];
-    if (input["staged"]) args.push("--cached");
+    const revs: string[] = [];
+    if (input["staged"]) revs.push("--cached");
     if (input["ref"]) {
       const ref = sanitizeGitArg(String(input["ref"]), "ref");
       if (!ref.valid) return { content: `Error: ${ref.error}`, isError: true };
-      args.push(ref.value);
+      revs.push(ref.value);
     }
+    const pathspec: string[] = [];
     if (input["path"]) {
       const path = sanitizeGitArg(String(input["path"]), "path", { isPath: true });
       if (!path.valid) return { content: `Error: ${path.error}`, isError: true };
-      args.push("--");
-      args.push(path.value);
+      if (isSensitivePath(resolve(context.projectPath, path.value))) {
+        return { content: `Error: '${path.value}' is on the sensitive-file blocklist; git_diff does not show it.`, isError: true };
+      }
+      pathspec.push(path.value);
     }
 
-    const result = await runGit(args, context.projectPath);
+    // A ref, a directory or no path at all reaches secret files no name check
+    // sees, so what this diff covers is listed first and those are left out.
+    const root = await topLevel(context.projectPath);
+    if (!root.ok) return { content: `Error: ${root.error}`, isError: true };
+    const listed = await diffNames([...revs, "--", ...pathspec], context.projectPath);
+    if (listed.exitCode !== 0) {
+      return { content: `Error: ${listed.stderr || "git diff failed"}`, isError: true };
+    }
+    const omitted = sensitiveNames(listed.stdout, root.path);
+    if (omitted.length > 0) {
+      for (const name of omitted) pathspec.push(`:(top,exclude,literal)${name}`);
+      // A blob range (`A:.env..B:.env`) takes no pathspec, so confirm the exclusion took.
+      const recheck = await diffNames([...revs, "--", ...pathspec], context.projectPath);
+      if (recheck.exitCode !== 0 || sensitiveNames(recheck.stdout, root.path).length > 0) {
+        return {
+          content: `Error: this diff shows files on the sensitive-file blocklist (${omitted.join(", ")}) and they cannot be left out of it.`,
+          isError: true,
+        };
+      }
+    }
+
+    const result = await runGit(["diff", "--stat", "--patch", ...revs, "--", ...pathspec], context.projectPath);
     if (result.exitCode !== 0) {
       return { content: `Error: ${result.stderr || "git diff failed"}`, isError: true };
     }
+    const note = omitted.length > 0 ? `Left out (sensitive-file blocklist): ${omitted.join(", ")}` : "";
     if (!result.stdout.trim()) {
-      return { content: "No differences found." };
+      return { content: note ? `No differences outside the sensitive-file blocklist.\n${note}` : "No differences found." };
     }
-    return { content: result.stdout };
+    return { content: note ? `${result.stdout}\n${note}` : result.stdout };
   }
 }
 
@@ -263,6 +317,8 @@ export class GitCommitTool implements ITool {
     else if (rawFiles !== undefined && rawFiles !== null) {
       return { content: "Error: 'files' must be an array of file paths (or a single path string)", isError: true };
     }
+    const root = await topLevel(context.projectPath);
+    if (!root.ok) return { content: `Error: ${root.error}`, isError: true };
     if (files && files.length > 0) {
       // Validate each file path and use -- to prevent flag injection
       const staged: string[] = [];
@@ -270,6 +326,26 @@ export class GitCommitTool implements ITool {
         const check = sanitizeGitArg(String(f), "file path", { isPath: true });
         if (!check.valid) return { content: `Error: ${check.error}`, isError: true };
         staged.push(check.value);
+      }
+      // What `git add` would stage, checked before it does: `.`, a directory or
+      // a glob reaches secret files that no name check on `files` sees, and a
+      // refused file left staged would ride along with the user's next commit.
+      // A deletion carries no content, so removing a tracked secret still works.
+      const [tracked, untracked] = await Promise.all([
+        diffNames(["--diff-filter=d", "--", ...staged], context.projectPath),
+        runGit(["ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--", ...staged], context.projectPath),
+      ]);
+      const failed = [tracked, untracked].find((result) => result.exitCode !== 0);
+      if (failed) {
+        return { content: `Error staging files: ${failed.stderr}`, isError: true };
+      }
+      const refused = sensitiveNames(tracked.stdout + untracked.stdout, root.path);
+      if (refused.length > 0) {
+        return {
+          content: `Error: refusing to stage files on the sensitive-file blocklist: ${refused.join(", ")}. ` +
+            "Name the files to commit without them.",
+          isError: true,
+        };
       }
       const addResult = await runGit(["add", "--", ...staged], context.projectPath);
       if (addResult.exitCode !== 0) {
@@ -281,6 +357,19 @@ export class GitCommitTool implements ITool {
     const statusResult = await runGit(["diff", "--cached", "--quiet"], context.projectPath);
     if (statusResult.exitCode === 0) {
       return { content: "Nothing to commit: no staged changes. Stage files first.", isError: true };
+    }
+    // ...and that none of them is a secret file something else staged.
+    const index = await diffNames(["--cached", "--diff-filter=d"], context.projectPath);
+    if (index.exitCode !== 0) {
+      return { content: `Error: ${index.stderr || "git diff --cached failed"}`, isError: true };
+    }
+    const stagedSecrets = sensitiveNames(index.stdout, root.path);
+    if (stagedSecrets.length > 0) {
+      return {
+        content: `Error: refusing to commit: the index holds files on the sensitive-file blocklist: ${stagedSecrets.join(", ")}. ` +
+          "They were staged outside git_commit; unstage them first.",
+        isError: true,
+      };
     }
 
     // Commit
@@ -497,10 +586,53 @@ export class GitPushTool implements ITool {
 
 // ─── git_stash ────────────────────────────────────────────────────────────────
 
+interface StashState {
+  /** Ends the message of every entry git_stash pushes in this checkout. */
+  tag: string;
+  /** This checkout's git_stash entries, newest first. */
+  own: { selector: string; subject: string }[];
+  /** Entries on the stack that are not this checkout's. */
+  others: number;
+}
+
+/**
+ * refs/stash belongs to the repository, not the checkout: every linked
+ * worktree — each workspace lease is one — pushes onto and pops from the
+ * user's own stack. An agent that pushed nothing in its lease and then popped
+ * took the user's WIP into the lease and dropped it from their list (audit
+ * tools#2), and parallel leases could pop each other's entries. git_stash
+ * tags what it pushes with the checkout it ran in and touches nothing else.
+ * git has no compare-and-swap for a stash entry, so a push from another
+ * checkout in the instant between this listing and the pop can still shift
+ * the selector by one.
+ */
+async function readStash(cwd: string): Promise<({ ok: true } & StashState) | { ok: false; error: string }> {
+  const root = await topLevel(cwd);
+  if (!root.ok) return root;
+  const tag = `[git_stash ${createHash("sha256").update(root.path).digest("hex").slice(0, 12)}]`;
+  const result = await runGit(["stash", "list", "--format=%gs"], cwd);
+  if (result.exitCode !== 0) {
+    return { ok: false, error: result.stderr || `git stash list failed (exit ${result.exitCode})` };
+  }
+  // The stack is listed newest first, so line n is stash@{n}.
+  const subjects = result.stdout.split("\n").filter((line) => line.length > 0);
+  const own = subjects
+    .map((subject, n) => ({ selector: `stash@{${n}}`, subject }))
+    .filter((entry) => entry.subject.endsWith(tag));
+  return { ok: true, tag, own, others: subjects.length - own.length };
+}
+
+function otherStashesNote(others: number): string {
+  if (others === 0) return "";
+  return `${others} other stash ${others === 1 ? "entry" : "entries"} in this repository ` +
+    "(the user's, or another checkout's) not shown: git_stash only touches what it stashed in this checkout.";
+}
+
 export class GitStashTool implements ITool {
   readonly name = "git_stash";
   readonly description =
-    "Stash or restore changes. Actions: 'push' (default), 'pop', 'list', 'drop'.";
+    "Stash or restore changes in this checkout. Actions: 'push' (default), 'pop', 'list', 'drop'. " +
+    "pop, drop and list see only the entries git_stash pushed in this same checkout; untracked files are not stashed.";
 
   readonly inputSchema = {
     type: "object",
@@ -526,50 +658,59 @@ export class GitStashTool implements ITool {
     switch (action) {
       case "push": {
         if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
-        const args = ["stash", "push"];
+        let message = "";
         if (input["message"]) {
           const msgCheck = sanitizeGitArg(String(input["message"]), "stash message");
           if (!msgCheck.valid) return { content: `Error: ${msgCheck.error}`, isError: true };
-          args.push("-m", msgCheck.value);
+          message = `${msgCheck.value} `;
         }
-        const result = await runGit(args, context.projectPath);
-        return {
-          content: result.exitCode === 0
-            ? result.stdout || "Changes stashed."
-            : `Error: ${result.stderr}`,
-          isError: result.exitCode !== 0,
-        };
+        const before = await readStash(context.projectPath);
+        if (!before.ok) return { content: `Error: ${before.error}`, isError: true };
+        const result = await runGit(["stash", "push", "-m", `${message}${before.tag}`], context.projectPath);
+        if (result.exitCode !== 0) return { content: `Error: ${result.stderr}`, isError: true };
+        // git exits 0 when there was nothing to save, in a localized message:
+        // judge by whether this checkout gained an entry.
+        const after = await readStash(context.projectPath);
+        if (!after.ok) return { content: `Error: ${after.error}`, isError: true };
+        if (after.own.length <= before.own.length) {
+          return {
+            content: "Nothing was stashed: no local changes to tracked files (untracked files are not stashed), " +
+              "so there is no entry to pop.",
+          };
+        }
+        return { content: result.stdout || "Changes stashed.", isError: false };
       }
-      case "pop": {
+      case "pop":
+      case "drop": {
         if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
-        const result = await runGit(["stash", "pop"], context.projectPath);
+        const stash = await readStash(context.projectPath);
+        if (!stash.ok) return { content: `Error: ${stash.error}`, isError: true };
+        const entry = stash.own[0];
+        if (!entry) {
+          const note = otherStashesNote(stash.others);
+          return {
+            content: `Error: there is no stash entry git_stash pushed in this checkout to ${action}.${note ? ` ${note}` : ""}`,
+            isError: true,
+          };
+        }
+        const result = await runGit(["stash", action, entry.selector], context.projectPath);
         return {
           content: result.exitCode === 0
-            ? result.stdout || "Stash applied and removed."
+            ? result.stdout || (action === "pop" ? "Stash applied and removed." : "Stash dropped.")
             : `Error: ${result.stderr}`,
           isError: result.exitCode !== 0,
         };
       }
       case "list": {
-        const result = await runGit(["stash", "list"], context.projectPath);
-        // Audited 2026-09-02: this was the one action in the switch that
-        // ignored the exit code, so a lease without .git (exit 128, empty
-        // stdout) or a vanished cwd (exit 127) read as "No stashes found." —
-        // a failed check rendered as a clean one.
-        if (result.exitCode !== 0) {
-          return { content: `Error: ${result.stderr || `git stash list failed (exit ${result.exitCode})`}`, isError: true };
-        }
-        return { content: result.stdout || "No stashes found." };
-      }
-      case "drop": {
-        if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
-        const result = await runGit(["stash", "drop"], context.projectPath);
-        return {
-          content: result.exitCode === 0
-            ? result.stdout || "Stash dropped."
-            : `Error: ${result.stderr}`,
-          isError: result.exitCode !== 0,
-        };
+        // Audited 2026-09-02: a failed `git stash list` (a lease without .git
+        // exits 128 with empty stdout) read as "No stashes found." — a failed
+        // check rendered as a clean one. readStash reports it as an error.
+        const stash = await readStash(context.projectPath);
+        if (!stash.ok) return { content: `Error: ${stash.error}`, isError: true };
+        const lines = stash.own.map((entry) => `${entry.selector}: ${entry.subject}`);
+        const note = otherStashesNote(stash.others);
+        if (note) lines.push(note);
+        return { content: lines.join("\n") || "No stashes found." };
       }
       default:
         return { content: `Error: unknown action '${action}'.`, isError: true };
