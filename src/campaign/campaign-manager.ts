@@ -5427,7 +5427,8 @@ export class CampaignManager {
         }
         // The later of the two: a copy that preserved an old mtime changed the file at its ctime.
         const changedNs = st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs;
-        if (changedNs <= startedNs - settledNs) {
+        // Only a regular file has bytes to read: opening a FIFO blocks this synchronous walk until a writer comes.
+        if (changedNs <= startedNs - settledNs || !st.isFile()) {
           hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
           continue;
         }

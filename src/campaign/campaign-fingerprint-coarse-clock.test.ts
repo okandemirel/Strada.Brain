@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,8 @@ const fsClock = vi.hoisted(() => {
     mtimeNs: undefined as bigint | undefined,
     ctimeNs: undefined as bigint | undefined,
     opens: 0,
+    /** A path whose open throws instead of happening (a FIFO would block the test for good). */
+    refuse: undefined as string | undefined,
     pin<T>(st: T): T {
       if (clock.mtimeNs !== undefined && clock.ctimeNs !== undefined && typeof (st as { mtimeNs?: unknown })?.mtimeNs === "bigint") {
         Object.assign(st as object, { mtimeNs: clock.mtimeNs, ctimeNs: clock.ctimeNs });
@@ -44,6 +47,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const statSync = ((...args: Parameters<typeof actual.statSync>) => fsClock.pin(actual.statSync(...args))) as typeof actual.statSync;
   const openSync = ((...args: Parameters<typeof actual.openSync>) => {
+    if (fsClock.refuse !== undefined && String(args[0]) === fsClock.refuse) throw new Error(`opened ${fsClock.refuse}`);
     fsClock.opens++;
     return actual.openSync(...args);
   }) as typeof actual.openSync;
@@ -70,6 +74,7 @@ describe("the project fingerprint on a filesystem whose clock ticks coarsely", (
     writeFileSync(join(project, "Assets", "Game.cs"), "class Game { int x = 1; }");
     stampAll(undefined);
     fsClock.opens = 0;
+    fsClock.refuse = undefined;
     vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
   });
   afterEach(() => {
@@ -126,6 +131,18 @@ describe("the project fingerprint on a filesystem whose clock ticks coarsely", (
 
     expect(campaign.milestones[0]!.coverageClosed).not.toBe(true);
     expect(result.open).toEqual(["Req1: absent"]);
+  });
+
+  it.skipIf(process.platform === "win32")("a fresh FIFO is fingerprinted by its stamps and never opened", () => {
+    // Opening a FIFO for reading blocks until a writer comes; this walk is
+    // synchronous, so it would hold the daemon's event loop with it.
+    const fifo = join(project, "Assets", "pipe");
+    execFileSync("mkfifo", [fifo]);
+    stampAll(NOW_NS);
+    fsClock.refuse = fifo;
+    const m = manager();
+
+    expect(fingerprintOf(m)).toMatch(/^fp:[0-9a-f]{64}$/);
   });
 
   it("a tree that settled before the walk is fingerprinted by its stamps alone", () => {
