@@ -12,6 +12,8 @@ import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { FakeClock } from "../agent-core/control/clock.js";
+import { openRunClock, type RunClock } from "../agent-core/control/run-clock.js";
+import type { RunBudgetPolicy } from "../agent-core/control/policy.js";
 import { resolveFlagSetById } from "../agent-core/runner/index.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -162,5 +164,97 @@ describe("STREAMING_ENABLED (N-3)", () => {
     ).rejects.toThrow(/aborted/);
     expect(recordFailure.mock.calls.filter(([name]) => name === "mock-cancelled")).toEqual([]);
     recordFailure.mockRestore();
+  });
+});
+
+// A chat() answer arrives all at once when the call ends, and nothing marked
+// the call scope live, so leave() booked every answered call's whole duration
+// as task silence. The accumulator never resets: about thirty answered 60 s
+// calls crossed the 30-minute ceiling and the run stopped as task-inactivity
+// (reported "failed" off the interactive route) while it was making progress.
+// A streamed answer only books the gap after its last token.
+describe("an answered call without stream chunks is not task silence", () => {
+  const CALL_MS = 60_000;
+  const policy: RunBudgetPolicy = {
+    mode: "background",
+    taskHardMs: Number.POSITIVE_INFINITY,
+    taskInactivityMs: 1_800_000,
+    callFirstResponseMs: 600_000,
+    callStallMs: 300_000,
+    callHardMs: 600_000,
+    outputTokenCap: Number.POSITIVE_INFINITY,
+    costCapUsd: Number.POSITIVE_INFINITY,
+  };
+
+  function setup(streamingEnabled: boolean, name: string) {
+    const clock = new FakeClock(0);
+    const provider = createStreamingCapableProvider(name);
+    const orch = new Orchestrator({
+      providerManager: {
+        getProvider: () => provider,
+        getActiveInfo: () => ({ providerName: provider.name, model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as never,
+      tools: [],
+      channel: createChannel() as never,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      agentCoreClock: clock,
+      streamingEnabled,
+    });
+    const runClock = openRunClock(clock, policy);
+    const silentStream = (orch as unknown as {
+      silentStream: (
+        chatId: string, systemPrompt: string, session: { messages: unknown[] }, p: unknown,
+        tools: unknown[], externalSignal?: AbortSignal, onLiveness?: () => void, runClock?: RunClock,
+      ) => Promise<ProviderResponse>;
+    }).silentStream;
+    const call = () =>
+      silentStream(name, "system", { messages: [{ role: "user", content: "hi" }] }, provider, [], undefined, undefined, runClock);
+    return { clock, provider, runClock, call };
+  }
+
+  it("STREAMING_ENABLED=false: thirty answered 60 s calls leave the run under its silence ceiling", async () => {
+    const { clock, provider, runClock, call } = setup(false, "mock-silence-answered");
+    provider.chat.mockImplementation(async () => {
+      clock.advance(CALL_MS);
+      return answer();
+    });
+    for (let i = 0; i < 30; i++) await call();
+
+    expect(provider.chat).toHaveBeenCalledTimes(30);
+    expect(runClock.accumulatedSilentMs()).toBe(0);
+    expect(runClock.silenceCeilingExceeded()).toBe(false);
+  });
+
+  it("a stream served without chunks (a non-streaming chain member) counts the same way", async () => {
+    const { clock, provider, runClock, call } = setup(true, "mock-silence-chunkless");
+    provider.chatStream.mockImplementation(async () => {
+      clock.advance(CALL_MS);
+      return answer();
+    });
+    await call();
+
+    expect(provider.chatStream).toHaveBeenCalledTimes(1);
+    expect(runClock.accumulatedSilentMs()).toBe(0);
+  });
+
+  it("a call that brought no answer still books its whole wait", async () => {
+    const empty = setup(false, "mock-silence-empty");
+    empty.provider.chat.mockImplementation(async () => {
+      empty.clock.advance(CALL_MS);
+      return { ...answer(), text: "" };
+    });
+    await empty.call();
+    expect(empty.runClock.accumulatedSilentMs()).toBe(CALL_MS);
+
+    const failed = setup(false, "mock-silence-failed");
+    failed.provider.chat.mockImplementation(async () => {
+      failed.clock.advance(CALL_MS);
+      throw new Error("socket hang up");
+    });
+    await failed.call();
+    expect(failed.runClock.accumulatedSilentMs()).toBe(CALL_MS);
   });
 });

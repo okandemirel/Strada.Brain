@@ -179,6 +179,34 @@ describe("the wall names the module twin", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // The wall judges the write against the lease, so the twin has to be looked
+  // up there too: a module copy the run created in its lease is not in the
+  // checkout yet, and the refusal fell back to "create the owning module".
+  it("names a twin that exists only in the run's lease", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const checkout = mkdtempSync(join(tmpdir(), "twin-checkout-"));
+    const lease = mkdtempSync(join(tmpdir(), "twin-lease-"));
+    try {
+      writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ projectRoot: checkout }));
+      mkdirSync(join(lease, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
+      writeFileSync(join(lease, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy");
+      const o = makeOrch(true, checkout);
+      const r = await review(
+        o,
+        "file_edit",
+        { path: "Assets/Scripts/PlayfieldBuilder.cs", old_string: "a", new_string: "b" },
+        { workspaceLease: { path: lease } },
+      );
+      expect(r.approved).toBe(false);
+      expect(r.reason).toContain("loose duplicate of Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs");
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(lease, { recursive: true, force: true });
+    }
+  });
 });
 
 // The write tools resolve the path against the run's root and check only that

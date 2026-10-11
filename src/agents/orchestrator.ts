@@ -2631,10 +2631,16 @@ export class Orchestrator {
         return { status: "error", reason: "blocked task has no prompt to resubmit" };
       }
       this.taskManager?.fail(taskId, "superseded by /retry resubmission");
+      // Rerun where the task ran, as continueFromCheckpoint does: on the web
+      // channel chatId is one connection and the conversation is the profile,
+      // so without it goal trees and execution memory are keyed by the
+      // connection. A row with no owner let the caller through the check above
+      // as one, so it reruns as the caller.
       void this.handleMessage({
         channelType: blocked.channelType as ChannelType,
         chatId: blocked.chatId,
-        userId: blocked.userId ?? "",
+        conversationId: blocked.conversationId,
+        userId: blocked.userId || options?.userId || "",
         text: prompt,
         timestamp: new Date(),
       });
@@ -3530,11 +3536,33 @@ export class Orchestrator {
     const pendingResumeTrees = this.sessionManager.takePendingResumeTrees(conversationScope, chatId);
     if (pendingResumeTrees.length > 0) {
       const resumePrompt = formatResumePrompt(pendingResumeTrees);
-      const normalized = text.toLowerCase().trim();
-      if (normalized === "resume" || normalized === "resume all") {
+      // "Resume." is still the word: an exact match sent it to the model as a
+      // bare prompt.
+      const normalized = text.toLowerCase().trim().replace(/[\s.!?]+$/, "");
+      // The prompt offers "Resume #N" when several trees wait; N is the
+      // "Tree N" it printed for this same list.
+      const pick = /^resume\s*#?\s*(\d+)$/.exec(normalized);
+      const pickIndex = pick ? Number(pick[1]) - 1 : -1;
+      if (pick && !pendingResumeTrees[pickIndex]) {
+        this.sessionManager.appendVisibleUserMessage(session, text);
+        this.sessionManager.restorePendingResumeTrees(conversationScope, pendingResumeTrees);
+        const range = pendingResumeTrees.length === 1
+          ? 'reply "Resume" or "Discard"'
+          : `reply with a number from 1 to ${pendingResumeTrees.length}`;
+        await this.sessionManager.sendVisibleAssistantMarkdown(
+          chatId,
+          session,
+          `${resumePrompt}\n\nThere is no tree #${pick[1]} on offer: ${range}.`,
+        );
+        return;
+      }
+      if (pick || normalized === "resume" || normalized === "resume all") {
         this.sessionManager.appendVisibleUserMessage(session, text);
         await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
-        for (const tree of pendingResumeTrees) {
+        const resuming = pick ? [pendingResumeTrees[pickIndex]!] : pendingResumeTrees;
+        const remaining = pick ? pendingResumeTrees.filter((_, i) => i !== pickIndex) : [];
+        this.sessionManager.restorePendingResumeTrees(conversationScope, remaining);
+        for (const tree of resuming) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
           // audited 2026-09-02: the reset lived only in memory, so a crash
@@ -3548,10 +3576,16 @@ export class Orchestrator {
             });
           }
         }
+        // The trees left on offer are numbered afresh, so show the new numbers:
+        // a "Resume #N" read against the old list would pick the wrong tree.
         await this.sessionManager.sendVisibleAssistantMarkdown(
           chatId,
           session,
-          "Resuming interrupted goal trees...",
+          !pick
+            ? "Resuming interrupted goal trees..."
+            : remaining.length === 0
+              ? `Resuming interrupted goal tree #${pick[1]}...`
+              : `Resuming interrupted goal tree #${pick[1]}...\n\n${formatResumePrompt(remaining)}`,
         );
         return;
       } else if (normalized === "discard" || normalized === "discard all") {
@@ -4282,6 +4316,12 @@ export class Orchestrator {
         signal: fallbackSignal,
         externalSignal,
       });
+      // chat() delivers the whole answer when it returns — the moment a stream
+      // would have touched the scope. Untouched, leave() booked every answered
+      // call's full duration as task silence, and with STREAMING_ENABLED=false
+      // about thirty answered 60 s calls stopped a productive run as
+      // task-inactivity. An empty answer stays silence, as an empty stream does.
+      if (!isEmptyProviderResponse(fallbackResponse)) fbScope?.firstTokenSeen();
       // The fallback chat can also return an empty 200 — record it as a health FAILURE
       // (same predicate the per-task breaker uses) so the registry and breaker stay in
       // agreement on this path too (audit #9).
@@ -4409,6 +4449,10 @@ export class Orchestrator {
         // the turn ends here when the token says so.
         streamPromise.catch(() => undefined);
         const response = await Promise.race([streamPromise, rejectWhenAborted(composedSignal)]);
+        // The answer's arrival is activity even when no chunk announced it: a
+        // fallback chain serves a non-streaming member with chat(), which emits
+        // none, and its whole call was booked as silence.
+        if (!isEmptyProviderResponse(response)) scope.firstTokenSeen();
         logProviderCall("turn", provider, turnStartedAt, { response }, {
           chatId,
           promptChars: effectivePrompt?.length ?? 0,
@@ -4822,7 +4866,9 @@ export class Orchestrator {
     // Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs — each
     // answered with the layout rule and nothing about the twin, so the agent
     // kept trying the loose copy while the build carried both definitions.
-    const twin = findModuleTwin(this.projectPath, normalized);
+    // Looked up under the same root: a module copy made in the lease is not
+    // in the checkout until the lease commits.
+    const twin = findModuleTwin(root, normalized);
     const wayOut = twin
       ? ` ${normalized} is a loose duplicate of ${twin}: edit the module copy, and delete the loose one with ` +
         "file_delete (deletes are not walled, and a commit applies the deletion of the system's own file)."

@@ -24,7 +24,7 @@ vi.mock("./context/strada-knowledge.js", () => ({
 
 const { Orchestrator } = await import("./orchestrator.js");
 
-function harness(ownerUserId: string | undefined) {
+function harness(ownerUserId: string | undefined, row: Record<string, unknown> = {}) {
   const provider = {
     name: "mock",
     capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
@@ -50,6 +50,7 @@ function harness(ownerUserId: string | undefined) {
       chatId: "shared-channel",
       channelType: "discord",
       userId: ownerUserId,
+      ...row,
     })),
     fail: vi.fn(),
   };
@@ -79,6 +80,24 @@ describe("resubmitBlockedTask enforces the task owner (ORC-14)", () => {
     const h = harness(undefined);
     const result = await h.orch.resubmitBlockedTask("task-1", { userId: "user-B" });
     expect(result.status).toBe("submitted");
+  });
+
+  // The /retry fallback when no checkpoint exists rebuilt the request from the
+  // row's chat alone. On the web channel the chat is one connection and the
+  // conversation is the profile: without it the rerun keyed its goal trees and
+  // execution memory by the connection.
+  it("reruns in the task's conversation, not the connection's chat id", async () => {
+    const h = harness("profile-7", { chatId: "conn-5b1d", channelType: "web", conversationId: "profile-7" });
+    await h.orch.resubmitBlockedTask("task-1", { userId: "profile-7" });
+    expect(h.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelType: "web", chatId: "conn-5b1d", userId: "profile-7", conversationId: "profile-7",
+    }));
+  });
+
+  it("an ownerless task reruns as the caller, not as an empty user", async () => {
+    const h = harness(undefined);
+    await h.orch.resubmitBlockedTask("task-1", { userId: "user-B" });
+    expect(h.handleMessage).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-B" }));
   });
 });
 

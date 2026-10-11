@@ -250,6 +250,15 @@ describe("TaskCheckpointStore — multi-user isolation", () => {
     const loaded = await store.loadByTaskId("task-web");
     expect(loaded).toMatchObject({ userId: "profile-7", channelType: "web", conversationId: "profile-7" });
   });
+
+  it("clamps the channel and conversation like every other caller-supplied string", async () => {
+    await store.save(makeCheckpoint({
+      taskId: "task-long-route", channelType: "w".repeat(5_000), conversationId: "c".repeat(5_000),
+    }));
+    const loaded = await store.loadByTaskId("task-long-route");
+    expect(loaded?.channelType).toHaveLength(64);
+    expect(loaded?.conversationId).toHaveLength(256);
+  });
 });
 
 /**

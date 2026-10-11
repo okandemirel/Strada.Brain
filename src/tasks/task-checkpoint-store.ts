@@ -181,6 +181,14 @@ export class TaskCheckpointStore {
         typeof cp.chatId === "string"
           ? cp.chatId.slice(0, TaskCheckpointStore.MAX_CHAT_ID_CHARS)
           : cp.chatId,
+      channelType:
+        typeof cp.channelType === "string"
+          ? cp.channelType.slice(0, TaskCheckpointStore.MAX_CHANNEL_TYPE_CHARS)
+          : undefined,
+      conversationId:
+        typeof cp.conversationId === "string"
+          ? cp.conversationId.slice(0, TaskCheckpointStore.MAX_CONVERSATION_ID_CHARS)
+          : undefined,
       lastUserMessage:
         typeof cp.lastUserMessage === "string"
           ? cp.lastUserMessage.slice(0, TaskCheckpointStore.MAX_USER_MESSAGE_CHARS)
@@ -225,6 +233,8 @@ export class TaskCheckpointStore {
   private static readonly MAX_INTENT_CHARS = 2_000;
   private static readonly MAX_TASK_ID_CHARS = 256;
   private static readonly MAX_CHAT_ID_CHARS = 256;
+  private static readonly MAX_CHANNEL_TYPE_CHARS = 64;
+  private static readonly MAX_CONVERSATION_ID_CHARS = 256;
   private static readonly MAX_REVIEW_ID_CHARS = 128;
 
   /**

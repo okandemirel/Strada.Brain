@@ -123,4 +123,66 @@ describe("replying something else to the resume prompt (2026-09-10)", () => {
     expect(stored).not.toBeNull();
     for (const node of stored!.nodes.values()) expect(node.status).toBe("pending");
   });
+
+  it("takes 'Resume.' with a full stop as 'resume'", async () => {
+    await say("Resume.");
+    for (const node of storage.getTree(tree.rootId)!.nodes.values()) expect(node.status).toBe("pending");
+  });
+});
+
+// With two or more trees the prompt says Reply "Resume all", "Resume #N", or
+// "Discard all", and the handler compared the reply to "resume" and "resume
+// all" only: "Resume #2" went to the model as a bare prompt and no tree could
+// be picked.
+describe("replying 'Resume #N' when several trees are on offer", () => {
+  let second: GoalTree;
+  let provider: ReturnType<typeof createMockProvider>;
+
+  beforeEach(() => {
+    second = { ...interruptedTree("chat1"), taskDescription: "Score the match" };
+    storage.upsertTree(second, "executing");
+    provider = createMockProvider();
+    orch = new Orchestrator({
+      providerManager: {
+        getProvider: () => provider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as never,
+      tools: [] as never,
+      channel: channel as never,
+      projectPath: "/tmp/goal-discard-project",
+      readOnly: false,
+      requireConfirmation: false,
+      interruptedGoalTrees: [tree, second],
+    } as never);
+    orch.setGoalStorage(storage);
+  });
+
+  const statuses = (t: GoalTree) => [...storage.getTree(t.rootId)!.nodes.values()].map((n) => n.status);
+
+  it("resumes that tree only, without a model turn, and keeps the other on offer", async () => {
+    await say("Resume #2");
+
+    expect(statuses(second)).toEqual(["pending", "pending"]);
+    expect(statuses(tree), "tree #1 was resumed too").toContain("executing");
+    expect(provider.chat).not.toHaveBeenCalled();
+
+    // The first tree is still waiting for an answer: discarding now removes it alone.
+    await say("discard");
+    expect(storage.getTree(tree.rootId)).toBeNull();
+    expect(storage.getTree(second.rootId)).not.toBeNull();
+  });
+
+  it("a number that is not on offer resumes nothing and says so", async () => {
+    await say("resume #3");
+
+    expect(statuses(tree)).toContain("executing");
+    expect(statuses(second)).toContain("executing");
+    expect(provider.chat).not.toHaveBeenCalled();
+    const sent = (channel.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]));
+    expect(sent.some((m) => /#3/.test(m) && /1 (to|and) 2/.test(m))).toBe(true);
+
+    await say("resume #1");
+    expect(statuses(tree)).toEqual(["pending", "pending"]);
+  });
 });
