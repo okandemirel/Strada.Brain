@@ -9926,6 +9926,7 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
       provider?: ReturnType<typeof createMockProvider>;
       instinctRetriever?: unknown;
       tools?: unknown[];
+      maxIterations?: number;
     },
   ): Orchestrator {
     const provider = extra?.provider ?? createMockProvider();
@@ -9944,6 +9945,7 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
       requireConfirmation: false,
       learningPipeline: pipeline,
       ...(extra?.instinctRetriever ? { instinctRetriever: extra.instinctRetriever as any } : {}),
+      ...(extra?.maxIterations !== undefined ? { maxIterations: extra.maxIterations } : {}),
     });
   }
 
@@ -10221,6 +10223,64 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
 
     expect(pipeline.recordTrajectory).toHaveBeenCalledTimes(1);
     expect(settle).toHaveBeenCalledWith("chat-port-throw", { success: true }, expect.any(String));
+  });
+
+  it("a run that failed after a step is stored as a failure through the port", async () => {
+    // Every other failed-terminal test hands the private recorder its
+    // `success: false`; this one lets persistTerminal compute it, so booking
+    // a failed run as a success cannot pass unseen. The run stops on its own
+    // runaway (three truncated answers in a row), not on a provider outage.
+    const provider = createMockProvider();
+    provider.chat.mockResolvedValueOnce({
+      text: "",
+      toolCalls: [{ id: "tc-0", name: "file_read", input: {} }],
+      stopReason: "tool_use",
+      usage: runUsage,
+    });
+    provider.chat.mockResolvedValue({ text: "partial answer", toolCalls: [], stopReason: "max_tokens", usage: runUsage });
+    const orch = makeOrch(makePipeline(false), { provider, tools: [createMockTool("file_read")] });
+
+    await runBackgroundTask(orch, "add a health bar to the player", {
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "chat-port-failed",
+      userId: "user-port",
+      taskRunId: "taskrun_port_failed",
+    });
+    storage.flush();
+
+    const rows = stepRows();
+    expect(rows.map((row) => row.steps.map((step) => step.toolName))).toEqual([["file_read"]]);
+    expect(rows[0]!.outcome.success).toBe(false);
+  });
+
+  it("an interactive run that spent its iteration budget is stored as a failure, not a success", async () => {
+    // The interactive max-iterations terminal keeps status "completed" (a
+    // budget-reached end the adapter renders as a notice), so the status
+    // alone booked the unfinished run a clean success: 'Replay success', chain
+    // credit and an auto-generated verdict for work that was never finished.
+    const provider = createMockProvider();
+    provider.chat.mockResolvedValue({
+      text: "",
+      toolCalls: [{ id: "tc-loop", name: "file_read", input: {} }],
+      stopReason: "tool_use",
+      usage: runUsage,
+    });
+    const orch = makeOrch(makePipeline(false), { provider, tools: [createMockTool("file_read")], maxIterations: 2 });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-port-maxiter",
+      userId: "user-port",
+      text: "add a health bar to the player",
+      timestamp: new Date(),
+    });
+    storage.flush();
+
+    const rows = stepRows();
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.outcome.success).toBe(false);
+    expect(replayFor("add a health bar to the enemy", "user-port").some((line) => line.startsWith("Replay success"))).toBe(false);
   });
 
   it("a run that took no step leaves no row of its own", async () => {

@@ -29,6 +29,7 @@ import { resolveIdentityKey } from "../../agents/orchestrator-text-utils.js";
 import { randomUUID } from "node:crypto";
 import { firstClause } from "../../agents/orchestrator-loop-shared.js";
 import { getResilienceMessage, type MessageKey } from "../../agents/resilience-messages.js";
+import { terminalKeyOf } from "../../agents/autonomy/terminal-outcome.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { PolicySeed } from "../control/policy.js";
 import type { HealthCore } from "../control/failure-ledger.js";
@@ -452,19 +453,18 @@ export function createAgentCorePort(
         // interactive max-tokens runaway abort — because flipping the TASK terminal there would
         // change how background-executor settles a live campaign task. The METRIC is under no such
         // constraint, and booking a cut-short run COMPLETE is what still let the metrics CLI, the
-        // daemon digest and learning-stats count those runs as completion_status "success". The
-        // pattern is the CLOSED set of stop reasons the spine emits with a "completed" status
-        // (describeCancelReason kinds + the runaway abort) — never an open "not on the happy list",
-        // so a reason this does not recognize is still recorded exactly as it was before.
-        const stoppedShortByArbiter =
-          terminalReason !== undefined &&
-          /^(?:hard-timeout|budget-exhausted|provider-stall|verdict-stop):|^(?:task-inactivity|max-tokens-runaway)$/.test(
-            terminalReason,
-          );
+        // daemon digest and learning-stats count those runs as completion_status "success".
+        // An interactive reflection that settled blocked or had its write refused, and the
+        // interactive iteration budget, keep "completed" too; a hand-kept list of arbiter reasons
+        // missed them, and each such run was booked a clean success with a step row replay offers
+        // as one. The terminal key reads every reason the spine writes, from the table the task's
+        // verification already uses; a reason it does not recognize, with a clean status, still
+        // reads "done", so nothing outside that closed table is recorded differently.
+        const endedDone = terminalKeyOf(terminalReason, terminalStatus) === "done";
         // The run's outcome, read from the spine's typed terminal. AgentState.phase never reaches
         // COMPLETE in production, so it cannot answer this; one value feeds the metric, the
         // recorded trajectory and the instinct-credit settle so they cannot disagree about a run.
-        const runSucceeded = !(cancelled || failedVerdict || stoppedShortByArbiter);
+        const runSucceeded = !cancelled && !failedVerdict && endedDone;
         try {
         engine.recordMetricEnd(c.metricId, {
           agentPhase: runSucceeded ? AgentPhase.COMPLETE : AgentPhase.FAILED,
