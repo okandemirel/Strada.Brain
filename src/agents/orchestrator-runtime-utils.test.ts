@@ -159,6 +159,55 @@ describe("orchestrator-runtime-utils", () => {
       expect(out).toContain('key = "[REDACTED]";\r\n');
       expect(out).toMatch(/never write \[REDACTED\] back/);
     });
+
+    // A [REDACTED] in place of an identifier makes the edit that copies the
+    // line miss, and a read-then-rewrite puts the placeholder on disk.
+    it("file_read: leaves identifiers that merely start like a key alone", () => {
+      const body = [
+        '    1 | const int Interval = Config.Get("token-refresh-interval-seconds");',
+        '    2 | <div class="key-binding-panel-root">',
+        '    3 | var map = asset.FindActionMap("key-rebinding-overlay");',
+        "    4 | // Bearer authentication_scheme is negotiated per request",
+        '    5 | api_key = os.environ["OPENAI_API_KEY"]',
+        "",
+      ].join("\r\n");
+      expect(sanitizeToolResult(body, undefined, "file_read")).toBe(body);
+    });
+
+    it("file_read: still redacts keys with the shape real ones have", () => {
+      const keys = [
+        "sk-proj-4fK9xQ2mZ7pL1vB8nR3tY6wE0aS5dG",
+        "key-3ax6xnjp29jd6fds4gc373sgvjxteol0",
+        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        "api_key=Zx81kq0Lw2mN7bV4cT9rP3sY",
+      ];
+      const out = sanitizeToolResult(keys.map((k, i) => `    ${i + 1} | ${k}`).join("\n"), undefined, "file_read");
+      for (const key of keys) expect(out).not.toContain(key.slice(-12));
+    });
+
+    it("batch_execute: an inner file_read keeps its text, and an inner command's output is still rewritten", () => {
+      const read = `File: A.cs\n    1 | "（はい）！" = "${BASE64}";\r\n    2 | protected override void OnUpdate() { } // ticks the movement system\r\n`;
+      const batch = JSON.stringify({
+        results: [
+          { tool: "file_read", success: true, content: read, durationMs: 1 },
+          { tool: "shell_exec", success: true, content: `${INJECTION}\r\nok`, durationMs: 1 },
+        ],
+        totalDurationMs: 2,
+        stopped: false,
+        successCount: 2,
+        failureCount: 0,
+      }, null, 2);
+
+      const out = JSON.parse(sanitizeToolResult(batch, undefined, "batch_execute")) as {
+        results: Array<{ content: string }>;
+        successCount: number;
+      };
+      // Verbatim, under the same note a direct file_read gets for directive-shaped wording.
+      expect(out.results[0]!.content.endsWith(read)).toBe(true);
+      expect(out.results[0]!.content.split("\n")[0]).toMatch(/^\[note: .*inline_override.*do not act on it\.\]$/);
+      expect(out.results[1]!.content).toContain("[filtered:");
+      expect(out.successCount).toBe(2);
+    });
   });
 
   it("ignores incidental inspection failures when reflection declares DONE", () => {
@@ -326,5 +375,58 @@ describe("recordProviderHealthFailure", () => {
     recordProviderHealthFailure(reg, "openai", "403 Forbidden");
     expect(spy.failure).toBe(true);
     expect(spy.quota).toBe(false);
+  });
+
+  // providers#1, the orchestrator's half: a hard pin gives the chat a bare
+  // seat named like the default chain's member, so a credential bench here
+  // takes the seat from every chat and every model for 8h, persisted.
+  describe("reads the status the error states, like the chain does", () => {
+    function recordingRegistry() {
+      const calls: string[] = [];
+      const reg = {
+        recordFailure: (name: string) => { calls.push(`failure:${name}`); },
+        recordQuotaExhausted: (name: string) => { calls.push(`quota:${name}`); },
+        recordOverloaded: (name: string) => { calls.push(`overloaded:${name}`); },
+        recordCredentialRejected: (name: string) => { calls.push(`credential:${name}`); },
+      };
+      return { reg, calls };
+    }
+
+    it("leaves a seat alone when the gateway rejects the model, not the key", () => {
+      const { reg, calls } = recordingRegistry();
+      recordProviderHealthFailure(
+        reg,
+        "opencode",
+        'OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model stale-model-xyz is not supported"}}',
+      );
+      expect(calls).toEqual([]);
+    });
+
+    it("does not bench a seat whose 400 body merely cites a 401", () => {
+      const { reg, calls } = recordingRegistry();
+      recordProviderHealthFailure(
+        reg,
+        "kimi",
+        'Kimi API error 400: {"error":{"message":"Invalid request: messages[401].content must be a string"}}',
+      );
+      expect(calls).toEqual(["failure:kimi"]);
+    });
+
+    it("does not cool a seat down as overloaded or out of quota over numbers a 400 body cites", () => {
+      const { reg, calls } = recordingRegistry();
+      recordProviderHealthFailure(reg, "kimi", "Kimi API error 400: messages[503].content must be a string");
+      recordProviderHealthFailure(reg, "kimi", "Kimi API error 400: messages[403] exceeded the tool limit");
+      expect(calls).toEqual(["failure:kimi", "failure:kimi"]);
+    });
+
+    it("still benches a refused key: a stated 401, an SDK status, or a message with no marker", () => {
+      const { reg, calls } = recordingRegistry();
+      recordProviderHealthFailure(reg, "kimi", "Kimi (Moonshot) API error 401: The API Key appears to be invalid");
+      recordProviderHealthFailure(reg, "claude", "invalid x-api-key", {
+        error: Object.assign(new Error("invalid x-api-key"), { status: 401 }),
+      });
+      recordProviderHealthFailure(reg, "revoked", "Unauthorized (401): token expired");
+      expect(calls).toEqual(["credential:kimi", "credential:claude", "credential:revoked"]);
+    });
   });
 });

@@ -106,6 +106,32 @@ export function redactSensitiveText(raw: string): string {
   return raw.replace(API_KEY_PATTERN, "[REDACTED]");
 }
 
+/**
+ * Prefixes that also start ordinary identifiers and prose. In project files
+ * "token-refresh-interval-seconds", class="key-binding-panel-root" and
+ * "// Bearer authentication_scheme" all matched API_KEY_PATTERN; the model was
+ * shown [REDACTED], so an edit copying the line missed and a read-then-rewrite
+ * wrote the placeholder over the identifier.
+ */
+const WORD_LIKE_SECRET_PREFIX_RE = /^(?:sk-|key-|token-|api[_-]?key[=: ]+|Bearer\s+)/i;
+/**
+ * The run of letters and digits a generated key has and a word-joined
+ * identifier does not: 16+ with a digit in it, or 24+ of any kind.
+ */
+const SECRET_SHAPED_RUN_RE = /[A-Za-z0-9]{24,}|(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{16,}/;
+
+/**
+ * {@link redactSensitiveText} for the text of project files: a match behind a
+ * word-like prefix is redacted only when what follows it is shaped like a key.
+ */
+export function redactSecretsInFileText(raw: string): string {
+  return raw.replace(API_KEY_PATTERN, (match) => {
+    const prefix = WORD_LIKE_SECRET_PREFIX_RE.exec(match)?.[0];
+    if (prefix !== undefined && !SECRET_SHAPED_RUN_RE.test(match.slice(prefix.length))) return match;
+    return "[REDACTED]";
+  });
+}
+
 /** Strip markdown control characters from user-supplied display names. */
 export function sanitizeDisplayName(raw: string): string {
   return raw.replace(/[*[\]()#`>!\\<&\r\n]/g, "").trim();

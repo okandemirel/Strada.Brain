@@ -4336,6 +4336,7 @@ export class Orchestrator {
       getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
       recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
         isSingleProvider: isSingleProviderChain(provider),
+        error: fallbackErr,
       });
       // Surface the failure to the agent so it can adapt its approach
       // (e.g. simplify the request, reduce tool usage, skip non-critical work).
@@ -4484,6 +4485,7 @@ export class Orchestrator {
               err instanceof QuotaExhaustedError && Number.isFinite(err.retryAfterMs)
                 ? err.retryAfterMs
                 : undefined,
+            error: err,
           });
           getLogger().warn("Provider refused; not retrying it without streaming", {
             chatId,

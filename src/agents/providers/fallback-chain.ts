@@ -17,6 +17,7 @@ import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep, parseResetDurationMs } from "../../common/fetch-with-retry.js";
 import type { BackoffInfo } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
+import { MODEL_UNSUPPORTED_RE, httpStatusOf, reportsHttpStatus } from "./provider-error-status.js";
 import { stripLeakedReasoning } from "../leaked-reasoning.js";
 
 /**
@@ -56,18 +57,10 @@ const BILLING_RE = /credit balance|insufficient[_ ](?:quota|balance|credits?|fun
  */
 const TOOL_CALL_ID_RULE_RE = /tool[_ ]?(?:call|use)[_ ]?ids?\b|tool_call_id|tool_result|tool_use_id|no tool output found/i;
 /**
- * A model-availability error: an OpenAI-compatible gateway reports the configured
- * model id as unknown/unsupported (OpenCode/Zen returns this under a 401 with a
- * `ModelError` body). This is a per-provider CONFIG mismatch, NOT an auth failure —
- * it must remain RETRYABLE so a healthy sibling provider is tried instead of
- * collapsing the chain to a false "All providers failed".
- */
-const MODEL_UNSUPPORTED_RE = /ModelError|model[\s\S]{0,80}not supported|unsupported model|no such model|model[\s\S]{0,40}(not found|does not exist)/i;
-/**
  * A ChatGPT/Codex SUBSCRIPTION rejecting the configured model with HTTP 400/404
  * ("The 'X' model is not supported when using Codex with a ChatGPT account." — or
  * Strada's own "... is not accepted by the ChatGPT/Codex subscription endpoint").
- * Unlike the generic MODEL_UNSUPPORTED_RE above (an OpenCode/Zen gateway mismatch
+ * Unlike the generic MODEL_UNSUPPORTED_RE (an OpenCode/Zen gateway mismatch
  * that SHOULD fail over to a healthy sibling), this is a STATIC per-provider config
  * mismatch: the subscription only serves a fixed set of Codex models, so retrying or
  * failing over the SAME pinned model just re-fails identically while churning this
@@ -85,15 +78,17 @@ const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 const ABORT_RE = /abort/i;
 const CANCEL_RE = /cancel/i;
 const TASK_INTERRUPTED_RE = /task\.interrupted/i;
-/** Regex for server overload errors (HTTP 529, 503) — triggers extended cooldown */
-const OVERLOAD_RE = /\b(?:529|503)\b/;
+/** Server overload statuses (HTTP 529, 503) — trigger extended cooldown */
+const OVERLOAD_STATUSES = [503, 529] as const;
 /**
- * Regex for rate-limit (HTTP 429) errors. Matched against the terminal error message
- * so a 429-driven failure is classified + reported as rate-limited, NOT as an
- * "unresponsive endpoint". Anchored on the bare 429 status and the explicit
- * "rate-limited" phrasing emitted by fetch-with-retry.ts.
+ * The "rate-limited" phrasing fetch-with-retry.ts emits. With a 429 status it
+ * classifies a failure as rate-limited, NOT as an "unresponsive endpoint". The
+ * status is read by reportsHttpStatus: a bare 429 anywhere in a 400 body is
+ * not one.
  */
-const RATE_LIMIT_RE = /\b429\b|rate.?limit/i;
+const RATE_LIMIT_RE = /rate.?limit/i;
+/** Seat + model pairs already warned about; per process, since a chain is re-created on a cache miss. */
+const warnedModelMismatches = new Set<string>();
 /**
  * Cross-boundary fallback recogniser for a HARD QUOTA STOP (a 429 whose Retry-After
  * exceeds our entire retry budget). The primary signal is `instanceof QuotaExhaustedError`
@@ -197,19 +192,6 @@ function isCredentialRejection(error: unknown): boolean {
   if (status !== undefined) return status === 401 || (status === 403 && !QUOTA_LIMIT_RE.test(msg));
   if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
   return /\b40[13]\b/.test(msg);
-}
-
-/**
- * The HTTP status an error reports, when it says so: an SDK's numeric `status`,
- * or the leading marker the adapters write ("<name> API error 401: …",
- * "(HTTP 401)", or an SDK message that starts with the status).
- */
-function httpStatusOf(error: unknown, msg: string): number | undefined {
-  const status = error !== null && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
-  if (typeof status === "number") return status;
-  const m = /\bAPI error (\d{3})\b|\bHTTP (\d{3})\b|^(\d{3})\b/.exec(msg);
-  const code = m?.[1] ?? m?.[2] ?? m?.[3];
-  return code === undefined ? undefined : Number(code);
 }
 
 /**
@@ -549,7 +531,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     // its 429 retries and threw a "rate-limited (HTTP 429)" message. A hard quota stop
     // is handled on its own (long cooldown) branch, NOT as a transient rate-limit.
     const isRateLimited = !isQuotaHardStop
-      && (error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg));
+      && (error instanceof RateLimitedError || reportsHttpStatus(error, errorMsg, [429]) || RATE_LIMIT_RE.test(errorMsg));
 
     // Quota/billing (403) errors get a long cooldown so the provider is skipped for
     // hours. Overload (529/503) AND rate-limit (429) errors get a medium cooldown to
@@ -579,7 +561,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         quotaHardStop?.retryAfterMs ?? parseResetDurationMs(errorMsg) ?? Number.NaN,
         errorMsg,
       );
-    } else if ((/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) || isBillingRejection(errorMsg)) {
+    } else if ((reportsHttpStatus(error, errorMsg, [403]) && QUOTA_LIMIT_RE.test(errorMsg)) || isBillingRejection(errorMsg)) {
       // A spent credit balance arrives as a 400/402 rather than a 403, but it is
       // the same wall: it waits for a person or a billing cycle, not a minute.
       const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
@@ -592,16 +574,37 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       // drew another 429, and the campaign sat in a 195-refusal loop for
       // hours. Treat it as the quota it says it is.
       health.recordFreeTierExhausted(provider.name, errorMsg);
-    } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
+    } else if (reportsHttpStatus(error, errorMsg, OVERLOAD_STATUSES) || isRateLimited) {
       const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
       health[method](provider.name, errorMsg);
     } else if (MODEL_UNSUPPORTED_RE.test(errorMsg)) {
       // A model this gateway does not serve says nothing about the seat. Health
       // is keyed by seat, so one chat's model pick would otherwise walk the seat
       // down the ladder for every chat on its default model.
+      this.warnModelMismatchOnce(provider, errorMsg);
     } else {
       health.recordFailure(provider.name, errorMsg);
     }
+  }
+
+  /**
+   * Recording nothing for a model mismatch also leaves no trace of it: a seat
+   * whose configured model was retired pays one fast refusal per call and
+   * fails over, never looks unhealthy, and the single-point-of-failure warning
+   * never fires. One warning per seat and model says so without walking the
+   * seat down.
+   */
+  private warnModelMismatchOnce(provider: IAIProvider, errorMsg: string): void {
+    const model = this.attemptMeta[this.providers.indexOf(provider)]?.model;
+    const key = `${provider.name}\u0000${model ?? ""}`;
+    if (warnedModelMismatches.has(key)) return;
+    warnedModelMismatches.add(key);
+    getLogger().warn("Provider rejected the model, not the key; its health is left as it was", {
+      provider: provider.name,
+      model,
+      error: sanitizeSecrets(errorMsg).slice(0, 300),
+      hint: "Every call to this seat with this model fails over. Pick a model the gateway serves.",
+    });
   }
 
   /**

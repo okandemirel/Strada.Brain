@@ -298,3 +298,68 @@ describe("a 401 that is not about the credential", () => {
     expect(ProviderHealthRegistry.getInstance().isAvailable("Revoked")).toBe(false);
   });
 });
+
+/**
+ * Same class as providers#1, for the shorter cooldowns: the overload (503/529),
+ * rate-limit (429) and quota (403) checks matched the number anywhere in the
+ * body, so a 400 citing `messages[503]` cooled a healthy seat down.
+ */
+describe("a status number a 400 body cites", () => {
+  it.each([
+    ["an overload", 'Kimi API error 400: {"error":{"message":"messages[503].content must be a string"}}'],
+    ["a rate limit", 'Kimi API error 400: {"error":{"message":"messages[429].content must be a string"}}'],
+    ["a quota wall", 'Kimi API error 400: {"error":{"message":"messages[403] exceeded the per-message size limit"}}'],
+  ])("is not read as %s", async (_label, message) => {
+    const kimi = provider("kimi", message);
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([kimi.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("kimi")).toBe(true);
+  });
+
+  it("still cools down a seat that states the overload", async () => {
+    const busy = provider("busy", "Busy API error 503: service unavailable");
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([busy.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("busy")).toBe(false);
+  });
+});
+
+/**
+ * A model mismatch records no health, so a retired configured model left no
+ * trace: every call paid one fast refusal and failed over, and the seat never
+ * looked unhealthy. One warning per seat and model is the signal.
+ */
+describe("a model the gateway does not serve", () => {
+  const MODEL_ERROR =
+    'OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model retired-model is not supported"}}';
+  const warnings = () =>
+    mockLogger.warn.mock.calls.filter(([message]) => String(message).includes("rejected the model"));
+
+  function chainFor(model: string) {
+    const oc = provider("opencode", MODEL_ERROR);
+    const good = provider("openai", "ok");
+    return new FallbackChainProvider([oc.provider, good.provider], {
+      attemptTimeoutMs: 5_000,
+      attemptMeta: [{ provider: "opencode", model }, { provider: "openai", model: "gpt-ok" }],
+    });
+  }
+
+  it("is warned about once per seat and model, and the seat keeps its health", async () => {
+    const chain = chainFor("retired-model-a");
+    await ask(chain);
+    await ask(chain);
+    await ask(chainFor("retired-model-a"));
+
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0]![1]).toMatchObject({ provider: "opencode", model: "retired-model-a" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("opencode")).toBe(true);
+
+    await ask(chainFor("retired-model-b"));
+    expect(warnings()).toHaveLength(2);
+    expect(warnings()[1]![1]).toMatchObject({ provider: "opencode", model: "retired-model-b" });
+  });
+});

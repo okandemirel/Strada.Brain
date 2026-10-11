@@ -3,7 +3,7 @@ import { getLoggerSafe } from "../utils/logger.js";
 import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import type { WorkerRunResult, WorkerToolTrace } from "./supervisor/supervisor-types.js";
-import { sanitizeToolResult } from "./orchestrator-runtime-utils.js";
+import { appendToSanitizedToolResult } from "./orchestrator-runtime-utils.js";
 import type { ErrorSignature } from "../learning/error-signature.js";
 
 /** Minimal interface for TaskPlanner methods used by tracking. */
@@ -207,7 +207,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       taskPlanner.recordError(analysis.summary);
       toolResults[i] = {
         toolCallId: tr.toolCallId,
-        content: sanitizeToolResult(tr.content + analysis.recoveryInjection, undefined, tc.name),
+        content: appendToSanitizedToolResult(tr.content, analysis.recoveryInjection),
         isError: tr.isError,
         metadata: tr.metadata,
       };
