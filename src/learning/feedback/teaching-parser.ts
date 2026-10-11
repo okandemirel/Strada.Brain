@@ -5,12 +5,15 @@
  * the content and optional scope hint.
  */
 
+import { foldTurkishLetters } from "./turkish-letters.js";
+
 export interface TeachingResult {
   content: string;
   scope?: 'user' | 'project' | 'global';
 }
 
-// Teaching trigger keywords (EN + TR) followed by colon or "that"
+// Teaching trigger keywords (EN + TR) followed by colon or "that". The TR ones
+// are spelled without Turkish letters: they run on foldTurkishLetters(text).
 const TEACHING_PATTERNS_EN = ['remember', 'learn', 'note', 'memorize'];
 const TEACHING_PATTERNS_TR = ['hatirla', 'ogren', 'not et', 'unutma'];
 
@@ -34,7 +37,7 @@ export class TeachingParser {
    */
   static isTeachingIntent(text: string): boolean {
     if (!text) return false;
-    return DETECTION_REGEX.test(text.trim());
+    return DETECTION_REGEX.test(foldTurkishLetters(text.trim()));
   }
 
   /**
@@ -42,9 +45,13 @@ export class TeachingParser {
    */
   static parse(text: string): TeachingResult {
     const trimmed = text.trim();
-    const match = TEACHING_REGEX.exec(trimmed);
+    const match = TEACHING_REGEX.exec(foldTurkishLetters(trimmed));
 
-    const content = match?.[1]?.trim() ?? trimmed;
+    // Matched on the folded text, cut from the original: the content keeps its
+    // own letters (folding is one code unit for one).
+    const content = match?.[1] !== undefined
+      ? trimmed.slice(match[0].length - match[1].length).trim()
+      : trimmed;
     const scope = TeachingParser.detectScope(content);
 
     return { content, scope };

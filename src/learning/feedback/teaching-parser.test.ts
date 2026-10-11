@@ -24,6 +24,22 @@ describe("TeachingParser", () => {
       expect(TeachingParser.isTeachingIntent("unutma: API key formati")).toBe(true);
     });
 
+    // Turkish is typed with its own letters; the patterns are spelled without
+    // them, so "hatırla:" and "öğren:" were never read as teaching.
+    it("detects TR teaching written with Turkish letters", () => {
+      expect(TeachingParser.isTeachingIntent("hatırla: testleri her zaman EditMode ile çalıştır")).toBe(true);
+      expect(TeachingParser.isTeachingIntent("Hatırla: x")).toBe(true);
+      expect(TeachingParser.isTeachingIntent("HATIRLA: x")).toBe(true);
+      expect(TeachingParser.isTeachingIntent("öğren: const kullanmayı tercih et")).toBe(true);
+      expect(TeachingParser.isTeachingIntent("ÖĞREN: x")).toBe(true);
+    });
+
+    it("keeps the Turkish letters of the content it extracts", () => {
+      expect(TeachingParser.parse("hatırla: testleri her zaman EditMode ile çalıştır").content)
+        .toBe("testleri her zaman EditMode ile çalıştır");
+      expect(TeachingParser.parse("öğren: şu dosyayı değiştirme").content).toBe("şu dosyayı değiştirme");
+    });
+
     it("should be case-insensitive", () => {
       expect(TeachingParser.isTeachingIntent("REMEMBER: always use strict mode")).toBe(true);
       expect(TeachingParser.isTeachingIntent("Remember that I prefer dark mode")).toBe(true);

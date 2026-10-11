@@ -12,6 +12,8 @@
  * file-level correction detection is wanted.
  */
 
+import { foldTurkishLetters } from "./turkish-letters.js";
+
 /** One turn of the conversation, as the session stores it. */
 interface AgentTurn {
   readonly role: string;
@@ -30,7 +32,7 @@ const EN_PATTERNS = [
   /\bdon'?t do that\b/i,
 ];
 
-// TR correction patterns
+// TR correction patterns, spelled without Turkish letters: they run on foldTurkishLetters(text)
 const TR_PATTERNS = [
   /\bhayir\b/i,
   /\byanlis\b/i,
@@ -70,7 +72,8 @@ export class CorrectionDetector {
   static isCorrection(text: string): boolean {
     if (!text) return false;
     if (text.trim().length > MAX_CORRECTION_CHARS) return false;
-    return ALL_CORRECTION_PATTERNS.some(pattern => pattern.test(text));
+    const folded = foldTurkishLetters(text);
+    return ALL_CORRECTION_PATTERNS.some(pattern => pattern.test(folded));
   }
 
   /**

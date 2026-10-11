@@ -19,6 +19,18 @@ describe("CorrectionDetector", () => {
       expect(CorrectionDetector.isCorrection("dogru degil, baska yol dene")).toBe(true);
     });
 
+    // Turkish is typed with its own letters; the patterns are spelled without
+    // them, so "hayır" and "yanlış" were never read as a correction.
+    it("detects TR corrections written with Turkish letters", () => {
+      expect(CorrectionDetector.isCorrection("hayır, öyle değil")).toBe(true);
+      expect(CorrectionDetector.isCorrection("Hayır, EditMode kullan")).toBe(true);
+      expect(CorrectionDetector.isCorrection("HAYIR")).toBe(true);
+      expect(CorrectionDetector.isCorrection("bu yanlış")).toBe(true);
+      expect(CorrectionDetector.isCorrection("YANLIŞ, async olmalı")).toBe(true);
+      expect(CorrectionDetector.isCorrection("doğru değil, başka yol dene")).toBe(true);
+      expect(CorrectionDetector.isCorrection("bunu yanlışlıkla sildim, geri getir")).toBe(false);
+    });
+
     it("should be case-insensitive", () => {
       expect(CorrectionDetector.isCorrection("NO, use const")).toBe(true);
       expect(CorrectionDetector.isCorrection("Wrong answer")).toBe(true);
