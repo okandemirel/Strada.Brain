@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isatty } from "node:tty";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -792,77 +793,140 @@ function resolveManagedPath(rootDir, configuredValue, fallback) {
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(rootDir, raw);
 }
 
-function purgeRuntimeState(options = {}) {
+/**
+ * Whether git tracks `targetPath` or anything under it; null when git cannot
+ * answer (not installed, not a repository), which a purge reads as "keep it".
+ */
+function gitTracksPath(repoRoot, targetPath) {
+  const relative = path.relative(repoRoot, targetPath).split(path.sep).join("/");
+  try {
+    const listed = execFileSync(
+      "git",
+      ["--literal-pathspecs", "-C", repoRoot, "ls-files", "-z", "--", relative],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    return listed.length > 0;
+  } catch {
+    return null;
+  }
+}
+
+function isDirectoryEntry(targetPath) {
+  try {
+    return lstatSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why `candidate` must survive the purge, or null when it may go.
+ *
+ * A .env value can name any folder (`MEMORY_DB_PATH=src` took a source tree
+ * with it), so a folder is only Strada's when it is where Strada would put it.
+ * In a source checkout the root is the developer's working tree: anything git
+ * tracks (the default HEARTBEAT.md is) and git's own metadata stay.
+ */
+function purgeRefusal(candidate, root, sourceCheckout) {
+  if (candidate.namedBy && isDirectoryEntry(candidate.path)) {
+    return `folder named by ${candidate.namedBy} in .env is not a Strada default location`;
+  }
+  if (!sourceCheckout) {
+    return null;
+  }
+  if (isWithinPath(candidate.path, path.join(root, ".git"))) {
+    return "git metadata is never removed";
+  }
+  const tracked = gitTracksPath(root, candidate.path);
+  if (tracked === null) {
+    return "could not ask git whether it is tracked";
+  }
+  return tracked ? "tracked by git; never removed" : null;
+}
+
+function planPurgeTargets(root, candidates, sourceCheckout, rootLabel) {
+  const targets = [];
+  const skipped = [];
+  for (const candidate of candidates) {
+    if (pathsEqual(candidate.path, root)) {
+      skipped.push(`${candidate.path} (${rootLabel} is never removed)`);
+      continue;
+    }
+    if (!isWithinPath(candidate.path, root)) {
+      skipped.push(`${candidate.path} (outside ${rootLabel})`);
+      continue;
+    }
+    if (!existsSync(candidate.path) || targets.some((target) => pathsEqual(target, candidate.path))) {
+      continue;
+    }
+    const refusal = purgeRefusal(candidate, root, sourceCheckout);
+    if (refusal) {
+      skipped.push(`${candidate.path} (${refusal})`);
+      continue;
+    }
+    targets.push(candidate.path);
+  }
+  return { targets, skipped };
+}
+
+function planRuntimePurge(options = {}) {
   const configRoot = options.configRoot;
   const envPath = path.join(configRoot, ".env");
   const envConfig = parseDotenvFile(envPath);
-  const removed = [];
-  const skipped = [];
+  const candidates = [];
 
   for (const target of DEFAULT_RUNTIME_PURGE_TARGETS) {
-    const resolvedPath = resolveManagedPath(configRoot, target.key ? envConfig[target.key] : undefined, target.fallback);
+    const configured = target.key ? envConfig[target.key]?.trim() : undefined;
+    const resolvedPath = resolveManagedPath(configRoot, configured, target.fallback);
     if (!resolvedPath) {
       continue;
     }
-
-    if (pathsEqual(resolvedPath, configRoot)) {
-      skipped.push(`${resolvedPath} (runtime root is never removed)`);
-      continue;
-    }
-
-    if (!isWithinPath(resolvedPath, configRoot)) {
-      skipped.push(`${resolvedPath} (outside runtime root)`);
-      continue;
-    }
-
-    if (removeEntryIfExists(resolvedPath)) {
-      removed.push(resolvedPath);
-    }
+    const defaultPath = resolveManagedPath(configRoot, undefined, target.fallback);
+    candidates.push({
+      path: resolvedPath,
+      namedBy: configured && !pathsEqual(resolvedPath, defaultPath) ? target.key : null,
+    });
   }
+  candidates.push({ path: envPath, namedBy: null });
 
-  if (removeEntryIfExists(envPath)) {
-    removed.push(envPath);
-  }
-
-  const dataDir = path.join(configRoot, "data");
-  if (removeDirectoryIfEmpty(dataDir)) {
-    removed.push(dataDir);
-  }
-
-  if (options.removeRuntimeRootIfEmpty && removeDirectoryIfEmpty(configRoot)) {
-    removed.push(configRoot);
-  }
-
-  return { removed, skipped };
+  return planPurgeTargets(configRoot, candidates, options.sourceCheckout, "runtime root");
 }
 
-function purgeSourcePreparedState(options = {}) {
+function planSourcePreparedPurge(options = {}) {
   const installRoot = options.installRoot;
-  const removed = [];
-  const skipped = [];
-
+  const candidates = [];
   for (const target of DEFAULT_SOURCE_PREPARED_PURGE_TARGETS) {
     const resolvedPath = resolveManagedPath(installRoot, undefined, target.fallback);
-    if (!resolvedPath) {
-      continue;
-    }
-
-    if (pathsEqual(resolvedPath, installRoot)) {
-      skipped.push(`${resolvedPath} (install root is never removed)`);
-      continue;
-    }
-
-    if (!isWithinPath(resolvedPath, installRoot)) {
-      skipped.push(`${resolvedPath} (outside install root)`);
-      continue;
-    }
-
-    if (removeEntryIfExists(resolvedPath)) {
-      removed.push(resolvedPath);
+    if (resolvedPath) {
+      candidates.push({ path: resolvedPath, namedBy: null });
     }
   }
+  return planPurgeTargets(installRoot, candidates, true, "install root");
+}
 
-  return { removed, skipped };
+/**
+ * Ask on the terminal and wait for the answer. Anything but a yes is a no, and
+ * so is having no terminal: a purge run from a script has to say --force.
+ */
+function askOnTerminal(question) {
+  if (!isatty(0)) {
+    return false;
+  }
+  process.stdout.write(question);
+  const buffer = Buffer.alloc(256);
+  let answer = "";
+  try {
+    while (!answer.includes("\n")) {
+      const bytes = readSync(0, buffer, 0, buffer.length, null);
+      if (bytes === 0) {
+        break;
+      }
+      answer += buffer.toString("utf8", 0, bytes);
+    }
+  } catch {
+    return false;
+  }
+  return /^y(?:es)?$/iu.test(answer.split(/\r?\n/u)[0].trim());
 }
 
 export function installCommand(options = {}) {
@@ -1006,6 +1070,8 @@ export function uninstallCommand(options = {}) {
   const env = options.env || process.env;
   const homeDir = options.homeDir || os.homedir();
   const purgeConfig = options.purgeConfig === true;
+  const force = options.force === true;
+  const confirm = options.confirm || askOnTerminal;
   const launcherPath = options.launcherPath
     || env.STRADA_LAUNCHER_PATH
     || getDefaultLauncherPath(options.wrapperKind);
@@ -1086,17 +1152,40 @@ export function uninstallCommand(options = {}) {
     }
   }
 
+  let purged = false;
   if (purgeConfig) {
-    const purgeResult = purgeRuntimeState({
-      configRoot: runtimeRoots.configRoot,
-      removeRuntimeRootIfEmpty: !runtimeRoots.sourceCheckout,
-    });
-    removed.push(...purgeResult.removed);
-    skipped.push(...purgeResult.skipped);
-    if (runtimeRoots.sourceCheckout) {
-      const sourcePreparedResult = purgeSourcePreparedState({ installRoot: runtimeRoots.installRoot });
-      removed.push(...sourcePreparedResult.removed);
-      skipped.push(...sourcePreparedResult.skipped);
+    const { configRoot, installRoot, sourceCheckout } = runtimeRoots;
+    const runtimePlan = planRuntimePurge({ configRoot, sourceCheckout });
+    const preparedPlan = sourceCheckout
+      ? planSourcePreparedPurge({ installRoot })
+      : { targets: [], skipped: [] };
+    const targets = [...runtimePlan.targets, ...preparedPlan.targets];
+    skipped.push(...runtimePlan.skipped, ...preparedPlan.skipped);
+
+    if (targets.length > 0) {
+      console.log("--purge-config will delete:");
+      for (const target of targets) {
+        console.log(`  ${target}`);
+      }
+    }
+    // A checkout's .env is the developer's own configuration with no backup,
+    // so deleting from a working tree takes a yes or an explicit --force.
+    purged = !sourceCheckout || targets.length === 0 || force
+      || confirm(`Delete these ${targets.length} path(s) from ${configRoot}? [y/N] `);
+
+    if (purged) {
+      for (const target of targets) {
+        if (removeEntryIfExists(target)) {
+          removed.push(target);
+        }
+      }
+      const dataDir = path.join(configRoot, "data");
+      if (removeDirectoryIfEmpty(dataDir)) {
+        removed.push(dataDir);
+      }
+      if (!sourceCheckout && removeDirectoryIfEmpty(configRoot)) {
+        removed.push(configRoot);
+      }
     }
   }
 
@@ -1117,16 +1206,19 @@ export function uninstallCommand(options = {}) {
     }
   }
 
-  if (purgeConfig) {
+  if (purgeConfig && purged) {
     console.log("");
     console.log(`Strada runtime files under ${runtimeRoots.configRoot} were purged.`);
     if (runtimeRoots.sourceCheckout) {
       console.log("Generated source-checkout dependencies and build artifacts were also removed for a zero-install rerun.");
     }
+  } else if (purgeConfig) {
+    console.log("");
+    console.log(`Nothing under ${runtimeRoots.configRoot} was purged. Rerun with --force to delete the paths listed above without being asked.`);
   }
 
   console.log("The repository checkout itself was not deleted.");
-  return { removed, skipped };
+  return { removed, skipped, purgeDeclined: purgeConfig && !purged };
 }
 
 export function shouldRunFromSource(args) {
@@ -1294,11 +1386,15 @@ export function main(argv = process.argv.slice(2)) {
 
   if (userArgs[0] === "uninstall-command" || userArgs[0] === "uninstall") {
     const purgeConfig = userArgs.includes("--purge-config");
-    uninstallCommand({
+    const result = uninstallCommand({
       wrapperKind: launcherKind,
       launcherPath: process.env.STRADA_LAUNCHER_PATH || resolvedLauncherPath,
       purgeConfig,
+      force: userArgs.includes("--force"),
     });
+    if (result.purgeDeclined) {
+      process.exitCode = 1;
+    }
     return;
   }
 

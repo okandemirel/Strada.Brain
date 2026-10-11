@@ -389,6 +389,8 @@ describe("source launcher install-command", () => {
       launcherPath: path.join(process.cwd(), "strada"),
     });
 
+    // A real repository: the purge asks git what it tracks and keeps all of it.
+    execFileSync("git", ["init", "-q"], { cwd: tempRepo, stdio: "pipe" });
     mkdirSync(path.join(tempRepo, ".strada-memory"), { recursive: true });
     mkdirSync(path.join(tempRepo, ".whatsapp-session"), { recursive: true });
     mkdirSync(path.join(tempRepo, "data"), { recursive: true });
@@ -420,6 +422,7 @@ describe("source launcher install-command", () => {
         rootDir: tempRepo,
         sourceCheckout: true,
         purgeConfig: true,
+        force: true,
       });
     } finally {
       consoleSpy.mockRestore();
@@ -617,6 +620,115 @@ describe("source launcher install-command", () => {
     expect(existsSync(path.join(installDir, "strada.cmd"))).toBe(false);
     expect(existsSync(path.join(installDir, "strada.ps1"))).toBe(false);
     expect(existsSync(installDir)).toBe(false);
+  });
+});
+
+/**
+ * In a source checkout the runtime root IS the developer's working tree, and
+ * `uninstall --purge-config` rm -rf'd whatever the .env named inside it
+ * (MEMORY_DB_PATH=src took the source tree), deleted the tracked HEARTBEAT.md
+ * and the developer's own .env, all without a word before or a question.
+ */
+describe("uninstall --purge-config in a source checkout", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeCheckout() {
+    const home = mkdtempSync(path.join(os.tmpdir(), "strada-purge-home-"));
+    const repo = mkdtempSync(path.join(os.tmpdir(), "strada-purge-repo-"));
+    tempDirs.push(home, repo);
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo, stdio: "pipe" });
+    git("init", "-q");
+    mkdirSync(path.join(repo, "src"), { recursive: true });
+    writeFileSync(path.join(repo, "src", "index.ts"), "export {};\n", "utf8");
+    writeFileSync(path.join(repo, "HEARTBEAT.md"), "# Strada Brain Daemon Triggers\n", "utf8");
+    git("add", "src/index.ts", "HEARTBEAT.md");
+    git("commit", "-q", "-m", "fixture");
+    // The developer's own configuration, pointing a runtime path at the source
+    // tree, one into git's metadata (a file git itself calls untracked) and
+    // one at an untracked folder of their own.
+    writeFileSync(path.join(repo, ".env"), [
+      "MEMORY_DB_PATH=src",
+      "LOG_FILE=.git/config",
+      "WHATSAPP_SESSION_PATH=notes",
+    ].join("\n"), "utf8");
+    mkdirSync(path.join(repo, "notes"), { recursive: true });
+    writeFileSync(path.join(repo, "notes", "todo.txt"), "mine\n", "utf8");
+    // Strada's own runtime state, untracked.
+    writeFileSync(path.join(repo, "strada-brain-sync.log"), "sync\n", "utf8");
+    mkdirSync(path.join(repo, "dist"), { recursive: true });
+    return { home, repo };
+  }
+
+  function expectDeveloperFilesKept(repo: string) {
+    expect(readFileSync(path.join(repo, "src", "index.ts"), "utf8")).toBe("export {};\n");
+    expect(readFileSync(path.join(repo, "HEARTBEAT.md"), "utf8")).toBe("# Strada Brain Daemon Triggers\n");
+    expect(existsSync(path.join(repo, ".git", "HEAD"))).toBe(true);
+    expect(existsSync(path.join(repo, ".git", "config"))).toBe(true);
+    expect(existsSync(path.join(repo, "notes", "todo.txt"))).toBe(true);
+  }
+
+  it("names what it would delete, asks, and deletes nothing on a no", async () => {
+    const { uninstallCommand } = await loadSourceLauncherModule();
+    const { home, repo } = makeCheckout();
+    let namedBeforeAsking = "";
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const confirm = vi.fn(() => {
+      namedBeforeAsking = consoleSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      return false;
+    });
+    let result: { removed: string[] };
+    try {
+      result = uninstallCommand({
+        env: { ...process.env, HOME: home, XDG_BIN_HOME: path.join(home, ".local", "bin"), SHELL: "/bin/zsh" },
+        homeDir: home,
+        rootDir: repo,
+        sourceCheckout: true,
+        purgeConfig: true,
+        confirm,
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    for (const doomed of [".env", "strada-brain-sync.log", "dist"]) {
+      expect(namedBeforeAsking).toContain(path.join(repo, doomed));
+    }
+    expect(namedBeforeAsking).not.toContain(`  ${path.join(repo, "src")}\n`);
+    expectDeveloperFilesKept(repo);
+    expect(readFileSync(path.join(repo, ".env"), "utf8")).toContain("MEMORY_DB_PATH=src");
+    expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(true);
+    expect(existsSync(path.join(repo, "dist"))).toBe(true);
+    expect(result!.removed.filter((entry) => entry.startsWith(repo))).toEqual([]);
+  });
+
+  it("with --force deletes Strada's state and the .env but never a tracked path or a folder the .env names", async () => {
+    const { uninstallCommand } = await loadSourceLauncherModule();
+    const { home, repo } = makeCheckout();
+    const confirm = vi.fn(() => true);
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      uninstallCommand({
+        env: { ...process.env, HOME: home, XDG_BIN_HOME: path.join(home, ".local", "bin"), SHELL: "/bin/zsh" },
+        homeDir: home,
+        rootDir: repo,
+        sourceCheckout: true,
+        purgeConfig: true,
+        force: true,
+        confirm,
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(confirm).not.toHaveBeenCalled();
+    expectDeveloperFilesKept(repo);
+    expect(existsSync(path.join(repo, ".env"))).toBe(false);
+    expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(false);
+    expect(existsSync(path.join(repo, "dist"))).toBe(false);
   });
 });
 

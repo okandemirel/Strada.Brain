@@ -352,7 +352,8 @@ program
   .command("uninstall")
   .description("Remove installed bare-command bindings and optionally purge Strada runtime state")
   .option("--purge-config", "Also remove Strada runtime files and source-checkout generated artifacts for a zero-install rerun", false)
-  .action(async (opts: { purgeConfig?: boolean }) => {
+  .option("--force", "With --purge-config in a source checkout, delete without asking", false)
+  .action(async (opts: { purgeConfig?: boolean; force?: boolean }) => {
     const sourceLauncherPath = path.join(runtimePaths.installRoot, "scripts", "source-launcher.mjs");
     if (!existsSync(sourceLauncherPath)) {
       console.error("Source launcher not found in this install. Manual cleanup is required.");
@@ -362,6 +363,9 @@ program
     const args = [sourceLauncherPath, "uninstall-command"];
     if (opts.purgeConfig) {
       args.push("--purge-config");
+    }
+    if (opts.force) {
+      args.push("--force");
     }
 
     const result = spawnSync(process.execPath, args, {
