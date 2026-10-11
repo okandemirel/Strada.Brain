@@ -31,6 +31,11 @@ import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
 import { collectProviderCredentials } from "../provider-config.js";
 import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
+import type { IAIProvider } from "../../agents/providers/provider.interface.js";
+import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
+import type { TierRouter } from "../../agents/multi/delegation/tier-router.js";
+import type { ModelTier } from "../../agents/multi/delegation/delegation-types.js";
+import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type {
   MultiAgentDelegationStageDeps,
   MultiAgentDelegationStageResult,
@@ -362,6 +367,10 @@ export async function initializeMemoryConsolidationStage(
     learningEventBus?: IEventBus<LearningEventMap>;
     heartbeatLoop: Pick<HeartbeatLoop, "setConsolidationEngine">;
     daemonContext: import("../../daemon/daemon-cli.js").DaemonContext;
+    /** Books each summary's spend against the daemon's allowance. */
+    unifiedBudgetManager?: Pick<UnifiedBudgetManager, "recordCost">;
+    /** Resolves memory.consolidation.modelTier to a "provider:model" spec. */
+    tierRouter?: Pick<TierRouter, "resolveProviderSpec">;
   },
   deps: MemoryConsolidationStageDeps = {},
 ): Promise<MemoryConsolidationStageResult> {
@@ -402,18 +411,48 @@ export async function initializeMemoryConsolidationStage(
       return vec;
     };
 
+    // MEMORY_CONSOLIDATION_MODEL_TIER names a tier, and the tier map names its
+    // model: the live delegation router once derived, else the operator's pins.
+    // Every summary went to the primary provider, premium or not.
+    const modelTier = params.config.memory.consolidation.modelTier as ModelTier;
+    const summarizer = (): IAIProvider => {
+      const spec = (params.tierRouter?.resolveProviderSpec(modelTier)
+        ?? params.config.delegation?.tiers?.[modelTier]
+        ?? "").trim();
+      const colon = spec.indexOf(":");
+      const name = colon === -1 ? spec : spec.slice(0, colon);
+      const model = colon === -1 ? undefined : spec.slice(colon + 1) || undefined;
+      return (name ? params.providerManager.getProviderByName(name, model) : null)
+        ?? params.providerManager.getProvider("");
+    };
+
     const summarizeWithLLM = async (texts: string[]): Promise<{ summary: string; cost: number; model: string }> => {
-      const provider = params.providerManager.getProvider("");
+      const provider = summarizer();
       const prompt = `Summarize the following related memory entries into a single concise entry that preserves key information:\n\n${texts.map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}`;
       const response = await provider.chat(
         "You are a memory consolidation engine. Produce a concise summary preserving key facts.",
         [{ role: "user", content: prompt }],
         [],
       );
+      // Priced and booked as daemon spend: this returned cost 0, so the budget
+      // walls, the portal and consolidation_log never saw a dollar of it.
+      const servedProvider = response.servedBy?.provider ?? provider.name;
+      const servedModel = response.servedBy?.model;
+      const cost = response.usage
+        ? estimateCostWithCache({ ...response.usage, model: servedModel }, servedProvider)
+        : 0;
+      if (cost > 0) {
+        params.unifiedBudgetManager?.recordCost(cost, "daemon", {
+          model: servedModel ?? servedProvider,
+          tokensIn: response.usage.inputTokens,
+          tokensOut: response.usage.outputTokens,
+          triggerName: "memory-consolidation",
+        });
+      }
       return {
         summary: response.text,
-        cost: 0,
-        model: provider.name,
+        cost,
+        model: servedModel ?? servedProvider,
       };
     };
 

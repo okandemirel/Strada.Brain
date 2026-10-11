@@ -1771,3 +1771,69 @@ describe("HeartbeatLoop.fireNow — a manual fire takes the tick's path, gates i
     expect(taskManager.submit).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("HeartbeatLoop — idle memory consolidation spends inside the budget walls", () => {
+  // Consolidation summarizes clusters with LLM calls. It started on idle
+  // alone, before the tick's budget refusal, so an exhausted wallet or daemon
+  // sub-limit still paid for a cycle every time the user went idle.
+  let loop: HeartbeatLoop;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    loop = new HeartbeatLoop(
+      new TriggerRegistry(), makeTaskManager() as any, makeBudgetTracker() as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, makeEventBus(),
+      makeDaemonConfig(), makeLogger() as any,
+    );
+  });
+
+  afterEach(() => {
+    loop.stop();
+    vi.useRealTimers();
+  });
+
+  function idleEngine() {
+    const runCycle = vi.fn(async () => ({ status: "completed", processed: 0, remaining: 0, clustersFound: 0, costUsd: 0 }));
+    loop.setConsolidationEngine({ runCycle }, { idleMinutes: 0 });
+    loop.start();
+    return runCycle;
+  }
+
+  it("does not start a cycle once the daemon sub-limit is reached", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(6, "daemon", {});
+    loop.setUnifiedBudgetManager(mgr);
+    const runCycle = idleEngine();
+
+    await loop.tick();
+
+    expect(runCycle).not.toHaveBeenCalled();
+  });
+
+  it("does not start a cycle once the global daily budget is exhausted", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ dailyLimitUsd: 2 });
+    mgr.recordCost(3, "chat", {});
+    expect(mgr.isGlobalExceeded()).toBe(true);
+    loop.setUnifiedBudgetManager(mgr);
+    const runCycle = idleEngine();
+
+    await loop.tick();
+
+    expect(runCycle).not.toHaveBeenCalled();
+  });
+
+  it("still starts a cycle under budget", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ subLimits: { daemonDailyUsd: 5, agentDefaultUsd: 5, verificationPct: 0.15 } });
+    mgr.recordCost(1, "daemon", {});
+    loop.setUnifiedBudgetManager(mgr);
+    const runCycle = idleEngine();
+
+    await loop.tick();
+
+    expect(runCycle).toHaveBeenCalledTimes(1);
+  });
+});
+

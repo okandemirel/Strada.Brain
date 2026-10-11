@@ -2107,6 +2107,8 @@ async function bootstrapImpl(
         learningEventBus: learningResult.eventBus,
         heartbeatLoop,
         daemonContext: daemonContext!,
+        unifiedBudgetManager,
+        tierRouter: delegationManager?.getTierRouter(),
       });
 
       await initializeDeploymentStage({

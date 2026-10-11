@@ -388,10 +388,15 @@ export class HeartbeatLoop {
       }
     }
 
+    // Unified budget check -- run once per tick, not per trigger. Read before
+    // consolidation, which spends on LLM calls too: it used to start on idle
+    // alone, ahead of this wall, and paid for a cycle on an exhausted wallet.
+    const budgetRefusal = this.unifiedBudgetRefusal(now);
+
     // Idle-driven memory consolidation (Phase 25, MEM-12, MEM-13)
     // Skip if all providers are in cooldown — consolidation requires LLM calls
     // and attempting them against overloaded providers just adds log noise.
-    if (this.consolidationEngine && this.consolidationConfig && !this.consolidationRunning) {
+    if (this.consolidationEngine && this.consolidationConfig && !this.consolidationRunning && budgetRefusal === undefined) {
       const idleMs = now.getTime() - this.lastUserActivity;
       const idleThresholdMs = this.consolidationConfig.idleMinutes * 60000;
       if (idleMs >= idleThresholdMs && !ProviderHealthRegistry.getInstance().areAllUnavailable()) {
@@ -437,8 +442,7 @@ export class HeartbeatLoop {
     // Get budget usage once per tick (avoids up to 3 SQLite queries)
     const budgetUsage = this.budgetTracker.getUsage();
 
-    // Unified budget check -- run once per tick, not per trigger
-    if (this.unifiedBudgetRefusal(now) !== undefined) {
+    if (budgetRefusal !== undefined) {
       this.lastTick = now;
       return; // Skip all triggers this tick
     }

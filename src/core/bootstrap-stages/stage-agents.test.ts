@@ -544,6 +544,94 @@ describe("initializeMemoryConsolidationStage — consolidation disabled", () => 
   });
 });
 
+describe("initializeMemoryConsolidationStage — what a summary costs and which model writes it", () => {
+  type StageParams = Parameters<typeof initializeMemoryConsolidationStage>[0];
+  type Summarize = (texts: string[]) => Promise<{ summary: string; cost: number; model: string }>;
+
+  function providerAnswering(name: string) {
+    return {
+      name,
+      chat: vi.fn(async () => ({
+        text: `summary from ${name}`,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 200_000, outputTokens: 50_000, totalTokens: 250_000 },
+        servedBy: { provider: "deepseek", model: "deepseek-chat" },
+      })),
+    };
+  }
+
+  async function summarizerFor(extra: Partial<StageParams>, consolidation: Record<string, unknown> = {}): Promise<Summarize> {
+    let summarize: Summarize | undefined;
+    await initializeMemoryConsolidationStage(
+      {
+        config: makeConfig({
+          memory: {
+            consolidation: { enabled: true, threshold: 0.85, idleMinutes: 30, modelTier: "cheap", ...consolidation },
+            unified: { dimensions: 384 },
+            dbPath: "/tmp/test-mem",
+            decay: { exemptDomains: [] },
+          } as unknown as Config["memory"],
+        }),
+        logger: createMockLogger(),
+        memoryManager: {} as StageParams["memoryManager"],
+        providerManager: {
+          getProvider: vi.fn(() => providerAnswering("default")),
+          getProviderByName: vi.fn(() => null),
+        } as unknown as StageParams["providerManager"],
+        heartbeatLoop: { setConsolidationEngine: vi.fn() },
+        daemonContext: {} as StageParams["daemonContext"],
+        ...extra,
+      },
+      {
+        isAgentDbAdapter: async () => true,
+        getConsolidationInternals: () => ({ sqliteDb: {}, entries: [], hnswStore: {} }),
+        createMemoryConsolidationEngine: (options: { summarizeWithLLM: Summarize }) => {
+          summarize = options.summarizeWithLLM;
+          return Promise.resolve({ getStats: vi.fn() });
+        },
+      } as unknown as Parameters<typeof initializeMemoryConsolidationStage>[1],
+    );
+    return summarize!;
+  }
+
+  it("prices each summary and books it as daemon spend, instead of reporting $0", async () => {
+    const recordCost = vi.fn();
+    const summarize = await summarizerFor({
+      unifiedBudgetManager: { recordCost } as unknown as StageParams["unifiedBudgetManager"],
+    });
+
+    const result = await summarize(["a", "b"]);
+
+    // deepseek: $0.14 in / $0.28 out per 1M tokens.
+    const expected = (200_000 * 0.14 + 50_000 * 0.28) / 1_000_000;
+    expect(result.cost).toBeCloseTo(expected, 10);
+    expect(result.model).toBe("deepseek-chat");
+    expect(recordCost).toHaveBeenCalledWith(
+      result.cost,
+      "daemon",
+      expect.objectContaining({ model: "deepseek-chat", tokensIn: 200_000, tokensOut: 50_000 }),
+    );
+  });
+
+  it("summarizes on the provider MEMORY_CONSOLIDATION_MODEL_TIER names in the tier map", async () => {
+    const cheap = providerAnswering("cheap-seat");
+    const getProviderByName = vi.fn(() => cheap);
+    const getProvider = vi.fn(() => providerAnswering("default"));
+    const summarize = await summarizerFor({
+      providerManager: { getProvider, getProviderByName } as unknown as StageParams["providerManager"],
+      tierRouter: { resolveProviderSpec: vi.fn((tier: string) => (tier === "local" ? "ollama:llama3" : "deepseek:deepseek-chat")) },
+    }, { modelTier: "local" });
+
+    const result = await summarize(["a", "b"]);
+
+    expect(getProviderByName).toHaveBeenCalledWith("ollama", "llama3");
+    expect(cheap.chat).toHaveBeenCalledTimes(1);
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(result.summary).toBe("summary from cheap-seat");
+  });
+});
+
 // =============================================================================
 // MODULE: initializeDeploymentStage
 // =============================================================================
