@@ -39,7 +39,7 @@ describe("orchestrator-text-utils", () => {
         preferences: { communicationStyle: "formal" },
       },
       availablePersonas: ["default", "formal", "casual", "minimal"],
-      prompt: "My name is Okan. From now on reply in JSON. Call yourself Atlas. Use the formal persona. Your personality should be calm and precise. Use full autonomy.",
+      prompt: "My name is Okan. From now on reply in JSON. Call yourself Atlas. Use the formal persona. Your personality should be calm and precise. I give you full autonomy.",
       nowMs: 1_700_000_000_000,
     });
 
@@ -106,6 +106,10 @@ describe("orchestrator-text-utils", () => {
         "Add a drone with patrol and chase states. Switch to autonomous mode.",
         "Fix the bug in EnemyAI.cs and enable autonomous mode for the bots",
         "Add a Buy button to the shop. Continue without waiting for confirmation.",
+        // A grant with no addressee after the opening is a feature spec.
+        "Add a drone with patrol and chase states. Enable full autonomy.",
+        "Add an admin role. Enable full authority.",
+        "Give the turret an override switch. Activate full autonomy.",
       ],
       tr: [
         // questions
@@ -140,6 +144,8 @@ describe("orchestrator-text-utils", () => {
         "Drone'a devriye ve kovalama durumları ekle. Otonom moda geç.",
         "Mağazaya satın al butonu ekle. Onay beklemeden devam et.",
         "Admin rolü ekle. Tam yetki ver.",
+        "Admin rolünü ekledim. Tam yetki verdim.",
+        "Moderatör rolü ekle. Tam yetki veriyorum.",
       ],
     };
 
@@ -164,8 +170,9 @@ describe("orchestrator-text-utils", () => {
         "Proceed without asking for approval.",
         "Enable autonomous mode. Then refactor the inventory system.",
         "Hi! Enable autonomous mode for the rest of this session.",
-        // A grant to the assistant also counts after other settings.
-        "My name is Okan. Use full autonomy.",
+        // A grant addressed to the assistant also counts after other settings.
+        "My name is Okan. You have full autonomy.",
+        "My name is Okan. I grant you full authority.",
       ],
       tr: [
         "otonom modu aç",
@@ -189,9 +196,12 @@ describe("orchestrator-text-utils", () => {
         "ONAY SORMADAN İLERLE",
         "Onay beklemeden devam et",
         "sana tam yetki veriyorum",
+        "Tam yetki veriyorum.",
         "Tam yetkiyle ilerle.",
         "Otonom modu aç. Sonra build hatalarını düzelt.",
         "Adım Okan. Sana tam yetki veriyorum.",
+        "Adım Okan. Tam yetkilisin.",
+        "Adım Okan. Tam yetkiyle ilerle.",
       ],
     };
 

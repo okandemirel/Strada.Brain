@@ -42,15 +42,18 @@ const PROVIDER_REASONING_BLOCK_RE =
 // "autonomous mode" / "otonom mod" is an everyday game-feature name and
 // "continue without waiting for confirmation" an everyday purchase-flow spec,
 // so those forms only count as the message's opening sentence ("Add a drone.
-// Switch to autonomous mode." specifies the drone); a grant that can only mean
-// the assistant (full autonomy, "sana tam yetki veriyorum" — the bare "tam
-// yetki ver" hands authority to something else) counts as any sentence, as it
-// closes a settings message ("My name is Okan. ... Use full autonomy.").
+// Switch to autonomous mode." specifies the drone). So does a grant with no
+// addressee: "Add a drone. Enable full autonomy." and "Admin rolünü ekledim.
+// Tam yetki verdim." describe the drone and the role. Only a grant addressed
+// to the assistant ("you have full autonomy", "sana tam yetki veriyorum",
+// "tam yetkilisin", the imperative "tam yetkiyle ilerle") counts as any
+// sentence, as it closes a settings message ("My name is Okan. ... I give you
+// full autonomy.").
 const AUTONOMY_LEAD_SRC = String.raw`(?:please|pls|ok(?:ay)?|alright|yes|hi|hello|hey|now|so|just|also|go\s+ahead\s+and|i\s+want\s+you\s+to|from\s+now\s+on|for\s+(?:this|the\s+rest\s+of\s+(?:this|the))\s+(?:task|session|conversation|chat|project)|l[üu]tfen|art[ıi]k|bundan\s+sonra|[şs]imdi|hemen|tamam|peki|evet|hadi|merhaba|selam|bu\s+(?:(?:g[öo]rev|i[şs]|oturum|konu[şs]ma|proje)\s+i[çc]in|g[öo]revde|oturumda|konu[şs]mada|projede))`;
 const AUTONOMY_TAIL_SRC = String.raw`(?:please|now|right\s+now|from\s+now\s+on|for\s+(?:this|the\s+rest\s+of\s+(?:this|the))\s+(?:task|session|conversation|chat|project)|l[üu]tfen|art[ıi]k|hemen|[şs]imdi|bundan\s+sonra|bu\s+(?:g[öo]rev|i[şs]|oturum|konu[şs]ma|proje)\s+i[çc]in)`;
 const AUTONOMY_JOIN_SRC = String.raw`(?:\s*,\s*|\s+)(?:and\s+then|and|then|ve|sonra|ard[ıi]ndan)\s+|\s*,\s*`;
-const AUTONOMY_GRANT_SRC = String.raw`(?:enable|activate|turn\s+on|switch\s+to|use|take|you\s+have|i\s+give\s+you|i\s+grant\s+you)\s+full\s+(?:autonomy|authority)|(?:sana\s+)?tam\s+yetki\s+ver(?:iyorum|dim)|tam\s+yetkilisin|tam\s+yetkiyle\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
-const AUTONOMY_MODE_SRC = String.raw`(?:enable|activate|turn\s+on|switch\s+on|switch\s+to|go\s+into|enter|use|start)\s+(?:the\s+)?(?:autonomous\s+mode|autonomy(?:\s+mode)?)|(?:turn|switch)\s+(?:the\s+)?autonomous\s+mode\s+on|go\s+(?:fully\s+)?autonomous|(?:work|proceed|continue)\s+(?:fully\s+)?autonomously|(?:otonom|autonom)(?:\s+(?:mod(?:u|unu|una|a|da|unda)?|olarak))?\s+(?:a[çc](?:[ıi]n)?|aktif\s+(?:et|edin)|aktifle[şs]tir(?:in)?|etkinle[şs]tir(?:in)?|ba[şs]lat(?:[ıi]n)?|ge[çc](?:in|elim)?|[çc]al[ıi][şs](?:[ıi]n|al[ıi]m|abilirsin(?:iz)?)?|ilerle(?:yin|yelim|yebilirsin(?:iz)?)?|devam\s+(?:et|edin))|(?:otonom|autonom)\s+mod(?:u|unu)?\s+(?:aktif|etkin|a[çc][ıi]k)\s+olsun|(?:proceed|continue|keep\s+going|go\s+ahead)\s+without\s+(?:asking(?:\s+me)?\s+for|waiting\s+for)\s+(?:approval|confirmation|permission)|(?:onay|approval|izin)\s+(?:sormadan|istemeden|beklemeden)\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
+const AUTONOMY_GRANT_SRC = String.raw`(?:you\s+have|i\s+give\s+you|i\s+grant\s+you)\s+full\s+(?:autonomy|authority)|sana\s+tam\s+yetki\s+ver(?:iyorum|dim)|tam\s+yetkilisin|tam\s+yetkiyle\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
+const AUTONOMY_MODE_SRC = String.raw`(?:enable|activate|turn\s+on|switch\s+to|use|take)\s+full\s+(?:autonomy|authority)|tam\s+yetki\s+ver(?:iyorum|dim)|(?:enable|activate|turn\s+on|switch\s+on|switch\s+to|go\s+into|enter|use|start)\s+(?:the\s+)?(?:autonomous\s+mode|autonomy(?:\s+mode)?)|(?:turn|switch)\s+(?:the\s+)?autonomous\s+mode\s+on|go\s+(?:fully\s+)?autonomous|(?:work|proceed|continue)\s+(?:fully\s+)?autonomously|(?:otonom|autonom)(?:\s+(?:mod(?:u|unu|una|a|da|unda)?|olarak))?\s+(?:a[çc](?:[ıi]n)?|aktif\s+(?:et|edin)|aktifle[şs]tir(?:in)?|etkinle[şs]tir(?:in)?|ba[şs]lat(?:[ıi]n)?|ge[çc](?:in|elim)?|[çc]al[ıi][şs](?:[ıi]n|al[ıi]m|abilirsin(?:iz)?)?|ilerle(?:yin|yelim|yebilirsin(?:iz)?)?|devam\s+(?:et|edin))|(?:otonom|autonom)\s+mod(?:u|unu)?\s+(?:aktif|etkin|a[çc][ıi]k)\s+olsun|(?:proceed|continue|keep\s+going|go\s+ahead)\s+without\s+(?:asking(?:\s+me)?\s+for|waiting\s+for)\s+(?:approval|confirmation|permission)|(?:onay|approval|izin)\s+(?:sormadan|istemeden|beklemeden)\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
 const autonomySentenceRe = (directive: string): RegExp => {
   const segment = String.raw`(?:${AUTONOMY_LEAD_SRC}[\s,]+)*(?:${directive})(?:,?\s+${AUTONOMY_TAIL_SRC})*`;
   return new RegExp(String.raw`^${segment}(?:(?:${AUTONOMY_JOIN_SRC})${segment})*$`, "iu");
