@@ -21,7 +21,14 @@ vi.mock("./module-folders.js", async (importOriginal) => {
   const { CORE_DECLARATION_SOURCE } = await import("./core-declaration-fixture.js");
   return {
     ...actual,
-    readDeclaredModuleFolders: () => actual.parseDeclaredFolders(CORE_DECLARATION_SOURCE),
+    readModuleLayout: () => ({
+      status: "declared" as const,
+      layout: {
+        file: "/test/project/Packages/Submodules/Strada.Core/Editor/ModuleGenerator/Config/DirectoryStructureConfig.cs",
+        folders: actual.parseDeclaredFolders(CORE_DECLARATION_SOURCE),
+        folderOwners: actual.parseFolderOwners(CORE_DECLARATION_SOURCE),
+      },
+    }),
   };
 });
 

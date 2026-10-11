@@ -23,7 +23,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
 import { ModuleCreateTool } from "./module-create.js";
-import { installCoreDeclaration } from "./core-declaration-fixture.js";
+import { installCoreDeclaration, installCoreLayout } from "./core-declaration-fixture.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -142,5 +142,58 @@ describe("a generated module's folder layout", () => {
     const { result } = await create();
     expect(result.content).toMatch(/Scripts\//);
     expect(result.content).not.toMatch(/Mediators/);
+  });
+});
+
+describe("a framework whose layout lives in ModuleLayout.cs", () => {
+  // Strada.Core moved the folder list out of DirectoryStructureConfig.cs into
+  // ModuleLayout.DefaultEntries(), dropped Commands, and filed Signals with
+  // Events. Read only from the old file, every module was refused as "Strada.Core
+  // is not installed" while startup announced the framework as detected.
+  const createIn = async (input: Record<string, unknown> = {}, withLayout = true) => {
+    const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-layout-"));
+    installCoreLayout(projectPath, { withLayout });
+    const result = await new ModuleCreateTool().execute(
+      { name: "Board", ...input },
+      { projectPath } as never,
+    );
+    return { base: join(projectPath, "Assets", "Modules", "BoardModule"), result };
+  };
+
+  it("creates the module", async () => {
+    const { base, result } = await createIn();
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    for (const folder of ["Interfaces", "Services", "Systems", "Components"]) {
+      expect(existsSync(join(base, "Scripts", folder)), `Scripts/${folder} missing`).toBe(true);
+    }
+    expect(existsSync(join(base, "Tests", "Runtime"))).toBe(true);
+  });
+
+  it("puts signals in the folder the framework files them in", async () => {
+    // FolderOwner(Signals) is Events: asking for signals must give that folder,
+    // not a Scripts/Signals the framework no longer declares, and not nothing.
+    const { base, result } = await createIn({ include_signals: true });
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(base, "Scripts", "Events"))).toBe(true);
+    expect(existsSync(join(base, "Scripts", "Signals"))).toBe(false);
+    expect(result.content).toMatch(/Signals.*Scripts\/Events/);
+  });
+
+  it("says so when a requested component has no folder in the layout", async () => {
+    const { base, result } = await createIn({ include_commands: true });
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(existsSync(join(base, "Scripts", "Commands"))).toBe(false);
+    expect(result.content).toMatch(/Commands/);
+    expect(result.content).toMatch(/declares no folder/);
+  });
+
+  it("tells an unreadable layout apart from a missing framework", async () => {
+    // The framework directory is there; only its layout cannot be read. "Not
+    // installed" sends the agent to install what is already installed.
+    const { result } = await createIn({}, false);
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toMatch(/not installed/);
+    expect(result.content).toMatch(/module layout could not be read/);
+    expect(result.content).toMatch(/ModuleLayout\.cs/);
   });
 });

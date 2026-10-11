@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import {
-  readDeclaredModuleFolders,
+  readModuleLayout,
   foldersForModule,
+  folderForComponent,
   optionalFolderPaths,
   CORE_INSTALL_PATH,
 } from "./module-folders.js";
@@ -14,7 +15,7 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s DirectoryStructureConfig, so they always match what the Unity generator produces.";
+    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions), so they always match what the Unity generator produces.";
 
   readonly inputSchema = {
     type: "object",
@@ -51,7 +52,8 @@ export class ModuleCreateTool implements ITool {
       },
       include_signals: {
         type: "boolean",
-        description: "Include a Signals/ folder. Default: false",
+        description:
+          "Include the folder signals go in — their own where the framework declares one, otherwise the folder it files them with (Scripts/Events in current Strada.Core). Default: false",
       },
       include_model: {
         type: "boolean",
@@ -67,7 +69,8 @@ export class ModuleCreateTool implements ITool {
       },
       include_commands: {
         type: "boolean",
-        description: "Include a Scripts/Commands/ folder. Default: false",
+        description:
+          "Include a Scripts/Commands/ folder where the framework declares one. Current Strada.Core declares none; the result then says so. Default: false",
       },
       include_editor: {
         type: "boolean",
@@ -144,8 +147,8 @@ export class ModuleCreateTool implements ITool {
       // which was never declared, and created neither Scripts/Interfaces nor
       // Scripts/Editor, which were. Read the declaration instead — when the
       // framework adds a folder, modules made here get it with no change.
-      const declared = readDeclaredModuleFolders(context.projectPath);
-      if (!declared) {
+      const lookup = readModuleLayout(context.projectPath);
+      if (lookup.status === "not-installed") {
         return {
           content:
             `Error: Strada.Core is not installed at ${CORE_INSTALL_PATH}, and it is where a module's ` +
@@ -154,6 +157,21 @@ export class ModuleCreateTool implements ITool {
           isError: true,
         };
       }
+      // Kept apart from "not installed": that told an agent standing in an
+      // installed framework to install it, when the real fault was a layout
+      // file this reader could not follow.
+      if (lookup.status === "unreadable") {
+        return {
+          content:
+            `Error: Strada.Core is installed at ${CORE_INSTALL_PATH}, but its module layout could not be read ` +
+            `(${lookup.reason}). The framework may declare its layout somewhere this tool does not yet read, ` +
+            `or the checkout is incomplete. No module was created — guessing the structure is how a module ` +
+            `ends up in a shape the framework never agreed to.`,
+          isError: true,
+        };
+      }
+      const { layout } = lookup;
+      const declared = layout.folders;
 
       const includeController = input["include_controller"] === true;
       const includeEvents = input["include_events"] === true;
@@ -206,7 +224,24 @@ export class ModuleCreateTool implements ITool {
         };
       }
 
-      const createdDirs = foldersForModule(declared, components, assetFolders);
+      const createdDirs = foldersForModule(declared, components, assetFolders, layout.folderOwners);
+
+      // A component the layout files with another (Signals with Events) or no
+      // longer has (Commands) is said so here; creating nothing in silence left
+      // the agent to invent the missing folder itself.
+      const layoutFile = basename(layout.file);
+      const placementNotes: string[] = [];
+      for (const component of components) {
+        const folder = folderForComponent(layout, component);
+        if (folder === null) {
+          placementNotes.push(
+            `  ${component}: the installed Strada.Core declares no folder for it (${layoutFile}), so none was created`,
+          );
+        } else if (layout.folderOwners.has(component)) {
+          placementNotes.push(`  ${component} → ${folder}/ (${layoutFile} files it there)`);
+        }
+      }
+
       const dirs = [
         fullBase,
         ...createdDirs.map((rel) => join(fullBase, ...rel.split("/"))),
@@ -320,6 +355,7 @@ export class ModuleCreateTool implements ITool {
         // of it: a summary that drifts from the disk teaches the agent to file
         // its next file in a folder that is not there.
         ...createdDirs.map((rel) => `  ${rel}/`),
+        ...(placementNotes.length > 0 ? ["", "Requested components:", ...placementNotes] : []),
         "",
         `Next steps:`,
         `  1. Create a ${name}ModuleConfig ScriptableObject asset in Unity`,
