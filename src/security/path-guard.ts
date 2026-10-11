@@ -193,20 +193,35 @@ function outsideProjectError(projectRoot: string): string {
 /**
  * The real checkout a workspace lease was seeded from, read from the
  * lease's owner file (written by the lease manager), or undefined when the
- * root is not a lease. Cached by the owner file's mtime.
+ * root is not a lease. Cached while the owner file's size, mtime, ctime and
+ * inode are what they were: mtime alone stayed put when the file was
+ * replaced, or rewritten with its mtime put back, and the old checkout kept
+ * being redirected into the lease.
+ *
+ * …and only once the file has settled. A filesystem stamps in ticks (NTFS
+ * ~15.6 ms, HFS+ and ext3 a second, FAT two), so a lease path re-used for
+ * another checkout inside one tick moves no stamp at all. As the evidence
+ * ledger's digest memory does (windows-test 2f8041bc), an owner file that
+ * changed less than a window before the read is read again next time.
  */
 const LEASE_OWNER_FILE = ".strada-lease-owner.json";
-const leaseOwnerCache = new Map<string, { mtimeMs: number; owner: string | undefined }>();
+const LEASE_OWNER_SETTLED_NS = 5_000_000_000n;
+const leaseOwnerCache = new Map<string, { stamp: string; owner: string | undefined }>();
 export function leaseOwnerRootOf(projectRoot: string): string | undefined {
   const file = join(projectRoot, LEASE_OWNER_FILE);
-  let mtimeMs: number;
+  // Taken before the stat, so a write that lands during this call counts as fresh.
+  const startedNs = BigInt(Date.now()) * 1_000_000n;
+  let stamp: string;
+  let changedNs: bigint;
   try {
-    mtimeMs = statSync(file).mtimeMs;
+    const st = statSync(file, { bigint: true });
+    stamp = `${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}`;
+    changedNs = st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs;
   } catch {
     return undefined;
   }
   const cached = lruGet(leaseOwnerCache, projectRoot);
-  if (cached && cached.mtimeMs === mtimeMs) return cached.owner;
+  if (cached && cached.stamp === stamp) return cached.owner;
   let owner: string | undefined;
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as { projectRoot?: unknown };
@@ -214,7 +229,8 @@ export function leaseOwnerRootOf(projectRoot: string): string | undefined {
   } catch {
     owner = undefined;
   }
-  lruSet(leaseOwnerCache, projectRoot, { mtimeMs, owner });
+  if (changedNs <= startedNs - LEASE_OWNER_SETTLED_NS) lruSet(leaseOwnerCache, projectRoot, { stamp, owner });
+  else leaseOwnerCache.delete(projectRoot);
   return owner;
 }
 

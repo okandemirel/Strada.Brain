@@ -36,9 +36,15 @@ symlinkSync(join(realParent, "proj", "Assets", "Vendor"), join(realParent, "proj
 
 /** The root as the lease manager hands it over: lexical, through the symlink. */
 const root = join(base, "link", "proj");
-/** The same directory as pwd, git and the compiler print it. */
-const real = realpathSync(join(realParent, "proj"));
-const realBase = realpathSync(base);
+/**
+ * The same directory as pwd, git and the compiler print it. The native
+ * realpath, as validatePath's: the JS one keeps the spelling it is given, so
+ * windows-test's tmpdir C:\Users\RUNNER~1\… stayed a short name here while
+ * fullPath came back as C:\Users\runneradmin\… (and a TMPDIR spelled in
+ * another letter case does the same on macOS).
+ */
+const real = realpathSync.native(join(realParent, "proj"));
+const realBase = realpathSync.native(base);
 const allow = { allowMissingParents: true };
 
 afterAll(() => {
