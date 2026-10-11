@@ -43,6 +43,9 @@ type Result = { content: string; isError?: boolean };
 
 let tools: Record<string, ReturnType<typeof tool>>;
 let composites: Record<string, CompositeTool>;
+// In the ToolRegistry and not in the orchestrator: registered after it was
+// built, as a hot-loaded skill's tools are.
+let lateTools: Record<string, ReturnType<typeof tool>>;
 let requestConfirmation: ReturnType<typeof vi.fn>;
 let orch: Orchestrator;
 
@@ -56,12 +59,13 @@ function build(level: ApprovalLevel): void {
     batch_execute: tool("batch_execute", true),
   };
   composites = {};
+  lateTools = {};
   // Strada.MCP's batch_execute looks each operation up through Brain's
   // ToolRegistry (setToolResolver), where ChainManager registers composites:
   // a chain named in a batch runs.
   tools.batch_execute!.execute.mockImplementation(async (input: Record<string, unknown>, ctx: unknown) => {
     for (const op of input["operations"] as Array<{ tool: string; input: Record<string, unknown> }>) {
-      await (tools[op.tool] ?? composites[op.tool])!.execute(op.input, ctx as never);
+      await (tools[op.tool] ?? composites[op.tool] ?? lateTools[op.tool])!.execute(op.input, ctx as never);
     }
     return { content: "ran" };
   });
@@ -82,12 +86,23 @@ function build(level: ApprovalLevel): void {
   } as never);
 }
 
-/** A chain over the mock tools, registered as ChainManager registers one. */
-function chain(name: string, toolSequence: string[], parameterMappings: ChainStepMapping[]): void {
+/**
+ * A chain over the mock tools, registered as ChainManager registers one.
+ * `held: false` leaves it in the registry only: the view of an orchestrator
+ * built from a registry snapshot (a per-agent or delegated one) before the
+ * chain was synthesized.
+ */
+function chain(
+  name: string,
+  toolSequence: string[],
+  parameterMappings: ChainStepMapping[],
+  { held = true }: { held?: boolean } = {},
+): void {
+  const resolve = (n: string) => tools[n] ?? lateTools[n];
   const registry = {
-    has: (n: string) => n in tools,
-    get: (n: string) => tools[n],
-    execute: (n: string, input: Record<string, unknown>, ctx: unknown) => tools[n]!.execute(input, ctx),
+    has: (n: string) => resolve(n) !== undefined,
+    get: resolve,
+    execute: (n: string, input: Record<string, unknown>, ctx: unknown) => resolve(n)!.execute(input, ctx),
   } as unknown as ToolRegistry;
   const composite = new CompositeTool(
     {
@@ -99,7 +114,7 @@ function chain(name: string, toolSequence: string[], parameterMappings: ChainSte
     registry,
     { emit: vi.fn() } as never,
   );
-  orch.addTool(composite, computeCompositeMetadata(toolSequence.map(() => undefined)));
+  if (held) orch.addTool(composite, computeCompositeMetadata(toolSequence.map(() => undefined)));
   composites[name] = composite;
 }
 
@@ -327,5 +342,81 @@ describe("a synthesized chain named as an operation of batch_execute", () => {
     }));
 
     expect(tools.file_edit!.execute, "a 200-line chained edit in a batch ran unprompted").not.toHaveBeenCalled();
+  });
+});
+
+describe("a tool the registry resolves that this orchestrator does not hold", () => {
+  // batch_execute resolves each operation through the live ToolRegistry, and a
+  // chain each of its steps, while every judge of them read the orchestrator's
+  // own tools. An orchestrator built from a registry snapshot does not hold a
+  // chain synthesized after it was built: the chain's name was taken for a
+  // read, and the batch ran it with no review and no prompt.
+  const batchOf = (name: string, input: Record<string, unknown>) => ({ operations: [{ tool: name, input }] });
+
+  it("does not delete a file unconfirmed through a chain synthesized after the orchestrator was built", async () => {
+    build(ApprovalLevel.DESTRUCTIVE_ONLY);
+    requestConfirmation.mockResolvedValue("No");
+    const path = "Assets/Modules/AModule/Old.cs";
+    chain("read_then_delete", ["file_read", "file_delete"], [fromUser(0, "path"), fromUser(1, "path")], { held: false });
+
+    for (const mode of ["interactive", "background"] as const) {
+      const result = await run("batch_execute", batchOf("read_then_delete", { path }), mode);
+      expect(tools.file_delete!.execute, `a late chain's file_delete in a batch ran unconfirmed (${mode})`).not.toHaveBeenCalled();
+      expect(tools.file_read!.execute, `a refused batch ran its chain's first step (${mode})`).not.toHaveBeenCalled();
+      expect(result.isError, mode).toBe(true);
+    }
+  });
+
+  it("does not run a late chain's rm -r in the background", async () => {
+    build(ApprovalLevel.SMART);
+    chain("look_then_run", ["file_read", "shell_exec"], [fromUser(0, "path"), fromUser(1, "command")], { held: false });
+
+    const result = await run(
+      "batch_execute",
+      batchOf("look_then_run", { path: "Assets", command: "rm -r Assets/Modules" }),
+      "background",
+    );
+
+    expect(tools.shell_exec!.execute, "a late chain's rm -r in a batch ran unreviewed").not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+  });
+
+  it("does not take a hot-loaded writer it does not hold for a read", async () => {
+    build(ApprovalLevel.SMART);
+    lateTools.skill_write_asmdef = tool("skill_write_asmdef", true);
+
+    const result = await run(
+      "batch_execute",
+      batchOf("skill_write_asmdef", { path: "Assets/Modules/AModule/A.asmdef" }),
+      "background",
+    );
+
+    expect(lateTools.skill_write_asmdef!.execute, "a writer only the registry holds ran unreviewed in a batch").not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("skill_write_asmdef");
+  });
+
+  it("does not take a chain step it does not hold for a read", async () => {
+    build(ApprovalLevel.SMART);
+    lateTools.skill_write_asmdef = tool("skill_write_asmdef", true);
+    chain("read_then_skill", ["file_read", "skill_write_asmdef"], [fromUser(0, "path"), fromUser(1, "path")]);
+
+    const result = await run("read_then_skill", { path: "Assets/Modules/AModule/A.asmdef" }, "background");
+
+    expect(lateTools.skill_write_asmdef!.execute, "a chain step only the registry holds ran unreviewed").not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+  });
+
+  it("still runs a batch of tools it holds", async () => {
+    build(ApprovalLevel.SMART);
+
+    const result = await run(
+      "batch_execute",
+      batchOf("file_write", { path: "Assets/Modules/AModule/A.cs", content: "// ok" }),
+      "background",
+    );
+
+    expect(result.isError, result.content).toBeFalsy();
+    expect(tools.file_write!.execute).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,7 +47,9 @@ function makeOrch(conformanceFrameworkPathsOnly: boolean | undefined, projectPat
       getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
       shutdown: vi.fn(),
     } as never,
-    tools: [tool("file_write", true), tool("file_edit", true), tool("file_delete", true)] as never,
+    // A batch reaches only what the run holds, so file_rename is here for the
+    // batched rename below to be judged by the wall at all.
+    tools: [tool("file_write", true), tool("file_edit", true), tool("file_delete", true), tool("file_rename", true)] as never,
     channel: createMockChannel() as never,
     projectPath,
     readOnly: false,

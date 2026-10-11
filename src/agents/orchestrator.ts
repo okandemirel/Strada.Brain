@@ -4936,17 +4936,42 @@ export class Orchestrator {
 
   /** A batch's operations, with a dispatcher among them refused as a nested batch is. */
   private batchOperations(input: Record<string, unknown>): BatchParse {
-    return parseBatchOperations(input, { dispatches: (name) => this.dispatchesInTurn(name) });
+    return this.heldOperationsOnly(
+      parseBatchOperations(input, { dispatches: (name) => this.dispatchesInTurn(name) }),
+      (index, tool) => `operation ${index} names ${tool}`,
+    );
   }
 
   /** A synthesized chain's plan, read the way a batch is; null for any other tool. */
   private chainOperations(toolName: string, input: Record<string, unknown>): BatchParse | null {
     const tool = this.tools.get(toolName);
     if (!isChainDispatchTool(tool)) return null;
-    return parseChainOperations(tool.plannedOperations(input), {
-      isWrite: (name) => this.isWriteOperation(name),
-      dispatches: (name) => this.dispatchesInTurn(name),
-    });
+    return this.heldOperationsOnly(
+      parseChainOperations(tool.plannedOperations(input), {
+        isWrite: (name) => this.isWriteOperation(name),
+        dispatches: (name) => this.dispatchesInTurn(name),
+      }),
+      (index, step) => `step ${index + 1} runs ${step}`,
+    );
+  }
+
+  /**
+   * Refuse an operation naming a tool this orchestrator does not hold.
+   *
+   * batch_execute resolves each operation, and a chain each step, through the
+   * live ToolRegistry, while every judge here (dispatchesInTurn,
+   * isWriteOperation) reads this.tools. A per-agent or delegated orchestrator
+   * is built from a snapshot of the registry and never holds a chain
+   * synthesized after that, and no orchestrator holds a hot-loaded skill's
+   * tools: judged here, such a name was a read, and a chained file_delete or
+   * `rm -r` in a batch ran with no review and no prompt. What this run cannot
+   * call directly it does not reach through a dispatcher either.
+   */
+  private heldOperationsOnly(parsed: BatchParse, describe: (index: number, tool: string) => string): BatchParse {
+    if (parsed.kind === "unreviewable") return parsed;
+    const index = parsed.operations.findIndex((op) => !this.tools.has(op.tool));
+    if (index < 0) return parsed;
+    return { kind: "unreviewable", reason: `${describe(index, parsed.operations[index]!.tool)}, which this run does not have` };
   }
 
   /**

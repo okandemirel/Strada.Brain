@@ -54,7 +54,9 @@ beforeEach(() => {
       getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
       shutdown: vi.fn(),
     } as never,
-    tools: [fileEdit, fileWrite, batch] as never,
+    // file_delete is held so the batch below carrying one is reviewed, not
+    // refused as naming a tool this run does not have.
+    tools: [fileEdit, fileWrite, tool("file_delete", true), batch] as never,
     channel: channel as never,
     projectPath: "/tmp/test-project",
     readOnly: false,
