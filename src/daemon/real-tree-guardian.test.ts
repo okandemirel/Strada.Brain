@@ -599,6 +599,51 @@ describe("the play rung's fix waits in the same queue", () => {
     expect(submitted).toHaveLength(2);
     expect(submitted[1]!.prompt).toContain("does not compile");
     expect(guardian.snapshot()).toMatchObject({ lastVerdict: "red", fixTaskId: "task_fix1", fixAttempts: 1, attemptsWithoutProgress: 0 });
+    expect(guardian.snapshot().playFixAttempts).toBe(0);  // the withdrawn play fix never ran
+  });
+
+  /**
+   * Review of the queue rework (daemon#1): a play fix was counted when it was
+   * submitted, and a red compile withdrew it without taking the count back.
+   * Probed: three write-backs that broke the build and three that healed it
+   * submitted six fixes, none ran, and the guardian told the user the game
+   * "still cannot be played after 3 autonomous fix attempts".
+   */
+  it("a play fix withdrawn before it ran is not an attempt: break/heal cycles during a sprint never escalate the play rung", async () => {
+    const { manager, submitted, cancelled } = makeTaskManager({ active: true, status: { status: TaskStatus.pending } });
+    const messages: string[] = [];
+    let compiles = true;
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () =>
+        compiles
+          ? { ok: true, ran: true, detail: "compile succeeded" }
+          : { ok: false, ran: true, detail: "Headless compile failed with 2 error(s)" },
+      ),
+      play: vi.fn(async () => ({ ok: false, ran: true, detail: "session 1 never ended after 60 actions" })),
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });   // play fix queued
+    for (let cycle = 0; cycle < 4; cycle++) {
+      compiles = false;                                // a write-back breaks the build
+      t += 20 * 60_000;
+      await guardian.tick({ ignoreForeground: true }); // the play fix gives way to a compile fix
+      compiles = true;                                 // another heals it
+      t += 20 * 60_000;
+      await guardian.tick({ ignoreForeground: true }); // the compile fix is withdrawn, the game played again
+    }
+
+    expect(messages.filter((m) => m.includes("cannot be played after"))).toEqual([]);
+    expect(submitted).toHaveLength(9);
+    expect(cancelled).toHaveLength(8);
+    const playFixNotices = messages.filter((m) => m.includes("cannot be played — I'm fixing it"));
+    expect(playFixNotices).toHaveLength(5);
+    for (const notice of playFixNotices) expect(notice).toContain("attempt 1/3");
+    expect(guardian.snapshot()).toMatchObject({ fixTaskId: "task_fix1", playFixAttempts: 1, escalated: false });
   });
 });
 

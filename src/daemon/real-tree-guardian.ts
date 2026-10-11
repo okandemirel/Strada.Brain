@@ -721,9 +721,10 @@ export class RealTreeGuardian {
 
   /**
    * Take back a fix that never left the queue, because the rung it was
-   * submitted for measured healthy without it. Nothing ran, so nothing is
-   * counted. False when it started while the verdict was being taken: a
-   * running fix is waited for like any other.
+   * submitted for measured healthy without it, or a red compile made a
+   * queued play fix moot. Nothing ran, so nothing is counted. False when it
+   * started while the verdict was being taken: a running fix is waited for
+   * like any other.
    */
   private withdrawQueuedFix(id: string): boolean {
     if (!this.isQueued(id)) return false;
@@ -732,6 +733,11 @@ export class RealTreeGuardian {
     } catch {
       /* already settled */
     }
+    // Its rung counted it as an attempt when it was submitted. Left counted,
+    // build break/heal cycles during a sprint withdrew one play fix after
+    // another and escalated the play rung with no play fix ever having run.
+    if (this.fixRung === "play") this.playFixAttempts = Math.max(0, this.playFixAttempts - 1);
+    else this.fixAttempts = Math.max(0, this.fixAttempts - 1);
     this.fixTaskId = undefined;
     this.fixTaskStartedAt = 0;
     this.fixTaskRunningSince = 0;
