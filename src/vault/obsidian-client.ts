@@ -87,6 +87,7 @@ export class ObsidianApiClient {
     endpoint: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
+    responseOpts?: { ignoreBody?: boolean },
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const headers: Record<string, string> = { ...this.headers, ...(extraHeaders ?? {}) };
@@ -117,6 +118,10 @@ export class ObsidianApiClient {
       }
       // Some endpoints return 204 No Content
       if (res.status === 204) return undefined as T;
+      if (responseOpts?.ignoreBody) {
+        await res.text().catch(() => '');
+        return undefined as T;
+      }
       return (await res.json()) as T;
     } catch (err) {
       getLoggerSafe().warn(`[obsidian-client] request failed: ${method} ${endpoint}`, { err });
@@ -179,13 +184,36 @@ export class ObsidianApiClient {
     }
   }
 
-  /** Append content to a specific heading in a note. */
+  /**
+   * Append content at the end of a heading's section. The note and heading
+   * must exist (404 / 400 PatchFailed otherwise). `heading` is the heading's
+   * text, `Parent::Child` for a nested one; leading `#`s are dropped.
+   *
+   * A 1.x header-targeted PATCH, the one request every plugin version serves
+   * under the heading: 5.x refuses Target-Type/Target headers without
+   * `Markdown-Patch-Version: 1`, and a POST that a version does not target is
+   * appended to the end of the note.
+   */
   async appendToHeading(path: string, heading: string, content: string): Promise<void> {
     const encoded = encodeURIComponent(path);
-    await this.request<void>('POST', `/vault/${encoded}`, content, {
-      'Target-Type': 'heading',
-      'Target': heading,
-    });
+    const target = heading
+      .split('::')
+      .map((part) => part.trim().replace(/^#+\s*/, ''))
+      .join('::');
+    await this.request<void>(
+      'PATCH',
+      `/vault/${encoded}`,
+      content,
+      {
+        'Markdown-Patch-Version': '1',
+        'Operation': 'append',
+        'Target-Type': 'heading',
+        // The plugin percent-decodes it; a raw non-ASCII heading cannot ride in a header.
+        'Target': encodeURIComponent(target),
+      },
+      // A patch answers 200 with the patched note as text, not JSON.
+      { ignoreBody: true },
+    );
   }
 
   /** Check if the Obsidian API is reachable. */

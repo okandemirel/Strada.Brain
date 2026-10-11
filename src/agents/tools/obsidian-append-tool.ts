@@ -1,16 +1,16 @@
-import type { ObsidianVault } from '../../vault/obsidian-vault.js';
+import type { ObsidianNoteWriteResult, ObsidianVault } from '../../vault/obsidian-vault.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
 /**
- * Append content to a heading in an Obsidian note.
- * Creates the note if it does not exist.
+ * Append content to an Obsidian note, at its end (creating the note when
+ * missing) or at the end of a heading's section (note and heading must exist).
  */
 export class ObsidianAppendTool {
   readonly name = 'obsidian_append';
   readonly description =
-    'Append content to a specific heading in an Obsidian note. ' +
-    'If the note does not exist, it will be created. ' +
+    'Append content to an Obsidian note: under a heading (the note and the heading must already exist), ' +
+    'or without a heading at the end of the note, which is created if it does not exist. ' +
     'Requires an obsidian vault to be registered and the Obsidian Local REST API plugin to be active.';
   readonly inputSchema = {
     type: 'object' as const,
@@ -21,7 +21,9 @@ export class ObsidianAppendTool {
       },
       heading: {
         type: 'string',
-        description: 'Heading to append under (e.g. "## Notes"). If omitted, appends to end of file.',
+        description:
+          'Heading to append under, by its text (e.g. "Notes"; leading #s are ignored). A nested heading is its ' +
+          'path from the top-level heading, e.g. "2024-01-15::Notes". If omitted, appends to end of file.',
       },
       content: {
         type: 'string',
@@ -70,21 +72,26 @@ export class ObsidianAppendTool {
     }
 
     const vault = targetVaults[0] as ObsidianVault;
+    let outcome: ObsidianNoteWriteResult;
     try {
-      if (heading) {
-        await vault.appendToHeading(path, heading, content);
-      } else {
+      outcome = heading
+        ? await vault.appendToHeading(path, heading, content)
         // writeNote is a PUT, which replaced the whole note with this one line.
-        await vault.appendNote(path, content);
-      }
-      return {
-        content: `appended to ${path}${heading ? ` under "${heading}"` : ''} in vault ${vault.id}`,
-      };
+        : await vault.appendNote(path, content);
     } catch (err) {
       return {
         content: `failed to append to ${path}: ${(err as Error).message}`,
         isError: true,
       };
     }
+    const appended = `appended to ${path}${heading ? ` under "${heading}"` : ''} in vault ${vault.id}`;
+    if (!outcome.reindexed) {
+      // The entry is in the note: an error would have the agent append it again.
+      return {
+        content: `${appended}, but not reindexed: ${outcome.reindexError}. ` +
+          'Do not append it again; vault_sync retries the index.',
+      };
+    }
+    return { content: appended };
   }
 }

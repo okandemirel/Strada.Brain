@@ -264,16 +264,11 @@ export class DevKnowledgeNoteWriterImpl implements DevKnowledgeNoteWriter {
   }
 
   async writeNote(relPath: string, content: string): Promise<boolean> {
+    let vault: IVault | undefined;
     try {
-      const vault = this.resolveKnowledgeVault();
+      vault = this.resolveKnowledgeVault();
       if (!vault || !vault.writeFile) return false;
       await vault.writeFile(relPath, content);
-      // Reindex so the note is immediately searchable. Best-effort: the watcher
-      // also picks it up on its debounce tick as a backstop.
-      if (hasReindexFile(vault)) {
-        await vault.reindexFile(relPath);
-      }
-      return true;
     } catch (err) {
       this.logger?.debug('[dev-knowledge] note write failed', {
         relPath,
@@ -281,5 +276,19 @@ export class DevKnowledgeNoteWriterImpl implements DevKnowledgeNoteWriter {
       });
       return false;
     }
+    // Reindex so the note is immediately searchable. Best-effort: the watcher
+    // also picks it up on its debounce tick as a backstop. The note is on disk
+    // either way, so a failed reindex is not a failed write.
+    try {
+      if (hasReindexFile(vault)) {
+        await vault.reindexFile(relPath);
+      }
+    } catch (err) {
+      this.logger?.debug('[dev-knowledge] note written but not reindexed', {
+        relPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
   }
 }

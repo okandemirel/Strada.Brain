@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ObsidianVault, VaultQueryError, redactPathsInMessage } from './obsidian-vault.js';
@@ -317,5 +317,63 @@ describe('ObsidianVault: a reindex that failed is not an unchanged note', () => 
     const result = await vault.sync();
 
     expect(result).toMatchObject({ changed: 0, failed: 1 });
+  });
+
+  async function vaultWithLandingWrites(): Promise<{ root: string; vault: ObsidianVault }> {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'notes'));
+    writeFileSync(join(root, 'notes', 'a.md'), '## Log\n- a\n');
+    const vault = new ObsidianVault({
+      id: 'test-obsidian-written',
+      rootPath: root,
+      embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore(),
+      obsidian: OFFLINE_OBSIDIAN,
+    });
+    vaults.push(vault);
+    await vault.init();
+    // Stands in for a Local REST API that took the write.
+    const client = (vault as unknown as { client: ObsidianApiClient }).client;
+    vi.spyOn(client, 'putNote').mockImplementation(async (p, c) => { writeFileSync(join(root, p), c); });
+    vi.spyOn(client, 'appendNote').mockImplementation(async (p, c) => { appendFileSync(join(root, p), c); });
+    vi.spyOn(client, 'appendToHeading').mockImplementation(async (p, _h, c) => { appendFileSync(join(root, p), c); });
+    return { root, vault };
+  }
+
+  const write = (vault: ObsidianVault, method: 'writeNote' | 'appendNote' | 'appendToHeading', content: string) =>
+    method === 'appendToHeading' ? vault.appendToHeading('notes/a.md', 'Log', content) : vault[method]('notes/a.md', content);
+
+  it.each(['writeNote', 'appendNote', 'appendToHeading'] as const)(
+    '%s returns a write that landed but was not reindexed instead of throwing it as failed',
+    async (method) => {
+      const { root, vault } = await vaultWithLandingWrites();
+      const store = (vault as unknown as { store: { runReindexTxn: (...a: unknown[]) => unknown } }).store;
+      vi.spyOn(store, 'runReindexTxn').mockReturnValue({ ok: false, error: 'SQLITE_FULL: database or disk is full' });
+
+      const outcome = await write(vault, method, '- b\n');
+
+      expect(readFileSync(join(root, 'notes', 'a.md'), 'utf8')).toContain('- b\n');
+      expect(outcome).toEqual({ reindexed: false, reindexError: expect.stringContaining('SQLITE_FULL') });
+    },
+  );
+
+  it.each(['writeNote', 'appendNote', 'appendToHeading'] as const)(
+    '%s still reports a write the API refused as failed',
+    async (method) => {
+      const { vault } = await vaultWithLandingWrites();
+      const client = (vault as unknown as { client: ObsidianApiClient }).client;
+      const refused = new Error('Obsidian API failed: 400 Bad Request');
+      vi.spyOn(client, 'putNote').mockRejectedValue(refused);
+      vi.spyOn(client, 'appendNote').mockRejectedValue(refused);
+      vi.spyOn(client, 'appendToHeading').mockRejectedValue(refused);
+
+      await expect(write(vault, method, '- b\n')).rejects.toThrow(/400 Bad Request/);
+    },
+  );
+
+  it('a write whose reindex succeeded says so', async () => {
+    const { vault } = await vaultWithLandingWrites();
+
+    await expect(write(vault, 'appendNote', '- b\n')).resolves.toEqual({ reindexed: true });
   });
 });

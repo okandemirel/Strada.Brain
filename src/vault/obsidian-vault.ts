@@ -48,6 +48,14 @@ export interface ObsidianVaultDeps {
 }
 
 /**
+ * A note write the Obsidian API took. `reindexed: false` means the note
+ * changed but search still serves its previous rows until the next sync.
+ */
+export type ObsidianNoteWriteResult =
+  | { reindexed: true }
+  | { reindexed: false; reindexError: string };
+
+/**
  * Canonicalize a vault-relative path used as wikilink source/target identifier.
  * Always returns the *stored* path with its original case (matching `vault_files.path`),
  * but normalizes separator and trims redundant prefixes so equal logical paths compare equal.
@@ -372,36 +380,51 @@ export class ObsidianVault implements IVault {
   }
 
   /** Write a note to Obsidian via REST API. */
-  async writeNote(relPath: string, content: string): Promise<void> {
+  async writeNote(relPath: string, content: string): Promise<ObsidianNoteWriteResult> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
     try {
       await this.client.putNote(safeRelPath, content);
-      // Trigger reindex after write so the vault stays in sync.
-      await this.reindexFile(safeRelPath);
     } catch (err) {
       throw this.redactError(err);
     }
+    return this.reindexAfterWrite(safeRelPath);
   }
 
   /** Append content to the end of an Obsidian note, creating it when missing. */
-  async appendNote(relPath: string, content: string): Promise<void> {
+  async appendNote(relPath: string, content: string): Promise<ObsidianNoteWriteResult> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
     try {
       await this.client.appendNote(safeRelPath, content);
-      await this.reindexFile(safeRelPath);
     } catch (err) {
       throw this.redactError(err);
     }
+    return this.reindexAfterWrite(safeRelPath);
   }
 
   /** Append content to a heading in an Obsidian note. */
-  async appendToHeading(relPath: string, heading: string, content: string): Promise<void> {
+  async appendToHeading(relPath: string, heading: string, content: string): Promise<ObsidianNoteWriteResult> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
     try {
       await this.client.appendToHeading(safeRelPath, heading, content);
-      await this.reindexFile(safeRelPath);
     } catch (err) {
       throw this.redactError(err);
+    }
+    return this.reindexAfterWrite(safeRelPath);
+  }
+
+  /**
+   * Brings the index up to a write the API already took. Its failure is
+   * returned, not thrown: a caller that saw the throw reported the write as
+   * failed, and an agent that retried an append put the entry in twice.
+   */
+  private async reindexAfterWrite(relPath: string): Promise<ObsidianNoteWriteResult> {
+    try {
+      await this.reindexFile(relPath);
+      return { reindexed: true };
+    } catch (err) {
+      const reindexError = this.redactError(err).message;
+      getLoggerSafe().warn(`[obsidian-vault ${this.id}] note written but not reindexed`, { path: relPath, error: reindexError });
+      return { reindexed: false, reindexError };
     }
   }
 

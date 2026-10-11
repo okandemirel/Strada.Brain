@@ -323,4 +323,27 @@ describe('DevKnowledgeNoteWriterImpl (real vault integration)', () => {
     const ok = await writer.writeNote('knowledge/x.md', '# x');
     expect(ok).toBe(false);
   });
+
+  it('reports a note that reached disk but not the index as written, and logs the reindex failure', async () => {
+    const v = makeKnowledgeVault();
+    await v.init();
+    registry.register(v, 'Dev Knowledge');
+    const store = (v as unknown as { store: { runReindexTxn: (...a: unknown[]) => unknown } }).store;
+    const txn = vi.spyOn(store, 'runReindexTxn').mockReturnValue({ ok: false, error: 'SQLITE_FULL: database or disk is full' });
+    const debug = vi.fn();
+    const writer = new DevKnowledgeNoteWriterImpl(registry, { debug });
+
+    try {
+      const ok = await writer.writeNote('knowledge/x.md', '# x');
+
+      expect(await v.readFile('knowledge/x.md')).toBe('# x');
+      expect(ok).toBe(true);
+      expect(debug).toHaveBeenCalledWith(
+        '[dev-knowledge] note written but not reindexed',
+        expect.objectContaining({ relPath: 'knowledge/x.md', error: expect.stringContaining('SQLITE_FULL') }),
+      );
+    } finally {
+      txn.mockRestore();
+    }
+  });
 });

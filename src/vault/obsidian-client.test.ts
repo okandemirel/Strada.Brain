@@ -67,6 +67,40 @@ describe("ObsidianApiClient write path", () => {
     expect(headers["Target"]).toBe("Log");
   });
 
+  it("appendToHeading is a 1.x header-targeted PATCH append, which every plugin version serves under the heading", async () => {
+    await client.appendToHeading("Daily/2026-05-30.md", "Log", "- item");
+
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://localhost:27124/vault/Daily%2F2026-05-30.md");
+    // 5.x refuses header targets without Markdown-Patch-Version: 1
+    // (HeaderTargetingRequiresVersion1); a POST that a plugin does not target
+    // lands at the end of the note while the tool says "under the heading".
+    expect(opts.method).toBe("PATCH");
+    const headers = opts.headers as Record<string, string>;
+    expect(headers["Markdown-Patch-Version"]).toBe("1");
+    expect(headers["Operation"]).toBe("append");
+  });
+
+  it("appendToHeading names the heading by its text, as the plugin's heading target does", async () => {
+    await client.appendToHeading("a.md", "## Notes", "x");
+    await client.appendToHeading("a.md", "# 2026-10-11 :: ## Günlük", "x");
+
+    const targets = mockFetch.mock.calls.map(([, opts]) => (opts as RequestInit & { headers: Record<string, string> }).headers["Target"]);
+    // Percent-encoded: the plugin decodes it, and a header cannot carry the raw text.
+    expect(targets).toEqual(["Notes", encodeURIComponent("2026-10-11::Günlük")]);
+  });
+
+  it("appendToHeading resolves when the plugin answers 200 with the patched note as text", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "## Log\n- item\n",
+      json: async () => { throw new SyntaxError("Unexpected token '#'"); },
+    });
+
+    await expect(client.appendToHeading("a.md", "Log", "- item")).resolves.toBeUndefined();
+  });
+
   it("appendNote POSTs the raw markdown with no target, so the note is appended to, not replaced", async () => {
     const md = "- fixed the spawner\n";
     await client.appendNote("Daily/2026-10-11.md", md);
