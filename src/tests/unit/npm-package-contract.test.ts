@@ -13,7 +13,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -150,4 +150,73 @@ describe("build-package runtime assets", () => {
     expect(clean, "dist/ is never removed before tsc").toBeGreaterThan(-1);
     expect(clean).toBeLessThan(tsc);
   });
+});
+
+/**
+ * A portal build that succeeds but whose copy into dist/channels/web/static
+ * fails is a portal failure too. The copy's catch logged "Portal build skipped"
+ * and exited 0 after rmSync had already removed the served UI, so the launcher's
+ * stale-portal rebuild (`--portal-only`) and `npm run build` both reported
+ * success. Each case runs the real script in a fixture root whose build:portal
+ * exits 0 without writing web-portal/dist, and whose tsc is a no-op on PATH.
+ */
+describe.skipIf(process.platform === "win32")("build-package portal copy", () => {
+  function makeFixture(options: { portalDist: boolean }): { root: string; env: NodeJS.ProcessEnv } {
+    const root = tempRoot("strada-portal-copy-");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(root, "scripts", "build-package.mjs"),
+      readFileSync(path.join(repoRoot, "scripts", "build-package.mjs"), "utf8"),
+    );
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({ name: "portal-copy-fixture", version: "0.0.0", private: true, scripts: { "build:portal": "node -e \"\"" } })}\n`,
+    );
+    mkdirSync(path.join(root, "src"), { recursive: true });
+    touch(root, "dist/channels/web/static/index.html", "old ui");
+    if (options.portalDist) touch(root, "web-portal/dist/index.html", "new ui");
+    const bin = path.join(root, "bin");
+    touch(bin, "tsc", "#!/bin/sh\nexit 0\n");
+    chmodSync(path.join(bin, "tsc"), 0o755);
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+    delete env.STRADA_ALLOW_PORTAL_BUILD_FAILURE;
+    return { root, env };
+  }
+
+  function build(root: string, env: NodeJS.ProcessEnv, args: string[]) {
+    const result = spawnSync(process.execPath, [path.join(root, "scripts", "build-package.mjs"), ...args], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  it("--portal-only exits non-zero when the copy fails, so the launcher does not start without a UI", () => {
+    const { root, env } = makeFixture({ portalDist: false });
+    const { status, output } = build(root, env, ["--portal-only"]);
+    expect(status, output).not.toBe(0);
+    expect(output).toMatch(/Portal copy FAILED/);
+    expect(output).not.toMatch(/Portal build skipped/);
+  }, 60_000);
+
+  it("a full build refuses to finish without the copied UI unless the opt-out is set", () => {
+    const refused = makeFixture({ portalDist: false });
+    const strict = build(refused.root, refused.env, []);
+    expect(strict.status, strict.output).not.toBe(0);
+    expect(strict.output).toMatch(/Portal copy FAILED/);
+
+    const allowed = makeFixture({ portalDist: false });
+    const optedOut = build(allowed.root, { ...allowed.env, STRADA_ALLOW_PORTAL_BUILD_FAILURE: "1" }, []);
+    expect(optedOut.status, optedOut.output).toBe(0);
+    expect(optedOut.output).toMatch(/continuing anyway because STRADA_ALLOW_PORTAL_BUILD_FAILURE=1/);
+  }, 60_000);
+
+  it("a copy that lands still exits 0 and serves the new bundle", () => {
+    const { root, env } = makeFixture({ portalDist: true });
+    const { status, output } = build(root, env, ["--portal-only"]);
+    expect(status, output).toBe(0);
+    expect(readFileSync(path.join(root, "dist", "channels", "web", "static", "index.html"), "utf8")).toBe("new ui");
+  }, 60_000);
 });

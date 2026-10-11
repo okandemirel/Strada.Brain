@@ -121,18 +121,33 @@ function main() {
     try {
       rmSync(WEB_STATIC_DIR, { recursive: true, force: true });
       cpSync(PORTAL_DIST_DIR, WEB_STATIC_DIR, { recursive: true });
-    } catch {
-      console.log("[strada] Portal build skipped — web UI will use fallback page.");
+      return;
+    } catch (error) {
+      // The copy runs after rmSync may already have removed the served UI. Its
+      // catch used to log "Portal build skipped" and exit 0, so the launcher's
+      // stale-portal rebuild and `npm run build` both reported success with no
+      // (or a half-copied) dashboard. It is a portal failure like a build one.
+      console.error(
+        `[strada] Portal copy FAILED (${PORTAL_DIST_DIR} -> ${WEB_STATIC_DIR}): ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+      failPortal("Portal copy", portalOnly, 1);
+      return;
     }
-  } else if (portalOnly) {
+  }
+  failPortal("Portal build", portalOnly, portalBuild.status ?? 1);
+}
+
+function failPortal(step, portalOnly, status) {
+  if (portalOnly) {
     // The launcher's stale-portal rebuild relies on this exit code — a portal
-    // build failure must surface, not be silently swallowed into a stale UI.
-    process.exit(portalBuild.status ?? 1);
+    // failure must surface, not be silently swallowed into a stale UI.
+    process.exit(status);
   } else if (process.env["STRADA_ALLOW_PORTAL_BUILD_FAILURE"] === "1") {
     // Explicit opt-out for backend-only builds (e.g. a CI job that never serves
     // the portal). Deliberate, and it says so in the log.
     console.log(
-      "[strada] Portal build FAILED — continuing anyway because " +
+      `[strada] ${step} FAILED — continuing anyway because ` +
         "STRADA_ALLOW_PORTAL_BUILD_FAILURE=1. The web UI will use the fallback page.",
     );
   } else {
@@ -141,11 +156,11 @@ function main() {
     // image — silently shipped without a UI. Fail loudly instead; set
     // STRADA_ALLOW_PORTAL_BUILD_FAILURE=1 to opt out deliberately.
     console.error(
-      "[strada] Portal build FAILED. Refusing to produce a package with a " +
+      `[strada] ${step} FAILED. Refusing to produce a package with a ` +
         "missing web UI. Fix the portal build, or set " +
         "STRADA_ALLOW_PORTAL_BUILD_FAILURE=1 to build the backend only.",
     );
-    process.exit(portalBuild.status ?? 1);
+    process.exit(status);
   }
 }
 
