@@ -51,6 +51,10 @@ const ALICE = { userId: "alice", chatId: "alice-dm" };
 const BOB = { userId: "bob", chatId: "bob-dm" };
 
 async function twoUserMemory(withVectors: boolean): Promise<MemorySearchTool> {
+  return new MemorySearchTool(await twoUserAdapter(withVectors));
+}
+
+async function twoUserAdapter(withVectors: boolean): Promise<AgentDBAdapter> {
   const memory = new AgentDBMemory({
     dbPath: join(dir, withVectors ? "vec" : "text"),
     dimensions: DIMS,
@@ -86,7 +90,7 @@ async function twoUserMemory(withVectors: boolean): Promise<MemorySearchTool> {
   ]);
   for (const r of stored) expect(r.kind).toBe("ok");
 
-  return new MemorySearchTool(adapter);
+  return adapter;
 }
 
 describe.each([
@@ -135,5 +139,36 @@ describe.each([
     const notes = await tool.execute({ query: "windmill locker code hint raise", limit: 10, type: "note" }, bob);
     expect(notes.content).toContain("[NOTE]");
     expect(notes.content).not.toContain("[CONVERSATION]");
+  });
+
+  // memory-user-scope: the web channel gives every connection a fresh chatId,
+  // so a conversation stored under the chat alone was lost to its own person
+  // the moment they reconnected.
+  it("returns a person's conversation from their earlier connection to them, and to no one else", async () => {
+    const adapter = await twoUserAdapter(withVectors);
+    const tool = new MemorySearchTool(adapter);
+    const owned = await adapter.storeConversation(
+      "web-conn-1" as ChatId,
+      "Alice planned the harbour level with a tide timer and a crane puzzle",
+      { userId: "alice-profile" },
+    );
+    expect(owned.kind).toBe("ok");
+    const chatOnly = await adapter.storeConversation(
+      "web-conn-1" as ChatId,
+      "Someone planned the orchard level with a harvest timer and a cart puzzle",
+    );
+    expect(chatOnly.kind).toBe("ok");
+
+    // The asserted words are not in the query: an empty result echoes the query.
+    const alice = createToolContext({ userId: "alice-profile", chatId: "web-conn-2" });
+    const recalled = await tool.execute({ query: "harbour level tide timer", limit: 10 }, alice);
+    expect(recalled.content).toContain("crane puzzle");
+
+    const unowned = await tool.execute({ query: "orchard level harvest timer", limit: 10 }, alice);
+    expect(unowned.content).not.toContain("cart puzzle");
+
+    const bob = createToolContext({ userId: "bob-profile", chatId: "web-conn-3" });
+    const other = await tool.execute({ query: "harbour level tide timer", limit: 10 }, bob);
+    expect(other.content).not.toContain("crane puzzle");
   });
 });

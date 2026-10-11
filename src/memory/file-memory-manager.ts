@@ -531,6 +531,7 @@ export class FileMemoryManager implements IMemoryManager {
       turnNumber?: number;
       userMessage?: string;
       assistantMessage?: string;
+      userId?: string;
     }
   ): Promise<Result<MemoryId, Error>> {
     try {
@@ -549,6 +550,7 @@ export class FileMemoryManager implements IMemoryManager {
         id,
         type: "conversation" as const,
         chatId,
+        ...(options?.userId ? { userId: options.userId } : {}),
         content: safeSummary,
         userMessage: safeUserMessage,
         assistantMessage: safeAssistantMessage,
@@ -627,7 +629,7 @@ export class FileMemoryManager implements IMemoryManager {
         archived: false,
         metadata: options?.metadata ?? {},
         // Codex round 7 #19: ownership is stored, so the note is recalled in
-        // its chat's scope (and in no other).
+        // its chat's scope (and in no other chat, unless it names its person).
         ...(options?.chatId !== undefined ? { chatId: options.chatId } : {}),
         ...(options?.userId !== undefined ? { userId: options.userId } : {}),
         ...(options?.projectId !== undefined ? { projectId: options.projectId } : {}),

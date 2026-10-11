@@ -3656,6 +3656,15 @@ export class Orchestrator {
         session.mixedParticipants = true;
       }
     }
+    // memory-user-scope: the web channel names each conversation after the
+    // browser's profile (conversationId === userId) while every connection gets
+    // a fresh chatId, so a summary owned by the chat alone was lost to its person
+    // on reconnect. Only a conversation the channel keyed to the person is
+    // theirs; a group or thread conversation stays its chat's, so it never
+    // follows one member into another chat.
+    const speakerId = userId?.trim();
+    session.memoryOwnerId =
+      !session.mixedParticipants && speakerId && conversationId?.trim() === speakerId ? speakerId : undefined;
 
     // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {

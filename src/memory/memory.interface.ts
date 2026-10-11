@@ -93,7 +93,8 @@ interface BaseMemoryEntry {
  * entries carrying no userId/projectId for a named key stay in. For chatId
  * (Codex round 6 #16) an entry of unknown ownership (chatId "default" or
  * missing) is returned only when the scope's chatId is itself "default" or
- * the entry is explicitly `shared`.
+ * the entry is explicitly `shared`. An entry carrying the scope's userId is
+ * returned whatever chat wrote it (memory-user-scope).
  */
 export interface MemoryScope {
   readonly userId?: string;
@@ -486,6 +487,11 @@ export interface IMemoryManager {
       turnNumber?: number;
       userMessage?: string;
       assistantMessage?: string;
+      /**
+       * The person the conversation belongs to (memory-user-scope). Set, it is
+       * recalled by that person from any of their chats; absent, by its chat only.
+       */
+      userId?: string;
     }
   ): Promise<Result<MemoryId, Error>>;
 

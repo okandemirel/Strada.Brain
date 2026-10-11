@@ -20,6 +20,9 @@
 import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { DEFAULT_TASK_CONFIG } from "../config/config.js";
+import { FileMemoryManager } from "../memory/file-memory-manager.js";
+import { MemorySearchTool } from "./tools/memory-search.js";
+import { createToolContext } from "../test-helpers.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -488,6 +491,79 @@ describe("Orchestrator Integration", () => {
       // At least 6 visible messages: 3 user + 3 assistant
       const visibleMessages = (orch as any).sessionManager.getVisibleTranscript(session);
       expect(visibleMessages.length).toBeGreaterThanOrEqual(6);
+    });
+
+    // memory-user-scope: the web channel gives every connection a fresh chatId
+    // and names the conversation after the browser profile (conversationId ===
+    // userId). Summaries were stored under the chat alone, so the person's next
+    // connection could not recall their own earlier chat.
+    it("a web user recalls their earlier connection's conversation; a thread the channel did not key to them stays its chat's", async () => {
+      const memoryDir = mkdtempSync(join(tmpdir(), "strada-orch-user-scope-"));
+      const memory = new FileMemoryManager(join(memoryDir, "db"));
+      await memory.initialize();
+      try {
+        const orch = new Orchestrator({
+          providerManager: makeProviderManager(mockProvider),
+          tools: [readTool],
+          channel: mockChannel,
+          projectPath: "/tmp/test-project",
+          readOnly: false,
+          requireConfirmation: true,
+          memoryDbPath: memoryDir,
+          memoryManager: memory,
+        });
+
+        mockProvider.chat
+          .mockResolvedValueOnce(toolResponse("Plan: acknowledge the level plan."))
+          .mockResolvedValueOnce(toolResponse("Noted, a crane puzzle it is."));
+        await orch.handleMessage({
+          channelType: "web",
+          chatId: "web-conn-1",
+          conversationId: "profile-alice",
+          userId: "profile-alice",
+          text: "Plan the harbour level with a tide timer",
+          timestamp: new Date(),
+        });
+
+        mockProvider.chat
+          .mockResolvedValueOnce(toolResponse("Plan: acknowledge the level plan."))
+          .mockResolvedValueOnce(toolResponse("Noted, a cart puzzle it is."));
+        await orch.handleMessage({
+          channelType: "slack",
+          chatId: "C-team",
+          conversationId: "thread-9",
+          userId: "U-alice",
+          text: "Plan the orchard level with a harvest timer",
+          timestamp: new Date(),
+        });
+
+        // The asserted words are not in the query: an empty result echoes the query.
+        const search = new MemorySearchTool(memory);
+        const nextConnection = await search.execute(
+          { query: "harbour level tide timer" },
+          createToolContext({ chatId: "web-conn-2", userId: "profile-alice" }),
+        );
+        expect(nextConnection.content).toContain("crane puzzle");
+        const someoneElse = await search.execute(
+          { query: "harbour level tide timer" },
+          createToolContext({ chatId: "web-conn-3", userId: "profile-bob" }),
+        );
+        expect(someoneElse.content).not.toContain("crane puzzle");
+
+        const sameThread = await search.execute(
+          { query: "orchard level harvest timer" },
+          createToolContext({ chatId: "C-team", userId: "U-alice" }),
+        );
+        expect(sameThread.content).toContain("cart puzzle");
+        const elsewhere = await search.execute(
+          { query: "orchard level harvest timer" },
+          createToolContext({ chatId: "C-elsewhere", userId: "U-alice" }),
+        );
+        expect(elsewhere.content).not.toContain("cart puzzle");
+      } finally {
+        await memory.shutdown();
+        rmSync(memoryDir, { recursive: true, force: true });
+      }
     });
 
     it("carries agent state across turns within same session", async () => {

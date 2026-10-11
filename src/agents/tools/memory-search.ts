@@ -61,7 +61,8 @@ export class MemorySearchTool implements ITool {
     // The caller's chat and person, as automatic recall scopes them (plan
     // 3.9): one memory serves every user of a multi-user channel, and an
     // unscoped search returned another chat's private conversation. A caller
-    // with no chat sees only entries no chat owns, never everyone's.
+    // with no chat sees only entries no chat owns or that name the caller,
+    // never everyone's.
     const scope: MemoryScope = {
       chatId: (context.chatId || UNSCOPED_CHAT_ID) as ChatId,
       ...(context.userId ? { userId: context.userId } : {}),

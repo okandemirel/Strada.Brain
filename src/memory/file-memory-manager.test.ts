@@ -602,6 +602,29 @@ describe("storeNote ownership (Codex round 7 #19)", () => {
   });
 });
 
+// memory-user-scope: a conversation carried only its chatId, and a web user's
+// next connection is a new chat, so their own conversations were out of reach.
+describe("storeConversation ownership (memory-user-scope)", () => {
+  it("a conversation stored with a userId is recalled by that person from another chat, by no one else, and survives a reload", async () => {
+    await withTempDir(async (dir) => {
+      const mm = new FileMemoryManager(join(dir, "db"));
+      await mm.initialize();
+      const ownedId = unwrap(await mm.storeConversation("web-conn-1" as never, "harbour level tide timer crane puzzle", { userId: "alice" }));
+      await mm.storeConversation("web-conn-1" as never, "harbour level tide timer of a chat with no known person");
+      await mm.shutdown();
+
+      const reopened = new FileMemoryManager(join(dir, "db"));
+      await reopened.initialize();
+      const alice = unwrap(await reopened.retrieve({ mode: "text", query: "harbour tide timer crane", scope: { chatId: "web-conn-2" as never, userId: "alice" } }));
+      expect(alice.map((r) => r.entry.id)).toEqual([ownedId]);
+      expect((alice[0]!.entry as any).userId).toBe("alice");
+      const bob = unwrap(await reopened.retrieve({ mode: "text", query: "harbour tide timer crane", scope: { chatId: "web-conn-3" as never, userId: "bob" } }));
+      expect(bob).toEqual([]);
+      await reopened.shutdown();
+    });
+  });
+});
+
 describe("memory.json persistence safety (MEM-13)", () => {
   it("moves an unparseable memory.json aside instead of overwriting it on the next save", async () => {
     await withTempDir(async (dir) => {

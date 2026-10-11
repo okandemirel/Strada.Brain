@@ -258,6 +258,7 @@ export class AgentDBAdapter implements IMemoryManager {
       turnNumber?: number;
       userMessage?: string;
       assistantMessage?: string;
+      userId?: string;
     },
   ): Promise<Result<MemoryId, Error>> {
     try {
@@ -278,6 +279,7 @@ export class AgentDBAdapter implements IMemoryManager {
           "NormalizedScore" as const,
         ),
         chatId,
+        ...(options?.userId ? { userId: options.userId } : {}),
       } as unknown as Parameters<typeof this.agentdb.storeEntry>[0]);
 
       if (result.kind === "err") {

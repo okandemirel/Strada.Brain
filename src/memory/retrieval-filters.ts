@@ -35,6 +35,13 @@
  * chatId comparison and nothing else. It used to short-circuit the whole scope
  * check, so Alice's project-A note matched Bob's project-B scope. The userId
  * and projectId comparisons always apply.
+ *
+ * A person's memory follows the person (memory-user-scope): an entry that names
+ * the scope's userId is matched by that identity instead of by chat. The web
+ * channel gives every connection a fresh chatId, so a conversation matched by
+ * chat alone was lost to its own person on reconnect. The chat stays the
+ * fallback for every entry that names no person, and a different userId is
+ * still a mismatch in any chat.
  */
 
 import type {
@@ -175,18 +182,27 @@ function isProjectKnowledgeOfScope(entry: FilterableEntry, scope: MemoryScope): 
   return entryProject !== undefined && entryProject === String(scope.projectId);
 }
 
+/** True when the entry names the scope's person (memory-user-scope). */
+function isOwnedByScopeUser(entry: FilterableEntry, scope: MemoryScope): boolean {
+  if (scope.userId === undefined) return false;
+  const entryUser = entryIdentity(entry, "userId");
+  return entryUser !== undefined && entryUser === String(scope.userId);
+}
+
 /**
  * Identity scope check (plan 3.9). A userId/projectId the entry does not carry
  * is not a mismatch; a DIFFERENT value is. For chatId (Codex round 6 #16) an
  * unowned entry matches only the "default" scope unless explicitly shared —
- * and the share bypasses ONLY the chat comparison (Codex round 7 #18).
+ * and the share bypasses ONLY the chat comparison (Codex round 7 #18). The
+ * scope's own person's entry bypasses it the same way (memory-user-scope).
  */
 export function matchesScope(entry: FilterableEntry, scope: MemoryScope | undefined): boolean {
   if (!scope) return true;
   if (
     scope.chatId !== undefined &&
     !isExplicitlyShared(entry) &&
-    !isProjectKnowledgeOfScope(entry, scope)
+    !isProjectKnowledgeOfScope(entry, scope) &&
+    !isOwnedByScopeUser(entry, scope)
   ) {
     const scopeChat = String(scope.chatId);
     if (isUnownedByChat(entry)) {

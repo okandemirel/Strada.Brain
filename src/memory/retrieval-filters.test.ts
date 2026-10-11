@@ -192,3 +192,40 @@ describe("a share crosses chats only (Codex round 7 #18)", () => {
     expect(matchesScope(entry({ chatId: "A", shared: true }), { userId: "bob", chatId: "B" as never })).toBe(true);
   });
 });
+
+// memory-user-scope: a web user gets a fresh chatId on every connection, so a
+// conversation keyed by chat alone was out of reach from their next chat.
+// A memory that names its person is that person's wherever they ask from;
+// one that names no person stays its chat's.
+describe("a person's memory follows the person across chats (memory-user-scope)", () => {
+  const aliceConn1 = entry({ type: "conversation", chatId: "web-conn-1", userId: "alice" });
+
+  it("is returned to the same person in another chat", () => {
+    expect(matchesScope(aliceConn1, { chatId: "web-conn-2" as never, userId: "alice" })).toBe(true);
+    expect(matchesRetrievalFilters(aliceConn1, { scope: { chatId: "web-conn-2" as never, userId: "alice" } })).toBe(true);
+    const viaMeta = entry({ chatId: "web-conn-1", metadata: { userId: "alice" } });
+    expect(matchesScope(viaMeta, { chatId: "web-conn-2" as never, userId: "alice" })).toBe(true);
+  });
+
+  it("is never returned to another person, in its own chat or any other", () => {
+    expect(matchesScope(aliceConn1, { chatId: "web-conn-3" as never, userId: "bob" })).toBe(false);
+    expect(matchesScope(aliceConn1, { chatId: "web-conn-1" as never, userId: "bob" })).toBe(false);
+  });
+
+  it("a scope that names no person still falls back to the chat", () => {
+    expect(matchesScope(aliceConn1, { chatId: "web-conn-2" as never })).toBe(false);
+    expect(matchesScope(aliceConn1, { chatId: "web-conn-1" as never })).toBe(true);
+  });
+
+  it("a memory that names no person stays its chat's, whoever asks", () => {
+    const chatOnly = entry({ type: "conversation", chatId: "group-1" });
+    expect(matchesScope(chatOnly, { chatId: "web-conn-2" as never, userId: "alice" })).toBe(false);
+    expect(matchesScope(chatOnly, { chatId: "group-1" as never, userId: "alice" })).toBe(true);
+  });
+
+  it("the project comparison still applies to the person's own memory", () => {
+    const inProjectA = entry({ chatId: "web-conn-1", userId: "alice", projectId: "project-A" });
+    expect(matchesScope(inProjectA, { chatId: "web-conn-2" as never, userId: "alice", projectId: "project-A" })).toBe(true);
+    expect(matchesScope(inProjectA, { chatId: "web-conn-2" as never, userId: "alice", projectId: "project-B" })).toBe(false);
+  });
+});

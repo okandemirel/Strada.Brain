@@ -69,6 +69,12 @@ export interface Session {
   conversationScope?: string;
   profileKey?: string;
   mixedParticipants?: boolean;
+  /**
+   * The person this chat's stored conversation belongs to (memory-user-scope),
+   * so they recall it from their next chat. Set only when the channel keyed the
+   * conversation to that person; absent, the summary belongs to the chat alone.
+   */
+  memoryOwnerId?: string;
   postSetupBootstrapDelivered?: boolean;
   lastJournalSnapshot?: import("./autonomy/execution-journal.js").ExecutionJournalSnapshot;
   /**
@@ -1331,6 +1337,7 @@ export class SessionManager {
           {
             userMessage: extractText(userMsg),
             assistantMessage: extractText(assistantMsg),
+            ...(session?.memoryOwnerId ? { userId: session.memoryOwnerId } : {}),
           },
         );
         if (result && typeof result === "object" && "kind" in result && result.kind === "err") {

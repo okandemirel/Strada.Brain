@@ -680,7 +680,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     summary: string,
     tags: string[] = [],
     tier: MemoryTier = MemoryTier.Ephemeral,
-    options?: { userMessage?: string; assistantMessage?: string },
+    options?: { userMessage?: string; assistantMessage?: string; userId?: string },
   ): Promise<import("../memory.interface.js").MemoryEntry> {
     const result = await this.storeEntry({
       type: "conversation",
@@ -696,6 +696,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       tier,
       importanceScore: calculateImportanceScore(summary, tier),
       chatId,
+      ...(options?.userId ? { userId: options.userId } : {}),
     } as unknown as Omit<
       UnifiedMemoryEntry,
       "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
