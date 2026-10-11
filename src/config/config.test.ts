@@ -71,7 +71,10 @@ describe("loadConfig", () => {
     delete process.env["STRADA_MCP_ALLOW_PROJECT_LOCAL"];
     delete process.env["LOG_LEVEL"];
     delete process.env["LOG_FILE"];
-    // Clear unified memory env vars
+    // Clear unified memory env vars. The worker setup points both database
+    // paths into the worker's temp home; these tests read the schema defaults.
+    delete process.env["MEMORY_DB_PATH"];
+    delete process.env["MODEL_INTELLIGENCE_DB_PATH"];
     delete process.env["MEMORY_BACKEND"];
     delete process.env["MEMORY_DIMENSIONS"];
     delete process.env["MEMORY_AUTO_TIERING"];

@@ -36,6 +36,36 @@ describe("logger", () => {
     expect(onDisk).toMatch(/REDACTED/i);
   });
 
+  it("writes a relative log file into the config root, not wherever the process happens to stand", async () => {
+    // The runtime chdirs to its config root before it logs, so a relative
+    // LOG_FILE always meant "<config root>/<file>". Anything that never chdirs
+    // — 50 test files call createLogger("error", "test.log") — wrote it into
+    // the checkout instead (measured 2026-10-11: <repo>/test.log after a run).
+    const { mkdtempSync, existsSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "strada-logroot-"));
+    const name = `relative-probe-${process.pid}.log`;
+    const saved = { home: process.env["STRADA_HOME"], checkout: process.env["STRADA_SOURCE_CHECKOUT"] };
+    process.env["STRADA_HOME"] = home;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "false";
+    try {
+      const { createLogger } = await import("./logger.js");
+      createLogger("info", name).info("where does this land?");
+      // Winston's File transport writes asynchronously.
+      await new Promise((r) => setTimeout(r, 600));
+
+      expect(existsSync(join(home, name))).toBe(true);
+      expect(existsSync(join(process.cwd(), name))).toBe(false);
+    } finally {
+      if (saved.home === undefined) delete process.env["STRADA_HOME"];
+      else process.env["STRADA_HOME"] = saved.home;
+      if (saved.checkout === undefined) delete process.env["STRADA_SOURCE_CHECKOUT"];
+      else process.env["STRADA_SOURCE_CHECKOUT"] = saved.checkout;
+      rmSync(join(process.cwd(), name), { force: true });
+    }
+  });
+
   it("getLogger throws before createLogger is called", async () => {
     const { getLogger } = await import("./logger.js");
     expect(() => getLogger()).toThrow("Logger not initialized");

@@ -9,7 +9,7 @@
  * TMPDIR when it calls os.tmpdir(), so a fresh root here contains all of it,
  * and the teardown deletes the whole run at once.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,35 @@ export default function setup(): () => void {
   process.env["TEMP"] = root;
   process.env["TMP"] = root;
   process.env["STRADA_VITEST_TMP_ROOT"] = root;
+
+  // The config root (.env, .strada/locks, relative log files) goes in the run
+  // root too. Run from a git checkout, the source-checkout probe made the
+  // checkout itself the config root: every worker's config.ts import loaded
+  // the developer's .env, the setup-wizard save tests aimed persistSetup at
+  // it, and an AutoUpdater test took the live daemon's update lock (measured
+  // 2026-10-11). Forced, not defaulted: a shell the launcher spawned carries
+  // STRADA_SOURCE_CHECKOUT=true and its STRADA_INSTALL_ROOT. A test that needs
+  // a source checkout sets both itself, on a temp directory. Each worker
+  // narrows the home to its own subdirectory (vitest.worker-setup.ts).
+  const home = join(root, "strada-home");
+  mkdirSync(home);
+  process.env["STRADA_HOME"] = home;
+  process.env["STRADA_SOURCE_CHECKOUT"] = "false";
+  // The rest of what the launcher and the daemon hand their children goes
+  // too: under STRADA_DAEMON=1 an AutoUpdater a test builds without its own
+  // isDaemonProcess thinks it runs under the daemon, and an auto-restart
+  // update SIGTERMs the worker it runs in.
+  for (const key of [
+    "STRADA_INSTALL_ROOT",
+    "STRADA_LAUNCHER_PATH",
+    "STRADA_SOURCE_LAUNCHER",
+    "STRADA_LAUNCH_CWD",
+    "STRADA_NODE_PATH",
+    "STRADA_DAEMON",
+  ]) {
+    delete process.env[key];
+  }
+
   return () => {
     rmSync(root, { recursive: true, force: true });
   };

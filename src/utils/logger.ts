@@ -1,5 +1,7 @@
+import path from "node:path";
 import winston from "winston";
 import TransportStream from "winston-transport";
+import { resolveRuntimePaths } from "../common/runtime-paths.js";
 // Leaf module with no dependencies of its own — safe to import here without
 // creating a logger <-> security circular dependency.
 import { applySecretPatterns, DEFAULT_SECRET_PATTERNS, sanitizeSecretsQuiet } from "../security/secret-patterns.js";
@@ -201,7 +203,11 @@ export function createLogger(level: string, logFile: string): winston.Logger {
         ),
       }),
       new winston.transports.File({
-        filename: logFile,
+        // The runtime chdirs to its config root before it logs, so a relative
+        // LOG_FILE has always meant "<config root>/<file>". Resolve it there
+        // explicitly: a caller that never chdirs (a test, a one-off script)
+        // otherwise drops the log into whatever directory it was started from.
+        filename: path.resolve(resolveRuntimePaths().configRoot, logFile),
         maxsize: 10 * 1024 * 1024, // 10MB
         maxFiles: 5,
         tailable: true,

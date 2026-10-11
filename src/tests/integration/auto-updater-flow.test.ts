@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { AutoUpdater } from "../../core/auto-updater.js";
 import { ChannelActivityRegistry } from "../../core/channel-activity-registry.js";
+import { installLockPath } from "../../core/runtime-lock.js";
 
 describe("AutoUpdater Integration", () => {
   const tmpDirs: string[] = [];
@@ -26,13 +27,25 @@ describe("AutoUpdater Integration", () => {
   };
 
   it("should complete full lockfile lifecycle", () => {
-    makeTmpDir();
+    // Its own install and state root: with neither, the updater resolves to
+    // this checkout and takes the LIVE daemon's update lock (and its legacy
+    // mirror) there — measured 2026-10-11 as <repo>/.strada/locks after a run.
+    const dir = makeTmpDir();
     const registry = new ChannelActivityRegistry();
-    const updater = new AutoUpdater(mockAutoUpdateConfig, registry, { hasRunningTasks: () => false });
+    const updater = new AutoUpdater(mockAutoUpdateConfig, registry, { hasRunningTasks: () => false }, {
+      installRoot: dir,
+      stateRoot: dir,
+    });
+    const lockPath = installLockPath(dir, dir, "update");
+    const legacyLockPath = path.join(dir, ".strada-update.lock");
 
     expect(updater.acquireLock()).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.existsSync(legacyLockPath)).toBe(true);
     expect(updater.acquireLock()).toBe(false); // same PID, within 30min
     updater.releaseLock();
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(legacyLockPath)).toBe(false);
     expect(updater.acquireLock()).toBe(true);
     updater.releaseLock();
   });
@@ -49,9 +62,12 @@ describe("AutoUpdater Integration", () => {
   });
 
   it("should shutdown cleanly without errors", () => {
-    makeTmpDir();
+    const dir = makeTmpDir();
     const registry = new ChannelActivityRegistry();
-    const updater = new AutoUpdater(mockAutoUpdateConfig, registry, { hasRunningTasks: () => false });
+    const updater = new AutoUpdater(mockAutoUpdateConfig, registry, { hasRunningTasks: () => false }, {
+      installRoot: dir,
+      stateRoot: dir,
+    });
     expect(() => updater.shutdown()).not.toThrow();
   });
 

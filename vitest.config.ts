@@ -11,6 +11,9 @@ export default defineConfig({
     // Every worker inherits TMPDIR from here; the run's temp files go in one
     // root that the teardown removes (see vitest.global-setup.ts).
     globalSetup: ["./vitest.global-setup.ts"],
+    // …and each worker gets its own STRADA_HOME and memory databases inside
+    // that root (see vitest.worker-setup.ts).
+    setupFiles: ["./vitest.worker-setup.ts"],
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
     benchmark: {
       include: ["benchmarks/**/*.bench.ts"],

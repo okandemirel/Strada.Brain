@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolve, sep } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Config } from "../config/config.js";
 import {
   finalizeChannelStartupStage,
@@ -30,6 +32,12 @@ function createMockLogger(): winston.Logger {
     debug: vi.fn(),
   } as unknown as winston.Logger;
 }
+
+// Absolute, under the run's temp root: the stages open real SQLite files here
+// (campaigns.db, dynamic-profiles.db) and no test closes them. No afterAll rm:
+// on Windows deleting an open SQLite file is EBUSY, and the global teardown
+// removes the run root once the workers have exited.
+const MEMORY_DIR = mkdtempSync(join(tmpdir(), "bootstrap-stages-memory-"));
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -80,12 +88,12 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     modelIntelligence: {
       enabled: true,
       refreshHours: 24,
-      dbPath: ".strada-memory/model-intelligence.db",
+      dbPath: join(MEMORY_DIR, "model-intelligence.db"),
       providerSourcesPath: "docs/provider-sources",
     },
     memory: {
       enabled: true,
-      dbPath: ".strada-memory",
+      dbPath: MEMORY_DIR,
     } as Config["memory"],
     rag: {
       enabled: true,
@@ -165,6 +173,18 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 describe("bootstrap-stages", () => {
+  it("opens its stage databases inside the run's temp root, not the checkout", () => {
+    // The stages open real SQLite files under these paths (campaigns.db,
+    // dynamic-profiles.db) relative to the process cwd — the checkout, in a
+    // test run (measured 2026-10-11: <repo>/.strada-memory/ after a run).
+    const runRoot = process.env["STRADA_VITEST_TMP_ROOT"]!;
+    const config = makeConfig();
+    for (const dbPath of [config.memory.dbPath, config.modelIntelligence.dbPath]) {
+      const rel = relative(runRoot, resolve(dbPath));
+      expect(rel.startsWith("..") || isAbsolute(rel), `${dbPath} resolves outside ${runRoot}`).toBe(false);
+    }
+  });
+
   it("keeps live embeddings active for transient verification failures", async () => {
     const logger = createMockLogger();
     const provider = {
@@ -896,7 +916,7 @@ describe("bootstrap-stages", () => {
           verbosity: "normal",
         },
         memory: {
-          dbPath: ".strada-memory",
+          dbPath: MEMORY_DIR,
           unified: { dimensions: 1536 },
         } as Config["memory"],
       }),
@@ -1007,7 +1027,7 @@ describe("bootstrap-stages", () => {
     const result = await initializeMemoryConsolidationStage({
       config: makeConfig({
         memory: {
-          dbPath: ".strada-memory",
+          dbPath: MEMORY_DIR,
           unified: { dimensions: 4 },
           consolidation: { enabled: true, idleMinutes: 10, threshold: 0.8 },
           decay: { exemptDomains: ["identity"] },
@@ -1169,7 +1189,7 @@ describe("bootstrap-stages", () => {
     });
 
     expect(modelIntelligence.initialize).toHaveBeenCalledWith(
-      ".strada-memory/model-intelligence.db",
+      join(MEMORY_DIR, "model-intelligence.db"),
       { refreshOnInitialize: true },
     );
     expect(providerManager.setModelCatalog).toHaveBeenCalledWith(modelIntelligence);
