@@ -235,8 +235,8 @@ export class DeployTrigger implements ITrigger {
     return result;
   }
 
-  /** Update cached readiness from external source */
-  setCachedReadiness(result: ReadinessResult): void {
+  /** Update cached readiness from external source; null forgets it. */
+  setCachedReadiness(result: ReadinessResult | null): void {
     this.cachedReadiness = result;
   }
 }

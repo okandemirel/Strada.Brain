@@ -332,4 +332,16 @@ describe("deploy:check --execute --force proposes only what the deploy trigger's
     expect(exitCode).toBe(1);
     expect(rt.approvalQueue.enqueue).not.toHaveBeenCalled();
   });
+
+  it("leaves nothing a later tick proposes once it said the deployment was not proposed", async () => {
+    deployment();
+    rt.loop.stop();
+    const refused = await command(["deploy:check", "--execute", "--force"], () => rt.ctx, file);
+    expect([refused.stderr, refused.exitCode]).toEqual(["Deployment not proposed: the daemon heartbeat is stopped (resume it with /daemon start)", 1]);
+
+    rt.loop.start();
+    await rt.loop.tick();
+
+    expect(rt.approvalQueue.enqueue).not.toHaveBeenCalled();
+  });
 });

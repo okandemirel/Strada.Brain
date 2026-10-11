@@ -98,7 +98,7 @@ export interface DaemonContext {
   /** The registered deploy-readiness trigger; a proposal is its fire. */
   deployTrigger?: ITrigger & {
     triggerReadinessCheck(): Promise<ReadinessResult>;
-    setCachedReadiness(result: ReadinessResult): void;
+    setCachedReadiness(result: ReadinessResult | null): void;
     onApprovalDecided(decision: string, proposalId: string, decidedBy?: string): void;
   };
 }
@@ -122,6 +122,9 @@ export function proposeDeployment(
   if (!trigger) return { proposed: false, reason: "the deploy trigger is not running in this Strada" };
   trigger.setCachedReadiness(readiness);
   const outcome = ctx.heartbeatLoop.fireNow(trigger.metadata.name);
+  // Refused, the readiness handed over stayed armed: once the gate opened, a
+  // tick proposed the deployment this call had just said it did not propose.
+  if (outcome.status !== "approval") trigger.setCachedReadiness(null);
   switch (outcome.status) {
     case "approval":
       return { proposed: true };
