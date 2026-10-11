@@ -46,6 +46,7 @@ export class ReadinessChecker {
    * 1. Test command exits 0
    * 2. Git working directory is clean (if requireCleanGit)
    * 3. Current branch matches targetBranch
+   * 4. A deployment script is configured
    */
   async checkReadiness(forceRefresh = false): Promise<ReadinessResult> {
     if (this.cachedResult && !forceRefresh) {
@@ -67,9 +68,12 @@ export class ReadinessChecker {
 
     branchMatch = await this.checkBranch();
 
-    // Build result
-    const ready = testPassed && gitClean && branchMatch;
+    // Build result. With no script, a proposal asked a human to approve a
+    // deploy the executor could only refuse.
+    const scriptConfigured = Boolean(this.config.scriptPath);
+    const ready = testPassed && gitClean && branchMatch && scriptConfigured;
     const reasons: string[] = [];
+    if (!scriptConfigured) reasons.push("no deployment script configured (DEPLOY_SCRIPT_PATH)");
     if (!testPassed) reasons.push("test command failed");
     if (!gitClean) reasons.push("git working directory has uncommitted changes");
     if (!branchMatch) reasons.push(`current branch does not match target branch "${this.config.targetBranch}"`);

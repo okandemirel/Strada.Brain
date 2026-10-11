@@ -116,6 +116,67 @@ describe("DeploymentExecutor ledger (real scripts, real SQLite)", () => {
     });
   });
 
+  describe("an approved proposal the executor does not run", () => {
+    it("with no deployment script configured, ends as failed, with the reason and the approver", async () => {
+      const p = project();
+      const executor = executorFor(p.root, { scriptPath: undefined });
+      const id = executor.logProposal();
+
+      const result = await executor.execute({ id, approvedBy: "carol" });
+
+      expect(result.success).toBe(false);
+      const [row] = executor.getHistory(1);
+      expect(row!.status).toBe("failed");
+      expect(row!.error).toMatch(/DEPLOY_SCRIPT_PATH/);
+      expect(row!.approvedBy).toBe("carol");
+      expect(executor.getStats()).toMatchObject({ totalDeployments: 1, failed: 1 });
+    });
+
+    it("while another deploy runs, ends as failed and leaves the running deploy's row alone", async () => {
+      const p = project();
+      p.script("deploy.sh", "exit 0");
+      const executor = executorFor(p.root, {});
+      const running = executor.logProposal();
+      const second = executor.logProposal();
+
+      // execute() claims the executor before its first await; how the first
+      // deploy ends (on Windows the shebang script cannot start) is not measured.
+      const first = executor.execute({ id: running });
+      const refused = await executor.execute({ id: second, approvedBy: "dave" });
+      const sameAgain = await executor.execute({ id: running, approvedBy: "dave" });
+      await first.catch(() => undefined);
+
+      expect(refused.success).toBe(false);
+      expect(sameAgain.success).toBe(false);
+      const rows = new Map(executor.getHistory(5).map((row) => [row.id, row]));
+      expect(rows.get(second)).toMatchObject({ status: "failed", approvedBy: "dave" });
+      expect(rows.get(second)!.error).toMatch(/already in progress/);
+      expect(rows.get(running)!.error ?? "").not.toMatch(/already in progress/);
+      expect(rows.get(running)!.approvedBy).toBeUndefined();
+    });
+  });
+
+  describe("a deploy the runtime stopped in the middle of", () => {
+    it("ends as failed when the next runtime builds its executor, and counts as one", () => {
+      const p = project();
+      const db = new Database(":memory:");
+      dbs.push(db);
+      const before = new DeploymentExecutor(config(), p.root, quietLogger, db);
+      const interrupted = before.logProposal();
+      const untouched = before.logProposal();
+      // What a crash mid-deploy leaves: markExecuting ran, nothing after it.
+      db.prepare("UPDATE deployment_log SET status = 'executing', approved_at = ?, approved_by = 'erin' WHERE id = ?").run(Date.now(), interrupted);
+
+      const after = new DeploymentExecutor(config(), p.root, quietLogger, db);
+
+      const rows = new Map(after.getHistory(5).map((row) => [row.id, row]));
+      expect(rows.get(interrupted)).toMatchObject({ status: "failed", approvedBy: "erin" });
+      expect(rows.get(interrupted)!.error).toMatch(/stopped while this deployment ran/);
+      expect(rows.get(untouched)!.status).toBe("proposed");
+      expect(after.getStats()).toMatchObject({ totalDeployments: 2, failed: 1 });
+    });
+  });
+
   describe.skipIf(!runsShebangScripts)("a script that cannot run once the deploy is approved", () => {
     it("an unrunnable post-verify script fails verification and rolls the live release back", async () => {
       const p = project();

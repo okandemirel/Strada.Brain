@@ -610,12 +610,22 @@ export async function initializeDeploymentStage(
     params.daemonContext.readinessChecker = readinessChecker;
     params.daemonContext.deployTrigger = deployTrigger;
 
-    if (params.config.deployment.scriptPath) {
+    // All three: the post-verify and rollback scripts run only after a deploy,
+    // so one that cannot run was otherwise found when it was needed.
+    const scripts = [
+      ["DEPLOY_SCRIPT_PATH", params.config.deployment.scriptPath],
+      ["DEPLOY_POST_SCRIPT_PATH", params.config.deployment.postScriptPath],
+      ["DEPLOY_ROLLBACK_SCRIPT_PATH", params.config.deployment.rollbackScriptPath],
+    ] as const;
+    for (const [setting, scriptPath] of scripts) {
+      if (!scriptPath) continue;
       try {
-        readinessChecker.validateScriptPath(params.config.deployment.scriptPath);
-      } catch {
+        readinessChecker.validateScriptPath(scriptPath);
+      } catch (error) {
         params.logger.warn("Deployment script path validation failed at startup (will be re-validated at execution time)", {
-          scriptPath: params.config.deployment.scriptPath,
+          setting,
+          scriptPath,
+          reason: error instanceof Error ? error.message : String(error),
         });
       }
     }

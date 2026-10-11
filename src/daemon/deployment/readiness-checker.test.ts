@@ -57,6 +57,7 @@ function createMockProcessWithStdout(output: string, exitCode = 0): ChildProcess
 function createDefaultConfig(overrides: Partial<DeploymentConfig> = {}): DeploymentConfig {
   return {
     enabled: false,
+    scriptPath: "scripts/deploy.sh",
     testCommand: "npm test",
     targetBranch: "main",
     requireCleanGit: true,
@@ -162,6 +163,22 @@ describe("ReadinessChecker", () => {
       expect(result.ready).toBe(false);
       expect(result.branchMatch).toBe(false);
       expect(result.reason).toContain("does not match target branch");
+    });
+
+    it("is not ready with no deployment script to run (DEPLOY_SCRIPT_PATH)", async () => {
+      checker = new ReadinessChecker(createDefaultConfig({ scriptPath: undefined }), "/project", mockLogger);
+
+      mockSpawn
+        .mockReturnValueOnce(createMockProcess(0)) // test passes
+        .mockReturnValueOnce(createMockProcessWithStdout("")) // git clean
+        .mockReturnValueOnce(createMockProcessWithStdout("main")); // branch matches
+
+      const result = await checker.checkReadiness();
+
+      // Proposed, it asked a human to approve a deploy nothing could run.
+      expect(result.ready).toBe(false);
+      expect(result).toMatchObject({ testPassed: true, gitClean: true, branchMatch: true });
+      expect(result.reason).toContain("DEPLOY_SCRIPT_PATH");
     });
 
     it("returns ready=false when test is killed by signal (timeout)", async () => {

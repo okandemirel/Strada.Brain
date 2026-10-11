@@ -831,3 +831,51 @@ describe("initializeDeploymentStage — the executor reports the deploy breaker"
     }
   });
 });
+
+describe("initializeDeploymentStage — scripts that cannot run are named at startup", () => {
+  it("checks the post-verify and rollback scripts too, and says why each cannot run", async () => {
+    const logger = createMockLogger();
+    const validateScriptPath = vi.fn((scriptPath: string) => {
+      if (scriptPath !== "scripts/deploy.sh") throw new Error(`Script not found or not executable: "${scriptPath}"`);
+    });
+    await initializeDeploymentStage(
+      {
+        config: makeConfig({
+          deployment: {
+            enabled: true, testCommand: "npm test", targetBranch: "main", requireCleanGit: true, testTimeoutMs: 60000,
+            executionTimeoutMs: 600000, cooldownMinutes: 30, notificationUrgency: "medium",
+            scriptPath: "scripts/deploy.sh", postScriptPath: "scripts/verify.sh", rollbackScriptPath: "scripts/rollback.sh",
+          } as Config["deployment"],
+        }),
+        logger,
+        daemonConfig: { backoff: { failureThreshold: 3, baseCooldownMs: 10000, maxCooldownMs: 300000 } } as Config["daemon"],
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonStorage"],
+        approvalQueue: {} as unknown as Parameters<typeof initializeDeploymentStage>[0]["approvalQueue"],
+        triggerRegistry: { register: vi.fn() },
+        heartbeatLoop: { setDeployTrigger: vi.fn(), onTaskSettled: vi.fn() },
+        daemonEventBus: { emit: vi.fn(), on: vi.fn() } as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonEventBus"],
+        taskManager: { on: vi.fn() } as unknown as Parameters<typeof initializeDeploymentStage>[0]["taskManager"],
+        daemonContext: {} as unknown as Parameters<typeof initializeDeploymentStage>[0]["daemonContext"],
+      },
+      {
+        createReadinessChecker: vi.fn(() => ({ validateScriptPath })),
+        createDeploymentExecutor: vi.fn(() => ({})),
+        createDeployCircuitBreaker: vi.fn(() => ({})),
+        createDeployTrigger: vi.fn(() => ({})),
+        registerDeployApprovalBridge: vi.fn(),
+      } as unknown as Parameters<typeof initializeDeploymentStage>[1],
+    );
+
+    // A rollback runs only after a failure: an unrunnable one was found then.
+    expect(validateScriptPath.mock.calls.map(([scriptPath]) => scriptPath)).toEqual([
+      "scripts/deploy.sh", "scripts/verify.sh", "scripts/rollback.sh",
+    ]);
+    const warned = vi.mocked(logger.warn).mock.calls
+      .filter(([message]) => String(message).startsWith("Deployment script path validation failed at startup"))
+      .map(([, meta]) => meta);
+    expect(warned).toEqual([
+      { setting: "DEPLOY_POST_SCRIPT_PATH", scriptPath: "scripts/verify.sh", reason: 'Script not found or not executable: "scripts/verify.sh"' },
+      { setting: "DEPLOY_ROLLBACK_SCRIPT_PATH", scriptPath: "scripts/rollback.sh", reason: 'Script not found or not executable: "scripts/rollback.sh"' },
+    ]);
+  });
+});

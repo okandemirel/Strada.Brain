@@ -90,6 +90,7 @@ export class DeploymentExecutor {
     this.db = db;
     this.circuitState = options.circuitState;
     this.initSchema();
+    this.endInterruptedDeployments();
   }
 
   /**
@@ -102,26 +103,12 @@ export class DeploymentExecutor {
     agentId?: string;
   }): Promise<DeployResult> {
     if (this.deploymentInProgress) {
-      return {
-        success: false,
-        exitCode: null,
-        signal: null,
-        stdout: "",
-        stderr: "Deployment already in progress",
-        durationMs: 0,
-      };
+      return this.refuseApproved(proposal, "Deployment already in progress");
     }
 
     const scriptPath = this.config.scriptPath;
     if (!scriptPath) {
-      return {
-        success: false,
-        exitCode: null,
-        signal: null,
-        stdout: "",
-        stderr: "No deployment script configured (DEPLOY_SCRIPT_PATH)",
-        durationMs: 0,
-      };
+      return this.refuseApproved(proposal, "No deployment script configured (DEPLOY_SCRIPT_PATH)");
     }
 
     this.deploymentInProgress = true;
@@ -190,6 +177,20 @@ export class DeploymentExecutor {
       this.activeProcess = null;
       this.activeProposalId = null;
     }
+  }
+
+  /**
+   * An approved proposal this executor will not run still ends, as 'failed'
+   * with the reason: left 'proposed' it read as never decided and counted as
+   * no failure, while the trigger recorded one on its breaker. The row of the
+   * deploy that is running (the same approval delivered twice) is left alone.
+   */
+  private refuseApproved(proposal: { id: string; approvedBy?: string }, reason: string): DeployResult {
+    if (proposal.id !== this.activeProposalId) {
+      this.markExecuting(proposal);
+      this.updateLogEntry(proposal.id, "failed", undefined, 0, reason);
+    }
+    return { success: false, exitCode: null, signal: null, stdout: "", stderr: reason, durationMs: 0 };
   }
 
   /**
@@ -310,6 +311,20 @@ export class DeploymentExecutor {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_deployment_log_status ON deployment_log(status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_deployment_log_proposed ON deployment_log(proposed_at DESC)");
+  }
+
+  /**
+   * A row still 'executing' when an executor is built belongs to a runtime
+   * that stopped mid-deploy (the runtime builds one executor, and one runtime
+   * holds an install): nothing will finish it, and it stayed out of both
+   * counts for good.
+   */
+  private endInterruptedDeployments(): void {
+    const ended = this.db
+      .prepare("UPDATE deployment_log SET status = ?, error = ? WHERE status = ?")
+      .run("failed", "Strada stopped while this deployment ran; whether the script finished is unknown", "executing")
+      .changes;
+    if (ended > 0) this.logger.warn("Ended deployments a stopped runtime left executing", { count: ended });
   }
 
   private validateScript(scriptPath: string): string {
