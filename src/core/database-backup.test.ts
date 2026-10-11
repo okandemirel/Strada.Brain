@@ -550,6 +550,53 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
       path.join("agentdb", "memory.db"),
     ]);
   });
+
+  // A linked FILE is the other case: the restore replaces a destination that is
+  // itself a link rather than writing through it, so collapsing the two
+  // spellings onto the link's entry restored the link away, left the file the
+  // runtime reads stale, and reported success. Both entries stay, and the
+  // restore refuses them by name, touching neither.
+  it("keeps a database file linked into another root under both names, so the restore refuses it instead of replacing the link", async () => {
+    const userHome = path.join(root, "user");
+    const real = path.join(userHome, ".strada", "trusted-skills.db");
+    const link = path.join(stradaHome, "trusted-skills.db");
+    mkdirSync(path.dirname(real), { recursive: true });
+    seedDatabase(real, 5).close();
+    symlinkSync(real, link);
+    await backupRuntimeData({ memoryRoot, stradaHome, userHome, destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).databases.map((d) => `${d.root}:${d.relative}`)).toEqual([
+      "strada-home:trusted-skills.db",
+      "user-home:trusted-skills.db",
+    ]);
+    seedDatabase(real, 1).close();
+
+    await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(
+      /trusted-skills\.db is named twice/,
+    );
+    expect(countRows(real)).toBe(6);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps an AgentDB file linked to another tree's under both names, so the restore refuses it instead of replacing the link", async () => {
+    const real = path.join(memoryRoot, "agents", "a1", "memory.db");
+    const link = path.join(memoryRoot, "agentdb", "memory.db");
+    mkdirSync(path.dirname(real), { recursive: true });
+    mkdirSync(path.dirname(link), { recursive: true });
+    seedDatabase(real, 5).close();
+    symlinkSync(real, link);
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).databases.map((d) => d.relative)).toEqual([
+      path.join("agentdb", "memory.db"),
+      path.join("agents", "a1", "memory.db"),
+    ]);
+    seedDatabase(real, 1).close();
+
+    await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(
+      /memory\.db is named twice/,
+    );
+    expect(countRows(real)).toBe(6);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
 });
 
 describe("backup and restore of a default installation (round 10 #22)", () => {

@@ -322,9 +322,9 @@ export interface RuntimeDatabaseFile {
 /**
  * Every runtime database across every root.
  *
- * Deduplicated by real path (the first root that holds a file owns it), so
- * overlapping roots — or one root reached under two spellings — cannot produce
- * two copies of one database.
+ * Deduplicated by real directory and file name (the first root that holds a
+ * file owns it), so overlapping roots — or one root reached under two
+ * spellings — cannot produce two copies of one database ({@link fileIdentity}).
  */
 export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): RuntimeDatabaseFile[] {
   const files: RuntimeDatabaseFile[] = [];
@@ -551,13 +551,19 @@ function walkedDirectories(rootName: string, rootPath: string): Set<string> {
 }
 
 /**
- * One key per file however it is spelled. A restore judges destinations by
- * their canonical path, so an inventory that deduplicated lexically carried one
- * file twice and the restore refused the archive for it.
+ * One key per file however its directory is spelled. A restore judges
+ * destinations by their canonical path, so an inventory that deduplicated
+ * lexically carried one file twice and the restore refused the archive for it.
+ *
+ * Keyed the way {@link resolveInsideRoot} keys a destination: real directory,
+ * file name as named. Following a linked FILE collapsed the link and its target
+ * onto whichever was listed first; when that was the link, the restore replaced
+ * the link with a regular file, left the real one stale and reported success.
+ * Kept apart, the restore refuses the two by name instead.
  */
 function fileIdentity(file: string): string {
   try {
-    return realpathSync(file);
+    return path.join(realpathSync(path.dirname(file)), path.basename(file));
   } catch {
     return path.resolve(file);
   }
