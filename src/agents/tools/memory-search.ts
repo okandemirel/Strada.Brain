@@ -63,9 +63,10 @@ export class MemorySearchTool implements ITool {
     // unscoped search returned another chat's private conversation. A caller
     // with no chat sees only entries no chat owns or that name the caller,
     // never everyone's.
+    const userId = context.recallUserId ?? context.userId;
     const scope: MemoryScope = {
       chatId: (context.chatId || UNSCOPED_CHAT_ID) as ChatId,
-      ...(context.userId ? { userId: context.userId } : {}),
+      ...(userId ? { userId } : {}),
     };
 
     try {

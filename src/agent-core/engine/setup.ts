@@ -35,7 +35,11 @@ import {
   type ContextBuilderDeps,
 } from "../../agents/orchestrator-context-builder.js";
 import { buildVaultProjectContext } from "../../agents/context/strada-knowledge.js";
-import { resolveIdentityKey, resolveConversationScope } from "../../agents/orchestrator-text-utils.js";
+import {
+  resolveConversationOwner,
+  resolveIdentityKey,
+  resolveConversationScope,
+} from "../../agents/orchestrator-text-utils.js";
 import { canonicalizeProviderName } from "../../agents/providers/provider-identity.js";
 import { conformanceAppliesTo, createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
 import { conformanceProjectPath } from "../../agents/autonomy/strada-conformance.js";
@@ -540,6 +544,12 @@ export async function setupAgentCoreRun(
       goalsDecomposed: false,
       identityKey,
       userId: request.userId,
+      // An interactive run continues the chat's session, whose owner processMessage keeps
+      // (and clears once a second person speaks). Any other run's transcript is this one
+      // request's, so its speaker owns it under the same rule.
+      memoryOwnerId: isInteractive
+        ? session.memoryOwnerId
+        : resolveConversationOwner(request.userId, request.conversationId),
       channelType: request.channelType,
       attachments: request.attachments,
       conversationScope,
@@ -621,6 +631,8 @@ export function trimContextWindowForRun(
         runCtx.chatId,
         trimmed,
         /* force */ true,
+        undefined,
+        { userId: runCtx.memoryOwnerId },
       );
     }
   }

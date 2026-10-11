@@ -486,6 +486,8 @@ export function createAgentCorePort(
           c.chatId,
           deps.sessionManager.getVisibleTranscript(c.session),
           true,
+          undefined,
+          { userId: c.memoryOwnerId },
         );
         // The run's step-bearing trajectory, plus Issue #22 (SIBLING A) credit when that flag is on.
         // MUST run BEFORE the currentSessionInstinctIds.delete below (the participating set is read

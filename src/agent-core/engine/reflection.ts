@@ -175,7 +175,8 @@ export function buildBgReflectionContext(
     formatBoundaryVisibleText: (b) => deps.sessionManager.formatBoundaryVisibleText(b),
     appendVisibleAssistantMessage: (s, t) => deps.sessionManager.appendVisibleAssistantMessage(s, t),
     synthesizeUserFacingResponse: (p) => deps.synthesizeUserFacingResponse(p),
-    persistSessionToMemory: (c, t, f) => deps.sessionManager.persistSessionToMemory(c, t, f),
+    persistSessionToMemory: (c, t, f) =>
+      deps.sessionManager.persistSessionToMemory(c, t, f, undefined, { userId: runCtx.memoryOwnerId }),
     getVisibleTranscript: (s) => deps.sessionManager.getVisibleTranscript(s),
   };
 }
@@ -220,7 +221,10 @@ export function buildBgEndTurnContext(
     formatBoundaryVisibleText: (b) => deps.sessionManager.formatBoundaryVisibleText(b),
     appendVisibleAssistantMessage: (s, t) => deps.sessionManager.appendVisibleAssistantMessage(s, t),
     synthesizeUserFacingResponse: (p) => deps.synthesizeUserFacingResponse(p),
-    persistSessionToMemory: (c, t, f) => deps.sessionManager.persistSessionToMemory(c, t as ConversationMessage[], f),
+    persistSessionToMemory: (c, t, f) =>
+      deps.sessionManager.persistSessionToMemory(c, t as ConversationMessage[], f, undefined, {
+        userId: runCtx.memoryOwnerId,
+      }),
     getVisibleTranscript: (s) => deps.sessionManager.getVisibleTranscript(s),
   };
 }

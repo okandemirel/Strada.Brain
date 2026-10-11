@@ -259,6 +259,20 @@ export function resolveConversationScope(chatId: string, conversationId?: string
   return normalizedConversationId ? normalizedConversationId : chatId;
 }
 
+/**
+ * The person a chat's stored conversation belongs to (memory-user-scope), or
+ * undefined when it belongs to the chat alone. The web channel names each
+ * conversation after the browser's profile (conversationId === userId) while
+ * every connection gets a fresh chatId, so a summary owned by the chat alone
+ * was lost to its person on reconnect. Only a conversation the channel keyed to
+ * the person is theirs; a group or thread conversation stays its chat's, so it
+ * never follows one member into another chat.
+ */
+export function resolveConversationOwner(userId?: string, conversationId?: string): string | undefined {
+  const speakerId = userId?.trim();
+  return speakerId && conversationId?.trim() === speakerId ? speakerId : undefined;
+}
+
 interface IdentityLinkResolver {
   resolveLinkedIdentity: (channelType: string, channelUserId: string) => string | null;
 }

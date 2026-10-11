@@ -112,6 +112,12 @@ export interface MemoryScope {
  */
 export interface MemoryOwnershipOptions {
   readonly chatId?: ChatId;
+  /**
+   * The person the entry belongs to. Their recall finds it from ANY chat
+   * (memory-user-scope), so name only a person the channel keyed the content
+   * to (resolveConversationOwner), never whoever spoke in a DM, group or
+   * thread: that memory must stay in its chat.
+   */
   readonly userId?: string;
   readonly projectId?: string;
   readonly shared?: boolean;

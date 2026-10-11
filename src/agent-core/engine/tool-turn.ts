@@ -198,6 +198,9 @@ export async function portExecuteToolTurn(
         // where userId != chatId. The v1 background/worker loop does NOT thread it (@ :4642), so
         // keep byte-parity per route; unconditional threading is its own decision post-deletion.
         userId: runCtx.toolExecMode === "interactive" ? runCtx.userId : undefined,
+        // memory-user-scope: memory_search recalls for the run's person on every route, as
+        // automatic recall does (setup's recallUserId); the parity above is about autonomy prefs.
+        recallUserId: runCtx.userId,
         // A worker's session holds no user turn — it was given a task, not a
         // conversation — so extractLastUserMessage returns "" and the shell
         // reviewer was handed "Task: (not provided)". Measured: it then refused

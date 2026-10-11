@@ -82,6 +82,13 @@ export interface EngineRunContext {
   // for the goal→background submit (3.6). Threaded from AgentRunSetupInput; undefined on paths that
   // don't supply them (the divergences are interactive-only, where they are always set).
   readonly userId?: string;
+  /**
+   * memory-user-scope: the person this run's stored conversation belongs to, or undefined
+   * when it belongs to the chat alone. Every persist of the run's transcript passes it: a
+   * background run's session is fresh, so the owner processMessage keeps on the chat's
+   * session never reaches it.
+   */
+  readonly memoryOwnerId?: string;
   readonly channelType?: string;
   readonly attachments?: readonly Attachment[];
   readonly conversationScope?: string;

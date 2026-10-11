@@ -189,6 +189,7 @@ import {
   applyVisibleResponseContract,
   extractExactResponseLiteral,
   extractNaturalLanguageDirectiveUpdates,
+  resolveConversationOwner,
   resolveConversationScope,
   resolveIdentityKey,
   sanitizePromptInjection,
@@ -552,6 +553,8 @@ type ToolExecutionMode = "interactive" | "background" | "delegated";
 interface ToolExecutionOptions {
   mode?: ToolExecutionMode;
   userId?: string;
+  /** Who memory recall is for (ToolContext.recallUserId); unset, `userId`. */
+  recallUserId?: string;
   taskPrompt?: string;
   sessionMessages?: ConversationMessage[];
   onUsage?: (usage: TaskUsageEvent) => void;
@@ -3656,15 +3659,11 @@ export class Orchestrator {
         session.mixedParticipants = true;
       }
     }
-    // memory-user-scope: the web channel names each conversation after the
-    // browser's profile (conversationId === userId) while every connection gets
-    // a fresh chatId, so a summary owned by the chat alone was lost to its person
-    // on reconnect. Only a conversation the channel keyed to the person is
-    // theirs; a group or thread conversation stays its chat's, so it never
-    // follows one member into another chat.
-    const speakerId = userId?.trim();
-    session.memoryOwnerId =
-      !session.mixedParticipants && speakerId && conversationId?.trim() === speakerId ? speakerId : undefined;
+    // memory-user-scope: a chat more than one person has spoken in belongs to
+    // none of them.
+    session.memoryOwnerId = session.mixedParticipants
+      ? undefined
+      : resolveConversationOwner(userId, conversationId);
 
     // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {
@@ -5211,6 +5210,7 @@ export class Orchestrator {
       workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,
+      recallUserId: options.recallUserId ?? options.userId,
       chatId,
       channel: this.channel,
       soulLoader: this.soulLoader,

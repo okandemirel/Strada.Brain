@@ -69,6 +69,13 @@ export interface ToolContext {
   readOnly: boolean;
   /** User ID for the current session */
   userId?: string;
+  /**
+   * The person whose memory this call may recall (memory-user-scope), on every
+   * route. `userId` is withheld from background and delegated runs, where it
+   * would key the user's autonomy prefs; recall must still be this user's own.
+   * Unset, `userId` stands in.
+   */
+  recallUserId?: string;
   /** Chat ID for the current session */
   chatId?: string;
   /** Session ID for tracking */

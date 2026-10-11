@@ -115,6 +115,7 @@ type ToolExecutionMode = "interactive" | "background" | "delegated";
 export interface ToolExecutionOptions {
   mode?: ToolExecutionMode;
   userId?: string;
+  recallUserId?: string;
   taskPrompt?: string;
   sessionMessages?: ConversationMessage[];
   onUsage?: (usage: TaskUsageEvent) => void;

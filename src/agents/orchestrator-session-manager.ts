@@ -1277,6 +1277,14 @@ export class SessionManager {
      * the memory write's await found nothing and skipped the final state.
      */
     session: Session | undefined = this.sessions.get(chatId),
+    /**
+     * memory-user-scope: who the stored conversation belongs to, when the caller
+     * decides it. A V2 background run's transcript lives in a fresh session this
+     * map never holds, so the owner processMessage records on the chat's session
+     * never reached channel traffic; the run passes its own. Omitted, the
+     * session's owner applies.
+     */
+    owner: { readonly userId: string | undefined } = { userId: session?.memoryOwnerId },
   ): Promise<void> {
     // Memory disabled means no persistence at all, the session file included: a user who
     // turned memory off must not get transcripts under <project>/.strada-memory. Deliberate,
@@ -1337,7 +1345,7 @@ export class SessionManager {
           {
             userMessage: extractText(userMsg),
             assistantMessage: extractText(assistantMsg),
-            ...(session?.memoryOwnerId ? { userId: session.memoryOwnerId } : {}),
+            ...(owner.userId ? { userId: owner.userId } : {}),
           },
         );
         if (result && typeof result === "object" && "kind" in result && result.kind === "err") {

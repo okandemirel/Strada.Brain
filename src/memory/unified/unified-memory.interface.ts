@@ -470,6 +470,8 @@ export interface IUnifiedMemory {
   /**
    * Store an entry with full control over metadata. `createdAt` is for
    * imports that carry the original time; a new entry omits it and gets now.
+   * A `userId` makes the entry its person's in every chat (see
+   * MemoryOwnershipOptions.userId).
    */
   storeEntry(
     entry: Omit<

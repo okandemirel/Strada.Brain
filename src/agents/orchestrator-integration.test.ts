@@ -23,6 +23,8 @@ import { DEFAULT_TASK_CONFIG } from "../config/config.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
 import { MemorySearchTool } from "./tools/memory-search.js";
 import { createToolContext } from "../test-helpers.js";
+import { BackgroundExecutor } from "../tasks/background-executor.js";
+import type { ChatId } from "../types/index.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -509,7 +511,9 @@ describe("Orchestrator Integration", () => {
           projectPath: "/tmp/test-project",
           readOnly: false,
           requireConfirmation: true,
-          memoryDbPath: memoryDir,
+          // Session files are written in the background after a turn; in the
+          // memory's own dir they raced the rmSync below (ENOTEMPTY).
+          memoryDbPath: TEST_MEMORY_DB_PATH,
           memoryManager: memory,
         });
 
@@ -561,6 +565,118 @@ describe("Orchestrator Integration", () => {
         );
         expect(elsewhere.content).not.toContain("cart puzzle");
       } finally {
+        await memory.shutdown();
+        rmSync(memoryDir, { recursive: true, force: true });
+      }
+    });
+
+    // memory-user-scope, on the route channel traffic takes: router → task →
+    // BackgroundExecutor.runWorkerEnvelope("background") → V2 worker run on a
+    // fresh session. handleMessage (above) is the interactive path, which no
+    // channel message reaches; the owner it records never got here, and the
+    // memory_search a run calls was handed no person to recall for.
+    it("a channel message's background run stores a web user's conversation as theirs, and memory_search in their next connection's run recalls it while another user's does not", async () => {
+      const memoryDir = mkdtempSync(join(tmpdir(), "strada-orch-user-scope-bg-"));
+      const memory = new FileMemoryManager(join(memoryDir, "db"));
+      await memory.initialize();
+      const searchTool = new MemorySearchTool(memory);
+      const searchSpy = vi.spyOn(searchTool, "execute");
+      const orch = new Orchestrator({
+        providerManager: makeProviderManager(mockProvider),
+        tools: [readTool, searchTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
+        memoryManager: memory,
+      });
+      const executor = new BackgroundExecutor({ orchestrator: orch });
+      const runChannelTask = (
+        id: string,
+        prompt: string,
+        route: { chatId: string; channelType: string; conversationId: string; userId: string },
+      ) =>
+        executor.runWorkerEnvelope(orch, {
+          mode: "background",
+          prompt,
+          signal: new AbortController().signal,
+          onProgress: () => {},
+          taskRunId: id,
+          ...route,
+        });
+      const searchingTurn = (query: string): ProviderResponse => ({
+        text: "Let me check what we said before.",
+        toolCalls: [{ id: `tc-${Math.random().toString(36).slice(2, 8)}`, name: "memory_search", input: { query } }],
+        stopReason: "tool_use" as const,
+        usage: { inputTokens: 10, outputTokens: 10 },
+      });
+      const script = (...responses: ProviderResponse[]) => {
+        mockProvider.chat.mockReset();
+        for (const response of responses) mockProvider.chat.mockResolvedValueOnce(response);
+        mockProvider.chat.mockResolvedValue(approvalResponse());
+      };
+      const aliceWeb = { channelType: "web", conversationId: "profile-alice", userId: "profile-alice" };
+      try {
+        script(toolResponse("Plan: acknowledge the level plan."), toolResponse("Noted, a crane puzzle it is."));
+        await runChannelTask("task-a", "Plan the harbour level with a tide timer", { chatId: "web-bg-1", ...aliceWeb });
+        script(toolResponse("Plan: acknowledge the level plan."), toolResponse("Noted, a cart puzzle it is."));
+        await runChannelTask("task-b", "Plan the orchard level with a harvest timer", {
+          chatId: "C-bg-team",
+          channelType: "slack",
+          conversationId: "thread-bg-9",
+          userId: "U-alice",
+        });
+
+        // Write side: the run's speaker owns the web conversation; a Slack
+        // thread is not keyed to one person, so it stays its chat's.
+        const webHistory = await memory.getChatHistory("web-bg-1" as ChatId);
+        const threadHistory = await memory.getChatHistory("C-bg-team" as ChatId);
+        if (webHistory.kind !== "ok" || threadHistory.kind !== "ok") throw new Error("history read failed");
+        expect(webHistory.value.length).toBeGreaterThan(0);
+        expect(webHistory.value.every((entry) => entry.userId === "profile-alice")).toBe(true);
+        expect(threadHistory.value.length).toBeGreaterThan(0);
+        expect(threadHistory.value.every((entry) => entry.userId === undefined)).toBe(true);
+
+        // Read side, inside a run on the same route: Alice's next connection
+        // recalls her conversation; Bob's never does. The asserted words are not
+        // in the query: an empty result echoes the query.
+        script(
+          toolResponse("Plan: look up the earlier level plan."),
+          searchingTurn("harbour level tide timer"),
+          toolResponse("Found it."),
+        );
+        await runChannelTask("task-c", "What did we decide for the harbour level?", { chatId: "web-bg-2", ...aliceWeb });
+        script(
+          toolResponse("Plan: look up the earlier level plan."),
+          searchingTurn("harbour level tide timer"),
+          toolResponse("Nothing on record."),
+        );
+        await runChannelTask("task-d", "What did we decide for the harbour level?", {
+          chatId: "web-bg-3",
+          channelType: "web",
+          conversationId: "profile-bob",
+          userId: "profile-bob",
+        });
+
+        expect(searchSpy.mock.calls.map(([, context]) => context.chatId)).toEqual(["web-bg-2", "web-bg-3"]);
+        const [aliceSearch, bobSearch] = await Promise.all(searchSpy.mock.results.map((result) => result.value));
+        expect(aliceSearch.content).toContain("crane puzzle");
+        expect(bobSearch.content).not.toContain("crane puzzle");
+
+        // The thread's conversation does not follow Alice into another chat.
+        const elsewhere = await searchTool.execute(
+          { query: "orchard level harvest timer" },
+          createToolContext({ chatId: "C-bg-elsewhere", userId: "U-alice" }),
+        );
+        expect(elsewhere.content).not.toContain("cart puzzle");
+        const sameThread = await searchTool.execute(
+          { query: "orchard level harvest timer" },
+          createToolContext({ chatId: "C-bg-team", userId: "U-alice" }),
+        );
+        expect(sameThread.content).toContain("cart puzzle");
+      } finally {
+        await executor.shutdown();
         await memory.shutdown();
         rmSync(memoryDir, { recursive: true, force: true });
       }
