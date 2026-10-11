@@ -517,9 +517,20 @@ export function reconcileSeedBaseline(
   let reconciled = 0;
   for (const [rel, before] of beforeSeed) {
     const after = sourceSeed.get(rel);
-    // A rewrite inside the tick of the file's last write moves no stamp; only its bytes say it moved.
-    const sameBytes = before.h === undefined || after?.h === undefined || before.h === after.h;
-    if (after !== undefined && after.m === before.m && after.s === before.s && after.c === before.c && sameBytes) continue;
+    if (after !== undefined && after.m === before.m && after.s === before.s && after.c === before.c) {
+      // A rewrite inside the tick of the file's last write moves no stamp; only its bytes say it moved.
+      if (before.h === undefined || before.h === after.h) continue;
+      // Hashed before seeding and not after: a seed that outlasts the settle
+      // window finds settled the stamp the walk before it found fresh, so
+      // nobody has read the bytes since. Keeping the hashless stamp left the
+      // commit nothing to catch a same-tick save with; the pre-seed hash is
+      // what the commit checks them against instead. Not counted as moved:
+      // whether they moved is the commit's question.
+      if (after.h === undefined) {
+        sourceSeed.set(rel, before);
+        continue;
+      }
+    }
     sourceSeed.set(rel, before); // moved, or deleted: the pre-seed stamp is the baseline
     reconciled += 1;
   }

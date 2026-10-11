@@ -1462,6 +1462,24 @@ describe("size plus mtime cannot prove unchanged content (Codex 2026-09-12 P#16)
     expect(after.get("created.cs")?.absent).toBe(true);
     expect(existedAtSeed(after.get("created.cs"))).toBe(false);
   });
+
+  it("a hash taken before seeding outlives a post-seed stamp that settled unread, without calling the file moved", () => {
+    const h = "a".repeat(64);
+    const before = new Map<string, SeedStamp>([
+      ["slow.cs", { m: 1, s: 2, c: 3, h }],
+      ["rewritten.cs", { m: 1, s: 2, c: 3, h }],
+    ]);
+    const after = new Map<string, SeedStamp>([
+      ["slow.cs", { m: 1, s: 2, c: 3 }],
+      ["rewritten.cs", { m: 1, s: 2, c: 3, h: "b".repeat(64) }],
+    ]);
+
+    expect(reconcileSeedBaseline(before, after)).toBe(1);
+
+    // The commit checks the bytes against what the project held before seeding.
+    expect(after.get("slow.cs")).toEqual({ m: 1, s: 2, c: 3, h });
+    expect(after.get("rewritten.cs")).toEqual({ m: 1, s: 2, c: 3, h });
+  });
 });
 
 describe("the seed survives a restart exactly as it was written (Codex 2026-09-12 Q#5)", () => {

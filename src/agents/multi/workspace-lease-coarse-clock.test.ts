@@ -73,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fsClock.tickMs = undefined;
   fsClock.beforeStatUnder = undefined;
   rmSync(source, { recursive: true, force: true });
@@ -183,6 +184,52 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
 
     expect(result.conflicts).toEqual([rel]);
     expect(readFileSync(join(source, rel), "utf8")).toBe("class Mine  {}");
+  });
+
+  /** Let the seed outlast the settle window, after saving `bytes` over the project's copy once the lease was copied. */
+  const slowSeed = (bytes?: string): void => {
+    const realNow = Date.now.bind(Date);
+    fsClock.beforeStatUnder = {
+      prefix: leaseRoot,
+      run: () => {
+        if (bytes !== undefined) writeFileSync(join(source, rel), bytes, "utf8");
+        // A Unity tree's copy takes longer than the window: the post-seed
+        // walk finds a stamp that the pre-seed walk found fresh settled.
+        vi.spyOn(Date, "now").mockImplementation(() => realNow() + 6_000);
+      },
+    };
+  };
+
+  it("a person's same-length save inside the tick while seeding is not overwritten when the seed outlasts the settle window", async () => {
+    await startOfTick();
+    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    const manager = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+    slowSeed("class Mine  {}");
+    const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
+    expect(readFileSync(join(lease.path, rel), "utf8")).toBe("class Board {}");
+    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toEqual([rel]);
+    expect(readFileSync(join(source, rel), "utf8")).toBe("class Mine  {}");
+  });
+
+  it("a file nobody saved while a slow seed ran is still the agent's to publish", async () => {
+    await startOfTick();
+    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    const manager = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+    slowSeed();
+    const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).toEqual([rel]);
+    expect(readFileSync(join(source, rel), "utf8")).toBe("class Board { int agent; }");
   });
 
   it("a deletion does not take a file a person saved inside the tick after the seed was read", async () => {
