@@ -3128,6 +3128,35 @@ describe("CampaignManager", () => {
     expect(fresh.milestones[0]!.attempts).toBe(1); // fresh budget, one new attempt
   });
 
+  // owner-commands: "kampanya devam" is `/campaign revive` in words. The command
+  // is the instance owner's; the sentence revived — and resubmitted paid work —
+  // for anyone on the chat.
+  it("asks the command gate before a chat caller's sentence revives a campaign", async () => {
+    const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    tasks.emit("task:failed", "task_1", "boom");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    await failUntilStopped(campaign.id, "boom again");
+
+    const asked: Array<{ userId?: string; command: string; args: readonly string[] }> = [];
+    manager.setCommandGate(async (caller, command, args) => {
+      asked.push({ userId: caller.userId, command, args });
+      return caller.userId !== ctx.userId; // refused, and told, unless the owner (who also started it)
+    });
+    const say = (userId: string) =>
+      manager.tryHandleIncoming({ chatId: ctx.chatId, channelType: "telegram", userId, text: "kampanya devam", timestamp: new Date() });
+    const before = tasks.submitted.length;
+
+    expect(await say("guest")).toBe(true);
+    expect(asked).toEqual([{ userId: "guest", command: "campaign", args: ["revive"] }]);
+    expect(storage.get(campaign.id)!.state).toBe("failed");
+    expect(tasks.submitted.length).toBe(before);
+
+    expect(await say(ctx.userId)).toBe(true);
+    await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before));
+    expect(storage.get(campaign.id)!.state).toBe("executing");
+  });
+
   it("commits the working tree when a milestone goes green", async () => {
     rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true }); // Recordings/ never enters the envelope
     const { execFileSync } = await import("node:child_process");

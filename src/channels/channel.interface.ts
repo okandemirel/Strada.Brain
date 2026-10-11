@@ -8,6 +8,7 @@
 import type { IChannelCore, IChannelReceiver, IChannelSender } from "./channel-core.interface.js";
 import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
 import type { ResponseFeedbackPort } from "../learning/feedback/response-attribution.js";
+import type { InstanceFacts, InstanceRole } from "./web/instance-access.js";
 
 /**
  * Common interface for all messaging channel adapters.
@@ -59,6 +60,17 @@ export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChanne
    * report a thumbs up/down by the id of the message it is on.
    */
   setFeedbackHandler?(port: ResponseFeedbackPort | null): void;
+
+  /**
+   * How a caller stands in the shared-instance model, for a channel that issues
+   * its own identities (web); undefined for a caller it does not know. The
+   * command handler asks it before an owner-only power.
+   */
+  instanceStandingOf?(caller: {
+    readonly chatId: string;
+    readonly userId?: string;
+    readonly channelType?: string;
+  }): { readonly facts: InstanceFacts; readonly role: InstanceRole } | undefined;
 
   // Core features are required
   // Optional features use type guards

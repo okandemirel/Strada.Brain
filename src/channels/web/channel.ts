@@ -47,6 +47,7 @@ import {
   type InstanceActor,
   type InstanceFacts,
   type InstanceResource,
+  type InstanceRole,
   type InstanceSurface,
 } from "./instance-access.js";
 import { getLoggerSafe } from "../../utils/logger.js";
@@ -1052,6 +1053,23 @@ export class WebChannel
       ...(role === "unidentified" ? {} : { profileId: profileId! }),
       ...(chatId ? { chatId } : {}),
     };
+  }
+
+  /**
+   * How a web caller stands, for the command handler (owner-commands).
+   * `allowChatCommand` sees only text that parses as a command; a sentence
+   * that the handler turns into the same power ("I raised the budget to
+   * 100000k") arrives without one, so the handler asks these identities too
+   * instead of taking every web caller for the owner.
+   */
+  instanceStandingOf(caller: {
+    readonly chatId: string;
+    readonly userId?: string;
+    readonly channelType?: string;
+  }): { readonly facts: InstanceFacts; readonly role: InstanceRole } | undefined {
+    if (caller.channelType !== "web") return undefined;
+    const facts = this.instanceFacts();
+    return { facts, role: this.actorFor(caller.userId, caller.chatId, facts).role };
   }
 
   /** The actor behind a chatId, whether or not its socket is live right now. */

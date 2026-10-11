@@ -750,6 +750,54 @@ describe("bootstrap-stages", () => {
     expect(channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "update available");
   });
 
+  // owner-commands: the handler it builds asks the channel who a caller is, so
+  // the portal's guest is not taken for the owner of the instance.
+  it("builds a command handler that asks the channel how a caller stands", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      instanceStandingOf: (caller: { userId?: string; channelType?: string }) =>
+        caller.channelType === "web"
+          ? { facts: { shared: true, ownerProfileId: "owner" }, role: caller.userId === "owner" ? "owner" as const : "guest" as const }
+          : undefined,
+    } as any;
+    const { commandHandler } = await initializeTaskRuntimeStage({
+      daemonMode: false,
+      config: makeConfig(),
+      logger: createMockLogger(),
+      orchestrator: { setTaskManager: vi.fn() } as any,
+      providerManager: { getProvider: vi.fn() } as any,
+      channel,
+      dmPolicy: {} as any,
+      userProfileStore: {} as any,
+      soulLoader: {} as any,
+      runtimeArtifactManager: {} as any,
+      activityRegistry: { getActiveChatIds: vi.fn().mockReturnValue([]) } as any,
+      goalDecomposer: {} as any,
+      goalStorage: {} as any,
+      learningEventBus: {} as any,
+      identityManager: { incrementTasks: vi.fn() } as any,
+      startupNotices: [],
+    }, {
+      createTaskStorage: vi.fn().mockReturnValue({ initialize: vi.fn() }),
+      createDaemonEventBus: vi.fn().mockReturnValue({}),
+      createBackgroundExecutor: vi.fn().mockReturnValue({ setTaskManager: vi.fn() }),
+      createTaskManager: vi.fn().mockReturnValue({ recoverOnStartup: vi.fn(), on: vi.fn() }),
+      createAutoUpdater: vi.fn().mockReturnValue({ setNotifyFn: vi.fn(), init: vi.fn(), scheduleChecks: vi.fn() }),
+      createMessageRouter: vi.fn().mockReturnValue({}),
+      createProgressReporter: vi.fn(),
+    });
+    const updateConfig = vi.fn();
+    commandHandler.setUnifiedBudgetManager({ updateConfig } as any);
+
+    await commandHandler.handle("chat-g", "token", ["5000"], "guest", "web");
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(channel.sendText).toHaveBeenCalledWith("chat-g", expect.stringMatching(/^Refused: guest identity guest may not change this instance's setup/));
+
+    await commandHandler.handle("chat-o", "token", ["5000"], "owner", "web");
+    expect(updateConfig).toHaveBeenCalledWith({ interactiveTokenBudget: 5000 });
+  });
+
   it("loads heartbeat triggers into the shared trigger registry and tracks webhook triggers", () => {
     const logger = createMockLogger();
     const triggerRegistry = {

@@ -173,6 +173,17 @@ describe("HubChannel", () => {
     expect(tg.setFeedbackHandler).toHaveBeenCalledWith(feedback);
   });
 
+  // owner-commands: behind a hub the portal still answers for the identities it
+  // issued; without that the command handler took a web guest for the owner.
+  it("asks the member that knows a caller how it stands, and nobody else", () => {
+    const guest = { facts: { shared: true, ownerProfileId: "owner" }, role: "guest" as const };
+    const web = fake("web", { instanceStandingOf: vi.fn((c: { channelType?: string }) => (c.channelType === "web" ? guest : undefined)) });
+    const tg = fake("telegram");
+    const hub = track(new HubChannel([tg, web]));
+    expect(hub.instanceStandingOf({ chatId: "c", userId: "p", channelType: "web" })).toBe(guest);
+    expect(hub.instanceStandingOf({ chatId: "c", userId: "111", channelType: "telegram" })).toBeUndefined();
+  });
+
   // LRN-20b: the member that sends a final response is the one that learns the
   // sent message's id, so the response attribution must reach it.
   it("passes a final response's attribution through to the owning member", async () => {

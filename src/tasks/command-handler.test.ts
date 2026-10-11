@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { CommandHandler, chatChannelAccessFromConfig, chatInstanceAuthority } from "./command-handler.js";
+import type { TaskCommand } from "./types.js";
+import { commandPrivilege } from "../channels/web/instance-access.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -1072,5 +1074,229 @@ describe("Chat task and daemon commands act only for their owner (TSK-6)", () =>
     expect(authority.standingOf({ chatId: "c", userId: "p", channelType: "web" }).role).toBe("owner");
     expect(authority.standingOf({ chatId: "c", userId: "cli-user", channelType: "cli" }).role).toBe("owner");
     expect(authority.standingOf({ chatId: "c", userId: "x" }).role).toBe("unidentified");
+  });
+});
+
+describe("One owner rule for every chat command and its plain-language form (owner-commands)", () => {
+  // THE DEFECT. The shared-instance model (COMMAND_PRIVILEGE) calls /token,
+  // /routing preset, /persona delete, /autonomous on, /campaign revive, /run …
+  // owner-only, but only the web portal asked it. Telegram, Discord, Slack and
+  // Teams dispatch straight to the handler, which checked /daemon and the task
+  // commands and nothing else — so any allowlisted member set the instance's
+  // budget, routing and personas. The plain-language "I raised the budget to
+  // 100000k" skipped the check on every channel, the portal included.
+  const OWNER_TASK = "task_owner";
+  const GUEST = { chatId: "chat-222", userId: "222", channelType: "telegram" } as const;
+  const OWNER = { chatId: "chat-111", userId: "111", channelType: "telegram" } as const;
+  const shared = () => chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111", "222"] } });
+  const singleOwner = () => chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111"] } });
+
+  // Keyed on TaskCommand: a new command does not compile into this table until
+  // its forms are written down, and every form the model calls owner-only is
+  // then held to the refusal below without another line of test.
+  const FORMS: Readonly<Record<TaskCommand, ReadonlyArray<readonly string[]>>> = {
+    tasks: [[]],
+    help: [[]],
+    agent: [[], ["status"]],
+    measure: [[]],
+    guardian: [[]],
+    status: [[], [OWNER_TASK]],
+    detail: [[OWNER_TASK]],
+    cancel: [[], [OWNER_TASK]],
+    pause: [[], [OWNER_TASK]],
+    resume: [[], [OWNER_TASK]],
+    goal: [["list"], ["cancel", OWNER_TASK], ["build", "a", "level"]],
+    retry: [[]],
+    continue: [[]],
+    daemon: [[], ["status"], ["triggers"], ["start"], ["stop"], ["restart"]],
+    autonomous: [[], ["status"], ["on", "168"], ["off"]],
+    model: [[], ["list"], ["info"], ["openai"], ["pin", "openai"], ["unpin"], ["reset"], ["bias", "openai"], ["sabitle", "openai"]],
+    campaign: [[], ["cancel"], ["revive"], ["resume"], ["devam"], ["continue"]],
+    run: [["rm", "-rf", "build"]],
+    routing: [[], ["info"], ["preset", "performance"]],
+    token: [[], ["-1"], ["100000k"]],
+    persona: [[], ["list"], ["switch", "formal"], ["create", "mine"], ["delete", "ownerstyle"], ["sil", "ownerstyle"]],
+    vault: [[], ["status"], ["init", "/tmp/elsewhere"], ["sync"]],
+  };
+  const forms = (Object.entries(FORMS) as Array<[TaskCommand, ReadonlyArray<readonly string[]>]>)
+    .flatMap(([command, list]) => list.map((args) => ({ command, args: [...args], privilege: commandPrivilege(command, args) })));
+  const label = (f: { command: string; args: string[] }) => `/${f.command} ${f.args.join(" ")}`.trim();
+
+  /**
+   * Every dependency the handler can reach, each one recording any call made
+   * on it. A refused command touches none of them: that is what "refused"
+   * means, whichever handler a future command adds.
+   */
+  function world(authority: ReturnType<typeof chatInstanceAuthority>) {
+    const touched: string[] = [];
+    const replies: string[] = [];
+    const recorder = (name: string, impl: Record<string, (...args: unknown[]) => unknown> = {}) =>
+      new Proxy({}, {
+        get: (_target, prop) => {
+          if (typeof prop !== "string" || prop === "then") return undefined;
+          return (...args: unknown[]) => {
+            touched.push(`${name}.${prop}`);
+            return impl[prop]?.(...args);
+          };
+        },
+      });
+    const ownerTask = {
+      id: OWNER_TASK, chatId: OWNER.chatId, userId: OWNER.userId, status: "executing",
+      title: "title of the owner's task", prompt: "secret prompt", result: "secret result",
+      progress: [], createdAt: 1, updatedAt: 1,
+    };
+    const taskManager = recorder("taskManager", {
+      getStatus: (id) => (id === OWNER_TASK ? ownerTask : null),
+      listTasks: (chatId) => (chatId === OWNER.chatId ? [ownerTask] : []),
+    });
+    const channel = new Proxy({}, {
+      get: (_target, prop) => {
+        if (typeof prop !== "string" || prop === "then") return undefined;
+        return async (...args: unknown[]) => {
+          if (prop === "sendText" || prop === "sendMarkdown") replies.push(String(args[1]));
+          else touched.push(`channel.${prop}`);
+          return undefined;
+        };
+      },
+    });
+    const handler = new CommandHandler(
+      taskManager as never,
+      channel as never,
+      recorder("providerManager") as never,
+      recorder("dmPolicy") as never,
+      recorder("userProfileStore") as never,
+      recorder("soulLoader") as never,
+      recorder("runtimeArtifacts") as never,
+      "fingerprint",
+      recorder("heartbeat") as never,
+      { instanceAuthority: authority },
+    );
+    handler.setProviderRouter(recorder("providerRouter") as never);
+    handler.setUnifiedBudgetManager(recorder("budget") as never);
+    handler.setTaskCheckpointStore(recorder("checkpoints", {
+      loadLatest: async () => ({ taskId: "task_cp", chatId: GUEST.chatId, stage: "budget_exceeded", touchedFiles: [], lastUserMessage: "go", timestamp: 1 }),
+    }) as never);
+    handler.setOrchestrator(recorder("orchestrator", { continueFromCheckpoint: async () => ({ status: "resumed" }) }) as never);
+    handler.setVaultRegistry(recorder("vaults") as never);
+    handler.setProjectPath("/tmp/project-that-must-not-be-touched");
+    handler.setCampaignManager(recorder("campaign") as never);
+    handler.setRealTreeGuardian(recorder("guardian") as never);
+    handler.setDeliveryMeasurer(((root: string) => { touched.push(`measure(${root})`); return {} as never; }));
+    // What the wiring itself calls (the campaign layer's gate) is not a command's doing.
+    touched.length = 0;
+    return { handler, touched, replies };
+  }
+
+  const run = async (w: ReturnType<typeof world>, who: typeof GUEST | typeof OWNER, command: TaskCommand, args: string[]) =>
+    w.handler.handle(who.chatId, command, args, who.userId, who.channelType).catch(() => undefined);
+
+  it("covers every privileged command the model names", () => {
+    const privileged = [...new Set(forms.filter((f) => f.privilege.kind === "owner-only").map((f) => f.command))].sort();
+    expect(privileged).toEqual(["autonomous", "campaign", "daemon", "model", "persona", "routing", "run", "token", "vault"]);
+  });
+
+  it("refuses every owner-only form a guest types before it touches anything", async () => {
+    const leaks: string[] = [];
+    for (const form of forms.filter((f) => f.privilege.kind === "owner-only")) {
+      const w = world(shared());
+      await run(w, GUEST, form.command, form.args);
+      const refused = w.replies.length === 1 && /^Refused: guest identity 222 may not /.test(w.replies[0]!);
+      if (!refused || w.touched.length > 0) {
+        leaks.push(`${label(form)} → touched [${w.touched.join(", ")}], replied ${JSON.stringify(w.replies)}`);
+      }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  it("leaves the owner of a single-user roster every one of those powers", async () => {
+    const refused: string[] = [];
+    for (const form of forms.filter((f) => f.privilege.kind === "owner-only")) {
+      const w = world(singleOwner());
+      await run(w, OWNER, form.command, form.args);
+      if (w.replies.some((r) => r.startsWith("Refused"))) refused.push(label(form));
+    }
+    expect(refused).toEqual([]);
+  });
+
+  it("keeps a guest's reads and own-traffic forms open, and never hands it the owner's task", async () => {
+    const wrong: string[] = [];
+    for (const form of forms.filter((f) => f.privilege.kind !== "owner-only")) {
+      const w = world(shared());
+      await run(w, GUEST, form.command, form.args);
+      if (w.replies.some((r) => r.startsWith("Refused"))) wrong.push(`${label(form)} refused`);
+      const acted = w.touched.filter((t) => /^taskManager\.(cancel|pauseTask|resumeTask)$/.test(t));
+      if (form.privilege.kind === "task" && acted.length > 0) wrong.push(`${label(form)} → ${acted.join(", ")}`);
+      if (w.replies.some((r) => r.includes("secret") || r.includes("owner's task"))) wrong.push(`${label(form)} revealed the task`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("refuses a guest's plain-language budget change exactly like /token", async () => {
+    const guest = world(shared());
+    const handled = await guest.handler.tryHandleImplicitRecovery(
+      GUEST.chatId, "I raised the budget to 100000k", GUEST.userId, GUEST.channelType,
+    );
+    expect(handled).toBe(true);
+    expect(guest.touched).not.toContain("budget.updateConfig");
+    expect(guest.touched).not.toContain("orchestrator.continueFromCheckpoint");
+    expect(guest.replies.join("\n")).toMatch(/^Refused: guest identity 222 may not change this instance's setup/);
+
+    const owner = world(singleOwner());
+    await owner.handler.tryHandleImplicitRecovery(OWNER.chatId, "I raised the budget to 100000k", OWNER.userId, OWNER.channelType);
+    expect(owner.touched).toContain("budget.updateConfig");
+    expect(owner.touched).toContain("orchestrator.continueFromCheckpoint");
+  });
+
+  it("gives the campaign layer's sentences the rule its commands answer to", async () => {
+    // "kampanya devam" is `/campaign revive` in words and is matched by the
+    // campaign layer, not by detectCommand — so the handler hands it the rule.
+    type Gate = (caller: { chatId: string; userId?: string; channelType?: string }, command: TaskCommand, args: readonly string[]) => Promise<boolean>;
+    const gateOf = (authority: ReturnType<typeof chatInstanceAuthority>) => {
+      const w = world(authority);
+      let gate: Gate | undefined;
+      w.handler.setCampaignManager({ describeStatus: () => undefined, reviveByCommand: async () => false, setCommandGate: (g: Gate) => { gate = g; } });
+      return { gate: gate!, replies: w.replies };
+    };
+
+    const guest = gateOf(shared());
+    expect(await guest.gate(GUEST, "campaign", ["revive"])).toBe(true);
+    expect(guest.replies).toEqual([expect.stringMatching(/^Refused: guest identity 222 may not control this instance "\/campaign revive"/)]);
+    // A form the model leaves open stays open.
+    expect(await guest.gate(GUEST, "campaign", ["cancel"])).toBe(false);
+
+    const owner = gateOf(singleOwner());
+    expect(await owner.gate(OWNER, "campaign", ["revive"])).toBe(false);
+    expect(owner.replies).toEqual([]);
+  });
+
+  it("asks the portal who a web caller is, because the portal gates only typed commands", async () => {
+    // The portal's identities live in its identity store; the handler used to
+    // call every web caller the owner because the portal gates `/token`. The
+    // plain-language budget line is not a command to the portal and reached
+    // the handler unchecked.
+    const OWNER_PROFILE = "owner-profile";
+    const portal = {
+      instanceStandingOf: (caller: { userId?: string; channelType?: string }) =>
+        caller.channelType !== "web"
+          ? undefined
+          : {
+            facts: { shared: true, ownerProfileId: OWNER_PROFILE },
+            role: caller.userId === OWNER_PROFILE ? "owner" as const : "guest" as const,
+          },
+    };
+    const authority = chatInstanceAuthority(chatChannelAccessFromConfig({} as never), portal);
+    expect(authority.standingOf({ chatId: "c", userId: "guest-profile", channelType: "web" }).role).toBe("guest");
+    expect(authority.standingOf({ chatId: "c", userId: OWNER_PROFILE, channelType: "web" }).role).toBe("owner");
+    // A gated channel the source does not answer for is the local operator.
+    expect(authority.standingOf({ chatId: "c", userId: "cli-user", channelType: "cli" }).role).toBe("owner");
+
+    const guest = world(authority);
+    await guest.handler.tryHandleImplicitRecovery("ws-guest", "budget 1k", "guest-profile", "web");
+    expect(guest.touched).not.toContain("budget.updateConfig");
+    expect(guest.replies.join("\n")).toMatch(/^Refused: guest identity guest-profile/);
+
+    const owner = world(authority);
+    await owner.handler.tryHandleImplicitRecovery("ws-owner", "budget 1k", OWNER_PROFILE, "web");
+    expect(owner.touched).toContain("budget.updateConfig");
   });
 });

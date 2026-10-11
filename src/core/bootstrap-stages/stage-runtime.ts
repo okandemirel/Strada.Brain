@@ -375,8 +375,9 @@ export async function initializeTaskRuntimeStage(
       autonomousDefaultEnabled: params.config.autonomousDefaultEnabled,
       autonomousDefaultHours: params.config.autonomousDefaultHours,
       // Chat channels that dispatch commands without the portal's gate learn
-      // who may control the instance from their own allowlists (TSK-6).
-      instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig(params.config)),
+      // who may control the instance from their own allowlists (TSK-6); the
+      // portal answers for its own identities (owner-commands).
+      instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig(params.config), params.channel),
     },
   );
   if (params.providerRouter) {

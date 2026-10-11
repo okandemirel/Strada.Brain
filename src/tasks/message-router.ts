@@ -228,7 +228,12 @@ export class MessageRouter {
   private async tryImplicitRecovery(msg: IncomingMessage): Promise<boolean> {
     const logger = getLogger();
     try {
-      const handled = await this.commandHandler.tryHandleImplicitRecovery(msg.chatId, msg.text, msg.userId);
+      const handled = await this.commandHandler.tryHandleImplicitRecovery(
+        msg.chatId,
+        msg.text,
+        msg.userId,
+        msg.channelType,
+      );
       if (handled) {
         logger.info("Message classified as implicit recovery intent", { chatId: msg.chatId });
       }

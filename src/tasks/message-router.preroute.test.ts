@@ -44,7 +44,7 @@ describe("MessageRouter.preRoute", () => {
     const { router, tryHandleImplicitRecovery, route } = routerWith(false, true);
     const consumed = await router.preRoute({ chatId: "c", text: "tekrar dene", channelType: "cli", userId: "u" } as never);
     expect(consumed).toBe(true);
-    expect(tryHandleImplicitRecovery).toHaveBeenCalledWith("c", "tekrar dene", "u");
+    expect(tryHandleImplicitRecovery).toHaveBeenCalledWith("c", "tekrar dene", "u", "cli");
     expect(route).not.toHaveBeenCalled();
   });
 

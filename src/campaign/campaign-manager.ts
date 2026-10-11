@@ -31,7 +31,7 @@ import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProvide
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import { decideInstanceAccess } from "../channels/web/instance-access.js";
 import type { TaskManager } from "../tasks/task-manager.js";
-import type { TaskId } from "../tasks/types.js";
+import type { TaskCommand, TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
@@ -992,7 +992,20 @@ const REVIVE_TAIL_RE = /\n\nA ROUND OF ATTEMPTS ENDED[\s\S]*?keep whatever alrea
 /** How long before a self-revived implementation failure tries again. */
 const IMPLEMENTATION_REVIVE_DELAY_MS = 5 * 60_000;
 
+/**
+ * May this chat caller use the command's power? A refused caller is told why,
+ * and the promise resolves true. The command handler installs it, so a
+ * sentence ("kampanya devam") and its command (`/campaign revive`) get one
+ * answer (owner-commands).
+ */
+export type CampaignCommandGate = (
+  caller: { readonly chatId: string; readonly userId?: string; readonly channelType?: string },
+  command: TaskCommand,
+  args: readonly string[],
+) => Promise<boolean>;
+
 export class CampaignManager {
+  private commandGate?: CampaignCommandGate;
   private readonly storage: CampaignStorage;
   private readonly planner: CampaignPlanner;
   private readonly visionProvider: { provider: import("../agents/providers/provider.interface.js").IAIProvider; name: string } | null;
@@ -1201,7 +1214,7 @@ export class CampaignManager {
     if (await this.tryHandleCancel(msg.chatId, msg.text, msg.userId)) return true;
     if (await this.tryHandleApproval(msg.chatId, msg.text, msg.userId)) return true;
     if (await this.tryHandleAmendment(msg.chatId, msg.text, msg.userId)) return true;
-    if (await this.tryHandleRevive(msg.chatId, msg.text, msg.userId)) return true;
+    if (await this.tryHandleRevive(msg.chatId, msg.text, msg.userId, msg)) return true;
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
@@ -1420,11 +1433,22 @@ export class CampaignManager {
    * Only the owner revives (audit 2026-10-11, campaign#5): cancel is
    * owner-only, and anyone else in a group chat could undo it with a fresh
    * paid budget. `userId` undefined is a programmatic call.
+   *
+   * `sentence` is the chat caller whose words these are; the command
+   * handler's own route (`reviveByCommand`) was judged before it got here.
    */
-  async tryHandleRevive(chatId: string, text: string, userId?: string): Promise<boolean> {
+  async tryHandleRevive(
+    chatId: string,
+    text: string,
+    userId?: string,
+    sentence?: Parameters<CampaignCommandGate>[0],
+  ): Promise<boolean> {
     if (!REVIVE_RE.test(text.trim())) return false;
     const campaign = this.storage.findLatestRevivable(chatId, this.isOurs);
     if (!campaign) return false;
+    // `/campaign revive` said in words: one rule for both, or a guest's
+    // sentence restarts paid work the command would have refused.
+    if (sentence && this.commandGate && (await this.commandGate(sentence, "campaign", ["revive"]))) return true;
     if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) {
       await this.tell({ chatId }, "Only the person who started this campaign can revive it.");
       return true;
@@ -8741,6 +8765,11 @@ export class CampaignManager {
    */
   async reviveByCommand(chatId: string, userId?: string): Promise<boolean> {
     return this.tryHandleRevive(chatId, "kampanya devam", userId);
+  }
+
+  /** Installed by the command handler when it is given this campaign layer. */
+  setCommandGate(gate: CampaignCommandGate | undefined): void {
+    this.commandGate = gate;
   }
 
   private async tell(

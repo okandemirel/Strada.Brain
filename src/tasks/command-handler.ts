@@ -28,7 +28,7 @@ import type { CampaignStatusSnapshot } from "../campaign/campaign-status.js";
 import { formatCampaignStatus, formatGuardianStatus, formatMeasurement } from "../campaign/campaign-status.js";
 import type { RealTreeGuardianSnapshot } from "../daemon/real-tree-guardian.js";
 import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
-import { decideInstanceAccess } from "../channels/web/instance-access.js";
+import { commandPrivilege, decideInstanceAccess } from "../channels/web/instance-access.js";
 import type {
   AccessDecision,
   InstanceFacts,
@@ -45,7 +45,10 @@ import { getLoggerSafe } from "../utils/logger.js";
 // (src/channels/web/instance-access.ts) before they reach this handler, but
 // Telegram, Discord, Slack and Teams dispatch straight here. The handler
 // therefore applies the same model itself: a command that names a task acts
-// only on the caller's own task, and daemon control is the instance owner's.
+// only on the caller's own task, and every form the model calls owner-only
+// (`commandPrivilege`: /daemon start, /autonomous on, /token, /routing preset,
+// /persona delete, /campaign revive, /run …) is the instance owner's — as is
+// the plain-language budget change that stands in for `/token`.
 
 /** Who typed the command. */
 export interface ChatCaller {
@@ -57,10 +60,12 @@ export interface ChatCaller {
 /**
  * How one chat channel's callers stand in the shared-instance model.
  *
- *   gated  — the channel applies the model to every typed line before
+ *   gated  — the channel applies the model to every typed command before
  *            dispatch (web: `allowChatCommand`), or only the operator at this
- *            machine can type into it (cli). An instance power the channel let
- *            through is not second-guessed here.
+ *            machine can type into it (cli). A channel that keeps its own
+ *            identities still answers for them through `ChatStandingSource`:
+ *            its gate sees only commands, and a plain-language line ("I raised
+ *            the budget to 100000k") reaches the same power without one.
  *   roster — the channel admits callers by id. Exactly one listed id and no
  *            other way in is a single-identity instance owned by that id;
  *            anything else is shared, and since no owner is recorded for a chat
@@ -82,6 +87,14 @@ export interface ChatInstanceAuthority {
 }
 
 /**
+ * A channel that issues its own identities (the web portal) and can say how a
+ * caller stands; undefined for a caller it does not know.
+ */
+export interface ChatStandingSource {
+  instanceStandingOf?(caller: ChatCaller): ChatInstanceStanding | undefined;
+}
+
+/**
  * With nothing wired (embedded use, unit tests) the handler keeps the
  * single-user behaviour it always had for instance powers: the caller is the
  * owner of an unshared instance. Another identity's task is refused either way.
@@ -90,9 +103,12 @@ const SOLE_OWNER: ChatInstanceStanding = { facts: { shared: false }, role: "owne
 
 export function chatInstanceAuthority(
   channels: Readonly<Partial<Record<string, ChatChannelAccess>>>,
+  source?: ChatStandingSource,
 ): ChatInstanceAuthority {
   return {
     standingOf(caller) {
+      const answered = source?.instanceStandingOf?.(caller);
+      if (answered) return answered;
       const access = caller.channelType ? channels[caller.channelType] : undefined;
       // A route nobody described vouches for nobody.
       if (!access) return { facts: { shared: true }, role: "unidentified" };
@@ -139,6 +155,8 @@ export interface CampaignStatusSource {
   reviveByCommand(chatId: string, userId: string): Promise<boolean>;
   /** Stop this chat's active campaign; the caller must own it. */
   cancelByCommand?(chatId: string, userId: string): Promise<boolean>;
+  /** Let the campaign layer's sentences ask the rule its commands answer to; resolves true when refused. */
+  setCommandGate?(gate: (caller: ChatCaller, command: TaskCommand, args: readonly string[]) => Promise<boolean>): void;
 }
 
 /** The slice of RealTreeGuardian the channels' status commands need. */
@@ -289,6 +307,8 @@ export class CommandHandler {
   /** Wire the campaign layer so `/campaign` can read and revive it. */
   setCampaignManager(source: CampaignStatusSource | undefined): void {
     this.campaignStatusSource = source;
+    // "kampanya devam" is `/campaign revive` in words: it asks the same rule.
+    source?.setCommandGate?.((caller, command, args) => this.refusedForCaller(caller, command, args));
   }
 
   /** Wire the real-tree guardian so `/guardian` and `/campaign` can show its last verdict. */
@@ -373,6 +393,32 @@ export class CommandHandler {
     return this.mayActOnTask(task, caller) ? task : null;
   }
 
+  private callerOf(chatId: string, userId?: string, channelType?: string): ChatCaller {
+    return {
+      chatId,
+      ...(userId !== undefined ? { userId } : {}),
+      ...(channelType ? { channelType } : {}),
+    };
+  }
+
+  /**
+   * Refuse, and say why, any form the model calls owner-only that this caller
+   * may not use. It runs before dispatch — on every typed command and on each
+   * plain-language stand-in for one — so a handler never has to remember to
+   * ask: before this, only /daemon did, and a guest on a shared roster set the
+   * instance's budget, routing and personas. Forms that name a task are judged
+   * by `callerTask`, which answers another identity's task like a missing one.
+   */
+  private async refusedForCaller(caller: ChatCaller, command: TaskCommand, args: readonly string[]): Promise<boolean> {
+    const privilege = commandPrivilege(command, args);
+    if (privilege.kind !== "owner-only") return false;
+    const what = `/${command} ${args.join(" ")}`.trim();
+    const decision = this.decideForCaller(caller, privilege.surface, what);
+    if (decision.allowed) return false;
+    await this.channel.sendText(caller.chatId, `Refused: ${decision.reason}.`);
+    return true;
+  }
+
   async handle(
     chatId: string,
     command: TaskCommand,
@@ -380,11 +426,8 @@ export class CommandHandler {
     userId?: string,
     channelType?: string,
   ): Promise<void> {
-    const caller: ChatCaller = {
-      chatId,
-      ...(userId !== undefined ? { userId } : {}),
-      ...(channelType ? { channelType } : {}),
-    };
+    const caller = this.callerOf(chatId, userId, channelType);
+    if (await this.refusedForCaller(caller, command, args)) return;
     switch (command) {
       case "status":
         await this.handleStatus(caller, args[0] as TaskId | undefined);
@@ -1356,16 +1399,6 @@ export class CommandHandler {
     const { chatId } = caller;
     const subcommand = args[0]?.toLowerCase();
 
-    // One daemon serves every identity: starting or stopping it is the
-    // instance owner's (the model's instance:control surface).
-    if (subcommand === "start" || subcommand === "stop") {
-      const decision = this.decideForCaller(caller, "instance:control", `/daemon ${subcommand}`);
-      if (!decision.allowed) {
-        await this.channel.sendText(chatId, `Refused: ${decision.reason}.`);
-        return;
-      }
-    }
-
     // status / no args → show current state
     if (!subcommand || subcommand === "status") {
       if (!this.heartbeatLoopRef) {
@@ -1787,6 +1820,7 @@ export class CommandHandler {
     // orchestrator so ownership is re-checked inside
     // `continueFromCheckpoint`. See TaskCheckpointStore migration notes.
     userId?: string,
+    channelType?: string,
   ): Promise<boolean> {
     if (!this.checkpointStore || !this.orchestratorRef) return false;
     const trimmed = (text ?? "").trim();
@@ -1816,6 +1850,11 @@ export class CommandHandler {
 
     if (intent.kind === "update_budget" && intent.confidence >= MIN_CONFIDENCE && typeof intent.tokenK === "number" && intent.tokenK > 0) {
       if (!this.unifiedBudgetManager) return false;
+      // The instance-wide budget, set by sentence instead of by `/token`: the
+      // same owner rule, or a guest's own checkpoint becomes the way round it.
+      // Refused means not resumed either — the run would only hit the budget again.
+      const caller = this.callerOf(chatId, userId, channelType);
+      if (await this.refusedForCaller(caller, "token", [`${intent.tokenK}k`])) return true;
       // Validate + clamp. Mirrors the explicit `/token` range so a user cannot
       // escalate the interactive budget beyond TOKEN_BUDGET_MAX (or below
       // TOKEN_BUDGET_MIN) through natural-language recovery. CWE-20.

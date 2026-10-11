@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import { validateHeaderValue } from "node:http";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import { IdentityIssueLimiter } from "./identity-issue-limiter.js";
+import { CommandHandler, chatChannelAccessFromConfig, chatInstanceAuthority } from "../../tasks/command-handler.js";
+import { MessageRouter } from "../../tasks/message-router.js";
+import { createLogger } from "../../utils/logger.js";
 import {
   MAX_ATTACHMENT_BYTES_PER_MESSAGE,
   MEDIA_SIZE_LIMITS,
@@ -3715,6 +3718,53 @@ describe("WebChannel shared instance: the ways around the owner check (round 13)
     await settle();
     expect(seen).toContain("/goal cancel task-owner");
 
+    await channel.disconnect();
+  });
+
+  // ── owner-commands: the same power, said in a sentence ─────────────────────
+  //
+  // THE DEFECT. allowChatCommand gates what parses as a command, and "I raised
+  // the budget to 100000k" does not: the router hands it to implicit recovery,
+  // which set the instance-wide interactive budget for anyone holding a
+  // checkpoint — and the handler took every web caller for the owner, because
+  // the portal "gates its own". Wired as stage-runtime wires it, end to end.
+  it("refuses a guest's plain-language budget change that never reached the portal's gate as /token", async () => {
+    createLogger("error", join(tmpdir(), "strada-web-owner-commands-test.log")); // the router needs one
+    const channel = new WebChannel(3000, 3100);
+    const owner = identify(channel, OWNER_ID);
+    const guest = identify(channel, GUEST_ID);
+
+    const updateConfig = vi.fn();
+    const continueFromCheckpoint = vi.fn(async () => ({ status: "resumed" as const }));
+    const handler = new CommandHandler(
+      {} as never, channel, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig({} as never), channel) },
+    );
+    handler.setUnifiedBudgetManager({ updateConfig } as never);
+    handler.setTaskCheckpointStore({
+      // Each identity's own checkpoint: a guest gets one by pausing its own task.
+      loadLatest: async (chatId: string) => ({
+        taskId: `task-of-${chatId}`, chatId, stage: "budget_exceeded", touchedFiles: [], lastUserMessage: "go", timestamp: 1,
+      }),
+    } as never);
+    handler.setOrchestrator({ continueFromCheckpoint } as never);
+    const router = new MessageRouter(
+      { submit: vi.fn(), listActiveTasks: () => [] } as never, handler, channel, [], { burstWindowMs: 5, maxBurstMessages: 4 },
+    );
+    channel.onMessage((msg) => router.route(msg));
+
+    guest.send({ type: "message", text: "I raised the budget to 100000k" });
+    await vi.waitFor(() => expect(guest.text()).toMatch(/^Refused: guest identity \S+ may not change this instance's setup/m));
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(continueFromCheckpoint).not.toHaveBeenCalled();
+
+    // The owner's identical sentence still sets it and resumes the run.
+    owner.send({ type: "message", text: "I raised the budget to 100000k" });
+    await vi.waitFor(() => expect(continueFromCheckpoint).toHaveBeenCalledTimes(1));
+    expect(updateConfig).toHaveBeenCalledWith({ interactiveTokenBudget: 100_000_000 });
+    expect(owner.text()).not.toContain("Refused");
+
+    router.dispose();
     await channel.disconnect();
   });
 

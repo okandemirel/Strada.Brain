@@ -355,6 +355,17 @@ export class HubChannel implements IChannelAdapter {
     for (const m of this.members) m.setFeedbackHandler?.(port);
   }
 
+  /** The member that issued the caller's identity answers for it (a web caller behind a hub is still the portal's). */
+  instanceStandingOf(
+    caller: Parameters<NonNullable<IChannelAdapter["instanceStandingOf"]>>[0],
+  ): ReturnType<NonNullable<IChannelAdapter["instanceStandingOf"]>> {
+    for (const m of this.members) {
+      const standing = m.instanceStandingOf?.(caller);
+      if (standing) return standing;
+    }
+    return undefined;
+  }
+
   setBuildStatusProvider(provider: unknown): void {
     for (const m of this.members) m.setBuildStatusProvider?.(provider);
   }
