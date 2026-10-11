@@ -778,6 +778,42 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     expect(sendMarkdown).not.toHaveBeenCalled(); // not the status view
   });
 
+  it("/campaign rows and /campaign rejudge print what the campaign layer reads, in either language (W14)", async () => {
+    const handler = makeHandler();
+    const describeRows = vi.fn(() => "*GDD rows* — m1: 3 passing");
+    const rejudgeByCommand = vi.fn(() => "⚖️ Re-judged: 0 of 6 stored greens would be green");
+    handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand: vi.fn(), describeRows, rejudgeByCommand });
+
+    await handler.handle("chat-1", "campaign", ["rows", "m1"]);
+    expect(describeRows).toHaveBeenCalledWith("chat-1", "m1");
+    expect(String(sendMarkdown.mock.calls[0]?.[1])).toContain("m1: 3 passing");
+
+    await handler.handle("chat-1", "campaign", ["satırlar"]);
+    expect(describeRows).toHaveBeenLastCalledWith("chat-1", undefined);
+
+    await handler.handle("chat-1", "campaign", ["rejudge", "campaign_1787904962170_18d4t"]);
+    expect(rejudgeByCommand).toHaveBeenCalledWith("chat-1", "campaign_1787904962170_18d4t");
+    expect(String(sendMarkdown.mock.calls.at(-1)?.[1])).toContain("0 of 6");
+  });
+
+  it("/campaign waive passes the target, the whole reason and the caller to the campaign's owner check (W14)", async () => {
+    const handler = makeHandler();
+    const waiveByCommand = vi.fn().mockResolvedValue(true);
+    handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand: vi.fn(), waiveByCommand });
+
+    await handler.handle("chat-1", "campaign", ["waive", "R-07", "cut", "from", "the", "MVP"], "u7");
+    expect(waiveByCommand).toHaveBeenCalledWith("chat-1", "u7", "R-07", "cut from the MVP");
+
+    await handler.handle("chat-1", "campaign", ["muaf", "§16.2", "MVP", "dışı"], "u7");
+    expect(waiveByCommand).toHaveBeenLastCalledWith("chat-1", "u7", "§16.2", "MVP dışı");
+    expect(sendMarkdown).not.toHaveBeenCalled(); // not the status view
+
+    // No reason, no waiver: the usage line, and the campaign is not asked.
+    await handler.handle("chat-1", "campaign", ["waive", "R-07"], "u7");
+    expect(waiveByCommand).toHaveBeenCalledTimes(2);
+    expect(String(sendText.mock.calls.at(-1)?.[1])).toMatch(/waive <row id, label or §section> <reason>/);
+  });
+
   it("/measure runs the delivery-gate measurement on the configured project and prints its counts", async () => {
     const handler = makeHandler();
     handler.setProjectPath("/proj");
@@ -1039,6 +1075,22 @@ describe("Chat task and daemon commands act only for their owner (TSK-6)", () =>
     // Reads stay open.
     await handler.handle("chat-222", "daemon", [], "222", "telegram");
     expect(sendMarkdown).toHaveBeenCalledWith("chat-222", expect.stringContaining("Daemon Status"));
+  });
+
+  it("a guest cannot waive a campaign's GDD rows, in either language; the single owner can (W14)", async () => {
+    const waiveByCommand = vi.fn().mockResolvedValue(true);
+    const source = { describeStatus: () => undefined, reviveByCommand: vi.fn(), waiveByCommand };
+    const shared = handlerWith({ authority: chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111", "222"] } }) });
+    shared.setCampaignManager(source);
+    await shared.handle("chat-222", "campaign", ["waive", "R-07", "not", "needed"], "222", "telegram");
+    await shared.handle("chat-222", "campaign", ["feragat", "R-07", "gerek", "yok"], "222", "telegram");
+    expect(waiveByCommand).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith("chat-222", expect.stringMatching(/^Refused: .*may not control this instance/));
+
+    const single = handlerWith({ authority: chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111"] } }) });
+    single.setCampaignManager(source);
+    await single.handle("chat-111", "campaign", ["waive", "R-07", "not", "needed"], "111", "telegram");
+    expect(waiveByCommand).toHaveBeenCalledWith("chat-111", "111", "R-07", "not needed");
   });
 
   it("a single-user setup keeps its daemon control and its daemon tasks", async () => {

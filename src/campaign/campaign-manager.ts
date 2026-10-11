@@ -92,7 +92,18 @@ import type { Campaign, CampaignMilestone,
 } from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
-import { DEFAULT_SCOPE_GATE_MODE, type AcceptanceAuthorLike, type AcceptanceSuiteRunner, type ScopeGateMode } from "./scope-types.js";
+import { DEFAULT_SCOPE_GATE_MODE, type AcceptanceAuthorLike, type AcceptanceSource, type AcceptanceSuiteRunner, type ScopeGateMode } from "./scope-types.js";
+import {
+  applyWaiver,
+  campaignScopeBlock,
+  carryWaivers,
+  formatRejudge,
+  formatRows,
+  milestoneScopeReport,
+  rejudgeCampaign,
+  rowRef,
+} from "./scope-report.js";
+import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
 export type CampaignMessenger = (chatId: string, markdown: string) => Promise<void>;
@@ -7729,8 +7740,22 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
+    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). 18d4t went green six
+    // times on prose and no line here said which GDD rows any sprint had been
+    // held to. A campaign the scope gate never saw reads exactly as before.
+    const scopeMode = this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
+    const scopeSeen =
+      campaign.requirements !== undefined ||
+      campaign.requirementsUnreadable === true ||
+      campaign.milestones.some((m) => m.scopeVerdict !== undefined || m.parked !== undefined || m.judgementBasis !== undefined);
+    const checks = scopeSeen ? this.acceptanceSourcesOf(campaign) : { sources: [] };
+    if (checks.error) caveats.push(`the stored acceptance checks could not be read, so no writer is named here: ${checks.error}`);
     for (const [i, m] of campaign.milestones.entries()) {
       const marks: string[] = [];
+      const scope = scopeSeen
+        ? milestoneScopeReport(campaign, m, checks.sources.filter((s) => s.milestoneId === m.id))
+        : { marks: [], caveats: [] };
+      if (scope.lead) marks.push(scope.lead);
       if (m.commitNote) marks.push(m.commitNote.replace(/^\s*/, ""));
       if (m.testVerdict) marks.push(`tests: ${m.testVerdict.slice(0, 80)}`);
       // The delivery gate is one-shot by design; a green reached by spending
@@ -7883,8 +7908,12 @@ export class CampaignManager {
             : `${m.title}: unclosed — its scope is NOT delivered. Cause: ${campaign.lastError ?? "not recorded"}`,
         );
       }
+      marks.push(...scope.marks);
+      caveats.push(...scope.caveats);
       lines.push(`• ${m.status === "green" ? "✅" : "❌"} ${m.title}${marks.length > 0 ? ` — ${marks.join("; ")}` : ""}`);
     }
+    const scopeBlock = campaignScopeBlock(campaign, scopeMode);
+    if (scopeBlock.length > 0) lines.push("", ...scopeBlock);
     const frames = this.countCaptureFiles();
     lines.push("", `Captured frames on disk: ${frames}`);
 
@@ -8716,6 +8745,10 @@ export class CampaignManager {
       });
       return false;
     }
+    // A PERSON'S WAIVER OUTLIVES A COPY READ BEFORE IT. The settle path holds
+    // its campaign across long awaits; its save would put a waived row back to
+    // failing and back in the coverage queue.
+    carryWaivers(before?.requirements, campaign);
     if (campaign.stopRequestedAt === undefined) {
       const stored = this.storage.get(campaign.id);
       if (
@@ -8765,6 +8798,7 @@ export class CampaignManager {
       milestoneTimeBoxMs: this.milestoneTimeBoxMs,
       getTask: (taskId) => this.taskManager.getStatus(taskId as TaskId),
       listTasks: (chat) => this.taskManager.listTasks(chat, 20),
+      scopeGate: this.scopeGateWiring(),
     });
   }
 
@@ -8780,6 +8814,113 @@ export class CampaignManager {
   /** Installed by the command handler when it is given this campaign layer. */
   setCommandGate(gate: CampaignCommandGate | undefined): void {
     this.commandGate = gate;
+  }
+
+  /** `/campaign rows [milestone]`: the GDD rows of the campaign `findForStatus` picks, as its ledger holds them. */
+  describeRows(chatId?: string, milestoneId?: string): string | undefined {
+    const campaign = this.findForStatus(chatId);
+    if (!campaign) return undefined;
+    return formatRows(campaign, { ...(milestoneId ? { milestoneId } : {}), mode: this.scopeGateMode });
+  }
+
+  /**
+   * `/campaign waive <rid|label|§section> <reason>`: take GDD rows out of
+   * judgement. A person's decision only — the campaign's owner, by the same
+   * rule as cancel — recorded with who and why, taken out of the coverage
+   * queue, and disclosed in the status and the delivery report. Returns
+   * whether any row was waived; the chat is told either way.
+   */
+  async waiveByCommand(chatId: string, userId: string, target: string, reason: string): Promise<boolean> {
+    const campaign = this.findForStatus(chatId);
+    if (!campaign) {
+      await this.tell({ chatId }, "There is no campaign on this project — nothing to waive.");
+      return false;
+    }
+    if (!this.callerOwns(campaign, chatId, userId)) {
+      await this.tell({ chatId }, "Only the person who started this campaign can waive its GDD rows.");
+      return false;
+    }
+    const why = reason.replace(/\s+/g, " ").trim();
+    if (target.trim() === "" || why === "") {
+      await this.tell({ chatId }, "A waiver names its rows and gives a reason: `/campaign waive <row id, label or §section> <reason>`.");
+      return false;
+    }
+    if (campaign.requirementsUnreadable === true || !campaign.requirements) {
+      await this.tell(
+        { chatId },
+        campaign.requirementsUnreadable === true
+          ? "The requirement ledger could not be read — nothing was waived."
+          : `Campaign \`${campaign.id}\` has no requirement ledger yet — there is no GDD row to waive.`,
+      );
+      return false;
+    }
+    const by = userId.trim() || chatId;
+    const outcome = applyWaiver(campaign, { target, reason: why, userId: by, atMs: Date.now() });
+    if (outcome.waived.length === 0) {
+      await this.tell(
+        { chatId },
+        outcome.untouched.length === 0
+          ? `No GDD row matches ${target.trim()} — name a row id, the GDD's own label (R-07) or a section (§3.3); \`/campaign rows\` lists them.`
+          : `Nothing to waive: ${outcome.untouched.map(rowRef).join(", ")} ${outcome.untouched.length === 1 ? "is" : "are"} already waived or excluded.`,
+      );
+      return false;
+    }
+    if (!this.persist(campaign)) {
+      await this.tell({ chatId }, "The waiver could not be saved (the campaign was changed meanwhile) — send it again.");
+      return false;
+    }
+    getLoggerSafe().info("GDD rows waived by a person", {
+      id: campaign.id,
+      by,
+      target: target.trim(),
+      rows: outcome.waived.map((r) => r.rid),
+      dequeued: outcome.dequeued,
+    });
+    const listed = outcome.waived.slice(0, 12).map(rowRef).join(", ") + (outcome.waived.length > 12 ? `, …and ${outcome.waived.length - 12} more` : "");
+    const text =
+      `🖐 Waived ${outcome.waived.length} GDD row(s) (${outcome.how}) on \`${campaign.id}\` — "${why}": ${listed}. ` +
+      "They no longer hold a milestone or the delivery back" +
+      (outcome.dequeued > 0 ? `; ${outcome.dequeued} queued coverage item(s) were dropped` : "") +
+      ". The waiver is listed in `/campaign` and in the delivery report.";
+    await this.tell({ chatId }, text);
+    if (campaign.chatId !== chatId) await this.tell(campaign, text);
+    return true;
+  }
+
+  /**
+   * `/campaign rejudge [campaign id]`: replay the scope judge on every settled
+   * milestone, from its stored verdict's input or rebuilt from the record.
+   * Read-only: nothing is stored, sent or changed, so a finished campaign
+   * (18d4t) can be judged again without touching it.
+   */
+  rejudgeByCommand(chatId?: string, campaignId?: string): string | undefined {
+    const id = campaignId?.trim();
+    const campaign = id ? this.storage.get(id) : this.findForStatus(chatId);
+    if (!campaign || !this.isOurs(campaign)) return id ? `No campaign ${id} on this project.` : undefined;
+    const checks = this.acceptanceSourcesOf(campaign);
+    const judged = rejudgeCampaign(campaign, {
+      judgements: this.storage.listJudgements(campaign.id),
+      sources: checks.sources,
+      tipOf: (m) => {
+        if (!m.taskId) return undefined;
+        const tip = this.taskManager.findLatestLineageTask(m.taskId as TaskId) ?? this.taskManager.getStatus(m.taskId as TaskId);
+        return tip ? { status: String(tip.status), result: tip.result, verification: tip.verification } : undefined;
+      },
+      stampsIn: systemStampsIn,
+      proseFailure: (text) => isTerminalFailureReport(text, { systemStamps: true }),
+      mode: this.scopeGateMode,
+    });
+    const text = formatRejudge(campaign, judged);
+    return checks.error ? `${text}\n⚠️ The stored acceptance checks could not be read: ${checks.error}` : text;
+  }
+
+  /** The campaign's stored acceptance files; damaged bytes are reported, never read as "no checks". */
+  private acceptanceSourcesOf(campaign: Campaign): { sources: AcceptanceSource[]; error?: string } {
+    try {
+      return { sources: this.storage.listAcceptance(campaign.id) };
+    } catch (err) {
+      return { sources: [], error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   private async tell(

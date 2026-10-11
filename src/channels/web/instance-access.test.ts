@@ -383,6 +383,17 @@ describe("instance access model — privileged chat commands (round 13 #11)", ()
     expect(isOpen("campaign", [])).toBe(true);
   });
 
+  // GDD-drift W14: waiving a GDD row or section is a person's decision, and
+  // only the instance owner's here; listing rows and replaying the judge are reads.
+  it("classifies a campaign waiver, in either language, as instance control and its reads as open", () => {
+    for (const sub of ["waive", "WAIVE", "muaf", "feragat"]) {
+      expect(surfaceOf("campaign", [sub, "R-07", "cut", "from", "MVP"]), sub).toBe("instance:control");
+    }
+    for (const sub of ["rows", "satırlar", "rejudge", "yargila"]) {
+      expect(isOpen("campaign", [sub, "m1"]), sub).toBe(true);
+    }
+  });
+
   it("sends a command that NAMES a task to the task-ownership check instead", () => {
     expect(commandPrivilege("cancel", ["task-7"])).toEqual({ kind: "task", taskId: "task-7" });
     expect(commandPrivilege("pause", ["task-7"])).toEqual({ kind: "task", taskId: "task-7" });

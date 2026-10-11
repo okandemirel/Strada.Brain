@@ -17,6 +17,8 @@ import type { Task } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
 import type { RealTreeGuardianSnapshot } from "../daemon/real-tree-guardian.js";
 import type { BuiltAsSpecifiedReport } from "../agents/autonomy/built-as-specified.js";
+import { countRows, describeRowCounts, describeScopeVerdict, ownedRows, queuedRows, type RowCounts } from "./scope-report.js";
+import type { JudgementBasis, ScopeGateMode } from "./scope-types.js";
 
 export interface MilestoneStatusSnapshot {
   readonly id: string;
@@ -53,6 +55,20 @@ export interface MilestoneStatusSnapshot {
    * 2026-09-12 V#7).
    */
   readonly coverageClosed?: boolean;
+  /** Its GDD rows by status; present only when the campaign has a requirement ledger (GDD-drift W14). */
+  readonly rows?: RowCounts;
+  /** Set when its budget ran out on failing rows: it is `failed`, its rows were queued and the ladder moved on. */
+  readonly parked?: { readonly reasons: readonly string[]; readonly queued: number };
+  /** The scope gate's last verdict in one sentence; a shadow verdict says it decided nothing. */
+  readonly scopeVerdict?: string;
+  readonly judgementBasis?: JudgementBasis;
+}
+
+/** What the scope gate runs with: `CampaignManager.scopeGateWiring()`. */
+export interface ScopeGateWiring {
+  readonly mode: ScopeGateMode;
+  readonly writer: string | null;
+  readonly runner: boolean;
 }
 
 export interface TaskStatusSnapshot {
@@ -89,6 +105,15 @@ export interface CampaignStatusSnapshot {
   readonly independentReview?: Campaign["independentReview"];
   /** How the plan covered the GDD's measured section inventory (2026-09-10). */
   readonly planCoverage?: Campaign["planCoverage"];
+  /**
+   * Present when the gate is not off or the campaign has a ledger: with the
+   * gate off and nothing judged, the status reads exactly as it did before.
+   */
+  readonly scopeGate?: ScopeGateWiring;
+  /** Every GDD row by status, and how many blocking rows nobody owns. */
+  readonly requirements?: RowCounts & { readonly queued: number };
+  /** The persisted ledger could not be read — not the same as having none. */
+  readonly requirementsUnreadable?: boolean;
 }
 
 /** Whether a revive command would act on this campaign (mirrors CampaignStorage.findLatestRevivable). */
@@ -117,8 +142,10 @@ export function buildCampaignStatus(
     readonly milestoneTimeBoxMs: number;
     readonly getTask: (taskId: string) => Task | null | undefined;
     readonly listTasks: (chatId: string) => readonly Task[];
+    readonly scopeGate?: ScopeGateWiring;
   },
 ): CampaignStatusSnapshot {
+  const ledger = campaign.requirements;
   const milestones = campaign.milestones.map<MilestoneStatusSnapshot>((m) => ({
     id: m.id,
     title: m.title,
@@ -139,7 +166,12 @@ export function buildCampaignStatus(
     ...(m.gddClaims && m.gddClaims.length > 0 ? { gddClaims: summarizeClaims(m.gddClaims) } : {}),
     ...(m.deliveryProofsMissing && m.deliveryProofsMissing.length > 0 ? { proofsMissing: m.deliveryProofsMissing } : {}),
     ...(m.coverageClosed === true ? { coverageClosed: true } : {}),
+    ...(ledger ? { rows: countRows(ownedRows(ledger, m.id)) } : {}),
+    ...(m.parked ? { parked: { reasons: m.parked.reasons.map((r) => r.detail), queued: m.parked.queued.length } } : {}),
+    ...(m.scopeVerdict ? { scopeVerdict: describeScopeVerdict(m.scopeVerdict) } : {}),
+    ...(m.judgementBasis ? { judgementBasis: m.judgementBasis } : {}),
   }));
+  const gateSeen = ledger !== undefined || campaign.requirementsUnreadable === true;
   const current = campaign.milestones[campaign.currentMilestone];
   const currentTaskRaw = current?.taskId ? opts.getTask(current.taskId) : undefined;
   const activeTasks = opts
@@ -166,6 +198,11 @@ export function buildCampaignStatus(
     activeTasks,
     independentReview: campaign.independentReview,
     ...(campaign.planCoverage ? { planCoverage: campaign.planCoverage } : {}),
+    ...(opts.scopeGate && (opts.scopeGate.mode !== "off" || gateSeen) ? { scopeGate: opts.scopeGate } : {}),
+    ...(ledger
+      ? { requirements: { ...countRows(ledger.rows), queued: queuedRows(ledger).length } }
+      : {}),
+    ...(campaign.requirementsUnreadable === true ? { requirementsUnreadable: true } : {}),
   };
 }
 
@@ -261,11 +298,22 @@ export function formatCampaignStatus(snapshot: CampaignStatusSnapshot, now: numb
         (c.excluded.length > 0 ? ` — excluded by the GDD: ${shorten(c.excluded.slice(0, 3).join("; "), 160)}` : ""),
     );
   }
+  if (snapshot.scopeGate) {
+    const g = snapshot.scopeGate;
+    lines.push(`Scope gate: ${g.mode} — writer ${g.writer ?? "NOT wired"}, acceptance runner ${g.runner ? "wired" : "NOT wired"}`);
+  }
+  if (snapshot.requirementsUnreadable) {
+    lines.push("⚠️ GDD rows: the requirement ledger could not be read — no row is reported, and none was proven.");
+  } else if (snapshot.requirements) {
+    const r = snapshot.requirements;
+    lines.push(`GDD rows: ${describeRowCounts(r)}; queued with no owner: ${r.queued} — \`/campaign rows\` lists them`);
+  }
   lines.push("", `*Milestones* ${green}/${snapshot.milestones.length} green · time box ${formatDuration(snapshot.milestoneTimeBoxMs)} each`);
   snapshot.milestones.forEach((m, i) => {
     const icon = MILESTONE_ICON[m.status] ?? "•";
     const marker = i === snapshot.currentMilestone && snapshot.state === "executing" ? " ◀" : "";
-    const parts = [`${icon} ${m.id} ${m.title} — ${m.status}, attempt ${m.attempts}/${m.maxAttempts}${marker}`];
+    // A park is not a status (MILESTONE_ICON is unchanged): the line says it.
+    const parts = [`${icon} ${m.id} ${m.title} — ${m.status}${m.parked ? " (PARKED)" : ""}, attempt ${m.attempts}/${m.maxAttempts}${marker}`];
     if (m.status === "running" && m.startedAtMs !== undefined) {
       const elapsed = now - m.startedAtMs;
       const left = snapshot.milestoneTimeBoxMs - elapsed;
@@ -296,6 +344,12 @@ export function formatCampaignStatus(snapshot: CampaignStatusSnapshot, now: numb
     if (m.proofsMissing && m.proofsMissing.length > 0) {
       parts.push(`   ⛔ proofs still missing: ${shorten(m.proofsMissing.join("; "), 240)}`);
     }
+    if (m.rows) parts.push(`   📋 GDD rows: ${m.rows.total > 0 ? describeRowCounts(m.rows) : "owns none"}`);
+    if (m.parked) {
+      parts.push(`   🅿️ parked: ${shorten(m.parked.reasons.slice(0, 2).join("; "), 200) ?? "no reason recorded"} — ${m.parked.queued} row(s) queued`);
+    }
+    if (m.judgementBasis === "legacy") parts.push("   ⚖️ went green before the scope gate existed (basis: legacy)");
+    if (m.scopeVerdict) parts.push(`   ⚖️ ${shorten(m.scopeVerdict, 240)}`);
     lines.push(...parts);
   });
 

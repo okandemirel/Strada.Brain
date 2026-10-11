@@ -588,10 +588,12 @@ const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandRule>> = {
   daemon: { kind: "when-write", surface: "instance:control", writes: ["start", "stop", "restart"] },
   autonomous: { kind: "when-write", surface: "instance:control", writes: ["on", "off"] },
   model: { kind: "unless-read", surface: "instance:control", reads: ["list", "listele", "info", "bilgi"] },
+  // Waiving a GDD row takes it out of the scope gate's judgement: a person's
+  // decision, never a guest's (GDD-drift W14). `rows` and `rejudge` only read.
   campaign: {
     kind: "when-write",
     surface: "instance:control",
-    writes: ["revive", "resume", "devam", "continue"],
+    writes: ["revive", "resume", "devam", "continue", "waive", "muaf", "feragat"],
   },
   // Arbitrary shell in the shared project, as the daemon.
   run: { kind: "always", surface: "instance:control" },

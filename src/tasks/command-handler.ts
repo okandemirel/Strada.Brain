@@ -184,7 +184,18 @@ export interface CampaignStatusSource {
   cancelByCommand?(chatId: string, userId: string): Promise<boolean>;
   /** Let the campaign layer's sentences ask the rule its commands answer to; resolves true when refused. */
   setCommandGate?(gate: ChatCommandGate): void;
+  /** `/campaign rows [milestone]`: the campaign's GDD rows; undefined when there is no campaign. */
+  describeRows?(chatId: string, milestoneId?: string): string | undefined;
+  /** Waive GDD rows (a row id, a label or a §section); the caller must own the campaign. Tells the chat itself. */
+  waiveByCommand?(chatId: string, userId: string, target: string, reason: string): Promise<boolean>;
+  /** `/campaign rejudge [id]`: replay the scope judge, changing nothing; undefined when there is no campaign. */
+  rejudgeByCommand?(chatId: string, campaignId?: string): string | undefined;
 }
+
+/** `/campaign` subcommands, English and Turkish. A waiver is an instance power in COMMAND_PRIVILEGE too. */
+const CAMPAIGN_ROWS_SUBS = new Set(["rows", "satirlar", "satırlar"]);
+const CAMPAIGN_WAIVE_SUBS = new Set(["waive", "muaf", "feragat"]);
+const CAMPAIGN_REJUDGE_SUBS = new Set(["rejudge", "yargila", "yargıla"]);
 
 /** The slice of RealTreeGuardian the channels' status commands need. */
 export interface GuardianStatusSource {
@@ -529,7 +540,7 @@ export class CommandHandler {
         await this.handleVault(chatId, args);
         break;
       case "campaign":
-        await this.handleCampaign(chatId, args, userId);
+        await this.handleCampaign(caller, args);
         break;
       case "measure":
         await this.handleMeasure(chatId);
@@ -669,6 +680,9 @@ export class CommandHandler {
       "",
       "`/campaign` (`/kampanya`) - Measured campaign status: milestones, attempts, time box, current task, guardian",
       "`/campaign revive` - Continue a failed/refused campaign (same as `kampanya devam`)",
+      "`/campaign rows [milestone]` (`satırlar`) - The GDD rows each milestone is judged on, with their tests and last results",
+      "`/campaign waive <row|§section> <reason>` (`muaf`) - Take GDD rows out of judgement; the campaign owner only, disclosed in the report",
+      "`/campaign rejudge [campaign id]` (`yargıla`) - Replay the scope judge on every settled milestone; changes nothing",
       "`/campaign measure` or `/measure` (`/ölç`) - Run the delivery-gate measurement now: scenes, renderers, placeholder sprites, unbound art",
       "`/guardian` (`/bekçi`) - Real-tree guardian: last compile verdict, fix task, escalation",
       "",
@@ -1986,7 +2000,8 @@ export class CommandHandler {
     return `Campaign \`${snapshot.id}\`: ${snapshot.state}, ${green}/${snapshot.milestones.length} milestones green${where} — \`/campaign\` for details.`;
   }
 
-  private async handleCampaign(chatId: string, args: string[], userId?: string): Promise<void> {
+  private async handleCampaign(caller: ChatCaller, args: string[]): Promise<void> {
+    const { chatId, userId } = caller;
     const sub = (args[0] ?? "").toLowerCase();
     if (sub === "measure" || sub === "olc" || sub === "ölç") {
       await this.handleMeasure(chatId);
@@ -2010,6 +2025,43 @@ export class CommandHandler {
           "Nothing to revive on this chat — only a failed, cancelled, or structurally refused campaign can be continued.",
         );
       }
+      return;
+    }
+    if (CAMPAIGN_WAIVE_SUBS.has(sub) && this.campaignStatusSource.waiveByCommand) {
+      // Taking a GDD row out of judgement is a person's decision. The model
+      // classifies it as instance control (COMMAND_PRIVILEGE), and Telegram,
+      // Discord, Slack and Teams reach this handler without the portal's gate;
+      // the campaign layer then checks the caller owns the campaign.
+      const privilege = commandPrivilege("campaign", args);
+      if (privilege.kind === "owner-only") {
+        const decision = this.decideForCaller(caller, privilege.surface, `/campaign ${sub}`);
+        if (!decision.allowed) {
+          await this.channel.sendText(chatId, `Refused: ${decision.reason}.`);
+          return;
+        }
+      }
+      const target = args[1] ?? "";
+      const reason = args.slice(2).join(" ").trim();
+      if (target === "" || reason === "") {
+        await this.channel.sendText(chatId, "Usage: `/campaign waive <row id, label or §section> <reason>` — e.g. `/campaign waive §16.2 deferred past the MVP`.");
+        return;
+      }
+      await this.campaignStatusSource.waiveByCommand(chatId, userId ?? "", target, reason);
+      return;
+    }
+    const source = this.campaignStatusSource;
+    const read = CAMPAIGN_ROWS_SUBS.has(sub) && source.describeRows
+      ? () => source.describeRows!(chatId, args[1])
+      : CAMPAIGN_REJUDGE_SUBS.has(sub) && source.rejudgeByCommand
+      ? () => source.rejudgeByCommand!(chatId, args[1])
+      : undefined;
+    if (read) {
+      const text = read();
+      if (text === undefined) {
+        await this.channel.sendText(chatId, "No campaign for this project yet — nothing to show.");
+        return;
+      }
+      await this.channel.sendMarkdown(chatId, text);
       return;
     }
     const snapshot = this.campaignStatusSource.describeStatus(chatId);
