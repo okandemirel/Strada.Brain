@@ -11,7 +11,8 @@
  * This machine's filesystem is finer than a test can wait out, so the stat
  * calls the digest makes report a clock that has not ticked: every file
  * stamped with one instant, as FAT would stamp writes inside one two-second
- * tick.
+ * tick. The wall clock the freshness rule measures against is held still,
+ * so how long a test takes never decides whether a stamp has settled.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -57,7 +58,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const HEX = /^[0-9a-f]{64}$/;
 const SECOND_NS = 1_000_000_000n;
-const nowNs = (): bigint => BigInt(Date.now()) * 1_000_000n;
+const NOW_MS = Date.now();
+const nowNs = (): bigint => BigInt(NOW_MS) * 1_000_000n;
 const stampAll = (ns: bigint | undefined): void => {
   fsClock.mtimeNs = ns;
   fsClock.ctimeNs = ns;
@@ -69,8 +71,10 @@ describe("artifactDigest on a filesystem whose clock ticks coarsely", () => {
     dir = mkdtempSync(join(tmpdir(), "artifact-digest-clock-"));
     stampAll(undefined);
     fsClock.reads = 0;
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     stampAll(undefined);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -84,9 +88,9 @@ describe("artifactDigest on a filesystem whose clock ticks coarsely", () => {
   };
 
   it("an expansion file rewritten at the same size inside one tick is read again (windows-test 2f8041bc)", async () => {
-    // The tick a FAT disk is in now: it began up to two seconds ago, and
-    // every write until it ends carries this stamp.
-    stampAll((nowNs() / (2n * SECOND_NS)) * 2n * SECOND_NS);
+    // The oldest stamp a write in a FAT disk's current tick can carry: the
+    // tick began two seconds ago, and every write until it ends gets this.
+    stampAll(nowNs() - 2n * SECOND_NS);
     const apk = android();
     const walked = artifactDigest(apk);
     expect(walked).toMatch(HEX);
@@ -112,6 +116,18 @@ describe("artifactDigest on a filesystem whose clock ticks coarsely", () => {
     writeFileSync(join(build, "Game_Data", "level0"), "level two");
     expect(await artifactDigestAsync(exe)).not.toBe(before);
     expect(artifactDigest(exe)).not.toBe(before);
+  });
+
+  it("a file whose copy kept an old mtime is fresh by its ctime, and is read again", () => {
+    // A timestamp-preserving copy: the mtime is an hour old, the ctime is the
+    // copy's, inside the current tick. Freshness is the later of the two.
+    fsClock.mtimeNs = nowNs() - 3600n * SECOND_NS;
+    fsClock.ctimeNs = nowNs() - 2n * SECOND_NS;
+    const apk = android();
+    const walked = artifactDigest(apk);
+    expect(walked).toMatch(HEX);
+    writeFileSync(join(dir, "android", "Game.main.obb"), "THE DATA");
+    expect(artifactDigest(apk)).not.toBe(walked);
   });
 
   it("an artifact that settled long before it was hashed is still served from memory (CMP-11)", async () => {
