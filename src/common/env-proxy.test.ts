@@ -1,7 +1,8 @@
-import { createServer, type Server } from "node:http";
+import http, { createServer, type Server } from "node:http";
+import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
+import { setGlobalDispatcher, type Dispatcher } from "undici";
 import { LOOPBACK_NO_PROXY, describeProxy, envProxySettings, installEnvProxy } from "./env-proxy.js";
 
 describe("envProxySettings", () => {
@@ -32,8 +33,15 @@ describe("envProxySettings", () => {
     expect(installEnvProxy({}, (d) => installed.push(d)).kind).toBe("none");
     expect(installEnvProxy({ HTTPS_PROXY: "http://p:1", NODE_USE_ENV_PROXY: "1" }, (d) => installed.push(d)).kind).toBe("node");
     expect(installed).toHaveLength(0);
-    expect(installEnvProxy({ HTTPS_PROXY: "http://p:1" }, (d) => installed.push(d)).kind).toBe("installed");
+    installEnvProxy({ HTTPS_PROXY: "http://p:1" }, (d) => installed.push(d));
     expect(installed).toHaveLength(1);
+  });
+
+  it("never reports installed when the dispatcher did not reach the key fetch reads", () => {
+    // Handed the dispatcher, this installer put it nowhere: fetch still goes direct.
+    const setup = installEnvProxy({ HTTPS_PROXY: "http://user:pw@p:1" }, () => {});
+    expect(setup.kind).toBe("unrouted");
+    expect(setup).toMatchObject({ httpsProxy: "http://user:pw@p:1", noProxy: LOOPBACK_NO_PROXY.join(",") });
   });
 
   it("describes a proxy without its credentials", () => {
@@ -44,13 +52,32 @@ describe("envProxySettings", () => {
 
 describe("fetch through the environment's proxy", () => {
   const servers: Server[] = [];
-  let previous: Dispatcher | undefined;
+  let restoreGlobals: (() => void) | undefined;
 
   afterEach(async () => {
-    if (previous) setGlobalDispatcher(previous);
-    previous = undefined;
+    restoreGlobals?.();
+    restoreGlobals = undefined;
     await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
   });
+
+  /**
+   * Node's bundled undici and the npm one keep their dispatchers under
+   * different versioned keys on globalThis, so restoring through either one's
+   * setGlobalDispatcher would leave the other's proxy in place for later tests.
+   */
+  function saveGlobals(): () => void {
+    void globalThis.Headers; // loads Node's bundled undici, so its key is saved too
+    const slots = globalThis as unknown as Record<symbol, unknown>;
+    const saved = Object.getOwnPropertySymbols(globalThis)
+      .filter((key) => /^undici\.globalDispatcher\.\d+$/u.test(key.description ?? ""))
+      .map((key) => [key, slots[key]] as const);
+    const agents = { http: http.globalAgent, https: https.globalAgent };
+    return () => {
+      for (const [key, dispatcher] of saved) slots[key] = dispatcher;
+      http.globalAgent = agents.http;
+      https.globalAgent = agents.https;
+    };
+  }
 
   async function listen(server: Server): Promise<number> {
     servers.push(server);
@@ -58,9 +85,8 @@ describe("fetch through the environment's proxy", () => {
     return (server.address() as AddressInfo).port;
   }
 
-  it("sends an outside host through the proxy and loopback directly", async () => {
-    // The proxy answers for whatever it tunnels to, so a reply of "via-proxy"
-    // proves the request went through it; it never resolves the name.
+  /** A proxy that answers "via-proxy" for whatever it is asked to reach; it never resolves the name. */
+  async function startProxy(): Promise<{ url: string; tunnelled: string[] }> {
     const tunnelled: string[] = [];
     const proxy = createServer((req, res) => {
       tunnelled.push(`absolute ${req.url ?? ""}`);
@@ -73,12 +99,16 @@ describe("fetch through the environment's proxy", () => {
         socket.end("HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nvia-proxy");
       });
     });
-    const proxyPort = await listen(proxy);
+    return { url: `http://127.0.0.1:${await listen(proxy)}`, tunnelled };
+  }
+
+  it("sends an outside host through the proxy and loopback directly", async () => {
+    // A reply of "via-proxy" proves the request went through the proxy.
+    const { url: proxyUrl, tunnelled } = await startProxy();
     const direct = createServer((_req, res) => res.end("direct"));
     const directPort = await listen(direct);
 
-    previous = getGlobalDispatcher();
-    const proxyUrl = `http://127.0.0.1:${proxyPort}`;
+    restoreGlobals = saveGlobals();
     const setup = installEnvProxy({ HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl });
     expect(setup.kind).toBe("installed");
 
@@ -91,5 +121,26 @@ describe("fetch through the environment's proxy", () => {
     expect(await (await fetch(`http://127.0.0.1:${directPort}/`)).text()).toBe("direct");
     expect(await (await fetch(`http://localhost:${directPort}/`)).text()).toBe("direct");
     expect(tunnelled).toHaveLength(before);
+  });
+
+  it("reports installed exactly when Node's own fetch goes through the proxy", async () => {
+    // npm undici's setGlobalDispatcher writes the key its own generation reads;
+    // whether this Node's fetch reads that key depends on the undici Node
+    // bundles (Node 26's does not). The verdict must match what fetch does.
+    const { url: proxyUrl, tunnelled } = await startProxy();
+    restoreGlobals = saveGlobals();
+    const setup = installEnvProxy({ HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl }, setGlobalDispatcher);
+
+    const reply = await fetch("http://upstream.example.test/ping").then((r) => r.text(), (err: unknown) => err);
+    const viaProxy = reply === "via-proxy" && tunnelled.join("\n").includes("upstream.example.test");
+    expect({ kind: setup.kind, viaProxy }).toEqual({ kind: viaProxy ? "installed" : "unrouted", viaProxy });
+  });
+
+  it("routes fetch only: the http and https global agents stay as they were", () => {
+    restoreGlobals = saveGlobals();
+    const before = { http: http.globalAgent, https: https.globalAgent };
+    installEnvProxy({ HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9" });
+    expect(http.globalAgent).toBe(before.http);
+    expect(https.globalAgent).toBe(before.https);
   });
 });

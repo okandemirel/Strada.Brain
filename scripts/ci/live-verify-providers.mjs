@@ -429,7 +429,9 @@ async function main(argv) {
   // The proxy routing the app installs at startup (src/common/env-proxy.ts),
   // so the checks reach the provider the way the app does behind a proxy.
   const { installEnvProxy } = await importDist("common/env-proxy.js");
-  installEnvProxy();
+  if (installEnvProxy().kind === "unrouted") {
+    console.error(`live-verify-providers: a proxy is set, but Node ${process.version}'s fetch does not read the dispatcher; the checks connect directly`);
+  }
   const registry = await importDist("agents/providers/provider-registry.js");
   const { supportsStreaming } = await importDist("agents/providers/provider.interface.js");
   const { HARDCODED_MODELS } = await importDist("agents/providers/model-intelligence.js");
