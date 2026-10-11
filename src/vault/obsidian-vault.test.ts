@@ -285,3 +285,37 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     });
   },
 );
+
+/** vault-intelligence#6, ObsidianVault's sync. */
+describe('ObsidianVault: a reindex that failed is not an unchanged note', () => {
+  const tmp = createTempDirTracker('strada-obsidian-failed-');
+  const vaults: IVault[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const v of vaults.splice(0)) await v.dispose();
+    tmp.cleanup();
+  });
+
+  it('sync counts a note whose SQL write failed as failed, not as unchanged', async () => {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'notes'));
+    writeFileSync(join(root, 'notes', 'a.md'), '# alpha');
+    const vault = new ObsidianVault({
+      id: 'test-obsidian-failed',
+      rootPath: root,
+      embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore(),
+      obsidian: OFFLINE_OBSIDIAN,
+    });
+    vaults.push(vault);
+    await vault.init();
+    writeFileSync(join(root, 'notes', 'a.md'), '# alpha, edited');
+    const store = (vault as unknown as { store: { runReindexTxn: (...a: unknown[]) => unknown } }).store;
+    vi.spyOn(store, 'runReindexTxn').mockReturnValue({ ok: false, error: 'SQLITE_BUSY: database is locked' });
+
+    const result = await vault.sync();
+
+    expect(result).toMatchObject({ changed: 0, failed: 1 });
+  });
+});

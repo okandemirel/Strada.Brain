@@ -22,6 +22,16 @@ export class VaultSyncTool {
     const v = this.registry.resolve(vaultId);
     if (!v) return { content: vaultNotFound(vaultId, this.registry.ids()), isError: true };
     const r = await v.sync();
+    // "0 file(s) reindexed" alone read as "index is current" while the paths
+    // whose reindex failed kept serving their old rows (vault-intelligence#6).
+    if (r.failed > 0) {
+      return {
+        content:
+          `sync ${vaultId}: ${r.changed} file(s) reindexed, ${r.failed} path(s) failed to reindex in ${r.durationMs}ms; ` +
+          'those keep their previous index content (the daemon log names each one)',
+        isError: true,
+      };
+    }
     return { content: `sync ${vaultId}: ${r.changed} file(s) reindexed in ${r.durationMs}ms` };
   }
 }

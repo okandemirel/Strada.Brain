@@ -97,15 +97,22 @@ export class VaultWriteNoteTool {
       }
       try {
         await vault.writeFile(path, content);
+      } catch (err) {
+        errors.push(`${vault.id}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      // The note is on disk from here on; a failed reindex only leaves the
+      // index behind and must not read as a failed write.
+      written.push(vault.id);
+      try {
         if (hasReindexFile(vault)) {
           await vault.reindexFile(path);
         }
         if (hasRegenerateCanvas(vault)) {
           await vault.regenerateCanvas();
         }
-        written.push(vault.id);
       } catch (err) {
-        errors.push(`${vault.id}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`${vault.id}: written but not reindexed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

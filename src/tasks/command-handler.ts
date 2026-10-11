@@ -707,7 +707,8 @@ export class CommandHandler {
     const lines: string[] = [];
     for (const vault of vaults) {
       const result = await vault.sync();
-      lines.push(`${vault.id}: ${result.changed} file(s) reindexed in ${result.durationMs}ms`);
+      const failed = result.failed > 0 ? `, ${result.failed} path(s) failed to reindex` : "";
+      lines.push(`${vault.id}: ${result.changed} file(s) reindexed${failed} in ${result.durationMs}ms`);
     }
     await this.channel.sendMarkdown(chatId, `*Vault Sync*\n\n${lines.join("\n")}`);
   }

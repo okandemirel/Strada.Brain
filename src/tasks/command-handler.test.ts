@@ -385,6 +385,29 @@ describe("CommandHandler /vault", () => {
       expect.stringContaining("unity:abc: 3 file(s) reindexed in 17ms"),
     );
   });
+
+  // vault-intelligence#6: a failed reindex read as "nothing to reindex".
+  it("names the paths a sync failed to reindex", async () => {
+    const vault = {
+      id: "unity:abc",
+      sync: vi.fn().mockResolvedValue({ changed: 0, failed: 4, durationMs: 17 }),
+    };
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never,
+    );
+    handler.setVaultRegistry({
+      list: () => [vault],
+      get: () => vault,
+    } as never);
+
+    await handler.handle("chat-1", "vault" as never, ["sync"], "user-1");
+
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("unity:abc: 0 file(s) reindexed, 4 path(s) failed to reindex in 17ms"),
+    );
+  });
 });
 
 describe("CommandHandler /autonomous", () => {

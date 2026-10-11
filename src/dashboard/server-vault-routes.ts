@@ -536,6 +536,8 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 // leak any new top-level field (e.g. an internal `error` or `path`).
 type SafeSyncResponse = {
   changed: number;
+  /** Paths the sync could not reindex; without it a failed sync reads as current. */
+  failed?: number;
   durationMs: number;
   canvas?: { ok: true } | { ok: false; error: 'canvas regeneration failed' };
 };
@@ -554,6 +556,7 @@ function sanitizeSyncResponse(result: unknown): SafeSyncResponse | null {
   const changed = typeof x.changed === 'number' ? x.changed : 0;
   const durationMs = typeof x.durationMs === 'number' ? x.durationMs : 0;
   const out: SafeSyncResponse = { changed, durationMs };
+  if (typeof x.failed === 'number') out.failed = x.failed;
   const canvas = x.canvas;
   if (canvas && typeof canvas === 'object' && 'ok' in canvas) {
     const ok = (canvas as { ok: unknown }).ok;

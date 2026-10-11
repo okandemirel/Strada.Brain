@@ -187,15 +187,15 @@ export class SelfVault extends UnityProjectVault {
   }
 
   // Override sync: use curated discovery roots (same as init) rather than Unity's file walker.
-  override async sync(): Promise<{ changed: number; durationMs: number }> {
+  override async sync(): Promise<{ changed: number; failed: number; durationMs: number }> {
     // A sync during boot's background index waits for it rather than walking
     // the same tree concurrently.
     await this.waitForInit();
     const started = Date.now();
     const scan = await this.discoverFiles();
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const changed = await this.processFiles(scan, before, 'sync');
-    return { changed: changed.length, durationMs: Date.now() - started };
+    const { changed, failed } = await this.processFiles(scan, before, 'sync');
+    return { changed: changed.length, failed, durationMs: Date.now() - started };
   }
 
   // Override the index pass: use curated discovery roots rather than Unity's
@@ -265,15 +265,17 @@ export class SelfVault extends UnityProjectVault {
     { files: found, unreadable }: IndexableFileScan,
     before: Set<string>,
     phase: 'init' | 'sync',
-  ): Promise<string[]> {
+  ): Promise<{ changed: string[]; failed: number }> {
     const changed: string[] = [];
+    let failed = unreadable.length;
     for (const f of found) {
       // dispose() waits for this pass: stop at the next file instead of
       // indexing the rest of the tree first. The next init reconciles.
-      if (this.disposed) return changed;
+      if (this.disposed) return { changed, failed };
       try {
         if (await this.reindexFile(f.path)) changed.push(f.path);
       } catch (err) {
+        failed++;
         getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during ${phase}`, { err });
       }
     }
@@ -288,6 +290,6 @@ export class SelfVault extends UnityProjectVault {
     if (changed.length) {
       this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     }
-    return changed;
+    return { changed, failed };
   }
 }

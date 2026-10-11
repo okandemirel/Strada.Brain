@@ -59,6 +59,25 @@ describe('VaultWriteNoteTool', () => {
     expect(vault.regenerateCanvas).toHaveBeenCalled();
   });
 
+  // A reindex that fails (vault-intelligence#4/#6 made it reject instead of
+  // returning false) happens after the note is on disk: "write failed" would
+  // tell the caller to write a note that already exists.
+  it('reports a note whose reindex failed as written, with the reindex failure named', async () => {
+    const vault = makeVault({ supportsWrite: true, supportsRefresh: true }) as unknown as {
+      reindexFile: ReturnType<typeof vi.fn>;
+      regenerateCanvas: ReturnType<typeof vi.fn>;
+    };
+    vault.reindexFile.mockRejectedValue(new Error('reindex SQL txn failed for notes/test.md: SQLITE_FULL'));
+    const result = await tool.execute(
+      { path: 'notes/test.md', content: '# Hello' },
+      makeContext([vault as never]),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('written to v1');
+    expect(result.content).toContain('v1: written but not reindexed: reindex SQL txn failed');
+  });
+
   it('returns error when no vaults registered', async () => {
     const result = await tool.execute(
       { path: 'a.md', content: 'x' },

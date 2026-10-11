@@ -405,6 +405,14 @@ describe("handleVaultRoutes — POST /api/vaults/:id/sync (response sanitization
     await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
     expect(responseJson(res)).toEqual({ changed: 0, durationMs: 1 });
   });
+
+  // vault-intelligence#6: the count of paths a sync could not reindex is part
+  // of the verdict; dropping it made a failed sync read as "index current".
+  it("passes the failed count through", async () => {
+    const { res } = postSync({ changed: 0, failed: 3, durationMs: 4 });
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(responseJson(res)).toEqual({ changed: 0, failed: 3, durationMs: 4 });
+  });
 });
 
 // =============================================================================

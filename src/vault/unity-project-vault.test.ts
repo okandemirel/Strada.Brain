@@ -767,5 +767,72 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       expect(await vault.reindexFile('Assets/Scripts/Player.cs')).toBe(true);
       expect(vault.listFiles()).toEqual([]);
     });
+
+    it('a sync names the file it could not read as failed', async () => {
+      const { root, vault } = await indexedPlayer();
+      lock(join(root, 'Assets', 'Scripts', 'Player.cs'), 0o000);
+
+      expect(await vault.sync()).toMatchObject({ changed: 0, failed: 1 });
+    });
   },
 );
+
+/**
+ * vault-intelligence#6: a reindex whose SQL write failed returned false, the
+ * same value as "content unchanged", so a sync that brought nothing current
+ * answered "0 file(s) reindexed" while the index kept serving the old rows.
+ */
+describe('UnityProjectVault: a reindex that failed is not an unchanged file', () => {
+  const tmp = createTempDirTracker('strada-unity-vault-failed-');
+  const vaults: IVault[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const v of vaults.splice(0)) await v.dispose();
+    tmp.cleanup();
+  });
+
+  async function indexedVault(): Promise<{ root: string; vault: UnityProjectVault }> {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'Assets'), { recursive: true });
+    writeFileSync(join(root, 'Assets', 'Player.cs'), 'public class Player {}\n');
+    writeFileSync(join(root, 'Assets', 'Enemy.cs'), 'public class Enemy {}\n');
+    const vault = new UnityProjectVault({
+      id: 'test-unity-failed',
+      rootPath: root,
+      embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore(),
+    });
+    vaults.push(vault);
+    await vault.init();
+    return { root, vault };
+  }
+
+  function failSqlWrites(vault: UnityProjectVault): void {
+    const store = (vault as unknown as { store: { runReindexTxn: (...a: unknown[]) => unknown } }).store;
+    vi.spyOn(store, 'runReindexTxn').mockReturnValue({ ok: false, error: 'SQLITE_FULL: database or disk is full' });
+  }
+
+  it('reindexFile rejects when the SQL write fails', async () => {
+    const { root, vault } = await indexedVault();
+    writeFileSync(join(root, 'Assets', 'Player.cs'), 'public class Player { int hp; }\n');
+    failSqlWrites(vault);
+
+    await expect(vault.reindexFile('Assets/Player.cs')).rejects.toThrow(/SQLITE_FULL/);
+  });
+
+  it('sync counts a file whose SQL write failed as failed, not as unchanged', async () => {
+    const { root, vault } = await indexedVault();
+    writeFileSync(join(root, 'Assets', 'Player.cs'), 'public class Player { int hp; }\n');
+    failSqlWrites(vault);
+
+    expect(await vault.sync()).toMatchObject({ changed: 0, failed: 1 });
+  });
+
+  it('sync reports failed: 0 when every file was brought current', async () => {
+    const { root, vault } = await indexedVault();
+    writeFileSync(join(root, 'Assets', 'Player.cs'), 'public class Player { int hp; }\n');
+
+    expect(await vault.sync()).toMatchObject({ changed: 1, failed: 0 });
+  });
+});

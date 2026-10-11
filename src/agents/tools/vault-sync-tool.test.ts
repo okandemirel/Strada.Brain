@@ -74,6 +74,20 @@ describe("VaultSyncTool — execute()", () => {
     expect(result.content).toContain("42");
   });
 
+  // vault-intelligence#6: "0 file(s) reindexed" read as "index is current"
+  // while the files whose reindex failed kept serving their old rows.
+  it("names the paths whose reindex failed and returns isError", async () => {
+    const vault = {
+      sync: vi.fn().mockResolvedValue({ changed: 1, failed: 2, durationMs: 9 }),
+    };
+    const registry = { resolve: vi.fn(() => vault), ids: vi.fn(() => []) } as unknown as VaultRegistry;
+    const tool = new VaultSyncTool(registry);
+    const result = await tool.execute({ vaultId: "my-vault" });
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/2 path\(s\) failed to reindex/);
+    expect(result.content).toContain("1 file(s) reindexed");
+  });
+
   it("passes the vaultId to the registry resolver", async () => {
     const vault = {
       sync: vi.fn().mockResolvedValue({ changed: 0, durationMs: 5 }),

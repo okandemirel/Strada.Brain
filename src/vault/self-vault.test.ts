@@ -168,3 +168,34 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     });
   },
 );
+
+/** vault-intelligence#6, SelfVault's sync override. */
+describe('SelfVault: a reindex that failed is not an unchanged file', () => {
+  const tmp = createTempDirTracker('strada-self-vault-failed-');
+  const vaults: SelfVault[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const v of vaults.splice(0)) await v.dispose();
+    tmp.cleanup();
+  });
+
+  it('sync counts a file whose SQL write failed as failed, not as unchanged', async () => {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'app.ts'), 'export const app = 1;\n');
+    const vault = new SelfVault({
+      id: 'self',
+      rootPath: root,
+      embedding: createFakeEmbedding(),
+      vectorStore: createFakeVectorStore(),
+    });
+    vaults.push(vault);
+    await vault.init();
+    writeFileSync(join(root, 'src', 'app.ts'), 'export const app = 2;\n');
+    const store = (vault as unknown as { store: { runReindexTxn: (...a: unknown[]) => unknown } }).store;
+    vi.spyOn(store, 'runReindexTxn').mockReturnValue({ ok: false, error: 'SQLITE_FULL: database or disk is full' });
+
+    expect(await vault.sync()).toMatchObject({ changed: 0, failed: 1 });
+  });
+});

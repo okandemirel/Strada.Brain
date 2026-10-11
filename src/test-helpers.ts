@@ -171,7 +171,7 @@ export function createFakeVault(overrides: Partial<IVault> = {}): IVault {
     kind: "unity-project",
     rootPath: "/tmp/fake-root",
     init: vi.fn(async () => undefined),
-    sync: vi.fn(async () => ({ changed: 0, durationMs: 1 })),
+    sync: vi.fn(async () => ({ changed: 0, failed: 0, durationMs: 1 })),
     rebuild: vi.fn(async () => undefined),
     query: vi.fn(async () => ({ hits: [], budgetUsed: 0, truncated: false })),
     stats: vi.fn(async () => ({ fileCount: 1, symbolCount: 3, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 })),

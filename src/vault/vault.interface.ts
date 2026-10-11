@@ -101,7 +101,12 @@ export interface IVault {
   readonly kind: VaultKind;
   readonly rootPath: string;
   init(): Promise<void>;
-  sync(): Promise<{ changed: number; durationMs: number }>;
+  /**
+   * `failed` counts the paths the pass could not bring current (a read or
+   * SQL write failed, or the walk could not read them); those keep their
+   * previous rows. `changed: 0` alone does not mean the index is current.
+   */
+  sync(): Promise<{ changed: number; failed: number; durationMs: number }>;
   rebuild(): Promise<void>;
   query(q: VaultQuery): Promise<VaultQueryResult>;
   stats(): Promise<VaultStats>;

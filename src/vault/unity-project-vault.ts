@@ -153,13 +153,13 @@ export class UnityProjectVault implements IVault {
     }
   }
 
-  async sync(): Promise<{ changed: number; durationMs: number }> {
+  async sync(): Promise<{ changed: number; failed: number; durationMs: number }> {
     // A sync during the background index waits for it rather than walking
     // the same tree concurrently.
     await this.waitForInit();
     const started = Date.now();
-    const changed = await this.reindexChanged();
-    return { changed, durationMs: Date.now() - started };
+    const { changed, failed } = await this.reindexChanged();
+    return { changed, failed, durationMs: Date.now() - started };
   }
 
   async rebuild(): Promise<void> {
@@ -441,9 +441,11 @@ export class UnityProjectVault implements IVault {
       tags: extracted?.tags ?? null,
     });
     if (!txn.ok) {
-      getLoggerSafe().warn(`[vault ${this.id}] reindex SQL txn failed for ${relPath}`, { error: txn.error });
       this.invalidateEdgesCache();
-      return false;
+      // Thrown, not `return false`: false is "content unchanged", and a sync
+      // counted a rolled-back write as nothing to do (vault-intelligence#6).
+      // The rollback kept the old rows and hash, so the next pass retries.
+      throw new Error(`reindex SQL txn failed for ${relPath}: ${txn.error}`);
     }
 
     // Embed the NEW vectors first; only remove the OLD ones after success.
@@ -643,16 +645,18 @@ export class UnityProjectVault implements IVault {
     return scan;
   }
 
-  private async reindexChanged(): Promise<number> {
+  private async reindexChanged(): Promise<{ changed: number; failed: number }> {
     // Fix CodeRevC1: capture the pre-scan state of the DB BEFORE we reindex,
     // so deletion detection compares apples to apples even if reindexFile mutates store mid-loop.
     const before = new Set(this.store.listFiles().map((f) => f.path));
     const { files, unreadable } = await this.scanFiles();
     const changed: string[] = [];
+    let failed = unreadable.length;
     for (const f of files) {
       try {
         if (await this.reindexFile(f.path)) changed.push(f.path);
       } catch (err) {
+        failed++;
         getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during reindexChanged`, {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -665,7 +669,7 @@ export class UnityProjectVault implements IVault {
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
-    return changed.length;
+    return { changed: changed.length, failed };
   }
 
   protected deleteIndexedFileInternal(relPath: string): boolean {

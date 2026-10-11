@@ -178,10 +178,10 @@ export class ObsidianVault implements IVault {
     await this.fullIndex();
   }
 
-  async sync(): Promise<{ changed: number; durationMs: number; canvas?: { ok: boolean; error?: string } }> {
+  async sync(): Promise<{ changed: number; failed: number; durationMs: number; canvas?: { ok: boolean; error?: string } }> {
     return this.writeLock.run(async () => {
       const started = Date.now();
-      const { count, paths } = await this.reindexChangedInternal();
+      const { count, paths, failed } = await this.reindexChangedInternal();
       let canvasStatus: { ok: boolean; error?: string } | undefined;
       // Derive wikilinks + canvas when files changed OR when a prior canvas
       // regen failed (canvasDirty). The dirty latch lets a transient regen
@@ -208,7 +208,7 @@ export class ObsidianVault implements IVault {
           this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
         }
       }
-      return { changed: count, durationMs: Date.now() - started, ...(canvasStatus ? { canvas: canvasStatus } : {}) };
+      return { changed: count, failed, durationMs: Date.now() - started, ...(canvasStatus ? { canvas: canvasStatus } : {}) };
     });
   }
 
@@ -653,12 +653,11 @@ export class ObsidianVault implements IVault {
     if (!txn.ok) {
       // SQL rollback already happened inside runReindexTxn — old HNSW vectors
       // are still in the index and still referenced by the (unchanged) SQL
-      // rows, so the two indexes remain consistent.
-      getLoggerSafe().warn('[obsidian-vault] reindex SQL txn failed', {
-        vaultId: this.id, path: relPath, op: 'reindexFile', error: txn.error,
-      });
+      // rows, so the two indexes remain consistent. Thrown, not `return
+      // false`: false is "content unchanged", and a sync counted a
+      // rolled-back write as nothing to do (vault-intelligence#6).
       this.invalidateEdgesCache();
-      return false;
+      throw new Error(`reindex SQL txn failed for ${relPath}: ${txn.error}`);
     }
 
     // Step 3: embed + HNSW upsert.
@@ -798,7 +797,7 @@ export class ObsidianVault implements IVault {
    *
    * `op` is purely a log tag.
    */
-  private async runIndexPass(op: 'fullIndex' | 'sync'): Promise<{ count: number; paths: string[] }> {
+  private async runIndexPass(op: 'fullIndex' | 'sync'): Promise<{ count: number; paths: string[]; failed: number }> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
     const { files, unreadable } = await scanIndexableFiles(this.rootPath);
     if (unreadable.length) {
@@ -808,26 +807,28 @@ export class ObsidianVault implements IVault {
     }
 
     const changed: string[] = [];
+    let failed = unreadable.length;
     for (const f of files) {
       // dispose() waits for the initial pass: stop at the next note instead
       // of indexing the rest first. The next init reconciles.
-      if (this.disposed) return { count: changed.length, paths: changed };
+      if (this.disposed) return { count: changed.length, paths: changed, failed };
       try {
         if (await this.reindexFileInternal(f.path)) changed.push(f.path);
       } catch (err) {
         // Failure in one file should not poison the whole pass.
+        failed++;
         getLoggerSafe().warn(`[obsidian-vault] reindex failed during ${op}`, {
           vaultId: this.id, path: f.path, op, err,
         });
       }
     }
-    if (this.disposed) return { count: changed.length, paths: changed };
+    if (this.disposed) return { count: changed.length, paths: changed, failed };
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (present.has(p) || isUnderUnreadable(p, unreadable)) continue;
       if (this.deleteIndexedFileInternal(p)) changed.push(p);
     }
-    return { count: changed.length, paths: changed };
+    return { count: changed.length, paths: changed, failed };
   }
 
   private async fullIndex(): Promise<void> {
@@ -854,7 +855,7 @@ export class ObsidianVault implements IVault {
    * Uses `runIndexPass` (which calls `reindexFileInternal`) to avoid
    * double-lock acquisition.
    */
-  private async reindexChangedInternal(): Promise<{ count: number; paths: string[] }> {
+  private async reindexChangedInternal(): Promise<{ count: number; paths: string[]; failed: number }> {
     return this.runIndexPass('sync');
   }
 
