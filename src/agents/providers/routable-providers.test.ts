@@ -66,4 +66,23 @@ describe("what may route, as opposed to what exists", () => {
     // An unpinned deployment allows everything, as before.
     expect(manager([], false).allowsProvider("openai")).toBe(true);
   });
+
+  it("judges the seat a name means, not how the chain spelled it", () => {
+    // "anthropic" and "claude" are both canonical, so comparing canonical
+    // spellings put the Claude seat outside a chain written "anthropic".
+    const sameSeat: Array<[chain: string, asked: string]> = [
+      ["anthropic", "claude"],
+      ["claude", "anthropic"],
+      ["anthropic", "Anthropic Claude"],
+      ["moonshot", "kimi"],
+      ["kimi", "Kimi (Moonshot)"],
+      ["gemini", "Google Gemini"],
+      ["ollama", "Ollama (Local)"],
+    ];
+    for (const [chain, asked] of sameSeat) {
+      expect(manager([chain], true).allowsProvider(asked), `${chain} admits ${asked}`).toBe(true);
+    }
+    expect(manager(["anthropic"], true).allowsProvider("openai")).toBe(false);
+    expect(manager(["moonshot"], true).allowsProvider("claude")).toBe(false);
+  });
 });

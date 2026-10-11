@@ -299,13 +299,13 @@ export class ProviderManager {
     const seen = new Set<string>();
     const order: string[] = [];
 
-    const configured = new Set(
-      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
-    );
     // A STRICT chain admits no newcomers. Without this the requested primary
     // went to the head of the chain whatever the operator configured, and the
     // strict flag only governed the boot-time auto-append.
-    if (this.chainIsExhaustive && normalizedPrimary && configured.size > 0 && !configured.has(normalizedPrimary)) {
+    if (normalizedPrimary && !this.allowsProvider(normalizedPrimary)) {
+      const configured = new Set(
+        this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
+      );
       getLogger().info("Requested provider is outside the strict chain — using the configured chain", {
         requested: normalizedPrimary,
         chain: [...configured],
@@ -313,15 +313,17 @@ export class ProviderManager {
       return [...configured];
     }
 
+    // Deduplicated by seat, not spelling: "claude" asked of a chain written
+    // "anthropic" listed the one Claude seat twice.
     if (normalizedPrimary) {
-      seen.add(normalizedPrimary);
+      seen.add(providerRecordKey(normalizedPrimary));
       order.push(normalizedPrimary);
     }
 
     for (const name of this.defaultProviderOrder) {
       const normalized = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
+      if (!normalized || seen.has(providerRecordKey(normalized))) continue;
+      seen.add(providerRecordKey(normalized));
       order.push(normalized);
     }
 
@@ -921,20 +923,17 @@ export class ProviderManager {
    * was ignored through them one after another (Codex 2026-09-12 P#1).
    */
   allowsProvider(name: string): boolean {
-    const chain = new Set(
-      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
-    );
-    if (!this.chainIsExhaustive || chain.size === 0) return true;
-    const canonical = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
-    return chain.has(canonical);
+    if (!this.chainIsExhaustive || this.defaultProviderOrder.length === 0) return true;
+    // Compared by seat: "anthropic" and "claude" are both canonical names, and
+    // the Claude seat lists itself as "claude", so a chain written "anthropic"
+    // shut out its own seat at every door.
+    const chain = new Set(this.defaultProviderOrder.map(providerRecordKey));
+    return chain.has(providerRecordKey(name));
   }
 
   listRoutable(): ReturnType<ProviderManager["listAvailable"]> {
     const all = this.listAvailable();
-    const chain = new Set(
-      this.defaultProviderOrder.map((n) => canonicalizeProviderName(n) ?? n.trim().toLowerCase()),
-    );
-    if (!this.chainIsExhaustive || chain.size === 0) return all;
+    if (!this.chainIsExhaustive || this.defaultProviderOrder.length === 0) return all;
     const inChain = all.filter((entry) => this.allowsProvider(entry.name));
     if (inChain.length > 0) return inChain;
     // The chain and the credentials disagree — a naming mismatch, or keys that

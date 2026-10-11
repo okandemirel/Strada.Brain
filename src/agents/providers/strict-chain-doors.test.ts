@@ -147,3 +147,73 @@ describe("a strict chain hands out no provider outside it", () => {
     expect(m.getProviderByName("openai")).not.toBeNull();
   });
 });
+
+/**
+ * "anthropic" and "claude" are both accepted chain names and both canonical,
+ * but the Claude seat lists itself as "claude". The strict gate compared
+ * spellings, so PROVIDER_CHAIN=anthropic shut its own only seat out: no vision
+ * provider (visual conformance read "not checked" with a false reason), no
+ * by-name lookup (the verifier's same-provider fallback skipped review), and
+ * listRoutable fell back to every credential, the excluded account included.
+ */
+describe("a strict chain admits its seat under either Claude spelling", () => {
+  const CLAUDE_CREDENTIALS = {
+    claude: { apiKey: "anthropic-key" },
+    anthropic: { apiKey: "anthropic-key" },
+    openai: { apiKey: "openai-key" },
+  };
+  const claudeManager = (chain: string[], strict = true): ProviderManager => new ProviderManager(
+    makeProvider(`chain(${chain.join("->")})`),
+    CLAUDE_CREDENTIALS,
+    undefined,
+    "/tmp/strict-chain-doors-test",
+    chain,
+    undefined,
+    undefined,
+    undefined,
+    strict,
+  );
+
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    preferenceState.clear();
+    buildProviderChainMock.mockReset();
+    buildProviderChainMock.mockImplementation((order: string[]) => makeProvider(`chain(${order.join("->")})`));
+  });
+
+  it.each(["anthropic", "claude", "Anthropic Claude"])("PROVIDER_CHAIN=%s opens every door to the Claude seat and none to openai", (spelling) => {
+    const m = claudeManager([spelling]);
+    for (const name of ["claude", "anthropic"]) {
+      expect(m.allowsProvider(name), name).toBe(true);
+      expect(m.getPrimaryProviderByName(name), name).not.toBeNull();
+      expect(m.getProviderByName(name), name).not.toBeNull();
+    }
+    expect(m.getVisionProvider()?.name).toBe("claude");
+    expect(m.listRoutable().map((p) => p.name)).toEqual(["claude"]);
+    expect(m.allowsProvider("openai")).toBe(false);
+    expect(m.getPrimaryProviderByName("openai")).toBeNull();
+    expect(m.getProviderByName("openai")).toBeNull();
+  });
+
+  it("a preference under the other spelling is what runs, reported and pooled as itself", () => {
+    preferenceState.set("chat-1", { providerName: "claude", model: "claude-x", selectionMode: "strada-hard-pin" });
+    const m = claudeManager(["anthropic"]);
+    const info = m.getActiveInfo("chat-1");
+    expect(info.providerName).toBe("claude");
+    expect(info.model).toBe("claude-x");
+    expect(info.selectionMode).toBe("strada-hard-pin");
+    expect(m.listExecutionCandidates("chat-1").map((c) => c.name)).toEqual(["claude"]);
+  });
+
+  it("a chain built for the other spelling holds the seat once and keeps the requested model", () => {
+    claudeManager(["anthropic"]).getProviderByName("claude", "claude-x");
+    expect(buildProviderChainMock).toHaveBeenLastCalledWith(
+      ["claude"],
+      expect.anything(),
+      expect.objectContaining({ models: expect.objectContaining({ claude: "claude-x" }) }),
+    );
+    // Unpinned too: the seat is not tried twice under two names.
+    claudeManager(["anthropic", "openai"], false).getProviderByName("claude");
+    expect(buildProviderChainMock).toHaveBeenLastCalledWith(["claude", "openai"], expect.anything(), expect.anything());
+  });
+});
