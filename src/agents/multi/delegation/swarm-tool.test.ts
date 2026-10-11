@@ -200,6 +200,37 @@ describe("SwarmTool", () => {
     expect(result.content).toContain("3 of 15 submitted entries were NOT run");
   });
 
+  it("refuses a misspelled type for that member instead of running it as the first type", async () => {
+    // Measured 2026-10: type "implementaton" ran as DEFAULT_DELEGATION_TYPES[0] — code_review on
+    // the cheap tier with 60 s and 10 iterations — and nothing in the report said so.
+    const delegate = vi.fn(async () => delegationResult("ok"));
+    const tool = new SwarmTool(TYPES, managerWith(delegate), "agent-1" as never, 1, 4);
+
+    const result = await tool.execute(
+      { tasks: [{ task: "A", type: "implementaton" }, { task: "B", type: "review" }] },
+      {} as never,
+    );
+
+    expect(delegate.mock.calls.map(([req]) => (req as { type: string }).type)).toEqual(["review"]);
+    expect(result.content).toContain('unknown delegation type "implementaton"');
+    expect(result.content).toContain("implement, review");
+    expect(result.content).toContain("1 of 2 subtasks failed");
+  });
+
+  it("offers the configured type names and names the type each member ran as", async () => {
+    const delegate = vi.fn(async () => delegationResult("ok"));
+    const tool = new SwarmTool(TYPES, managerWith(delegate), "agent-1" as never, 1, 4);
+    const items = (tool.inputSchema["properties"] as Record<string, { items: { properties: Record<string, { enum?: string[] }> } }>)
+      .tasks!.items.properties;
+
+    expect(items.type!.enum).toEqual(["implement", "review"]);
+
+    const result = await tool.execute({ tasks: [{ task: "A" }, { task: "B", type: "review" }] }, {} as never);
+
+    expect(result.content).toContain("### 1. [implement] A");
+    expect(result.content).toContain("### 2. [review] B");
+  });
+
   it("refuses a single-task swarm and respects the depth rule", async () => {
     const tool = new SwarmTool(TYPES, managerWith(vi.fn()), "agent-1" as never, 1);
     const single = await tool.execute({ tasks: [{ task: "only" }] }, {} as never);

@@ -32,25 +32,7 @@ export class SwarmTool implements ITool {
     "do not depend on each other (e.g. implement five unrelated elements, or audit six modules). " +
     "Dependent work must stay sequential — order matters there, and this tool does not guarantee it.";
 
-  readonly inputSchema: ToolInputSchema = {
-    type: "object",
-    properties: {
-      tasks: {
-        type: "array",
-        description: "Independent subtasks to run concurrently (2-12).",
-        items: {
-          type: "object",
-          properties: {
-            task: { type: "string", description: "What this sub-agent must do" },
-            type: { type: "string", description: "Delegation type (defaults to the first configured type)" },
-            context: { type: "string", description: "Extra context for this subtask" },
-          },
-          required: ["task"],
-        },
-      },
-    },
-    required: ["tasks"],
-  };
+  readonly inputSchema: ToolInputSchema;
 
   readonly metadata: ToolMetadata = {
     name: "swarm_tasks",
@@ -68,7 +50,32 @@ export class SwarmTool implements ITool {
     private readonly depth: number,
     /** Pool width — the manager's own per-parent concurrency limit. */
     private readonly maxConcurrent: number = 3,
-  ) {}
+  ) {
+    const typeNames = types.map((t) => t.name);
+    this.inputSchema = {
+      type: "object",
+      properties: {
+        tasks: {
+          type: "array",
+          description: "Independent subtasks to run concurrently (2-12).",
+          items: {
+            type: "object",
+            properties: {
+              task: { type: "string", description: "What this sub-agent must do" },
+              type: {
+                type: "string",
+                enum: typeNames,
+                description: `Delegation type: one of ${typeNames.join(", ")} (defaults to ${typeNames[0] ?? "the first configured type"})`,
+              },
+              context: { type: "string", description: "Extra context for this subtask" },
+            },
+            required: ["task"],
+          },
+        },
+      },
+      required: ["tasks"],
+    };
+  }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     const rawTasks = Array.isArray(input["tasks"]) ? (input["tasks"] as SwarmTaskSpec[]) : [];
@@ -90,6 +97,15 @@ export class SwarmTool implements ITool {
     }
 
     const defaultType = this.types[0]?.name ?? "general";
+    // An unknown type used to fall back to the first configured one, so "implement" ran as
+    // code_review on the cheap tier with 60 s and 10 iterations, and the report never said
+    // which type ran. Only a missing type takes the default; a wrong one is refused for that
+    // member, which is also what the manager does for a direct delegation.
+    const memberTypes = tasks.map((spec) =>
+      spec.type === undefined || spec.type === null || spec.type === ""
+        ? defaultType
+        : this.types.find((t) => t.name === spec.type)?.name,
+    );
     const parentAgentId = resolveDelegationParent(this.parentAgentId, context);
 
     // BOUNDED POOL, not a burst. delegate() rejects (it does not queue) past
@@ -114,10 +130,20 @@ export class SwarmTool implements ITool {
           results[index] = { status: "rejected", reason: new Error("not started: the run was cancelled") };
           continue;
         }
+        const type = memberTypes[index];
+        if (!type) {
+          results[index] = {
+            status: "rejected",
+            reason: new Error(
+              `not started: unknown delegation type "${String(spec.type)}" — valid types: ${this.types.map((t) => t.name).join(", ")}`,
+            ),
+          };
+          continue;
+        }
         try {
           const value = await this.delegationManager.delegate({
             parentAgentId,
-            type: this.types.find((t) => t.name === spec.type)?.name ?? defaultType,
+            type,
             task: spec.context ? `${spec.task}\n\nContext: ${spec.context}` : spec.task,
             depth: this.depth,
             mode: "sync",
@@ -148,7 +174,7 @@ export class SwarmTool implements ITool {
     }
     let failures = 0;
     settled.forEach((outcome, i) => {
-      const label = tasks[i]!.task.slice(0, 80);
+      const label = `[${memberTypes[i] ?? "unknown type"}] ${tasks[i]!.task.slice(0, 80)}`;
       if (outcome.status === "fulfilled") {
         // delegate() resolves with a DelegationResult — { content, workerResult,
         // metadata } — never { success, output }. Reading the invented shape
