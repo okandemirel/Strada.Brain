@@ -12,7 +12,7 @@
 
 import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
-import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePaths, isVerificationToolName } from "./constants.js";
+import { MUTATION_TOOLS, COMPILABLE_EXT, INSPECTING_VERIFY_TOOLS, extractFilePaths, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { lexShell, type ShellOperator } from "../../security/shell-lexer.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
@@ -287,6 +287,8 @@ export class SelfVerification {
   private static readonly MAX_BUILD_GATE_EMISSIONS = 10;
   /** Clean verdicts so far: a conclusive check that passed and left no verification debt. */
   private cleanVerdicts = 0;
+  /** The last verifier call measured nothing, and no verdict has come since: the prompt says so. */
+  private unmeasured: { tool: string; detail: string; neverRan: boolean } | null = null;
 
   /** Reset for new task. */
   reset(): void {
@@ -304,6 +306,7 @@ export class SelfVerification {
     this.failingTestRun = false;
     this.buildGateEmissions = 0;
     this.cleanVerdicts = 0;
+    this.unmeasured = null;
     // The published state described the task that just ended, not the next.
     this.dispose();
   }
@@ -372,8 +375,10 @@ export class SelfVerification {
         const bodyText = executedTool.output !== undefined && executedTool.output !== ""
           ? executedTool.output
           : (typeof result.content === "string" ? result.content : "");
+        const testRecord = UNITY_TEST_RECORD_TOOLS.has(executedTool.toolName) ? unityTestRecordVerdict(bodyText) : undefined;
         const bodyReportsFailure =
-          (runsTests(executedTool.toolName, executedTool.input) && reportsTestFailure(bodyText))
+          testRecord === "failed"
+          || (runsTests(executedTool.toolName, executedTool.input) && reportsTestFailure(bodyText))
           // A BODY THAT SAYS IT FAILED IS A FAILURE, whatever the flag says:
           // `{"success":false,"compileIssueCount":3}` cleared the debt of
           // every edited file (Codex 2026-09-13 AF#3).
@@ -389,27 +394,48 @@ export class SelfVerification {
           // "unityExit=1" in a passing dotnet or npm run is not a Unity exit
           // (Codex 2026-09-17 round 4 #11).
           || (executedTool.toolName.startsWith("unity_") && /\bunityExit=(-?\d+)\b/.test(bodyText) && /\bunityExit=(-?\d+)\b/.exec(bodyText)![1] !== "0");
+        // A RED TEST RECORD IS A FAILING TEST RUN, whichever tool returned it.
+        // Only a run of the suite clears it (below): a green record read back
+        // may be any run's, and a rerun of the old failures is not the suite.
+        if (testRecord === "failed") this.failingTestRun = true;
         // AN INSPECTION IS NOT A VERIFICATION. A symbol search that returned
         // "No matches" and a console read cleared the compile debt of every
         // edited file, because "did not fail" was read as "compiled" (Codex
         // 2026-09-12 AE#3). They answer questions; they do not build.
-        if (INSPECTION_ONLY_TOOLS.has(executedTool.toolName)) continue;
+        if (INSPECTING_VERIFY_TOOLS.has(executedTool.toolName)) continue;
+        // A VERIFIER THAT NEVER RAN HAS NO VERDICT. A timeout, a bridge that
+        // was down, or a refused call came back as "tests failing" and a red
+        // published build, though nothing was measured (autonomy#5). It still
+        // spends a test-run attempt, so tooling that can never run lets the
+        // gate close; a body that reports a failure stays a failure.
+        // A batch's metadata is the batch's, not this child's.
+        const ownMetadata = toolName === "batch_execute" ? undefined : result.metadata;
+        if (executedTool.isError && !bodyReportsFailure && verifierNeverRan(bodyText, ownMetadata)) {
+          if (runsTests(executedTool.toolName, executedTool.input)) this.testRunAttempts++;
+          this.unmeasured = { tool: executedTool.toolName, detail: bodyText, neverRan: true };
+          continue;
+        }
         // …AND A RESULT THAT SAYS NOTHING SETTLES NOTHING. `{}` with no error,
         // `{"isCompiling":true}`, a `--help` usage dump and a shell command
         // that skipped its build (`true || dotnet build`, which exits 0 with
         // no output) all produced lastBuildOk: true and emptied the pending
-        // list (AE#3). An inconclusive answer leaves the debt where it was.
+        // list (AE#3). An inconclusive answer leaves the debt where it was —
+        // and everything else too: it moved lastVerificationAt, the cutoff
+        // the completion review reads failures from, so a non-answer erased
+        // an earlier failed step, and it turned a red build into an unknown
+        // one (autonomy#3).
         const shell = executedTool.toolName === "shell_exec";
         const needsVerdict = shell
           && shellVerification(typeof executedTool.input["command"] === "string" ? executedTool.input["command"] : "") === "maybe";
         // A masked exit status that printed a failure verdict has failed.
-        const conclusive = (needsVerdict && bodyReportsFailure)
-          || verificationIsConclusive(bodyText, { shell, needsVerdict });
+        const conclusive = testRecord === "failed"
+          || (testRecord !== "unmeasured"
+            && ((needsVerdict && bodyReportsFailure) || verificationIsConclusive(bodyText, { shell, needsVerdict })));
         if (!executedTool.isError && !conclusive) {
-          this.lastVerificationAt = Date.now();
-          this.lastBuildOk = null;
+          this.unmeasured = { tool: executedTool.toolName, detail: bodyText, neverRan: false };
           continue;
         }
+        this.unmeasured = null;
         // ACCEPTANCE IS NOT PROOF. `ok_exit_codes: [0, 2]` makes a compiler's
         // exit 2 an accepted result (isError: false) so a predicate does not
         // trip the breaker — but `error TS2322` under an accepted exit 2
@@ -711,6 +737,17 @@ export class SelfVerification {
       );
     }
 
+    // The gates above say what is still open; this says why the last attempt
+    // did not close it, so a call that measured nothing is not read as a red.
+    if (this.unmeasured !== null && lines.length > 0) {
+      const said = sanitizePromptInjection(this.unmeasured.detail.replace(/\s+/gu, " ").trim().slice(0, 160));
+      lines.push(
+        ``,
+        `[NOT MEASURED] The last ${this.unmeasured.tool} call ${this.unmeasured.neverRan ? "never ran" : "answered without a verdict"}` +
+          `${said === "" ? "" : `: "${said}"`}. It is neither a pass nor a failure — run it again, or another verifier, once it can answer.`,
+      );
+    }
+
     return lines.join("\n");
   }
 
@@ -801,13 +838,10 @@ const CONSOLE_REPORTING_TOOLS: ReadonlySet<string> = new Set([
   "unity_console_read", "unity_console_analyze",
 ]);
 
-/**
- * Tools that answer a QUESTION about the tree rather than building it. Their
- * success says the question was answered, never that the code compiles.
- */
-const INSPECTION_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  "csharp_symbol_search", "unity_console_read", "unity_console_analyze",
-]);
+// The tools that answer a QUESTION about the tree rather than building it are
+// constants.ts INSPECTING_VERIFY_TOOLS: a private, shorter copy here left out
+// unity_test_results and unity_test_list, which the stall check already
+// called inspections (audit autonomy#2).
 
 /**
  * Does this verifier's own output settle anything?
@@ -825,8 +859,19 @@ export function verificationIsConclusive(body: string, opts: { shell?: boolean; 
   if (text === "" || text === "{}" || text === "[]") return opts.shell === true && opts.needsVerdict !== true;
   // A TOOL THAT SAYS IT COULD NOT ANSWER has not answered (Codex 2026-09-13
   // AF#3): "unavailable", "unknown", "pending" and "error" are states, not
-  // verdicts.
-  if (/"?status"?\s*[:=]\s*"?(?:unavailable|unknown|pending|queued|running|error)"?/i.test(text)) return false;
+  // verdicts. So are "idle" (no run on record: unity_test_results after a
+  // domain reload) and "noop" (unity_test_rerun_failed found nothing to run).
+  if (/"?status"?\s*[:=]\s*"?(?:unavailable|unknown|pending|queued|running|error|idle|noop)"?/i.test(text)) return false;
+  // …and a tool that says outright it verified nothing: Strada.MCP's compile
+  // status answers `"source": "unavailable", "verified": false` with no
+  // status key, and that read as a clean compile (audit autonomy#2). A
+  // counted compile error still speaks for itself, and a shell's exit status
+  // for the shell.
+  if (
+    opts.shell !== true
+    && /"verified"\s*:\s*false|"source"\s*:\s*"unavailable"/i.test(text)
+    && !/"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(text)
+  ) return false;
   // A verifier BEHIND `||` must show its own verdict before it is believed.
   if (opts.needsVerdict === true && !/\b(?:succeeded|success|passed|0 errors?|no errors?|build succeeded|compil\w+ succeeded)\b/i.test(text)) {
     return false;
@@ -847,6 +892,60 @@ const TEST_RUNNING_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify", "unity_playthrough", "unity_test_run", "unity_playmode_test",
   "unity_editmode_test", "dotnet_test",
 ]);
+
+/**
+ * Tools that answer with Strada.MCP's Unity Test Framework record as it is
+ * (TestFrameworkCommands.SerializeRecord, JSON-stringified). The record never
+ * sets isError: a red suite comes back as `"status": "completed", "result":
+ * "Failed"` with a clean flag, and no failure pattern here read that, so a
+ * failing EditMode run cleared every gate (audit autonomy#1).
+ */
+const UNITY_TEST_RECORD_TOOLS: ReadonlySet<string> = new Set([
+  "unity_test_run", "unity_test_results", "unity_test_rerun_failed",
+]);
+
+/**
+ * What a finished Unity test record says. Read with patterns rather than
+ * JSON.parse, so a record the transcript cut short still speaks from its head.
+ *  - "failed": the suite's result is Failed, or it counted a failed test.
+ *  - "passed": the result is Passed and at least one test passed.
+ *  - "unmeasured": a result that is neither (Inconclusive, Skipped, Unknown),
+ *    or a Passed that ran nothing — a suite that executed no test proves none.
+ *  - undefined: not a finished record (queued, idle, a note).
+ */
+function unityTestRecordVerdict(text: string): "failed" | "passed" | "unmeasured" | undefined {
+  const result = /"result"\s*:\s*"([A-Za-z]+)"/u.exec(text)?.[1]?.toLowerCase();
+  const failed = Number(/"failed"\s*:\s*(\d+)/u.exec(text)?.[1] ?? "0");
+  if (result === "failed" || failed > 0) return "failed";
+  if (result === undefined) return undefined;
+  const passed = Number(/"passed"\s*:\s*(\d+)/u.exec(text)?.[1] ?? "0");
+  return result === "passed" && passed > 0 ? "passed" : "unmeasured";
+}
+
+/**
+ * What a call that never reached its check says instead of a verdict. The
+ * Strada.MCP adapter's own refusals and its timeout race (strada-mcp-tool-
+ * loader.ts) carry no metadata, so they are read by their fixed opening; the
+ * PlayMode runner says in words when a run is "not evidence about the tests".
+ * Anchored, so a test's own output about time ("Test timed out in 5000ms")
+ * is a failing test, not a runner that never started.
+ */
+const NEVER_RAN_PATTERNS: readonly RegExp[] = [
+  /^Unity bridge unavailable\b/u,
+  /^The previous '[^']+' call \(started [^)]*\) has not returned yet\b/u,
+  /^Error in [\w.-]+ \(elapsed=\d+ms\): StradaMCP tool '[^']+' timed out after \d+ms\b/u,
+  /^Invalid argument for '[^']+': input did not match expected schema\b/u,
+  /^projectPath .+ is outside this run's project\b/u,
+  // unity_test_rerun_failed stopped polling a run that had not finished.
+  /^\{\s*"status"\s*:\s*"timeout"/u,
+  /^PlayMode tests never ran\b[^\n]*\n?[^\n]*\bthis is not (?:a test problem|evidence about the tests)\b/iu,
+];
+
+function verifierNeverRan(body: string, metadata: Record<string, unknown> | undefined): boolean {
+  if (infrastructureFailure({ isError: true, content: body, metadata })) return true;
+  const text = body.trimStart();
+  return NEVER_RAN_PATTERNS.some((re) => re.test(text));
+}
 
 const TEST_RUNNING_SHELL_RE = /\b(?:vitest|jest|pytest|dotnet\s+test|npm\s+(?:run\s+)?test|yarn\s+test)\b/iu;
 

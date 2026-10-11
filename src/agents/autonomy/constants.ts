@@ -91,12 +91,21 @@ export function isVerificationToolName(toolName: string): boolean {
 
 /**
  * Verification tools that inspect rather than run a check: a symbol search, a
- * console read, an earlier test run's results, the list of tests. For the
- * read-only stall they are reading.
+ * console read, an earlier test run's results, the list of tests, the build
+ * settings. For the read-only stall they are reading, and their success never
+ * says the code compiles: the name pattern above matches unity_build_settings
+ * and unity_test_list, and a settings read cleared the compile debt of every
+ * edited file (audit autonomy#2).
  */
-const INSPECTING_VERIFY_TOOLS: ReadonlySet<string> = new Set([
+export const INSPECTING_VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "csharp_symbol_search", "unity_console_read", "unity_console_analyze", "unity_test_results", "unity_test_list",
+  "unity_build_settings",
 ]);
+
+/** A verification tool that RUNS a check — a compile, tests, the game, a build — rather than reading. */
+export function runsVerificationCheck(toolName: string): boolean {
+  return isVerificationToolName(toolName) && !INSPECTING_VERIFY_TOOLS.has(toolName);
+}
 
 export type StallClass = "progress" | "neutral" | "reading";
 
@@ -114,7 +123,7 @@ export type StallClass = "progress" | "neutral" | "reading";
  */
 export function stallClassOf(toolName: string, metadata?: { readonly readOnly?: boolean }): StallClass {
   if (PROGRESS_MUTATION_TOOLS.has(toolName)) return "progress";
-  if (isVerificationToolName(toolName) && !INSPECTING_VERIFY_TOOLS.has(toolName)) return "neutral";
+  if (runsVerificationCheck(toolName)) return "neutral";
   if (toolName.startsWith("unity_") && metadata?.readOnly === false) return "progress";
   return "reading";
 }

@@ -2,7 +2,7 @@ import type { AgentState } from "../agent-state.js";
 import type { VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
-import { PROGRESS_MUTATION_TOOLS } from "./constants.js";
+import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
 
 export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
@@ -391,7 +391,13 @@ export function isVerificationStep(toolName: string, summary: string): boolean {
   if (toolName === "shell_exec") {
     return /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu.test(summary);
   }
-  return /\b(?:build|test|check|verify|lint|typecheck|compile|smoke)\b/iu.test(toolName);
+  // Tool names are snake_case, and `\b` does not split at `_`: the private
+  // pattern this replaced matched no real verifier (dotnet_build,
+  // unity_verify_change, unity_playmode_verify), so a run that only verified
+  // was accused of NO WORK EVIDENCE and a clean compile never ended a
+  // same-error streak (audit autonomy#0). A read of the console or of an old
+  // test record is not a verification either.
+  return runsVerificationCheck(toolName);
 }
 
 
