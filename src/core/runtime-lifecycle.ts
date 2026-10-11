@@ -39,8 +39,10 @@ export function getMatchingLocalRuntimeProcesses(
   lockHolder: RuntimeLockHolder | null = null,
 ): RuntimeProcessInfo[] {
   const installRoot = path.resolve(inspection.installRoot);
-  // Only a holder whose pid means something here can be signalled from here.
-  const holder = lockHolder?.local && lockHolder.holder.pid !== currentPid ? lockHolder.holder : null;
+  // Only a holder whose pid means something here, and still names the process
+  // that wrote the lock, can be signalled from here: a pid reused after a crash
+  // belongs to an unrelated process.
+  const holder = lockHolder?.local && lockHolder.identified && lockHolder.holder.pid !== currentPid ? lockHolder.holder : null;
   const matching = inspection.runtimes.filter((runtime) => (
     runtime.pid !== currentPid
     && ((runtime.cwd !== null && path.resolve(runtime.cwd) === installRoot) || runtime.pid === holder?.pid)

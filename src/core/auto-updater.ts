@@ -12,6 +12,9 @@ import {
 import { planTreeKill } from "../utils/process-runner.js";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
 import { installLockPath, installRootKey, installStateDir } from "./runtime-lock.js";
+import { getProcessStartTime, readProcessStartTime, START_TIME_MARGIN_MS } from "./process-start-time.js";
+
+export { readProcessStartTime };
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
@@ -146,52 +149,6 @@ interface LockContent {
   timestamp: number;
   startTime?: number;
   token?: string;
-}
-
-/** Holder start times within this margin are the same process (clock and tick rounding). */
-const START_TIME_MARGIN_MS = 5000;
-/** USER_HZ: the unit of /proc/<pid>/stat starttime, fixed at 100 by the Linux user ABI. */
-const LINUX_CLOCK_TICKS_PER_SECOND = 100;
-
-/**
- * When `pid` started (ms since the epoch) as the OS reports it, or null when
- * that cannot be determined here. The update lock compares THE HOLDER's start
- * time with the one it recorded; comparing the checker's own start time (as
- * before) judged every live holder that started >5 s apart from the checker
- * as "PID reuse" and broke its lock mid-update (COR-3).
- */
-export function readProcessStartTime(pid: number): number | null {
-  try {
-    if (process.platform === "linux") {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
-      // Fields after "(comm) ": state is field 3, starttime field 22.
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      const startTicks = Number(fields[19]);
-      const btime = fs.readFileSync("/proc/stat", "utf-8").split("\n").find((line) => line.startsWith("btime "));
-      const bootSeconds = Number(btime?.slice("btime ".length));
-      if (!Number.isFinite(startTicks) || !Number.isFinite(bootSeconds) || !btime) return null;
-      return bootSeconds * 1000 + (startTicks * 1000) / LINUX_CLOCK_TICKS_PER_SECOND;
-    }
-    const probe = process.platform === "win32"
-      ? spawnSync("powershell.exe", [
-        "-NoProfile", "-NonInteractive", "-Command",
-        `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
-      ], { encoding: "utf-8", timeout: 10_000, windowsHide: true })
-      : spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf-8", timeout: 5_000 });
-    if (probe.status !== 0 || typeof probe.stdout !== "string") return null;
-    const parsed = Date.parse(probe.stdout.trim());
-    return Number.isFinite(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-let ownStartTime: number | null = null;
-
-/** This process's start time, measured the way a checker will measure it. */
-function getProcessStartTime(): number {
-  ownStartTime ??= readProcessStartTime(process.pid) ?? Date.now() - process.uptime() * 1000;
-  return ownStartTime;
 }
 
 interface AutoUpdaterOptions {

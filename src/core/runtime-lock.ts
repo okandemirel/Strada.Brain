@@ -35,7 +35,9 @@
  * automatically, so a SIGKILLed previous instance never wedges the next start.
  * Known limitation: PID reuse within the staleness window can false-positive
  * as "alive"; the failure mode is a clear refusal message, not silent
- * corruption.
+ * corruption. Signalling is held to a stricter test than refusing: the lock
+ * records when its writer started, and `strada kill`/`restart` act on the pid
+ * only while the process there started then (see {@link readRuntimeLockHolder}).
  *
  * Atomicity (COR-6): a claim is a complete file hard-linked into place, so no
  * reader ever sees an empty lock and mistakes a starter mid-write for a stale
@@ -58,6 +60,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Logger } from "winston";
 import { removeLockIfUnchanged } from "./setup-env-persistence.js";
+import { getProcessStartTime, readProcessStartTime, START_TIME_MARGIN_MS } from "./process-start-time.js";
 
 const LOCK_FILE_NAME = "runtime.lock";
 
@@ -79,6 +82,8 @@ export interface LockPayload {
   host?: string;
   /** The writer's pid namespace (Linux), so containers sharing a hostname are told apart. */
   pidNamespace?: string;
+  /** When the writer's process started (ms since the epoch), so a later process given its pid is told apart. */
+  processStartedAtMs?: number;
   token?: string;
 }
 
@@ -233,6 +238,7 @@ function parseLock(raw: string): LockPayload | null {
         channel: typeof parsed.channel === "string" ? parsed.channel : "",
         ...(typeof parsed.host === "string" ? { host: parsed.host } : {}),
         ...(typeof parsed.pidNamespace === "string" ? { pidNamespace: parsed.pidNamespace } : {}),
+        ...(typeof parsed.processStartedAtMs === "number" ? { processStartedAtMs: parsed.processStartedAtMs } : {}),
         ...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
       };
     }
@@ -312,6 +318,24 @@ export interface RuntimeLockHolder {
   holder: LockPayload;
   /** False when it runs on another host or in another container: it cannot be signalled from here. */
   local: boolean;
+  /**
+   * True only when the process now at `holder.pid` is the one that wrote the
+   * lock. Only then may it be signalled.
+   */
+  identified: boolean;
+}
+
+/**
+ * Whether the live process at `lock.pid` is the lock's writer. A writer that
+ * died without releasing (a second Ctrl-C, SIGKILL, OOM) leaves its pid behind,
+ * and the OS may give it to any process of this user; macOS has no boot id or
+ * pid namespace to notice. Only the start time the writer recorded tells them
+ * apart, so a lock without one identifies nobody.
+ */
+function isLockWriter(lock: LockPayload): boolean {
+  if (lock.processStartedAtMs === undefined) return false;
+  const startedAt = readProcessStartTime(lock.pid);
+  return startedAt !== null && Math.abs(startedAt - lock.processStartedAtMs) <= START_TIME_MARGIN_MS;
 }
 
 /**
@@ -323,7 +347,10 @@ export interface RuntimeLockHolder {
 export async function readRuntimeLockHolder(opts: { installRoot: string; configRoot: string }): Promise<RuntimeLockHolder | null> {
   for (const path of [installLockPath(opts.configRoot, opts.installRoot, "runtime"), legacyRuntimeLockPath(opts.installRoot)]) {
     const state = await readLockState(path);
-    if (state?.payload && holderIsLive(state)) return { holder: state.payload, local: isLocalOwner(state.payload) };
+    if (state?.payload && holderIsLive(state)) {
+      const local = isLocalOwner(state.payload);
+      return { holder: state.payload, local, identified: local && isLockWriter(state.payload) };
+    }
   }
   return null;
 }
@@ -346,6 +373,10 @@ export async function acquireRuntimeLock(opts: {
     startedAtIso: new Date().toISOString(),
     channel: opts.channelType,
     ...ownIdentity(),
+    // Tells this runtime from a later process given its pid before anyone
+    // signals it. Windows, where kill and restart do not run, skips it: the
+    // measurement there launches PowerShell, which no start should wait for.
+    ...(process.platform === "win32" ? {} : { processStartedAtMs: getProcessStartTime() }),
     // Makes every claim's bytes unique, so "is it still ours" is exact.
     token: randomBytes(8).toString("hex"),
   };

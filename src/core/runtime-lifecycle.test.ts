@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
-import { readRuntimeLockHolder } from "./runtime-lock.js";
+import { acquireRuntimeLock, installLockPath, readRuntimeLockHolder } from "./runtime-lock.js";
 import {
   DEFAULT_STOP_TIMEOUT_MS,
   getMatchingLocalRuntimeProcesses,
@@ -45,9 +45,10 @@ describe("runtime lifecycle", () => {
   describe("a runtime whose working directory is the config root (packaged, Docker, STRADA_SOURCE_CHECKOUT=false)", () => {
     // Every command chdirs to the config root, so the cwd scan never sees
     // this runtime; its lock under the config root names it.
-    const holder = (pid: number, local = true) => ({
+    const holder = (pid: number, local = true, identified = local) => ({
       holder: { pid, startedAtIso: "2026-10-11T00:00:00Z", channel: "web,telegram" },
       local,
+      identified,
     });
 
     it("is found through the runtime lock", () => {
@@ -64,6 +65,12 @@ describe("runtime lifecycle", () => {
     it("is not offered for signalling when it runs on another host or in another container, or is this process", () => {
       expect(getMatchingLocalRuntimeProcesses(makeInspection([]), process.pid, holder(4242, false))).toEqual([]);
       expect(getMatchingLocalRuntimeProcesses(makeInspection([]), 4242, holder(4242))).toEqual([]);
+    });
+
+    it("is not offered for signalling when the process at its pid is not the one that wrote the lock", () => {
+      expect(getMatchingLocalRuntimeProcesses(makeInspection([]), process.pid, holder(4242, true, false))).toEqual([]);
+      const scanned = { pid: 101, cwd: "/elsewhere", command: "node dist/index.js start --channel web" };
+      expect(getMatchingLocalRuntimeProcesses(makeInspection([scanned]), process.pid, holder(101, true, false))).toEqual([]);
     });
 
     it("a live runtime that chdir'd to its config root is found and stopped", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
@@ -98,6 +105,54 @@ describe("runtime lifecycle", () => {
         await exited;
       } finally {
         child.kill("SIGKILL");
+        rmSync(configRoot, { recursive: true, force: true });
+        rmSync(installRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("a lock whose pid now belongs to an unrelated process is never offered for signalling", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
+      // A runtime that died without releasing its lock (a second Ctrl-C, an
+      // exception in shutdown, SIGKILL, OOM) leaves its pid in the lock, and
+      // the OS may give that pid to any process of this user.
+      const configRoot = mkdtempSync(join(tmpdir(), "strada-lifecycle-config-"));
+      const installRoot = mkdtempSync(join(tmpdir(), "strada-lifecycle-install-"));
+      const lockPath = installLockPath(configRoot, installRoot, "runtime");
+      const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)"], { stdio: "ignore" });
+      try {
+        await once(unrelated, "spawn");
+        // This machine's host and pid namespace as a runtime records them, so the lock reads as local.
+        const taken = await acquireRuntimeLock({ installRoot, configRoot, channelType: "web" });
+        if (!taken.acquired) throw new Error("the test could not take its own lock");
+        const written = JSON.parse(readFileSync(lockPath, "utf-8")) as { host: string; pidNamespace?: string };
+        await taken.release();
+
+        const anHourAgo = Date.now() - 3_600_000;
+        const crashed = {
+          pid: unrelated.pid,
+          startedAtIso: new Date(anHourAgo).toISOString(),
+          channel: "web",
+          host: written.host,
+          ...(written.pidNamespace ? { pidNamespace: written.pidNamespace } : {}),
+        };
+        const leftBehind = {
+          "a runtime that recorded when it started": { ...crashed, processStartedAtMs: anHourAgo - 5_000 },
+          "a runtime that recorded no start time": crashed,
+          "a runtime from before owners recorded their host": { pid: unrelated.pid, startedAtIso: crashed.startedAtIso, channel: "web" },
+        };
+        for (const [writer, lock] of Object.entries(leftBehind)) {
+          writeFileSync(lockPath, JSON.stringify(lock));
+          const holder = await readRuntimeLockHolder({ installRoot, configRoot });
+          // Still read as held, so a start is refused as before; only signalling it is withheld.
+          expect(holder?.holder.pid, writer).toBe(unrelated.pid);
+
+          const inspection: LocalRuntimeInspection = { installRoot, runtimes: [], matchingRuntime: null };
+          const matching = getMatchingLocalRuntimeProcesses(inspection, process.pid, holder);
+          expect(matching.map((runtime) => runtime.pid), writer).toEqual([]);
+          await stopRuntimeProcesses(matching, { timeoutMs: 1_000, pollMs: 50 });
+          expect(() => process.kill(unrelated.pid!, 0), writer).not.toThrow();
+        }
+      } finally {
+        unrelated.kill("SIGKILL");
         rmSync(configRoot, { recursive: true, force: true });
         rmSync(installRoot, { recursive: true, force: true });
       }

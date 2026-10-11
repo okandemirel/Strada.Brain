@@ -926,7 +926,9 @@ async function runStatusCommand(): Promise<void> {
     console.log(
       lockHolder && !lockHolder.local
         ? `Runtime: held by PID ${lockHolder.holder.pid} on ${lockHolder.holder.host ?? "another host"} in another container or host; it cannot be stopped from here.`
-        : "Runtime: no active process detected for this install.",
+        : lockHolder && !lockHolder.identified
+          ? `Runtime: the runtime lock names PID ${lockHolder.holder.pid}, which cannot be confirmed as the runtime that took it (after a crash its pid can pass to another process); kill and restart leave it alone.`
+          : "Runtime: no active process detected for this install.",
     );
   } else {
     console.log(`Runtime: ${matchingRuntimes.length} active process${matchingRuntimes.length === 1 ? "" : "es"} for this install.`);
