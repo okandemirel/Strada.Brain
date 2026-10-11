@@ -222,11 +222,14 @@ function errorCode(error: unknown): string {
  * on a proxy-only network the channel never came up. https requests tunnel
  * (CONNECT) through HTTPS_PROXY, else HTTP_PROXY as fetch's undici does;
  * NO_PROXY hosts and loopback connect directly. Undefined when nothing is to
- * be proxied here: no proxy named, NODE_USE_ENV_PROXY (Node proxies its own
- * agents), or a value fetch cannot use either, which startup already reports.
+ * be proxied here: no proxy named, or a value fetch cannot use either, which
+ * startup already reports.
  */
 export function envProxyAgent(env: NodeJS.ProcessEnv = process.env): https.Agent | undefined {
-  const setup = envProxySettings(env);
+  // Built under NODE_USE_ENV_PROXY too. Node then proxies requests on its
+  // global agents, but ws opens its own connection when handed no agent, so
+  // the Socket Mode WebSocket still went direct.
+  const setup = envProxySettings({ ...env, NODE_USE_ENV_PROXY: undefined });
   if (setup.kind !== "installed") return undefined;
   let proxy: URL;
   try {

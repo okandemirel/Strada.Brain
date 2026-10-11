@@ -45,6 +45,7 @@ vi.mock("../../utils/logger.js", () => {
   return { getLogger: () => logger, getLoggerSafe: () => logger };
 });
 
+import { webApi } from "@slack/bolt";
 import { SlackChannel } from "./app.js";
 
 describe("SlackChannel behind HTTPS_PROXY", () => {
@@ -53,6 +54,7 @@ describe("SlackChannel behind HTTPS_PROXY", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await channel?.disconnect();
     channel = null;
     bolt.constructed.length = 0;
@@ -100,6 +102,37 @@ describe("SlackChannel behind HTTPS_PROXY", () => {
       expect(tunnel.firstBytes?.[0]).toBe(0x16);
       expect(tunnel.firstBytes?.includes(Buffer.from("slack.example.test"))).toBe(true);
     }
+  });
+
+  it("sends the Socket Mode WebSocket through the proxy under NODE_USE_ENV_PROXY too", async () => {
+    // Node then proxies requests on its global agents, but ws opens its own
+    // connection when handed no agent: Socket Mode went direct.
+    const proxy = await startTunnelProxy();
+    stubProxyEnv(proxy.url);
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+    // apps.connections.open answers as Slack would, so the WebSocket is opened.
+    const apiCall = webApi.WebClient.prototype.apiCall;
+    vi.spyOn(webApi.WebClient.prototype, "apiCall").mockImplementation(function (
+      this: InstanceType<typeof webApi.WebClient>,
+      method: string,
+      options?: Record<string, unknown>,
+    ) {
+      return method === "apps.connections.open"
+        ? Promise.resolve({ ok: true, url: "wss://wss-primary.slack.example.test/link/?ticket=t" })
+        : apiCall.call(this, method, options);
+    });
+    channel = new SlackChannel({ botToken: "xoxb-test", signingSecret: "s", appToken: "xapp-test", socketMode: true });
+
+    // It never connects: the stand-in proxy hangs up inside the tunnel.
+    void channel.connect().catch(() => undefined);
+
+    await vi.waitFor(
+      () => expect(proxy.tunnels.map((t) => [t.authority, t.firstBytes !== undefined])).toEqual([["wss-primary.slack.example.test:443", true]]),
+      { timeout: 5_000 },
+    );
+    // A TLS ClientHello for the WebSocket's host: the handshake went inside the tunnel.
+    expect(proxy.tunnels[0]!.firstBytes![0]).toBe(0x16);
+    expect(proxy.tunnels[0]!.firstBytes!.includes(Buffer.from("wss-primary.slack.example.test"))).toBe(true);
   });
 
   it("hands Bolt no agent when no proxy is named, so Slack connects as it always has", async () => {

@@ -297,6 +297,38 @@ describe("fetch through the environment's proxy", () => {
     }
   });
 
+  it("hides the proxy variables from node:http's installer for that call only, whether it takes the route or refuses it", () => {
+    // Slack's envProxyAgent() and the processes this one spawns read them from
+    // process.env after startup: left deleted, they would connect directly.
+    restoreGlobals = saveGlobals();
+    stubProxyEnv({ HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:8" });
+    const names = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+    const snapshot = () => Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const before = snapshot();
+    const node = http as { setGlobalProxyFromEnv?: unknown };
+    const had = Object.prototype.hasOwnProperty.call(node, "setGlobalProxyFromEnv");
+    const original = node.setGlobalProxyFromEnv;
+    const seen: Array<Record<string, string | undefined>> = [];
+    try {
+      for (const refuse of [false, true]) {
+        node.setGlobalProxyFromEnv = vi.fn(() => {
+          seen.push(snapshot());
+          if (refuse) throw Object.assign(new TypeError("Invalid URL"), { code: "ERR_INVALID_URL" });
+          return () => {};
+        });
+        const setup = installEnvProxy();
+        expect(setup.kind).toBe(refuse ? "invalid" : "unrouted");
+        expect(snapshot(), refuse ? "after a refusal" : "after the install").toEqual(before);
+      }
+    } finally {
+      if (had) node.setGlobalProxyFromEnv = original;
+      else delete node.setGlobalProxyFromEnv;
+    }
+    // Once for the route, then the route and each variable alone when refused.
+    expect(seen).toHaveLength(4);
+    for (const during of seen) expect(Object.values(during).filter((v) => v !== undefined)).toEqual([]);
+  });
+
   it("routes fetch only: the http and https global agents stay as they were", () => {
     restoreGlobals = saveGlobals();
     const before = { http: http.globalAgent, https: https.globalAgent };
@@ -391,9 +423,20 @@ describe("envProxyAgent", () => {
     return bytes !== undefined && bytes[0] === 0x16 && bytes.includes(Buffer.from(host));
   }
 
-  it("is not built when no proxy is named, or when NODE_USE_ENV_PROXY leaves it to Node", () => {
+  it("is not built when no proxy is named", () => {
     expect(envProxyAgent({})).toBeUndefined();
-    expect(envProxyAgent({ HTTPS_PROXY: "http://127.0.0.1:9", NODE_USE_ENV_PROXY: "1" })).toBeUndefined();
+    expect(envProxyAgent({ NODE_USE_ENV_PROXY: "1" })).toBeUndefined();
+  });
+
+  it("is built under NODE_USE_ENV_PROXY too, which proxies Node's global agents but not a client that takes none", async () => {
+    // ws (Slack's Socket Mode) opens its own connection when handed no agent.
+    const { url: proxyUrl, tunnels } = await startTunnelProxy();
+    const agent = agentFor({ HTTPS_PROXY: proxyUrl, NODE_USE_ENV_PROXY: "1" });
+
+    await attempt("https://wss-primary.slack.example.test/link", { agent });
+
+    expect(tunnels.map((t) => t.authority)).toEqual(["wss-primary.slack.example.test:443"]);
+    expect(isClientHelloFor(tunnels[0]!.firstBytes, "wss-primary.slack.example.test")).toBe(true);
   });
 
   it("tunnels https through HTTPS_PROXY and starts TLS with the origin inside the tunnel", async () => {
