@@ -230,13 +230,20 @@ export async function shellDotnet(command: string, cwd: string, projectPath: str
       // it shares the verdict. An error line or a timeout fails them all,
       // whatever the status says (`dotnet build; true`); only an all-`&&`
       // line that exited 0 proves each of them compiled. A redirection moves
-      // the output, not the status.
-      const failed = result.timedOut || MSBUILD_ERROR_LINE.test(output);
-      const clean = !failed
-        && result.exitCode === 0
-        && read.operators.every((op) => op === "&&")
+      // the output, not the status, so a non-zero exit of an all-`&&` line
+      // fails them too when no `dotnet test` in it could have set it:
+      // `dotnet build > /dev/null` over a broken source printed nothing and
+      // exited 1, and the next no_build run read the old DLL as PASSED
+      // (measured, 10.0.400). Another command's failure there (`cd`) is then
+      // held against the build, which only refuses no-build runs until a
+      // clean build.
+      const unmasked = read.operators.every((op) => op === "&&")
         && [...read.hazards].every((hazard) => hazard === "redirection")
         && read.commands.every((words) => words.length > 0);
+      const failed = result.timedOut
+        || MSBUILD_ERROR_LINE.test(output)
+        || (result.exitCode !== 0 && unmasked && commands.every((c) => c.verb === "build"));
+      const clean = !failed && result.exitCode === 0 && unmasked;
       if (failed || clean) {
         for (const c of commands) {
           if (c.builds) recordBuild(workspace, `shell_exec dotnet ${c.verb}`, c.target, c.config, { ...result, output }, failed);

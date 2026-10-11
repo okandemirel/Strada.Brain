@@ -378,7 +378,8 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
    * as it is now; `--no-build` runs the last DLL that compiled, whose one
    * test passes. `compileFailure` is what a failed compile prints, or a run
    * stopped at its time limit before it printed anything. A shell_exec line
-   * runs its `&&`/`;` commands the way bash would.
+   * runs its `&&`/`;` commands the way bash would, and `> file` takes a
+   * command's output away from the line.
    */
   function dotnetOnDisk(source: {
     compiles: boolean;
@@ -417,8 +418,9 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
       for (let i = 0; i < parts.length; i += 2) {
         if (i > 0 && parts[i - 1] === "&&" && exitCode !== 0) continue;
         const words = parts[i]!.split(/\s+/);
-        const ran = words[0] === "dotnet" ? dotnet(words.slice(1)) : { stdout: "", exitCode: 0, timedOut: false };
-        stdout += `${ran.stdout}\n`;
+        const to = words.indexOf(">");
+        const ran = words[0] === "dotnet" ? dotnet(words.slice(1, to < 0 ? undefined : to)) : { stdout: "", exitCode: 0, timedOut: false };
+        if (to < 0) stdout += `${ran.stdout}\n`;
         exitCode = ran.exitCode;
         if (ran.timedOut) return { ...done, stdout, exitCode, timedOut: true };
       }
@@ -567,6 +569,56 @@ describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => 
       expect(result.content).toContain("Result: NOT MEASURED");
       expect(result.content).toContain("dotnet build");
       expect(result.content).toContain("CS1002");
+    });
+
+    /**
+     * Measured with dotnet 10.0.400: `dotnet build P > /dev/null` over a
+     * source that did not compile printed nothing at all and exited 1. With
+     * no error line to read it was never recorded, and the next no_build run
+     * read "Result: PASSED, Total: 1" from the last good DLL.
+     */
+    it.each([
+      ["sent to /dev/null", `dotnet build ${testsProject} > /dev/null`],
+      ["sent to a log with its errors", `dotnet build ${testsProject} > build.log 2>&1`],
+      ["sent to /dev/null after `cd … &&`", "cd Game.Tests && dotnet build > /dev/null"],
+    ])("records a shell `dotnet build` whose output was %s by its exit code", async (_case, command) => {
+      const at = workspace();
+      const source = { compiles: false };
+      const dotnet = dotnetOnDisk(source);
+      const verifier = new SelfVerification();
+      verifier.track("file_write", { path: "Game.Tests/UnitTest1.cs" }, { toolCallId: "w", content: "written", isError: false });
+
+      const build = await shell.execute({ command }, at);
+      expect(build.isError).toBe(true);
+      expect(build.content).not.toContain("CS1002");
+
+      const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+      expect(result.content).toContain("Result: NOT MEASURED");
+      expect(result.content).not.toContain("PASSED");
+      expect(result.content).toContain("shell_exec dotnet build");
+      expect(result.content).toContain("exit code 1");
+      verifier.track("dotnet_test", { project: testsProject, no_build: true }, { toolCallId: "t", content: result.content, isError: result.isError, metadata: result.metadata });
+      expect(verifier.needsVerification()).toBe(true);
+      expect((await shell.execute({ command: `dotnet test ${testsProject} --no-build` }, at)).content).toContain("Result: NOT MEASURED");
+      expect(dotnet.calls().filter((args) => args[0] === "test")).toEqual([]);
+
+      // The same hidden line, once it compiles, clears what it recorded.
+      source.compiles = true;
+      expect((await shell.execute({ command }, at)).isError).toBe(false);
+      expect((await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at)).content).toContain("Result: PASSED");
+    });
+
+    it.each([
+      ["a building `dotnet test` with its output hidden", `dotnet test ${testsProject} > /dev/null`],
+      ["a hidden build that compiled, then a no-build test", `dotnet build ${testsProject} > /dev/null && dotnet test ${testsProject} --no-build`],
+    ])("does not read the non-zero exit of a line whose tests failed (%s) as a failed build", async (_case, command) => {
+      const at = workspace();
+      dotnetOnDisk({ compiles: true, testsFail: true });
+      expect((await shell.execute({ command }, at)).isError).toBe(true);
+
+      const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+      expect(result.content).toContain("Result: FAILED");
+      expect(result.content).not.toContain("NOT MEASURED");
     });
 
     it("says NOT MEASURED when the line's own build failed before its no-build test ran", async () => {
