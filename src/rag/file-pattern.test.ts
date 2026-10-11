@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { glob } from "glob";
-import { createFilePatternFilter, filePatternProblem, MAX_FILE_PATTERN_LENGTH } from "./file-pattern.js";
+import { createFilePatternFilter, filePatternProblem, globPatternProblem, MAX_FILE_PATTERN_LENGTH } from "./file-pattern.js";
 
 const ROOT = "/proj";
 const at = (rel: string) => `${ROOT}/${rel}`;
@@ -114,5 +114,31 @@ describe("createFilePatternFilter", () => {
         expect(inScope(at("Assets/Scripts/combat/Damage.cs"))).toBe(true);
       });
     }
+  });
+});
+
+// grep_search and glob_search hand their glob to glob, whose RegExps
+// backtrack: each `*` run in a segment multiplies the splits tried per name.
+describe("globPatternProblem", () => {
+  it("counts the '*' runs of each path segment of each {a,b} alternative", () => {
+    expect(globPatternProblem("**/*Damage*System*.cs")).toBeUndefined();
+    expect(globPatternProblem("*a*/*b*/*c*")).toBeUndefined();
+    expect(globPatternProblem("**/*a*b*c*d")).toMatch(/segment '\*a\*b\*c\*d' holds 4 '\*' wildcards/);
+
+    // Escaped stars, classes and a run like "**" inside a name are no extra runs.
+    expect(globPatternProblem("**/*\\*\\*a**b[*]*.cs")).toBeUndefined();
+
+    expect(globPatternProblem("**/*{a,b}*")).toBeUndefined();
+    expect(globPatternProblem("**/*{a,b}*c*")).toMatch(/too many path segments/);
+    expect(globPatternProblem(`**/{${Array.from({ length: 9 }, (_, i) => `*${i}*`).join(",")}}`)).toMatch(
+      /too many path segments/,
+    );
+  });
+
+  it("keeps filePatternProblem's limits and names the argument it was given", () => {
+    expect(globPatternProblem("**/+(?|??)#", "pattern")).toMatch(/^pattern uses extglob syntax/);
+    expect(globPatternProblem("{a,b}".repeat(12), "pattern")).toMatch(/^pattern expands to more than 64/);
+    expect(globPatternProblem(`**/${"a".repeat(MAX_FILE_PATTERN_LENGTH)}`)).toMatch(/^file_pattern is too long/);
+    expect(globPatternProblem("**/*.{cs,shader,compute,hlsl,cginc,json,xml,yaml}")).toBeUndefined();
   });
 });

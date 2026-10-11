@@ -56,10 +56,64 @@ const MAX_BRACE_ALTERNATIVES = 64;
 /** Most characters the expanded patterns may hold together: matching costs this × path length. */
 const MAX_EXPANDED_LENGTH = 4 * MAX_FILE_PATTERN_LENGTH;
 
-/** Why `pattern` cannot be matched, or undefined when it can. */
-export function filePatternProblem(pattern: string): string | undefined {
+/** Why `pattern` cannot be matched, or undefined when it can; `label` names it in the answer. */
+export function filePatternProblem(pattern: string, label = "file_pattern"): string | undefined {
   try {
-    compileFilePattern(pattern, false);
+    compileFilePattern(pattern, false, label);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** Most `*` runs one path segment may hold when glob matches it. */
+const MAX_GLOB_STARS_PER_SEGMENT = 3;
+/**
+ * What the segments holding several `*` runs may cost together, over every
+ * {a,b} alternative: two runs cost 1 and three cost 8, about the ratio their
+ * matching time grows by on 30-60 character names.
+ */
+const MAX_GLOB_MULTI_STAR_COST = 8;
+
+/**
+ * Why `pattern` cannot be handed to glob, or undefined when it can — the guard
+ * for grep_search's file_pattern and glob_search's pattern, which glob matches.
+ *
+ * glob (minimatch) compiles each path segment into a backtracking RegExp in
+ * which every `*` run is a lazy `[^/]*?`, so a name that fails a segment with
+ * k runs is tried about C(name length, k) ways, on the main thread. `?` makes
+ * every ordinary name adversarial: `**` + `/*?*?*?*?*?*?*?*?#` took 1.2 s over
+ * 100 Unity file names, and the extglob `+(?|??)` grows exponentially. On top
+ * of filePatternProblem's limits, which refuse extglobs, this caps the `*` runs
+ * in a segment and what segments with several of them may cost together.
+ */
+export function globPatternProblem(pattern: string, label = "file_pattern"): string | undefined {
+  const problem = filePatternProblem(pattern, label);
+  if (problem !== undefined) return problem;
+  try {
+    let cost = 0;
+    for (const alternative of expandBraces(pattern, label)) {
+      for (const part of alternative.split("/")) {
+        const segment = parseSegment(part, false);
+        if (segment.kind === "globstar") continue;
+        const stars = segment.tokens.filter((token) => token.kind === "star").length;
+        if (stars > MAX_GLOB_STARS_PER_SEGMENT) {
+          return (
+            `${label} segment '${part}' holds ${stars} '*' wildcards; one path segment may hold at most ` +
+            `${MAX_GLOB_STARS_PER_SEGMENT}, because glob tries every way of splitting each file name between them. ` +
+            "Use fewer '*' and narrow the results afterwards."
+          );
+        }
+        if (stars >= 2) cost += 8 ** (stars - 2);
+      }
+    }
+    if (cost > MAX_GLOB_MULTI_STAR_COST) {
+      return (
+        `${label} puts several '*' wildcards into too many path segments, counting every {a,b} alternative: ` +
+        `a segment with two counts 1 and one with three counts 8, at most ${MAX_GLOB_MULTI_STAR_COST} in all, ` +
+        "because glob tries every way of splitting each file name between them. Use fewer alternatives or fewer '*'."
+      );
+    }
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -85,17 +139,21 @@ type Segment =
 const GLOBSTAR: Segment = { kind: "globstar" };
 
 /** @throws when the pattern is over a size limit or uses extglob syntax. */
-function compileFilePattern(pattern: string, nocase: boolean): (relPath: string) => boolean {
+function compileFilePattern(
+  pattern: string,
+  nocase: boolean,
+  label = "file_pattern",
+): (relPath: string) => boolean {
   if (pattern.length > MAX_FILE_PATTERN_LENGTH) {
-    throw new Error(`file_pattern is too long (${pattern.length} characters, max ${MAX_FILE_PATTERN_LENGTH})`);
+    throw new Error(`${label} is too long (${pattern.length} characters, max ${MAX_FILE_PATTERN_LENGTH})`);
   }
   if (hasExtglob(pattern)) {
     throw new Error(
-      "file_pattern uses extglob syntax such as +(a|b) or @(a|b), which is not supported; list alternatives as {a,b}",
+      `${label} uses extglob syntax such as +(a|b) or @(a|b), which is not supported; list alternatives as {a,b}`,
     );
   }
   const directory = pattern.replace(/\/+$/, "") || pattern;
-  const alternatives = expandBraces(directory);
+  const alternatives = expandBraces(directory, label);
   const compiled = alternatives
     .map((alternative) => alternative.replace(/^(\.\/)+/, ""))
     // An absolute alternative never names a project-relative path.
@@ -127,7 +185,7 @@ function hasExtglob(pattern: string): boolean {
  * `{a,b}` alternatives, nested ones included, expanded into whole patterns.
  * A brace pair without a top-level comma is literal, as in grep_search.
  */
-function expandBraces(pattern: string): string[] {
+function expandBraces(pattern: string, label: string): string[] {
   const out: string[] = [];
   let expandedLength = 0;
   const expand = (p: string): void => {
@@ -136,10 +194,10 @@ function expandBraces(pattern: string): string[] {
       out.push(p);
       expandedLength += p.length;
       if (out.length > MAX_BRACE_ALTERNATIVES) {
-        throw new Error(`file_pattern expands to more than ${MAX_BRACE_ALTERNATIVES} {a,b} alternatives`);
+        throw new Error(`${label} expands to more than ${MAX_BRACE_ALTERNATIVES} {a,b} alternatives`);
       }
       if (expandedLength > MAX_EXPANDED_LENGTH) {
-        throw new Error(`file_pattern's {a,b} alternatives expand past ${MAX_EXPANDED_LENGTH} characters`);
+        throw new Error(`${label}'s {a,b} alternatives expand past ${MAX_EXPANDED_LENGTH} characters`);
       }
       return;
     }

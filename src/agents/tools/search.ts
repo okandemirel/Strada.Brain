@@ -5,6 +5,7 @@ import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { nearbyNames } from "./nearby-names.js";
 import { RegexTimeoutError, WorkerLineMatcher, type LineMatchResult } from "./regex-line-matcher.js";
+import { globPatternProblem } from "../../rag/file-pattern.js";
 
 /**
  * Reject glob patterns that could escape the project directory.
@@ -111,6 +112,11 @@ export class GlobSearchTool implements ITool {
     if (!isSafeGlobPattern(pattern)) {
       return { content: "Error: pattern must not contain '..' or absolute paths", isError: true };
     }
+    // glob matches it with backtracking RegExps on this thread (see globPatternProblem).
+    const problem = globPatternProblem(pattern, "pattern");
+    if (problem !== undefined) {
+      return { content: `Error: ${problem}`, isError: true };
+    }
 
     try {
       const matches = await globInsideProject(pattern, context.projectPath);
@@ -192,6 +198,11 @@ export class GrepSearchTool implements ITool {
 
     if (!isSafeGlobPattern(filePattern)) {
       return { content: "Error: file_pattern must not contain '..' or absolute paths", isError: true };
+    }
+    // glob matches it with backtracking RegExps on this thread (see globPatternProblem).
+    const filePatternIssue = globPatternProblem(filePattern);
+    if (filePatternIssue !== undefined) {
+      return { content: `Error: ${filePatternIssue}`, isError: true };
     }
 
     let regex: RegExp;
