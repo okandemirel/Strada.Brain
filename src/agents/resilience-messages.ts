@@ -1,4 +1,4 @@
-export type MessageKey = "provider_slow" | "provider_failing" | "provider_backoff" | "provider_ask_user" | "provider_abort" | "provider_quota" | "task_stuck" | "token_budget_exceeded" | "max_steps_reached";
+export type MessageKey = "provider_slow" | "provider_failing" | "provider_backoff" | "provider_ask_user" | "provider_abort" | "provider_quota" | "task_stuck" | "token_budget_exceeded" | "max_steps_reached" | "cost_budget_exceeded";
 
 const MESSAGES: Record<string, Record<MessageKey, string>> = {
   en: {
@@ -11,6 +11,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.",
     token_budget_exceeded: "Token budget exceeded ({used}K / {budget}K input tokens). Use `/token -1` for unlimited.",
     max_steps_reached: "I've reached the maximum number of steps for this request. Please send a follow-up message to continue.",
+    cost_budget_exceeded: "Stopped: the daily or monthly spending limit has been reached. The AI provider did not fail — the run stopped before spending more. Raise the limit in the budget settings, or continue once the period resets.",
   },
   tr: {
     provider_slow: "Yapay zeka sağlayıcısı gecikme yaşıyor. Yeniden deneniyor...",
@@ -22,6 +23,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "Bu görevde birden fazla yaklaşım denedikten sonra takıldım. Neler denediğimi ve nerede tıkandığımı paylaşacağım, böylece birlikte ilerleyebiliriz.",
     token_budget_exceeded: "Token bütçesi aşıldı ({used}K / {budget}K input token). Sınırsız için `/token -1` kullan.",
     max_steps_reached: "Bu istek için maksimum adım sayısına ulaştım. Devam etmek için lütfen bir takip mesajı gönderin.",
+    cost_budget_exceeded: "Durduruldu: günlük veya aylık harcama sınırına ulaşıldı. Yapay zeka sağlayıcısı hata vermedi — koşu daha fazla harcamadan önce durdu. Bütçe ayarlarından sınırı yükseltin ya da dönem yenilenince devam edin.",
   },
   ja: {
     provider_slow: "AIプロバイダーに遅延が発生しています。再試行中...",
@@ -33,6 +35,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "複数のアプローチを試みましたが、このタスクで行き詰まりました。試したことと問題点を共有しますので、一緒に進めましょう。",
     token_budget_exceeded: "トークン予算を超過しました（{used}K / {budget}K入力トークン）。無制限には `/token -1` を使用。",
     max_steps_reached: "このリクエストの最大ステップ数に達しました。続行するにはフォローアップメッセージを送信してください。",
+    cost_budget_exceeded: "停止しました: 日次または月次の支出上限に達しました。AIプロバイダーの障害ではありません — これ以上支出しないよう実行を止めました。予算設定で上限を引き上げるか、期間がリセットされてから続行してください。",
   },
   ko: {
     provider_slow: "AI 제공업체에서 지연이 발생하고 있습니다. 재시도 중...",
@@ -44,6 +47,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "여러 접근 방식을 시도했지만 이 작업에서 막혔습니다. 시도한 내용과 문제점을 공유하여 함께 진행하겠습니다.",
     token_budget_exceeded: "토큰 예산 초과 ({used}K / {budget}K 입력 토큰). 무제한은 `/token -1` 사용.",
     max_steps_reached: "이 요청의 최대 단계 수에 도달했습니다. 계속하려면 후속 메시지를 보내주세요.",
+    cost_budget_exceeded: "중단됨: 일간 또는 월간 지출 한도에 도달했습니다. AI 제공업체 장애가 아닙니다 — 더 지출하기 전에 실행을 멈췄습니다. 예산 설정에서 한도를 올리거나 기간이 초기화된 후 계속하세요.",
   },
   zh: {
     provider_slow: "AI提供商正在经历延迟。正在重试...",
@@ -55,6 +59,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "尝试了多种方法后，我在这个任务上遇到了困难。我会分享我尝试的内容和遇到的问题，以便我们一起推进。",
     token_budget_exceeded: "令牌预算已超出（{used}K / {budget}K输入令牌）。无限制请使用 `/token -1`。",
     max_steps_reached: "已达到此请求的最大步骤数。请发送后续消息以继续。",
+    cost_budget_exceeded: "已停止：已达到每日或每月的支出上限。这不是AI提供商的故障——运行在继续花费之前停止了。请在预算设置中提高上限，或在周期重置后继续。",
   },
   de: {
     provider_slow: "Der KI-Anbieter hat Verzögerungen. Wird erneut versucht...",
@@ -66,6 +71,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "Nach mehreren Ansätzen bin ich bei dieser Aufgabe nicht weitergekommen. Ich teile mit, was ich versucht habe und wo ich steckengeblieben bin, damit wir gemeinsam vorankommen.",
     token_budget_exceeded: "Token-Budget überschritten ({used}K / {budget}K Eingabe-Token). Für unbegrenzt `/token -1` verwenden.",
     max_steps_reached: "Ich habe die maximale Anzahl an Schritten für diese Anfrage erreicht. Bitte senden Sie eine Folgenachricht, um fortzufahren.",
+    cost_budget_exceeded: "Gestoppt: Das tägliche oder monatliche Ausgabenlimit ist erreicht. Der KI-Anbieter ist nicht ausgefallen — der Lauf wurde angehalten, bevor mehr ausgegeben wurde. Erhöhen Sie das Limit in den Budget-Einstellungen oder fahren Sie fort, sobald der Zeitraum zurückgesetzt ist.",
   },
   es: {
     provider_slow: "El proveedor de IA está experimentando retrasos. Reintentando...",
@@ -77,6 +83,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "Me quedé atascado en esta tarea después de varios intentos. Compartiré lo que probé y dónde me bloqueé para que podamos avanzar juntos.",
     token_budget_exceeded: "Presupuesto de tokens excedido ({used}K / {budget}K tokens de entrada). Para ilimitado use `/token -1`.",
     max_steps_reached: "He alcanzado el número máximo de pasos para esta solicitud. Por favor, envíe un mensaje de seguimiento para continuar.",
+    cost_budget_exceeded: "Detenido: se alcanzó el límite de gasto diario o mensual. El proveedor de IA no falló — la ejecución se detuvo antes de gastar más. Aumente el límite en la configuración del presupuesto o continúe cuando se reinicie el período.",
   },
   fr: {
     provider_slow: "Le fournisseur d'IA subit des retards. Nouvelle tentative...",
@@ -88,6 +95,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     task_stuck: "Je suis resté bloqué sur cette tâche après plusieurs approches. Je vais partager ce que j'ai essayé et où je me suis bloqué afin que nous puissions avancer ensemble.",
     token_budget_exceeded: "Budget de tokens dépassé ({used}K / {budget}K tokens d'entrée). Pour illimité utilisez `/token -1`.",
     max_steps_reached: "J'ai atteint le nombre maximum d'étapes pour cette demande. Veuillez envoyer un message de suivi pour continuer.",
+    cost_budget_exceeded: "Arrêté : la limite de dépenses quotidienne ou mensuelle est atteinte. Le fournisseur d'IA n'est pas en panne — l'exécution s'est arrêtée avant de dépenser davantage. Augmentez la limite dans les paramètres de budget ou reprenez lorsque la période sera réinitialisée.",
   },
 };
 

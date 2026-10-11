@@ -1531,11 +1531,10 @@ export class Orchestrator {
    *                   `provider_failing {attempt}/{max}` is deferred to a backoff-event enrichment.
    *   - `ask_user`  → the model's own `visibleText` when present, else `provider_ask_user` (:1478).
    *   - `show_plan` → `visibleText` verbatim (the plan body, not a resilience string).
-   *   - `run.ending` whose reason is a control-plane STOP → `provider_abort` (v1's ledger-break
-   *                   render, :1485). The reason carries the terminal cause; every value NOT in
-   *                   {@link INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS} (done/end_turn/max-tokens/
-   *                   ask-block/epoch) is a stop. The happy `end_turn`/`done` already had the answer
-   *                   rendered by the port dispatch (3.0), so they are skipped — no double-render.
+   *   - `run.ending` → the notice its CAUSE owes (engine/render.ts interactiveRunEndingNotice): a
+   *                   provider stop → `provider_abort` (v1's ledger-break render, :1485), the cost
+   *                   cap → `cost_budget_exceeded`, a loop stop → `task_stuck`. Reasons whose answer
+   *                   the port dispatch already rendered (3.0) and benign cancels render nothing.
    *                   (Empirically: a rule-4 inactivity stop is a SOFT stop → terminalStatus
    *                   "completed", so keying on `run.ended.status==="failed"` would MISS it; the
    *                   reason on `run.ending` is the faithful break signal.)
@@ -3004,9 +3003,10 @@ export class Orchestrator {
     status: TerminalStatus | undefined,
   ): MessageKey | undefined {
     if (reason) {
-      // budget-exhausted:tokens | budget-exhausted:cost
+      // budget-exhausted:tokens | budget-exhausted:cost — the spending limit is not a provider
+      // outage, and "switch to a different provider" is the wrong advice for it.
       if (reason.startsWith("budget-exhausted")) {
-        return reason.endsWith(":tokens") ? "token_budget_exceeded" : "provider_abort";
+        return reason.endsWith(":tokens") ? "token_budget_exceeded" : "cost_budget_exceeded";
       }
       // provider-stall:* | hard-timeout:* | task-inactivity → provider not responding.
       if (

@@ -14,6 +14,8 @@ export const FAILED_TERMINAL_KEYS: ReadonlySet<string> = new Set([
   "provider_quota",
   "task_stuck",
   "token_budget_exceeded",
+  // The spending limit stopped the work before it finished.
+  "cost_budget_exceeded",
 ]);
 
 export function isFailedTerminalKey(key: string | undefined): boolean {

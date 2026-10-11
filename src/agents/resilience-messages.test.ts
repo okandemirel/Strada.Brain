@@ -10,6 +10,7 @@ const ALL_KEYS: MessageKey[] = [
   "provider_abort",
   "task_stuck",
   "token_budget_exceeded",
+  "cost_budget_exceeded",
 ];
 
 const ALL_LANGUAGES = ["en", "tr", "ja", "ko", "zh", "de", "es", "fr"];

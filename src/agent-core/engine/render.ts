@@ -11,27 +11,44 @@
 import type { Session, SessionManager } from "../../agents/orchestrator-session-manager.js";
 import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
 import type { AgentEvent } from "../events/agent-event.js";
-import { getResilienceMessage } from "../../agents/resilience-messages.js";
+import { getResilienceMessage, type MessageKey } from "../../agents/resilience-messages.js";
 import { getLogger } from "../../utils/logger.js";
 import type { EngineRunContext } from "./engine-deps.js";
 import { getLiveInteractiveTokenBudget, type BudgetDeps } from "./budget.js";
 import type { RunResponse } from "../../learning/feedback/response-attribution.js";
 
-/** Copies of the shell's loop-block detection const + the interactive non-abort run-ending reasons
- *  (both still used in the shell; transitional duplication until Steps 7-9 finish the relocation). */
+/** Copy of the shell's loop-block detection const (transitional duplication until Steps 7-9). */
 const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
-const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
-  "done",
-  "completed",
-  "blocked",
-  "end_turn",
-  "max-tokens-runaway",
-  "blocked:ask_user",
-  "epoch-budget-exhausted",
-  "plan-review",
-  "goal-handoff",
-  "budget-exhausted:tokens",
-]);
+
+/**
+ * The notice an interactive `run.ending` reason owes the user, keyed on the CAUSE. Only a provider
+ * cause may say the provider is not responding: keying the abort on "not a known happy reason" told
+ * the user to switch providers after an honest failure report ("failed"), a refused write
+ * ("self-managed-write-rejected"), the spending limit ("budget-exhausted:cost") and their own
+ * /cancel (agent-core-goals#1). Every reason not named here either had its visible text rendered by
+ * the port dispatch already (done/completed/blocked/failed/end_turn/plan-review/…) or is a benign
+ * control-plane stop, and renders nothing.
+ */
+function interactiveRunEndingNotice(reason: string): MessageKey | undefined {
+  // A parent-cancelled stop is judged by the cause that cancelled the parent.
+  const wrapped = /^parent-cancelled\((.*)\)$/.exec(reason);
+  if (wrapped) return interactiveRunEndingNotice(wrapped[1]!);
+  // 3.4: the step budget is spent — the "send a follow-up" notice (v1 "Hit max iterations" parity).
+  if (reason === "max-iterations") return "max_steps_reached";
+  // The token stop's specific notice was rendered inline by the port (3.3); the cost stop has none.
+  if (reason === "budget-exhausted:cost") return "cost_budget_exceeded";
+  if (reason === "verdict-stop:loop-detected") return "task_stuck";
+  if (
+    reason.startsWith("provider-stall:")
+    || reason.startsWith("hard-timeout:")
+    || reason === "task-inactivity"
+    || reason === "verdict-stop:health"
+    || reason === "provider-failure"
+  ) {
+    return "provider_abort";
+  }
+  return undefined;
+}
 
 /** The dependency slice the rendering cluster reads (grows only with this module). */
 export interface RenderDeps extends BudgetDeps {
@@ -122,11 +139,11 @@ export async function portRenderInteractiveBudgetExceeded(
  *                   `provider_failing {attempt}/{max}` is deferred to a backoff-event enrichment.
  *   - `ask_user`  → the model's own `visibleText` when present, else `provider_ask_user` (:1478).
  *   - `show_plan` → `visibleText` verbatim (the plan body, not a resilience string).
- *   - `run.ending` whose reason is a control-plane STOP → `provider_abort` (v1's ledger-break
- *                   render, :1485). The reason carries the terminal cause; every value NOT in
- *                   {@link INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS} (done/end_turn/max-tokens/
- *                   ask-block/epoch) is a stop. The happy `end_turn`/`done` already had the answer
- *                   rendered by the port dispatch (3.0), so they are skipped — no double-render.
+ *   - `run.ending` → the notice its CAUSE owes ({@link interactiveRunEndingNotice}): a provider stop
+ *                   → `provider_abort` (v1's ledger-break render, :1485), the cost cap →
+ *                   `cost_budget_exceeded`, a loop stop → `task_stuck`, max-iterations →
+ *                   `max_steps_reached`. Reasons whose answer the port dispatch already rendered
+ *                   (3.0) and benign cancels render nothing — no double-render, no false cause.
  *                   (Empirically: a rule-4 inactivity stop is a SOFT stop → terminalStatus
  *                   "completed", so keying on `run.ended.status==="failed"` would MISS it; the
  *                   reason on `run.ending` is the faithful break signal.)
@@ -162,19 +179,11 @@ export function renderInteractiveResilienceEvent(
     case "show_plan":
       enqueue(e.visibleText);
       return;
-    case "run.ending":
-      if (e.reason === "max-iterations") {
-        // 3.4: the interactive run exhausted its step budget — render the "send a follow-up" notice
-        // (v1 runAgentLoop "Hit max iterations" parity), NOT a provider_abort. Localized via the
-        // resilience key (v1 hardcoded English). Dedicated arm — NOT a skip-set entry (the skip-set
-        // means "already rendered, do nothing"; here we render a specific notice).
-        enqueue(getResilienceMessage("max_steps_reached", language));
-        return;
-      }
-      if (!INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS.has(e.reason)) {
-        enqueue(getResilienceMessage("provider_abort", language));
-      }
+    case "run.ending": {
+      const notice = interactiveRunEndingNotice(e.reason);
+      if (notice) enqueue(getResilienceMessage(notice, language));
       return;
+    }
     default:
       return;
   }
