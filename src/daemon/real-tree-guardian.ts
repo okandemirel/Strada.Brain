@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
-import { ACTIVE_STATUSES } from "../tasks/types.js";
+import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 
 /**
  * Headless compile verdict for the real project root. `ran: false` means the
@@ -266,6 +266,15 @@ export class RealTreeGuardian {
   private fixTaskId: string | undefined;
   /** When the in-flight fix task was submitted; 0 = none. */
   private fixTaskStartedAt = 0;
+  /**
+   * When a tick first saw the in-flight fix task out of the queue; 0 = not
+   * yet. The runtime budget counts from here, never from submission: a
+   * daemon task waits `pending` for as long as a sprint runs, and a task that
+   * never ran is no evidence that repair is not converging (audit daemon#1).
+   * A look can only come late, so this under-counts a run and never
+   * over-counts one.
+   */
+  private fixTaskRunningSince = 0;
   private nextVerifyAt = 0;
   /** Fingerprint of the error list the current attempt streak is fixing. */
   private redFingerprint: string | undefined;
@@ -377,8 +386,14 @@ export class RealTreeGuardian {
       if (this.fixTaskId) {
         const fix = this.taskManager.getStatus(this.fixTaskId as TaskId);
         if (fix && ACTIVE_STATUSES.has(fix.status)) {
-          const ranForMs = this.now() - this.fixTaskStartedAt;
-          if (this.fixTaskStartedAt > 0 && ranForMs > MAX_FIX_TASK_RUNTIME_MS) {
+          if (
+            this.fixTaskRunningSince === 0 &&
+            (fix.status === TaskStatus.planning || fix.status === TaskStatus.executing)
+          ) {
+            this.fixTaskRunningSince = this.now();
+          }
+          const ranForMs = this.now() - this.fixTaskRunningSince;
+          if (this.fixTaskRunningSince > 0 && ranForMs > MAX_FIX_TASK_RUNTIME_MS) {
             // Take the tree back. The task is looping inside itself and the
             // guardian cannot see it: from out here a 45-minute fix and a
             // 45-minute thrash look identical, and only one of them is worth
@@ -395,6 +410,7 @@ export class RealTreeGuardian {
             }
             this.fixTaskId = undefined;
             this.fixTaskStartedAt = 0;
+            this.fixTaskRunningSince = 0;
             this.attemptsWithoutProgress += 1;
           } else {
             return;
@@ -405,6 +421,7 @@ export class RealTreeGuardian {
           const finishedId = this.fixTaskId;
           this.fixTaskId = undefined;
           this.fixTaskStartedAt = 0;
+          this.fixTaskRunningSince = 0;
           if (!settledOk) {
             // The fix failed/blocked — fall through and re-diagnose from the
             // CURRENT error list rather than resubmitting the same prompt.
@@ -544,6 +561,7 @@ export class RealTreeGuardian {
       );
       this.fixTaskId = task.id;
       this.fixTaskStartedAt = this.now();
+      this.fixTaskRunningSince = 0;
       this.nextVerifyAt = this.now() + POST_FIX_QUIET_MS;
       if (this.messenger) {
         await this.messenger(
@@ -650,6 +668,7 @@ export class RealTreeGuardian {
     );
     this.fixTaskId = task.id;
     this.fixTaskStartedAt = now;
+    this.fixTaskRunningSince = 0;
     this.playDirty = true; // the fix will write back; play again after it
     this.nextVerifyAt = now + POST_FIX_QUIET_MS;
     if (this.messenger) {

@@ -375,6 +375,52 @@ describe("one fix task cannot hold the tree forever", () => {
     // 40 minutes: a real fix deserves the room.
     expect(cancelled).toHaveLength(0);
   });
+
+  /**
+   * Audited 2026-10 (daemon#1): during a sprint every daemon task waits as
+   * `pending`, yet write-back checks still tick. The budget ran from
+   * SUBMISSION, so the first check past 45 minutes cancelled a fix that never
+   * ran, and two of those told the user "Autonomous repair is NOT converging —
+   * 4 attempts in a row failed" when no repair had run at all.
+   */
+  it("does not spend the budget on queue time: a fix still pending behind sprint work is neither cancelled nor counted", async () => {
+    const opts: { active: boolean; status: unknown } = { active: true, status: { status: TaskStatus.pending } };
+    const { manager, submitted, cancelled } = makeTaskManager(opts);
+    const messages: string[] = [];
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: false, ran: true, detail: "Headless compile failed with 7 error(s)" })),
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });   // red: fix submitted, queued behind the sprint
+    expect(submitted).toHaveLength(1);
+    for (let i = 0; i < 9; i++) {                      // three hours of write-back checks
+      t += 20 * 60_000;
+      await guardian.tick({ ignoreForeground: true });
+    }
+    expect(cancelled).toEqual([]);
+    expect(submitted).toHaveLength(1);
+    expect(guardian.snapshot()).toMatchObject({ fixTaskId: "task_fix1", attemptsWithoutProgress: 0, escalated: false });
+    expect(messages.filter((m) => /NOT converging/.test(m))).toEqual([]);
+
+    // The sprint ends and the fix starts. Its budget starts with it: the
+    // check right after the last write-back must not take back a task that
+    // has run for seconds.
+    opts.status = { status: TaskStatus.executing };
+    t += 5_000;
+    await guardian.tick({ ignoreForeground: true });
+    t += 40 * 60_000;
+    await guardian.tick({ ignoreForeground: true });
+    expect(cancelled).toEqual([]);
+
+    t += 10 * 60_000;                                  // 50 minutes seen running: now it overran
+    await guardian.tick({ ignoreForeground: true });
+    expect(cancelled).toEqual(["task_fix1"]);
+  });
 });
 
 describe("the fix task is told the errors, not the whole verdict", () => {
