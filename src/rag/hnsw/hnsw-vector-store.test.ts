@@ -251,6 +251,101 @@ describeIfHnsw("HNSWVectorStore", () => {
     });
   });
 
+  describe("background compaction with no serializer (memory-rag#4)", () => {
+    function fileEntries(name: string, n: number): VectorEntry[] {
+      return Array.from({ length: n }, (_, i) => ({
+        id: `${name}-${i}`,
+        vector: createRandomVector(dimensions),
+        chunk: createMockChunk(`${name}-${i}`, `${name} ${i}`, `/test/${name}.cs`),
+        addedAt: Date.now(),
+        accessCount: 0,
+      }));
+    }
+
+    it("a file removed while the rebuild is re-adding the index stays removed", async () => {
+      // The 300 survivors are more than one 128-point slice, so the rebuild
+      // yields with "kept" half re-added and "victim" not re-added yet.
+      await store.upsert([...fileEntries("gone", 200), ...fileEntries("kept", 200), ...fileEntries("victim", 100)]);
+      await store.removeByFile("/test/gone.cs"); // 200 of 500 deleted: compaction scheduled
+
+      for (let i = 0; i < 100 && store.count() >= 300; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      // The race this test is about: the rebuild has started and not finished.
+      expect(store.count()).toBeGreaterThan(0);
+      expect(store.count()).toBeLessThan(300);
+
+      await store.removeByFile("/test/victim.cs");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(store.getFileChunkIds("/test/victim.cs")).toEqual([]);
+      expect(store.count()).toBe(200);
+    });
+
+    it("an entry written while the rebuild runs is the one the id keeps", async () => {
+      await store.upsert([...fileEntries("gone", 200), ...fileEntries("kept", 300)]);
+      await store.removeByFile("/test/gone.cs");
+
+      for (let i = 0; i < 100 && store.count() >= 300; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(store.count()).toBeLessThan(300);
+
+      // "kept-299" sits in the slice the rebuild has not re-added yet.
+      const fresh = fileEntries("kept", 300)[299]!;
+      fresh.chunk = { ...fresh.chunk, content: "fresh body" };
+      await store.upsert([fresh]);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(store.count()).toBe(300);
+      const hits = await store.search(fresh.vector, 1);
+      expect(hits[0]?.id).toBe("kept-299");
+      expect(hits[0]?.chunk.content).toBe("fresh body");
+    });
+  });
+
+  describe("an id claimed by more than one index (memory-rag#1)", () => {
+    it("keeps one point per id when a batch repeats an id", async () => {
+      const first = createRandomVector(dimensions);
+      const second = createRandomVector(dimensions);
+      await store.upsert([
+        { id: "ctor", vector: first, chunk: { ...createMockChunk("ctor", "as method", "/test/Big.cs"), kind: "method" }, addedAt: Date.now(), accessCount: 0 },
+        { id: "ctor", vector: second, chunk: { ...createMockChunk("ctor", "as constructor", "/test/Big.cs"), kind: "constructor" }, addedAt: Date.now(), accessCount: 0 },
+      ]);
+
+      expect(store.count()).toBe(1);
+      expect((await store.search(first, 5)).map((h) => h.chunk.content)).toEqual(["as constructor"]);
+
+      await store.removeByFile("/test/Big.cs");
+      expect(store.count()).toBe(0);
+    });
+
+    it("removeByFile drops the orphans an index saved by an older build still holds", async () => {
+      await store.upsert([
+        { id: "ctor", vector: createRandomVector(dimensions), chunk: createMockChunk("ctor", "v1 body", "/test/Big.cs"), addedAt: Date.now(), accessCount: 0 },
+        { id: "other", vector: createRandomVector(dimensions), chunk: createMockChunk("other", "v2 body", "/test/Big.cs"), addedAt: Date.now(), accessCount: 0 },
+      ]);
+      await store.saveIndex(tempDir);
+      // The shape the duplicate-id bug wrote to disk: two indices claim one
+      // id, and the id maps to only the second.
+      const metadataPath = join(tempDir, "metadata.json");
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+      metadata.indexToId = [[0, "ctor"], [1, "ctor"]];
+      metadata.idToIndex = [["ctor", 1]];
+      writeFileSync(metadataPath, JSON.stringify(metadata), "utf-8");
+
+      const reloaded = await createHNSWVectorStore(tempDir, {
+        dimensions, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine", quantization: "none",
+      });
+      expect(reloaded.count()).toBe(2);
+
+      await reloaded.removeByFile("/test/Big.cs");
+
+      expect(reloaded.count()).toBe(0);
+      expect(await reloaded.search(createRandomVector(dimensions), 5)).toEqual([]);
+    });
+  });
+
   describe("search operations", () => {
     beforeEach(async () => {
       // Insert test vectors with known relationships
@@ -623,6 +718,29 @@ describeIfHnsw("HNSWVectorStore", () => {
       expect(existsSync(join(legacyDir, "vectors.bin"))).toBe(false);
       expect(existsSync(join(legacyDir, "chunks.json"))).toBe(false);
       expect(existsSync(join(legacyDir, "legacy-backup"))).toBe(true);
+
+      await migrationStore.shutdown();
+    });
+
+    it("migrates a legacy id that appears twice as one point (memory-rag#1)", async () => {
+      // The legacy store appended a repeated id as a second row.
+      const legacyDir = join(tempDir, "legacy-dup");
+      mkdirSync(legacyDir, { recursive: true });
+      const chunks: CodeChunk[] = [
+        { ...createMockChunk("dup", "as method", "/test/Big.cs"), kind: "method" },
+        { ...createMockChunk("dup", "as constructor", "/test/Big.cs"), kind: "constructor" },
+      ];
+      writeFileSync(join(legacyDir, "chunks.json"), JSON.stringify(chunks), "utf8");
+      const vectors = Float32Array.from([...createRandomVector(dimensions), ...createRandomVector(dimensions)]);
+      writeFileSync(join(legacyDir, "vectors.bin"), Buffer.from(vectors.buffer));
+
+      const migrationStore = new HNSWVectorStore(legacyDir, {
+        dimensions, maxElements: 100, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine",
+      });
+      await migrationStore.initialize();
+
+      expect(migrationStore.count()).toBe(1);
+      expect(migrationStore.getFileChunkIds("/test/Big.cs")).toEqual(["dup"]);
 
       await migrationStore.shutdown();
     });

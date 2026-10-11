@@ -406,6 +406,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private writeSerializer: HnswWriteSerializer | null = null;
   /** Coalesce guard: at most one background compaction rebuild scheduled at a time. */
   private rebuildScheduled = false;
+  /**
+   * The rebuild now re-adding the index; settles, never rejects. Every public
+   * write waits it out: the rebuild yields between slices with only part of
+   * the index re-added, so a remove there misses what is still to come back,
+   * and an upsert there is overwritten by the copy the rebuild re-adds after it.
+   */
+  private rebuildInFlight: Promise<void> | null = null;
   /** True when hnswlib-node is missing and the exact fallback index is in use. */
   private usingExactIndex = false;
   /** "<query>:<index>" sizes of the last query-size mismatch logged (one line per mismatch, not per search). */
@@ -542,6 +549,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     }
 
     if (entries.length === 0) return;
+    while (this.rebuildInFlight) await this.rebuildInFlight;
 
     // Separate into updates and inserts
     const updates: VectorEntry[] = [];
@@ -557,14 +565,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Handle updates (mark old as deleted + insert new)
     for (const entry of updates) {
-      const oldIndex = this.idToIndex.get(entry.id)!;
-
       // Mark old entry as deleted (HNSW doesn't support true updates)
-      this.hnswIndex.markDelete(oldIndex);
-      this.deletedIndices.add(oldIndex);
-      this.chunks.delete(oldIndex);
-      this.vectorsByIndex.delete(oldIndex);
-      this.quantizedVectors.delete(oldIndex);
+      this.dropIndex(this.idToIndex.get(entry.id)!);
 
       // Insert as new
       const newIndex = this.nextIndex++;
@@ -585,7 +587,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Handle inserts in batch
     if (inserts.length > 0) {
-      await this.upsertBatch(inserts);
+      await this.insertEntries(inserts);
     }
 
     getLoggerSafe().debug("[HNSWVectorStore] Upsert complete", {
@@ -596,6 +598,12 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   }
 
   async upsertBatch(entries: VectorEntry[]): Promise<void> {
+    while (this.rebuildInFlight) await this.rebuildInFlight;
+    await this.insertEntries(entries);
+  }
+
+  /** upsertBatch without waiting for a rebuild, which itself re-adds through here. */
+  private async insertEntries(entries: VectorEntry[]): Promise<void> {
     if (!this.hnswIndex) throw new Error("HNSW index not initialized");
     if (entries.length === 0) return;
 
@@ -621,6 +629,12 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       // the process from going deaf while doing it.
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i]!;
+        // An id already held, from before this batch or earlier in it, is about
+        // to be remapped; unless its old point goes now, nothing can name it to
+        // remove it. The chunker repeats ids in one batch: a large class's
+        // constructor comes out as a method and as a constructor.
+        const previous = this.idToIndex.get(entry.id);
+        if (previous !== undefined) this.dropIndex(previous);
         const index = this.nextIndex++;
         const normalizedVector = this.normalizeVector(entry.vector);
 
@@ -645,6 +659,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       const quantized = quantizeBatch(vectors, this.config.quantization);
       for (let i = 0; i < entries.length; i++) {
         const index = this.nextIndex - entries.length + i;
+        // A later entry of this batch with the same id already retired it.
+        if (!this.chunks.has(index)) continue;
         this.quantizedVectors.set(index, quantized[i]!);
       }
     }
@@ -654,31 +670,60 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     if (!this.isInitialized) {
       throw new Error("HNSWVectorStore not initialized");
     }
+    while (this.rebuildInFlight) await this.rebuildInFlight;
 
     const requiredCapacity = Math.max(this.config.maxElements, entries.length || 1);
     this.recreateIndex(requiredCapacity);
     if (entries.length > 0) {
-      await this.upsertBatch(entries);
+      await this.insertEntries(entries);
     }
   }
 
   async remove(ids: string[]): Promise<void> {
     if (!this.isInitialized || !this.hnswIndex) return;
+    while (this.rebuildInFlight) await this.rebuildInFlight;
 
     for (const id of ids) {
       const index = this.idToIndex.get(id);
-      if (index !== undefined) {
-        // HNSW doesn't support true deletion, mark as deleted
-        this.hnswIndex.markDelete(index);
-        this.deletedIndices.add(index);
-        this.chunks.delete(index);
-        this.vectorsByIndex.delete(index);
-        this.quantizedVectors.delete(index);
-        this.idToIndex.delete(id);
-        this.indexToId.delete(index);
-      }
+      // HNSW doesn't support true deletion, mark as deleted
+      if (index !== undefined) this.dropIndex(index);
     }
 
+    this.scheduleCompactionIfNeeded();
+    getLoggerSafe().debug("[HNSWVectorStore] Removed entries", { count: ids.length });
+  }
+
+  async removeByFile(filePath: string): Promise<void> {
+    if (!this.isInitialized || !this.hnswIndex) return;
+    while (this.rebuildInFlight) await this.rebuildInFlight;
+
+    // By index, not by id: an index saved before insertEntries retired
+    // repeated ids can hold several points under one id, and a remove by id
+    // reaches only the one the id maps to.
+    let removed = 0;
+    for (const [index, chunk] of this.chunks) {
+      if (chunk.filePath !== filePath) continue;
+      this.dropIndex(index);
+      removed++;
+    }
+
+    this.scheduleCompactionIfNeeded();
+    getLoggerSafe().debug("[HNSWVectorStore] Removed entries", { count: removed });
+  }
+
+  /** Marks one point deleted and forgets it in every map. */
+  private dropIndex(index: number): void {
+    this.hnswIndex.markDelete(index);
+    this.deletedIndices.add(index);
+    this.chunks.delete(index);
+    this.vectorsByIndex.delete(index);
+    this.quantizedVectors.delete(index);
+    const id = this.indexToId.get(index);
+    this.indexToId.delete(index);
+    if (id !== undefined && this.idToIndex.get(id) === index) this.idToIndex.delete(id);
+  }
+
+  private scheduleCompactionIfNeeded(): void {
     // Background compaction when deleted ratio exceeds threshold. Coalesced via
     // rebuildScheduled so a burst of removes can't stack multiple rebuilds.
     const total = this.chunks.size + this.deletedIndices.size;
@@ -726,21 +771,6 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         setImmediate(runWhenIdle);
       }
     }
-
-    getLoggerSafe().debug("[HNSWVectorStore] Removed entries", { count: ids.length });
-  }
-
-  async removeByFile(filePath: string): Promise<void> {
-    const idsToRemove: string[] = [];
-
-    for (const [index, chunk] of this.chunks) {
-      if (chunk.filePath === filePath) {
-        const id = this.indexToId.get(index);
-        if (id) idsToRemove.push(id);
-      }
-    }
-
-    await this.remove(idsToRemove);
   }
 
   async search(queryVector: number[], topK: number): Promise<VectorSearchHit[]> {
@@ -975,7 +1005,21 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async rebuildIndex(): Promise<void> {
     if (!this.isInitialized) return;
+    while (this.rebuildInFlight) await this.rebuildInFlight;
 
+    const rebuild = this.rebuildFromLiveChunks();
+    this.rebuildInFlight = rebuild.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await rebuild;
+    } finally {
+      this.rebuildInFlight = null;
+    }
+  }
+
+  private async rebuildFromLiveChunks(): Promise<void> {
     getLoggerSafe().info("[HNSWVectorStore] Rebuilding index");
 
     // Collect all current entries from live chunks
@@ -1028,7 +1072,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Recreate index and re-insert (this clears all internal maps)
     this.recreateIndex(Math.max(this.config.maxElements, entries.length || 1));
     if (entries.length > 0) {
-      await this.upsertBatch(entries);
+      await this.insertEntries(entries);
     }
 
     getLoggerSafe().info("[HNSWVectorStore] Index rebuilt", { count: entries.length });
@@ -1247,6 +1291,9 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         const vector = vectors.subarray(vectorStart, vectorEnd);
         const normalizedVector = this.normalizeVector(Array.from(vector));
 
+        // The legacy store appended a repeated id as another row; keep the last.
+        const previous = this.idToIndex.get(chunk.id);
+        if (previous !== undefined) this.dropIndex(previous);
         const index = this.nextIndex++;
         this.hnswIndex.addPoint(Array.from(normalizedVector), index);
         this.chunks.set(index, chunk);

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { RAGPipeline } from "../rag-pipeline.js";
+import { chunkCSharpFile } from "../chunker.js";
 import { HNSWVectorStore, createHNSWVectorStore, isHnswAvailable } from "./hnsw-vector-store.js";
 import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 
@@ -194,6 +195,41 @@ public class MyClass {
 
       // High threshold should return fewer or no results
       expect(highThreshold.length).toBeLessThanOrEqual(lowThreshold.length);
+    });
+  });
+
+  describe("a file whose chunks share an id (memory-rag#1)", () => {
+    // Over MAX_CHUNK_CHARS, so the chunker splits it per member, and the
+    // parser reads `public PlayerController(int hp)` both as a method and as a
+    // constructor: two chunks under one id in every batch.
+    function playerController(version: number): string {
+      const methods = Array.from({ length: 16 }, (_, i) =>
+        `    public int Method${i}(int a)\n    {\n        var total = a * ${i} + 12345;\n        return total - ${i};\n    }\n`,
+      ).join("\n");
+      return (
+        `using UnityEngine;\n\npublic class PlayerController : MonoBehaviour\n{\n    private int _hp;\n\n` +
+        `    public PlayerController(int hp)\n    {\n        _hp = hp + ${version};\n    }\n\n${methods}}\n`
+      );
+    }
+
+    it("leaves nothing of the file behind once it is removed, however often it was edited", async () => {
+      const file = "/test/PlayerController.cs";
+      const ids = chunkCSharpFile(file, playerController(1)).map((c) => c.id);
+      const uniqueIds = new Set(ids).size;
+      // The precondition this test is about: the real chunker repeats an id.
+      expect(uniqueIds).toBeLessThan(ids.length);
+
+      for (const version of [1, 2, 3]) {
+        await ragPipeline.indexFile(file, playerController(version));
+        expect(vectorStore.count()).toBe(uniqueIds);
+      }
+
+      await ragPipeline.removeFile(file);
+
+      expect(vectorStore.count()).toBe(0);
+      expect(vectorStore.getFileChunkIds(file)).toEqual([]);
+      const hits = await ragPipeline.search("PlayerController hp", { topK: 50, minScore: 0 as never });
+      expect(hits.filter((h) => h.chunk.filePath === file).map((h) => h.chunk.content)).toEqual([]);
     });
   });
 
