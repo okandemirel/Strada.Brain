@@ -29,6 +29,12 @@ import { limitIncomingText } from "../channel-messages.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import {
+  ATTACHMENT_CONTENT_MISMATCH,
+  ATTACHMENT_DOWNLOAD_FAILED,
+  rejectedAttachmentsReply,
+  type RejectedAttachment,
+} from "../attachment-rejection.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
@@ -211,6 +217,10 @@ export class DiscordChannel implements IChannelAdapter {
       // did not see created (e.g. older replies after a restart) are delivered
       // as partial structures instead of being silently dropped.
       partials: [Partials.Channel, Partials.Message, Partials.Reaction],
+      // Agent text can quote anything it read (a README, a web page, an
+      // injected document), so nothing in it may ping: no @everyone/@here,
+      // role or user mention is parsed. A reply still notifies its author.
+      allowedMentions: { parse: [], repliedUser: true },
     });
 
     this.setupEventHandlers();
@@ -1301,34 +1311,58 @@ export class DiscordChannel implements IChannelAdapter {
 
     // Extract attachments from the Discord message (validated)
     const attachments: Attachment[] = [];
+    const rejected: RejectedAttachment[] = [];
     if (message.attachments.size > 0) {
       for (const [, att] of message.attachments) {
+        const name = att.name ?? "attachment";
         const type = mimeToAttachmentType(att.contentType);
         const v = validateMediaAttachment({ mimeType: att.contentType ?? undefined, size: att.size, type });
-        if (!v.valid) continue; // Skip unsupported or oversized files
+        if (!v.valid) {
+          rejected.push({ name, reason: v.reason ?? "unsupported file" });
+          continue;
+        }
 
         let data: Buffer | undefined;
-        // Download image data for vision + audio data for STT transcription + magic bytes validation
-        if ((type === "image" || type === "audio") && att.url) {
+        let missing = ATTACHMENT_DOWNLOAD_FAILED;
+        // Images and audio still work from the public CDN URL (vision, cloud
+        // STT), so their bytes are optional. A document is read only from its
+        // bytes: campaign intake skips one without them.
+        if ((type === "image" || type === "audio" || type === "document") && att.url) {
           try {
             const downloaded = await downloadMedia(att.url);
             if (downloaded && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
               data = downloaded.data;
+            } else if (downloaded) {
+              missing = ATTACHMENT_CONTENT_MISMATCH;
             }
           } catch {
-            // Non-critical — proceed with URL only
+            // Non-critical for images and audio — proceed with URL only
           }
+        }
+        if (type === "document" && !data) {
+          rejected.push({ name, reason: missing });
+          continue;
         }
 
         attachments.push({
           type,
-          name: att.name ?? "attachment",
+          name,
           url: att.url,
           mimeType: att.contentType ?? undefined,
           size: att.size,
           data,
         });
       }
+    }
+
+    if (rejected.length > 0) {
+      getLogger().warn("Discord: attachment rejected — message not forwarded", {
+        chatId: message.channelId,
+        rejected,
+        textLength: message.content.length,
+      });
+      await message.reply(rejectedAttachmentsReply(rejected));
+      return;
     }
 
     const msg: IncomingMessage = {

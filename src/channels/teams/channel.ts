@@ -26,6 +26,12 @@ import {
   validateMagicBytes,
   validateMediaAttachment,
 } from "../../utils/media-processor.js";
+import {
+  ATTACHMENT_CONTENT_MISMATCH,
+  ATTACHMENT_DOWNLOAD_FAILED,
+  rejectedAttachmentsReply,
+  type RejectedAttachment,
+} from "../attachment-rejection.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -261,9 +267,19 @@ export class TeamsChannel implements IChannelAdapter {
             this.activeTurnContexts.set(chatId, context);
 
             const msg = await this.toIncomingMessage(context.activity);
-            if (!msg) {
-              if (this.activeTurnContexts.get(chatId) === context) {
-                this.activeTurnContexts.delete(chatId);
+            if (!msg || "rejected" in msg) {
+              try {
+                if (msg) {
+                  getLogger().warn("Teams: attachment rejected — message not forwarded", {
+                    chatId,
+                    rejected: msg.rejected,
+                  });
+                  await context.sendActivity(rejectedAttachmentsReply(msg.rejected));
+                }
+              } finally {
+                if (this.activeTurnContexts.get(chatId) === context) {
+                  this.activeTurnContexts.delete(chatId);
+                }
               }
               return;
             }
@@ -554,8 +570,11 @@ export class TeamsChannel implements IChannelAdapter {
     return this.feedbackPort.react(type, { chatId }, userId, "reaction");
   }
 
-  private async toIncomingMessage(activity: TeamsActivityLike): Promise<IncomingMessage | null> {
-    const attachments = await this.extractAttachments(activity);
+  private async toIncomingMessage(
+    activity: TeamsActivityLike,
+  ): Promise<IncomingMessage | { rejected: RejectedAttachment[] } | null> {
+    const { attachments, rejected } = await this.extractAttachments(activity);
+    if (rejected.length > 0) return { rejected };
     const normalizedText = typeof activity.text === "string"
       ? limitIncomingText(activity.text)
       : attachments.some((attachment) => attachment.type === "audio")
@@ -576,9 +595,12 @@ export class TeamsChannel implements IChannelAdapter {
     };
   }
 
-  private async extractAttachments(activity: TeamsActivityLike): Promise<Attachment[]> {
+  private async extractAttachments(
+    activity: TeamsActivityLike,
+  ): Promise<{ attachments: Attachment[]; rejected: RejectedAttachment[] }> {
     const rawAttachments = Array.isArray(activity.attachments) ? activity.attachments : [];
     const attachments: Attachment[] = [];
+    const rejected: RejectedAttachment[] = [];
 
     for (const raw of rawAttachments) {
       const inferredMimeType = this.resolveAttachmentMimeType(raw);
@@ -605,12 +627,22 @@ export class TeamsChannel implements IChannelAdapter {
         size,
         type,
       });
-      if (!validation.valid) continue;
-      if (data && effectiveMimeType && !validateMagicBytes(data, effectiveMimeType)) continue;
+      const name = this.resolveAttachmentName(raw) || this.defaultAttachmentName(type);
+      let reason: string | undefined;
+      if (!validation.valid) reason = validation.reason ?? "unsupported file";
+      else if (data && effectiveMimeType && !validateMagicBytes(data, effectiveMimeType)) reason = ATTACHMENT_CONTENT_MISMATCH;
+      // A document is read only from its bytes: campaign intake skips one without them.
+      else if (resolvedUrl && type === "document" && !data) reason = ATTACHMENT_DOWNLOAD_FAILED;
+      if (reason) {
+        // Only an attachment behind a URL is a file the user sent. Teams also
+        // attaches the message's own HTML body and cards, inline and URL-less.
+        if (resolvedUrl) rejected.push({ name, reason });
+        continue;
+      }
 
       attachments.push({
         type,
-        name: this.resolveAttachmentName(raw) || this.defaultAttachmentName(type),
+        name,
         url: resolvedUrl,
         mimeType: effectiveMimeType,
         size,
@@ -618,7 +650,7 @@ export class TeamsChannel implements IChannelAdapter {
       });
     }
 
-    return attachments;
+    return { attachments, rejected };
   }
 
   private resolveAttachmentUrl(attachment: TeamsAttachmentLike): string | undefined {

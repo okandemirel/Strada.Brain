@@ -28,6 +28,12 @@ import { chunkText } from "../chunk-text.js";
 import { confirmationOptionAt } from "../confirmation-payload.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import {
+  ATTACHMENT_CONTENT_MISMATCH,
+  ATTACHMENT_DOWNLOAD_FAILED,
+  rejectedAttachmentsReply,
+  type RejectedAttachment,
+} from "../attachment-rejection.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import { MessageQueue } from "../message-queue.js";
 import { resolveBindHost } from "../../core/bind-host.js";
@@ -1016,41 +1022,68 @@ export class SlackChannel implements IChannelAdapter {
     }
 
     const attachments: Attachment[] = [];
+    const rejected: RejectedAttachment[] = [];
 
     // Extract files from message
     const files = message.files;
 
     if (files && Array.isArray(files)) {
       // Download files in parallel — Slack url_private requires Bearer auth
-      const downloads = files
-        .filter((f) => f.name && f.mimetype)
-        .map(async (file) => {
-          let data: Buffer | undefined;
-          if (file.url_private && this.config.botToken) {
-            const downloaded = await downloadMedia(file.url_private, {
-              headers: { Authorization: `Bearer ${this.config.botToken}` },
-            });
-            if (downloaded) data = downloaded.data;
-          }
-          return { file, data };
-        });
+      const downloads = files.map(async (file) => {
+        let data: Buffer | undefined;
+        if (file.name && file.mimetype && file.url_private && this.config.botToken) {
+          const downloaded = await downloadMedia(file.url_private, {
+            headers: { Authorization: `Bearer ${this.config.botToken}` },
+          });
+          if (downloaded) data = downloaded.data;
+        }
+        return { file, data };
+      });
 
       const results = await Promise.all(downloads);
       for (const { file, data } of results) {
+        if (!file.name || !file.mimetype) {
+          rejected.push({ name: file.name ?? file.id, reason: "Slack did not give the bot this file's name and type" });
+          continue;
+        }
         const type = mimeToAttachmentType(file.mimetype);
         const size = data?.length ?? file.size ?? 0;
         const v = validateMediaAttachment({ mimeType: file.mimetype, size, type });
-        if (!v.valid) continue; // Skip unsupported or oversized files
-        if (data && !validateMagicBytes(data, file.mimetype!)) continue;
+        if (!v.valid) {
+          rejected.push({ name: file.name, reason: v.reason ?? "unsupported file" });
+          continue;
+        }
+        if (data && !validateMagicBytes(data, file.mimetype)) {
+          rejected.push({ name: file.name, reason: ATTACHMENT_CONTENT_MISMATCH });
+          continue;
+        }
+        // A document is read only from its bytes: campaign intake skips one
+        // without them, and url_private is useless to anyone without the token.
+        if (type === "document" && !data) {
+          rejected.push({ name: file.name, reason: ATTACHMENT_DOWNLOAD_FAILED });
+          continue;
+        }
         attachments.push({
           type,
-          name: file.name!,
+          name: file.name,
           url: file.url_private,
           mimeType: file.mimetype,
           size,
           data,
         });
       }
+    }
+
+    if (rejected.length > 0) {
+      this.logger.warn("Slack: attachment rejected — message not forwarded", {
+        userId,
+        channelId,
+        rejected,
+        textLength: text.length,
+      });
+      const reply = escapeSlackText(rejectedAttachmentsReply(rejected));
+      await say(threadTs ? { text: reply, thread_ts: threadTs } : reply);
+      return;
     }
 
     if (!text && attachments.length === 0) return;

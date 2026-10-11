@@ -957,7 +957,9 @@ describe("SlackChannel file extraction", () => {
     expect(messageHandlerFn).not.toHaveBeenCalled();
   });
 
-  it("should skip files without name or mimetype", async () => {
+  // Audit channels#1: these used to be dropped silently while the rest of the
+  // message went on — the user never learned a file had not arrived.
+  it("refuses a message whose files Slack did not describe, and names them", async () => {
     const message = {
       type: "message",
       user: "U456",
@@ -975,10 +977,12 @@ describe("SlackChannel file extraction", () => {
     const say = vi.fn();
     await capturedMessageCallback!({ message, say });
 
-    const incoming = (messageHandlerFn as any).mock.calls[0][0];
-    // Only the second file (valid.png) has both name and mimetype
-    expect(incoming.attachments).toHaveLength(1);
-    expect(incoming.attachments[0].name).toBe("valid.png");
+    expect(messageHandlerFn).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledTimes(1);
+    const reply = String(say.mock.calls[0]![0]);
+    expect(reply).toContain('"F1"');
+    expect(reply).toContain('"no-mime.dat"');
+    expect(reply).not.toContain("valid.png");
   });
 
   describe("processMessageQueue head-of-line blocking (M7)", () => {

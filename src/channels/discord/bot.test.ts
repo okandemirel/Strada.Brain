@@ -13,8 +13,12 @@ vi.mock("../../utils/logger.js", () => ({
   }),
 }));
 
-// Mock media-processor — bypass security validation in channel-level tests
+// Mock media-processor — bypass security validation in channel-level tests.
+// Downloads fail by default (images/audio fall back to their URL); a test
+// with a document supplies its bytes, since a document without them is refused.
+const mockDownloadMedia = vi.fn().mockResolvedValue(null);
 vi.mock("../../utils/media-processor.js", () => ({
+  downloadMedia: (...args: unknown[]) => mockDownloadMedia(...args),
   validateMediaAttachment: () => ({ valid: true }),
   validateMagicBytes: () => true,
   mimeToAttachmentType: (mime: string | undefined | null) => {
@@ -402,6 +406,8 @@ describe("DiscordChannel attachment extraction", () => {
   let messageCreateHandler: (message: Record<string, unknown>) => Promise<void>;
 
   beforeEach(() => {
+    mockDownloadMedia.mockReset();
+    mockDownloadMedia.mockResolvedValue(null);
     auth = new AuthManager([], {
       allowedDiscordIds: new Set(["allowed123"]),
       allowedDiscordRoles: new Set(),
@@ -547,6 +553,7 @@ describe("DiscordChannel attachment extraction", () => {
   it("should default to document type for unknown content types", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     channel.onMessage(handler);
+    mockDownloadMedia.mockResolvedValueOnce({ data: Buffer.from("PK"), mimeType: "application/zip", size: 2 });
 
     const attachments = new Map([
       ["1", {
@@ -567,6 +574,7 @@ describe("DiscordChannel attachment extraction", () => {
   it("should handle null contentType as document", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     channel.onMessage(handler);
+    mockDownloadMedia.mockResolvedValueOnce({ data: Buffer.from("raw"), mimeType: "application/octet-stream", size: 3 });
 
     const attachments = new Map([
       ["1", {
@@ -587,12 +595,16 @@ describe("DiscordChannel attachment extraction", () => {
       url: "https://cdn.discord.com/unknown",
       mimeType: undefined,
       size: 100,
+      data: Buffer.from("raw"),
     });
   });
 
   it("should extract multiple attachments of mixed types", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     channel.onMessage(handler);
+    mockDownloadMedia.mockImplementation(async (url: string) =>
+      url.endsWith("readme.txt") ? { data: Buffer.from("read me"), mimeType: "text/plain", size: 7 } : null,
+    );
 
     const attachments = new Map([
       ["1", {
