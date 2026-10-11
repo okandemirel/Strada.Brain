@@ -110,11 +110,10 @@ describe("the project fingerprint on a filesystem whose clock ticks coarsely", (
     expect(fingerprintOf(m)).not.toBe(first);
   });
 
-  it("an audit across a same-length rewrite inside one tick closes nothing", async () => {
-    stampAll(NOW_NS);
+  /** One coverage requirement, Req1, put to an audit whose resolver closes it after doing `during`. */
+  const auditClosingReq1 = async (during: () => void): Promise<{ campaign: Campaign; result: { open: string[]; auditFailed?: string } }> => {
     const m = manager(async (_gdd, reqs) => {
-      // The implementation changes while the audit is judging the old one.
-      writeFileSync(join(project, "Assets", "Game.cs"), "class Game { int x = 2; }");
+      during();
       return { closed: [...reqs], open: [] };
     });
     const campaign = {
@@ -124,13 +123,61 @@ describe("the project fingerprint on a filesystem whose clock ticks coarsely", (
       milestones: [{ id: "mcov1-0", title: "Req1", prompt: "p", status: "failed", attempts: 1, coverageGap: "Req1: absent" }],
     } as unknown as Campaign;
     const openRequirements = (m as unknown as {
-      openRequirements(c: Campaign): Promise<{ open: string[] }>;
+      openRequirements(c: Campaign): Promise<{ open: string[]; auditFailed?: string }>;
     }).openRequirements.bind(m);
+    return { campaign, result: await openRequirements(campaign) };
+  };
+  const rewriteSameLength = (): void => writeFileSync(join(project, "Assets", "Game.cs"), "class Game { int x = 2; }");
+  // An LLM audit outlasts the settle window: the walk after it finds every stamp the walk before it found fresh settled.
+  const outlastTheWindow = (): void => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS + 10_000);
+  };
 
-    const result = await openRequirements(campaign);
+  it("an audit across a same-length rewrite inside one tick closes nothing", async () => {
+    stampAll(NOW_NS);
+    // The implementation changes while the audit is judging the old one.
+    const { campaign, result } = await auditClosingReq1(rewriteSameLength);
 
     expect(campaign.milestones[0]!.coverageClosed).not.toBe(true);
     expect(result.open).toEqual(["Req1: absent"]);
+  });
+
+  it("an audit across a same-length rewrite inside one tick closes nothing when it outlasts the settle window", async () => {
+    stampAll(NOW_NS);
+    const { campaign, result } = await auditClosingReq1(() => {
+      rewriteSameLength();
+      outlastTheWindow();
+    });
+
+    expect(campaign.milestones[0]!.coverageClosed).not.toBe(true);
+    expect(result.open).toEqual(["Req1: absent"]);
+  });
+
+  it("an unchanged fresh tree still closes what the audit closed when the audit outlasts the settle window", async () => {
+    stampAll(NOW_NS);
+    const { campaign, result } = await auditClosingReq1(outlastTheWindow);
+
+    expect(campaign.milestones[0]!.coverageClosed).toBe(true);
+    expect(result).toEqual({ open: [] });
+  });
+
+  it("a fresh tree's fingerprint holds once its stamps settle, unless its bytes moved first", () => {
+    stampAll(NOW_NS);
+    const m = manager();
+    const fresh = fingerprintOf(m);
+    outlastTheWindow();
+    expect(fingerprintOf(m)).toBe(fresh);
+    // Once settled, the stamps vouch for the bytes read when they settled.
+    fsClock.opens = 0;
+    expect(fingerprintOf(m)).toBe(fresh);
+    expect(fsClock.opens).toBe(0);
+
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+    const other = manager();
+    const before = fingerprintOf(other);
+    rewriteSameLength();
+    outlastTheWindow();
+    expect(fingerprintOf(other)).not.toBe(before);
   });
 
   it.skipIf(process.platform === "win32")("a fresh FIFO is fingerprinted by its stamps and never opened", () => {

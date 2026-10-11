@@ -5338,6 +5338,9 @@ export class CampaignManager {
     }
   }
 
+  /** What projectFingerprint read of each file whose stamps were too fresh to vouch, while those stamps hold. */
+  private fingerprintBytes = new Map<string, { size: bigint; mtimeNs: bigint; ctimeNs: bigint; digest: string; settled: boolean }>();
+
   /**
    * What the tree IS, for a project that has no repository to say so: every
    * file's path, size, mtime and ctime under the project at nanosecond
@@ -5357,14 +5360,23 @@ export class CampaignManager {
    * and the closure stood for a tree that had changed. As the evidence ledger
    * treats a racily clean artifact (980b16d5), a file that last changed less
    * than a settle window before this walk began is fingerprinted by its bytes
-   * as well. Its line differs from the stamps-only line it gets once settled,
-   * so a closure bound to a fresh tree is judged once more later: the price
-   * of never vouching for bytes nobody read.
+   * as well.
+   *
+   * …AND KEEPS THAT LINE ONCE IT SETTLES. Each walk measures freshness from
+   * its own clock, and an LLM audit outlasts the window: the walk after it
+   * found settled what the walk before it found fresh, the stamps-only line
+   * never matched the bytes line, and an unchanged tree closed nothing
+   * (review 2026-10-12). A file read while fresh is read once more by the
+   * first walk that finds the same stamps settled, which is the last moment
+   * its bytes could have moved unseen; from then its stamps vouch for those
+   * bytes. A process with no such memory gives the stamps-only line, so a
+   * closure bound to a fresh tree before a restart is judged once more after.
    */
   private projectFingerprint(): string {
     // Wider than FAT's two-second tick, with room for a clock a little ahead.
     const settledNs = 5_000_000_000n;
     const startedNs = BigInt(Date.now()) * 1_000_000n;
+    const remembered: typeof this.fingerprintBytes = new Map();
     let chunk: Buffer | undefined;
     const hash = createHash("sha256");
     let files = 0;
@@ -5427,27 +5439,40 @@ export class CampaignManager {
         }
         // The later of the two: a copy that preserved an old mtime changed the file at its ctime.
         const changedNs = st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs;
+        const settled = changedNs <= startedNs - settledNs;
+        const key = `${rel}/${entry}`;
+        const known = this.fingerprintBytes.get(key);
+        const read = known !== undefined && known.size === st.size && known.mtimeNs === st.mtimeNs && known.ctimeNs === st.ctimeNs
+          ? known
+          : undefined;
         // Only a regular file has bytes to read: opening a FIFO blocks this synchronous walk until a writer comes.
-        if (changedNs <= startedNs - settledNs || !st.isFile()) {
-          hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
+        if ((settled && read === undefined) || !st.isFile()) {
+          hash.update(`${key}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
           continue;
         }
-        const bytes = createHash("sha256");
-        let fd: number | undefined;
-        try {
-          fd = openSync(child, "r");
-          chunk ??= Buffer.allocUnsafe(1024 * 1024);
-          for (let n = readSync(fd, chunk); n > 0; n = readSync(fd, chunk)) bytes.update(chunk.subarray(0, n));
-        } catch {
-          incomplete = true;
-          return;
-        } finally {
-          if (fd !== undefined) closeSync(fd);
+        let digest = settled && read?.settled === true ? read.digest : undefined;
+        if (digest === undefined) {
+          const bytes = createHash("sha256");
+          let fd: number | undefined;
+          try {
+            fd = openSync(child, "r");
+            chunk ??= Buffer.allocUnsafe(1024 * 1024);
+            for (let n = readSync(fd, chunk); n > 0; n = readSync(fd, chunk)) bytes.update(chunk.subarray(0, n));
+          } catch {
+            incomplete = true;
+            return;
+          } finally {
+            if (fd !== undefined) closeSync(fd);
+          }
+          digest = bytes.digest("hex");
         }
-        hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}:bytes=${bytes.digest("hex")}\n`);
+        remembered.set(key, { size: st.size, mtimeNs: st.mtimeNs, ctimeNs: st.ctimeNs, digest, settled });
+        hash.update(`${key}:${st.size}:${st.mtimeNs}:${st.ctimeNs}:bytes=${digest}\n`);
       }
     };
     walk(this.projectRoot, "");
+    // Only a finished walk saw every file; an unfinished one keeps what was known.
+    if (!incomplete) this.fingerprintBytes = remembered;
     return incomplete ? "" : `fp:${hash.digest("hex")}`;
   }
 
