@@ -267,4 +267,66 @@ describe("merges made on histogram vectors before the gate (memory-rag#2)", () =
     expect((await engine.runCycle(new AbortController().signal)).processed).toBe(1);
     expect(engine.findHistogramMerges()).toEqual([]);
   });
+
+  // Consolidation predates provenance stamping, and a soft-deleted original is
+  // never reloaded to be stamped, so most real histogram merges carry source
+  // rows with no embeddingProvenance at all. Only their vector's shape says
+  // what they were merged on; with that branch disabled every other test here
+  // still passed and the startup check would report no merges.
+  async function mergeUnstamped(
+    memory: AgentDBMemory,
+    texts: string[],
+    embed: (text: string) => Promise<number[]>,
+  ): Promise<{ engine: MemoryConsolidationEngine; logId: string; sourceIds: string[] }> {
+    const ids: string[] = [];
+    for (const text of texts) {
+      ids.push((await memory.storeNote(text, [], MemoryTier.Persistent, { chatId: "c1" as never })).id as string);
+    }
+    const db = memory.getConsolidationInternals().sqliteDb!;
+    const strip = db.prepare("UPDATE memories SET value = json_remove(value, '$.embeddingProvenance') WHERE id = ?");
+    for (const id of ids) strip.run(id);
+    const engine = engineFor(memory, [], embed);
+    await engine.processCluster({ seedId: ids[0]!, memberIds: ids, avgSimilarity: 0.9, tier: MemoryTier.Persistent });
+    const stamped = db.prepare("SELECT json_extract(value, '$.embeddingProvenance') AS p FROM memories WHERE id = ?");
+    for (const id of ids) expect((stamped.get(id) as { p: unknown }).p).toBeNull();
+    const log = db.prepare("SELECT id FROM consolidation_log WHERE status = 'completed'").get() as { id: string };
+    return { engine, logId: log.id, sourceIds: ids };
+  }
+
+  it("lists a merge whose unstamped source rows hold histogram vectors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "consolidation-gate-"));
+    dirs.push(dir);
+    const memory = new AgentDBMemory(memoryConfig(dir));
+    open.push(memory);
+    expect((await memory.initialize()).kind).toBe("ok");
+
+    const { engine, logId, sourceIds } = await mergeUnstamped(memory, UNRELATED.slice(0, 2), standIn);
+
+    expect(engine.findHistogramMerges()).toEqual([
+      expect.objectContaining({ logId, sourceEntryIds: sourceIds }),
+    ]);
+  });
+
+  it("does not list a merge whose unstamped source rows hold provider vectors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "consolidation-gate-"));
+    dirs.push(dir);
+    const embed = async (text: string): Promise<number[]> => {
+      const v = new Array<number>(8).fill(-0.01);
+      v[/health|regen/i.test(text) ? 0 : 1] = 1;
+      return v;
+    };
+    const memory = new AgentDBMemory(memoryConfig(dir, {
+      dimensions: 8, embeddingProvider: embed, embeddingProviderId: "toy-embedder:8d",
+    }));
+    open.push(memory);
+    expect((await memory.initialize()).kind).toBe("ok");
+
+    const { engine } = await mergeUnstamped(
+      memory,
+      ["Player health regenerates slowly", "Health regen for the player is slow"],
+      embed,
+    );
+
+    expect(engine.findHistogramMerges()).toEqual([]);
+  });
 });
