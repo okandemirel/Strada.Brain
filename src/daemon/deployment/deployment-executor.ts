@@ -124,17 +124,16 @@ export class DeploymentExecutor {
       };
     }
 
-    // Validate and resolve script path
-    const resolvedScript = this.validateScript(scriptPath);
-
     this.deploymentInProgress = true;
     this.activeProposalId = proposal.id;
-
-    this.markExecuting(proposal);
-
     const startTime = Date.now();
 
     try {
+      this.markExecuting(proposal);
+      // Validated once the row says 'executing', so a script that cannot run
+      // ends this approved proposal as 'failed' (below) rather than leaving it
+      // 'proposed'.
+      const resolvedScript = this.validateScript(scriptPath);
       const result = await this.runScript(resolvedScript, proposal);
       const durationMs = Date.now() - startTime;
       const deployResult: DeployResult = { ...result, durationMs };
@@ -172,6 +171,20 @@ export class DeploymentExecutor {
       }
 
       return deployResult;
+    } catch (err) {
+      // Whatever threw after the approval still ends the row: it stayed
+      // 'executing' for good, never pruned and counted as neither a success
+      // nor a failure.
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        this.updateLogEntry(proposal.id, "failed", undefined, Date.now() - startTime, message);
+      } catch (logErr) {
+        this.logger.error("Could not record the failed deployment", {
+          proposalId: proposal.id,
+          error: logErr instanceof Error ? logErr.message : String(logErr),
+        });
+      }
+      throw err;
     } finally {
       this.deploymentInProgress = false;
       this.activeProcess = null;
@@ -356,7 +369,15 @@ export class DeploymentExecutor {
     const postPath = this.config.postScriptPath;
     if (!postPath) return { success: true, stderr: "" };
 
-    const resolved = this.validateScript(postPath);
+    let resolved: string;
+    try {
+      resolved = this.validateScript(postPath);
+    } catch (err) {
+      // An unrunnable post-verify script leaves a live release nobody
+      // verified: that fails verification, so the rollback runs. Thrown, it
+      // skipped both and escaped execute().
+      return { success: false, stderr: err instanceof Error ? err.message : String(err) };
+    }
     const result = await this.runScript(resolved, proposal);
     return { success: result.success, stderr: result.stderr };
   }

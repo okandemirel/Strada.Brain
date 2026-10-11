@@ -107,4 +107,59 @@ describe("DeploymentExecutor ledger (real scripts, real SQLite)", () => {
       expect(executor.getStats().circuitBreakerState).toBe("OPEN");
     });
   });
+
+  describe("a script that cannot run once the deploy is approved", () => {
+    it("an unrunnable post-verify script fails verification and rolls the live release back", async () => {
+      const p = project();
+      p.script("deploy.sh", "touch deployed");
+      p.script("verify.sh", "exit 0", false);
+      p.script("rollback.sh", "touch rolledback");
+      const executor = executorFor(p.root, {
+        postScriptPath: "scripts/verify.sh",
+        rollbackScriptPath: "scripts/rollback.sh",
+      });
+      const id = executor.logProposal();
+
+      const result = await executor.execute({ id });
+
+      expect(result.success).toBe(false);
+      expect(p.marker("deployed")).toBe(true);
+      expect(p.marker("rolledback")).toBe(true);
+      const [row] = executor.getHistory(1);
+      expect(row!.status).toBe("rollback_completed");
+      expect(row!.error).toMatch(/verify\.sh/);
+      expect(executor.getStats().failed).toBe(1);
+      expect(executor.isInProgress()).toBe(false);
+    });
+
+    it("an unrunnable post-verify script with no rollback ends the row as post_verify_failed", async () => {
+      const p = project();
+      p.script("deploy.sh", "exit 0");
+      p.script("verify.sh", "exit 0", false);
+      const executor = executorFor(p.root, { postScriptPath: "scripts/verify.sh" });
+      const id = executor.logProposal();
+
+      await executor.execute({ id });
+
+      const [row] = executor.getHistory(1);
+      expect(row!.status).toBe("post_verify_failed");
+      expect(row!.error).toMatch(/not executable/);
+    });
+
+    it("an unrunnable deploy script ends the approved row as failed, with the reason", async () => {
+      const p = project();
+      p.script("deploy.sh", "exit 0", false);
+      const executor = executorFor(p.root, {});
+      const id = executor.logProposal();
+
+      await expect(executor.execute({ id, approvedBy: "bob" })).rejects.toThrow(/not executable/);
+
+      const [row] = executor.getHistory(1);
+      expect(row!.status).toBe("failed");
+      expect(row!.error).toMatch(/not executable/);
+      expect(row!.approvedBy).toBe("bob");
+      expect(executor.getStats().failed).toBe(1);
+      expect(executor.isInProgress()).toBe(false);
+    });
+  });
 });
