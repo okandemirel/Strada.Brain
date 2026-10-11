@@ -16,8 +16,8 @@
  *   POST /api/daemon/trigger              { name }      fires it as a tick would
  *   POST /api/daemon/circuit/reset        { name }
  *   POST /api/daemon/budget/reset         {}
- *   POST /api/daemon/digest/send          {}
- *   POST /api/daemon/notify               { level, message }
+ *   POST /api/daemon/digest/send          {}            { status: "sent" | "not_delivered", reason? }
+ *   POST /api/daemon/notify               { level, message }   { status, level, deliveredTo, missed? }
  *   POST /api/agents/:id/stop             { force? }
  *   POST /api/agents/:id/start            {}
  *   POST /api/agents/:id/budget           { usd }
@@ -303,8 +303,8 @@ function handleDaemonChanges(url: string, method: string, req: IncomingMessage, 
       return true;
     }
     withBody(req, res, ctx, NO_ARGUMENTS, async () => {
-      await reporter.sendDigest();
-      sendJson(res, { status: "sent" });
+      const delivery = await reporter.sendDigest();
+      sendJson(res, delivery.delivered ? { status: "sent" } : { status: "not_delivered", reason: delivery.reason });
     });
     return true;
   }
@@ -318,8 +318,8 @@ function handleDaemonChanges(url: string, method: string, req: IncomingMessage, 
       return true;
     }
     withBody(req, res, ctx, NOTIFY_BODY, async ({ level, message }) => {
-      await router.notify({ level, title: "Manual test", message, timestamp: Date.now() });
-      sendJson(res, { status: "sent", level });
+      const outcome = await router.notify({ level, title: "Manual test", message, timestamp: Date.now() });
+      sendJson(res, { status: outcome.deliveredTo.length > 0 ? "sent" : "not_delivered", level, ...outcome });
     });
     return true;
   }

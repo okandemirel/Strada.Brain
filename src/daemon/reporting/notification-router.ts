@@ -24,6 +24,7 @@ import {
   type QuietHoursConfig,
   type NotificationPayload,
   type NotificationHistoryEntry,
+  type NotificationOutcome,
 } from "./notification-types.js";
 
 // =============================================================================
@@ -126,12 +127,13 @@ export class NotificationRouter {
    * Main notification API.
    * Applies: min level filter, time-window grouping, rate limiting,
    * silent-only logging, quiet hours buffering, channel delivery,
-   * history persistence, and event emission.
+   * history persistence, and event emission. Answers where it went now and
+   * what it missed, so a caller never reports a dropped notification as sent.
    */
-  async notify(payload: NotificationPayload): Promise<void> {
+  async notify(payload: NotificationPayload): Promise<NotificationOutcome> {
     // 1. Check min level filter
     if (URGENCY_ORDER[payload.level] < URGENCY_ORDER[this.config.minLevel]) {
-      return;
+      return { deliveredTo: [], missed: `below the minimum notification level (${this.config.minLevel})` };
     }
 
     // Flush any group whose window has expired. Unlike a silent eviction this
@@ -152,13 +154,18 @@ export class NotificationRouter {
     if (existingGroup && (now - existingGroup.windowStart) < this.config.groupingWindowMs) {
       existingGroup.count++;
       existingGroup.lastPayload = payload;
-      return; // Grouped, delivery deferred
+      // Grouped, delivery deferred
+      return {
+        deliveredTo: [],
+        missed: `grouped with the same notification from ${Math.round((now - existingGroup.windowStart) / 1000)}s ago; ` +
+          `one summary goes out when its ${Math.round(this.config.groupingWindowMs / 1000)}s window ends`,
+      };
     }
 
     // No active window (new key, or flushed above): start a fresh window for
     // this event and deliver it on its own payload.
     this.groupMap.set(groupKey, { count: 1, lastPayload: payload, windowStart: now });
-    await this.deliver(payload);
+    return this.deliver(payload);
   }
 
   /**
@@ -166,14 +173,14 @@ export class NotificationRouter {
    * delivery, history persistence, and event emission for a single payload.
    * Grouping/min-level filtering happen upstream in {@link notify}.
    */
-  private async deliver(deliveryPayload: NotificationPayload): Promise<void> {
+  private async deliver(deliveryPayload: NotificationPayload): Promise<NotificationOutcome> {
     const now = deliveryPayload.timestamp;
 
     // 3. Silent urgency: log to history only (never delivered to channels)
     if (deliveryPayload.level === "silent") {
       this.logToHistory(deliveryPayload, ["dashboard"]);
       this.emitRoutedEvent(deliveryPayload, ["dashboard"], false);
-      return;
+      return { deliveredTo: ["dashboard"] };
     }
 
     // 4. Apply per-urgency rate limiting (critical is unlimited)
@@ -185,7 +192,8 @@ export class NotificationRouter {
       const recent = timestamps.filter((t) => t > windowStart);
 
       if (recent.length >= limit) {
-        return; // Rate limited, drop
+        // Rate limited, drop
+        return { deliveredTo: [], missed: `over the limit of ${limit} ${deliveryPayload.level} notification(s) per minute; dropped` };
       }
 
       recent.push(now);
@@ -196,18 +204,23 @@ export class NotificationRouter {
     if (this.quietHoursManager.isQuietHours() && !this.quietHoursManager.shouldBypass(deliveryPayload.level)) {
       this.quietHoursManager.bufferNotification(deliveryPayload);
       this.emitRoutedEvent(deliveryPayload, [], true);
-      return;
+      return { deliveredTo: [], missed: "buffered for quiet hours; it goes out when they end" };
     }
 
     // 6. Route to channels
     const channels = this.config.routing[deliveryPayload.level] ?? [];
     const deliveredTo: string[] = [];
+    const missed: string[] = channels.length === 0 ? [`no channel is routed for ${deliveryPayload.level} notifications`] : [];
 
     // 2.9: the owner's chat (from the task/goal row) wins; the fallback is the
     // admin/first-bound chat, never the most recent inbound one.
     const targetChatId = deliveryPayload.chatId ?? this.chatId;
     for (const channel of channels) {
-      if (channel === "chat" && this.channelSender && targetChatId) {
+      if (channel === "chat" && !this.channelSender) {
+        missed.push("chat: no chat channel is configured");
+      } else if (channel === "chat" && !targetChatId) {
+        missed.push("chat: no chat is bound yet (the first chat that messages Strada after it starts)");
+      } else if (channel === "chat" && this.channelSender && targetChatId) {
         const markdown = this.formatNotification(deliveryPayload);
         try {
           if (deliveryPayload.chatId && deliveryPayload.channelType) {
@@ -224,6 +237,7 @@ export class NotificationRouter {
                 title: deliveryPayload.title,
                 reason: ownership.reason,
               });
+              missed.push(`chat: ${ownership.reason}`);
               continue;
             }
           }
@@ -232,13 +246,15 @@ export class NotificationRouter {
         } catch (err) {
           // Do not swallow silently: surface the failure so a broken channel
           // send is debuggable, then continue to the next channel.
+          const error = err instanceof Error ? err.message : String(err);
           getLoggerSafe().warn("Notification channel send failed", {
             chatId: targetChatId,
             channelType: deliveryPayload.channelType,
             urgency: deliveryPayload.level,
             title: deliveryPayload.title,
-            error: err instanceof Error ? err.message : String(err),
+            error,
           });
+          missed.push(`chat: the send failed: ${error}`);
         }
       } else if (channel === "dashboard") {
         deliveredTo.push("dashboard");
@@ -250,6 +266,7 @@ export class NotificationRouter {
 
     // 8. Emit event
     this.emitRoutedEvent(deliveryPayload, deliveredTo, false);
+    return { deliveredTo, ...(missed.length > 0 ? { missed: missed.join("; ") } : {}) };
   }
 
   /**

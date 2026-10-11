@@ -68,8 +68,8 @@ function fakeDaemon() {
     },
     storage: { upsertCircuitState: vi.fn() },
     config: {},
-    digestReporter: { sendDigest: vi.fn(async () => "sent"), previewDigest: vi.fn(() => "**preview**") },
-    notificationRouter: { notify: vi.fn(async () => undefined), getHistory: vi.fn(() => []) },
+    digestReporter: { sendDigest: vi.fn(async () => ({ markdown: "**digest**", delivered: true })), previewDigest: vi.fn(() => "**preview**") },
+    notificationRouter: { notify: vi.fn(async () => ({ deliveredTo: ["dashboard"] })), getHistory: vi.fn(() => []) },
     agentManager: { stopAgent: vi.fn(async () => undefined), startAgent: vi.fn(async () => undefined), setBudgetCap: vi.fn() },
     tierRouter: { setOverride: vi.fn() },
     consolidationEngine: {

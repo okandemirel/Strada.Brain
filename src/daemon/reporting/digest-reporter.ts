@@ -59,6 +59,13 @@ export interface DigestReporterDeps {
   readonly logger: winston.Logger;
 }
 
+/** What sendDigest() did: the digest, and whether anyone received it (and if not, why). */
+export interface DigestDelivery {
+  readonly markdown: string;
+  readonly delivered: boolean;
+  readonly reason?: string;
+}
+
 // =============================================================================
 // DIGEST REPORTER
 // =============================================================================
@@ -127,8 +134,11 @@ export class DigestReporter {
    * 5. Deliver via channel (if available)
    * 6. Update delta state in storage
    * 7. Emit daemon:digest_sent event
+   *
+   * Answers whether it was delivered, so `strada daemon digest` never reports
+   * a skipped or failed send as sent.
    */
-  async sendDigest(): Promise<string> {
+  async sendDigest(): Promise<DigestDelivery> {
     const now = Date.now();
     const dashboardUrl = `http://localhost:${this.deps.dashboardPort ?? 3100}`;
 
@@ -144,6 +154,7 @@ export class DigestReporter {
     // 4. Deliver via channel
     let truncated = false;
     let delivered = false;
+    let reason: string | undefined;
     if (this.deps.channelSender && this.chatId) {
       const channelType = this.deps.channelType ?? "web";
       const finalMarkdown = truncateForChannel(markdown, channelType, dashboardUrl);
@@ -154,9 +165,13 @@ export class DigestReporter {
         delivered = true;
       } catch (err) {
         this.deps.logger.error("Failed to send digest", { error: err });
+        reason = `the chat send failed: ${err instanceof Error ? err.message : String(err)}`;
       }
     } else {
       this.deps.logger.warn("No channel available for digest delivery -- skipping");
+      reason = this.deps.channelSender
+        ? "no chat is bound yet (the digest goes to the first chat that messages Strada after it starts)"
+        : "no chat channel is configured";
     }
 
     // 5. Update delta state — only for a digest someone actually received.
@@ -184,7 +199,7 @@ export class DigestReporter {
       timestamp: now,
     });
 
-    return markdown;
+    return { markdown, delivered, ...(reason !== undefined ? { reason } : {}) };
   }
 
   /**

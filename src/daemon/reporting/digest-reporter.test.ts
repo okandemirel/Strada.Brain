@@ -208,13 +208,36 @@ describe("DigestReporter.sendDigest", () => {
       eventBus,
       metricsStorage,
     }));
-    const markdown = await reporter2.sendDigest();
+    const { markdown, delivered } = await reporter2.sendDigest();
+    expect(delivered).toBe(true);
     expect(markdown).not.toContain("+3 since last digest");
     expect(storage.getDaemonState("digest_last_tasks_completed")).toBe("13");
     expect(eventBus.emit).toHaveBeenCalledWith(
       "daemon:digest_sent",
       expect.objectContaining({ delivered: true }),
     );
+  });
+
+  it("answers whether the digest was delivered, and why not (daemon#7)", async () => {
+    const noChannel = new DigestReporter(makeDeps({ channelSender: undefined, chatId: undefined }));
+    expect(await noChannel.sendDigest()).toMatchObject({ delivered: false, reason: "no chat channel is configured" });
+
+    // Every runtime after a restart: a chat channel, no chat until someone messages it.
+    const sender = makeMockChannelSender();
+    const unbound = new DigestReporter(makeDeps({ channelSender: sender, chatId: undefined, channelType: "telegram" }));
+    expect(await unbound.sendDigest()).toMatchObject({
+      delivered: false,
+      reason: "no chat is bound yet (the digest goes to the first chat that messages Strada after it starts)",
+    });
+
+    unbound.setChatId("chat-1");
+    const sent = await unbound.sendDigest();
+    expect(sent).toMatchObject({ delivered: true });
+    expect(sent).not.toHaveProperty("reason");
+    expect(sent.markdown).toBe((sender.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+
+    (sender.sendMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Telegram 403"));
+    expect(await unbound.sendDigest()).toMatchObject({ delivered: false, reason: "the chat send failed: Telegram 403" });
   });
 
   it("gracefully handles missing channel (logs warning, skips delivery)", async () => {

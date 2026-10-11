@@ -39,7 +39,8 @@ import type { DaemonConfig, ITrigger } from "./daemon-types.js";
 import type { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { DigestReporter } from "./reporting/digest-reporter.js";
 import type { NotificationRouter } from "./reporting/notification-router.js";
-import type { UrgencyLevel } from "./reporting/notification-types.js";
+import type { NotificationOutcome, UrgencyLevel } from "./reporting/notification-types.js";
+import type { DigestDelivery } from "./reporting/digest-reporter.js";
 import type { ReadinessResult } from "./deployment/deployment-types.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
@@ -411,8 +412,13 @@ export function registerDaemonCommands(
             return;
           }
           printDigestPreview(read.data.markdown);
-        } else if (await post("send the digest", "/api/daemon/digest/send", {}, RemoteStatusSchema)) {
-          printDigestSent();
+        } else {
+          const answer = await post("send the digest", "/api/daemon/digest/send", {}, RemoteDigestSendSchema);
+          if (answer) {
+            printDigestDelivery(answer.status === "sent"
+              ? { delivered: true }
+              : { delivered: false, reason: answer.reason ?? `the running Strada answered '${answer.status}'` });
+          }
         }
         return;
       }
@@ -427,8 +433,7 @@ export function registerDaemonCommands(
         // "since last digest" baseline.
         printDigestPreview(ctx.digestReporter.previewDigest());
       } else {
-        await ctx.digestReporter.sendDigest();
-        printDigestSent();
+        printDigestDelivery(await ctx.digestReporter.sendDigest());
       }
     });
 
@@ -492,7 +497,13 @@ export function registerDaemonCommands(
           return;
         }
         const body = { level: opts.level, message: opts.message };
-        if (await post("send the notification", "/api/daemon/notify", body, RemoteStatusSchema)) printNotificationSent(opts.level);
+        const answer = await post("send the notification", "/api/daemon/notify", body, RemoteNotifySchema);
+        if (!answer) return;
+        if (answer.deliveredTo === undefined) {
+          console.log(`Notification accepted by the running Strada (level: ${opts.level}); it did not say where it went`);
+          return;
+        }
+        printNotificationOutcome(opts.level, { deliveredTo: answer.deliveredTo, ...(answer.missed ? { missed: answer.missed } : {}) });
         return;
       }
 
@@ -506,13 +517,13 @@ export function registerDaemonCommands(
         return;
       }
 
-      await ctx.notificationRouter.notify({
+      const outcome = await ctx.notificationRouter.notify({
         level: opts.level as UrgencyLevel,
         title: "Manual test",
         message: opts.message,
         timestamp: Date.now(),
       });
-      printNotificationSent(opts.level);
+      printNotificationOutcome(opts.level, outcome);
     });
 
   // =========================================================================
@@ -1572,6 +1583,16 @@ function printJob(job: RemoteJob): void {
 /** A state change the runtime carried out: it names what it did in `status`. */
 const RemoteStatusSchema = z.looseObject({ status: z.string() });
 
+/** POST /api/daemon/digest/send: "sent", or "not_delivered" and why. */
+const RemoteDigestSendSchema = z.looseObject({ status: z.string(), reason: z.string().optional() });
+
+/** POST /api/daemon/notify: where the notification went and what it missed (an older runtime answers without them). */
+const RemoteNotifySchema = z.looseObject({
+  status: z.string(),
+  deliveredTo: z.array(z.string()).optional(),
+  missed: z.string().optional(),
+});
+
 // -----------------------------------------------------------------------------
 // Printers shared by the in-process path and the shell path (COR-13), so a
 // command prints the same thing wherever it runs.
@@ -1623,8 +1644,13 @@ function printBudgetReset(): void {
   console.log("Budget counter reset");
 }
 
-function printDigestSent(): void {
-  console.log("Digest sent to active channel");
+function printDigestDelivery(delivery: Pick<DigestDelivery, "delivered" | "reason">): void {
+  if (delivery.delivered) {
+    console.log("Digest sent to active channel");
+    return;
+  }
+  console.error(`Digest not delivered: ${delivery.reason ?? "no reason given"}`);
+  process.exitCode = 1;
 }
 
 function printDigestPreview(markdown: string): void {
@@ -1633,8 +1659,18 @@ function printDigestPreview(markdown: string): void {
   console.log("--- End Preview ---");
 }
 
-function printNotificationSent(level: string): void {
-  console.log(`Notification sent (level: ${level})`);
+/** A test notification exists to test delivery: anything it missed is a failure. */
+function printNotificationOutcome(level: string, outcome: NotificationOutcome): void {
+  if (outcome.deliveredTo.length === 0) {
+    console.error(`Notification not delivered (level: ${level}): ${outcome.missed ?? "no reason given"}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Notification sent (level: ${level}) to: ${outcome.deliveredTo.join(", ")}`);
+  if (outcome.missed) {
+    console.error(`Not delivered everywhere this level is routed: ${outcome.missed}`);
+    process.exitCode = 1;
+  }
 }
 
 function printAgentStopped(id: string, force: boolean | undefined): void {

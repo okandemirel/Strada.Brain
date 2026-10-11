@@ -377,7 +377,7 @@ describe("daemon approve|deny <id>", () => {
 
 describe("daemon digest", () => {
   it("calls digestReporter.sendDigest()", async () => {
-    const sendDigest = vi.fn().mockResolvedValue("**All quiet** -- no activity");
+    const sendDigest = vi.fn().mockResolvedValue({ markdown: "**All quiet** -- no activity", delivered: true });
     const ctx = makeMockContext({
       digestReporter: { sendDigest, start: vi.fn(), stop: vi.fn(), getLastDigestTime: vi.fn() } as any,
     });
@@ -386,6 +386,17 @@ describe("daemon digest", () => {
 
     expect(sendDigest).toHaveBeenCalled();
     expect(stdout.toLowerCase()).toContain("digest sent");
+  });
+
+  it("says a digest nobody received was not delivered, and why, exiting non-zero (daemon#7)", async () => {
+    const sendDigest = vi.fn().mockResolvedValue({ markdown: "**All quiet**", delivered: false, reason: "no chat channel is configured" });
+    const ctx = makeMockContext({ digestReporter: { sendDigest } as any });
+
+    const { stdout, stderr } = await runDaemonCommand(() => ctx, ["digest"]);
+
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Digest not delivered: no chat channel is configured");
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints to stdout in --dry-run mode, without sending anything", async () => {
@@ -439,7 +450,7 @@ describe("daemon notifications", () => {
 
 describe("daemon notify", () => {
   it("calls notificationRouter.notify() with level and message", async () => {
-    const notifyFn = vi.fn().mockResolvedValue(undefined);
+    const notifyFn = vi.fn().mockResolvedValue({ deliveredTo: ["chat", "dashboard"] });
     const ctx = makeMockContext({
       notificationRouter: {
         notify: notifyFn,
@@ -458,8 +469,18 @@ describe("daemon notify", () => {
         message: "test notification",
       }),
     );
-    expect(stdout).toContain("Notification sent");
-    expect(stdout).toContain("high");
+    expect(stdout).toBe("Notification sent (level: high) to: chat, dashboard");
+  });
+
+  it("says a notification that went nowhere was not delivered, and why, exiting non-zero (daemon#7)", async () => {
+    const notifyFn = vi.fn().mockResolvedValue({ deliveredTo: [], missed: "buffered for quiet hours; it goes out when they end" });
+    const ctx = makeMockContext({ notificationRouter: { notify: notifyFn } as any });
+
+    const { stdout, stderr } = await runDaemonCommand(() => ctx, ["notify", "--level", "medium", "--message", "m"]);
+
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Notification not delivered (level: medium): buffered for quiet hours; it goes out when they end");
+    expect(process.exitCode).toBe(1);
   });
 });
 
@@ -1259,7 +1280,10 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
   it("daemon budget reset and digest post an empty JSON object, and send the dashboard bearer too when the install has one", async () => {
     const { baseUrl, seen } = await startRuntime({
       "POST /api/daemon/budget/reset": ok,
-      "POST /api/daemon/digest/send": ok,
+      "POST /api/daemon/digest/send": [
+        { body: { status: "sent" } },
+        { body: { status: "not_delivered", reason: "no chat is bound yet" } },
+      ],
     }, "bearer-1");
 
     expect((await run(["budget", "reset"], baseUrl, "bearer-1")).stdout).toBe("Budget counter reset");
@@ -1268,10 +1292,22 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
       ["POST /api/daemon/budget/reset", {}, "Bearer bearer-1"],
       ["POST /api/daemon/digest/send", {}, "Bearer bearer-1"],
     ]);
+    expect(process.exitCode).toBeUndefined();
+
+    const undelivered = await run(["digest"], baseUrl, "bearer-1");
+    expect(undelivered.stdout).toBe("");
+    expect(undelivered.stderr).toBe("Digest not delivered: no chat is bound yet");
+    expect(process.exitCode).toBe(1);
   });
 
   it("daemon notify checks the level before posting it", async () => {
-    const { baseUrl, seen } = await startRuntime({ "POST /api/daemon/notify": ok });
+    const { baseUrl, seen } = await startRuntime({
+      "POST /api/daemon/notify": [
+        { body: { status: "sent", level: "high", deliveredTo: ["chat", "dashboard"] } },
+        // A runtime from before daemon#7 answers without saying where it went.
+        { body: { status: "sent", level: "high" } },
+      ],
+    });
 
     const bad = await run(["notify", "--level", "loud", "--message", "hi"], baseUrl);
     expect(bad.stderr).toContain("Invalid level: loud");
@@ -1280,8 +1316,11 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
     process.exitCode = undefined;
 
     const sent = await run(["notify", "--level", "high", "--message", "disk almost full"], baseUrl);
-    expect(sent.stdout).toBe("Notification sent (level: high)");
+    expect(sent.stdout).toBe("Notification sent (level: high) to: chat, dashboard");
     expect(seen.map((s) => [s.line, s.body])).toEqual([["POST /api/daemon/notify", { level: "high", message: "disk almost full" }]]);
+
+    const older = await run(["notify", "--level", "high", "--message", "disk almost full"], baseUrl);
+    expect(older.stdout).toBe("Notification accepted by the running Strada (level: high); it did not say where it went");
   });
 
   it("daemon agent stop, start and budget set post to the agent's route", async () => {

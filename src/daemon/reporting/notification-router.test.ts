@@ -889,6 +889,55 @@ describe("NotificationRouter", () => {
     });
   });
 
+  describe("notify() answers what it delivered (daemon#7)", () => {
+    const at = Date.parse("2026-06-21T12:00:00Z");
+    const payload = (level: "silent" | "low" | "medium" | "high" | "critical", title = "Manual test") =>
+      ({ level, title, message: "m", timestamp: at });
+
+    it("names every channel it reached", async () => {
+      expect(await createRouter().notify(payload("high"))).toEqual({ deliveredTo: ["chat", "dashboard"] });
+      expect(await createRouter({ config: { minLevel: "silent" } }).notify(payload("silent"))).toEqual({ deliveredTo: ["dashboard"] });
+    });
+
+    it("says why when it delivered nothing now", async () => {
+      expect(await createRouter({ config: { minLevel: "high" } }).notify(payload("low")))
+        .toEqual({ deliveredTo: [], missed: "below the minimum notification level (high)" });
+
+      const grouping = createRouter();
+      await grouping.notify(payload("medium"));
+      expect(await grouping.notify({ ...payload("medium"), timestamp: at + 2000 })).toEqual({
+        deliveredTo: [],
+        missed: "grouped with the same notification from 2s ago; one summary goes out when its 30s window ends",
+      });
+
+      const limited = createRouter();
+      await limited.notify(payload("low", "first"));
+      expect(await limited.notify(payload("low", "second")))
+        .toEqual({ deliveredTo: [], missed: "over the limit of 1 low notification(s) per minute; dropped" });
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at);
+      expect(await createRouter({ quietConfig: { enabled: true, startHour: 0, endHour: 23 } }).notify(payload("high")))
+        .toEqual({ deliveredTo: [], missed: "buffered for quiet hours; it goes out when they end" });
+    });
+
+    it("names the routed chat it missed: not bound yet, or a send that failed", async () => {
+      const unbound = new NotificationRouter({
+        config: defaultNotifConfig, quietHoursConfig: defaultQuietConfig, eventBus, storage, channelSender: mockSender,
+      });
+      expect(await unbound.notify(payload("high"))).toEqual({
+        deliveredTo: ["dashboard"],
+        missed: "chat: no chat is bound yet (the first chat that messages Strada after it starts)",
+      });
+
+      vi.mocked(mockSender.sendMarkdown).mockRejectedValueOnce(new Error("Slack 429"));
+      expect(await createRouter().notify(payload("critical"))).toEqual({
+        deliveredTo: ["dashboard"],
+        missed: "chat: the send failed: Slack 429",
+      });
+    });
+  });
+
   describe("approval requests (daemon#4)", () => {
     const deployConfig: DeploymentConfig = {
       enabled: true,

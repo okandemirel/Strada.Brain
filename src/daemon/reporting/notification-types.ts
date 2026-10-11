@@ -26,6 +26,19 @@ export const URGENCY_ORDER: Record<UrgencyLevel, number> = {
 // =============================================================================
 
 /** Payload for a single notification */
+/**
+ * What notify() did with one notification, now: where it went, and why it did
+ * not reach every channel its level routes to (grouped, dropped over the rate
+ * limit, buffered for quiet hours, below the minimum level, a chat that is not
+ * bound or whose send failed). `strada daemon notify` prints it.
+ */
+export interface NotificationOutcome {
+  /** "chat", "dashboard": empty when nothing went out now. */
+  readonly deliveredTo: readonly string[];
+  /** Why it missed some or all of its routed channels; absent when it reached them all. */
+  readonly missed?: string;
+}
+
 export interface NotificationPayload {
   readonly level: UrgencyLevel;
   readonly title: string;
