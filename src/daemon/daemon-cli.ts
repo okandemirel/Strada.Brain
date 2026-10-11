@@ -35,11 +35,12 @@ import type { TriggerRegistry } from "./trigger-registry.js";
 import type { BudgetTracker } from "./budget/budget-tracker.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
-import type { DaemonConfig } from "./daemon-types.js";
+import type { DaemonConfig, ITrigger } from "./daemon-types.js";
 import type { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { DigestReporter } from "./reporting/digest-reporter.js";
 import type { NotificationRouter } from "./reporting/notification-router.js";
 import type { UrgencyLevel } from "./reporting/notification-types.js";
+import type { ReadinessResult } from "./deployment/deployment-types.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { AgentId } from "../agents/multi/agent-types.js";
@@ -93,10 +94,43 @@ export interface DaemonContext {
   readinessChecker?: {
     checkReadiness(force?: boolean): Promise<{ ready: boolean; reason?: string; testPassed: boolean; gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean }>;
   };
-  deployTrigger?: {
-    triggerReadinessCheck(): Promise<{ ready: boolean; reason?: string; testPassed: boolean; gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean }>;
+  /** The registered deploy-readiness trigger; a proposal is its fire. */
+  deployTrigger?: ITrigger & {
+    triggerReadinessCheck(): Promise<ReadinessResult>;
+    setCachedReadiness(result: ReadinessResult): void;
     onApprovalDecided(decision: string, proposalId: string, decidedBy?: string): void;
   };
+}
+
+/** What `deploy:check --execute --force` did about a ready project. */
+export type DeployProposalOutcome = { readonly proposed: true } | { readonly proposed: false; readonly reason: string };
+
+/**
+ * Propose the deployment `readiness` found ready, now: the deploy trigger's
+ * fire, through every gate a heartbeat tick applies (heartbeat running,
+ * budget, its circuit breakers, a pending proposal, a running deploy,
+ * cooldown, dedup). Only that fire enqueues the approval; refreshing the
+ * trigger's readiness alone reported a proposal nothing had made, and ran the
+ * project's tests a second time.
+ */
+export function proposeDeployment(
+  ctx: Pick<DaemonContext, "heartbeatLoop" | "deployTrigger">,
+  readiness: ReadinessResult,
+): DeployProposalOutcome {
+  const trigger = ctx.deployTrigger;
+  if (!trigger) return { proposed: false, reason: "the deploy trigger is not running in this Strada" };
+  trigger.setCachedReadiness(readiness);
+  const outcome = ctx.heartbeatLoop.fireNow(trigger.metadata.name);
+  switch (outcome.status) {
+    case "approval":
+      return { proposed: true };
+    case "refused":
+      return { proposed: false, reason: outcome.reason };
+    case "not_found":
+      return { proposed: false, reason: `the deploy trigger '${trigger.metadata.name}' is not registered with the heartbeat` };
+    case "submitted":
+      return { proposed: false, reason: `the deploy trigger submitted task ${outcome.taskId} instead of an approval` };
+  }
 }
 
 /**
@@ -1198,11 +1232,10 @@ export function registerDaemonCommands(
       const result = await ctx.readinessChecker.checkReadiness(true);
       printReadiness(result);
 
-      if (opts.execute && result.ready && ctx.deployTrigger) {
+      if (opts.execute && result.ready) {
         if (opts.force) {
           console.log("Proposing deployment...");
-          await ctx.deployTrigger.triggerReadinessCheck();
-          console.log("Deployment proposed via approval queue.");
+          printDeployProposal(proposeDeployment(ctx, result));
         } else {
           console.log("Use --force to propose deployment without interactive confirmation.");
         }
@@ -1528,7 +1561,8 @@ function printJob(job: RemoteJob): void {
     const result = RemoteDeployCheckSchema.safeParse(job.result);
     if (result.success && !("enabled" in result.data)) {
       printReadiness(result.data);
-      if (result.data.proposed) console.log("Deployment proposed via approval queue.");
+      const proposal = remoteDeployProposal(result.data);
+      if (proposal) printDeployProposal(proposal);
       return;
     }
   }
@@ -1827,7 +1861,11 @@ function printReadiness(result: ReadinessView): void {
   }
 }
 
-/** POST /api/deployment/check: the readiness result (and whether it proposed), or `enabled: false`. */
+/**
+ * POST /api/deployment/check: the readiness result, or `enabled: false`. Asked
+ * to propose a ready project, it says whether it did, and if not why
+ * (`proposalRefused`).
+ */
 const RemoteDeployCheckSchema = z.union([
   z.object({ enabled: z.literal(false) }),
   z.object({
@@ -1837,8 +1875,25 @@ const RemoteDeployCheckSchema = z.union([
     gitClean: z.boolean(),
     branchMatch: z.boolean(),
     proposed: z.boolean().optional(),
+    proposalRefused: z.string().optional(),
   }),
 ]);
+
+/** The proposal a deploy:check answer reports, if it was asked for one on a ready project. */
+function remoteDeployProposal(result: { ready: boolean; proposed?: boolean; proposalRefused?: string }): DeployProposalOutcome | undefined {
+  if (result.proposed === true) return { proposed: true };
+  if (!result.ready || result.proposed === undefined) return undefined;
+  return { proposed: false, reason: result.proposalRefused ?? "the running Strada did not say why" };
+}
+
+function printDeployProposal(outcome: DeployProposalOutcome): void {
+  if (outcome.proposed) {
+    console.log("Deployment proposed via approval queue.");
+    return;
+  }
+  console.error(`Deployment not proposed: ${outcome.reason}`);
+  process.exitCode = 1;
+}
 
 /**
  * `deploy:check` from a shell. As in-process, --execute proposes only with
@@ -1870,10 +1925,10 @@ async function runRemoteDeployCheck(
   if (!opts.execute || !result.ready) return;
   if (!opts.force) {
     console.log("Use --force to propose deployment without interactive confirmation.");
-  } else if (result.proposed) {
-    console.log("Proposing deployment...");
-    console.log("Deployment proposed via approval queue.");
+    return;
   }
+  console.log("Proposing deployment...");
+  printDeployProposal(remoteDeployProposal(result) ?? { proposed: false, reason: "the running Strada did not say whether it proposed" });
 }
 
 /** The part of GET /api/daemon that `daemon status` prints. */

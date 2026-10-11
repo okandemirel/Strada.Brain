@@ -43,7 +43,11 @@ const as = (profileId: string): Record<string, string> => ({
 });
 
 function fakeDaemon() {
-  const fireNow = vi.fn((name: string) => (name === "nightly" ? { status: "submitted", taskId: "task_1" } : { status: "not_found" }));
+  const fireNow = vi.fn((name: string): unknown => {
+    if (name === "nightly") return { status: "submitted", taskId: "task_1" };
+    if (name === "deploy-readiness") return { status: "approval" };
+    return { status: "not_found" };
+  });
   const breaker = {
     reset: vi.fn(),
     getState: vi.fn(() => "CLOSED"),
@@ -79,7 +83,12 @@ function fakeDaemon() {
     readinessChecker: {
       checkReadiness: vi.fn(async () => ({ ready: true, testPassed: true, gitClean: true, branchMatch: true, timestamp: 1, cached: false })),
     },
-    deployTrigger: { triggerReadinessCheck: vi.fn(async () => ({})), onApprovalDecided: vi.fn() },
+    deployTrigger: {
+      metadata: { name: "deploy-readiness", description: "Deployment readiness detection", type: "deploy" },
+      triggerReadinessCheck: vi.fn(async () => ({})),
+      setCachedReadiness: vi.fn(),
+      onApprovalDecided: vi.fn(),
+    },
   };
   return { ctx, fireNow, breaker };
 }
@@ -396,11 +405,20 @@ describe("the daemon control routes do what the in-process commands do (COR-13)"
     const check = await jobResult(started.port, await post(started.port, "/api/deployment/check", operator(started.token), {}));
     expect(check).toMatchObject({ ready: true });
     expect(check).not.toHaveProperty("proposed");
-    expect(ctx.deployTrigger.triggerReadinessCheck).not.toHaveBeenCalled();
+    expect(started.daemon.fireNow).not.toHaveBeenCalled();
 
+    // daemon#5: the proposal is the deploy trigger's fire, on the readiness just checked (one test run).
     const propose = await jobResult(started.port, await post(started.port, "/api/deployment/check", operator(started.token), { propose: true }));
     expect(propose).toMatchObject({ ready: true, proposed: true });
-    expect(ctx.deployTrigger.triggerReadinessCheck).toHaveBeenCalledTimes(1);
+    expect(started.daemon.fireNow).toHaveBeenCalledWith("deploy-readiness");
+    expect(ctx.deployTrigger.setCachedReadiness).toHaveBeenCalledWith(expect.objectContaining({ ready: true }));
+    expect(ctx.readinessChecker.checkReadiness).toHaveBeenCalledTimes(2);
+    expect(ctx.deployTrigger.triggerReadinessCheck).not.toHaveBeenCalled();
+
+    // A gate that refuses the fire is reported, not a proposal.
+    started.daemon.fireNow.mockReturnValueOnce({ status: "refused", gate: "not_due", reason: "cooling down" });
+    const refused = await jobResult(started.port, await post(started.port, "/api/deployment/check", operator(started.token), { propose: true }));
+    expect(refused).toMatchObject({ ready: true, proposed: false, proposalRefused: "cooling down" });
   });
 
   it("serves the reads the CLI makes, and a digest preview sends nothing", async () => {

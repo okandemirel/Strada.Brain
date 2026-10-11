@@ -44,6 +44,7 @@ import type { MemoryHealth } from "../memory/memory.interface.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import { monitorReadScope } from "./monitor-read-scope.js";
 import { DEPLOYMENT_CHECK_BODY, readCommandBody, startDaemonJob } from "./server-daemon-control-routes.js";
+import { proposeDeployment } from "../daemon/daemon-cli.js";
 import type { RouteContext } from "./server-types.js";
 
 /** Only truly running statuses count toward activeTaskCount. */
@@ -249,9 +250,15 @@ export function handleSystemRoutes(
       startDaemonJob(res, ctx, "deploy:check", async () => {
         const result = await checker.checkReadiness(true);
         if (!body.propose) return result;
-        const deployTrigger = ctx.daemonCliContext?.deployTrigger;
-        if (result.ready && deployTrigger) await deployTrigger.triggerReadinessCheck();
-        return { ...result, proposed: result.ready && deployTrigger !== undefined };
+        if (!result.ready) return { ...result, proposed: false };
+        // `proposed` is what the deploy trigger's fire did, not that a trigger exists.
+        const daemon = ctx.daemonCliContext;
+        const proposal = daemon
+          ? proposeDeployment(daemon, result)
+          : { proposed: false as const, reason: "daemon mode is not enabled in the running Strada" };
+        return proposal.proposed
+          ? { ...result, proposed: true }
+          : { ...result, proposed: false, proposalRefused: proposal.reason };
       });
     }).catch((err) => {
       if (!res.headersSent) sendJsonError(res, 500, err instanceof Error ? err.message : String(err));

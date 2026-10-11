@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
-import { registerDaemonCommands, type DaemonContext } from "./daemon-cli.js";
+import { registerDaemonCommands, type DaemonContext, type JobWaitOptions } from "./daemon-cli.js";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import type { DaemonConfig, ITrigger, TriggerType } from "./daemon-types.js";
@@ -23,6 +23,8 @@ import type { IEventBus } from "../core/event-bus.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { resolveDaemonOperatorClient } from "../core/daemon-dashboard-client.js";
+import { DeployTrigger } from "./triggers/deploy-trigger.js";
+import type { DeploymentConfig } from "./deployment/deployment-types.js";
 
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../utils/logger.js", async (importOriginal) => {
@@ -93,6 +95,13 @@ function runtime() {
   return { ctx, loop, registry, taskManager, usage, approvalQueue };
 }
 
+/** A shell waiting on a job: fast polls, no progress line, no Ctrl-C handler. */
+const quickJobWait: JobWaitOptions = {
+  pollIntervalMs: 5,
+  progress: { isTTY: false, write: () => undefined },
+  interrupt: () => ({ signal: new AbortController().signal, dispose: () => undefined }),
+};
+
 async function command(
   args: string[],
   getDaemonContext: () => DaemonContext | undefined,
@@ -104,7 +113,7 @@ async function command(
     resolveDaemonOperatorClient(credentialFile, {
       dashboard: { enabled: true, port: 0 },
       websocketDashboard: { enabled: false, port: 0, authToken: undefined },
-    }));
+    }), quickJobWait);
   const out: string[] = [];
   const err: string[] = [];
   const log = vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => { out.push(parts.join(" ")); });
@@ -210,5 +219,117 @@ describe("strada daemon trigger runs the trigger, in-process and from a shell (C
     const missing = { stdout: "", stderr: "Trigger 'nope' not found", exitCode: 1 };
     expect(inProcess).toEqual(missing);
     expect(fromShell).toEqual(missing);
+  });
+});
+
+describe("deploy:check --execute --force proposes only what the deploy trigger's fire proposes (daemon#5)", () => {
+  let dir = "";
+  let server: DashboardServer | null = null;
+  let rt: ReturnType<typeof runtime>;
+  let file = "";
+
+  const deployConfig: DeploymentConfig = {
+    enabled: true,
+    scriptPath: "scripts/deploy.sh",
+    testCommand: "npm test",
+    targetBranch: "main",
+    requireCleanGit: true,
+    testTimeoutMs: 300_000,
+    executionTimeoutMs: 600_000,
+    cooldownMinutes: 30,
+    notificationUrgency: "high",
+  };
+  const ready = { ready: true, testPassed: true, gitClean: true, branchMatch: true, timestamp: 1, cached: false };
+
+  /** The real DeployTrigger, registered and wired as stage-agents wires it; `breakerOpen` is its own deploy breaker. */
+  function deployment(options: { breakerOpen?: boolean } = {}) {
+    const readinessChecker = { checkReadiness: vi.fn(async () => ({ ...ready, timestamp: Date.now() })), invalidateCache: vi.fn() };
+    const deployTrigger = new DeployTrigger(
+      readinessChecker as never,
+      rt.approvalQueue as never,
+      { isOpen: () => options.breakerOpen === true } as never,
+      { logProposal: () => "proposal-1", isInProgress: () => false } as never,
+      deployConfig,
+      logger,
+    );
+    rt.registry.register(deployTrigger);
+    rt.loop.setDeployTrigger(deployTrigger);
+    Object.assign(rt.ctx, { readinessChecker, deployTrigger });
+    server?.registerConsolidationDeploymentServices({ readinessChecker: readinessChecker as never });
+    return { readinessChecker };
+  }
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "strada-deploy-check-"));
+    file = join(dir, "k.operator.json");
+    rt = runtime();
+    rt.loop.start();
+    server = new DashboardServer(0, new MetricsCollector(), () => undefined, () => false, [], "127.0.0.1", [], file);
+    server.setDaemonContext({ cliContext: rt.ctx });
+    try {
+      await server.start();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") server = null;
+      else throw error;
+    }
+  });
+
+  afterEach(async () => {
+    rt.loop.stop();
+    await server?.stop();
+    server = null;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("in the runtime process: enqueues the approval it reports, on one run of the tests", async () => {
+    const { readinessChecker } = deployment();
+
+    const { stdout, stderr, exitCode } = await command(["deploy:check", "--execute", "--force"], () => rt.ctx, file);
+
+    expect(stdout).toContain("Deployment proposed via approval queue.");
+    expect([stderr, exitCode]).toEqual(["", undefined]);
+    expect(rt.approvalQueue.enqueue).toHaveBeenCalledTimes(1);
+    expect(rt.approvalQueue.enqueue).toHaveBeenCalledWith("deployment", expect.objectContaining({ proposalId: "proposal-1" }), "deploy-readiness", "high");
+    expect(readinessChecker.checkReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("from a shell: the job enqueues the approval it reports, on one run of the tests", async () => {
+    if (!server) return;
+    const { readinessChecker } = deployment();
+
+    const { stdout, stderr, exitCode } = await command(["deploy:check", "--execute", "--force"], () => undefined, file);
+
+    expect(stdout).toContain("Deployment proposed via approval queue.");
+    expect([stderr, exitCode]).toEqual(["", undefined]);
+    expect(rt.approvalQueue.enqueue).toHaveBeenCalledTimes(1);
+    expect(readinessChecker.checkReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the deployment was not proposed, and why, on both paths, when the deploy trigger cannot fire", async () => {
+    if (!server) return;
+    deployment({ breakerOpen: true });
+
+    const inProcess = await command(["deploy:check", "--execute", "--force"], () => rt.ctx, file);
+    const fromShell = await command(["deploy:check", "--execute", "--force"], () => undefined, file);
+
+    for (const outcome of [inProcess, fromShell]) {
+      expect(outcome.stdout).toContain("Ready: YES");
+      expect(outcome.stdout).not.toContain("Deployment proposed");
+      expect(outcome.stderr).toBe("Deployment not proposed: the trigger is disabled");
+      expect(outcome.exitCode).toBe(1);
+    }
+    expect(rt.approvalQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("says the deployment was not proposed while the heartbeat is stopped", async () => {
+    deployment();
+    rt.loop.stop();
+
+    const { stdout, stderr, exitCode } = await command(["deploy:check", "--execute", "--force"], () => rt.ctx, file);
+
+    expect(stdout).not.toContain("Deployment proposed");
+    expect(stderr).toBe("Deployment not proposed: the daemon heartbeat is stopped (resume it with /daemon start)");
+    expect(exitCode).toBe(1);
+    expect(rt.approvalQueue.enqueue).not.toHaveBeenCalled();
   });
 });
