@@ -457,3 +457,73 @@ describe("the run→ledger path (the settlement now leaves a row)", () => {
     }
   });
 });
+
+describe("a run SHOWN the rule that did not use it is not a run it influenced", () => {
+  // The misfire row is stored success=false with the beta weight in the verdict
+  // column; findSuspectGuidance reads it as "shown, not used" and the ledger
+  // printed the same row as a FAILED run the rule influenced, "verdict 0.25",
+  // although the rule was never applied and the run succeeded.
+  it("reports the misfire under its own heading, never as a FAILED run or a verdict", async () => {
+    const { LearningPipeline } = await import("./pipeline/learning-pipeline.js");
+    const { PatternMatcher } = await import("./matching/pattern-matcher.js");
+    const { ConfidenceScorer } = await import("./scoring/confidence-scorer.js");
+    const { ErrorLearningHooks } = await import("./hooks/error-learning-hooks.js");
+    const pipeline = new LearningPipeline(storage);
+    try {
+      const hooks = new ErrorLearningHooks(pipeline, new PatternMatcher(storage), new ConfidenceScorer(), storage);
+      hooks.enable();
+      const message = "error CS0246: The type or namespace name could not be found";
+      const rule = instinct({ triggerPattern: message });
+      storage.createInstinct(rule);
+      const errorContext = {
+        toolName: "dotnet_build",
+        errorOutput: message,
+        analysis: { hasErrors: true, errorCount: 1, summary: "1 error", recoveryInjection: "" },
+        sessionId: "session-other-fix",
+        timestamp: new Date(),
+      };
+      const shown = hooks.onBeforeErrorAnalysis(errorContext);
+      expect(shown.suggestions.map((m) => String(m.instinct?.id))).toContain(String(rule.id));
+      // The run repaired it another way, succeeded, and said it used none of what it was shown.
+      await hooks.onAfterErrorResolution({
+        errorContext,
+        action: "Referenced the package that defines the type",
+        success: true,
+        appliedInstinctIds: [],
+        correlationId: shown.correlationId,
+      });
+      const rows = storage.getInstinctCredits({ instinctId: String(rule.id) });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ applied: false, success: false });
+
+      const entry = buildInstinctLedger(storage, String(rule.id))!;
+      const suspect = findSuspectGuidance(storage).find((s) => s.id === String(rule.id))!;
+      // The two surfaces agree about the one row.
+      expect(suspect).toMatchObject({ failedRuns: 0, shownNotApplied: 1 });
+      expect(entry.runs).toHaveLength(0);
+      expect(entry.shownNotApplied).toHaveLength(1);
+      expect(entry.evidence).toMatchObject({ against: 0, shownNotApplied: 1, unmeasured: false });
+      // Still dated evidence against the rule: a wasted attempt is not nothing.
+      expect(entry.evidence.firstNegativeAt).toBe(rows[0]!.timestamp);
+
+      const text = renderLedgerEntry(entry);
+      expect(text).not.toContain("FAILED");
+      expect(text).not.toMatch(/verdict 0\.25/);
+      expect(text).toContain("RUNS IT INFLUENCED (0 recorded)");
+      expect(text).toMatch(/SHOWN, NOT USED \(1 recorded\)[\s\S]*session session-other-fix/);
+    } finally {
+      pipeline.stop();
+    }
+  });
+
+  it("an application that failed is still a FAILED run it influenced", () => {
+    const i = instinct();
+    storage.createInstinct(i);
+    credit(String(i.id), T0 + HOUR, false, { sessionId: "run-applied", verdictScore: 0.15 });
+
+    const entry = buildInstinctLedger(storage, String(i.id), { now: T0 + 2 * HOUR })!;
+    expect(entry.runs).toHaveLength(1);
+    expect(entry.evidence).toMatchObject({ against: 1, shownNotApplied: 0 });
+    expect(renderLedgerEntry(entry)).toMatch(/RUNS IT INFLUENCED \(1 recorded\)\n.*FAILED {2}session run-applied {2}verdict 0\.15/);
+  });
+});

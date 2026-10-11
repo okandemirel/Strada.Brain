@@ -58,6 +58,11 @@ export interface LedgerEvidence {
   /** Runs/outcomes that went its way, and against it. */
   for: number;
   against: number;
+  /**
+   * Runs shown the rule that did not use it (cost-only misfires). Dated evidence
+   * against the rule, but not a failed application, so not in `against`.
+   */
+  shownNotApplied: number;
   confidence: number;
   bayesianAlpha: number;
   bayesianBeta: number;
@@ -136,8 +141,10 @@ export interface InstinctLedgerEntry {
   action: string;
   origin: LedgerOrigin;
   evidence: LedgerEvidence;
-  /** The runs this guidance influenced, newest first (bounded). */
+  /** The runs this guidance influenced (it was applied), newest first (bounded). */
   runs: readonly InstinctCreditRecord[];
+  /** The runs shown it that did not use it, newest first (bounded with `runs`). */
+  shownNotApplied: readonly InstinctCreditRecord[];
   /** Every status change, oldest first. */
   timeline: readonly LedgerTransition[];
   effect: LedgerEffect;
@@ -164,7 +171,13 @@ export function buildInstinctLedger(
   const runLimit = opts?.runLimit ?? 50;
 
   const credits = storage.getInstinctCredits({ instinctId, limit: runLimit });
-  const allFailures = storage.getInstinctCredits({ instinctId }).filter((c) => !c.success);
+  // A failed application and a misfire are different facts, here as in
+  // findSuspectGuidance: both are stored success=0, but a misfire only showed the
+  // rule to a run that did not use it. Read as a failure it printed as a FAILED
+  // run the rule influenced, with its beta weight as the "verdict".
+  const allCredits = storage.getInstinctCredits({ instinctId });
+  const allFailures = allCredits.filter((c) => !c.success && c.applied);
+  const allMisfires = allCredits.filter((c) => !c.applied);
   const feedback = storage.getFeedbackByInstinct(instinctId);
   const logs = storage
     .getLifecycleLogs({ instinctId: instinctId as InstinctId })
@@ -181,6 +194,8 @@ export function buildInstinctLedger(
 
   const negativeDates = [
     ...allFailures.map((c) => c.timestamp),
+    // A misfire is still dated evidence against the rule: a wasted attempt.
+    ...allMisfires.map((c) => c.timestamp),
     ...feedback.filter((f) => NEGATIVE_FEEDBACK.has(f.type)).map((f) => f.createdAt),
   ].sort((a, b) => a - b);
 
@@ -190,6 +205,7 @@ export function buildInstinctLedger(
   const evidence: LedgerEvidence = {
     for: forCount,
     against: countedAgainst,
+    shownNotApplied: allMisfires.length,
     confidence: instinct.confidence,
     bayesianAlpha: instinct.bayesianAlpha ?? 1,
     bayesianBeta: instinct.bayesianBeta ?? 1,
@@ -275,7 +291,8 @@ export function buildInstinctLedger(
       scopes: storage.getInstinctScopes(instinctId),
     },
     evidence,
-    runs: credits,
+    runs: credits.filter((c) => c.applied),
+    shownNotApplied: credits.filter((c) => !c.applied),
     timeline: logs.map((l) => ({
       fromStatus: l.fromStatus,
       toStatus: l.toStatus,
@@ -659,6 +676,7 @@ export function renderLedgerEntry(entry: InstinctLedgerEntry): string {
   } else {
     lines.push(
       `  for: ${entry.evidence.for}   against: ${entry.evidence.against}   ` +
+        (entry.evidence.shownNotApplied > 0 ? `shown, not used: ${entry.evidence.shownNotApplied}   ` : "") +
         `alpha/beta: ${entry.evidence.bayesianAlpha.toFixed(1)}/${entry.evidence.bayesianBeta.toFixed(1)}`,
     );
     lines.push(
@@ -674,7 +692,11 @@ export function renderLedgerEntry(entry: InstinctLedgerEntry): string {
 
   lines.push("", `RUNS IT INFLUENCED (${entry.runs.length} recorded)`);
   if (entry.runs.length === 0) {
-    lines.push("  none recorded — no run has settled credit for this rule since the ledger existed.");
+    lines.push(
+      entry.shownNotApplied.length === 0
+        ? "  none recorded — no run has settled credit for this rule since the ledger existed."
+        : "  none recorded — no run it was shown to has used it (see below).",
+    );
   } else {
     for (const run of entry.runs.slice(0, 10)) {
       lines.push(
@@ -683,6 +705,18 @@ export function renderLedgerEntry(entry: InstinctLedgerEntry): string {
       );
     }
     if (entry.runs.length > 10) lines.push(`  … ${entry.runs.length - 10} more`);
+  }
+
+  if (entry.shownNotApplied.length > 0) {
+    lines.push("", `SHOWN, NOT USED (${entry.shownNotApplied.length} recorded)`);
+    lines.push("  the run was shown it and did not use it: a wasted attempt, not a failure — its action was never tried.");
+    for (const run of entry.shownNotApplied.slice(0, 10)) {
+      lines.push(
+        `  ${when(run.timestamp)}  not used  session ${run.sessionId}  ` +
+          `confidence ${run.confidenceBefore.toFixed(3)} → ${run.confidenceAfter.toFixed(3)}`,
+      );
+    }
+    if (entry.shownNotApplied.length > 10) lines.push(`  … ${entry.shownNotApplied.length - 10} more`);
   }
 
   lines.push("", "STATUS CHANGES");
