@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import { closeSync, constants as fsConstants, openSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "../../../agents/tools/tool.interface.js";
@@ -226,6 +226,37 @@ describe("file_line_search", () => {
     const result = await tool.execute({ directory: ".", pattern: "MATCH" }, context);
     expect(result.content).toContain("Found 50 match(es)");
     expect(result.content).toContain("Results limited to 50");
+  });
+
+  // The same silent skip grep_search had (audit tools#6): a file that failed
+  // to read vanished from the walk, and an oversized one was only counted,
+  // so "No matches found" read as an absence over files never opened.
+  const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
+  it.skipIf(!canDenyRead)("names the files it could not read or that were over the size limit", async () => {
+    await put("ok.txt", "nothing here\n");
+    const locked = await put("Assets/locked.txt", "TODO hidden\n");
+    await chmod(locked, 0o000);
+    await put("Assets/big.unity", `TODO\n${"x".repeat(1024 * 1024)}`);
+    try {
+      const result = await tool.execute({ directory: ".", pattern: "TODO" }, context);
+      expect(result.content).toMatch(/^No matches found for pattern "TODO" in the 1 file\(s\) searched/);
+      expect(result.content).toContain("1 file(s) could not be read and were NOT searched: Assets/locked.txt");
+      expect(result.content).toContain("1 file(s) over 1.0 MB were NOT searched: Assets/big.unity");
+    } finally {
+      await chmod(locked, 0o644);
+    }
+  });
+
+  it.skipIf(!canDenyRead)("says no file was searched when every file was skipped", async () => {
+    const locked = await put("locked.txt", "TODO hidden\n");
+    await chmod(locked, 0o000);
+    try {
+      const result = await tool.execute({ directory: ".", pattern: "TODO" }, context);
+      expect(result.content).toMatch(/^No files were searched for pattern "TODO"/);
+      expect(result.content).toContain("locked.txt");
+    } finally {
+      await chmod(locked, 0o644);
+    }
   });
 
   it("rejects over-long patterns", async () => {

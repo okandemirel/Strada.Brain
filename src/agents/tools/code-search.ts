@@ -1,6 +1,8 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { IRAGPipeline, SearchOptions } from "../../rag/rag.interface.js";
 import { isCodeChunk } from "../../rag/rag.interface.js";
+import { filePatternProblem } from "../../rag/file-pattern.js";
+import { isSafeGlobPattern } from "./search.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 15;
@@ -37,7 +39,8 @@ export class CodeSearchTool implements ITool {
         type: "string",
         description:
           "Optional: glob over project-relative paths to restrict the search, as in grep_search " +
-          "(e.g., '**/Combat/**', 'Assets/Scripts/**/*.cs'); a directory path also takes the files under it",
+          "(e.g., '**/Combat/**', 'Assets/Scripts/**/*.{cs,shader}'; case-insensitive on macOS and Windows); " +
+          "a directory path also takes the files under it",
       },
       limit: {
         type: "number",
@@ -67,6 +70,15 @@ export class CodeSearchTool implements ITool {
     const kind = input["kind"] as SearchOptions["kinds"] extends (infer K)[] ? K : never | undefined;
     const rawPattern = input["file_pattern"];
     const filePattern = typeof rawPattern === "string" && rawPattern.trim() ? rawPattern.trim() : undefined;
+    if (filePattern !== undefined) {
+      // Refused as grep_search refuses it: an absolute pattern never matched
+      // a project-relative path, so it answered "No results found".
+      if (!isSafeGlobPattern(filePattern)) {
+        return { content: "Error: file_pattern must not contain '..' or absolute paths", isError: true };
+      }
+      const problem = filePatternProblem(filePattern);
+      if (problem !== undefined) return { content: `Error: ${problem}`, isError: true };
+    }
 
     const options: SearchOptions = {
       topK: limit,

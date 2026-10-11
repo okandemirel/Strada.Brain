@@ -109,8 +109,9 @@ class VectorOps {
     arr: Array<{ idx: number; score: number }>,
     k: number
   ): Array<{ idx: number; score: number }> {
-    if (k >= arr.length) return arr;
-    
+    // Asked for all of them, the caller still expects them best first.
+    if (k >= arr.length) return arr.sort((a, b) => b.score - a.score);
+
     // Simple heap-based selection for small k
     if (k <= 50) {
       return this.heapSelect(arr, k);
@@ -751,8 +752,11 @@ export class FileVectorStore implements IVectorStore {
 
     const queryFloat = new Float32Array(queryVector);
     
-    // Use HNSW for approximate search when dataset is large enough
-    if (n > 100 && this.hnswIndex.size > 0) {
+    // Use HNSW for approximate search when dataset is large enough. A query
+    // for every chunk (a file-scoped search ranks the whole store) takes the
+    // exact scan: the graph reached 36 of 400 chunks, so the scope filter
+    // never saw the in-scope ones.
+    if (n > 100 && topK < n && this.hnswIndex.size > 0) {
       const hnswResults = this.hnswIndex.search(queryFloat, topK);
       return hnswResults.map(r => ({
         id: r.id,

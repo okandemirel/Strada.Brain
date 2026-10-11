@@ -56,21 +56,30 @@ async function findFilesWithSizes(dir: string, minSizeBytes: number, walk: Proje
   return results;
 }
 
-/** The text of the files under `dir`, within the per-file and total byte budgets. */
+/**
+ * The text of the files under `dir`, within the per-file and total byte
+ * budgets, and the files left out. An unreadable file used to vanish from the
+ * walk, so "No matches found" read as an absence over files never opened
+ * (the silent skip audit tools#6 fixed in grep_search).
+ */
 async function collectSearchableText(
   dir: string,
   walk: ProjectWalk,
-): Promise<{ files: SearchableText[]; skippedLarge: number }> {
+): Promise<{ files: SearchableText[]; tooLarge: string[]; unreadable: string[] }> {
   const files: SearchableText[] = [];
   let totalBytes = 0;
-  let skippedLarge = 0;
+  const tooLarge: string[] = [];
+  const unreadable: string[] = [];
   for await (const file of walkProjectFiles(dir, walk)) {
     const read = await readRegularFile(file.fullPath, MAX_SEARCH_FILE_BYTES);
     if (read.kind === "too-large") {
-      skippedLarge += 1;
+      tooLarge.push(file.relPath);
       continue;
     }
-    if (read.kind !== "text") continue;
+    if (read.kind !== "text") {
+      unreadable.push(file.relPath);
+      continue;
+    }
     if (totalBytes + read.size > MAX_SEARCH_TOTAL_BYTES) {
       walk.truncated = true;
       break;
@@ -78,7 +87,15 @@ async function collectSearchableText(
     totalBytes += read.size;
     files.push({ file: file.relPath, text: read.text });
   }
-  return { files, skippedLarge };
+  return { files, tooLarge, unreadable };
+}
+
+/** How many skipped files a verdict names before it only counts the rest (grep_search's limit). */
+const MAX_NAMED_SKIPS = 10;
+
+function nameSome(files: readonly string[]): string {
+  const named = files.slice(0, MAX_NAMED_SKIPS).join(", ");
+  return files.length > MAX_NAMED_SKIPS ? `${named} and ${files.length - MAX_NAMED_SKIPS} more` : named;
 }
 
 /**
@@ -253,7 +270,7 @@ const fileLineSearch: ITool = {
 
     const maxResults = 50;
     const walk: ProjectWalk = { truncated: false };
-    const { files, skippedLarge } = await collectSearchableText(validation.fullPath, walk);
+    const { files, tooLarge, unreadable } = await collectSearchableText(validation.fullPath, walk);
     let matches;
     try {
       matches = await searchLinesInWorker(patternStr, files, maxResults);
@@ -264,12 +281,21 @@ const fileLineSearch: ITool = {
       return { content: "Error: the pattern took too long to evaluate and was stopped; simplify the regex.", isError: true };
     }
 
-    const notes =
-      (skippedLarge > 0 ? `\n\n[${skippedLarge} file(s) over ${formatBytes(MAX_SEARCH_FILE_BYTES)} were not searched]` : "") +
-      (walk.truncated ? TRUNCATED_NOTE : "");
+    const skipped = [
+      ...(tooLarge.length > 0
+        ? [`${tooLarge.length} file(s) over ${formatBytes(MAX_SEARCH_FILE_BYTES)} were NOT searched: ${nameSome(tooLarge)}.`]
+        : []),
+      ...(unreadable.length > 0
+        ? [`${unreadable.length} file(s) could not be read and were NOT searched: ${nameSome(unreadable)}.`]
+        : []),
+    ];
+    const notes = skipped.map((note) => `\n\n[${note}]`).join("") + (walk.truncated ? TRUNCATED_NOTE : "");
 
     if (matches.length === 0) {
-      return { content: `No matches found for pattern "${patternStr}".${notes}` };
+      if (files.length === 0 && skipped.length > 0) {
+        return { content: `No files were searched for pattern "${patternStr}".${notes}` };
+      }
+      return { content: `No matches found for pattern "${patternStr}" in the ${files.length} file(s) searched.${notes}` };
     }
 
     const lines = matches.map((m) => `${m.file}:${m.line}: ${m.text}`);

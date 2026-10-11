@@ -211,7 +211,9 @@ export interface SearchOptions {
   readonly kinds?: ChunkKind[];
   /**
    * Filter by file pattern: a glob over the path relative to filePatternRoot,
-   * with forward slashes; a directory also takes the files under it.
+   * with forward slashes; a directory also takes the files under it. Syntax
+   * and size limits are createFilePatternFilter's: search throws on a pattern
+   * past them (filePatternProblem says why before searching).
    */
   readonly filePattern?: string;
   /** The project root filePattern is relative to (default: process.cwd()). */

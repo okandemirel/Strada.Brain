@@ -14,7 +14,7 @@ import { RegexTimeoutError, WorkerLineMatcher, type LineMatchResult } from "./re
  * `..` from pieces. Containment is enforced on what glob walks and returns
  * (see globInsideProject), not here.
  */
-function isSafeGlobPattern(pattern: string): boolean {
+export function isSafeGlobPattern(pattern: string): boolean {
   // Reject patterns with path traversal
   if (pattern.includes("..")) return false;
   // Reject absolute paths

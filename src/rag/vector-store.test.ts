@@ -441,4 +441,35 @@ describe("FileVectorStore", () => {
       await store.shutdown();
     });
   });
+
+  // A file-scoped code_search ranks the whole store (topK = count) and then
+  // filters by path. Past 100 chunks the JS HNSW graph answered it: its
+  // pruning leaves most nodes unreachable, so 36 of 400 chunks came back and
+  // a scoped search answered "No results found" about its exact nearest
+  // neighbour whenever hnswlib-node was missing. The exact scan, asked for
+  // every chunk, handed them back unsorted.
+  describe("search asking for every chunk", () => {
+    it.each([40, 400])("returns all %i chunks, best first", async (n) => {
+      const store = new FileVectorStore(tmpDir, DIMS);
+      await store.initialize();
+      let seed = 7;
+      const next = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648) * 2 - 1;
+      const entries = Array.from({ length: n }, (_, i) =>
+        makeEntry(`v${i}`, `/src/F${i}.cs`, Array.from({ length: DIMS }, next)),
+      );
+      await store.upsert(entries);
+
+      const query = entries[23]!.vector;
+      const hits = await store.search(query, store.count());
+
+      expect(hits).toHaveLength(n);
+      expect(new Set(hits.map((h) => h.id)).size).toBe(n);
+      expect(hits[0]!.id).toBe("v23");
+      for (let i = 1; i < hits.length; i++) {
+        expect(hits[i - 1]!.score).toBeGreaterThanOrEqual(hits[i]!.score);
+      }
+
+      await store.shutdown();
+    });
+  });
 });

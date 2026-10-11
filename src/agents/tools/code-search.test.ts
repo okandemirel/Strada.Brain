@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CodeSearchTool } from "./code-search.js";
+import { GrepSearchTool } from "./search.js";
 import { createToolContext } from "../../test-helpers.js";
 import type {
+  CodeChunk,
   IRAGPipeline,
   RAGSearchResult,
   IndexingStats,
@@ -10,6 +15,14 @@ import type {
   VectorSearchHit,
 } from "../../rag/rag.interface.js";
 import { RAGPipeline } from "../../rag/rag-pipeline.js";
+import { FileVectorStore } from "../../rag/vector-store.js";
+import { _simulateMissingHnswForTests } from "../../rag/hnsw/hnsw-vector-store.js";
+
+// FileVectorStore logs through getLogger(), which throws until a logger exists.
+vi.mock("../../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
 
 function createMockRAG(overrides?: Partial<IRAGPipeline>): IRAGPipeline {
   return {
@@ -190,6 +203,92 @@ describe("CodeSearchTool", () => {
 
       expect(result.content).toMatch(/^No results found for: "damage calculation" in files matching '\*\*\/Combat\/\*\*'/);
       expect(result.content).toMatch(/outside that pattern were NOT searched/);
+    });
+
+    // Without hnswlib-node the pipeline searches FileVectorStore, whose JS
+    // HNSW graph took over past 100 chunks and reached 36 of 400 of them, so
+    // the scoped search missed its exact nearest neighbour and answered "No
+    // results found ... Files outside that pattern were NOT searched".
+    it("finds the in-scope chunk through the FileVectorStore fallback past 100 chunks", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "code-search-file-store-"));
+      _simulateMissingHnswForTests(true);
+      try {
+        const dims = 8;
+        let seed = 11;
+        const next = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648) * 2 - 1;
+        const store = new FileVectorStore(dir, dims);
+        const query = Array.from({ length: dims }, next);
+        const embedder: IEmbeddingProvider = {
+          name: "stub",
+          dimensions: dims,
+          embed: vi.fn(async (texts: string[]) => ({ embeddings: texts.map(() => query), usage: { totalTokens: 1 } })),
+        };
+        const rag = new RAGPipeline(embedder, store);
+        await rag.initialize();
+        const chunk = (id: string, filePath: string) =>
+          ({ ...makeResult().chunk, id, filePath, content: `damage ${id}` }) as CodeChunk;
+        await store.upsert([
+          ...Array.from({ length: 399 }, (_, i) => ({
+            id: `ui-${i}`,
+            vector: Array.from({ length: dims }, next),
+            chunk: chunk(`ui-${i}`, `/game/Assets/Scripts/UI/Panel${i}.cs`),
+          })),
+          { id: "damage", vector: query, chunk: chunk("damage", "/game/Assets/Scripts/Combat/Damage.cs") },
+        ]);
+
+        const result = await new CodeSearchTool(rag).execute(
+          { query: "damage calculation", file_pattern: "**/Combat/**" },
+          ctx,
+        );
+
+        expect(result.content).toContain("Found 1 result(s)");
+        expect(result.content).toContain("/game/Assets/Scripts/Combat/Damage.cs");
+        await rag.shutdown();
+      } finally {
+        _simulateMissingHnswForTests(null);
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    // The schema says file_pattern works as in grep_search, whose glob is
+    // case-insensitive on macOS and Windows; code_search's was case-sensitive
+    // everywhere, so '**/combat/**' found Combat in one tool and not the other.
+    it("matches a file_pattern with grep_search's case rule on this platform", async () => {
+      const dir = await realpath(await mkdtemp(join(tmpdir(), "code-search-case-")));
+      try {
+        const file = join(dir, "Assets", "Combat", "Damage.cs");
+        await mkdir(join(dir, "Assets", "Combat"), { recursive: true });
+        await writeFile(file, "class Damage { int damage; }\n");
+        const project = createToolContext({ projectPath: dir, workingDirectory: dir });
+
+        const grep = await new GrepSearchTool().execute({ pattern: "damage", file_pattern: "**/combat/**" }, project);
+        const code = await new CodeSearchTool(pipelineOver([hit("damage", file, 0.9)])).execute(
+          { query: "damage", file_pattern: "**/combat/**" },
+          project,
+        );
+
+        const grepFound = grep.content.includes("Damage.cs:1:");
+        const codeFound = code.content.includes("Found 1 result(s)");
+        expect(codeFound).toBe(grepFound);
+        expect(grepFound).toBe(process.platform === "darwin" || process.platform === "win32");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses the file_pattern grep_search refuses, and one too costly to match, saying why", async () => {
+      const rag = createMockRAG();
+      const tool = new CodeSearchTool(rag);
+
+      for (const pattern of ["../Secrets/**", "/Users/me/game/Assets/**"]) {
+        const result = await tool.execute({ query: "damage", file_pattern: pattern }, ctx);
+        expect(result.isError, pattern).toBe(true);
+        expect(result.content).toContain("must not contain '..' or absolute paths");
+      }
+      const bomb = await tool.execute({ query: "damage", file_pattern: "{a,b}".repeat(12) }, ctx);
+      expect(bomb.isError).toBe(true);
+      expect(bomb.content).toMatch(/alternatives/);
+      expect(rag.search).not.toHaveBeenCalled();
     });
   });
 });
