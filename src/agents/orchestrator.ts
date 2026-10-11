@@ -4855,7 +4855,7 @@ export class Orchestrator {
         // fell to `default` and was stamped approved without the operations
         // array ever being read — measured, 368 writes reached disk that way,
         // more than went through the gated path.
-        const parsed = parseBatchOperations(input);
+        const parsed = this.batchOperations(input);
         if (parsed.kind === "unreviewable") {
           return { approved: false, reason: `batch cannot be reviewed: ${parsed.reason}` };
         }
@@ -4930,8 +4930,13 @@ export class Orchestrator {
    * synthesized chain's plan. Null for a tool that runs only itself.
    */
   private dispatchedOperations(toolName: string, input: Record<string, unknown>): BatchParse | null {
-    if (BATCH_DISPATCH_TOOLS.has(toolName)) return parseBatchOperations(input);
+    if (BATCH_DISPATCH_TOOLS.has(toolName)) return this.batchOperations(input);
     return this.chainOperations(toolName, input);
+  }
+
+  /** A batch's operations, with a dispatcher among them refused as a nested batch is. */
+  private batchOperations(input: Record<string, unknown>): BatchParse {
+    return parseBatchOperations(input, { dispatches: (name) => this.dispatchesInTurn(name) });
   }
 
   /** A synthesized chain's plan, read the way a batch is; null for any other tool. */
@@ -4940,8 +4945,18 @@ export class Orchestrator {
     if (!isChainDispatchTool(tool)) return null;
     return parseChainOperations(tool.plannedOperations(input), {
       isWrite: (name) => this.isWriteOperation(name),
-      dispatches: (name) => BATCH_DISPATCH_TOOLS.has(name) || isChainDispatchTool(this.tools.get(name)),
+      dispatches: (name) => this.dispatchesInTurn(name),
     });
+  }
+
+  /**
+   * Whether a tool dispatches tools of its own. Every reader of a batch or a
+   * chain (the review, the destructive check, the size estimate, the prompt)
+   * reads one level, so one dispatcher inside another is refused, whichever
+   * holds which.
+   */
+  private dispatchesInTurn(toolName: string): boolean {
+    return BATCH_DISPATCH_TOOLS.has(toolName) || isChainDispatchTool(this.tools.get(toolName));
   }
 
   /**

@@ -71,6 +71,16 @@ describe("reading a batch's operations", () => {
     expect(parsed.reason).toMatch(/nests batch_execute/);
   });
 
+  it("refuses a chain nested inside a batch, as a chain refuses a nested batch", () => {
+    const judge = { dispatches: (tool: string) => tool === "read_then_delete" };
+    for (const tool of ["read_then_delete", "  batch_execute  "]) {
+      const parsed = parseBatchOperations({ operations: [{ tool, input: { path: "Assets/A.cs" } }] }, judge);
+      expect(parsed.kind, tool).toBe("unreviewable");
+      if (parsed.kind !== "unreviewable") return;
+      expect(parsed.reason).toContain(`nests ${tool.trim()}`);
+    }
+  });
+
   it("names the offending operation so the refusal is actionable", () => {
     const parsed = parseBatchOperations({
       operations: [

@@ -43,8 +43,14 @@ export type BatchParse =
  * Anything this cannot read is `unreviewable` rather than empty: a batch whose
  * shape we do not understand must not be waved through on the grounds that we
  * found no writes in it.
+ *
+ * `judge.dispatches` names the tools that dispatch in turn beyond the batch
+ * tools themselves: a synthesized chain is known only to whoever holds it.
  */
-export function parseBatchOperations(input: Record<string, unknown>): BatchParse {
+export function parseBatchOperations(
+  input: Record<string, unknown>,
+  judge?: { dispatches(tool: string): boolean },
+): BatchParse {
   const raw = input["operations"];
   if (!Array.isArray(raw)) {
     return { kind: "unreviewable", reason: "operations is missing or not an array" };
@@ -67,14 +73,19 @@ export function parseBatchOperations(input: Record<string, unknown>): BatchParse
     // A batch inside a batch would make the review recursive and its depth
     // attacker-controlled. The batch tool itself already refuses to nest; this
     // refuses to *approve* a nested one, which is the half that matters here.
-    if (BATCH_DISPATCH_TOOLS.has(tool)) {
-      return { kind: "unreviewable", reason: `operation ${i} nests ${tool}` };
+    // A chain inside a batch is the same nesting: the destructive check, the
+    // size estimate and the prompt read one level, and judged the chain by its
+    // own name and input while its file_delete ran unprompted. A chain already
+    // refuses a nested dispatcher; this is the other direction.
+    const name = tool.trim();
+    if (BATCH_DISPATCH_TOOLS.has(name) || judge?.dispatches(name) === true) {
+      return { kind: "unreviewable", reason: `operation ${i} nests ${name}; call it on its own` };
     }
     const opInput = record["input"];
     if (typeof opInput !== "object" || opInput === null || Array.isArray(opInput)) {
       return { kind: "unreviewable", reason: `operation ${i} (${tool}) has no input object` };
     }
-    operations.push({ tool: tool.trim(), input: opInput as Record<string, unknown> });
+    operations.push({ tool: name, input: opInput as Record<string, unknown> });
   }
 
   return { kind: "ok", operations };

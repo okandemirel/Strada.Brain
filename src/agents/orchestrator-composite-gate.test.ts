@@ -42,6 +42,7 @@ type ToolCallInput = { id: string; name: string; input: Record<string, unknown> 
 type Result = { content: string; isError?: boolean };
 
 let tools: Record<string, ReturnType<typeof tool>>;
+let composites: Record<string, CompositeTool>;
 let requestConfirmation: ReturnType<typeof vi.fn>;
 let orch: Orchestrator;
 
@@ -52,7 +53,18 @@ function build(level: ApprovalLevel): void {
     file_edit: tool("file_edit", true),
     file_delete: tool("file_delete", true),
     shell_exec: tool("shell_exec", true),
+    batch_execute: tool("batch_execute", true),
   };
+  composites = {};
+  // Strada.MCP's batch_execute looks each operation up through Brain's
+  // ToolRegistry (setToolResolver), where ChainManager registers composites:
+  // a chain named in a batch runs.
+  tools.batch_execute!.execute.mockImplementation(async (input: Record<string, unknown>, ctx: unknown) => {
+    for (const op of input["operations"] as Array<{ tool: string; input: Record<string, unknown> }>) {
+      await (tools[op.tool] ?? composites[op.tool])!.execute(op.input, ctx as never);
+    }
+    return { content: "ran" };
+  });
   const channel = { ...createMockChannel(), requestConfirmation };
   orch = new Orchestrator({
     providerManager: {
@@ -88,6 +100,7 @@ function chain(name: string, toolSequence: string[], parameterMappings: ChainSte
     { emit: vi.fn() } as never,
   );
   orch.addTool(composite, computeCompositeMetadata(toolSequence.map(() => undefined)));
+  composites[name] = composite;
 }
 
 const fromUser = (stepIndex: number, parameterName: string, sourceKey = parameterName): ChainStepMapping => ({
@@ -246,5 +259,73 @@ describe("a synthesized chain is judged like the calls it contains", () => {
     expect(result.isError, result.content).toBeFalsy();
     expect(tools.file_read!.execute).toHaveBeenCalledTimes(1);
     expect(tools.file_write!.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a synthesized chain named as an operation of batch_execute", () => {
+  // The batch's destructive check, size estimate and prompt read one level:
+  // a chain among its operations was judged by its own name and input, so a
+  // chain the direct path prompts for ran unprompted one hop away.
+  const batchOf = (name: string, input: Record<string, unknown>) => ({ operations: [{ tool: name, input }] });
+
+  it("does not delete a file unconfirmed under DESTRUCTIVE_ONLY", async () => {
+    build(ApprovalLevel.DESTRUCTIVE_ONLY);
+    requestConfirmation.mockResolvedValue("No");
+    const path = "Assets/Modules/AModule/Old.cs";
+
+    await run("batch_execute", batchOf("file_delete", { path }));
+    expect(requestConfirmation, "the direct rule changed; this test is now vacuous").toHaveBeenCalledTimes(1);
+    expect(tools.file_delete!.execute).not.toHaveBeenCalled();
+
+    chain("read_then_delete", ["file_read", "file_delete"], [fromUser(0, "path"), fromUser(1, "path")]);
+    const result = await run("batch_execute", batchOf("read_then_delete", { path }));
+
+    expect(tools.file_delete!.execute, "a chained file_delete in a batch ran unconfirmed").not.toHaveBeenCalled();
+    expect(tools.file_read!.execute, "a refused batch ran its chain's first step").not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    // The agent is told where the chain can run: on its own, where its steps
+    // are reviewed and named in the prompt.
+    expect(result.content).toContain("nests read_then_delete");
+  });
+
+  it("does not run a chained rm -r that the same chain called directly is prompted for", async () => {
+    build(ApprovalLevel.DESTRUCTIVE_ONLY);
+    requestConfirmation.mockResolvedValue("No");
+    const command = "rm -r Assets/Modules";
+    chain("look_then_run", ["file_read", "shell_exec"], [fromUser(0, "path"), fromUser(1, "command")]);
+
+    await run("look_then_run", { path: "Assets", command });
+    expect(requestConfirmation, "the direct rule changed; this test is now vacuous").toHaveBeenCalledTimes(1);
+    expect(tools.shell_exec!.execute).not.toHaveBeenCalled();
+
+    for (const mode of ["interactive", "background"] as const) {
+      const result = await run("batch_execute", batchOf("look_then_run", { path: "Assets", command }), mode);
+      expect(tools.shell_exec!.execute, `a chained rm -r in a batch ran (${mode})`).not.toHaveBeenCalled();
+      expect(result.isError, mode).toBe(true);
+    }
+  });
+
+  it("does not size a chain's 200-line edit by the chain's own input under SMART", async () => {
+    build(ApprovalLevel.SMART);
+    requestConfirmation.mockResolvedValue("No");
+    chain("edit_twice", ["file_edit", "file_edit"], [
+      fromUser(0, "path"),
+      fromUser(0, "old_text", "first_old"),
+      fromUser(0, "new_text", "first_new"),
+      fromUser(1, "path"),
+      fromUser(1, "old_text", "second_old"),
+      fromUser(1, "new_text", "second_new"),
+    ]);
+
+    await run("batch_execute", batchOf("edit_twice", {
+      path: "Assets/Modules/AModule/A.cs",
+      content: "x",
+      first_old: "a",
+      first_new: "b",
+      second_old: "c",
+      second_new: lines(200),
+    }));
+
+    expect(tools.file_edit!.execute, "a 200-line chained edit in a batch ran unprompted").not.toHaveBeenCalled();
   });
 });
