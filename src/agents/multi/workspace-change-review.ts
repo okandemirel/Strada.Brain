@@ -90,7 +90,11 @@ export interface ReviewedChange {
   readonly action: UndoAction;
   /** sha256 of the bytes the run published. Absent for `restore-deleted` (the run removed the file). */
   readonly publishedHash?: string;
-  /** Stat of the published file, taken right after it landed. The cheap first question only. */
+  /**
+   * Stat of the published file, taken right after it landed. Kept with the
+   * record, never used as proof: it was taken inside the tick of the run's
+   * own write, so a same-length save in that tick leaves it unmoved.
+   */
   readonly publishedStamp?: FileStamp;
   /** Absolute path of the project's pre-run bytes; required for `restore` / `restore-deleted`. */
   readonly previousPath?: string;
@@ -540,13 +544,6 @@ export function pruneChangeReviews(projectRoot: string, keep: number = MAX_CHANG
 
 // Preview
 
-/** Did anything at all happen to this file since we wrote it? Cheap question. */
-function stampMoved(stamp: FileStamp | undefined, now: { mtimeMs: number; size: number; ctimeMs: number }): boolean {
-  if (stamp === undefined) return true; // nothing recorded answers nothing — ask the bytes
-  if (stamp.m !== now.mtimeMs || stamp.s !== now.size) return true;
-  return !Number.isNaN(stamp.c) && stamp.c !== now.ctimeMs;
-}
-
 async function statOrUndefined(path: string): Promise<{ mtimeMs: number; size: number; ctimeMs: number } | undefined> {
   try {
     const st = await fsp.stat(path);
@@ -600,14 +597,17 @@ async function entryPreview(record: ChangeReviewRecord, change: ReviewedChange):
   const now = await statOrUndefined(target);
 
   /**
-   * Is what is on disk still the run's own work? The stamp asks first because
-   * it is a stat; only a moved stamp is worth a full read. A chmod, a touch or
-   * an xattr moves the stamp without changing a byte, and refusing an undo
-   * over that would be a safety rule turning into a defect of its own.
+   * Is what is on disk still the run's own work? The bytes decide. A chmod, a
+   * touch or an xattr moves the stamp without changing a byte, and refusing an
+   * undo over that would be a safety rule turning into a defect of its own.
+   * An UNMOVED stamp proves nothing either: it is a stat of the run's own
+   * write, taken inside that write's filesystem tick, and a person's
+   * same-length save in the same tick (NTFS ~15.6 ms, HFS+ a second, FAT two)
+   * leaves it exactly as recorded. Answering "ours" from it restored the
+   * pre-run bytes over that save.
    */
   const stillOurs = async (): Promise<boolean> => {
     if (now === undefined) return false;
-    if (!stampMoved(change.publishedStamp, now)) return true;
     if (change.publishedHash === undefined) return false; // nothing to compare: assume someone else's
     return (await hashFile(target)) === change.publishedHash;
   };
@@ -819,9 +819,8 @@ async function captureTarget(
     }
     return { ok: true, bytes };
   }
-  if (change.publishedStamp !== undefined && !stampMoved(change.publishedStamp, stat)) {
-    return { ok: true, bytes };
-  }
+  // The recorded stamp cannot stand in for the hash: it was taken inside the
+  // tick of the run's own write (see stillOurs in entryPreview).
   return { ok: false, why: "nothing recorded proves the bytes on disk are the ones the run wrote, so they were left alone" };
 }
 

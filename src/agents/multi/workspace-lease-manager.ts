@@ -2227,10 +2227,10 @@ export class WorkspaceLeaseManager {
      * bytes and the stat of the file right after they landed.
      *
      * This is what makes "did a HUMAN edit this file after the run published
-     * it?" answerable later. The stamp is the cheap question (a stat), the hash
-     * is the one that decides — a chmod, a touch or an xattr moves the stamp
-     * without changing a byte, and treating that as a concurrent edit would
-     * refuse an undo that is perfectly legitimate.
+     * it?" answerable later. The hash decides. A chmod, a touch or an xattr
+     * moves the stamp without changing a byte, and a same-length save inside
+     * the tick of this very write leaves it unmoved, so the stamp is kept with
+     * the record and proves nothing either way.
      */
     const publishedOf = new Map<number, { hash?: string; stamp?: FileStamp }>();
     /** Set when a rollback copy is the last one and could not be put anywhere safe. */

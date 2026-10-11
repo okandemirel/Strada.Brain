@@ -398,6 +398,55 @@ describe("a human editing the same files while the run works", () => {
     expect(existsSync(join(source, "Assets/Scripts/New.cs"))).toBe(false);
   });
 
+  describe("a same-length save inside the tick the run published in", () => {
+    // The stamp a commit records is a stat of the file it has just renamed
+    // into place, so that write's filesystem tick is still open: a person's
+    // same-length save inside it (NTFS ~15.6 ms, HFS+ a second, FAT two)
+    // leaves size, mtime and ctime exactly as recorded (980b16d5's racily
+    // clean rule). This filesystem is finer than a test can wait out, so the
+    // record is given the stamp the file carries after that save.
+    const publishThenSaveInTick = async (keepHash: boolean): Promise<{ reviewId: string; target: string }> => {
+      put(source, "Assets/Scripts/Existing.cs", "the user's version");
+      const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+      writeFileSync(join(lease.path, "Assets/Scripts/Existing.cs"), "the run's version", "utf8");
+      const result = await lease.commit();
+      await lease.release();
+      const target = join(source, "Assets/Scripts/Existing.cs");
+      writeFileSync(target, "mine, same length", "utf8");
+      const st = statSync(target);
+      const record = readChangeReview(source, result.changeReview!.id)!;
+      writeChangeReview({
+        ...record,
+        changes: record.changes.map((c) => ({
+          ...c,
+          publishedHash: keepHash ? c.publishedHash : undefined,
+          publishedStamp: { m: st.mtimeMs, s: st.size, c: st.ctimeMs },
+        })),
+      });
+      return { reviewId: result.changeReview!.id, target };
+    };
+
+    it("is changed-since in the preview, and the undo leaves it alone", async () => {
+      const { reviewId, target } = await publishThenSaveInTick(true);
+
+      const preview = (await previewUndo(source, reviewId))!;
+      expect(preview.entries[0]!.state).toBe("changed-since");
+      const undo = await applyUndo(source, reviewId);
+      expect(undo.status).toBe("refused");
+      expect(readFileSync(target, "utf8")).toBe("mine, same length");
+    });
+
+    it("with no hash recorded, an unmoved stamp still proves nothing and the person's bytes stay", async () => {
+      const { reviewId, target } = await publishThenSaveInTick(false);
+
+      const preview = (await previewUndo(source, reviewId))!;
+      expect(preview.entries[0]!.state).toBe("changed-since");
+      const undo = await applyUndo(source, reviewId);
+      expect(undo.status).toBe("refused");
+      expect(readFileSync(target, "utf8")).toBe("mine, same length");
+    });
+  });
+
   it("undoes a review the user had already decided to keep — changing your mind is not an error", async () => {
     put(source, "Assets/Scripts/Existing.cs", "the user's version");
     const before = snapshotTree(source);
