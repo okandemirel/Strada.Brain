@@ -1,9 +1,16 @@
 import http, { createServer, type Server } from "node:http";
 import https from "node:https";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetch as undiciFetch, setGlobalDispatcher, type Dispatcher } from "undici";
-import { LOOPBACK_NO_PROXY, describeProxy, envProxySettings, installEnvProxy, reportEnvProxy } from "./env-proxy.js";
+import {
+  LOOPBACK_NO_PROXY,
+  describeProxy,
+  envProxyAgent,
+  envProxySettings,
+  installEnvProxy,
+  reportEnvProxy,
+} from "./env-proxy.js";
 
 describe("envProxySettings", () => {
   it("does nothing when no proxy variable is set", () => {
@@ -296,6 +303,146 @@ describe("fetch through the environment's proxy", () => {
     installEnvProxy({ HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9" });
     expect(http.globalAgent).toBe(before.http);
     expect(https.globalAgent).toBe(before.https);
+  });
+});
+
+// Slack's WebClient and Socket Mode build axios with proxy:false, so they reach
+// a proxy only through the agent they are handed.
+describe("envProxyAgent", () => {
+  const servers: Array<Server | net.Server> = [];
+  const agents: https.Agent[] = [];
+
+  afterEach(async () => {
+    for (const agent of agents.splice(0)) agent.destroy();
+    await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
+  });
+
+  async function listen(server: Server | net.Server): Promise<number> {
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return (server.address() as AddressInfo).port;
+  }
+
+  interface Tunnel {
+    authority: string;
+    proxyAuthorization?: string;
+    /** What the client sent first inside the tunnel. */
+    firstBytes?: Buffer;
+  }
+
+  /** A proxy that logs every CONNECT and the first bytes sent through it, then hangs up; it never resolves a name. */
+  async function startTunnelProxy(status = 200): Promise<{ url: string; tunnels: Tunnel[] }> {
+    const tunnels: Tunnel[] = [];
+    const proxy = createServer((_req, res) => res.writeHead(405).end());
+    proxy.on("connect", (req, socket) => {
+      const tunnel: Tunnel = { authority: req.url ?? "", proxyAuthorization: req.headers["proxy-authorization"] };
+      tunnels.push(tunnel);
+      if (status !== 200) {
+        socket.end(`HTTP/1.1 ${status} Refused\r\nContent-Length: 0\r\n\r\n`);
+        return;
+      }
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      socket.once("data", (chunk: Buffer) => {
+        tunnel.firstBytes = chunk;
+        socket.destroy();
+      });
+    });
+    return { url: `http://127.0.0.1:${await listen(proxy)}`, tunnels };
+  }
+
+  /** A plain TCP server standing in for an origin reached directly: it logs the first bytes, then hangs up. */
+  async function startOrigin(): Promise<{ port: number; firstBytes: Buffer[] }> {
+    const firstBytes: Buffer[] = [];
+    const origin = net.createServer((socket) => {
+      socket.once("data", (chunk) => {
+        firstBytes.push(chunk);
+        socket.destroy();
+      });
+    });
+    return { port: await listen(origin), firstBytes };
+  }
+
+  function agentFor(env: NodeJS.ProcessEnv): https.Agent {
+    const agent = envProxyAgent(env);
+    if (agent === undefined) throw new Error("expected an agent");
+    agents.push(agent);
+    return agent;
+  }
+
+  /** One https GET; resolves with how it ended, since none of these servers speaks TLS back. */
+  function attempt(url: string, options: https.RequestOptions): Promise<string> {
+    return new Promise((resolve) => {
+      const req = https.get(url, options, (res) => {
+        res.resume();
+        resolve(`status ${res.statusCode}`);
+      });
+      req.on("error", (error: NodeJS.ErrnoException) => resolve(`error ${error.code ?? ""} ${error.message}`));
+    });
+  }
+
+  /** Whatever the name, the address is loopback: a direct connection lands on the local origin. */
+  const toLoopback = ((_host: string, options: { all?: boolean }, callback: (...args: unknown[]) => void) => {
+    if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+    else callback(null, "127.0.0.1", 4);
+  }) as unknown as net.LookupFunction;
+
+  /** A TLS handshake record (0x16) whose ClientHello names `host`: TLS started for that origin. */
+  function isClientHelloFor(bytes: Buffer | undefined, host: string): boolean {
+    return bytes !== undefined && bytes[0] === 0x16 && bytes.includes(Buffer.from(host));
+  }
+
+  it("is not built when no proxy is named, or when NODE_USE_ENV_PROXY leaves it to Node", () => {
+    expect(envProxyAgent({})).toBeUndefined();
+    expect(envProxyAgent({ HTTPS_PROXY: "http://127.0.0.1:9", NODE_USE_ENV_PROXY: "1" })).toBeUndefined();
+  });
+
+  it("tunnels https through HTTPS_PROXY and starts TLS with the origin inside the tunnel", async () => {
+    const { url: proxyUrl, tunnels } = await startTunnelProxy();
+    const agent = agentFor({ HTTPS_PROXY: proxyUrl.replace("http://", "http://bot:p%40ss@") });
+
+    await attempt("https://slack.example.test/api/auth.test", { agent });
+
+    expect(tunnels.map((t) => t.authority)).toEqual(["slack.example.test:443"]);
+    expect(tunnels[0]!.proxyAuthorization).toBe(`Basic ${Buffer.from("bot:p@ss").toString("base64")}`);
+    expect(isClientHelloFor(tunnels[0]!.firstBytes, "slack.example.test")).toBe(true);
+  });
+
+  it("uses HTTP_PROXY for https when HTTPS_PROXY is unset, as fetch's undici does", async () => {
+    const { url: proxyUrl, tunnels } = await startTunnelProxy();
+    const agent = agentFor({ HTTP_PROXY: proxyUrl });
+
+    await attempt("https://files.example.test:8443/f", { agent });
+
+    expect(tunnels.map((t) => t.authority)).toEqual(["files.example.test:8443"]);
+  });
+
+  it("connects directly to NO_PROXY hosts and to loopback", async () => {
+    const { url: proxyUrl, tunnels } = await startTunnelProxy();
+    const origin = await startOrigin();
+    const agent = agentFor({ HTTPS_PROXY: proxyUrl, NO_PROXY: `.corp.test, pinned.test:${origin.port}` });
+
+    await attempt(`https://api.corp.test:${origin.port}/`, { agent, lookup: toLoopback });
+    await attempt(`https://pinned.test:${origin.port}/`, { agent, lookup: toLoopback });
+    await attempt(`https://127.0.0.1:${origin.port}/`, { agent });
+    expect(tunnels).toEqual([]);
+    expect(origin.firstBytes).toHaveLength(3);
+    expect(isClientHelloFor(origin.firstBytes[0], "api.corp.test")).toBe(true);
+
+    // A port-pinned entry spares only that port, and a suffix entry only names under it.
+    await attempt("https://pinned.test/", { agent });
+    await attempt("https://notcorp.test/", { agent });
+    expect(tunnels.map((t) => t.authority)).toEqual(["pinned.test:443", "notcorp.test:443"]);
+  });
+
+  it("fails the request when the proxy refuses the tunnel, naming the status but not the credentials", async () => {
+    const { url: proxyUrl, tunnels } = await startTunnelProxy(407);
+    const agent = agentFor({ HTTPS_PROXY: proxyUrl.replace("http://", "http://bot:s3cret@") });
+
+    const outcome = await attempt("https://slack.example.test/api/auth.test", { agent });
+
+    expect(tunnels).toHaveLength(1);
+    expect(outcome).toMatch(/407/u);
+    expect(outcome).not.toContain("s3cret");
   });
 });
 

@@ -355,6 +355,11 @@ describe("SlackChannel", () => {
   });
 
   describe("requestConfirmation", () => {
+    // A click counts only from someone this channel takes messages from.
+    beforeEach(() => {
+      channel = new SlackChannel({ ...mockConfig, allowedWorkspaces: ["T123"], allowedUserIds: ["U123", "U999"] });
+    });
+
     it("should throw if not connected", async () => {
       await expect(
         channel.requestConfirmation({
@@ -425,7 +430,7 @@ describe("SlackChannel", () => {
         ack: vi.fn().mockResolvedValue(undefined),
         body: {
           channel: { id: "C123" },
-          user: { id: "U999" },
+          user: { id: "U999", team_id: "T123" },
           message: { ts: "1234567890.123456" },
         },
         action: {
@@ -478,7 +483,7 @@ describe("SlackChannel", () => {
         ack: vi.fn().mockResolvedValue(undefined),
         body: {
           channel: { id: "C123" },
-          user: { id: "U123" },
+          user: { id: "U123", team_id: "T123" },
           message: { ts: "1234567890.123456" },
         },
         action: {
@@ -512,7 +517,7 @@ describe("SlackChannel", () => {
 
       await actionHandler({
         ack: vi.fn().mockResolvedValue(undefined),
-        body: { channel: { id: "C123" }, user: { id: "U123" }, message: { ts: "1.1" } },
+        body: { channel: { id: "C123" }, user: { id: "U123", team_id: "T123" }, message: { ts: "1.1" } },
         action: { action_id: `${confirmId}_opt7`, value: "something else" },
       });
 
@@ -520,6 +525,49 @@ describe("SlackChannel", () => {
       expect(internal.pendingConfirmations.has(confirmId!)).toBe(true);
       await channel.disconnect();
       await expect(guarded).resolves.toBeInstanceOf(Error);
+    });
+
+    it("refuses a click from outside the allowlists, even on a prompt that pins no requester", async () => {
+      await channel.connect();
+
+      const promise = channel.requestConfirmation({
+        chatId: "C123",
+        question: "Run the shell command?",
+        options: ["Yes", "No"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const internal = channel as unknown as {
+        app: { action: ReturnType<typeof vi.fn>; client: { chat: { postEphemeral: ReturnType<typeof vi.fn> } } };
+        pendingConfirmations: Map<string, unknown>;
+      };
+      const actionHandler = internal.app.action.mock.calls[0]?.[1] as (payload: unknown) => Promise<void>;
+      const [confirmId] = Array.from(internal.pendingConfirmations.keys());
+      const click = (user: { id: string; team_id: string }) =>
+        actionHandler({
+          ack: vi.fn().mockResolvedValue(undefined),
+          body: { channel: { id: "C123" }, user, team: { id: "T123" }, message: { ts: "1.1" } },
+          action: { action_id: `${confirmId}_opt0`, value: "Yes" },
+        });
+
+      // A channel member nobody allowlisted, then an allowlisted id whose own
+      // workspace is not allowed (a Slack Connect channel): neither answers.
+      await click({ id: "U-stranger", team_id: "T123" });
+      await click({ id: "U123", team_id: "T-other" });
+      expect(internal.pendingConfirmations.has(confirmId!)).toBe(true);
+      expect(internal.app.client.chat.postEphemeral).toHaveBeenCalledWith({
+        channel: "C123",
+        user: "U-stranger",
+        text: "You are not authorized to use Strada Brain.",
+      });
+      expect(internal.app.client.chat.postEphemeral).toHaveBeenCalledWith({
+        channel: "C123",
+        user: "U123",
+        text: "This workspace is not authorized to use Strada Brain.",
+      });
+
+      await click({ id: "U123", team_id: "T123" });
+      await expect(promise).resolves.toBe("Yes");
     });
 
     it("clears the timeout timer when the confirmation is answered (no leak)", async () => {
@@ -548,7 +596,7 @@ describe("SlackChannel", () => {
         ack: vi.fn().mockResolvedValue(undefined),
         body: {
           channel: { id: "C123" },
-          user: { id: "U123" },
+          user: { id: "U123", team_id: "T123" },
           message: { ts: "1234567890.123456" },
         },
         action: { action_id: `${confirmId}_opt0`, value: "Yes" },
@@ -1068,7 +1116,14 @@ describe("SlackChannel file extraction", () => {
 // LRN-20b: a final response is recorded under the ts of every message it was
 // posted as, and a reaction is reported by the ts of the message it is on.
 describe("SlackChannel response attribution (LRN-20b)", () => {
-  const config = { botToken: "xoxb-test-token", signingSecret: "test-secret", appToken: "xapp-test-token", socketMode: true };
+  const config = {
+    botToken: "xoxb-test-token",
+    signingSecret: "test-secret",
+    appToken: "xapp-test-token",
+    socketMode: true,
+    allowedWorkspaces: ["T1"],
+    allowedUserIds: ["U9"],
+  };
   const attribution = { instinctIds: ["instinct-a"], warnedRules: [], runId: "run-1", requesterUserId: "U1" };
 
   async function setup() {
@@ -1081,6 +1136,12 @@ describe("SlackChannel response attribution (LRN-20b)", () => {
       processQueuedMessage: (m: Record<string, unknown>) => Promise<void>;
     };
     return { channel, port, internal };
+  }
+
+  function reactionHandler(internal: { app: { event: ReturnType<typeof vi.fn> } }) {
+    return internal.app.event.mock.calls.find(([name]) => name === "reaction_added")?.[1] as (
+      args: { event: Record<string, unknown>; body: Record<string, unknown> },
+    ) => Promise<void>;
   }
 
   it("records a final response under the bare channel id and the posted ts", async () => {
@@ -1102,16 +1163,33 @@ describe("SlackChannel response attribution (LRN-20b)", () => {
 
   it("reports a thumbs reaction by the reacted-to message's ts", async () => {
     const { channel, port, internal } = await setup();
-    const handler = internal.app.event.mock.calls.find(([name]) => name === "reaction_added")?.[1] as (
-      args: { event: Record<string, unknown> },
-    ) => Promise<void>;
+    const handler = reactionHandler(internal);
 
-    await handler({ event: { user: "U9", reaction: "-1", item: { channel: "C123", ts: "111.0001" } } });
+    await handler({ event: { user: "U9", reaction: "-1", item: { channel: "C123", ts: "111.0001" } }, body: { team_id: "T1" } });
     expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId: "C123", messageRef: "111.0001" }, "U9", "reaction");
 
     // A reaction that names no message cannot be attributed.
-    await handler({ event: { user: "U9", reaction: "+1", item: { channel: "C123" } } });
+    await handler({ event: { user: "U9", reaction: "+1", item: { channel: "C123" } }, body: { team_id: "T1" } });
     expect(port.react).toHaveBeenCalledTimes(1);
+    await channel.disconnect();
+  });
+
+  it("counts a reaction only from someone the channel takes messages from", async () => {
+    // A reaction moves learned confidence for every rule the answer applied.
+    const { channel, port, internal } = await setup();
+    const handler = reactionHandler(internal);
+    const thumbsDown = (user: string) => ({ user, reaction: "-1", item: { channel: "C123", ts: "111.0001" } });
+
+    // A channel member nobody allowlisted, then the allowlisted user on an
+    // event from a workspace that is not allowed.
+    await handler({ event: thumbsDown("U-stranger"), body: { team_id: "T1" } });
+    await handler({ event: thumbsDown("U9"), body: { team_id: "T-other" } });
+    expect(port.react).not.toHaveBeenCalled();
+
+    // A refused event leaves no dedup entry behind to swallow the real one.
+    await handler({ event: thumbsDown("U9"), body: { team_id: "T1" } });
+    expect(port.react).toHaveBeenCalledTimes(1);
+    expect(port.react).toHaveBeenCalledWith("thumbs_down", { chatId: "C123", messageRef: "111.0001" }, "U9", "reaction");
     await channel.disconnect();
   });
 });

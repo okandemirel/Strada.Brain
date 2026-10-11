@@ -6,6 +6,7 @@
 
 import { App, type SayFn } from "@slack/bolt";
 import { randomUUID } from "node:crypto";
+import type { Agent } from "node:https";
 import { z } from "zod";
 import type { WebClient } from "@slack/web-api";
 import type { KnownBlock } from "@slack/types";
@@ -37,6 +38,7 @@ import {
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import { MessageQueue } from "../message-queue.js";
 import { resolveBindHost } from "../../core/bind-host.js";
+import { envProxyAgent } from "../../common/env-proxy.js";
 
 interface SlackConfig {
   botToken: string;
@@ -234,6 +236,8 @@ export class SlackChannel implements IChannelAdapter {
   private isConnected = false;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private botUserId: string | null = null;
+  /** HTTPS_PROXY for Bolt's clients, which never read it themselves (env-proxy.ts). */
+  private proxyAgent: Agent | undefined;
 
   // Bounded de-dup of processed reaction events (keyed by user:item:reaction) so a
   // toggled-off-and-on reaction or a redelivered event does not re-fire feedback.
@@ -260,12 +264,17 @@ export class SlackChannel implements IChannelAdapter {
       const httpListen = socketMode
         ? undefined
         : { port: this.config.port ?? DEFAULT_SLACK_HTTP_PORT, host: this.config.host ?? resolveBindHost() };
+      // Bolt and @slack/web-api build axios with proxy:false, so the Web API,
+      // response_url posts and the Socket Mode WebSocket reach a proxy only
+      // through the agent Bolt hands each of them.
+      this.proxyAgent = envProxyAgent();
       this.app = new App({
         token: this.config.botToken,
         signingSecret: this.config.signingSecret,
         appToken: this.config.appToken,
         socketMode,
         port: httpListen?.port,
+        ...(this.proxyAgent ? { agent: this.proxyAgent } : {}),
       });
 
       this.registerEventHandlers();
@@ -347,6 +356,9 @@ export class SlackChannel implements IChannelAdapter {
       }
       this.app = null;
     }
+    // Its keep-alive sockets would outlive the channel.
+    this.proxyAgent?.destroy();
+    this.proxyAgent = undefined;
 
     this.logger.info("Slack channel disconnected");
   }
@@ -809,6 +821,22 @@ export class SlackChannel implements IChannelAdapter {
     }
   }
 
+  /**
+   * The message path's allowlists, for a confirmation click or a reaction:
+   * one answers a prompt, the other moves learned confidence, so both count
+   * only from someone this channel takes messages from. Returns the refusal
+   * to show, or null when the actor is allowed.
+   */
+  private refuseActor(teamId: string | undefined, userId: string | undefined): string | null {
+    if (!isAllowedBySingleIdPolicy(teamId ?? "", this.config.allowedWorkspaces ?? [], "closed")) {
+      return "This workspace is not authorized to use Strada Brain.";
+    }
+    if (!isAllowedBySingleIdPolicy(userId ?? "", this.config.allowedUserIds ?? [], "closed")) {
+      return "You are not authorized to use Strada Brain.";
+    }
+    return null;
+  }
+
   private async refreshBotUserId(): Promise<void> {
     if (!this.app?.client) return;
     try {
@@ -851,11 +879,24 @@ export class SlackChannel implements IChannelAdapter {
         if (pending) {
           const actionBody = body as {
             channel?: { id?: string };
-            user?: { id?: string };
+            user?: { id?: string; team_id?: string };
+            team?: { id?: string } | null;
             message?: { ts?: string };
           };
           const channelId = actionBody.channel?.id;
           const actorUserId = actionBody.user?.id;
+
+          // A prompt with no requester pinned would otherwise take any
+          // channel member's click, a Slack Connect guest's included.
+          // user.team_id is the clicker's own workspace in a shared channel.
+          const refusal = this.refuseActor(actionBody.user?.team_id ?? actionBody.team?.id, actorUserId);
+          if (refusal !== null) {
+            this.logger.warn("Unauthorized Slack confirmation click", { userId: actorUserId, channelId });
+            if (this.app?.client && channelId && actorUserId) {
+              await this.app.client.chat.postEphemeral({ channel: channelId, user: actorUserId, text: refusal });
+            }
+            return;
+          }
 
           if ((channelId && channelId !== pending.chatId) || (pending.userId && actorUserId !== pending.userId)) {
             if (this.app?.client && channelId && actorUserId) {
@@ -911,13 +952,21 @@ export class SlackChannel implements IChannelAdapter {
     });
 
     // Feedback via emoji reactions (thumbs up/down)
-    this.app.event("reaction_added", async ({ event }) => {
+    this.app.event("reaction_added", async ({ event, body }) => {
       try {
         const feedbackPort = this.feedbackPort;
         if (!feedbackPort) return;
 
         // Skip the bot's own reactions so it never self-attributes feedback.
         if (this.botUserId && event.user === this.botUserId) return;
+
+        // A reaction moves learned confidence, so it counts only from someone
+        // this channel takes messages from (LRN-10). The event names no team
+        // for the reacting user, so the workspace checked is the one it was
+        // delivered for and the user allowlist is what admits the person.
+        // Checked before the dedup entry, so a refusal cannot shadow a later
+        // allowed reaction.
+        if (this.refuseActor(body.team_id, event.user) !== null) return;
 
         const reaction = event.reaction;
         let feedbackType: "thumbs_up" | "thumbs_down" | null = null;

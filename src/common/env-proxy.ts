@@ -12,8 +12,9 @@
  * dashboard and the CLI's own calls to it never go through the proxy.
  *
  * Clients with their own connection pool (the Telegram and Discord SDKs, and
- * the address-pinned web fetch) are not affected; axios-based ones (Slack)
- * already read the proxy variables themselves.
+ * the address-pinned web fetch) are not affected. Nor does axios read the
+ * variables for Slack: @slack/web-api and Bolt build it with `proxy: false`,
+ * so Slack reaches the proxy only through the agent envProxyAgent() builds.
  *
  * fetch reads its dispatcher from the undici Node bundles, which keeps it on
  * globalThis under a key numbered by undici generation. The npm undici this
@@ -28,6 +29,8 @@
 import http from "node:http";
 import https from "node:https";
 import { isIPv6 } from "node:net";
+import type { Duplex } from "node:stream";
+import tls from "node:tls";
 import { EnvHttpProxyAgent, setGlobalDispatcher, type Dispatcher } from "undici";
 import type { LoggerLike } from "../utils/logger.js";
 
@@ -211,6 +214,117 @@ function errorCode(error: unknown): string {
     if (error instanceof Error) return error.name;
   }
   return "unknown";
+}
+
+/**
+ * The agent for a client that takes one and ignores the proxy variables.
+ * Slack's Web API calls and its Socket Mode WebSocket connected directly, so
+ * on a proxy-only network the channel never came up. https requests tunnel
+ * (CONNECT) through HTTPS_PROXY, else HTTP_PROXY as fetch's undici does;
+ * NO_PROXY hosts and loopback connect directly. Undefined when nothing is to
+ * be proxied here: no proxy named, NODE_USE_ENV_PROXY (Node proxies its own
+ * agents), or a value fetch cannot use either, which startup already reports.
+ */
+export function envProxyAgent(env: NodeJS.ProcessEnv = process.env): https.Agent | undefined {
+  const setup = envProxySettings(env);
+  if (setup.kind !== "installed") return undefined;
+  let proxy: URL;
+  try {
+    proxy = new URL(setup.httpsProxy ?? setup.httpProxy ?? "");
+  } catch {
+    return undefined;
+  }
+  if (proxy.protocol !== "http:" && proxy.protocol !== "https:") return undefined;
+  return new TunnellingAgent(proxy, parseNoProxy(setup.noProxy));
+}
+
+interface NoProxyEntry {
+  readonly host: string;
+  readonly port?: number;
+}
+
+/** NO_PROXY as curl reads it: "*" is every host, an entry is that host and the names under it, "host:port" that port only. */
+function parseNoProxy(noProxy: string): NoProxyEntry[] {
+  return noProxy
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry !== "")
+    .map((entry) => {
+      const pinned = /^(.+):(\d+)$/u.exec(entry);
+      const host = (pinned?.[1] ?? entry).replace(/^\*?\./u, "");
+      return pinned ? { host, port: Number(pinned[2]) } : { host };
+    });
+}
+
+function bypassesProxy(entries: readonly NoProxyEntry[], host: string, port: number): boolean {
+  // Entries hold IPv6 in brackets (envProxySettings); request options do not.
+  const name = (isIPv6(host) ? `[${host}]` : host).toLowerCase();
+  return entries.some(
+    (entry) =>
+      (entry.port === undefined || entry.port === port) &&
+      (entry.host === "*" || name === entry.host || name.endsWith(`.${entry.host}`)),
+  );
+}
+
+class TunnellingAgent extends https.Agent {
+  private readonly proxy: URL;
+  private readonly noProxy: readonly NoProxyEntry[];
+
+  constructor(proxy: URL, noProxy: readonly NoProxyEntry[]) {
+    // Keep-alive, as https.globalAgent is: what these clients used before.
+    super({ keepAlive: true });
+    this.proxy = proxy;
+    this.noProxy = noProxy;
+  }
+
+  override createConnection(
+    options: https.RequestOptions,
+    callback?: (err: Error | null, stream: Duplex) => void,
+  ): Duplex | null | undefined {
+    const host = options.host ?? options.hostname ?? "localhost";
+    const port = Number(options.port) || 443;
+    if (bypassesProxy(this.noProxy, host, port)) return super.createConnection(options, callback);
+    // The agent's documented async form: the socket is handed to the callback.
+    openTunnel(this.proxy, host, port).then(
+      (socket) => callback?.(null, tls.connect({ ...(options as tls.ConnectionOptions), socket })),
+      (error: Error) => callback?.(error, undefined as unknown as Duplex),
+    );
+    return undefined;
+  }
+}
+
+/** A raw socket to host:port through the proxy's CONNECT tunnel; TLS to the origin goes on top. */
+function openTunnel(proxy: URL, host: string, port: number): Promise<Duplex> {
+  const authority = `${isIPv6(host) ? `[${host}]` : host}:${port}`;
+  return new Promise((resolve, reject) => {
+    const headers: http.OutgoingHttpHeaders = { host: authority };
+    if (proxy.username !== "" || proxy.password !== "") {
+      // Inside the executor: a malformed %-escape fails this request, not the caller's stack.
+      const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+      headers["proxy-authorization"] = `Basic ${Buffer.from(credentials).toString("base64")}`;
+    }
+    const secure = proxy.protocol === "https:";
+    const request = (secure ? https : http).request({
+      host: proxy.hostname.replace(/^\[(.*)\]$/u, "$1"),
+      port: proxy.port === "" ? (secure ? 443 : 80) : Number(proxy.port),
+      method: "CONNECT",
+      path: authority,
+      headers,
+      agent: false,
+    });
+    request.once("connect", (response: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+      if (response.statusCode !== 200) {
+        socket.destroy();
+        // describeProxy: the URL can carry credentials.
+        reject(new Error(`Proxy ${describeProxy(proxy.href)} refused a tunnel to ${authority}: HTTP ${response.statusCode}`));
+        return;
+      }
+      if (head.length > 0) socket.unshift(head);
+      resolve(socket);
+    });
+    request.once("error", reject);
+    request.end();
+  });
 }
 
 type ProxyLogger = Pick<LoggerLike, "info" | "warn">;
