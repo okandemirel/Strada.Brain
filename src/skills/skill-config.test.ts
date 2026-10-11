@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-config.js";
 import type { SkillConfig } from "./types.js";
@@ -27,12 +27,25 @@ vi.mock("node:os", () => ({
   homedir: () => "/mock-home",
 }));
 
+// The app home, as resolveStradaHome() answers it. By default the macOS/Linux
+// one with STRADA_HOME unset: the same directory homedir()/.strada names.
+const DEFAULT_APP_HOME = join("/mock-home", ".strada");
+const appHome = { dir: DEFAULT_APP_HOME };
+vi.mock("../common/runtime-paths.js", () => ({
+  resolveStradaHome: () => appHome.dir,
+}));
+
 /** A missing file, as node:fs reports it (the code is what tells it from a broken one). */
 function enoent(): Error {
   return Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 beforeEach(() => {
+  appHome.dir = DEFAULT_APP_HOME;
   fsMock.readFile.mockReset();
   fsMock.writeFile.mockReset();
   fsMock.mkdir.mockReset();
@@ -180,5 +193,49 @@ describe("setSkillEnabled", () => {
     const written = JSON.parse(fsMock.writeFile.mock.calls[0]![1] as string) as SkillConfig;
     expect(written.entries["gmail"]!.enabled).toBe(false);
     expect(written.entries["slack"]!.enabled).toBe(true);
+  });
+});
+
+describe("where skills.json lives", () => {
+  const legacy = join("/mock-home", ".strada", "skills.json");
+
+  it("follows the app home (STRADA_HOME), not homedir()/.strada", async () => {
+    vi.stubEnv("STRADA_HOME", "/srv/strada");
+    appHome.dir = "/srv/strada";
+    fsMock.readFile.mockRejectedValue(enoent());
+
+    await setSkillEnabled("x", false);
+
+    const target = join("/srv/strada", "skills.json");
+    expect(fsMock.readFile.mock.calls.map((call) => call[0])).toEqual([target]);
+    expect(fsMock.mkdir).toHaveBeenCalledWith("/srv/strada", { recursive: true });
+    expect(fsMock.rename).toHaveBeenCalledWith(expect.any(String), target);
+  });
+
+  it("keeps the entries left in ~/.strada when only the platform default moved (Windows), and writes them to the app home", async () => {
+    // A disabled skill there must stay disabled after the upgrade (SEC-15).
+    vi.stubEnv("STRADA_HOME", "");
+    appHome.dir = join("/mock-localappdata", "Strada");
+    fsMock.readFile.mockImplementation(async (path: string) => {
+      if (path === legacy) return JSON.stringify({ entries: { banned: { enabled: false } } });
+      throw enoent();
+    });
+
+    expect((await readSkillConfig()).entries).toEqual({ banned: { enabled: false } });
+    await setSkillEnabled("other", true);
+
+    const [temp, text] = fsMock.writeFile.mock.calls[0] as [string, string];
+    expect(JSON.parse(text).entries).toEqual({ banned: { enabled: false }, other: { enabled: true } });
+    expect(fsMock.rename).toHaveBeenCalledWith(temp, join("/mock-localappdata", "Strada", "skills.json"));
+  });
+
+  it("fails closed when that ~/.strada file cannot be read", async () => {
+    vi.stubEnv("STRADA_HOME", "");
+    appHome.dir = join("/mock-localappdata", "Strada");
+    fsMock.readFile.mockImplementation(async (path: string) => {
+      if (path === legacy) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      throw enoent();
+    });
+    expect((await readSkillConfig()).unreadable).toMatch(/EACCES/);
   });
 });

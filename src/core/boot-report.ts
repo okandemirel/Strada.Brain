@@ -570,8 +570,22 @@ function buildOperationsStage(capabilities: CapabilityDescriptor[]): BootStageRe
   };
 }
 
+/** Written under the config root's .strada/ when the supervisor gives up; the next boot reports and removes it. */
+export const SUPERVISOR_DEATH_MARKER = "supervisor-dead.json";
+
+/**
+ * Where the supervisor leaves the marker and the next boot looks for it. Both
+ * sides used to take process.cwd(): a boot that ran from anywhere else never
+ * saw the death, and a test worker, standing in the checkout, read and DELETED
+ * the live daemon's marker there. The config root resolves the same in the
+ * supervisor and in every boot after it, whatever their working directory.
+ */
+export function supervisorDeathMarkerPath(configRoot: string = resolveRuntimePaths().configRoot): string {
+  return resolve(configRoot, ".strada", SUPERVISOR_DEATH_MARKER);
+}
+
 /** Read and remove the supervisor-death marker; the sentence for the boot report, or null. */
-export function takeSupervisorDeathMarker(markerPath = resolve(process.cwd(), ".strada", "supervisor-dead.json")): string | null {
+export function takeSupervisorDeathMarker(markerPath = supervisorDeathMarkerPath()): string | null {
   try {
     if (!existsSync(markerPath)) return null;
     const raw = JSON.parse(readFileSync(markerPath, "utf8")) as { at?: string; restarts?: number; maxRestarts?: number; lastExit?: { code?: number | null; signal?: string | null } };

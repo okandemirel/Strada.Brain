@@ -1,11 +1,9 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { announceSupervisorDeath, describeSupervisorDeath, telegramChatIdsFromEnv, type SupervisorDeathReport } from "./supervisor-death.js";
-
-/** Written under .strada/ when the supervisor gives up; the next boot reports and removes it. */
-export const SUPERVISOR_DEATH_MARKER = "supervisor-dead.json";
 import { resolve } from "node:path";
 import { getLogger } from "../utils/logger.js";
 import { SHUTDOWN_IPC_MESSAGE } from "../core/shutdown-handlers.js";
+import { supervisorDeathMarkerPath } from "../core/boot-report.js";
 
 /**
  * Gateway daemon — keeps Strada Brain running as an always-on service.
@@ -168,7 +166,7 @@ export class Daemon {
           logHint: process.env["LOG_FILE"] ?? "the daemon log (LOG_FILE)",
         };
         void announceSupervisorDeath(report, {
-          markerPath: resolve(process.cwd(), ".strada", SUPERVISOR_DEATH_MARKER),
+          markerPath: supervisorDeathMarkerPath(),
           telegram: telegramChatIdsFromEnv(process.env),
         }).then((outcome) => {
           logger.error("Supervisor death announced", { ...outcome, report: describeSupervisorDeath(report) });

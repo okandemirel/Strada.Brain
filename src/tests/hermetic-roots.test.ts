@@ -11,7 +11,8 @@
  * resolvers when it passes nothing of its own.
  */
 import { describe, it, expect } from "vitest";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   resolveDotenvPath,
@@ -21,6 +22,8 @@ import {
 import { installLockPath } from "../core/runtime-lock.js";
 import { loadConfig } from "../config/config.js";
 import { resolveProviderModelCatalogPath } from "../agents/providers/provider-model-catalog-store.js";
+import { setSkillEnabled } from "../skills/skill-config.js";
+import { takeSupervisorDeathMarker } from "../core/boot-report.js";
 
 // What the source launcher and the daemon put in their children's environment.
 // A shell they spawned passes them on to the suite.
@@ -41,6 +44,29 @@ const setupWizardModule = pathToFileURL(join(repoRoot, "src", "core", "setup-wiz
 function isInside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Run `fn` with the user's home pointed at an empty decoy, and return the
+ * decoy. The resolvers above cannot see a module that skips them and builds
+ * `homedir()/.strada` itself — that module writes the developer's own home
+ * while every assertion here stays green. Whatever lands in the decoy would
+ * have landed there. os.homedir() reads USERPROFILE on Windows, HOME elsewhere.
+ */
+async function inDecoyHome(runRoot: string, fn: () => unknown): Promise<string> {
+  const decoy = mkdtempSync(join(runRoot, "decoy-home-"));
+  const saved = { HOME: process.env["HOME"], USERPROFILE: process.env["USERPROFILE"] };
+  process.env["HOME"] = decoy;
+  process.env["USERPROFILE"] = decoy;
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  return decoy;
 }
 
 describe("the suite's runtime roots", () => {
@@ -93,6 +119,27 @@ describe("the suite's runtime roots", () => {
     ]) {
       expect(isInside(home, resolve(dbPath)), `${dbPath} resolves outside ${home}`).toBe(true);
     }
+  });
+
+  it("toggles a skill in the app home, never in the user's own ~/.strada", async () => {
+    // The dashboard's POST /api/skills/:id/enable|disable end here. Measured
+    // 2026-10-11: every run rewrote the developer's real ~/.strada/skills.json.
+    const decoy = await inDecoyHome(runRoot!, () => setSkillEnabled("hermetic-roots-probe", false));
+    expect(readdirSync(decoy), `skills.json written under the user's home ${decoy}`).toEqual([]);
+    const written = join(resolveStradaHome(), "skills.json");
+    expect(JSON.parse(readFileSync(written, "utf8")).entries["hermetic-roots-probe"]).toEqual({ enabled: false });
+  });
+
+  it("takes the supervisor-death marker from the run's config root, never the checkout's", () => {
+    // The default was process.cwd(); a worker stands in the checkout, so the
+    // boot-report tests read and DELETED the live daemon's marker there.
+    const marker = join(resolveRuntimePaths().configRoot, ".strada", "supervisor-dead.json");
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, JSON.stringify({ at: "2026-10-11T00:00:00.000Z", restarts: 0, maxRestarts: 0, lastExit: { code: 1, signal: null } }));
+    const warning = takeSupervisorDeathMarker();
+    expect(warning, `no marker found at ${marker}`).not.toBeNull();
+    expect(warning).toContain("The supervisor gave up before this boot");
+    expect(existsSync(marker), marker).toBe(false);
   });
 
   it("does not inherit a launcher's or daemon's process markers", () => {
