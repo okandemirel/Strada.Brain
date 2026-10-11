@@ -9,6 +9,7 @@ import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.
 import { acquireRuntimeLock, installLockPath, readRuntimeLockHolder } from "./runtime-lock.js";
 import {
   DEFAULT_STOP_TIMEOUT_MS,
+  describeUnsignalledLockHolder,
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
@@ -20,6 +21,7 @@ import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 describe("runtime lifecycle", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   function makeInspection(runtimes: RuntimeProcessInfo[]): LocalRuntimeInspection {
@@ -46,9 +48,10 @@ describe("runtime lifecycle", () => {
     // Every command chdirs to the config root, so the cwd scan never sees
     // this runtime; its lock under the config root names it.
     const holder = (pid: number, local = true, identified = local) => ({
-      holder: { pid, startedAtIso: "2026-10-11T00:00:00Z", channel: "web,telegram" },
+      holder: { pid, startedAtIso: "2026-10-11T00:00:00Z", channel: "web,telegram", host: "box-b" },
       local,
       identified,
+      lockFile: "/home/u/.strada/locks/0123456789abcdef.runtime.lock",
     });
 
     it("is found through the runtime lock", () => {
@@ -73,7 +76,10 @@ describe("runtime lifecycle", () => {
       expect(getMatchingLocalRuntimeProcesses(makeInspection([scanned]), process.pid, holder(101, true, false))).toEqual([]);
     });
 
-    it("a live runtime that chdir'd to its config root is found and stopped", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
+    it("a live runtime that chdir'd to its config root is found and stopped, whatever language its user speaks", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
+      // The runtime and this checker both read start times with ps, which
+      // prints them in the user's language; this machine's user speaks Turkish.
+      for (const name of ["LANG", "LC_ALL", "LC_TIME"]) vi.stubEnv(name, "tr_TR.UTF-8");
       const configRoot = mkdtempSync(join(tmpdir(), "strada-lifecycle-config-"));
       const installRoot = mkdtempSync(join(tmpdir(), "strada-lifecycle-install-"));
       const moduleUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "runtime-lock.ts")).href;
@@ -134,28 +140,66 @@ describe("runtime lifecycle", () => {
           host: written.host,
           ...(written.pidNamespace ? { pidNamespace: written.pidNamespace } : {}),
         };
-        const leftBehind = {
-          "a runtime that recorded when it started": { ...crashed, processStartedAtMs: anHourAgo - 5_000 },
-          "a runtime that recorded no start time": crashed,
-          "a runtime from before owners recorded their host": { pid: unrelated.pid, startedAtIso: crashed.startedAtIso, channel: "web" },
-        };
-        for (const [writer, lock] of Object.entries(leftBehind)) {
+        const leftBehind = [
+          ["a runtime that recorded when it started", { ...crashed, processStartedAtMs: anHourAgo - 5_000 }, "started-at-another-time"],
+          ["a runtime that recorded no start time", crashed, "no-start-recorded"],
+          ["a runtime from before owners recorded their host", { pid: unrelated.pid, startedAtIso: crashed.startedAtIso, channel: "web" }, "no-start-recorded"],
+        ] as const;
+        for (const [writer, lock, because] of leftBehind) {
           writeFileSync(lockPath, JSON.stringify(lock));
           const holder = await readRuntimeLockHolder({ installRoot, configRoot });
           // Still read as held, so a start is refused as before; only signalling it is withheld.
-          expect(holder?.holder.pid, writer).toBe(unrelated.pid);
+          expect(holder, writer).toMatchObject({ holder: { pid: unrelated.pid }, local: true, identified: false, unidentifiedBecause: because, lockFile: lockPath });
 
           const inspection: LocalRuntimeInspection = { installRoot, runtimes: [], matchingRuntime: null };
-          const matching = getMatchingLocalRuntimeProcesses(inspection, process.pid, holder);
-          expect(matching.map((runtime) => runtime.pid), writer).toEqual([]);
-          await stopRuntimeProcesses(matching, { timeoutMs: 1_000, pollMs: 50 });
-          expect(() => process.kill(unrelated.pid!, 0), writer).not.toThrow();
+          expect(getMatchingLocalRuntimeProcesses(inspection, process.pid, holder).map((runtime) => runtime.pid), writer).toEqual([]);
+          // What status, kill, restart and the start refusal print instead of "nothing is running".
+          expect(describeUnsignalledLockHolder(holder)?.join("\n"), writer).toContain(`delete ${lockPath}`);
         }
       } finally {
         unrelated.kill("SIGKILL");
         rmSync(configRoot, { recursive: true, force: true });
         rmSync(installRoot, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("what an operator is told about a lock holder kill and restart will not signal", () => {
+    const lockFile = "/home/u/.strada/locks/0123456789abcdef.runtime.lock";
+    const named = (local: boolean, identified: boolean, unidentifiedBecause?: "no-start-recorded" | "start-unreadable" | "started-at-another-time") => ({
+      holder: { pid: 4242, startedAtIso: "", channel: "web", host: "box-b" },
+      local,
+      identified,
+      ...(unidentifiedBecause ? { unidentifiedBecause } : {}),
+      lockFile,
+    });
+
+    it("says nothing when there is no holder, or one kill and restart will stop", () => {
+      expect(describeUnsignalledLockHolder(null)).toBeNull();
+      expect(describeUnsignalledLockHolder(named(true, true))).toBeNull();
+    });
+
+    // Review of 74f6e347: the start refusal pointed at kill and restart, which
+    // then did nothing, and nothing named the file to remove.
+    it("names the pid, why it is left alone, and the lock file to remove", () => {
+      const reasons = {
+        "no-start-recorded": "records no start time",
+        "start-unreadable": "could not be read here",
+        "started-at-another-time": "after a crash its pid can pass to another process",
+      } as const;
+      for (const [because, says] of Object.entries(reasons)) {
+        const [first, second] = describeUnsignalledLockHolder(named(true, false, because as keyof typeof reasons))!;
+        expect(first, because).toContain(`(${lockFile}) names PID 4242`);
+        expect(first, because).toContain(says);
+        expect(first, because).toContain("kill and restart leave it alone");
+        expect(second, because).toBe(`If PID 4242 is not a Strada runtime, delete ${lockFile} and start again.`);
+      }
+    });
+
+    it("sends the operator to where a holder in another container or host runs", () => {
+      const [first, second] = describeUnsignalledLockHolder(named(false, false))!;
+      expect(first).toContain(`(${lockFile}) is held by PID 4242 on box-b`);
+      expect(second).toContain("Stop it where it runs");
     });
   });
 

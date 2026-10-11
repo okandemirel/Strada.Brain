@@ -17,10 +17,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutoUpdater } from "./auto-updater.js";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { installLockPath } from "./runtime-lock.js";
+import { readProcessStartTime } from "./process-start-time.js";
 
 // A directory nobody may write to. Root ignores chmod, so the write calls
 // under it are failed the way that filesystem fails them; reads still work.
 const unwritable = vi.hoisted(() => ({ root: undefined as string | undefined, code: "EROFS" }));
+
+// /proc on a machine that has none: the start counted from boot of the pids
+// set here; every other pid reads as the platform answers.
+const bootStarts = vi.hoisted(() => new Map<number, string>());
+vi.mock("./process-start-time.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./process-start-time.js")>();
+  return {
+    ...actual,
+    readProcessBootStart: (pid: number, procRoot?: string) => bootStarts.get(pid) ?? actual.readProcessBootStart(pid, procRoot),
+    getProcessBootStart: () => bootStarts.get(process.pid) ?? actual.getProcessBootStart(),
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -43,6 +56,7 @@ const dirs: string[] = [];
 afterEach(() => {
   unwritable.root = undefined;
   unwritable.code = "EROFS";
+  bootStarts.clear();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -119,6 +133,36 @@ describe("update lock (COR-3)", () => {
       expect(updater.wasLockedOut()).toBe(true);
 
       fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, timestamp: Date.now() - 3 * 60 * 60_000 }));
+      expect(updater.acquireLock()).toBe(true);
+      updater.releaseLock();
+    } finally {
+      holder.kill();
+    }
+  });
+
+  // On Linux the epoch start adds btime, which moves with every wall-clock
+  // step (Docker Desktop's VM re-syncs after the host sleeps): a live update's
+  // start no longer matched what it recorded, and its lock was broken.
+  it("a live holder keeps its lock after the wall clock stepped (Linux)", { skip: process.platform === "win32" }, async () => {
+    const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    try {
+      await once(holder, "spawn");
+      const startedAt = readProcessStartTime(holder.pid!);
+      if (startedAt === null) throw new Error("this machine cannot read a start time");
+      bootStarts.set(holder.pid!, "boot-a:4242");
+      const { updater, lockPath, newLockPath } = makeUpdater();
+
+      // The writer records it, or a checker has nothing exact to compare.
+      bootStarts.set(process.pid, "boot-a:99");
+      expect(updater.acquireLock()).toBe(true);
+      expect(JSON.parse(fs.readFileSync(newLockPath, "utf-8"))).toMatchObject({ bootStart: "boot-a:99" });
+      updater.releaseLock();
+
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, timestamp: Date.now(), startTime: startedAt - 3_600_000, bootStart: "boot-a:4242" }));
+      expect(updater.acquireLock()).toBe(false);
+
+      // A later process given the pid: its epoch start happens to match, its start since boot does not.
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, timestamp: Date.now(), startTime: startedAt, bootStart: "boot-a:17" }));
       expect(updater.acquireLock()).toBe(true);
       updater.releaseLock();
     } finally {

@@ -3,7 +3,7 @@ import { formatChannelSpec, isValidChannelSpec, parseChannelSpec } from "../chan
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
-import type { RuntimeLockHolder } from "./runtime-lock.js";
+import { STALE_AFTER_MS, type RuntimeLockHolder, type UnidentifiedHolderReason } from "./runtime-lock.js";
 import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
 export interface StopRuntimeProcessesOptions {
@@ -55,6 +55,37 @@ export function getMatchingLocalRuntimeProcesses(
     });
   }
   return matching;
+}
+
+const UNIDENTIFIED_BECAUSE: Record<UnidentifiedHolderReason, string> = {
+  "no-start-recorded": "the lock records no start time to confirm that process by",
+  "start-unreadable": "that process's start time could not be read here",
+  "started-at-another-time": "the process there started at another time than the lock's writer (after a crash its pid can pass to another process)",
+};
+
+/**
+ * What to tell an operator when the runtime lock names a live process that
+ * kill and restart will not signal, or null when there is none. Without it a
+ * start is refused with advice to run commands that then do nothing, and
+ * nothing names the file that keeps refusing it.
+ */
+export function describeUnsignalledLockHolder(
+  lockHolder: RuntimeLockHolder | null,
+  currentPid: number = process.pid,
+): string[] | null {
+  if (!lockHolder) return null;
+  const { holder, lockFile } = lockHolder;
+  if (!lockHolder.local) {
+    return [
+      `The runtime lock (${lockFile}) is held by PID ${holder.pid} on ${holder.host ?? "another host"}, in another container or host; it cannot be stopped from here.`,
+      `Stop it where it runs. If it crashed, its lock is taken over once it has gone ${Math.round(STALE_AFTER_MS / 1000)}s without a refresh.`,
+    ];
+  }
+  if (lockHolder.identified || holder.pid === currentPid) return null;
+  return [
+    `The runtime lock (${lockFile}) names PID ${holder.pid}, but ${UNIDENTIFIED_BECAUSE[lockHolder.unidentifiedBecause ?? "no-start-recorded"]}, so kill and restart leave it alone.`,
+    `If PID ${holder.pid} is not a Strada runtime, delete ${lockFile} and start again.`,
+  ];
 }
 
 export function inferChannelFromRuntimeCommand(

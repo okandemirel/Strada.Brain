@@ -64,6 +64,7 @@ import {
 } from "./core/launcher.js";
 import {
   DEFAULT_STOP_TIMEOUT_MS,
+  describeUnsignalledLockHolder,
   getMatchingLocalRuntimeProcesses,
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
@@ -673,11 +674,16 @@ async function startApp(
       console.error(
         `Strada is already running for this install (PID ${lock.holder.pid}${lock.local ? "" : ` on ${lock.holder.host ?? "another host"}, in another container or host`}, channel ${lock.holder.channel || "unknown"}, started ${lock.holder.startedAtIso || "at an unknown time"}).`,
       );
-      console.error(
+      // kill and restart leave a holder alone that they cannot confirm as the
+      // runtime, so pointing at them would send the operator round in a loop.
+      const unsignalled = lock.local ? describeUnsignalledLockHolder(await readThisInstallRuntimeLockHolder()) : null;
+      for (const line of unsignalled ?? [
         lock.local
           ? "Use `strada restart` to replace it or `strada kill` to stop it first."
           : `Stop it where it runs. If it crashed, its lock is taken over once it has gone ${Math.round(RUNTIME_LOCK_STALE_AFTER_MS / 1000)}s without a refresh.`,
-      );
+      ]) {
+        console.error(line);
+      }
       process.exit(1);
     }
 
@@ -903,6 +909,18 @@ async function readThisInstallRuntimeLockHolder(): Promise<RuntimeLockHolder | n
   return readRuntimeLockHolder({ installRoot: runtimePaths.installRoot, configRoot: runtimePaths.configRoot });
 }
 
+/**
+ * A lock holder kill and restart will not signal still holds this install:
+ * say who and what to do, and fail, instead of "nothing is running" (kill)
+ * or a start the lock then refuses (restart).
+ */
+function reportUnsignalledLockHolder(lockHolder: RuntimeLockHolder | null): void {
+  const unsignalled = describeUnsignalledLockHolder(lockHolder);
+  if (!unsignalled) return;
+  for (const line of unsignalled) console.error(line);
+  process.exit(1);
+}
+
 async function runStatusCommand(): Promise<void> {
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
@@ -923,13 +941,9 @@ async function runStatusCommand(): Promise<void> {
   }
 
   if (matchingRuntimes.length === 0) {
-    console.log(
-      lockHolder && !lockHolder.local
-        ? `Runtime: held by PID ${lockHolder.holder.pid} on ${lockHolder.holder.host ?? "another host"} in another container or host; it cannot be stopped from here.`
-        : lockHolder && !lockHolder.identified
-          ? `Runtime: the runtime lock names PID ${lockHolder.holder.pid}, which cannot be confirmed as the runtime that took it (after a crash its pid can pass to another process); kill and restart leave it alone.`
-          : "Runtime: no active process detected for this install.",
-    );
+    const [first, ...rest] = describeUnsignalledLockHolder(lockHolder) ?? ["no active process detected for this install."];
+    console.log(`Runtime: ${first}`);
+    for (const line of rest) console.log(`  ${line}`);
   } else {
     console.log(`Runtime: ${matchingRuntimes.length} active process${matchingRuntimes.length === 1 ? "" : "es"} for this install.`);
     for (const runtime of matchingRuntimes) {
@@ -975,9 +989,11 @@ async function runKillCommand(force: boolean): Promise<void> {
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
-  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, await readThisInstallRuntimeLockHolder());
+  const lockHolder = await readThisInstallRuntimeLockHolder();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, lockHolder);
 
   if (matchingRuntimes.length === 0) {
+    reportUnsignalledLockHolder(lockHolder);
     console.log(`No running Strada runtime detected for ${inspection.installRoot}.`);
     return;
   }
@@ -1007,7 +1023,8 @@ async function runRestartCommand(
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
-  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, await readThisInstallRuntimeLockHolder());
+  const lockHolder = await readThisInstallRuntimeLockHolder();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, lockHolder);
   const defaultChannel = getConfiguredDefaultChannel();
   const inferredChannel = matchingRuntimes[0]
     ? inferChannelFromRuntimeCommand(matchingRuntimes[0].command, defaultChannel)
@@ -1047,6 +1064,7 @@ async function runRestartCommand(
       }
     }
   } else {
+    reportUnsignalledLockHolder(lockHolder);
     console.log("No running local Strada runtime detected; starting a fresh process.");
   }
 

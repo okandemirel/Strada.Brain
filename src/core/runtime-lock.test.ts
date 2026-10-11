@@ -5,7 +5,8 @@ import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { acquireRuntimeLock, installLockPath, legacyRuntimeLockPath } from "./runtime-lock.js";
+import { acquireRuntimeLock, installLockPath, legacyRuntimeLockPath, readRuntimeLockHolder } from "./runtime-lock.js";
+import { readProcessStartTime } from "./process-start-time.js";
 import { kernelEnforcesPermissions } from "../tests/helpers/permission-faults.js";
 
 // An install root nobody may write to (a read_only container, a root-owned
@@ -19,6 +20,18 @@ const renameHook = vi.hoisted(() => ({
   from: undefined as string | undefined,
   run: undefined as (() => Promise<void>) | undefined,
 }));
+
+// /proc on a machine that has none: the start counted from boot of the pids
+// set here; every other pid reads as the platform answers.
+const bootStarts = vi.hoisted(() => new Map<number, string>());
+vi.mock("./process-start-time.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./process-start-time.js")>();
+  return {
+    ...actual,
+    readProcessBootStart: (pid: number, procRoot?: string) => bootStarts.get(pid) ?? actual.readProcessBootStart(pid, procRoot),
+    getProcessBootStart: () => bootStarts.get(process.pid) ?? actual.getProcessBootStart(),
+  };
+});
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -63,6 +76,7 @@ describe("acquireRuntimeLock — one install gets exactly one live runtime", () 
     unwritable.code = "EROFS";
     renameHook.from = undefined;
     renameHook.run = undefined;
+    bootStarts.clear();
     rmSync(configRoot, { recursive: true, force: true });
     rmSync(installRoot, { recursive: true, force: true });
   });
@@ -338,6 +352,47 @@ describe("acquireRuntimeLock — one install gets exactly one live runtime", () 
       } finally {
         await result.release();
       }
+    });
+  });
+
+  describe("which live process wrote the lock", () => {
+    // Review of 74f6e347: on Linux the epoch start adds btime, which moves with
+    // every wall-clock step (Docker Desktop's VM re-syncs after the host
+    // sleeps), so a genuine runtime stopped matching what it recorded and
+    // `docker exec ... strada kill` could not see it.
+    it("is known on Linux by its start counted from boot, which a clock step does not move", { skip: process.platform === "win32" }, async () => {
+      bootStarts.set(process.pid, "boot-a:99");
+      const own = await acquire("web");
+      if (!own.acquired) throw new Error("expected acquisition");
+      const identity = JSON.parse(readFileSync(lockPath(), "utf-8")) as { host: string; pidNamespace?: string; processBootStart?: string };
+      await own.release();
+      // The writer records it, or a checker has nothing exact to compare.
+      expect(identity.processBootStart).toBe("boot-a:99");
+      // A live process here that is not this one.
+      const pid = process.ppid;
+      const startedAt = readProcessStartTime(pid);
+      if (startedAt === null) throw new Error("this machine cannot read a start time");
+      const lock = (processStartedAtMs: number, processBootStart: string) => JSON.stringify({
+        pid,
+        startedAtIso: new Date(startedAt).toISOString(),
+        channel: "web",
+        host: identity.host,
+        ...(identity.pidNamespace ? { pidNamespace: identity.pidNamespace } : {}),
+        processStartedAtMs,
+        processBootStart,
+      });
+      bootStarts.set(pid, "boot-a:4242");
+
+      // The wall clock stepped an hour since the runtime recorded its start.
+      writeLock(lockPath(), lock(startedAt - 3_600_000, "boot-a:4242"));
+      expect(await readRuntimeLockHolder({ installRoot, configRoot })).toMatchObject({ identified: true });
+
+      // A later process given the pid: its epoch start happens to match, its start since boot does not.
+      writeLock(lockPath(), lock(startedAt, "boot-a:17"));
+      expect(await readRuntimeLockHolder({ installRoot, configRoot })).toMatchObject({
+        identified: false,
+        unidentifiedBecause: "started-at-another-time",
+      });
     });
   });
 

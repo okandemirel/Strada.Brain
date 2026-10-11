@@ -60,7 +60,13 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Logger } from "winston";
 import { removeLockIfUnchanged } from "./setup-env-persistence.js";
-import { getProcessStartTime, readProcessStartTime, START_TIME_MARGIN_MS } from "./process-start-time.js";
+import {
+  getProcessBootStart,
+  getProcessStartTime,
+  readProcessBootStart,
+  readProcessStartTime,
+  START_TIME_MARGIN_MS,
+} from "./process-start-time.js";
 
 const LOCK_FILE_NAME = "runtime.lock";
 
@@ -84,6 +90,8 @@ export interface LockPayload {
   pidNamespace?: string;
   /** When the writer's process started (ms since the epoch), so a later process given its pid is told apart. */
   processStartedAtMs?: number;
+  /** The writer's start as `<boot id>:<clock ticks since boot>` (Linux), which no wall-clock step moves. */
+  processBootStart?: string;
   token?: string;
 }
 
@@ -239,6 +247,7 @@ function parseLock(raw: string): LockPayload | null {
         ...(typeof parsed.host === "string" ? { host: parsed.host } : {}),
         ...(typeof parsed.pidNamespace === "string" ? { pidNamespace: parsed.pidNamespace } : {}),
         ...(typeof parsed.processStartedAtMs === "number" ? { processStartedAtMs: parsed.processStartedAtMs } : {}),
+        ...(typeof parsed.processBootStart === "string" ? { processBootStart: parsed.processBootStart } : {}),
         ...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
       };
     }
@@ -314,6 +323,9 @@ function refusal(state: LockState | null, recoveryFile?: string): AcquireResult 
   };
 }
 
+/** Why a local holder could not be confirmed as the lock's writer. */
+export type UnidentifiedHolderReason = "no-start-recorded" | "start-unreadable" | "started-at-another-time";
+
 export interface RuntimeLockHolder {
   holder: LockPayload;
   /** False when it runs on another host or in another container: it cannot be signalled from here. */
@@ -323,19 +335,30 @@ export interface RuntimeLockHolder {
    * lock. Only then may it be signalled.
    */
   identified: boolean;
+  /** Set for a local holder that is not identified: the operator must judge it by hand. */
+  unidentifiedBecause?: UnidentifiedHolderReason;
+  /** The lock file that names it: what an operator removes once the pid is known not to be Strada. */
+  lockFile: string;
 }
 
 /**
  * Whether the live process at `lock.pid` is the lock's writer. A writer that
  * died without releasing (a second Ctrl-C, SIGKILL, OOM) leaves its pid behind,
  * and the OS may give it to any process of this user; macOS has no boot id or
- * pid namespace to notice. Only the start time the writer recorded tells them
- * apart, so a lock without one identifies nobody.
+ * pid namespace to notice. Only the start the writer recorded tells them
+ * apart, so a lock without one identifies nobody. On Linux the start counted
+ * from boot decides when both sides have it: the epoch reading moves with
+ * every wall-clock step.
  */
-function isLockWriter(lock: LockPayload): boolean {
-  if (lock.processStartedAtMs === undefined) return false;
+function checkLockWriter(lock: LockPayload): UnidentifiedHolderReason | "confirmed" {
+  if (lock.processBootStart !== undefined) {
+    const bootStart = readProcessBootStart(lock.pid);
+    if (bootStart !== null) return bootStart === lock.processBootStart ? "confirmed" : "started-at-another-time";
+  }
+  if (lock.processStartedAtMs === undefined) return "no-start-recorded";
   const startedAt = readProcessStartTime(lock.pid);
-  return startedAt !== null && Math.abs(startedAt - lock.processStartedAtMs) <= START_TIME_MARGIN_MS;
+  if (startedAt === null) return "start-unreadable";
+  return Math.abs(startedAt - lock.processStartedAtMs) <= START_TIME_MARGIN_MS ? "confirmed" : "started-at-another-time";
 }
 
 /**
@@ -349,7 +372,14 @@ export async function readRuntimeLockHolder(opts: { installRoot: string; configR
     const state = await readLockState(path);
     if (state?.payload && holderIsLive(state)) {
       const local = isLocalOwner(state.payload);
-      return { holder: state.payload, local, identified: local && isLockWriter(state.payload) };
+      const writer = local ? checkLockWriter(state.payload) : undefined;
+      return {
+        holder: state.payload,
+        local,
+        identified: writer === "confirmed",
+        ...(writer && writer !== "confirmed" ? { unidentifiedBecause: writer } : {}),
+        lockFile: path,
+      };
     }
   }
   return null;
@@ -368,6 +398,7 @@ export async function acquireRuntimeLock(opts: {
   logger?: Logger;
   pauses?: RuntimeLockPauses;
 }): Promise<AcquireResult> {
+  const bootStart = getProcessBootStart();
   const payload: LockPayload & { token: string } = {
     pid: process.pid,
     startedAtIso: new Date().toISOString(),
@@ -377,6 +408,7 @@ export async function acquireRuntimeLock(opts: {
     // signals it. Windows, where kill and restart do not run, skips it: the
     // measurement there launches PowerShell, which no start should wait for.
     ...(process.platform === "win32" ? {} : { processStartedAtMs: getProcessStartTime() }),
+    ...(bootStart === null ? {} : { processBootStart: bootStart }),
     // Makes every claim's bytes unique, so "is it still ours" is exact.
     token: randomBytes(8).toString("hex"),
   };

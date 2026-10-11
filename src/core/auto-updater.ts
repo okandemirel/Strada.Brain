@@ -12,7 +12,13 @@ import {
 import { planTreeKill } from "../utils/process-runner.js";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
 import { installLockPath, installRootKey, installStateDir } from "./runtime-lock.js";
-import { getProcessStartTime, readProcessStartTime, START_TIME_MARGIN_MS } from "./process-start-time.js";
+import {
+  getProcessBootStart,
+  getProcessStartTime,
+  readProcessBootStart,
+  readProcessStartTime,
+  START_TIME_MARGIN_MS,
+} from "./process-start-time.js";
 
 export { readProcessStartTime };
 
@@ -148,6 +154,8 @@ interface LockContent {
   pid: number;
   timestamp: number;
   startTime?: number;
+  /** The holder's start counted from boot (Linux), which no wall-clock step moves. */
+  bootStart?: string;
   token?: string;
 }
 
@@ -1546,6 +1554,12 @@ export class AutoUpdater {
 
     // PID exists — compare ITS start time with the one the holder recorded to
     // detect PID reuse. A match is a live update, however long it has run.
+    // On Linux the start counted from boot decides: the epoch reading moves
+    // with every wall-clock step, and a live update's lock would be broken.
+    if (typeof content.bootStart === "string") {
+      const holderBootStart = readProcessBootStart(content.pid);
+      if (holderBootStart !== null) return holderBootStart !== content.bootStart;
+    }
     const holderStartTime = typeof content.startTime === "number" ? readProcessStartTime(content.pid) : null;
     if (holderStartTime !== null) {
       return Math.abs(holderStartTime - content.startTime!) > START_TIME_MARGIN_MS;
@@ -1633,10 +1647,12 @@ export class AutoUpdater {
 
   acquireLock(): boolean {
     this.lockedOut = false;
+    const bootStart = getProcessBootStart();
     const body = JSON.stringify({
       pid: process.pid,
       timestamp: Date.now(),
       startTime: getProcessStartTime(),
+      ...(bootStart === null ? {} : { bootStart }),
       token: randomBytes(8).toString("hex"),
     } satisfies LockContent);
 
