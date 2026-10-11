@@ -484,6 +484,11 @@ export class CampaignStorage {
         // with lastError "NOT DELIVERED — …" — its report is owed just the
         // same (review 2026-09-07). The column defaults to 0, so the flag
         // alone cannot tell such a campaign from one that merely failed.
+        // The prefix is not the debt, though: a person's own stop writes it
+        // too and owes no report, so every writer of the prefix sets the flag
+        // once nothing is owed — when its notice landed, or at once for a
+        // person's stop. Without that a restart billed a reviewer run and
+        // posted a delivery report for a cancel (audit 2026-10-11, campaign#3).
         "SELECT * FROM campaigns WHERE (state = 'done' AND (delivery_reported IS NULL OR delivery_reported = 0)) " +
           "OR (state = 'failed' AND delivery_reported = 0 AND last_error LIKE 'NOT DELIVERED%') ORDER BY updated_at ASC",
       )
@@ -517,6 +522,19 @@ export class CampaignStorage {
         "state IN ('failed', 'cancelled') OR " +
         "(state = 'done' AND milestones_json LIKE '%\"structureRefused\":true%')" +
         ") ORDER BY updated_at DESC",
+      [chatId],
+      belongs,
+    );
+  }
+
+  /**
+   * The campaign on this chat that is parked with a self-revival appointment:
+   * `failed`, so not active, yet it will submit work again by itself. A
+   * person's stop must reach it (audit 2026-10-11, campaign#0).
+   */
+  findParkedForChat(chatId: string, belongs?: (campaign: Campaign) => boolean): Campaign | undefined {
+    return this.firstMatching(
+      "SELECT * FROM campaigns WHERE chat_id = ? AND state = 'failed' AND auto_revive_at IS NOT NULL ORDER BY updated_at DESC",
       [chatId],
       belongs,
     );

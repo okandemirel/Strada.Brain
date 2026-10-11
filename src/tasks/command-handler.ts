@@ -135,7 +135,8 @@ export function chatChannelAccessFromConfig(
 /** The slice of CampaignManager the channels' status commands need. */
 export interface CampaignStatusSource {
   describeStatus(chatId?: string): CampaignStatusSnapshot | undefined;
-  reviveByCommand(chatId: string): Promise<boolean>;
+  /** Revive this chat's newest stopped campaign; the caller must own it. */
+  reviveByCommand(chatId: string, userId: string): Promise<boolean>;
   /** Stop this chat's active campaign; the caller must own it. */
   cancelByCommand?(chatId: string, userId: string): Promise<boolean>;
 }
@@ -1914,7 +1915,7 @@ export class CommandHandler {
       return;
     }
     if (sub === "revive" || sub === "resume" || sub === "devam" || sub === "continue") {
-      const revived = await this.campaignStatusSource.reviveByCommand(chatId);
+      const revived = await this.campaignStatusSource.reviveByCommand(chatId, userId ?? "");
       if (!revived) {
         await this.channel.sendText(
           chatId,

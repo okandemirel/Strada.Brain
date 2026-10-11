@@ -1163,8 +1163,8 @@ export class CampaignManager {
     // the approval gate included.
     if (await this.tryHandleCancel(msg.chatId, msg.text, msg.userId)) return true;
     if (await this.tryHandleApproval(msg.chatId, msg.text, msg.userId)) return true;
-    if (await this.tryHandleAmendment(msg.chatId, msg.text)) return true;
-    if (await this.tryHandleRevive(msg.chatId, msg.text)) return true;
+    if (await this.tryHandleAmendment(msg.chatId, msg.text, msg.userId)) return true;
+    if (await this.tryHandleRevive(msg.chatId, msg.text, msg.userId)) return true;
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
@@ -1230,19 +1230,34 @@ export class CampaignManager {
    * "amend gdd": the GDD as it is on disk NOW becomes the approved one, by
    * hash (plan 1.9; round 6 #5). Without this a legitimately edited document
    * left every delivery refused for drift with no way to say "yes, that one".
+   *
+   * THE CAMPAIGN THE DRIFT PARKED, TOO. The delivery gate names the drift only
+   * in its NOT DELIVERED report, by which time the campaign is `failed`; an
+   * active-only lookup let the reply the report asks for fall through to an
+   * ordinary task (audit 2026-10-11, campaign#2). The target is the one
+   * "kampanya devam" would revive. Approving a document is the owner's
+   * decision, as at the gate (campaign#5); `userId` undefined is programmatic.
    */
-  async tryHandleAmendment(chatId: string, text: string): Promise<boolean> {
+  async tryHandleAmendment(chatId: string, text: string, userId?: string): Promise<boolean> {
     if (!AMEND_GDD_RE.test(text.trim())) return false;
-    const campaign = this.storage.findActiveForChat(chatId, this.isOurs);
+    const active = this.storage.findActiveForChat(chatId, this.isOurs);
+    const campaign = active ?? this.storage.findLatestRevivable(chatId, this.isOurs);
     if (!campaign) return false;
+    if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) {
+      await this.tell({ chatId }, "Only the person who started this campaign can amend its GDD.");
+      return true;
+    }
     const hash = this.amendGdd(campaign.id);
+    // A stopped campaign runs the amended document only when someone revives it.
+    const stopped = active === undefined && campaign.autoReviveAt === undefined;
     await this.tell(
       campaign,
       hash === undefined && this.isIdeaModeBeforeApproval(campaign)
         ? "The GDD is still a draft nobody has approved, so there is nothing to amend — approve it at the gate (**evet/onay**) instead."
         : hash === undefined
         ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`
-        : `GDD amendment acknowledged: the document on disk (${hash.slice(0, 8)}) is now the approved one; the next delivery is judged against it.`,
+        : `GDD amendment acknowledged: the document on disk (${hash.slice(0, 8)}) is now the approved one; the next delivery is judged against it.` +
+          (stopped ? " Reply **kampanya devam** to run it." : ""),
     );
     return true;
   }
@@ -1356,11 +1371,19 @@ export class CampaignManager {
    * (absent from listActive, no command, no code path); two graceful restarts
    * were enough to get there. Revival resets the current milestone's attempt
    * budget and resubmits it — everything already green stays green.
+   *
+   * Only the owner revives (audit 2026-10-11, campaign#5): cancel is
+   * owner-only, and anyone else in a group chat could undo it with a fresh
+   * paid budget. `userId` undefined is a programmatic call.
    */
-  async tryHandleRevive(chatId: string, text: string): Promise<boolean> {
+  async tryHandleRevive(chatId: string, text: string, userId?: string): Promise<boolean> {
     if (!REVIVE_RE.test(text.trim())) return false;
     const campaign = this.storage.findLatestRevivable(chatId, this.isOurs);
     if (!campaign) return false;
+    if (userId !== undefined && !this.callerOwns(campaign, chatId, userId)) {
+      await this.tell({ chatId }, "Only the person who started this campaign can revive it.");
+      return true;
+    }
     if (this.storage.hasActiveForChat(chatId, this.isOurs) || this.hasActiveHere()) {
       await this.tell({ chatId }, "A campaign is already active for this project — the failed one stays parked.");
       return true;
@@ -1380,6 +1403,10 @@ export class CampaignManager {
         // work, not the ladder. A person's revival is a fresh revision
         // budget, as it is a fresh attempt budget for a sprint.
         campaign.draftAttempts = 0;
+        // The old draft lineage is history: reopening the gate mints no new
+        // one, and a person's stop on it would otherwise abandon this
+        // generation's next appointment (scheduleAutoRevive, J#8).
+        campaign.draftTaskId = undefined;
         await this.reenterApprovalGate(campaign, "Reviving the campaign");
         return true;
       }
@@ -1402,10 +1429,17 @@ export class CampaignManager {
    * The campaign lands `cancelled`, which "kampanya devam" can revive.
    * `userId` undefined is a programmatic call; a chat caller must own the
    * campaign (see `callerOwns`).
+   *
+   * A campaign PARKED for self-revival is not active, but it is not stopped
+   * either: its appointment resubmits the sprint. "Nothing to cancel" there
+   * left the appointment armed, across restarts too, and the paid sprint
+   * started again after the person had said stop (audit 2026-10-11,
+   * campaign#0).
    */
   async tryHandleCancel(chatId: string, text: string, userId?: string): Promise<boolean> {
     if (!CANCEL_RE.test(text.trim())) return false;
-    const campaign = this.storage.findActiveForChat(chatId, this.isOurs);
+    const campaign =
+      this.storage.findActiveForChat(chatId, this.isOurs) ?? this.storage.findParkedForChat(chatId, this.isOurs);
     if (!campaign) {
       await this.tell({ chatId }, "There is no active campaign on this chat — nothing to cancel.");
       return true;
@@ -1857,6 +1891,7 @@ export class CampaignManager {
           if (parkedTaskId && this.lineageWasCancelledOnPurpose(parkedTaskId)) {
             fresh.autoReviveAt = undefined;
             fresh.lastError = `NOT DELIVERED — ${parked?.title ?? "the GDD draft"} was cancelled while its retry was pending`;
+            fresh.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
             this.persist(fresh);
             getLoggerSafe().info("Campaign self-revival abandoned — its lineage was cancelled on purpose", {
               id: campaignId,
@@ -2026,6 +2061,16 @@ export class CampaignManager {
             await this.landRecordedStop(campaign);
             return;
           }
+        }
+        // …and a stopped DRAFT is an outcome too: its cancelled tip fell
+        // through to a fresh draft below (campaign#4).
+        if (
+          campaign.state === "drafting-gdd"
+          && campaign.draftTaskId !== undefined
+          && this.lineageWasCancelledOnPurpose(campaign.draftTaskId)
+        ) {
+          await this.landDraftStop(campaign);
+          return;
         }
         const rootTaskId =
           campaign.state === "drafting-gdd"
@@ -2488,12 +2533,44 @@ export class CampaignManager {
     campaign.state = "failed";
     campaign.autoReviveAt = undefined;
     campaign.lastError = `NOT DELIVERED — ${title} was cancelled`;
+    // NOTHING IS OWED. The boot sweep re-sends a failed row whose error says
+    // NOT DELIVERED until the flag is set, and a person's stop is answered by
+    // its own line below, never by a delivery report: left unset, the next
+    // restart billed an independent review and posted "NOT DELIVERED — …
+    // was cancelled" as a delivery report (audit 2026-10-11, campaign#3).
+    campaign.deliveryReported = true;
     if (!this.persist(campaign)) return;
     this.cancelLiveLineages(campaign, "a sprint of this campaign was cancelled");
     getLoggerSafe().info("Campaign stopped: a recorded stop was carried out", { id: campaign.id });
     await this.tell(
       campaign,
       `🛑 **${title}** was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.`,
+    );
+  }
+
+  /**
+   * A person's stop of the GDD draft, carried out: `failed` and revivable, as
+   * a stopped sprint lands. The draft path read the cancelled tip as the
+   * draft's own failure and redrafted it, charged, with "The previous draft
+   * attempt cancelled" under the designer's revision request (audit
+   * 2026-10-11, campaign#4).
+   */
+  private async landDraftStop(campaign: Campaign): Promise<void> {
+    campaign.state = "failed";
+    campaign.autoReviveAt = undefined;
+    campaign.lastError = "NOT DELIVERED — the GDD draft was cancelled";
+    campaign.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
+    if (!this.persist(campaign)) return;
+    if (campaign.draftTaskId) {
+      try {
+        const tip = this.taskManager.findLatestLineageTask(campaign.draftTaskId as TaskId);
+        if (tip && ACTIVE_STATUSES.has(tip.status)) this.taskManager.cancel(tip.id as TaskId);
+      } catch { /* already settled */ }
+    }
+    getLoggerSafe().info("Campaign stopped: its GDD draft was cancelled on purpose", { id: campaign.id });
+    await this.tell(
+      campaign,
+      "🛑 The GDD draft was cancelled, so the campaign stops here. Reply **kampanya devam** to start it again.",
     );
   }
 
@@ -2886,6 +2963,7 @@ export class CampaignManager {
             fresh.state = "failed";
             fresh.autoReviveAt = undefined;
             fresh.lastError = `NOT DELIVERED — ${current.title} was cancelled`;
+            fresh.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
             this.persist(fresh);
             this.cancelLiveLineages(fresh, "a sprint of this campaign was cancelled");
             getLoggerSafe().info("Campaign stopped: one of its lineages was cancelled on purpose", {
@@ -2989,6 +3067,12 @@ export class CampaignManager {
   ): Promise<void> {
     const campaign = this.storage.get(campaignId);
     if (!campaign || campaign.state !== "drafting-gdd" || !campaign.draftTaskId) return;
+    // A STOP ORDER ANYWHERE IN THE DRAFT'S LINEAGE outranks every
+    // continuation, as on the milestone path (J#2).
+    if (this.lineageWasCancelledOnPurpose(campaign.draftTaskId)) {
+      await this.landDraftStop(campaign);
+      return;
+    }
     const tip = this.taskManager.findLatestLineageTask(campaign.draftTaskId as TaskId);
 
     if (tip && ACTIVE_STATUSES.has(tip.status) && tip.status !== TaskStatus.paused) {
@@ -3188,6 +3272,7 @@ export class CampaignManager {
       campaign.state = "failed";
       campaign.autoReviveAt = undefined;
       campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
+      campaign.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
       this.persist(campaign);
       this.cancelLiveLineages(campaign, "a sprint of this campaign was cancelled");
       getLoggerSafe().info("Campaign stopped: a task in its lineage was cancelled on purpose", {
@@ -3275,6 +3360,7 @@ export class CampaignManager {
       campaign.state = "failed";
       campaign.autoReviveAt = undefined;
       campaign.lastError = `NOT DELIVERED — ${milestone.title} was cancelled`;
+      campaign.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
       this.persist(campaign);
       getLoggerSafe().info("Campaign stopped: its sprint was cancelled on purpose", {
         id: campaign.id,
@@ -4497,13 +4583,18 @@ export class CampaignManager {
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
             await this.gatherIndependentReview(campaign);
-            await this.tell(
+            // …and only a LOST notice: a report that landed was sent again,
+            // in full, after the next restart (audit 2026-10-11, campaign#3).
+            if (await this.tell(
               campaign,
               `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
                 "This machine cannot produce the missing proof, so retrying changes nothing: " +
                 `${missingProofs.slice(0, 2).join("; ")}. Connect the verification tooling (Unity bridge, build/test runners) ` +
                 "or run the campaign where it exists, then reply **kampanya devam**.",
-            );
+            )) {
+              campaign.deliveryReported = true;
+              this.persist(campaign);
+            }
             await this.attachDeliveryEvidence(campaign);
             return;
           }
@@ -4567,12 +4658,15 @@ export class CampaignManager {
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
             await this.gatherIndependentReview(campaign);
-            await this.tell(
+            if (await this.tell(
               campaign,
               `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
                 `${MAX_DELIVERY_REVIVES} delivery rounds ended with exactly the same proofs missing, so another round changes nothing: ` +
                 `${missingProofs.slice(0, 2).join("; ")}. Reply **kampanya devam** to try again anyway, or change the GDD.`,
-            );
+            )) {
+              campaign.deliveryReported = true;
+              this.persist(campaign);
+            }
             await this.attachDeliveryEvidence(campaign);
             return;
           }
@@ -4598,6 +4692,7 @@ export class CampaignManager {
         if (stopBeforeDelivery !== undefined) {
           campaign.state = "failed";
           campaign.lastError = "NOT DELIVERED — the campaign was stopped while the final proofs were settling";
+          campaign.deliveryReported = true; // a person's stop owes no delivery report (see landRecordedStop)
           this.persist(campaign);
           this.cancelLiveLineages(campaign, "campaign stopped while delivering", { recoverable: true });
           await this.tell(
@@ -5083,13 +5178,19 @@ export class CampaignManager {
 
     campaign.autoReviveAt = undefined;
     campaign.lastError = `NOT DELIVERED — ${campaign.lastError ?? `${milestone.title} ${status}`}`.slice(0, 600);
+    // The stop line below IS this campaign's last word: the boot sweep owes a
+    // report only if it never landed, never a second one (campaign#3).
+    campaign.deliveryReported = false;
     this.persist(campaign);
-    await this.tell(
+    if (await this.tell(
       campaign,
       `❌ Campaign stopped: **${milestone.title}** ended ${status} after ${milestone.attempts} attempts, ` +
         `and ${campaign.implementationRevives ?? 0} self-revival(s) with a changed approach did not get past it.\n` +
         `Cause: ${campaign.lastError}\nReply **kampanya devam** to revive it with a fresh attempt budget.`,
-    );
+    )) {
+      campaign.deliveryReported = true;
+      this.persist(campaign);
+    }
   }
 
   // ===========================================================================
@@ -8491,8 +8592,8 @@ export class CampaignManager {
    * command-menu tap and a typed phrase cannot drift apart. Returns false when
    * nothing on this chat is revivable (the caller tells the user).
    */
-  async reviveByCommand(chatId: string): Promise<boolean> {
-    return this.tryHandleRevive(chatId, "kampanya devam");
+  async reviveByCommand(chatId: string, userId?: string): Promise<boolean> {
+    return this.tryHandleRevive(chatId, "kampanya devam", userId);
   }
 
   private async tell(

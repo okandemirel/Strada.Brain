@@ -6358,6 +6358,8 @@ describe("CampaignManager", () => {
     // No appointment: retrying cannot change a missing tool.
     expect(stopped.autoReviveAt).toBeUndefined();
     expect(messages.map((m) => m.text).join("\n")).toContain("This machine cannot produce the missing proof");
+    // The report landed, so a restart does not send it again (campaign#3).
+    expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(campaign.id);
     // A stop SHORT of delivery is recoverable — by a person, or by the
     // campaign's own budget — so its cancels are supersessions and the
     // executor may still recover a revived mission (Codex 2026-09-11 F#6).
@@ -7506,6 +7508,8 @@ describe("CampaignManager", () => {
     expect(stopped.lastError).toContain("NOT DELIVERED");
     expect(stopped.deliveryRevives).toBe(4); // three rounds allowed, the fourth stops
     expect(messages.at(-1)!.text).toContain("ended with exactly the same proofs missing");
+    // The report landed, so a restart does not send it again (campaign#3).
+    expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(campaign.id);
     // Bounded, not unlimited: nowhere near a submission per completion.
     expect(tasks.submitted.length).toBeLessThan(20);
   });
@@ -9630,6 +9634,205 @@ describe("CampaignManager", () => {
       manager = gateManager(1);
       await manager.resumeActive();
       await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+    });
+  });
+
+  describe("a person's control commands reach every campaign they own, and only theirs (campaign-control)", () => {
+    const incoming = (text: string, userId = "u1"): IncomingMessage =>
+      ({ channelType: "cli", chatId: "cli-local", userId, text, timestamp: new Date() }) as unknown as IncomingMessage;
+    const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+    const fireAppointmentNow = (id: string): void =>
+      (manager as unknown as { scheduleAutoRevive(id: string, ms: number): void }).scheduleAutoRevive(id, 20);
+    /** The campaign settled or acted, whichever comes first — a red run fails fast instead of timing out. */
+    const draftMoved = (id: string): Promise<void> =>
+      waitFor(() => expect(storage.get(id)!.state !== "drafting-gdd" || tasks.submitted.length > 1).toBe(true));
+
+    it("'kampanya iptal' stops a campaign parked for self-revival, and its appointment submits nothing (campaign#0)", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      // Parked the way every revival path parks: failed, with an appointment.
+      const parked = storage.get(campaign.id)!;
+      parked.state = "failed";
+      parked.autoReviveAt = Date.now() + 60_000;
+      storage.save(parked);
+
+      // Not by someone else in the chat…
+      expect(await manager.tryHandleIncoming(incoming("kampanya iptal", "someone-else"))).toBe(true);
+      expect(messages.at(-1)!.text).toContain("Only the person who started this campaign can cancel it");
+      expect(storage.get(campaign.id)!.autoReviveAt).toBeDefined();
+
+      // …but by its owner, in the chat or by command.
+      expect(await manager.tryHandleIncoming(incoming("kampanya iptal"))).toBe(true);
+      expect(messages.at(-1)!.text).toContain("Campaign cancelled");
+      const after = storage.get(campaign.id)!;
+      expect(after.state).toBe("cancelled");
+      expect(after.autoReviveAt).toBeUndefined();
+
+      // The appointment comes due (a live timer, or the boot sweep's) and finds nothing to revive.
+      fireAppointmentNow(campaign.id);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(tasks.submitted).toHaveLength(1);
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+      expect(storage.listAwaitingAutoRevive().map((c) => c.id)).not.toContain(campaign.id);
+    });
+
+    it("'/campaign cancel' reaches a parked campaign too (campaign#0)", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const parked = storage.get(campaign.id)!;
+      parked.state = "failed";
+      parked.autoReviveAt = Date.now() + 60_000;
+      storage.save(parked);
+
+      expect(await manager.cancelByCommand("cli-local", "u1")).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+      fireAppointmentNow(campaign.id);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("'amend gdd' reaches the campaign the delivery gate parked for drift, from its owner only (campaign#2, campaign#5)", async () => {
+      const gdd = "# GDD\n\nThe game ships 3 levels.";
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
+      const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const edited = `${gdd}\n\n## Multiplayer\n\nFour players online.`;
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), edited);
+      // The NOT DELIVERED report names the drift once the campaign is already failed.
+      const stopped = storage.get(campaign.id)!;
+      stopped.state = "failed";
+      stopped.lastError = "NOT DELIVERED — 3 delivery rounds ended with the same proofs missing: the GDD on disk is not the approved document";
+      storage.save(stopped);
+      const driftOf = (): string | undefined =>
+        (manager as unknown as { gddDriftOf(c: import("./types.js").Campaign): string | undefined }).gddDriftOf(storage.get(campaign.id)!);
+      expect(driftOf()).toContain("is not the approved document");
+
+      // Accepting an edited design is the owner's decision, as at the gate.
+      expect(await manager.tryHandleIncoming(incoming("amend gdd", "someone-else"))).toBe(true);
+      expect(messages.at(-1)!.text).toContain("Only the person who started this campaign can amend its GDD");
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(gdd));
+
+      expect(await manager.tryHandleIncoming(incoming("amend gdd"))).toBe(true);
+      expect(driftOf()).toBeUndefined();
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(edited));
+      expect(messages.at(-1)!.text).toContain("GDD amendment acknowledged");
+      expect(messages.at(-1)!.text).toContain("kampanya devam"); // stopped: it runs when revived
+      expect(storage.get(campaign.id)!.state).toBe("failed");
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("only the campaign's owner revives it, in the chat or by command (campaign#5)", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      expect(await manager.tryHandleIncoming(incoming("kampanya iptal"))).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+
+      expect(await manager.tryHandleIncoming(incoming("kampanya devam", "someone-else"))).toBe(true);
+      expect(messages.at(-1)!.text).toContain("Only the person who started this campaign can revive it");
+      expect(await manager.reviveByCommand("cli-local", "someone-else")).toBe(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(storage.get(campaign.id)!.state).toBe("cancelled");
+      expect(tasks.submitted).toHaveLength(1);
+
+      expect(await manager.reviveByCommand("cli-local", "u1")).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.state).toBe("executing");
+    });
+
+    it("a person's stop of the GDD draft stops the campaign instead of starting a new paid draft (campaign#4)", async () => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      expect(tasks.submitted).toHaveLength(1);
+      tasks.cancel("task_1", { reason: "user" });
+      tasks.emit("task:cancelled", "task_1");
+      await draftMoved(campaign.id);
+      await new Promise((r) => setTimeout(r, 100));
+      const after = storage.get(campaign.id)!;
+      expect(after.state).toBe("failed");
+      expect(tasks.submitted).toHaveLength(1);
+      expect(after.draftAttempts).toBe(0);
+      expect(after.autoReviveAt).toBeUndefined();
+      expect(messages.at(-1)!.text).toContain("GDD draft was cancelled");
+      expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(campaign.id);
+
+      // The person can start it again, as a fresh draft — not a "revision" of their stop.
+      expect(await manager.tryHandleIncoming(incoming("kampanya devam"))).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      expect(storage.get(campaign.id)!.state).toBe("drafting-gdd");
+      expect(tasks.submitted[1]!.prompt).not.toContain("previous draft attempt");
+    });
+
+    it("a draft stopped before a restart is not redrafted at boot (campaign#4)", async () => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.cancel("task_1", { reason: "user" }); // the process died before the settle was handled
+      await manager.resumeActive();
+      await draftMoved(campaign.id);
+      expect(storage.get(campaign.id)!.state).toBe("failed");
+      expect(tasks.submitted).toHaveLength(1);
+    });
+
+    it("a stopped revision revives at the gate without carrying the stopped lineage into the new generation (campaign#4)", async () => {
+      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
+      expect(await manager.tryHandleIncoming(incoming("revise: make it about cats"))).toBe(true);
+      await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+      tasks.cancel("task_2", { reason: "user" });
+      tasks.emit("task:cancelled", "task_2");
+      await waitFor(() => expect(storage.get(campaign.id)!.state !== "drafting-gdd" || tasks.submitted.length > 2).toBe(true));
+      expect(storage.get(campaign.id)!.state).toBe("failed");
+
+      expect(await manager.tryHandleIncoming(incoming("kampanya devam"))).toBe(true);
+      expect(storage.get(campaign.id)!.state).toBe("awaiting-approval");
+      // A later appointment would read the old draft's stop as this generation's.
+      expect(storage.get(campaign.id)!.draftTaskId).toBeUndefined();
+      expect(tasks.submitted).toHaveLength(2);
+    });
+
+    it("a person's stop of a sprint owes no delivery report after a restart (campaign#3)", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.cancel("task_1", { reason: "user" });
+      tasks.emit("task:cancelled", "task_1");
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await waitFor(() => expect(messages.at(-1)!.text).toContain("was cancelled"));
+      expect(storage.get(campaign.id)!.lastError).toContain("NOT DELIVERED");
+      expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(campaign.id);
+      const said = messages.length;
+      await manager.resumeActive();
+      expect(messages.slice(said)).toEqual([]);
+    });
+
+    it("a stop recorded before a restart is carried out at boot without a delivery report (campaign#3)", async () => {
+      const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      tasks.cancel("task_1", { reason: "user" });
+      const row = storage.get(campaign.id)!;
+      row.stopRequestedAt = Date.now();
+      storage.save(row);
+      const said = messages.length;
+      await manager.resumeActive();
+      await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("failed"));
+      await manager.resumeActive();
+      const told = messages.slice(said).map((m) => m.text);
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain("was cancelled, so the campaign stops here");
+    });
+
+    it("a plain stop whose notice landed is not re-sent at boot; one whose notice was lost still is (campaign#3)", async () => {
+      const landed = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      await failUntilStopped(landed.id, "compile exploded");
+      expect(messages.at(-1)!.text).toContain("Campaign stopped");
+      expect(storage.listUnreportedDeliveries().map((c) => c.id)).not.toContain(landed.id);
+
+      // The opposite direction: a stop line the messenger never delivered is still owed.
+      messengerDownFor = /Campaign stopped/;
+      const before = tasks.submitted.length;
+      const lost = manager.startFromGdd(ctx, "# GDD 2", "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(before + 1));
+      await failUntilStopped(lost.id, "compile exploded");
+      expect(storage.get(lost.id)!.lastError).toContain("NOT DELIVERED");
+      expect(storage.listUnreportedDeliveries().map((c) => c.id)).toContain(lost.id);
     });
   });
 

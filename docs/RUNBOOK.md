@@ -66,7 +66,9 @@ or the web chat. The ones an operator needs:
 | Command | Does |
 |---|---|
 | `/campaign` (`/kampanya`) | measured campaign status: milestones, attempts, time box, compile, play-through, player build, GDD numbers, proofs still owed, current task, self-revival timer |
-| `/campaign revive` / `kampanya devam` | resume a NOT DELIVERED or failed campaign now with a fresh budget (it also resumes by itself 15 min after a NOT DELIVERED report) |
+| `/campaign revive` / `kampanya devam` | resume a NOT DELIVERED or failed campaign now with a fresh budget (it also resumes by itself 15 min after a NOT DELIVERED report); only the person who started the campaign |
+| `/campaign cancel` / `kampanya iptal` | stop the chat's campaign, including one paused for a self-revival, so nothing more is submitted; only the person who started it |
+| `amend gdd` | accept the GDD as it is on disk now as the approved one (clears a drift refusal), also after a NOT DELIVERED report; only the person who started the campaign |
 | `/campaign measure` / `/measure` | run the delivery-gate structural measurement on the project now |
 | `/guardian` (`/bekçi`) | real-tree guardian: last compile verdict, play-through rung, fix task, escalation |
 | `/status [taskId]` · `/cancel <taskId>` · `/retry` · `/resume <taskId>` | task lifecycle; `/resume` reports honestly when a task cannot be resumed |

@@ -724,13 +724,14 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     expect(sendMarkdown).not.toHaveBeenCalled();
   });
 
-  it("/campaign revive goes through the campaign's own revive path and reports when nothing is revivable", async () => {
+  it("/campaign revive goes through the campaign's own revive path with the caller's identity, and reports when nothing is revivable", async () => {
     const handler = makeHandler();
     const reviveByCommand = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand });
 
-    await handler.handle("chat-1", "campaign", ["revive"]);
-    expect(reviveByCommand).toHaveBeenCalledWith("chat-1");
+    // Only the owner revives (campaign#5): the caller's identity reaches that check.
+    await handler.handle("chat-1", "campaign", ["revive"], "u7");
+    expect(reviveByCommand).toHaveBeenCalledWith("chat-1", "u7");
     expect(sendText).not.toHaveBeenCalled();
 
     await handler.handle("chat-1", "campaign", ["devam"]);
