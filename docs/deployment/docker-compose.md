@@ -334,14 +334,22 @@ Backups are created in `./backups/` with timestamp:
 ./scripts/deploy.sh --backup
 ```
 
+The state volumes are copied after the new images are built and the running
+containers are stopped, so the copy is taken with nothing writing to it. Every
+store on them is a WAL-mode SQLite database, and a file copy of a live one can
+be torn.
+
 ### Manual Backup
 
 ```bash
-# Backup memory volume
+# Stop the backend first (see above). Compose prefixes volume names with the
+# project name: `docker volume ls` shows the real one.
+docker compose stop strada-brain
 docker run --rm \
-  -v strada-memory:/data:ro \
+  -v <project>_strada-memory:/data:ro \
   -v $(pwd)/backups:/backup \
   alpine tar czf /backup/memory-$(date +%Y%m%d).tar.gz -C /data .
+docker compose start strada-brain
 
 # Backup logs
 tar czf backups/logs-$(date +%Y%m%d).tar.gz logs/

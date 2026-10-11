@@ -65,6 +65,31 @@ case "$1" in
       strada-nginx) echo "\${STUB_NGINX_HEALTH:-healthy}" ;;
       *) echo "Error: No such object: $name" >&2; exit 1 ;;
     esac ;;
+  run)
+    [[ -n "\${STUB_VOLUMES:-}" ]] || exit 0
+    # Plays the container: a named volume is a directory under $STUB_VOLUMES, a
+    # bind mount is itself, and the command runs with each mount point in its
+    # arguments rewritten to the host directory behind it.
+    shift
+    maps=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --rm) shift ;;
+        -v)
+          spec="$2"; shift 2
+          src="\${spec%%:*}"; rest="\${spec#*:}"; dst="\${rest%%:*}"
+          if [[ "$src" != /* ]]; then src="$STUB_VOLUMES/$src"; mkdir -p "$src"; fi
+          maps+=("$dst=$src") ;;
+        *) break ;;
+      esac
+    done
+    shift # the image
+    cmd=()
+    for a in "$@"; do
+      for m in "\${maps[@]}"; do a="\${a//\${m%%=*}/\${m#*=}}"; done
+      cmd+=("$a")
+    done
+    exec "\${cmd[@]}" ;;
   *) exit 0 ;;
 esac
 `;
@@ -205,6 +230,73 @@ describe.skipIf(process.platform === "win32")("scripts/deploy.sh", () => {
     expect(restores.some((call) => call.includes("-v stradatest_strada-memory:/data "))).toBe(true);
     expect(restores.some((call) => call.includes("-v stradatest_strada-home:/data "))).toBe(true);
     expect(restores.some((call) => /-v strada-memory:/.test(call))).toBe(false);
+  });
+
+  // Every store on these volumes is a WAL-mode SQLite database. tar reads the
+  // main file and its -wal one after the other, so a checkpoint by the running
+  // backend between the two reads archives a torn database; restoring over the
+  // live volume then kept any -wal/-shm the archive did not overwrite, to be
+  // replayed onto the older main file.
+  function volumeDir(project: Project, logical: string): string {
+    const dir = path.join(project.root, "volumes", `stradatest_${logical}`);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it("copies the state volumes only after the running stack is stopped, and before the new one starts", () => {
+    const project = makeProject();
+    writeFileSync(path.join(volumeDir(project, "strada-memory"), "memory.db"), "db");
+    writeFileSync(path.join(volumeDir(project, "strada-home"), "config.json"), "{}");
+    const { status, output, calls } = runDeploy(project, ["-f", "-b"], { STUB_VOLUMES: path.join(project.root, "volumes") });
+    expect(status, output).toBe(0);
+
+    const down = calls.findIndex((call) => call.startsWith("compose ") && / down( |$)/.test(call));
+    const up = calls.findIndex((call) => call.startsWith("compose ") && / up -d/.test(call));
+    const copies = calls.flatMap((call, index) => (call.startsWith("run --rm") && call.includes(":/data:ro") ? [index] : []));
+    expect(copies).toHaveLength(2);
+    expect(down, calls.join("\n")).toBeGreaterThan(-1);
+    for (const copy of copies) {
+      expect(copy, calls.join("\n")).toBeGreaterThan(down);
+      expect(copy, calls.join("\n")).toBeLessThan(up);
+    }
+    const backup = path.join(project.root, "backups", readdirSync(path.join(project.root, "backups"))[0]!);
+    const listed = spawnSync("tar", ["tzf", path.join(backup, "strada-memory.tar.gz")], { encoding: "utf8" });
+    expect(listed.stdout).toMatch(/memory\.db/);
+  });
+
+  it("restores a volume as the archive holds it, leaving no -wal/-shm of the newer state behind", () => {
+    const project = makeProject();
+    const archived = path.join(project.root, "archived");
+    mkdirSync(archived);
+    writeFileSync(path.join(archived, "memory.db"), "backed-up");
+    const backup = path.join(project.root, "backups", "backup_20200101_000000");
+    mkdirSync(backup, { recursive: true });
+    expect(spawnSync("tar", ["czf", path.join(backup, "strada-memory.tar.gz"), "-C", archived, "."]).status).toBe(0);
+    const live = volumeDir(project, "strada-memory");
+    writeFileSync(path.join(live, "memory.db"), "newer");
+    writeFileSync(path.join(live, "memory.db-wal"), "newer wal");
+    writeFileSync(path.join(live, "memory.db-shm"), "newer shm");
+    writeFileSync(path.join(live, ".hidden-state"), "newer");
+
+    const { status, output } = runDeploy(project, ["--rollback"], { STUB_VOLUMES: path.join(project.root, "volumes") });
+    expect(status, output).toBe(0);
+    expect(readdirSync(live).sort()).toEqual(["memory.db"]);
+    expect(readFileSync(path.join(live, "memory.db"), "utf8")).toBe("backed-up");
+  });
+
+  it("leaves a volume untouched when its archive cannot be read", () => {
+    const project = makeProject();
+    const backup = path.join(project.root, "backups", "backup_20200101_000000");
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(path.join(backup, "strada-memory.tar.gz"), "not a gzip archive");
+    const live = volumeDir(project, "strada-memory");
+    writeFileSync(path.join(live, "memory.db"), "current");
+
+    const { status, output } = runDeploy(project, ["--rollback"], { STUB_VOLUMES: path.join(project.root, "volumes") });
+    expect(status).not.toBe(0);
+    expect(output).toContain("strada-memory.tar.gz");
+    expect(readdirSync(live)).toEqual(["memory.db"]);
+    expect(readFileSync(path.join(live, "memory.db"), "utf8")).toBe("current");
   });
 
   it("measures free disk space with a BSD df that has no -B", () => {

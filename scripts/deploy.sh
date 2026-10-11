@@ -282,11 +282,13 @@ create_backup() {
         volume="$(compose_volume_name "$logical")"
         if docker volume inspect "$volume" &> /dev/null; then
             log INFO "Backing up ${volume} volume..."
-            docker run --rm \
+            if ! docker run --rm \
                 -v "${volume}:/data:ro" \
                 -v "$backup_path:/backup" \
                 alpine:latest \
-                tar czf "/backup/${logical}.tar.gz" -C /data .
+                tar czf "/backup/${logical}.tar.gz" -C /data .; then
+                error_exit "Backup of ${volume} failed. The old containers are stopped and the new ones were NOT started; fix the backup and rerun, or start the stack without one: docker compose up -d"
+            fi
         else
             log WARN "Volume ${volume} not found; nothing to back up for ${logical}"
         fi
@@ -339,6 +341,13 @@ deploy() {
     # Stop and remove old containers gracefully
     log INFO "Stopping current containers..."
     compose down --timeout 30
+
+    # Back up only now, with nothing writing to the state volumes. Every store
+    # on them is a WAL-mode SQLite database: tar reads a live one's main file
+    # and its -wal at different moments, so a checkpoint between the two reads
+    # archived a torn database. The build ran first, so downtime grows only by
+    # the copy.
+    create_backup
 
     # Start new containers
     log INFO "Starting new containers..."
@@ -432,11 +441,17 @@ rollback() {
         [[ -f "$BACKUP_DIR/$latest_backup/$archive" ]] || continue
         volume="$(compose_volume_name "$logical")"
         log INFO "Restoring ${archive} into ${volume}..."
-        docker run --rm \
+        # Emptied first, once the archive reads cleanly: extracting over the
+        # volume kept every -wal/-shm the archive does not hold, and SQLite
+        # replays such a leftover onto the older main file restored beside it.
+        if ! docker run --rm \
             -v "${volume}:/data" \
             -v "$BACKUP_DIR/$latest_backup:/backup:ro" \
             alpine:latest \
-            tar xzf "/backup/${archive}" -C /data
+            sh -c 'tar tzf "$1" > /dev/null && rm -rf /data/..?* /data/.[!.]* /data/* && tar xzf "$1" -C /data' \
+            sh "/backup/${archive}"; then
+            error_exit "Restoring ${archive} into ${volume} failed (an archive that does not read leaves the volume as it was); the stack is stopped."
+        fi
     done
     
     # Restore environment file
@@ -528,11 +543,8 @@ EOF
     
     # Confirm deployment
     confirm "Ready to deploy. Continue?"
-    
-    # Create backup
-    create_backup
-    
-    # Deploy
+
+    # Deploy (and back up, with -b, once the running stack is stopped)
     deploy
 }
 
