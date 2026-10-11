@@ -40,10 +40,23 @@ describe("parseSupervisorVerificationVerdict", () => {
     // pasted as a VERIFIER FLAG on a node nobody reviewed.
     const leaked = "<reasoning>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - User is a verification agent";
     const verdict = parseSupervisorVerificationVerdict(leaked, "opencode");
-    expect(verdict.verdict).toBe("flag_issues");
+    // Nobody reviewed the node, so it is not a flag: a flag counts as
+    // "verified" in the report (GDD-drift W02).
+    expect(verdict.verdict).toBe("skipped");
+    expect(verdict.unanswered).toBe("reasoning-only");
     expect(verdict.issues?.[0]).toContain("Verifier produced no verdict");
     expect(verdict.issues?.[0]).toContain("unterminated reasoning block");
     expect(verdict.issues?.[0]).not.toContain("thinking process");
+  });
+
+  it("an empty reply is not a review: skipped, with the reason kept (GDD-drift W02)", () => {
+    for (const reply of [undefined, "", "   \n"]) {
+      const verdict = parseSupervisorVerificationVerdict(reply, "opencode");
+      expect(verdict.verdict).toBe("skipped");
+      expect(verdict.unanswered).toBe("empty");
+      expect(verdict.issues).toEqual(["Verifier returned an empty review."]);
+      expect(verdict.verifierProvider).toBe("opencode");
+    }
   });
 
   it("still finds the verdict after a terminated reasoning block", () => {
@@ -139,10 +152,35 @@ describe("createSupervisorNodeVerifier", () => {
         getProviderByName: () => null,
       });
       const verdict = await verifyNode(makeNodeResult({ provider: "opencode" }), { chatId: "chat-1" } as any);
+      // No reviewer ran at all: reported as not verified, never as a flag (GDD-drift W02).
+      expect(verdict.verdict).toBe("skipped");
+      expect(verdict.unanswered).toBe("no-healthy-verifier");
       expect(verdict.issues?.[0]).toContain("verification_skipped");
     } finally {
       registry.clearProviderState("opencode");
     }
+  });
+
+  it("a reviewer that threw reviewed nothing: skipped, with its error kept (GDD-drift W02)", async () => {
+    const reviewer = {
+      name: "kimi",
+      capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
+      chat: vi.fn().mockRejectedValue(new Error("socket hang up")),
+    };
+    const verifyNode = createSupervisorNodeVerifier({
+      listAvailable: () => [{ name: "Kimi (Moonshot)", defaultModel: "kimi-for-coding" }],
+      getProviderByName: (name: string) => (name === "kimi" ? reviewer as any : null),
+    });
+
+    const verdict = await verifyNode(makeNodeResult({ provider: "claude" }), { chatId: "chat-1" } as any);
+
+    expect(reviewer.chat).toHaveBeenCalledTimes(1);
+    expect(verdict).toEqual({
+      verdict: "skipped",
+      unanswered: "threw",
+      issues: ["socket hang up"],
+      verifierProvider: "kimi",
+    });
   });
 
   it("routes the verification review through chatStream when the reviewer streams", async () => {

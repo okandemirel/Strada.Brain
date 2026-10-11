@@ -490,7 +490,8 @@ export class SupervisorBrain {
             if (externalSignal?.aborted || internalSignal.aborted) {
               return this.makePartialResult([], "Aborted during resume re-verification");
             }
-            const synthesized = verifier.synthesize(verified);
+            // The report travels with the result here too (GDD-drift W02).
+            const synthesized: SupervisorResult = { ...verifier.synthesize(verified), verification: report };
             // NOBODY LOOKED is not approval (C#4): a resume counts as done
             // only when every saved node was actually approved. A flagged or
             // unverified node keeps its explanation in the output.
@@ -534,7 +535,8 @@ export class SupervisorBrain {
                 partial: true,
                 output:
                   `The saved plan was re-verified on resume and ${unapproved} of ${report.candidates} step(s) did not pass: ` +
-                  `${report.approved} approved, ${report.flagged} flagged, ${report.rejected} rejected.\n${detail}`,
+                  `${report.approved} approved, ${report.flagged} flagged, ${report.rejected} rejected, ` +
+                  `${report.notVerified} not verified.\n${detail}`,
               };
             }
             getLoggerSafe().info("Saved plan already complete on resume — re-verified before counting it done", {
@@ -841,7 +843,13 @@ export class SupervisorBrain {
           ],
         });
       }
-      const supervisorResult = aggregator.synthesize(verifiedResults);
+      // The report travels with the result: it was dropped here, so nothing
+      // past the brain could tell a reviewed node from one nobody read
+      // (GDD-drift W02).
+      const supervisorResult: SupervisorResult = {
+        ...aggregator.synthesize(verifiedResults),
+        verification: verificationReport,
+      };
 
       // Step 13: Emit supervisor:complete
       this.emitter?.emit("supervisor:complete", {

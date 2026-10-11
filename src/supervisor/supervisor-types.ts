@@ -131,6 +131,14 @@ export interface VerificationVerdict {
    * counts it apart.
    */
   readonly independent?: boolean;
+  /**
+   * Why a "skipped" verdict is one: the verifier set out to review the node
+   * and no review happened. The reply was empty or an unterminated reasoning
+   * block, no reviewer was healthy, or the call threw. These used to come back
+   * as "flag_issues", which the report counts as verified, so a node nobody
+   * had read read as reviewed (GDD-drift W02).
+   */
+  readonly unanswered?: "empty" | "reasoning-only" | "no-healthy-verifier" | "threw";
 }
 
 /** What the verify stage actually measured — so a skipped check never reads like a passed one. */
@@ -225,4 +233,9 @@ export interface SupervisorResult {
   readonly totalDuration: number;
   readonly nodeResults: NodeResult[];
   readonly partial: boolean;
+  /**
+   * What the verify stage measured on this run. Absent when no verify stage
+   * ran (a partial result before verification, a resume with no verifier).
+   */
+  readonly verification?: VerificationReport;
 }

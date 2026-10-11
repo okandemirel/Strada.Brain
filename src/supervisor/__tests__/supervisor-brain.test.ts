@@ -4,6 +4,7 @@ import type { GoalTree, GoalNode } from "../../goals/types.js";
 import type { SupervisorConfig, NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor-types.js";
 import { CapabilityMatcher } from "../capability-matcher.js";
 import { ProviderAssigner } from "../provider-assigner.js";
+import { createSupervisorNodeVerifier } from "../supervisor-verification.js";
 import { createBudget } from "../../agent-core/control/budget.js";
 import { createControlPlane } from "../../agent-core/control/control-plane.js";
 import { FakeClock } from "../../agent-core/control/clock.js";
@@ -333,8 +334,8 @@ describe("SupervisorBrain", () => {
     };
     const verifyNode = vi.fn().mockResolvedValue({
       verdict: "flag_issues",
-      issues: ["verification_skipped: no HEALTHY cross-provider verifier — this node was NOT independently verified"],
-      verifierProvider: "claude",
+      issues: ["The new endpoint has no input validation."],
+      verifierProvider: "deepseek",
     });
     const brain = new SupervisorBrain({
       config: { ...DEFAULT_CONFIG, verificationMode: "always" },
@@ -355,6 +356,71 @@ describe("SupervisorBrain", () => {
     const done = emitter.emit.mock.calls.find((c) => c[0] === "supervisor:verify_done");
     expect(done).toBeDefined();
     expect((done![1] as { verdict: string }).verdict).toBe("flag_issues");
+  });
+
+  // GDD-drift W02: a run in which no verifier was healthy came back as one
+  // flag, so the report read flagged 1, notVerified 0 over a node nobody had
+  // reviewed, and the report itself was dropped at synthesis.
+  it("reports a review nobody performed as not verified, and returns the report with the result", async () => {
+    const emitter = { emit: vi.fn() };
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([{ id: "root", task: "Build" }, { id: "s1", task: "Sub task" }]),
+      ),
+    };
+    // The real verifier with no provider it can materialize: neither another
+    // one nor the worker's own.
+    const verifyNode = createSupervisorNodeVerifier({
+      listAvailable: () => [],
+      getProviderByName: () => null,
+    });
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "always" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+      verifyNode,
+    });
+    brain.setExecuteNode(vi.fn().mockResolvedValue({
+      nodeId: "s1", status: "ok", output: "done", artifacts: [], toolResults: [],
+      provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    }));
+
+    const result = await brain.execute("Build something complex", { chatId: "test" });
+
+    expect(result?.verification).toEqual({
+      candidates: 1, verified: 0, approved: 0, flagged: 0, rejected: 0, notVerified: 1,
+    });
+    expect(result?.output).toContain("[NOT VERIFIED");
+    expect(result?.output).not.toContain("VERIFIER FLAGS");
+    const done = emitter.emit.mock.calls.find((c) => c[0] === "supervisor:verify_done");
+    expect((done![1] as { verdict: string }).verdict).toBe("not_verified");
+  });
+
+  it("carries the re-verification report on a resumed plan, and counts an unreviewed step as not verified", async () => {
+    const goalTree = makeGoalTree([{ id: "root", task: "Build" }, { id: "s1", task: "Sub task" }]);
+    Object.assign(goalTree.nodes.get("s1" as any)!, { status: "completed", result: "built it" });
+    const verifyNode = createSupervisorNodeVerifier({ listAvailable: () => [], getProviderByName: () => null });
+    const executeNode = vi.fn();
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "always" },
+      decomposer: { shouldDecompose: vi.fn().mockReturnValue(false), decomposeProactive: vi.fn() } as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      verifyNode,
+    });
+    brain.setExecuteNode(executeNode);
+
+    const result = await brain.execute("Build something complex", { chatId: "test", goalTree });
+
+    expect(executeNode).not.toHaveBeenCalled();
+    expect(result?.success).toBe(false);
+    expect(result?.verification).toEqual({
+      candidates: 1, verified: 0, approved: 0, flagged: 0, rejected: 0, notVerified: 1,
+    });
+    expect(result?.output).toContain("0 approved, 0 flagged, 0 rejected, 1 not verified");
   });
 
   // audited 2026-09-02: VerificationReport.candidates is documented as the ok nodes

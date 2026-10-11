@@ -25,9 +25,13 @@ export function parseSupervisorVerificationVerdict(
   verifierProvider: string,
 ): VerificationVerdict {
   const trimmed = responseText?.trim() ?? "";
+  // An empty reply, like the three "unanswered" cases below, reviewed
+  // nothing. As a flag it counted as verified (GDD-drift W02); as a skip it
+  // counts as not verified and the aggregator still shows the reason.
   if (!trimmed) {
     return {
-      verdict: "flag_issues",
+      verdict: "skipped",
+      unanswered: "empty",
       issues: ["Verifier returned an empty review."],
       verifierProvider,
     };
@@ -42,7 +46,8 @@ export function parseSupervisorVerificationVerdict(
   const { text: withoutReasoning, reasoningOnly } = stripLeakedReasoning(trimmed);
   if (reasoningOnly) {
     return {
-      verdict: "flag_issues",
+      verdict: "skipped",
+      unanswered: "reasoning-only",
       issues: [
         `Verifier produced no verdict: its reply was an unterminated reasoning block (${trimmed.length} chars) ` +
           `cut off before any JSON — the token cap or a thinking model leaking its block (${verifierProvider}). ` +
@@ -221,7 +226,8 @@ export function createSupervisorNodeVerifier(
     }
     if (!reviewer) {
       return {
-        verdict: "flag_issues" as const,
+        verdict: "skipped",
+        unanswered: "no-healthy-verifier",
         issues: [
           "verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
         ],
@@ -248,7 +254,8 @@ export function createSupervisorNodeVerifier(
       return independent ? parsed : { ...parsed, independent: false };
     } catch (error) {
       return {
-        verdict: "flag_issues",
+        verdict: "skipped",
+        unanswered: "threw",
         issues: [error instanceof Error ? error.message : String(error)],
         verifierProvider: reviewer.providerName,
         ...(independent ? {} : { independent: false }),

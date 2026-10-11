@@ -221,7 +221,9 @@ export class ResultAggregator {
       verificationSpend = projectedSpend;
       const verdict = await this.verifyFn(node);
 
-      if (verdict.independent === false) sameProvider++;
+      // `sameProvider` is a share of `verified`: a same-provider review that
+      // threw rendered no verdict and must not be counted as one.
+      if (verdict.independent === false && verdict.verdict !== "skipped") sameProvider++;
       if (verdict.verdict === "approve") {
         counts.approved++;
       } else if (verdict.verdict === "flag_issues") {
@@ -234,8 +236,14 @@ export class ResultAggregator {
       // that hit its deadline (or was abandoned by an abort) came back
       // "skipped", the report said notVerified: 1 — and synthesis still
       // returned a clean success with the timeout explanation nowhere in the
-      // node's output (Codex 2026-09-12 P#8).
-      if (verdict.verdict === "skipped" && UNANSWERED_VERIFIER.has(verdict.verifierProvider)) {
+      // node's output (Codex 2026-09-12 P#8). The same holds for a verifier
+      // that found no reviewer, threw, or got an empty or reasoning-only
+      // reply: those carry `unanswered`, and their reason travels with the
+      // node now that they no longer arrive as flags (GDD-drift W02).
+      if (
+        verdict.verdict === "skipped" &&
+        (verdict.unanswered !== undefined || UNANSWERED_VERIFIER.has(verdict.verifierProvider))
+      ) {
         const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
         if (idx !== -1) {
           const unanswered = updatedResults[idx]!;

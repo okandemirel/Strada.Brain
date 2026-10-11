@@ -303,6 +303,36 @@ describe("ResultAggregator", () => {
       expect(skipped[0]!.output).not.toContain("NOT VERIFIED");
     });
 
+    it("a review nobody performed is counted not verified and named in the output (GDD-drift W02)", async () => {
+      // The verifier found no healthy reviewer, its reviewer threw, or the
+      // reply held no verdict. Those came back as flags, and a flag counts as
+      // "verified": the report said flagged 1, notVerified 0 over a node no
+      // model had read.
+      const verifyFn = vi.fn()
+        .mockResolvedValueOnce({
+          verdict: "skipped",
+          unanswered: "no-healthy-verifier",
+          verifierProvider: "claude",
+          issues: ["verification_skipped: no HEALTHY cross-provider verifier"],
+        })
+        .mockResolvedValueOnce({
+          verdict: "skipped",
+          unanswered: "threw",
+          independent: false,
+          verifierProvider: "claude (same provider — no independent verifier was healthy)",
+          issues: ["socket hang up"],
+        });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+
+      const { results: verified, report } = await agg.verifyWithReport([makeResult("A", "ok"), makeResult("B", "ok")]);
+
+      expect(report).toEqual({ candidates: 2, verified: 0, approved: 0, flagged: 0, rejected: 0, notVerified: 2 });
+      expect(verified[0]!.output).toContain("[NOT VERIFIED — verification_skipped: no HEALTHY cross-provider verifier]");
+      expect(verified[1]!.output).toContain("[NOT VERIFIED — socket hang up]");
+      expect(verified[0]!.output).not.toContain("VERIFIER FLAGS");
+      expect(verified.map((r) => r.status)).toEqual(["ok", "ok"]);
+    });
+
     it("a rejection in ANY script fails the node (Codex 2026-09-11 O#21)", async () => {
       // The remainder was tokenized as ASCII only, so a finding written in
       // Chinese vanished and the rejection was filed as a report complaint.
