@@ -4231,7 +4231,7 @@ export class Orchestrator {
 
   private async silentStreamFallback(
     provider: IAIProvider,
-    effectivePrompt: string,
+    systemPrompt: string,
     session: Session,
     toolDefinitions: Array<{
       name: string;
@@ -4242,8 +4242,10 @@ export class Orchestrator {
     chatId: string,
     runClock?: RunClock,
   ): Promise<ProviderResponse> {
-    // The hard-timeout retry compacts just before this call.
+    // The hard-timeout retry compacts just before this call, so the summary is
+    // read here: a prompt built before the compaction lacks the turns it dropped.
     this.normalizeSessionForCall(session, chatId);
+    const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
     let fbScope: CallScope | undefined;
     // Flag-ON: a fresh fallback CallScope token (composition order [externalSignal, token]
     // mirrors v1's [externalSignal, timeoutSignal]). Flag-OFF: VERBATIM v1 AbortSignal.timeout.
@@ -4337,7 +4339,7 @@ export class Orchestrator {
     // instead of opening a stream first.
     if (!this.streamingEnabled) {
       return await this.silentStreamFallback(
-        provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, runClock,
       );
     }
 
@@ -4435,7 +4437,7 @@ export class Orchestrator {
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
         this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions));
         return await this.silentStreamFallback(
-          provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+          provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, runClock,
         );
       } finally {
         scope.leave();
@@ -4520,7 +4522,7 @@ export class Orchestrator {
       // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
       // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
       return await this.silentStreamFallback(
-        provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId,
+        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId,
       );
     }
   };
