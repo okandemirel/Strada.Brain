@@ -1,5 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import path, { resolve, sep, isAbsolute, join, relative } from "node:path";
 
 /**
@@ -213,6 +213,48 @@ export function redirectRealCheckoutPath(projectRoot: string, absolutePath: stri
   if (target !== owner && !target.startsWith(ownerPrefix)) return undefined;
   const rel = relative(owner, target);
   return rel === "" ? "." : rel;
+}
+
+/**
+ * Where a tool given `rawPath` will land, relative to `projectRoot` and
+ * "/"-separated, or undefined when that is the root itself or outside it.
+ *
+ * A rule about project layout has to judge this, not the spelling:
+ * validatePath accepts an absolute path, a real-checkout path in a lease and a
+ * detour through `..` alike, so each writes the same file as the plain
+ * relative form. The root is compared in its lexical and its real form, since
+ * /var/… and /private/var/… are one directory on macOS, where leases live.
+ * Backslashes count as separators, as they do for a Windows checkout.
+ */
+export function projectRelativeTarget(projectRoot: string, rawPath: string): string | undefined {
+  const spelled = rawPath.replace(/\\/g, "/");
+  const target = resolve(projectRoot, redirectRealCheckoutPath(projectRoot, spelled) ?? spelled);
+  const forms: Array<[string, string]> = [
+    [resolve(projectRoot), target],
+    [realpathOfNearest(projectRoot), realpathOfNearest(target)],
+  ];
+  for (const [root, full] of forms) {
+    const rel = relative(root, full);
+    if (rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
+      return rel.split(sep).join("/");
+    }
+  }
+  return undefined;
+}
+
+/** The realpath of `p`, or of its nearest existing ancestor with the rest re-attached. */
+function realpathOfNearest(p: string): string {
+  const rest: string[] = [];
+  for (let current = resolve(p); ; ) {
+    try {
+      return join(realpathSync(current), ...rest);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolve(p);
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 /**

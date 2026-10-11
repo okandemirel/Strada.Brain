@@ -54,7 +54,7 @@ import {
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
-import { validatePath } from "../security/path-guard.js";
+import { validatePath, projectRelativeTarget } from "../security/path-guard.js";
 import { vaultFileRead, isVaultInsideProject, toVaultRelative, MAX_SYMBOL_LEN } from "./tools/file-read.js";
 import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
@@ -4725,7 +4725,7 @@ export class Orchestrator {
         // audited 2026-09-02: this case predates the wall and checked nothing
         // but presence, so write-to-module + rename-out reached any path the
         // wall refuses. A rename is a write at its destination.
-        const renameViolation = this.frameworkPathsViolation(newPath);
+        const renameViolation = this.frameworkPathsViolation(newPath, options);
         if (renameViolation) return { approved: false, reason: renameViolation };
         return { approved: true };
       }
@@ -4751,7 +4751,7 @@ export class Orchestrator {
         // through, so a loose Assets/Scripts/*.cs cannot arrive by either
         // path. Editor/Tests/Plugins tooling and non-code assets stay free.
         if (toolName !== "file_delete" && toolName !== "file_delete_directory") {
-          const violation = this.frameworkPathsViolation(path);
+          const violation = this.frameworkPathsViolation(path, options);
           if (violation) return { approved: false, reason: violation };
         }
         return { approved: true };
@@ -4779,9 +4779,16 @@ export class Orchestrator {
    * compilable game code outside the Strada module layout, else null.
    * Shared by every write shape (write/create/edit and rename destination).
    */
-  private frameworkPathsViolation(path: string): string | null {
+  private frameworkPathsViolation(path: string, options: ToolExecutionOptions): string | null {
     if (this.conformanceFrameworkPathsOnly === false) return null;
-    const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+    // Judged where the write lands under the root the tools resolve against
+    // (executeToolCalls' choice), not by its spelling: "/<root>/Assets/Scripts/X.cs"
+    // and "Assets/Modules/../Scripts/X.cs" passed the old prefix match and wrote
+    // the loose script anyway. Outside the project there is no Assets/ layout to
+    // keep, and path-guard refuses the write.
+    const root = options.projectPathOverride ?? options.workspaceLease?.path ?? this.projectPath;
+    const normalized = projectRelativeTarget(root, path);
+    if (normalized === undefined) return null;
     const isLooseGameCode =
       /\.cs$/i.test(normalized) &&
       /^assets\//i.test(normalized) &&

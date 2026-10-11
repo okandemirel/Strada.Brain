@@ -14,6 +14,7 @@ const review = (
   orch: Orchestrator,
   toolName: string,
   input: Record<string, unknown>,
+  options: Record<string, unknown> = {},
 ): Promise<Review> =>
   Promise.resolve(
     (
@@ -26,7 +27,7 @@ const review = (
           options: unknown,
         ) => Promise<Review> | Review;
       }
-    ).reviewSelfManagedWriteOperation("chat1", toolName, input, "interactive", {}),
+    ).reviewSelfManagedWriteOperation("chat1", toolName, input, "interactive", options),
   );
 
 function tool(name: string, mutates: boolean) {
@@ -39,7 +40,7 @@ function tool(name: string, mutates: boolean) {
   };
 }
 
-function makeOrch(conformanceFrameworkPathsOnly: boolean | undefined) {
+function makeOrch(conformanceFrameworkPathsOnly: boolean | undefined, projectPath = "/tmp/test-project") {
   return new Orchestrator({
     providerManager: {
       getProvider: () => createMockProvider(),
@@ -48,7 +49,7 @@ function makeOrch(conformanceFrameworkPathsOnly: boolean | undefined) {
     } as never,
     tools: [tool("file_write", true), tool("file_edit", true), tool("file_delete", true)] as never,
     channel: createMockChannel() as never,
-    projectPath: "/tmp/test-project",
+    projectPath,
     readOnly: false,
     requireConfirmation: true,
     conformanceFrameworkPathsOnly,
@@ -176,6 +177,93 @@ describe("the wall names the module twin", () => {
       expect(r.reason).toContain("file_delete");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// The write tools resolve the path against the run's root and check only that
+// it stays inside (path-guard.ts), so every spelling of Assets/Scripts/Foo.cs
+// writes the same file. The wall matched the spelling: an absolute path, or one
+// that passed through Assets/Modules/.. on its way, landed a loose script.
+describe("the wall judges where the write lands, not how the path is spelled", () => {
+  it("refuses absolute, dot-segment and backslash spellings of a loose script", async () => {
+    for (const path of [
+      "/tmp/test-project/Assets/Scripts/Foo.cs",
+      "Assets/Modules/../Scripts/Foo.cs",
+      "Assets\\Modules\\..\\Scripts\\Foo.cs",
+      "./Assets/./Scripts/Foo.cs",
+      "Assets/Editor/../../Assets/Scripts/Foo.cs",
+    ]) {
+      const r = await review(orch, "file_write", { path, content: "class X {}" });
+      expect(r.approved, path).toBe(false);
+      expect(r.reason, path).toContain("Assets/Modules/");
+    }
+  });
+
+  it("judges a rename destination and a batched write by the same resolved path", async () => {
+    const rename = await review(orch, "file_rename", {
+      old_path: "Assets/Modules/TmpModule/A.cs",
+      new_path: "/tmp/test-project/Assets/Scripts/A.cs",
+    });
+    expect(rename.approved).toBe(false);
+    const batch = await review(orch, "batch_execute", {
+      operations: [{ tool: "file_write", input: { path: "/tmp/test-project/Assets/Scripts/B.cs", content: "class B {}" } }],
+    });
+    expect(batch.approved).toBe(false);
+    expect(batch.reason).toMatch(/batched file_write was refused/);
+  });
+
+  it("still allows the module layout and paths outside Assets/ when spelled absolutely", async () => {
+    for (const path of [
+      "/tmp/test-project/Assets/Modules/BoardModule/Scripts/Board.cs",
+      "/tmp/test-project/Assets/Scripts/../Modules/BoardModule/Board.cs",
+      "/tmp/test-project/src/whatever.cs",
+    ]) {
+      const r = await review(orch, "file_write", { path, content: "class X {}" });
+      expect(r.approved, path).toBe(true);
+    }
+  });
+
+  it("resolves against the run's lease, where the real checkout's path is redirected", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const checkout = mkdtempSync(join(tmpdir(), "fpw-checkout-"));
+    const lease = mkdtempSync(join(tmpdir(), "fpw-lease-"));
+    try {
+      writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ projectRoot: checkout }));
+      const o = makeOrch(true, checkout);
+      const options = { workspaceLease: { path: lease } };
+      for (const path of [join(lease, "Assets", "Scripts", "Foo.cs"), join(checkout, "Assets", "Scripts", "Foo.cs")]) {
+        const r = await review(o, "file_write", { path, content: "class X {}" }, options);
+        expect(r.approved, path).toBe(false);
+      }
+      const ok = await review(o, "file_write", { path: join(lease, "Assets", "Modules", "M", "Foo.cs"), content: "x" }, options);
+      expect(ok.approved).toBe(true);
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(lease, { recursive: true, force: true });
+    }
+  });
+
+  it("matches the root through a symlink in either direction (/var vs /private/var)", async () => {
+    const { mkdtempSync, mkdirSync, symlinkSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const base = mkdtempSync(join(tmpdir(), "fpw-link-"));
+    const real = join(base, "real");
+    const link = join(base, "link");
+    try {
+      mkdirSync(join(real, "Assets"), { recursive: true });
+      symlinkSync(real, link, "dir");
+      for (const [root, other] of [[link, real], [real, link]] as const) {
+        const o = makeOrch(true, root);
+        const path = join(other, "Assets", "Scripts", "Foo.cs");
+        const r = await review(o, "file_write", { path, content: "class X {}" });
+        expect(r.approved, `${path} against root ${root}`).toBe(false);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });
