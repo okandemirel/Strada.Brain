@@ -14,6 +14,14 @@ import { CircuitBreaker } from "../resilience/circuit-breaker.js";
 
 const quietLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
+/**
+ * The script cases spawn `#!/bin/sh` files directly (no shell) and make one
+ * unrunnable through its mode bits. Windows does neither: CreateProcess
+ * cannot start a shebang script (spawn UNKNOWN), and access(X_OK) ignores
+ * mode bits there. windows-test runs every test file, so they are POSIX-only.
+ */
+const runsShebangScripts = process.platform !== "win32";
+
 function config(overrides: Partial<DeploymentConfig> = {}): DeploymentConfig {
   return {
     enabled: true,
@@ -58,7 +66,7 @@ describe("DeploymentExecutor ledger (real scripts, real SQLite)", () => {
     return new DeploymentExecutor(config(overrides), root, quietLogger, db, options);
   }
 
-  describe("a failed deploy that was rolled back", () => {
+  describe.skipIf(!runsShebangScripts)("a failed deploy that was rolled back", () => {
     it("counts as failed, keeps why the deploy failed, and records who approved it", async () => {
       const p = project();
       p.script("deploy.sh", "echo 'migration 42 failed' >&2\nexit 3");
@@ -108,7 +116,7 @@ describe("DeploymentExecutor ledger (real scripts, real SQLite)", () => {
     });
   });
 
-  describe("a script that cannot run once the deploy is approved", () => {
+  describe.skipIf(!runsShebangScripts)("a script that cannot run once the deploy is approved", () => {
     it("an unrunnable post-verify script fails verification and rolls the live release back", async () => {
       const p = project();
       p.script("deploy.sh", "touch deployed");
