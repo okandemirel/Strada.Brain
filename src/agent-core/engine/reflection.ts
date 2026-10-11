@@ -164,7 +164,10 @@ export function buildBgReflectionContext(
     progressTitle: runCtx.progressTitle,
     progressLanguage: runCtx.progressLanguage,
     iteration,
-    workspaceLease: undefined,
+    // The run's lease, or loop recovery's delegate is scoped to the project
+    // root: it reviews a tree without the run's edits and publishes behind
+    // the lease (review 2026-10-11).
+    workspaceLease: runCtx.workspaceLease,
     systemPrompt: runCtx.systemPrompt,
     emitProgress: runCtx.emitProgress,
     buildStructuredProgressSignal: (p, t, s, l) => deps.buildStructuredProgressSignal(p, t, s, l),
@@ -208,7 +211,7 @@ export function buildBgEndTurnContext(
     progressTitle: runCtx.progressTitle,
     progressLanguage: runCtx.progressLanguage,
     iteration,
-    workspaceLease: undefined,
+    workspaceLease: runCtx.workspaceLease, // see buildBgReflectionContext
     systemPrompt: runCtx.systemPrompt,
     daemonMode: true,
     emitProgress: runCtx.emitProgress,
