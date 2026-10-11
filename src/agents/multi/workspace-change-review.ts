@@ -49,6 +49,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { acquireProjectWriteLock } from "../../common/project-write-lock.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type { WorkspaceCommandRunner } from "./workspace-lease-manager.js";
@@ -200,7 +201,16 @@ export interface UndoOptions {
    *     report them in `kept` / `failed`. The status says partially-undone.
    */
   readonly onBlocked?: "refuse" | "skip";
+  /** How long an undo waits for the project write lock before refusing. */
+  readonly lockTimeoutMs?: number;
 }
+
+/**
+ * An undo waits this long for a publisher to finish. Shorter than a lease
+ * commit's own wait: a person is waiting on the answer, and a refusal changes
+ * nothing, so trying again later loses nothing.
+ */
+const UNDO_LOCK_TIMEOUT_MS = 30_000;
 
 // Record storage
 
@@ -830,7 +840,38 @@ export async function applyUndo(
 ): Promise<UndoResult> {
   // Round 12 #13: serialized per project, and everything below — the record
   // read included — happens inside the queue.
-  return withProjectMutation(projectRoot, () => applyUndoExclusive(projectRoot, reviewId, opts));
+  return withProjectMutation(projectRoot, async () => {
+    // …and against the other BULK writers, in any process. The queue only
+    // orders undos in this process; a lease commit decides "write" against its
+    // seed and renames its staged file over the target much later, holding
+    // the project write lock throughout. An undo landing in between restored
+    // the pre-run bytes, recorded the review as undone, and the commit then
+    // overwrote them with work built on the version the user had rejected.
+    const lock = await acquireProjectWriteLock(projectRoot, {
+      timeoutMs: opts.lockTimeoutMs ?? UNDO_LOCK_TIMEOUT_MS,
+    });
+    if (!lock.acquired) {
+      // Never unlocked: interleaving is exactly what the lock exists to stop.
+      return {
+        reviewId,
+        status: "refused",
+        restored: [],
+        deleted: [],
+        kept: [],
+        failed: [],
+        historyMoved: false,
+        reason:
+          "nothing was undone: another writer holds the project write lock (a run is publishing into the project). " +
+          "Try again once it has finished.",
+        leftOver: [],
+      };
+    }
+    try {
+      return await applyUndoExclusive(projectRoot, reviewId, opts);
+    } finally {
+      lock.release();
+    }
+  });
 }
 
 async function applyUndoExclusive(

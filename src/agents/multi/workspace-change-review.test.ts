@@ -41,6 +41,7 @@ import { dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { WorkspaceLeaseManager, type WorkspaceCommandRunner } from "./workspace-lease-manager.js";
 import { runProcess } from "../../utils/process-runner.js";
+import { acquireProjectWriteLock } from "../../common/project-write-lock.js";
 import {
   applyUndo,
   changeReviewDir,
@@ -642,6 +643,62 @@ describe("an undo that overlaps something else", () => {
     expect(result.restored).toEqual([]);
     // The created file is part of the same all-or-nothing undo: it stays.
     expect(readFileSync(join(source, "Assets/Scripts/New.cs"), "utf8")).toBe("brand new");
+  }, 20_000);
+
+  // The lease commit decides "write" against its seed, then renames its
+  // staged file over the target much later. It holds the project write lock
+  // for all of that; the undo took only its in-process queue, so a portal
+  // reject landing in that window restored the pre-run bytes, recorded the
+  // review as undone, and the commit then overwrote them with work built on
+  // the version the user had just rejected.
+  it("does not write while another publisher holds the project write lock, and goes through once it is free", async () => {
+    const { reviewId, baseHead, before } = await publishIntoRepo();
+    const target = join(source, "Assets/Scripts/Existing.cs");
+    const publisher = await acquireProjectWriteLock(source, { timeoutMs: 1_000 });
+    expect(publisher.acquired).toBe(true);
+    let refused;
+    try {
+      refused = await applyUndo(source, reviewId, { lockTimeoutMs: 300 });
+    } finally {
+      publisher.release();
+    }
+
+    expect(refused.status).toBe("refused");
+    expect(refused.reason).toMatch(/project write lock/);
+    expect(readFileSync(target, "utf8")).toBe("the run's version");
+    expect(existsSync(join(source, "Assets/Scripts/New.cs"))).toBe(true);
+    expect(readChangeReview(source, reviewId)!.status).not.toBe("undone");
+
+    const undone = await applyUndo(source, reviewId);
+    expect(undone.status).toBe("undone");
+    expect(git(source, "rev-parse", "HEAD").trim()).toBe(baseHead);
+    expect(snapshotTree(source)).toEqual(before);
+  }, 20_000);
+
+  it("holds the project write lock while it writes, so a publisher waits for it", async () => {
+    const { reviewId } = await publishIntoRepo();
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let reached = (): void => {};
+    const reachedUpdateRef = new Promise<void>((r) => { reached = r; });
+    const held: WorkspaceCommandRunner = async (spec) => {
+      if (spec.args.includes("update-ref")) {
+        reached();
+        await gate;
+      }
+      return runProcess({ ...spec, maxOutput: spec.maxOutput ?? 16_384 });
+    };
+
+    const undo = applyUndo(source, reviewId, { runner: held });
+    await Promise.race([reachedUpdateRef, after(4000)]);
+    // Mid-undo: files restored, HEAD not yet moved. A lease commit asks now.
+    const publisher = await acquireProjectWriteLock(source, { timeoutMs: 300 });
+    publisher.release();
+    release();
+    const result = await undo;
+
+    expect(publisher.acquired, "a publisher took the lock in the middle of an undo").toBe(false);
+    expect(result.status).toBe("undone");
   }, 20_000);
 
   it("refuses to delete a file the run created once a person has edited it", async () => {
