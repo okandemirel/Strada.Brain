@@ -60,6 +60,25 @@ describe('listIndexableFiles', () => {
     expect(paths.sort()).toEqual(['a.md', 'src/b.ts']);
   });
 
+  // vault-intelligence#5: the secret-name rule matched any basename starting
+  // with "secret"/"credential", so a game's SecretDoorTrigger.cs was never
+  // indexed and vault_search answered that the class does not exist.
+  it('indexes source files whose names merely start with secret/credential, and still skips secret files', async () => {
+    const root = tmp.makeDir();
+    mkdirSync(join(root, 'Assets', 'Scripts'), { recursive: true });
+    for (const name of ['SecretDoorTrigger.cs', 'CredentialsPanel.cs', 'DoorTrigger.cs', 'secrets.md', 'Credentials.cs']) {
+      writeFileSync(join(root, 'Assets', 'Scripts', name), `// ${name}\n`);
+    }
+
+    const paths = (await listIndexableFiles(root)).map((f) => f.path).sort();
+
+    expect(paths).toEqual([
+      'Assets/Scripts/CredentialsPanel.cs',
+      'Assets/Scripts/DoorTrigger.cs',
+      'Assets/Scripts/SecretDoorTrigger.cs',
+    ]);
+  });
+
   it('returns root-relative paths with forward slashes', async () => {
     const { root } = buildFixtureTree();
     const files = await listIndexableFiles(root);

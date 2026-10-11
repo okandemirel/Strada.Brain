@@ -131,6 +131,52 @@ describe('path-policy', () => {
       expect(() => validateSafeVaultWriteRelPath('secrets.json', 10)).toThrow(/not allowed/);
     });
 
+    // vault-intelligence#5: a dev-knowledge note for the goal "Credentials
+    // screen for the login flow" is slugged credentials-screen-…md; the
+    // prefix rule refused it and the task's learning note was lost.
+    it('accepts notes whose names merely start with secret/credential', () => {
+      for (const p of [
+        'knowledge/2026-10-11/credentials-screen-for-the-login-flow-ab12cd.md',
+        'knowledge/2026-10-11/secret-room-puzzle-in-level-3-ab12cd.md',
+        'analysis/SecretRoom.md',
+      ]) {
+        expect(validateSafeVaultWriteRelPath(p, 10)).toBe(p);
+      }
+    });
+  });
+
+  describe('secret-like basenames (vault-intelligence#5)', () => {
+    it('keeps source files and notes whose names merely start with secret/credential', () => {
+      for (const p of [
+        'Assets/Scripts/SecretDoorTrigger.cs',
+        'Assets/Scripts/CredentialsPanel.cs',
+        'Assets/Scripts/SecretaryNPC.cs',
+        'src/auth/credentialStore.ts',
+        'analysis/SecretRoom.md',
+      ]) {
+        expect(isPotentiallyIndexableVaultPath(p), p).toBe(true);
+      }
+    });
+
+    it('still refuses secret and credential files', () => {
+      for (const p of [
+        '.env.md',
+        '.env.local.md',
+        'secrets.md',
+        'secret.md',
+        'notes/Secrets.local.md',
+        'credentials.md',
+        'Credentials.cs',
+        'secrets.json',
+        'credentials.json',
+        'secrets_prod.json',
+        'credentials-dev.json',
+        'appsettings.Production.json',
+      ]) {
+        expect(isPotentiallyIndexableVaultPath(p), p).toBe(false);
+      }
+    });
+
     it('throws when content exceeds MAX_INDEXABLE_FILE_BYTES', () => {
       expect(() => validateSafeVaultWriteRelPath('notes/a.md', MAX_INDEXABLE_FILE_BYTES + 1)).toThrow(/not allowed/);
     });

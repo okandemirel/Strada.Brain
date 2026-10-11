@@ -26,7 +26,12 @@ export const EXT_LANG: Record<string, VaultFile['lang']> = {
 };
 
 const JSON_SECRET_BASENAME = /^(appsettings.*|\.env.*|secrets?.*|credentials?.*|.*\.secrets\..*|.*\.credentials\..*)\.json$/i;
-const SECRET_BASENAME = /^(\.env.*|secrets?.*|credentials?.*)$/i;
+// `secrets?.*` / `credentials?.*` matched any name STARTING with the word, so
+// SecretDoorTrigger.cs and the knowledge note credentials-screen-….md were
+// never indexed or writable (vault-intelligence#5). A secret file is the word
+// itself plus extensions (secrets.md, credentials.local.md); JSON keeps its
+// broader prefix rule above.
+const SECRET_BASENAME = /^(\.env.*|(secrets?|credentials?)(\..*)?)$/i;
 
 export function isSecretLikeJson(name: string): boolean {
   return JSON_SECRET_BASENAME.test(name);
