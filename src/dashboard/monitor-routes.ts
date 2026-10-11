@@ -34,6 +34,8 @@ export interface MonitorActivityEntry {
   tool?: string
   detail: string
   timestamp: number
+  /** Whose request `detail` quotes; read through readVisibility (dashboard#3). */
+  conversationId?: string
 }
 
 const MAX_ACTIVITY_ENTRIES = 100
@@ -463,10 +465,15 @@ export function handleMonitorRoute(
 
   // ── GET /api/monitor/activity ─────────────────────────────────────────
   if (method === 'GET' && (url === '/api/monitor/activity' || url.startsWith('/api/monitor/activity?'))) {
+    // dashboard#3: the entries quote requests ("Task started: <title>"), so
+    // this read is scoped like the dag/tasks/task routes beside it.
+    const visible = readVisibility(req, res)
+    if (!visible) return true
     const params = new URL(url, 'http://localhost').searchParams
     const limitParam = params.get('limit')
     const limit = limitParam ? Math.max(1, Math.min(parseInt(limitParam, 10) || 50, MAX_ACTIVITY_ENTRIES)) : 50
-    jsonResponse(res, 200, { entries: activityLog.getRecent(limit) })
+    const entries = activityLog.getRecent(MAX_ACTIVITY_ENTRIES).filter((entry) => visible(entry.conversationId))
+    jsonResponse(res, 200, { entries: entries.slice(-limit) })
     return true
   }
 
@@ -589,7 +596,7 @@ export function handleMonitorRoute(
           lines.push('')
 
           // Review results from recent activity
-          const recentActivity = activityLog.getRecent(MAX_ACTIVITY_ENTRIES)
+          const recentActivity = activityLog.getRecent(MAX_ACTIVITY_ENTRIES).filter((e) => visible(e.conversationId))
           const reviewEntries = recentActivity.filter((e) => e.action === 'review_result' || e.action.includes('review'))
           if (reviewEntries.length > 0) {
             lines.push('## Review Results')

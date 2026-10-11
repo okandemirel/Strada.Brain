@@ -23,7 +23,12 @@ import {
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 import { TypedEventBus } from "../../core/event-bus.js";
 import { createMonitorBridge } from "../../dashboard/monitor-bridge.js";
+import { createTaskWorkspaceBridge } from "../../dashboard/task-workspace-bridge.js";
+import { createLearningWorkspaceBridge } from "../../dashboard/learning-workspace-bridge.js";
 import type { WorkspaceEventMap } from "../../dashboard/workspace-events.js";
+import type { LearningEventMap } from "../../core/event-bus.js";
+import type { DaemonEventMap } from "../../daemon/daemon-events.js";
+import { EventEmitter } from "node:events";
 
 type WsHandler = (payload?: Buffer) => void;
 
@@ -454,6 +459,63 @@ describe("WebChannel monitor profile boundary (13F5 / 4.7)", () => {
     expect(JSON.stringify(bobAgain.socket.getSentMessages())).not.toContain("secret");
 
     bridge.stop();
+    await channel.disconnect();
+  });
+
+  // ── dashboard#3: the task and goal bridges threw the scope away ──
+  //
+  // TaskManager sets a task's title to the first 80 characters of the request
+  // and the task knows whose request it is, but the bridge emitted its
+  // activity frames ("Task started: <title>", "Task failed: <error>") with no
+  // scope, so the transport handed them to every profile and cached them for
+  // replay. "Goal started: <full description>" took the same route as a mode
+  // suggestion, which the portal shows as a toast.
+  it("keeps one profile's task activity and goal suggestion from another profile, live or on replay", async () => {
+    const channel = new WebChannel();
+    const bus = new TypedEventBus<WorkspaceEventMap>();
+    const monitor = createMonitorBridge(bus, (message) => channel.broadcastRaw(message));
+    const taskManager = new EventEmitter();
+    const tasks = createTaskWorkspaceBridge(taskManager, bus);
+    const learningBus = new TypedEventBus<LearningEventMap>();
+    const daemonBus = new TypedEventBus<DaemonEventMap>();
+    const goals = createLearningWorkspaceBridge(learningBus, daemonBus, bus);
+    monitor.start();
+    tasks.start();
+    goals.start();
+
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    taskManager.emit("task:created", {
+      id: "task_alice",
+      chatId: "chat-alice",
+      conversationId: A,
+      userId: A,
+      title: "Fix the secret payment exploit",
+      prompt: "Fix the secret payment exploit in StoreManager",
+    });
+    taskManager.emit("task:failed", "task_alice", "secret key rejected");
+    daemonBus.emit("goal:started", {
+      rootId: "goal-alice",
+      taskDescription: "the secret goal, in full",
+      nodeCount: 3,
+      timestamp: 1,
+      conversationId: A,
+    });
+
+    const aliceSees = JSON.stringify(alice.socket.getSentMessages());
+    expect(aliceSees).toContain("Task started: Fix the secret payment exploit");
+    expect(aliceSees).toContain("Task failed: secret key rejected");
+    expect(aliceSees).toContain("Goal started: the secret goal, in full");
+    expect(JSON.stringify(bob.socket.getSentMessages())).not.toContain("secret");
+
+    bob.socket.close();
+    const bobAgain = connectProfile(channel, B);
+    expect(JSON.stringify(bobAgain.socket.getSentMessages())).not.toContain("secret");
+
+    goals.stop();
+    tasks.stop();
+    monitor.stop();
     await channel.disconnect();
   });
 

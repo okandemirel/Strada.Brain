@@ -804,6 +804,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.objectContaining({
         rootId: goalTree.rootId,
         taskDescription: goalTree.taskDescription,
+        // dashboard#3: whose goal it is travels with the description, so the
+        // portal's "Goal started: …" suggestion reaches only that scope.
+        conversationId: "chat1",
       }),
     );
     expect(mockDaemonEventBus.emit).toHaveBeenCalledWith(

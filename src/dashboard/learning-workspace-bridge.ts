@@ -43,11 +43,14 @@ export function createLearningWorkspaceBridge(
       learningBus.on('goal:status-changed', onGoalStatus)
       listeners.push(() => learningBus.off('goal:status-changed', onGoalStatus))
 
-      // goal:started → workspace:mode_suggest
+      // goal:started → workspace:mode_suggest. The reason quotes the goal's
+      // request, so it keeps the goal's scope and reaches only the viewers of
+      // that goal's board (dashboard#3).
       const onGoalStarted = (event: DaemonEventMap['goal:started']) => {
         workspaceBus.emit('workspace:mode_suggest', {
           mode: 'monitor',
           reason: `Goal started: ${event.taskDescription}`,
+          ...(event.conversationId ? { conversationId: event.conversationId } : {}),
         })
       }
       daemonBus.on('goal:started', onGoalStarted)

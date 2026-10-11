@@ -113,6 +113,26 @@ describe('createLearningWorkspaceBridge', () => {
     expect(received[0].reason).toContain('Deploy to production')
   })
 
+  // dashboard#3: the suggestion quotes the goal's description, so it carries the
+  // goal's scope and the monitor bridge can stamp it with an origin.
+  it('goal:started names its conversation scope on the mode suggestion', () => {
+    const bridge = createLearningWorkspaceBridge(learningBus, daemonBus, workspaceBus)
+    bridge.start()
+
+    const received: WorkspaceEventMap['workspace:mode_suggest'][] = []
+    workspaceBus.on('workspace:mode_suggest', (ev) => received.push(ev))
+
+    daemonBus.emit('goal:started', {
+      rootId: 'root-2',
+      taskDescription: 'Deploy to production',
+      nodeCount: 5,
+      timestamp: 4001,
+      conversationId: 'profile-2',
+    })
+
+    expect(received[0].conversationId).toBe('profile-2')
+  })
+
   it('bridge.stop() removes all listeners — no events forwarded after stop', () => {
     const bridge = createLearningWorkspaceBridge(learningBus, daemonBus, workspaceBus)
     bridge.start()

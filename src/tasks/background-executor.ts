@@ -1005,6 +1005,7 @@ export class BackgroundExecutor {
       this.daemonEventBus.emit("goal:started", {
         rootId: goalTree.rootId,
         taskDescription: goalTree.taskDescription,
+        conversationId: emittedScope,
         nodeCount: goalTree.nodes.size - 1,
         timestamp: Date.now(),
       });

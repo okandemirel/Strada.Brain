@@ -144,6 +144,12 @@ export interface TriggerDeduplicatedEvent {
 export interface GoalStartedEvent {
   readonly rootId: string;
   readonly taskDescription: string;
+  /**
+   * The conversation scope the goal's board was emitted under. The description
+   * is that scope's request text, so whatever republishes it must keep it
+   * there (dashboard#3).
+   */
+  readonly conversationId?: string;
   readonly nodeCount: number;
   readonly estimatedMinutes?: number;
   readonly timestamp: number;

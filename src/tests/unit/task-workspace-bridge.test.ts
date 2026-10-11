@@ -92,4 +92,31 @@ describe('createTaskWorkspaceBridge', () => {
 
     expect(activities).toHaveLength(0)
   })
+
+  // dashboard#3: the frames name whose request they quote, so the monitor bridge
+  // can stamp an origin and the transport can keep them from other identities.
+  it('names the task owner\'s scope on every frame of a task it saw created', () => {
+    const bridge = createTaskWorkspaceBridge(taskManager, workspaceBus)
+    bridge.start()
+    taskManager.emit('task:created', { id: 'task_9', chatId: 'chat-9', userId: 'profile-9', title: 'Fix it' })
+    taskManager.emit('task:progress', 'task_9', 'Reading files')
+    taskManager.emit('task:blocked', 'task_9', 'Needs approval')
+    taskManager.emit('task:failed', 'task_9', 'Out of budget')
+
+    expect(activities.map((a) => a.conversationId)).toEqual(['profile-9', 'profile-9', 'profile-9', 'profile-9'])
+  })
+
+  it('asks the task manager for the scope of a task it did not see created (one recovered after a restart)', () => {
+    const lookup = Object.assign(taskManager, {
+      getStatus: (taskId: string) => (taskId === 'task_10' ? { id: taskId, chatId: 'chat-10', userId: 'profile-10' } : null),
+    })
+    const bridge = createTaskWorkspaceBridge(lookup, workspaceBus)
+    bridge.start()
+    taskManager.emit('task:failed', 'task_10', 'Out of budget')
+    taskManager.emit('task:failed', 'task_unknown', 'Out of budget')
+
+    expect(activities[0].conversationId).toBe('profile-10')
+    // Nothing to attribute it to: no scope is invented.
+    expect(activities[1]).not.toHaveProperty('conversationId')
+  })
 })

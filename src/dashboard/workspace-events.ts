@@ -104,6 +104,12 @@ export interface WorkspaceEventMap {
     tool?: string
     detail: string
     timestamp: number
+    /**
+     * The conversation scope whose request `detail` quotes (dashboard#3). Set,
+     * the frame is that scope's own, live, on replay and over REST; unset, it
+     * names nobody's request and goes to everybody.
+     */
+    conversationId?: string
   }
   'monitor:gate_request': {
     rootId: string
@@ -221,7 +227,8 @@ export interface WorkspaceEventMap {
   'supervisor:aborted': { reason: string; completedNodes: number; partialResult: boolean }
 
   // === Workspace meta events ===
-  'workspace:mode_suggest': { mode: string; reason: string }
+  /** `conversationId`: the scope a reason quoting a request belongs to (dashboard#3). */
+  'workspace:mode_suggest': { mode: string; reason: string; conversationId?: string }
   'workspace:notification': { title: string; message: string; severity: 'info' | 'warning' | 'error' }
 
   // === Budget events ===
