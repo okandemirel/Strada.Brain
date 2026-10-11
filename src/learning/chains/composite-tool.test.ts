@@ -591,3 +591,89 @@ describe("CompositeTool", () => {
     });
   });
 });
+
+// =============================================================================
+// THE WRITE REVIEW'S VIEW (plannedOperations)
+// =============================================================================
+
+describe("CompositeTool.plannedOperations", () => {
+  it("plans each step with the input the run gives it, and names what an earlier step supplies", async () => {
+    const registry = makeToolRegistry({
+      file_read: { content: '{"path": "B.cs"}' },
+      file_write: { content: "written" },
+    });
+    const tool = new CompositeTool(
+      {
+        name: "read_then_write",
+        description: "read then write",
+        inputSchema: {},
+        chainMetadata: makeChainMetadata(["file_read", "file_write"], [
+          { stepIndex: 0, parameterName: "path", source: "userInput", sourceKey: "target" },
+          { stepIndex: 1, parameterName: "path", source: "previousOutput", sourceKey: "path" },
+          { stepIndex: 1, parameterName: "content", source: "constant", defaultValue: "x" },
+          { stepIndex: 1, parameterName: "mode", source: "userInput", sourceKey: "absent", defaultValue: "w" },
+        ]),
+      },
+      registry,
+      makeEventBus(),
+    );
+
+    expect(tool.plannedOperations({ target: "A.cs" })).toEqual([
+      { tool: "file_read", input: { path: "A.cs" }, unresolved: [] },
+      { tool: "file_write", input: { content: "x", mode: "w" }, unresolved: ["path"] },
+    ]);
+
+    // The plan's known fields are what the run passes; only `path` was left to the run.
+    await tool.execute({ target: "A.cs" }, makeContext());
+    expect(registry.execute).toHaveBeenNthCalledWith(1, "file_read", { path: "A.cs" }, expect.anything());
+    expect(registry.execute).toHaveBeenNthCalledWith(
+      2,
+      "file_write",
+      { path: "B.cs", content: "x", mode: "w" },
+      expect.anything(),
+    );
+  });
+
+  it("plans a compensation only when a failure can trigger one, with all of its input unresolved", () => {
+    const metadata: ChainMetadataV2 = {
+      version: 2,
+      toolSequence: ["file_write", "file_read"],
+      steps: [
+        {
+          stepId: "step_0",
+          toolName: "file_write",
+          dependsOn: [],
+          reversible: true,
+          compensatingAction: { toolName: "file_delete", inputMappings: { path: "path" } },
+        },
+        { stepId: "step_1", toolName: "file_read", dependsOn: ["step_0"], reversible: true },
+      ],
+      parameterMappings: [{ stepIndex: 0, parameterName: "path", source: "userInput", sourceKey: "path" }],
+      isFullyReversible: true,
+      successRate: 0.9,
+      occurrences: 5,
+    };
+    const build = (rollbackEnabled: boolean) =>
+      new CompositeTool(
+        {
+          name: "write_then_read",
+          description: "write then read",
+          inputSchema: {},
+          chainMetadata: metadata,
+          resilienceConfig: { rollbackEnabled, parallelEnabled: false, maxParallelBranches: 4, compensationTimeoutMs: 5000 },
+        },
+        makeToolRegistry({}),
+        makeEventBus(),
+      );
+
+    const steps = [
+      { tool: "file_write", input: { path: "A.txt" }, unresolved: [] },
+      { tool: "file_read", input: {}, unresolved: [] },
+    ];
+    expect(build(false).plannedOperations({ path: "A.txt" })).toEqual(steps);
+    expect(build(true).plannedOperations({ path: "A.txt" })).toEqual([
+      ...steps,
+      { tool: "file_delete", input: {}, unresolved: ["path"] },
+    ]);
+  });
+});

@@ -7,6 +7,7 @@
 
 import type { IChannelSender } from "../channels/channel-core.interface.js";
 import { supportsInteractivity } from "../channels/channel-core.interface.js";
+import type { BatchOperation } from "./autonomy/batch-write-gate.js";
 
 // ─── Functions ────────────────────────────────────────────────────────────────
 
@@ -33,19 +34,7 @@ export function estimateWriteChangeLines(
   input: Record<string, unknown>,
 ): { totalChanges: number; known: boolean } {
   if (toolName === "batch_execute") {
-    const ops = Array.isArray(input["operations"]) ? (input["operations"] as unknown[]) : [];
-    let total = 0;
-    for (const op of ops) {
-      if (typeof op !== "object" || op === null) return { totalChanges: 0, known: false };
-      const rec = op as Record<string, unknown>;
-      const nested = estimateWriteChangeLines(
-        String(rec["tool"] ?? ""),
-        (typeof rec["input"] === "object" && rec["input"] !== null ? rec["input"] : {}) as Record<string, unknown>,
-      );
-      if (!nested.known) return { totalChanges: 0, known: false };
-      total += nested.totalChanges;
-    }
-    return { totalChanges: total, known: ops.length > 0 };
+    return estimateOperationsChangeLines(Array.isArray(input["operations"]) ? (input["operations"] as unknown[]) : []);
   }
   if (toolName === "file_delete" || toolName === "file_delete_directory" || toolName === "file_rename") {
     // Destructive by classification; the prompt fires on that, not on size.
@@ -63,6 +52,26 @@ export function estimateWriteChangeLines(
     if (n !== null) { oldest = n; break; }
   }
   return { totalChanges: Math.max(newest, oldest), known: true };
+}
+
+/**
+ * The lines a list of dispatched operations would change: a batch's operations
+ * array, or a synthesized chain's plan. A chain's own input says nothing about
+ * what its steps write, so it is sized by its steps, as a batch is.
+ */
+export function estimateOperationsChangeLines(ops: readonly unknown[]): { totalChanges: number; known: boolean } {
+  let total = 0;
+  for (const op of ops) {
+    if (typeof op !== "object" || op === null) return { totalChanges: 0, known: false };
+    const rec = op as Record<string, unknown>;
+    const nested = estimateWriteChangeLines(
+      String(rec["tool"] ?? ""),
+      (typeof rec["input"] === "object" && rec["input"] !== null ? rec["input"] : {}) as Record<string, unknown>,
+    );
+    if (!nested.known) return { totalChanges: 0, known: false };
+    total += nested.totalChanges;
+  }
+  return { totalChanges: total, known: ops.length > 0 };
 }
 
 /** How many batch operations a confirmation prompt names one by one (ORC-22). */
@@ -89,6 +98,29 @@ function describeBatchOperation(op: unknown): string {
   return `${tool}: ${flat.length > MAX_BATCH_TARGET_CHARS ? `${flat.slice(0, MAX_BATCH_TARGET_CHARS)}…` : flat}`;
 }
 
+/** A prompt for a list of dispatched operations: their counts, then each by what it touches. */
+function describeOperations(
+  subject: string,
+  runner: string,
+  ops: readonly unknown[],
+): { question: string; details: string } {
+  const names = ops
+    .map((op) => (typeof op === "object" && op !== null ? String((op as Record<string, unknown>)["tool"] ?? "?") : "?"));
+  const counts = new Map<string, number>();
+  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+  const summary = Array.from(counts.entries()).map(([n, c]) => `${c}× ${n}`).join(", ");
+  // ORC-22: counts alone are not informed consent — name what each
+  // operation touches (its path or command), capped.
+  const listed = ops.slice(0, MAX_BATCH_OPERATIONS_LISTED).map((op) => `- ${describeBatchOperation(op)}`);
+  if (ops.length > MAX_BATCH_OPERATIONS_LISTED) {
+    listed.push(`- …and ${ops.length - MAX_BATCH_OPERATIONS_LISTED} more`);
+  }
+  return {
+    question: `Confirm ${subject} of ${ops.length} operation${ops.length === 1 ? "" : "s"} (${summary || "unreadable"})?`,
+    details: [`Running ${runner}: ${summary || "operations could not be read"}`, ...listed].join("\n"),
+  };
+}
+
 /** Tri-state so callers can tell a human "No" from "no human was reachable". */
 export type WriteConfirmationOutcome = "approved" | "denied" | "unavailable";
 
@@ -102,6 +134,9 @@ export async function requestWriteConfirmation(
   userId: string | undefined,
   toolName: string,
   input: Record<string, unknown>,
+  // The steps of a synthesized chain, when `toolName` is one. A chain has no
+  // path of its own, so without them the prompt read "file edit: `unknown`".
+  chainOperations?: readonly BatchOperation[],
 ): Promise<WriteConfirmationOutcome> {
   if (!supportsInteractivity(channel)) {
     return "unavailable";
@@ -110,7 +145,9 @@ export async function requestWriteConfirmation(
   let question: string;
   let details: string;
 
-  switch (toolName) {
+  if (chainOperations !== undefined) {
+    ({ question, details } = describeOperations(`chain \`${toolName}\``, toolName, chainOperations));
+  } else switch (toolName) {
     case "file_delete":
       question = `Confirm delete: \`${input["path"]}\`?`;
       details = `Permanently deleting ${input["path"]}`;
@@ -146,19 +183,7 @@ export async function requestWriteConfirmation(
       // "Confirm file edit: unknown?" — the human could not see what they
       // were approving. Name the operations.
       const ops = Array.isArray(input["operations"]) ? (input["operations"] as unknown[]) : [];
-      const names = ops
-        .map((op) => (typeof op === "object" && op !== null ? String((op as Record<string, unknown>)["tool"] ?? "?") : "?"));
-      const counts = new Map<string, number>();
-      for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
-      const summary = Array.from(counts.entries()).map(([n, c]) => `${c}× ${n}`).join(", ");
-      question = `Confirm batch of ${ops.length} operation${ops.length === 1 ? "" : "s"} (${summary || "unreadable"})?`;
-      // ORC-22: counts alone are not informed consent — name what each
-      // operation touches (its path or command), capped.
-      const listed = ops.slice(0, MAX_BATCH_OPERATIONS_LISTED).map((op) => `- ${describeBatchOperation(op)}`);
-      if (ops.length > MAX_BATCH_OPERATIONS_LISTED) {
-        listed.push(`- …and ${ops.length - MAX_BATCH_OPERATIONS_LISTED} more`);
-      }
-      details = [`Running batch_execute: ${summary || "operations could not be read"}`, ...listed].join("\n");
+      ({ question, details } = describeOperations("batch", "batch_execute", ops));
       break;
     }
     default: {

@@ -79,3 +79,60 @@ export function parseBatchOperations(input: Record<string, unknown>): BatchParse
 
   return { kind: "ok", operations };
 }
+
+/**
+ * One operation a chain would dispatch, as far as it is known before the chain
+ * runs. `unresolved` names the parameters an earlier step's output supplies:
+ * their values do not exist until that step has run.
+ */
+export interface PlannedOperation extends BatchOperation {
+  unresolved: readonly string[];
+}
+
+/**
+ * A tool that dispatches other tools from its own definition: a synthesized
+ * chain (CompositeTool). Like batch_execute it calls each step through
+ * ToolRegistry.execute, so none of them passes executeSingleToolCall; unlike a
+ * batch its steps are not in its input, so it has to say what it would run.
+ */
+export interface ChainDispatchTool {
+  plannedOperations(input: Record<string, unknown>): PlannedOperation[];
+}
+
+export function isChainDispatchTool(tool: unknown): tool is ChainDispatchTool {
+  return typeof (tool as Partial<ChainDispatchTool> | undefined)?.plannedOperations === "function";
+}
+
+/**
+ * Read a chain's plan the way parseBatchOperations reads a batch.
+ *
+ * A write that takes any input from an earlier step is unreviewable: the review
+ * judges an operation as it will run, and before the chain runs that operation
+ * does not exist yet. A step that dispatches in turn is refused for the reason
+ * a nested batch is.
+ */
+export function parseChainOperations(
+  planned: readonly PlannedOperation[],
+  judge: { isWrite(tool: string): boolean; dispatches(tool: string): boolean },
+): BatchParse {
+  if (planned.length === 0) {
+    return { kind: "unreviewable", reason: "the chain has no steps" };
+  }
+  const operations: BatchOperation[] = [];
+  for (let i = 0; i < planned.length; i++) {
+    const op = planned[i]!;
+    if (judge.dispatches(op.tool)) {
+      return { kind: "unreviewable", reason: `step ${i + 1} nests ${op.tool}` };
+    }
+    if (op.unresolved.length > 0 && judge.isWrite(op.tool)) {
+      return {
+        kind: "unreviewable",
+        reason:
+          `step ${i + 1} (${op.tool}) takes ${op.unresolved.join(", ")} from an earlier step's output, ` +
+          "which no review can see before the chain runs",
+      };
+    }
+    operations.push({ tool: op.tool, input: op.input });
+  }
+  return { kind: "ok", operations };
+}

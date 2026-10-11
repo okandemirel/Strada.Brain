@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseBatchOperations, BATCH_DISPATCH_TOOLS } from "./batch-write-gate.js";
+import { parseBatchOperations, parseChainOperations, BATCH_DISPATCH_TOOLS } from "./batch-write-gate.js";
 
 describe("reading a batch's operations", () => {
   it("reads a well-formed batch", () => {
@@ -88,5 +88,48 @@ describe("reading a batch's operations", () => {
   it("knows which tools dispatch a nested list", () => {
     expect(BATCH_DISPATCH_TOOLS.has("batch_execute")).toBe(true);
     expect(BATCH_DISPATCH_TOOLS.has("file_write")).toBe(false);
+  });
+});
+
+describe("reading a chain's plan", () => {
+  const judge = {
+    isWrite: (tool: string) => tool !== "file_read",
+    dispatches: (tool: string) => tool === "batch_execute" || tool === "other_chain",
+  };
+
+  it("refuses a write whose input an earlier step supplies, and lets such a read through", () => {
+    const read = parseChainOperations(
+      [
+        { tool: "file_read", input: { path: "A.cs" }, unresolved: [] },
+        { tool: "file_read", input: {}, unresolved: ["path"] },
+      ],
+      judge,
+    );
+    expect(read).toEqual({
+      kind: "ok",
+      operations: [
+        { tool: "file_read", input: { path: "A.cs" } },
+        { tool: "file_read", input: {} },
+      ],
+    });
+
+    const write = parseChainOperations(
+      [
+        { tool: "file_read", input: { path: "A.cs" }, unresolved: [] },
+        { tool: "file_write", input: { content: "x" }, unresolved: ["path"] },
+      ],
+      judge,
+    );
+    expect(write.kind).toBe("unreviewable");
+    if (write.kind !== "unreviewable") return;
+    expect(write.reason).toContain("step 2 (file_write) takes path");
+  });
+
+  it("refuses a chain that nests a dispatcher or has no steps", () => {
+    for (const nested of ["batch_execute", "other_chain"]) {
+      const parsed = parseChainOperations([{ tool: nested, input: {}, unresolved: [] }], judge);
+      expect(parsed.kind, nested).toBe("unreviewable");
+    }
+    expect(parseChainOperations([], judge).kind).toBe("unreviewable");
   });
 });

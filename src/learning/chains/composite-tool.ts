@@ -31,6 +31,7 @@ import { DEFAULT_RESILIENCE_CONFIG } from "./chain-types.js";
 import { computeChainWaves } from "./chain-dag.js";
 import { executeRollback } from "./chain-rollback.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+import type { ChainDispatchTool, PlannedOperation } from "../../agents/autonomy/batch-write-gate.js";
 
 // =============================================================================
 // TYPES
@@ -55,7 +56,10 @@ interface StepRecord {
 // IMPLEMENTATION
 // =============================================================================
 
-export class CompositeTool implements ITool {
+/** Stands in, while planning, for a value only an earlier step's output can supply. */
+const FROM_EARLIER_OUTPUT = Symbol("fromEarlierOutput");
+
+export class CompositeTool implements ITool, ChainDispatchTool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
@@ -82,6 +86,50 @@ export class CompositeTool implements ITool {
   /** Check if this composite tool contains the given tool in its chain */
   containsTool(name: string): boolean {
     return this.chainMetadata.toolSequence.includes(name);
+  }
+
+  /**
+   * The operations this chain would dispatch for `input`. Every step runs
+   * through ToolRegistry.execute, past the gates on the orchestrator's dispatch
+   * path, so the orchestrator reviews this plan before it runs the chain
+   * (batch-write-gate.ts). Built with the mapping the run uses, so the plan and
+   * the run cannot disagree on what a step receives.
+   */
+  plannedOperations(input: Record<string, unknown>): PlannedOperation[] {
+    const planned: PlannedOperation[] = [];
+    const plan = (tool: string, mapped: Record<string, unknown>): void => {
+      const known: Record<string, unknown> = {};
+      const unresolved: string[] = [];
+      for (const [key, value] of Object.entries(mapped)) {
+        if (value === FROM_EARLIER_OUTPUT) unresolved.push(key);
+        else known[key] = value;
+      }
+      planned.push({ tool, input: known, unresolved });
+    };
+    const fromEarlierOutput = (): unknown => FROM_EARLIER_OUTPUT;
+
+    if (!this.isV2Metadata()) {
+      this.chainMetadata.toolSequence.forEach((tool, i) => plan(tool, this.mapStepInput(i, input, fromEarlierOutput)));
+      return planned;
+    }
+
+    const metadata = this.chainMetadata as ChainMetadataV2;
+    for (const step of metadata.steps) {
+      plan(step.toolName, this.mapStepInput(this.dagStepIndex(step), input, fromEarlierOutput));
+    }
+    // A compensation is a dispatch too whenever a failure can trigger one, and
+    // every input it takes is an earlier step's output.
+    if (this.rollsBack(metadata)) {
+      for (const step of metadata.steps) {
+        if (!step.compensatingAction) continue;
+        planned.push({
+          tool: step.compensatingAction.toolName,
+          input: {},
+          unresolved: Object.keys(step.compensatingAction.inputMappings),
+        });
+      }
+    }
+    return planned;
   }
 
   // ===========================================================================
@@ -379,7 +427,7 @@ export class CompositeTool implements ITool {
     parallelBranches?: number,
     cancelledSteps?: string[],
   ): Promise<ToolExecutionResult> {
-    if (metadata.isFullyReversible && this.resilienceConfig.rollbackEnabled) {
+    if (this.rollsBack(metadata)) {
       // Saga rollback
       const rollbackReport = await executeRollback(
         chainName,
@@ -430,48 +478,15 @@ export class CompositeTool implements ITool {
     userInput: Record<string, unknown>,
     stepOutputMap: Map<string, Record<string, unknown>>,
   ): Record<string, unknown> {
-    const metadata = this.chainMetadata as ChainMetadataV2;
-    const stepInput: Record<string, unknown> = {};
+    // V2: resolve sourceKey like 'stepId.field' from stepOutputMap
+    return this.mapStepInput(this.dagStepIndex(step), userInput, (sourceKey) =>
+      this.resolveDAGSourceKey(sourceKey, stepOutputMap),
+    );
+  }
 
-    // Find step index for backward-compatible parameterMappings
-    const stepIndex = metadata.steps.findIndex((s) => s.stepId === step.stepId);
-
-    for (const mapping of metadata.parameterMappings) {
-      if (mapping.stepIndex !== stepIndex) continue;
-
-      switch (mapping.source) {
-        case "userInput":
-          if (mapping.sourceKey && mapping.sourceKey in userInput) {
-            stepInput[mapping.parameterName] = userInput[mapping.sourceKey];
-          } else if (mapping.defaultValue !== undefined) {
-            stepInput[mapping.parameterName] = mapping.defaultValue;
-          }
-          break;
-
-        case "previousOutput": {
-          // V2: resolve sourceKey like 'stepId.field' from stepOutputMap
-          const resolved = this.resolveDAGSourceKey(
-            mapping.sourceKey,
-            stepOutputMap,
-          );
-          if (resolved !== undefined) {
-            stepInput[mapping.parameterName] = resolved;
-          } else if (mapping.defaultValue !== undefined) {
-            stepInput[mapping.parameterName] = mapping.defaultValue;
-          }
-          break;
-        }
-
-        case "constant":
-          stepInput[mapping.parameterName] =
-            mapping.defaultValue !== undefined
-              ? mapping.defaultValue
-              : mapping.sourceKey;
-          break;
-      }
-    }
-
-    return stepInput;
+  /** A V2 step's index, which its backward-compatible parameterMappings key on. */
+  private dagStepIndex(step: ChainStepNode): number {
+    return (this.chainMetadata as ChainMetadataV2).steps.findIndex((s) => s.stepId === step.stepId);
   }
 
   /**
@@ -514,6 +529,25 @@ export class CompositeTool implements ITool {
     userInput: Record<string, unknown>,
     previousOutput: Record<string, unknown>,
   ): Record<string, unknown> {
+    return this.mapStepInput(stepIndex, userInput, (sourceKey) =>
+      sourceKey && sourceKey in previousOutput ? previousOutput[sourceKey] : undefined,
+    );
+  }
+
+  // ===========================================================================
+  // PARAMETER MAPPING (shared by V1, V2 and the review plan)
+  // ===========================================================================
+
+  /**
+   * Apply a step's parameter mappings. The V1 run, the V2 run and the review
+   * plan differ only in how a previousOutput mapping resolves, so that is the
+   * one thing each passes in.
+   */
+  private mapStepInput(
+    stepIndex: number,
+    userInput: Record<string, unknown>,
+    fromOutput: (sourceKey: string | undefined) => unknown,
+  ): Record<string, unknown> {
     const stepInput: Record<string, unknown> = {};
 
     for (const mapping of this.chainMetadata.parameterMappings) {
@@ -528,14 +562,15 @@ export class CompositeTool implements ITool {
           }
           break;
 
-        case "previousOutput":
-          if (mapping.sourceKey && mapping.sourceKey in previousOutput) {
-            stepInput[mapping.parameterName] =
-              previousOutput[mapping.sourceKey];
+        case "previousOutput": {
+          const resolved = fromOutput(mapping.sourceKey);
+          if (resolved !== undefined) {
+            stepInput[mapping.parameterName] = resolved;
           } else if (mapping.defaultValue !== undefined) {
             stepInput[mapping.parameterName] = mapping.defaultValue;
           }
           break;
+        }
 
         case "constant":
           stepInput[mapping.parameterName] =
@@ -547,6 +582,11 @@ export class CompositeTool implements ITool {
     }
 
     return stepInput;
+  }
+
+  /** Whether a failed step triggers its predecessors' compensating actions. */
+  private rollsBack(metadata: ChainMetadataV2): boolean {
+    return metadata.isFullyReversible && this.resilienceConfig.rollbackEnabled;
   }
 
   // ===========================================================================

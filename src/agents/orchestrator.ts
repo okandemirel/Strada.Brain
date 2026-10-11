@@ -14,7 +14,14 @@ import type {
 // Streaming-first single-shot LLM call: a slow reasoning model must not trip the
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
-import { BATCH_DISPATCH_TOOLS, parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
+import {
+  BATCH_DISPATCH_TOOLS,
+  isChainDispatchTool,
+  parseBatchOperations,
+  parseChainOperations,
+  type BatchOperation,
+  type BatchParse,
+} from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { rememberUserAuthorizedPaths } from "../security/user-authorized-paths.js";
@@ -256,7 +263,11 @@ import {
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
-import { requestWriteConfirmation as requestWriteConfirmationHelper, estimateWriteChangeLines } from "./orchestrator-write-gate.js";
+import {
+  requestWriteConfirmation as requestWriteConfirmationHelper,
+  estimateOperationsChangeLines,
+  estimateWriteChangeLines,
+} from "./orchestrator-write-gate.js";
 import {
   buildTrajectoryReplayContext as buildTrajectoryReplayContextHelper,
   type TrajectoryReplayDeps,
@@ -4738,6 +4749,18 @@ export class Orchestrator {
     // deterministic rules below still apply; only the shell arbitration moves.
     humanConfirms: boolean = false,
   ): Promise<SelfManagedWriteReview> | SelfManagedWriteReview {
+    // The same second dispatch path as batch_execute, under names nobody can
+    // list: a synthesized chain runs each step through ToolRegistry.execute.
+    // It fell to `default` and was stamped approved without a step being read.
+    // Checked before the name switch, because what decides the review is what
+    // the tool dispatches, not what it is called.
+    const chain = this.chainOperations(toolName, input);
+    if (chain) {
+      if (chain.kind === "unreviewable") {
+        return { approved: false, reason: `chain cannot be reviewed: ${chain.reason}; run its steps as separate calls` };
+      }
+      return this.reviewBatchedOperations(chatId, chain.operations, mode, options, humanConfirms);
+    }
     switch (toolName) {
       case "shell_exec": {
         // THE COMMAND AS IT WILL RUN, newlines included (round 15 #12):
@@ -4889,16 +4912,36 @@ export class Orchestrator {
    * audited 2026-09-02: `batch_execute` is not in DESTRUCTIVE_TOOLS, so a batch
    * carrying a file_delete or an `rm -rf` shell_exec was judged by the stub
    * diff alone (1 change, under every threshold) and ran with no prompt. A
-   * batch is as destructive as its most destructive operation.
+   * batch is as destructive as its most destructive operation, and so is a
+   * synthesized chain.
    */
   private isDestructiveForConfirmation(toolName: string, input: Record<string, unknown>): boolean {
     if (isDestructiveOperation(toolName, input)) return true;
-    if (!BATCH_DISPATCH_TOOLS.has(toolName)) return false;
-    const parsed = parseBatchOperations(input);
+    const parsed = this.dispatchedOperations(toolName, input);
+    if (parsed === null) return false;
     // An unreadable batch is refused by the review before this is consulted;
     // if it ever gets here, treat it as destructive rather than waving it on.
     if (parsed.kind === "unreviewable") return true;
     return parsed.operations.some((op) => isDestructiveOperation(op.tool, op.input));
+  }
+
+  /**
+   * What a dispatching tool would run: a batch's operations array or a
+   * synthesized chain's plan. Null for a tool that runs only itself.
+   */
+  private dispatchedOperations(toolName: string, input: Record<string, unknown>): BatchParse | null {
+    if (BATCH_DISPATCH_TOOLS.has(toolName)) return parseBatchOperations(input);
+    return this.chainOperations(toolName, input);
+  }
+
+  /** A synthesized chain's plan, read the way a batch is; null for any other tool. */
+  private chainOperations(toolName: string, input: Record<string, unknown>): BatchParse | null {
+    const tool = this.tools.get(toolName);
+    if (!isChainDispatchTool(tool)) return null;
+    return parseChainOperations(tool.plannedOperations(input), {
+      isWrite: (name) => this.isWriteOperation(name),
+      dispatches: (name) => BATCH_DISPATCH_TOOLS.has(name) || isChainDispatchTool(this.tools.get(name)),
+    });
   }
 
   /**
@@ -5677,7 +5720,10 @@ export class Orchestrator {
         // SMART line threshold could never fire. Derive the size from the
         // input; a size that cannot be derived counts as exceeding the
         // threshold — an unmeasured write must not be reported as one line.
-        const estimate = estimateWriteChangeLines(activeToolCall.name, activeToolCall.input);
+        const chain = this.chainOperations(activeToolCall.name, activeToolCall.input);
+        const estimate = chain?.kind === "ok"
+          ? estimateOperationsChangeLines(chain.operations)
+          : estimateWriteChangeLines(activeToolCall.name, activeToolCall.input);
         const totalChanges = estimate.known ? estimate.totalChanges : prefs.smartLineThreshold;
         const sizedDiff = {
           path: String(activeToolCall.input["path"] ?? ""),
@@ -5899,6 +5945,8 @@ export class Orchestrator {
     // metadata survived the adapter (it does not always) must not decide
     // whether the batch review at reviewSelfManagedWriteOperation ever runs.
     if (BATCH_DISPATCH_TOOLS.has(toolName)) return true;
+    // So is a synthesized chain, for the same reason.
+    if (isChainDispatchTool(this.tools.get(toolName))) return true;
 
     // Registration is where this is decided — see registerTool, which applies the
     // allowlist, the tool's own declaration, and finally its shape. Reading the
@@ -5960,7 +6008,15 @@ export class Orchestrator {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<import("./orchestrator-write-gate.js").WriteConfirmationOutcome> {
-    return requestWriteConfirmationHelper(this.channel, chatId, userId, toolName, input);
+    const chain = this.chainOperations(toolName, input);
+    return requestWriteConfirmationHelper(
+      this.channel,
+      chatId,
+      userId,
+      toolName,
+      input,
+      chain?.kind === "ok" ? chain.operations : undefined,
+    );
   }
 
   getProviderManager(): ProviderManager {
