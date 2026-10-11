@@ -302,6 +302,67 @@ describeIfHnsw("HNSWVectorStore", () => {
       expect(hits[0]?.id).toBe("kept-299");
       expect(hits[0]?.chunk.content).toBe("fresh body");
     });
+
+    const reopen = (): Promise<HNSWVectorStore> =>
+      createHNSWVectorStore(tempDir, {
+        dimensions, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine", quantization: "none",
+      });
+
+    it("a shutdown while the rebuild is re-adding the index saves all of it (hnsw-shutdown)", async () => {
+      await store.upsert([...fileEntries("gone", 200), ...fileEntries("a", 100), ...fileEntries("b", 100), ...fileEntries("c", 100)]);
+      await store.removeByFile("/test/gone.cs");
+
+      for (let i = 0; i < 100 && store.count() >= 300; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(store.count()).toBeGreaterThan(0);
+      expect(store.count()).toBeLessThan(300);
+
+      await store.shutdown();
+
+      // A file cut short still carries its own content hash, so the next boot
+      // takes it as indexed and never re-embeds the chunks the save left out.
+      const reopened = await reopen();
+      try {
+        expect(reopened.count()).toBe(300);
+        for (const name of ["a", "b", "c"]) {
+          expect(reopened.getFileChunkIds(`/test/${name}.cs`)).toHaveLength(100);
+        }
+      } finally {
+        await reopened.shutdown();
+      }
+    });
+
+    it("a compaction that comes due while a save is writing waits for the save (hnsw-shutdown)", async () => {
+      const entries = [...fileEntries("gone", 200), ...fileEntries("a", 100), ...fileEntries("b", 100), ...fileEntries("c", 100)];
+      await store.upsert(entries);
+      await store.removeByFile("/test/gone.cs");
+
+      // Hold the native write open long enough for the compaction removeByFile
+      // scheduled to run: it swaps in a new index and maps, so a save that
+      // reads its metadata after the write pairs the old file with new labels.
+      const index = (store as unknown as { hnswIndex: { writeIndex(file: string): Promise<boolean> } }).hnswIndex;
+      const write = index.writeIndex.bind(index);
+      // The native method is read-only on the prototype; define an own one.
+      Object.defineProperty(index, "writeIndex", {
+        value: async (file: string) => {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          return write(file);
+        },
+      });
+      await store.shutdown();
+
+      const reopened = await reopen();
+      try {
+        expect(reopened.count()).toBe(300);
+        for (const name of ["a", "b", "c"]) {
+          const last = entries.find((e) => e.id === `${name}-99`)!;
+          expect((await reopened.search(last.vector, 1))[0]?.id).toBe(`${name}-99`);
+        }
+      } finally {
+        await reopened.shutdown();
+      }
+    });
   });
 
   describe("an id claimed by more than one index (memory-rag#1)", () => {

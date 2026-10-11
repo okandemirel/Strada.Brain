@@ -413,6 +413,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
    * and an upsert there is overwritten by the copy the rebuild re-adds after it.
    */
   private rebuildInFlight: Promise<void> | null = null;
+  /**
+   * The save now writing the index files; settles, never rejects. A rebuild
+   * waits it out: it swaps in a new index and maps while the native write is
+   * still on the old one, and the save then reads its metadata from the new,
+   * so the labels on disk no longer name the chunks saved with them.
+   */
+  private saveInFlight: Promise<void> | null = null;
   /** True when hnswlib-node is missing and the exact fallback index is in use. */
   private usingExactIndex = false;
   /** "<query>:<index>" sizes of the last query-size mismatch logged (one line per mismatch, not per search). */
@@ -1005,7 +1012,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async rebuildIndex(): Promise<void> {
     if (!this.isInitialized) return;
-    while (this.rebuildInFlight) await this.rebuildInFlight;
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
 
     const rebuild = this.rebuildFromLiveChunks();
     this.rebuildInFlight = rebuild.then(
@@ -1084,6 +1091,28 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async saveIndex(path: string): Promise<void> {
     if (!this.isInitialized || !this.hnswIndex) return;
+    // A rebuild yields with only part of the index re-added and keeps adding
+    // while the native write runs off-thread: a save in that window wrote an
+    // index that no longer loaded, or the part as the whole, where a file cut
+    // short keeps its own content hash and the next boot never re-embeds it.
+    // No timeout: a rebuild is CPU work that always settles, and saving
+    // before it does is the partial write this wait exists to prevent.
+    while (this.rebuildInFlight || this.saveInFlight) await (this.rebuildInFlight ?? this.saveInFlight);
+
+    const save = this.writeIndexFiles(path);
+    this.saveInFlight = save.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await save;
+    } finally {
+      this.saveInFlight = null;
+    }
+  }
+
+  private async writeIndexFiles(path: string): Promise<void> {
+    if (!this.hnswIndex) return;
 
     // Ensure directory exists
     if (!existsSync(path)) {
