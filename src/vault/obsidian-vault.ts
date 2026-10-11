@@ -8,7 +8,7 @@ import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget, candidateFetchK } from './query-pipeline.js';
-import { listIndexableFiles } from './discovery.js';
+import { isUnderUnreadable, scanIndexableFiles } from './discovery.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
@@ -18,6 +18,7 @@ import { writeFileAtomic } from '../common/atomic-file.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
 import {
   getIndexableFileInfo,
+  isPathGoneError,
   prepareSafeVaultWritePath,
   redactPathsInMessage,
   resolveSafeVaultReadPath,
@@ -575,8 +576,15 @@ export class ObsidianVault implements IVault {
     }
     const abs = fileInfo.absPath;
     relPath = canonicalizePath(fileInfo.relPath);
-    const body = await readFile(abs, 'utf8').catch(() => null);
-    if (body === null) { return this.deleteIndexedFileInternal(relPath); }
+    let body: string;
+    try {
+      body = await readFile(abs, 'utf8');
+    } catch (err) {
+      // Only a vanished note loses its rows; a failed read leaves them and
+      // the caller hears the error (vault-intelligence#4).
+      if (isPathGoneError(err)) return this.deleteIndexedFileInternal(relPath);
+      throw err;
+    }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;
@@ -792,7 +800,12 @@ export class ObsidianVault implements IVault {
    */
   private async runIndexPass(op: 'fullIndex' | 'sync'): Promise<{ count: number; paths: string[] }> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const files = await listIndexableFiles(this.rootPath);
+    const { files, unreadable } = await scanIndexableFiles(this.rootPath);
+    if (unreadable.length) {
+      getLoggerSafe().warn(`[obsidian-vault] ${op} walk could not read ${unreadable.length} path(s); their indexed notes are kept, not pruned`, {
+        vaultId: this.id, op, unreadable: unreadable.slice(0, 10),
+      });
+    }
 
     const changed: string[] = [];
     for (const f of files) {
@@ -811,7 +824,8 @@ export class ObsidianVault implements IVault {
     if (this.disposed) return { count: changed.length, paths: changed };
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
-      if (!present.has(p) && this.deleteIndexedFileInternal(p)) changed.push(p);
+      if (present.has(p) || isUnderUnreadable(p, unreadable)) continue;
+      if (this.deleteIndexedFileInternal(p)) changed.push(p);
     }
     return { count: changed.length, paths: changed };
   }

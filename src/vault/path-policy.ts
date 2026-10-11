@@ -32,6 +32,16 @@ export function isSecretLikeJson(name: string): boolean {
   return JSON_SECRET_BASENAME.test(name);
 }
 
+/**
+ * True only for the errors that mean "this path is not there". The index
+ * deletes a file's rows on that answer, so EMFILE, EACCES, EBUSY or EIO must
+ * not give it: they say nothing about whether the file still exists.
+ */
+export function isPathGoneError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 export function normalizeVaultRelPath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\/+/, '');
 }
@@ -118,9 +128,14 @@ export async function getIndexableFileInfo(
     if (await hasSymlinkAncestor(rootPath, absPath)) {
       return { ok: false, relPath: normalized, reason: 'symlink-ancestor' };
     }
+    // An escape is a rejection, not an error: the catch below rethrows
+    // everything but ENOENT/ENOTDIR, which would keep the escaped file's rows.
+    const realRelPath = await realRelPathInside(rootPath, absPath);
+    if (realRelPath === null) {
+      return { ok: false, relPath: normalized, reason: 'escapes vault root' };
+    }
     // Judged again under the disk's spelling, as resolveSafeVaultReadPath does:
     // the write hook reindexes a path as the agent spelled it.
-    const realRelPath = await assertRealpathInside(rootPath, absPath);
     if (!isPotentiallyIndexableVaultPath(realRelPath)) {
       return { ok: false, relPath: normalized, reason: 'not indexable' };
     }
@@ -137,8 +152,12 @@ export async function getIndexableFileInfo(
       mtimeMs: linkStats.mtimeMs,
       lang,
     };
-  } catch {
-    return { ok: false, relPath: normalized, reason: 'missing' };
+  } catch (err) {
+    // Callers delete the file's index rows on 'missing'. Every errno used to
+    // land here, so one EMFILE during a watcher reindex wiped an existing
+    // file's chunks, symbols and edges until its next edit.
+    if (isPathGoneError(err)) return { ok: false, relPath: normalized, reason: 'missing' };
+    throw err;
   }
 }
 
@@ -369,13 +388,22 @@ function resolveInsideVault(rootPath: string, relPath: string): string {
   return absPath;
 }
 
+/**
+ * Returns `path` relative to the root, both as the filesystem spells them, or
+ * null when the real path lies outside the real root.
+ */
+async function realRelPathInside(rootPath: string, path: string): Promise<string | null> {
+  const [rootReal, pathReal] = await Promise.all([realpath(rootPath), realpath(path)]);
+  return isInsideOrEqual(pathReal, rootReal) ? relative(rootReal, pathReal) : null;
+}
+
 /** Returns `path` relative to the root, both as the filesystem spells them. */
 async function assertRealpathInside(rootPath: string, path: string): Promise<string> {
-  const [rootReal, pathReal] = await Promise.all([realpath(rootPath), realpath(path)]);
-  if (!isInsideOrEqual(pathReal, rootReal)) {
+  const realRelPath = await realRelPathInside(rootPath, path);
+  if (realRelPath === null) {
     throw new Error(`path escapes vault root: ${path}`);
   }
-  return relative(rootReal, pathReal);
+  return realRelPath;
 }
 
 function isInsideOrEqual(candidatePath: string, rootPath: string): boolean {

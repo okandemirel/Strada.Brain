@@ -7,9 +7,10 @@ import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget, candidateFetchK } from './query-pipeline.js';
-import { listIndexableFiles } from './discovery.js';
+import { isUnderUnreadable, scanIndexableFiles, type IndexableFileScan } from './discovery.js';
 import {
   getIndexableFileInfo,
+  isPathGoneError,
   prepareSafeVaultWritePath,
   resolveSafeVaultReadPath,
 } from './path-policy.js';
@@ -376,8 +377,15 @@ export class UnityProjectVault implements IVault {
     }
     const abs = fileInfo.absPath;
     relPath = fileInfo.relPath;
-    const body = await readFile(abs, 'utf8').catch(() => null);
-    if (body === null) { return this.deleteIndexedFileInternal(relPath); }
+    let body: string;
+    try {
+      body = await readFile(abs, 'utf8');
+    } catch (err) {
+      // Only a vanished file loses its rows; a failed read leaves them and
+      // the caller hears the error (vault-intelligence#4).
+      if (isPathGoneError(err)) return this.deleteIndexedFileInternal(relPath);
+      throw err;
+    }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;  // Fix C1: short-circuit on unchanged hash
@@ -600,7 +608,7 @@ export class UnityProjectVault implements IVault {
 
   protected async fullIndex(): Promise<void> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const files = await listIndexableFiles(this.rootPath);
+    const { files, unreadable } = await this.scanFiles();
     const changed: string[] = [];
     for (const f of files) {
       // dispose() waits for this pass: stop at the next file instead of
@@ -617,17 +625,29 @@ export class UnityProjectVault implements IVault {
     if (this.disposed) return;
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
-      if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
+      if (present.has(p) || isUnderUnreadable(p, unreadable)) continue;
+      if (await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+  }
+
+  /** The walk an index pass prunes against, with what it could not read named. */
+  private async scanFiles(): Promise<IndexableFileScan> {
+    const scan = await scanIndexableFiles(this.rootPath);
+    if (scan.unreadable.length) {
+      getLoggerSafe().warn(`[vault ${this.id}] index walk could not read ${scan.unreadable.length} path(s); their indexed files are kept, not pruned`, {
+        unreadable: scan.unreadable.slice(0, 10),
+      });
+    }
+    return scan;
   }
 
   private async reindexChanged(): Promise<number> {
     // Fix CodeRevC1: capture the pre-scan state of the DB BEFORE we reindex,
     // so deletion detection compares apples to apples even if reindexFile mutates store mid-loop.
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const files = await listIndexableFiles(this.rootPath);
+    const { files, unreadable } = await this.scanFiles();
     const changed: string[] = [];
     for (const f of files) {
       try {
@@ -640,9 +660,8 @@ export class UnityProjectVault implements IVault {
     }
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
-      if (!present.has(p)) {
-        if (await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
-      }
+      if (present.has(p) || isUnderUnreadable(p, unreadable)) continue;
+      if (await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SelfVault } from './self-vault.js';
 import { createFakeEmbedding, createFakeVectorStore, createTempDirTracker } from '../test-helpers.js';
@@ -130,3 +130,41 @@ describe('SelfVault initial index running in the background', () => {
     await vault.dispose();
   });
 });
+
+/** vault-intelligence#4, SelfVault's own walk. */
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'SelfVault: a directory its walk cannot read is not a deleted directory',
+  () => {
+    const tmp = createTempDirTracker('strada-self-vault-unreadable-');
+    const vaults: SelfVault[] = [];
+    const locked: string[] = [];
+
+    afterEach(async () => {
+      for (const p of locked.splice(0)) chmodSync(p, 0o755);
+      for (const v of vaults.splice(0)) await v.dispose();
+      tmp.cleanup();
+    });
+
+    it('a sync does not prune the files under a directory it could not read', async () => {
+      const root = tmp.makeDir();
+      mkdirSync(join(root, 'src', 'core'), { recursive: true });
+      writeFileSync(join(root, 'src', 'core', 'engine.ts'), 'export const engine = 1;\n');
+      const vault = new SelfVault({
+        id: 'self',
+        rootPath: root,
+        embedding: createFakeEmbedding(),
+        vectorStore: createFakeVectorStore(),
+      });
+      vaults.push(vault);
+      await vault.init();
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['src/core/engine.ts']);
+
+      chmodSync(join(root, 'src', 'core'), 0o000);
+      locked.push(join(root, 'src', 'core'));
+      await vault.sync();
+      chmodSync(join(root, 'src', 'core'), 0o755);
+
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['src/core/engine.ts']);
+    });
+  },
+);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -683,3 +683,89 @@ describe('UnityProjectVault initial index running in the background', () => {
     await vault.dispose();
   });
 });
+
+/**
+ * vault-intelligence#4: every error on the reindex path read as "the file was
+ * deleted". A transient EMFILE/EACCES/EBUSY wiped an existing file's chunks,
+ * symbols and edges, reindexFile reported it as a change, and nothing put the
+ * file back until its next edit. chmod stands in for those transient errors.
+ */
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'UnityProjectVault: a path it cannot read is not a deleted path',
+  () => {
+    const tmp = createTempDirTracker('strada-unity-vault-unreadable-');
+    const vaults: IVault[] = [];
+    const locked: string[] = [];
+
+    afterEach(async () => {
+      for (const p of locked.splice(0)) chmodSync(p, 0o755);
+      for (const v of vaults.splice(0)) await v.dispose();
+      tmp.cleanup();
+    });
+
+    async function indexedPlayer(): Promise<{ root: string; vault: UnityProjectVault }> {
+      const root = tmp.makeDir();
+      mkdirSync(join(root, 'Assets', 'Scripts'), { recursive: true });
+      writeFileSync(join(root, 'Assets', 'Scripts', 'Player.cs'), 'public class Player { public void Move() {} }\n');
+      const vault = new UnityProjectVault({
+        id: 'test-unity-unreadable',
+        rootPath: root,
+        embedding: createFakeEmbedding(),
+        vectorStore: createFakeVectorStore(),
+      });
+      vaults.push(vault);
+      await vault.init();
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['Assets/Scripts/Player.cs']);
+      return { root, vault };
+    }
+
+    function lock(path: string, mode: number): void {
+      chmodSync(path, mode);
+      locked.push(path);
+    }
+
+    async function expectStillIndexed(vault: UnityProjectVault): Promise<void> {
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['Assets/Scripts/Player.cs']);
+      expect((await vault.query({ text: 'Player' })).hits.length).toBeGreaterThan(0);
+    }
+
+    it('a file whose read fails keeps its rows and reindexFile rejects instead of reporting a change', async () => {
+      const { root, vault } = await indexedPlayer();
+      lock(join(root, 'Assets', 'Scripts', 'Player.cs'), 0o000);
+
+      await expect(vault.reindexFile('Assets/Scripts/Player.cs')).rejects.toThrow(/EACCES/);
+
+      chmodSync(join(root, 'Assets', 'Scripts', 'Player.cs'), 0o644);
+      await expectStillIndexed(vault);
+    });
+
+    it('a file whose lstat fails keeps its rows and reindexFile rejects instead of reporting a change', async () => {
+      const { root, vault } = await indexedPlayer();
+      // Readable but not searchable: the leaf lstat fails with EACCES.
+      lock(join(root, 'Assets', 'Scripts'), 0o644);
+
+      await expect(vault.reindexFile('Assets/Scripts/Player.cs')).rejects.toThrow(/EACCES/);
+
+      chmodSync(join(root, 'Assets', 'Scripts'), 0o755);
+      await expectStillIndexed(vault);
+    });
+
+    it('a sync whose walk cannot read a directory does not prune the files under it', async () => {
+      const { root, vault } = await indexedPlayer();
+      lock(join(root, 'Assets', 'Scripts'), 0o000);
+
+      await vault.sync();
+
+      chmodSync(join(root, 'Assets', 'Scripts'), 0o755);
+      await expectStillIndexed(vault);
+    });
+
+    it('a file that is really gone is still removed', async () => {
+      const { root, vault } = await indexedPlayer();
+      rmSync(join(root, 'Assets', 'Scripts', 'Player.cs'));
+
+      expect(await vault.reindexFile('Assets/Scripts/Player.cs')).toBe(true);
+      expect(vault.listFiles()).toEqual([]);
+    });
+  },
+);

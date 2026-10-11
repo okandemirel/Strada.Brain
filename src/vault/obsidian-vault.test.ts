@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ObsidianVault, VaultQueryError, redactPathsInMessage } from './obsidian-vault.js';
@@ -230,3 +230,58 @@ describe('ObsidianVault initial index running in the background', () => {
     expect(vault.listFiles()).toHaveLength(3);
   });
 });
+
+/** vault-intelligence#4, ObsidianVault's copy of the reindex path. */
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'ObsidianVault: a note it cannot read is not a deleted note',
+  () => {
+    const tmp = createTempDirTracker('strada-obsidian-unreadable-');
+    const vaults: IVault[] = [];
+    const locked: string[] = [];
+
+    afterEach(async () => {
+      for (const p of locked.splice(0)) chmodSync(p, 0o755);
+      for (const v of vaults.splice(0)) await v.dispose();
+      tmp.cleanup();
+    });
+
+    async function indexedNote(): Promise<{ root: string; vault: ObsidianVault }> {
+      const root = tmp.makeDir();
+      mkdirSync(join(root, 'notes'));
+      writeFileSync(join(root, 'notes', 'a.md'), '# alpha note\n\nbody text');
+      const vault = new ObsidianVault({
+        id: 'test-obsidian-unreadable',
+        rootPath: root,
+        embedding: createFakeEmbedding(),
+        vectorStore: createFakeVectorStore(),
+        obsidian: OFFLINE_OBSIDIAN,
+      });
+      vaults.push(vault);
+      await vault.init();
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['notes/a.md']);
+      return { root, vault };
+    }
+
+    it('a sync that cannot read a note keeps its rows', async () => {
+      const { root, vault } = await indexedNote();
+      chmodSync(join(root, 'notes', 'a.md'), 0o000);
+      locked.push(join(root, 'notes', 'a.md'));
+
+      await vault.sync();
+
+      chmodSync(join(root, 'notes', 'a.md'), 0o644);
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['notes/a.md']);
+    });
+
+    it('a sync whose walk cannot read a directory does not prune the notes under it', async () => {
+      const { root, vault } = await indexedNote();
+      chmodSync(join(root, 'notes'), 0o000);
+      locked.push(join(root, 'notes'));
+
+      await vault.sync();
+
+      chmodSync(join(root, 'notes'), 0o755);
+      expect(vault.listFiles().map((f) => f.path)).toEqual(['notes/a.md']);
+    });
+  },
+);

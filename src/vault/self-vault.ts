@@ -1,9 +1,9 @@
 import { readdir, lstat } from 'node:fs/promises';
 import { join, relative, extname, basename, posix, sep as pathSep } from 'node:path';
 import { getLoggerSafe } from '../utils/logger.js';
-import { normalizeVaultRelPath } from './path-policy.js';
+import { isPathGoneError, normalizeVaultRelPath } from './path-policy.js';
 import { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
-import { EXT_LANG } from './discovery.js';
+import { EXT_LANG, isUnderUnreadable, type IndexableFileScan } from './discovery.js';
 import type { VaultFile } from './vault.interface.js';
 
 /** Directory names skipped unconditionally during SelfVault walks. */
@@ -61,11 +61,17 @@ function isSelfIndexablePath(relPath: string): boolean {
   return !isSensitiveSelfPath(relPosix, basename(relPosix));
 }
 
-async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> {
+/** Records `abs` as unread unless the error says it is gone (vault-intelligence#4). */
+function noteUnreadable(root: string, abs: string, err: unknown, unreadable: string[]): void {
+  if (!isPathGoneError(err)) unreadable.push(relative(root, abs).replaceAll(pathSep, '/') || '.');
+}
+
+async function walk(root: string, dir: string, out: VaultFile[], unreadable: string[]): Promise<void> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    noteUnreadable(root, dir, err, unreadable);
     return;
   }
   for (const e of entries) {
@@ -76,13 +82,16 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
     if (e.isSymbolicLink()) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      await walk(root, full, out);
+      await walk(root, full, out, unreadable);
       continue;
     }
     if (!e.isFile()) continue;
     const lang = EXT_LANG[extname(e.name).toLowerCase()];
     if (!lang) continue;
-    const st = await lstat(full).catch(() => null);
+    const st = await lstat(full).catch((err: unknown) => {
+      noteUnreadable(root, full, err, unreadable);
+      return null;
+    });
     if (!st || st.isSymbolicLink()) continue;
     const relPosix = relative(root, full).replaceAll(pathSep, '/');
     // sec-H4: block sensitive file shapes regardless of parent directory.
@@ -183,9 +192,9 @@ export class SelfVault extends UnityProjectVault {
     // the same tree concurrently.
     await this.waitForInit();
     const started = Date.now();
-    const found = await this.discoverFiles();
+    const scan = await this.discoverFiles();
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const changed = await this.processFiles(found, before, 'sync');
+    const changed = await this.processFiles(scan, before, 'sync');
     return { changed: changed.length, durationMs: Date.now() - started };
   }
 
@@ -205,20 +214,24 @@ export class SelfVault extends UnityProjectVault {
     this.store.migrate();
     this.reconcileEmbeddingMode();
 
-    const found = await this.discoverFiles();
+    const scan = await this.discoverFiles();
     if (this.disposed) return;
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    await this.processFiles(found, before, 'init');
+    await this.processFiles(scan, before, 'init');
     // A pass cut short by dispose() did not index the tree.
     if (!this.disposed) this.initialized = true;
   }
 
   /** Discover files from SELF_INCLUDE_ROOTS. */
-  private async discoverFiles(): Promise<VaultFile[]> {
+  private async discoverFiles(): Promise<IndexableFileScan> {
     const found: VaultFile[] = [];
+    const unreadable: string[] = [];
     for (const r of SELF_INCLUDE_ROOTS) {
       const abs = join(this.rootPath, r);
-      const st = await lstat(abs).catch(() => null);
+      const st = await lstat(abs).catch((err: unknown) => {
+        noteUnreadable(this.rootPath, abs, err, unreadable);
+        return null;
+      });
       if (!st || st.isSymbolicLink()) continue;
       if (st.isFile()) {
         const lang = EXT_LANG[extname(abs).toLowerCase()];
@@ -230,10 +243,15 @@ export class SelfVault extends UnityProjectVault {
           lang, kind: 'doc', indexedAt: 0,
         });
       } else {
-        await walk(this.rootPath, abs, found);
+        await walk(this.rootPath, abs, found, unreadable);
       }
     }
-    return found;
+    if (unreadable.length) {
+      getLoggerSafe().warn(`[vault ${this.id}] index walk could not read ${unreadable.length} path(s); their indexed files are kept, not pruned`, {
+        unreadable: unreadable.slice(0, 10),
+      });
+    }
+    return { files: found, unreadable };
   }
 
   /**
@@ -244,7 +262,7 @@ export class SelfVault extends UnityProjectVault {
    * deletions were never reconciled).
    */
   private async processFiles(
-    found: VaultFile[],
+    { files: found, unreadable }: IndexableFileScan,
     before: Set<string>,
     phase: 'init' | 'sync',
   ): Promise<string[]> {
@@ -262,9 +280,8 @@ export class SelfVault extends UnityProjectVault {
 
     const present = new Set(found.map((f) => f.path));
     for (const p of before) {
-      if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) {
-        changed.push(p);
-      }
+      if (present.has(p) || isUnderUnreadable(p, unreadable)) continue;
+      if (await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
     }
 
     await this.regenerateCanvas();
