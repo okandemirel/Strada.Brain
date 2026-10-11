@@ -436,15 +436,20 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     onChunk: StreamCallback,
     options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
-    // Whether ANY byte of this call already reached the consumer. Once true, a
-    // failing attempt must NOT fail over to the next provider: the consumer is
-    // holding half a response and appending a second provider's full text to it
-    // is corruption, not fallback (measured 2026-08-23: a mid-stream 500 on the
-    // primary concatenated a truncated answer with the fallback's complete one).
-    // The chain instead rethrows the ORIGINAL error; the run-level retry then
-    // re-executes the whole turn cleanly against whichever provider answers.
-    let emittedAny = false;
     return this.tryWithFallback("streaming", (provider, safeMessages, ctl) => {
+      // Whether THIS attempt already put a byte in the consumer's hands. Once
+      // true, its failure must NOT fail over to the next provider: the consumer
+      // is holding half a response and appending a second provider's full text
+      // to it is corruption, not fallback (measured 2026-08-23: a mid-stream 500
+      // on the primary concatenated a truncated answer with the fallback's
+      // complete one). The chain instead rethrows the ORIGINAL error; the
+      // run-level retry then re-executes the whole turn cleanly.
+      //
+      // Per attempt, not per call: an earlier member discarded as empty streamed
+      // no answer (only reasoning or whitespace), and the flag it set used to
+      // turn the next member's pre-output error into a "mid-stream" failure, so
+      // a healthy third member was never asked.
+      let emittedAny = false;
       const opts = {
         ...this.withTimeoutSignal(options, ctl.timeoutSignal),
         onBackoff: withCallerBackoff(ctl.onBackoff, options?.onBackoff),

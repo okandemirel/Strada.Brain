@@ -1171,6 +1171,29 @@ describe("FallbackChainProvider mid-stream failure handling", () => {
     expect(healthy.chat).toHaveBeenCalledTimes(1);
   });
 
+  it("judges each attempt by its own output: a sibling that fails before streaming still fails over (providers#3)", async () => {
+    // A thinking model that mirrors its reasoning into content streamed only an
+    // unclosed <think> block and hit max_tokens: an empty answer, so the chain
+    // moved on. B then failed before sending a byte — but the flag A had set was
+    // shared by the whole call, B's error was read as a mid-stream failure, and
+    // healthy C was never asked.
+    const thinker = streamingProvider("thinker", async (onChunk) => {
+      onChunk("<think>let me consider ");
+      onChunk("the plan...");
+      return { text: "<think>let me consider the plan...", toolCalls: [], stopReason: "max_tokens", usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 } };
+    });
+    const failsFirst = streamingProvider("kimi", async () => {
+      throw new Error("Kimi API error 500: internal");
+    });
+    const healthy = { ...createMockProvider({ text: "C answer" }), name: "groq" };
+    const chain = new FallbackChainProvider([thinker, failsFirst, healthy]);
+
+    const result = await chain.chatStream("sys", [], [], () => {});
+    expect(result.text).toBe("C answer");
+    expect(failsFirst.chatStream).toHaveBeenCalledTimes(1);
+    expect(healthy.chat).toHaveBeenCalledTimes(1);
+  });
+
   it("records the failed provider's health before refusing to fail over", async () => {
     const broken = streamingProvider("broken", async (onChunk) => {
       onChunk("half");
