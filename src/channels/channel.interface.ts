@@ -20,10 +20,12 @@ import type { ResponseFeedbackPort } from "../learning/feedback/response-attribu
  */
 export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChannelSender {
   /**
-   * Whether a chat id has this channel's shape (Telegram: an integer, web: a
-   * UUID, CLI: "cli-local"). Lets a HubChannel route a reply for a chat it has
-   * not seen a message from since boot — a persisted campaign chat, a guardian
-   * notice — to the right member instead of the primary one.
+   * Whether a chat id has this channel's shape (Telegram: an integer of at
+   * most 52 bits, Discord: a 17-20 digit snowflake, web: a UUID, CLI:
+   * "cli-local"). Lets a HubChannel route a reply for a chat it has not seen a
+   * message from since boot — a persisted campaign chat, a guardian notice —
+   * to the right member instead of the primary one. Shapes must not overlap:
+   * the hub takes the first member that claims an id.
    */
   claimsChatId?(chatId: string): boolean;
 

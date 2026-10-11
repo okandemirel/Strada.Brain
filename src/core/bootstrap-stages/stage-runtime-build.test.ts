@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { receiptOfFailure } from "../../campaign/producer-failure.js";
 import { parsePlayerBuildOutput, buildEvidenceFromToolResult, makeRunPlayer, makeRunPlaymodeSuite, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
+import { HubChannel } from "../../channels/hub/hub-channel.js";
+import type { IChannelAdapter } from "../../channels/channel.interface.js";
 
 const artifactDir = mkdtempSync(join(tmpdir(), "build-artifact-"));
 // A REAL StandaloneOSX artifact: .app is a bundle DIRECTORY holding Contents,
@@ -778,6 +780,33 @@ describe("makeCampaignMessenger — queued is not delivered", () => {
     // Both attempts reached the channel, and the status broadcast ran either way.
     expect(sent).toHaveLength(2);
     expect(broadcasts).toBe(2);
+  });
+
+  // Audit channels#3: "web,telegram" boots a HubChannel, and the hub had no
+  // sendMarkdownDelivered, so the messenger fell back to sendMarkdown and a
+  // report buffered for an offline browser was recorded as reported.
+  it("still says queued when the channel is a hub in front of an offline web member", async () => {
+    const member = (name: string, extras: Record<string, unknown> = {}): IChannelAdapter =>
+      ({
+        name,
+        connect: async () => undefined,
+        disconnect: async () => undefined,
+        isHealthy: () => true,
+        onMessage: () => undefined,
+        sendText: async () => undefined,
+        sendMarkdown: async () => undefined,
+        ...extras,
+      }) as IChannelAdapter;
+    const webChat = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+    const hub = new HubChannel(
+      [
+        member("web", { claimsChatId: (id: string) => id === webChat, sendMarkdownDelivered: async () => false }),
+        member("telegram", { claimsChatId: (id: string) => /^\d+$/.test(id) }),
+      ],
+      { ownerStore: null },
+    );
+    const messenger = makeCampaignMessenger(hub, () => undefined);
+    await expect(messenger(webChat, "Your game is ready.")).rejects.toThrow(/queued for a client that is not connected/);
   });
 
   it("uses a channel that cannot tell exactly as before", async () => {

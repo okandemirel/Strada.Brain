@@ -97,6 +97,15 @@ const DISCORD_EMBED_FIELD_MAX = 1024;
 export class DiscordChannel implements IChannelAdapter {
   readonly name = "discord";
 
+  /**
+   * Discord chat ids are channel snowflakes: 17-20 digits, past any integer
+   * Telegram issues, so a hub can route a chat it has no binding for here
+   * instead of to Telegram or the primary member (audit channels#4).
+   */
+  claimsChatId(chatId: string): boolean {
+    return /^\d{17,20}$/.test(chatId);
+  }
+
   private readonly client: Client;
   private readonly auth: AuthManager;
   private readonly rateLimiter: DiscordRateLimiter;

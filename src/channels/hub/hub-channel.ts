@@ -8,9 +8,11 @@
 // notification's owner row via bindOwner, or by the first inbound message with
 // that id — a later inbound never overwrites an existing mapping, plan 2.9,
 // audit 12F1/D58), else the member that claims the id's shape (Telegram ids are
-// integers, web ids are UUIDs, the CLI is "cli-local", Slack ids are C…/D…/G…),
-// else the first member — and that last fallback is logged once per id, because
-// a reply that lands on the wrong channel is a bug worth seeing.
+// integers of at most 52 bits, Discord ids are longer snowflakes, web ids are
+// UUIDs, the CLI is "cli-local", Slack ids are C…/D…/G…), else the first member
+// — and that last fallback is logged once per id, because a reply that lands on
+// the wrong channel is a bug worth seeing. A shape is a guess and is never
+// recorded: the first inbound still binds the chat (audit channels#4).
 //
 // Ownership is persisted as {chatId → member name} through HubOwnerStore (one
 // keyed SQLite row per chat) and restored at construction (plan 2.10, audit
@@ -54,6 +56,7 @@ interface OwnerEntry {
 /** The optional surface members may expose; every call site below feature-checks. */
 interface MemberExtras {
   claimsChatId?(chatId: string): boolean;
+  sendMarkdownDelivered?(chatId: string, markdown: string): Promise<boolean>;
   sendSystemMessage?(chatId: string, text: string): Promise<void>;
   sendTypingIndicator?(chatId: string): Promise<void>;
   sendTypingStop?(chatId: string): void;
@@ -161,8 +164,13 @@ export class HubChannel implements IChannelAdapter {
       member.onMessage(async (msg) => {
         // First inbound binds; a later inbound never overwrites an owner that
         // still resolves to a live member (2.9). A stale persisted name whose
-        // member is no longer configured is replaced.
-        if (!this.memberNamed(this.ownerName(msg.chatId))) this.record(msg.chatId, member.name);
+        // member is no longer configured is replaced, and so is an owner that
+        // disowns the id's shape: only a shape guess an older hub persisted
+        // could have bound it there, and nothing else would ever correct it.
+        const owner = this.memberNamed(this.ownerName(msg.chatId));
+        if (!owner || (owner !== member && owner.claimsChatId?.(msg.chatId) === false)) {
+          this.record(msg.chatId, member.name);
+        }
         await this.handler?.(msg);
       });
     }
@@ -226,11 +234,11 @@ export class HubChannel implements IChannelAdapter {
   ownerOf(chatId: string): Member {
     const known = this.memberNamed(this.ownerName(chatId));
     if (known) return known;
+    // Not recorded: a recorded guess outranks the first inbound (which never
+    // overwrites), so a Discord snowflake once guessed as Telegram stayed
+    // Telegram's for good. The shape gives the same answer on the next call.
     const claimant = this.members.find((m) => m.claimsChatId?.(chatId) === true);
-    if (claimant) {
-      this.record(chatId, claimant.name);
-      return claimant;
-    }
+    if (claimant) return claimant;
     const primary = this.members[0]!;
     if (!this.unownedWarned.has(chatId)) {
       this.unownedWarned.add(chatId);
@@ -259,6 +267,20 @@ export class HubChannel implements IChannelAdapter {
     return options
       ? this.ownerOf(chatId).sendMarkdown(chatId, markdown, options)
       : this.ownerOf(chatId).sendMarkdown(chatId, markdown);
+  }
+
+  /**
+   * Whether the markdown actually left or was only queued (AG#13). Without
+   * this the campaign messenger fell back to sendMarkdown, which resolves for
+   * a frame the web member merely buffered for an offline browser, and the
+   * delivery report was recorded as reported (audit channels#3). A member that
+   * cannot tell the difference is used exactly as the messenger used it before.
+   */
+  async sendMarkdownDelivered(chatId: string, markdown: string): Promise<boolean> {
+    const owner = this.ownerOf(chatId);
+    if (owner.sendMarkdownDelivered) return owner.sendMarkdownDelivered(chatId, markdown);
+    await owner.sendMarkdown(chatId, markdown);
+    return true;
   }
 
   async sendSystemMessage(chatId: string, text: string): Promise<void> {

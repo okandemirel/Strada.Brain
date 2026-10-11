@@ -741,4 +741,16 @@ describe("TelegramChannel.claimsChatId (hub routing)", () => {
     expect(channel.claimsChatId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(false);
     expect(channel.claimsChatId("cli-local")).toBe(false);
   });
+
+  // Audit channels#4: in a hub with Discord, a channel snowflake is all digits
+  // too. Telegram ids have at most 52 significant bits, and parseInt cannot
+  // address anything longer, so such an id is never Telegram's.
+  it("does not claim a Discord snowflake or any integer past what it can address", () => {
+    const auth = { isAllowed: vi.fn().mockReturnValue(true), getRole: vi.fn().mockReturnValue("admin") } as never;
+    const channel = new TelegramChannel("test-token", auth);
+    expect(channel.claimsChatId(String(2 ** 52))).toBe(true);
+    expect(channel.claimsChatId("1203456789012345678")).toBe(false);
+    expect(channel.claimsChatId("81384788765712384")).toBe(false);
+    expect(channel.claimsChatId("-99999999999999999999")).toBe(false);
+  });
 });

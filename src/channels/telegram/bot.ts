@@ -76,9 +76,13 @@ function chunkTelegramMessage(text: string): string[] {
 export class TelegramChannel implements IChannelAdapter {
   readonly name = "telegram";
 
-  /** Telegram chat ids are integers (negative for groups). */
+  /**
+   * Telegram chat ids are integers (negative for groups) of at most 52
+   * significant bits. A longer digit run is a Discord snowflake in a hub, and
+   * parseInt could not address it anyway (audit channels#4).
+   */
   claimsChatId(chatId: string): boolean {
-    return /^-?\d+$/.test(chatId);
+    return /^-?\d+$/.test(chatId) && Number.isSafeInteger(Number(chatId));
   }
 
   private readonly bot: Bot;

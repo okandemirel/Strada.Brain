@@ -206,6 +206,74 @@ describe("HubChannel", () => {
     expect(loggerStub.warn).not.toHaveBeenCalled();
   });
 
+  // Audit channels#4: Telegram's integer shape also matched Discord snowflakes,
+  // and the guess was recorded like a real binding, so the Discord inbound that
+  // followed could never take the chat back and every reply went to Telegram.
+  it("never records a shape guess: the first inbound binds the chat, and nothing guessed is persisted", async () => {
+    const snowflake = "1203456789012345678";
+    const store = new HubOwnerStore(":memory:");
+    try {
+      const tg = fake("telegram", { claimsChatId: (id: string) => /^-?\d+$/.test(id) });
+      const discord = fake("discord");
+      const hub = new HubChannel([tg, discord], { ownerStore: store });
+      hub.onMessage(async () => undefined);
+
+      await hub.sendMarkdown(snowflake, "task result before any inbound");
+      expect(tg.sent).toHaveLength(1);
+      expect(hub.ownerNames().has(snowflake)).toBe(false);
+      expect(store.load().has(snowflake)).toBe(false);
+
+      await discord.handler!(incoming(snowflake, "discord"));
+      await hub.sendMarkdown(snowflake, "reply");
+      expect(discord.sent).toEqual([[snowflake, "markdown", "reply"]]);
+      expect(tg.sent).toHaveLength(1);
+      expect(store.load().get(snowflake)).toBe("discord");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("lets an inbound take back a chat whose recorded member disowns the id's shape (a guess an older hub persisted)", async () => {
+    const snowflake = "1203456789012345678";
+    const store = new HubOwnerStore(":memory:");
+    try {
+      store.bind(snowflake, "telegram");
+      const tg = fake("telegram", { claimsChatId: (id: string) => /^-?\d+$/.test(id) && Number.isSafeInteger(Number(id)) });
+      const discord = fake("discord");
+      const hub = new HubChannel([tg, discord], { ownerStore: store });
+      hub.onMessage(async () => undefined);
+
+      await discord.handler!(incoming(snowflake, "discord"));
+      await hub.sendMarkdown(snowflake, "reply");
+      expect(discord.sent).toEqual([[snowflake, "markdown", "reply"]]);
+      expect(tg.sent).toEqual([]);
+      expect(store.load().get(snowflake)).toBe("discord");
+    } finally {
+      store.close();
+    }
+  });
+
+  // Audit channels#3 (Codex AG#13 reopened): the campaign messenger asks
+  // sendMarkdownDelivered whether a report left or only queued. The hub had no
+  // such method, so in "web,telegram" a report buffered for an offline browser
+  // was recorded as reported.
+  it("asks the owning member whether a markdown message left, and answers yes only for one that cannot queue", async () => {
+    const uuid = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+    const web = fake("web", {
+      claimsChatId: (id: string) => id === uuid,
+      sendMarkdownDelivered: vi.fn(async () => false),
+    });
+    const tg = fake("telegram", { claimsChatId: (id: string) => /^\d+$/.test(id) });
+    const hub = new HubChannel([tg, web], { ownerStore: null });
+
+    await expect(hub.sendMarkdownDelivered(uuid, "Your game is ready.")).resolves.toBe(false);
+    expect(web.sendMarkdownDelivered).toHaveBeenCalledWith(uuid, "Your game is ready.");
+    expect(web.sendMarkdown).not.toHaveBeenCalled();
+
+    await expect(hub.sendMarkdownDelivered("777", "Your game is ready.")).resolves.toBe(true);
+    expect(tg.sent).toEqual([["777", "markdown", "Your game is ready."]]);
+  });
+
   // Plan 2.10 (audit 12F2/D59): {chatId → channelType} is persisted and
   // restored, so a new hub from the same storage routes a chat it never saw.
   it("restores chat ownership from the owner store after a simulated restart", async () => {

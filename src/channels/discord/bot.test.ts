@@ -86,6 +86,18 @@ describe("DiscordChannel", () => {
       expect(channel.name).toBe("discord");
     });
 
+    // Audit channels#4: a hub routes a chat it has no binding for by the id's
+    // shape. Discord claimed nothing, so its snowflakes went to whichever
+    // member claimed digits (Telegram) or to the primary.
+    it("claims channel snowflakes and no other shape", () => {
+      expect(channel.claimsChatId("1203456789012345678")).toBe(true);
+      expect(channel.claimsChatId("81384788765712384")).toBe(true);
+      expect(channel.claimsChatId("123456789")).toBe(false);
+      expect(channel.claimsChatId("-1001234567890")).toBe(false);
+      expect(channel.claimsChatId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(false);
+      expect(channel.claimsChatId("cli-local")).toBe(false);
+    });
+
     it("should create instance with slash commands", () => {
       const withCommands = new DiscordChannel("fake-token", auth, {
         guildId: "guild123",
