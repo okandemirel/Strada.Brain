@@ -18,6 +18,7 @@ import {
   TextIndex, 
   extractTerms 
 } from "../text-index.js";
+import { importanceToScore, isMemoryImportance } from "./agentdb-adapter.js";
 
 function getLoggerSafe() {
   try {
@@ -36,9 +37,14 @@ interface LegacyMemoryFile {
     id: string;
     type: "conversation" | "analysis" | "note";
     chatId?: string;
+    userId?: string;
+    projectId?: string;
+    shared?: boolean;
     content: string;
     createdAt: string;
     tags: string[];
+    importance?: string;
+    archived?: boolean;
   }>;
   index: { df: Record<string, number>; docCount: number };
 }
@@ -71,6 +77,29 @@ export const MIGRATION_MARKER = "migration-complete.json";
 export const MIGRATION_PROGRESS = "migration-progress.json";
 
 /**
+ * Legacy entry ids a completion marker covers, or null without a readable
+ * marker. The marker used to end every later run, so what the file store
+ * wrote afterwards (the AgentDB-init fallback, a MEMORY_BACKEND=file period)
+ * never reached AgentDB; it now lists the ids its run accounted for. A
+ * marker from before that covers what existed when it was written: the
+ * entries created up to its completedAt (all of them when it has no time).
+ */
+function idsCoveredByMarker(sourcePath: string, entries: LegacyMemoryFile["entries"]): Set<string> | null {
+  let marker: unknown;
+  try {
+    marker = JSON.parse(readFileSync(join(sourcePath, MIGRATION_MARKER), "utf-8"));
+  } catch {
+    return null;
+  }
+  const { handledIds, completedAt } = (marker ?? {}) as { handledIds?: unknown; completedAt?: unknown };
+  if (Array.isArray(handledIds)) {
+    return new Set(handledIds.filter((id): id is string => typeof id === "string"));
+  }
+  const markedAt = typeof completedAt === "string" ? Date.parse(completedAt) : NaN;
+  return new Set(entries.filter((e) => !(Date.parse(e.createdAt) > markedAt)).map((e) => e.id));
+}
+
+/**
  * Default maximum entries to migrate (sum of tier limits: 100+1000+10000)
  */
 const DEFAULT_MAX_ENTRIES = 11100;
@@ -87,7 +116,11 @@ export interface MigrationConfig {
   generateEmbeddings: boolean;
   /** Assign tier based on age */
   tierAssignment: "age" | "all-persistent" | "all-ephemeral";
-  /** Cutoff date for persistent tier (entries older than this become persistent) */
+  /**
+   * No longer consulted: "age" sends everything older than a day to
+   * Persistent, because the Ephemeral band below this cutoff dropped those
+   * entries a TTL after the import. Kept so existing callers compile.
+   */
   persistentCutoffDays: number;
   /** Dry run - don't actually migrate */
   dryRun: boolean;
@@ -118,6 +151,8 @@ export const DEFAULT_MIGRATION_CONFIG: Partial<MigrationConfig> = {
 export class MemoryMigrator {
   private config: MigrationConfig;
   private status: MigrationStatus;
+  /** Every id in memory.json as this run read it; the marker records them. */
+  private sourceIds: string[] = [];
 
   constructor(config: MigrationConfig) {
     this.config = { ...DEFAULT_MIGRATION_CONFIG, ...config } as MigrationConfig;
@@ -144,13 +179,16 @@ export class MemoryMigrator {
     // Get source entry count for count validation
     const preview = MemoryMigrator.getMigrationPreview(this.config.sourcePath);
     const expectedCount = preview.entryCount;
+    // A marker means an earlier clean run imported the analysis cache; this
+    // run only brings over entries the file store wrote since.
+    const earlierRunCompleted = existsSync(join(this.config.sourcePath, MIGRATION_MARKER));
 
     try {
       // Migrate memory entries
       await this.migrateMemoryEntries();
 
       // Migrate analysis cache
-      await this.migrateAnalysisCache();
+      if (!earlierRunCompleted) await this.migrateAnalysisCache();
 
       // Count validation: migrated + failed should equal source count
       const actualCount = this.status.entriesMigrated + this.status.entriesFailed;
@@ -172,13 +210,15 @@ export class MemoryMigrator {
       // Write the idempotency marker only for a clean run. With failures the
       // marker stopped every later retry, so the entries that failed were
       // never migrated (MEM-9); a rerun re-imports and is safe to repeat.
-      if (this.status.entriesFailed === 0) {
-        this.writeMarkerFile();
-        if (!this.config.dryRun) rmSync(join(this.config.sourcePath, MIGRATION_PROGRESS), { force: true });
-      } else {
+      // A dry run imported nothing, and its marker told the real run that
+      // every entry was already in.
+      if (this.status.entriesFailed > 0) {
         getLoggerSafe().warn("[MemoryMigrator] Migration had failures; marker not written so the next start retries", {
           entriesFailed: this.status.entriesFailed,
         });
+      } else if (!this.config.dryRun) {
+        this.writeMarkerFile();
+        rmSync(join(this.config.sourcePath, MIGRATION_PROGRESS), { force: true });
       }
 
       getLoggerSafe().info("[MemoryMigrator] Migration complete", {
@@ -206,6 +246,8 @@ export class MemoryMigrator {
         entriesFailed: this.status.entriesFailed,
         sourceSystem: this.status.sourceSystem,
         version: this.status.version,
+        // Stored now or by an earlier run, or left out by maxEntries.
+        handledIds: this.sourceIds,
       };
       const tmpPath = markerPath + ".tmp";
       writeFileSync(tmpPath, JSON.stringify(markerData, null, 2));
@@ -267,7 +309,12 @@ export class MemoryMigrator {
     const textIndex = TextIndex.deserialize(legacyData.index);
 
     // Migrate each entry, skipping the ones a previous partial run stored
+    // and the ones an earlier clean run's marker covers
+    this.sourceIds = legacyData.entries.map((e) => e.id);
     const alreadyMigrated = this.readMigratedIds();
+    for (const id of idsCoveredByMarker(this.config.sourcePath, legacyData.entries) ?? []) {
+      alreadyMigrated.add(id);
+    }
     for (const legacyEntry of entriesToMigrate) {
       if (!this.config.dryRun && alreadyMigrated.has(legacyEntry.id)) {
         this.status.entriesMigrated++;
@@ -346,17 +393,26 @@ export class MemoryMigrator {
 
     // Create unified memory entry. importanceScore, archived and metadata are
     // required downstream: without a score, decay and eviction computed NaN
-    // and treated the row as the first to evict (MEM-9).
+    // and treated the row as the first to evict (MEM-9). What the file store
+    // recorded wins over what is derived here: an archived row came back
+    // live, a shared note became an unowned row hidden from chat-scoped
+    // recall, and every row was dated the day of the import.
+    const legacyImportance = isMemoryImportance(legacyEntry.importance) ? legacyEntry.importance : undefined;
+    const createdAt = Date.parse(legacyEntry.createdAt);
     const entry = {
       type: legacyEntry.type,
       chatId: legacyEntry.chatId,
+      userId: legacyEntry.userId,
+      projectId: legacyEntry.projectId,
+      shared: legacyEntry.shared === true ? true : undefined,
       content: legacyEntry.content,
       tags: legacyEntry.tags,
       tier,
-      importance: importance > 0.7 ? "high" : importance > 0.4 ? "medium" : "low",
-      importanceScore: importance,
-      archived: false,
+      importance: legacyImportance ?? (importance > 0.7 ? "high" : importance > 0.4 ? "medium" : "low"),
+      importanceScore: legacyImportance ? importanceToScore(legacyImportance) : importance,
+      archived: legacyEntry.archived === true,
       metadata: {},
+      ...(Number.isFinite(createdAt) ? { createdAt } : {}),
       termVector, // Keep for backward compatibility
     } as unknown as Parameters<typeof this.config.targetMemory.storeEntry>[0];
 
@@ -418,18 +474,12 @@ export class MemoryMigrator {
       return MemoryTier.Ephemeral;
     }
 
-    // Age-based tier assignment
+    // Age-based tier assignment. The file store never expired an entry, so
+    // none may land on the Ephemeral TTL: entries 1-7 days old went there
+    // and dropped out of every recall a day after the import.
     const entryDate = new Date(legacyEntry.createdAt);
     const ageDays = (Date.now() - entryDate.getTime()) / (1000 * 60 * 60 * 24);
-    const cutoffDays = this.config.persistentCutoffDays ?? 7;
-
-    if (ageDays < 1) {
-      return MemoryTier.Working;
-    } else if (ageDays < cutoffDays) {
-      return MemoryTier.Ephemeral;
-    } else {
-      return MemoryTier.Persistent;
-    }
+    return ageDays < 1 ? MemoryTier.Working : MemoryTier.Persistent;
   }
 
   /**
@@ -500,22 +550,25 @@ export class MemoryMigrator {
   }
 
   /**
-   * Check if migration is needed.
-   * Returns false if migration-complete marker exists (even if memory.json still exists).
+   * Check if migration is needed: memory.json holds an entry the
+   * migration-complete marker does not cover (all of them without a marker).
    */
   static isMigrationNeeded(sourcePath: string): boolean {
-    // If marker exists, migration was already completed
-    const markerPath = join(sourcePath, MIGRATION_MARKER);
-    if (existsSync(markerPath)) {
-      try {
-        JSON.parse(readFileSync(markerPath, "utf-8"));
-        return false;
-      } catch {
-        // Corrupted marker — treat as if migration is needed
-      }
-    }
     const memoryPath = join(sourcePath, "memory.json");
-    return existsSync(memoryPath);
+    if (!existsSync(memoryPath)) return false;
+    if (!existsSync(join(sourcePath, MIGRATION_MARKER))) return true;
+
+    let entries: unknown;
+    try {
+      entries = (JSON.parse(readFileSync(memoryPath, "utf-8")) as Partial<LegacyMemoryFile> | null)?.entries;
+    } catch {
+      return false; // unreadable: a run could import nothing from it
+    }
+    if (!Array.isArray(entries)) return false;
+    const legacyEntries = entries as LegacyMemoryFile["entries"];
+    const covered = idsCoveredByMarker(sourcePath, legacyEntries);
+    // Corrupted marker — treat as if migration is needed
+    return covered === null || legacyEntries.some((e) => !covered.has(e.id));
   }
 
   /**

@@ -106,7 +106,7 @@ function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function isMemoryImportance(value: unknown): value is MemoryImportance {
+export function isMemoryImportance(value: unknown): value is MemoryImportance {
   return value === "low" || value === "medium" || value === "high" || value === "critical";
 }
 
@@ -122,7 +122,7 @@ function isMemoryEntryType(value: unknown): value is MemoryEntryType {
     || value === "project";
 }
 
-function importanceToScore(importance: MemoryImportance): number {
+export function importanceToScore(importance: MemoryImportance): number {
   switch (importance) {
     case "low":
       return 0.25;
@@ -877,6 +877,8 @@ export class AgentDBAdapter implements IMemoryManager {
           projectId: readString(raw["projectId"]) ?? readString(metadata["projectId"]),
           userId: readString(raw["userId"]) ?? readString(metadata["userId"]),
           shared: raw["shared"] === true ? true : undefined,
+          // So does the time: every import used to be dated the day it ran.
+          createdAt: readNumber(raw["createdAt"]),
         } as unknown as Parameters<typeof this.agentdb.storeEntry>[0]);
 
         if (result.kind === "ok") {

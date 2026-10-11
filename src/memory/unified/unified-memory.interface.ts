@@ -467,12 +467,15 @@ export interface IUnifiedMemory {
     ownership?: MemoryOwnershipOptions,
   ): Promise<MemoryEntry>;
 
-  /** Store an entry with full control over metadata */
+  /**
+   * Store an entry with full control over metadata. `createdAt` is for
+   * imports that carry the original time; a new entry omits it and gets now.
+   */
   storeEntry(
     entry: Omit<
       UnifiedMemoryEntry,
       "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
-    >,
+    > & { readonly createdAt?: TimestampMs },
   ): Promise<Result<MemoryEntry, Error>>;
 
   /** Batch store entries */

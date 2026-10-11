@@ -709,7 +709,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     entry: Omit<
       UnifiedMemoryEntry,
       "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
-    >,
+    > & { readonly createdAt?: TimestampMs },
   ): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
     try {
       if (!this.isInitialized) {
@@ -762,7 +762,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         id,
         type: entry.type,
         content: entry.content,
-        createdAt: now,
+        createdAt: entry.createdAt ?? now,
         tags: entry.tags,
         importance: entry.importance,
         archived: entry.archived,

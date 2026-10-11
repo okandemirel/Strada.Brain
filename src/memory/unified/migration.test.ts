@@ -154,6 +154,8 @@ describe("MemoryMigrator", () => {
       // Verify no entries were actually migrated
       const persistent = await targetMemory.getByTier(MemoryTier.Persistent);
       expect(persistent).toHaveLength(0);
+      // A dry run imports nothing, so it must not record that it did.
+      expect(existsSync(join(tempDir, MIGRATION_MARKER))).toBe(false);
     });
 
     it("should assign tiers based on age", async () => {
@@ -190,6 +192,83 @@ describe("MemoryMigrator", () => {
       migrator.createBackup(backupPath);
 
       expect(existsSync(join(backupPath, "memory-backup.json"))).toBe(true);
+    });
+  });
+
+  // memory-rag#6: the legacy import lost data three ways.
+  describe("legacy entries keep what the file store held (memory-rag#6)", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    type Stored = {
+      content: string; tier: MemoryTier; expiresAt?: number; archived: boolean; importance: string;
+      createdAt: number; chatId: string; userId?: string; projectId?: string; shared?: boolean;
+    };
+    const storedEntries = (): Stored[] => [...(targetMemory as unknown as { entries: Map<string, Stored> }).entries.values()];
+    const legacyFile = (entries: Array<Record<string, unknown>>) => ({
+      version: 1,
+      entries: entries.map((e) => ({ type: "note", tags: [], ...e })),
+      index: { df: {}, docCount: entries.length },
+    });
+
+    // Entries 1-7 days old went to the Ephemeral tier, whose 24h TTL then
+    // hid them from every recall (and cleanupExpired deleted them).
+    it("never puts a migrated entry on the Ephemeral TTL", async () => {
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyFile([
+        { id: "three-days", content: "a note written three days ago", createdAt: new Date(Date.now() - 3 * DAY).toISOString() },
+      ])));
+
+      await runAutomaticMigration(tempDir, targetMemory);
+
+      const [entry] = storedEntries();
+      expect(entry!.tier).toBe(MemoryTier.Persistent);
+      expect(entry!.expiresAt).toBeUndefined();
+    });
+
+    it("carries archived, importance, createdAt and ownership over", async () => {
+      const createdAt = Date.now() - 20 * DAY;
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyFile([{
+        id: "owned", content: "an archived critical shared note", createdAt: new Date(createdAt).toISOString(),
+        chatId: "chat-9", userId: "u1", projectId: "p1", shared: true, archived: true, importance: "critical",
+      }])));
+
+      await runAutomaticMigration(tempDir, targetMemory);
+
+      expect(storedEntries()[0]).toMatchObject({
+        archived: true, importance: "critical", createdAt, chatId: "chat-9", userId: "u1", projectId: "p1", shared: true,
+      });
+    });
+
+    // The completion marker made every later run a no-op, so what the file
+    // backend wrote afterwards (AgentDB-init fallback, MEMORY_BACKEND=file)
+    // never reached AgentDB.
+    it("imports what the file store wrote after a clean migration, and only that", async () => {
+      const first = { id: "before", content: "written before the migration", createdAt: new Date(Date.now() - 2 * DAY).toISOString() };
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyFile([first])));
+      await runAutomaticMigration(tempDir, targetMemory);
+      expect(MemoryMigrator.isMigrationNeeded(tempDir)).toBe(false);
+
+      const later = { id: "after", content: "written by the file backend later", createdAt: new Date().toISOString() };
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyFile([first, later])));
+      expect(MemoryMigrator.isMigrationNeeded(tempDir)).toBe(true);
+      await runAutomaticMigration(tempDir, targetMemory);
+
+      expect(storedEntries().map((e) => e.content).sort()).toEqual([first.content, later.content].sort());
+      expect(MemoryMigrator.isMigrationNeeded(tempDir)).toBe(false);
+    });
+
+    it("reads a marker written before ids were recorded as covering what existed then", async () => {
+      const markedAt = Date.now() - DAY;
+      writeFileSync(join(tempDir, MIGRATION_MARKER), JSON.stringify({
+        completedAt: new Date(markedAt).toISOString(), entriesMigrated: 1, entriesFailed: 0, sourceSystem: "file-memory-tfidf", version: 2,
+      }));
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyFile([
+        { id: "old", content: "imported by the earlier run", createdAt: new Date(markedAt - DAY).toISOString() },
+        { id: "new", content: "written after the earlier run", createdAt: new Date().toISOString() },
+      ])));
+
+      expect(MemoryMigrator.isMigrationNeeded(tempDir)).toBe(true);
+      await runAutomaticMigration(tempDir, targetMemory);
+
+      expect(storedEntries().map((e) => e.content)).toEqual(["written after the earlier run"]);
     });
   });
 

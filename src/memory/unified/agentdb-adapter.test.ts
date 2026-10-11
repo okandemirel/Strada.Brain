@@ -1229,7 +1229,9 @@ describe("AgentDBAdapter", () => {
 
       const imported = await adapter.import(exported.value);
       expect(imported).toEqual({ kind: "ok", value: 1 });
-      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({ type: "project", projectId: "proj-42" }));
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "project", projectId: "proj-42", createdAt: 1_000 }),
+      );
     });
 
     it("still drops an entry of unknown type", async () => {
