@@ -2375,6 +2375,8 @@ async function bootstrapImpl(
     stradaMcpRuntime: toolRegistry.getStradaMcpRuntimeStatus(),
     primaryProviderSupportsStreaming: primaryProviderStreaming,
     supervisorWired: Boolean(supervisorBrain),
+    multiAgentWired: Boolean(agentManager),
+    delegationWired: Boolean(delegationManager),
     // The mode the vault ACTUALLY retrieves with, measured from the stores that
     // were registered (plan 3.10): a normal boot is lexical, and the report
     // says so instead of implying vectors.

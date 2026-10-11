@@ -537,3 +537,60 @@ describe("vault retrieval before registration settles (plan 3.10)", () => {
     }).some((w) => w.includes("LEXICAL ONLY"))).toBe(false);
   });
 });
+
+describe("multi-agent and delegation report what a boot built, not what config asked for", () => {
+  // Both are constructed only in daemon mode. With STRADA_DAEMON_ENABLED=false
+  // and the MULTI_AGENT_ENABLED / TASK_DELEGATION_ENABLED that setup writes,
+  // the report said "active" while chats ran single-agent with no delegate tools.
+  function configWithBoth(): Config {
+    const base = makeConfig();
+    return {
+      ...base,
+      agent: { ...base.agent, enabled: true },
+      delegation: { ...base.delegation, enabled: true },
+    } as Config;
+  }
+
+  it("reads inactive, and names the daemon, when the daemon-off boot never built them", () => {
+    const report = buildBootReport({
+      config: configWithBoth(),
+      installRoot: process.cwd(),
+      channelType: "web",
+      channelHealthy: true,
+      daemonMode: false,
+      multiAgentWired: false,
+      delegationWired: false,
+      startupNotices: [],
+    });
+
+    const multiAgent = report.capabilities.find((c) => c.id === "multi-agent");
+    const delegation = report.capabilities.find((c) => c.id === "delegation");
+    expect(multiAgent?.status).toBe("inactive");
+    expect(multiAgent?.detail).toMatch(/NOT built.*STRADA_DAEMON_ENABLED=false/);
+    expect(delegation?.status).toBe("inactive");
+    expect(delegation?.detail).toMatch(/NOT built.*STRADA_DAEMON_ENABLED=false/);
+  });
+
+  it("reads active when the boot built them, and stays config-read when nothing measured", () => {
+    const built = buildCapabilitySnapshot({
+      config: configWithBoth(),
+      installRoot: process.cwd(),
+      channelType: "web",
+      daemonMode: true,
+      multiAgentWired: true,
+      delegationWired: true,
+    });
+    expect(built.find((c) => c.id === "multi-agent")?.status).toBe("active");
+    expect(built.find((c) => c.id === "delegation")?.status).toBe("active");
+
+    // The doctor reads static config and never boots: no measurement, no verdict.
+    const unmeasured = buildCapabilitySnapshot({
+      config: configWithBoth(),
+      installRoot: process.cwd(),
+      channelType: "doctor",
+      daemonMode: false,
+    });
+    expect(unmeasured.find((c) => c.id === "multi-agent")?.detail).toBe("Multi-agent orchestration is enabled in current config.");
+    expect(unmeasured.find((c) => c.id === "delegation")?.detail).toBe("Delegation is enabled in current config.");
+  });
+});

@@ -67,6 +67,14 @@ export interface CapabilitySnapshotOptions {
    */
   supervisorWired?: boolean | "not-measured";
   /**
+   * Whether an AgentManager / DelegationManager was actually built this boot.
+   * Both are constructed only in daemon mode, so with STRADA_DAEMON_ENABLED=false
+   * the config flags alone reported them "active" while chats ran single-agent
+   * with no delegate tools. `undefined` — the caller did not measure (doctor).
+   */
+  multiAgentWired?: boolean;
+  delegationWired?: boolean;
+  /**
    * What the Codebase Memory Vault actually retrieves with (plan 3.10 /
    * audit 05.cap / D44).
    *
@@ -155,10 +163,17 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
   );
   const stradaMcpRuntime = options.stradaMcpRuntime;
   const stradaMcpInstalled = stradaMcpRuntime?.installed === true;
-  const multiAgentEnabled = options.config.agent.enabled;
+  const multiAgentConfigured = options.config.agent.enabled;
+  const multiAgentNotBuilt = multiAgentConfigured && options.multiAgentWired === false;
+  const multiAgentEnabled = multiAgentConfigured && !multiAgentNotBuilt;
   const supervisorEnabled = Boolean(options.config.supervisor?.enabled);
-  const delegationEnabled = multiAgentEnabled && options.config.delegation.enabled;
-  const delegationBlockedByMultiAgent = !multiAgentEnabled && options.config.delegation.enabled;
+  const delegationConfigured = multiAgentConfigured && options.config.delegation.enabled;
+  const delegationNotBuilt = delegationConfigured && options.delegationWired === false;
+  const delegationEnabled = delegationConfigured && !delegationNotBuilt;
+  const delegationBlockedByMultiAgent = !multiAgentConfigured && options.config.delegation.enabled;
+  const notBuiltReason = options.daemonMode
+    ? "see the startup notices"
+    : "it is built only in daemon mode, and STRADA_DAEMON_ENABLED=false";
   const unityBridgeStatus: CapabilityStatus = !stradaMcpInstalled
     ? "inactive"
     : stradaMcpRuntime?.bridgeConnected
@@ -428,9 +443,13 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       "experimental",
       multiAgentEnabled ? "active" : "inactive",
       "wired",
-      multiAgentEnabled
-        ? "Multi-agent orchestration is enabled in current config."
-        : "Disabled in current config (MULTI_AGENT_ENABLED=false). Multi-agent is outside the protected recovery surface.",
+      multiAgentNotBuilt
+        ? `Enabled in config but NOT built this boot (${notBuiltReason}). Chats run on the single-agent path, without per-chat agents.`
+        : multiAgentEnabled
+          ? (options.multiAgentWired
+            ? "Multi-agent orchestration is built and routing chats in this runtime."
+            : "Multi-agent orchestration is enabled in current config.")
+          : "Disabled in current config (MULTI_AGENT_ENABLED=false). Multi-agent is outside the protected recovery surface.",
       false,
     ),
     createCapability(
@@ -440,9 +459,13 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       "experimental",
       delegationEnabled ? "active" : "inactive",
       "wired",
-      delegationEnabled
-        ? "Delegation is enabled in current config."
-        : delegationBlockedByMultiAgent
+      delegationNotBuilt
+        ? `Enabled in config but NOT built this boot (${notBuiltReason}). No delegate or swarm tools exist in this runtime.`
+        : delegationEnabled
+          ? (options.delegationWired
+            ? "Delegation is built; delegate and swarm tools are offered in this runtime."
+            : "Delegation is enabled in current config.")
+          : delegationBlockedByMultiAgent
           ? "Delegation is configured, but multi-agent orchestration is disabled, so it will not initialize in this runtime."
           : "Disabled in current config (TASK_DELEGATION_ENABLED=false). Delegation is outside the protected recovery surface.",
       false,

@@ -281,6 +281,9 @@ export async function finalizeChannelStartupStage(params: {
   primaryProviderSupportsStreaming?: boolean;
   /** Whether a SupervisorBrain was actually constructed this boot. */
   supervisorWired?: boolean;
+  /** Whether an AgentManager / DelegationManager was built (daemon mode only). */
+  multiAgentWired: boolean;
+  delegationWired: boolean;
   /** What the vaults registered this boot actually retrieve with (plan 3.10). */
   vaultRetrieval?: { registered: number; semantic: boolean };
   startupNotices: string[];
@@ -308,6 +311,14 @@ export async function finalizeChannelStartupStage(params: {
     params.startupNotices.push(`GATE DEAD: liveness probe crashed — ${detail}`);
   }
 
+  // Multi-agent is built only in daemon mode. With the daemon off it was
+  // silently skipped while the config, and the report, said it was on.
+  if (params.config.agent.enabled && !params.multiAgentWired) {
+    params.startupNotices.push(params.daemonMode
+      ? "Multi-agent orchestration is enabled but was not built this boot; chats run on the single-agent path."
+      : "Multi-agent orchestration and delegation are enabled (MULTI_AGENT_ENABLED=true) but are built only in daemon mode, and STRADA_DAEMON_ENABLED=false: chats run on the single-agent path, without per-chat agents or delegate tools.");
+  }
+
   const runtimePaths = resolveRuntimePaths({ moduleUrl: params.moduleUrl });
   const bootReport = buildBootReport({
     config: params.config,
@@ -323,6 +334,8 @@ export async function finalizeChannelStartupStage(params: {
     stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
     primaryProviderSupportsStreaming: params.primaryProviderSupportsStreaming,
     supervisorWired: params.supervisorWired,
+    multiAgentWired: params.multiAgentWired,
+    delegationWired: params.delegationWired,
     ...(params.vaultRetrieval ? { vaultRetrieval: params.vaultRetrieval } : {}),
     startupNotices: params.startupNotices,
   });

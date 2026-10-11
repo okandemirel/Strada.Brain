@@ -301,6 +301,8 @@ describe("bootstrap-stages", () => {
       deploymentWired: false,
       alertingWired: false,
       backupWired: false,
+      multiAgentWired: false,
+      delegationWired: false,
       startupNotices: ["provider warning"],
       moduleUrl: import.meta.url,
     });
@@ -316,6 +318,38 @@ describe("bootstrap-stages", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "Startup notice: provider warning",
     );
+  });
+
+  it("says multi-agent was skipped when the daemon-off boot never built it", async () => {
+    // Multi-agent is constructed only in daemon mode; the boot said nothing
+    // and the report called it active while chats ran single-agent.
+    const logger = createMockLogger();
+    const channel = { connect: vi.fn(async () => {}), isHealthy: vi.fn(() => true) } as any;
+    const config = makeConfig();
+    const bootReport = await finalizeChannelStartupStage({
+      channel,
+      logger,
+      config: { ...config, agent: { ...config.agent, enabled: true } } as typeof config,
+      channelType: "web",
+      daemonMode: false,
+      embeddingStatus: {
+        state: "active",
+        ragEnabled: true,
+        configuredProvider: "auto",
+        verified: true,
+        usingHashFallback: false,
+      },
+      deploymentWired: false,
+      alertingWired: false,
+      backupWired: false,
+      multiAgentWired: false,
+      delegationWired: false,
+      startupNotices: [],
+      moduleUrl: import.meta.url,
+    });
+
+    expect(bootReport.capabilities.find((c) => c.id === "multi-agent")?.status).toBe("inactive");
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^Startup notice: Multi-agent .*STRADA_DAEMON_ENABLED=false/));
   });
 
   it("initializes runtime state and wires learning context", () => {
