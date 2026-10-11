@@ -16,9 +16,11 @@ import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import { AgentBudgetTracker } from "../agent-budget-tracker.js";
 import { DaemonStorage } from "../../../daemon/daemon-storage.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
+import { acquireProjectWriteLock } from "../../../common/project-write-lock.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -1459,13 +1461,14 @@ describe("DelegationManager", () => {
       toolContext: TEST_TOOL_CONTEXT,
     });
 
-    it("tells the parent which files were NOT applied and carries the commit in metadata", async () => {
+    it("tells the parent which deletions were NOT applied and carries the commit in metadata", async () => {
       const commit = vi.fn().mockResolvedValue({
         written: ["Assets/Scripts/Tile.cs"],
-        conflicts: ["Assets/Scripts/Board.cs"],
+        conflicts: [],
         removed: ["Assets/Old.asmdef"],
-        failed: ["Assets/Locked.meta"],
-        conflictsQuarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+        failed: [],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
       });
       const lease = leaseManagerWith(commit);
       manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
@@ -1475,18 +1478,95 @@ describe("DelegationManager", () => {
       expect(commit).toHaveBeenCalledTimes(1);
       expect(lease.release).toHaveBeenCalledTimes(1);
       expect(result.content).toContain("Sub-agent completed the task successfully.");
-      expect(result.content).toContain("NOT applied to the project");
-      expect(result.content).toContain("Assets/Scripts/Board.cs");
-      expect(result.content).toContain(".strada/lease-conflicts/lease-1");
-      expect(result.content).toContain("Assets/Locked.meta");
+      expect(result.content).toContain("LEFT IN PLACE in the project");
       expect(result.content).toContain("Assets/Old.asmdef");
       expect(result.metadata.commit).toEqual({
         written: 1,
-        conflicts: ["Assets/Scripts/Board.cs"],
-        failed: ["Assets/Locked.meta"],
+        conflicts: [],
+        failed: [],
         removed: ["Assets/Old.asmdef"],
-        quarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+        quarantinedUnder: null,
       });
+    });
+
+    // A whole-commit lock failure returns `failed` with nothing written and
+    // nothing quarantined. The delegation reported success with
+    // "[Workspace commit: 0 file(s) applied]" and the finally released —
+    // deleted — the only copy of the sub-agent's files.
+    it("a commit that published nothing fails the delegation and KEEPS the lease", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: [],
+        conflicts: [],
+        removed: [],
+        deleted: [],
+        failed: ["(the whole commit): the project write lock could not be taken — another writer holds it"],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      });
+      const lease = leaseManagerWith(commit);
+      const localOpts = buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager });
+      manager = new DelegationManager(localOpts);
+
+      await expect(manager.delegate(request())).rejects.toThrow(/did not publish.*project write lock/);
+
+      expect(lease.release, "the lease is the only copy of the sub-agent's work").not.toHaveBeenCalled();
+      // A pricier tier would redo the work only to lose it the same way.
+      expect(lease.acquireLease).toHaveBeenCalledTimes(1);
+      const [row] = delegationLog.getHistory(1);
+      expect(row!.status).toBe("failed");
+      const emit = vi.mocked(localOpts.eventBus.emit);
+      expect(emit.mock.calls.some(([name]) => name === "delegation:completed")).toBe(false);
+      expect(emit.mock.calls.some(([name]) => name === "delegation:failed")).toBe(true);
+    });
+
+    it("a conflict that could not be quarantined fails the delegation and keeps the lease", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: ["Assets/Scripts/Tile.cs"],
+        conflicts: ["Assets/Scripts/Board.cs"],
+        removed: [],
+        failed: [],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      await expect(manager.delegate(request())).rejects.toThrow(/did not publish.*could not be preserved/);
+      expect(lease.release).not.toHaveBeenCalled();
+    });
+
+    it("a quarantined conflict fails the delegation, and the lease goes — quarantine holds the bytes", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: [],
+        conflicts: ["Assets/Scripts/Board.cs"],
+        removed: [],
+        failed: [],
+        conflictsQuarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
+        quarantined: 1,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      await expect(manager.delegate(request())).rejects.toThrow(/did not publish.*Assets\/Scripts\/Board\.cs/);
+      expect(lease.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("a FAILED sub-agent whose commit published nothing keeps its lease too", async () => {
+      orchestratorHandleMessage = vi.fn().mockRejectedValue(new Error("Model failed"));
+      const commit = vi.fn().mockResolvedValue({
+        written: [],
+        conflicts: [],
+        removed: [],
+        failed: ["Assets/Scripts/Board.cs"],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      await expect(manager.delegate({ ...request(), type: "premium_task" })).rejects.toThrow("Model failed");
+      expect(commit).toHaveBeenCalledTimes(1);
+      expect(lease.release).not.toHaveBeenCalled();
     });
 
     it("adds nothing to a clean commit beyond the applied count", async () => {
@@ -1513,13 +1593,144 @@ describe("DelegationManager", () => {
       const localOpts = buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager });
       manager = new DelegationManager(localOpts);
 
-      await expect(manager.delegate(request())).rejects.toThrow(/discarded.*EACCES/);
+      await expect(manager.delegate(request())).rejects.toThrow(/commit failed.*EACCES/);
 
-      expect(lease.release).toHaveBeenCalledTimes(1);
+      // The commit never finished: the lease is the only copy of the work.
+      expect(lease.release).not.toHaveBeenCalled();
       const [row] = delegationLog.getHistory(1);
       expect(row!.status).toBe("failed");
       const emit = vi.mocked(localOpts.eventBus.emit);
       expect(emit.mock.calls.some(([name]) => name === "delegation:completed")).toBe(false);
+    });
+
+    it("with a real lease: another writer holding the project lock leaves the sub-agent's file in its workspace", async () => {
+      const project = mkdtempSync(join(tmpdir(), "deleg-lock-project-"));
+      const leaseRoot = mkdtempSync(join(tmpdir(), "deleg-lock-leases-"));
+      const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false, projectLockTimeoutMs: 300 });
+      let workspace = "";
+      orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+        workspace = orchestratorOpts.projectPath as string;
+        mkdirSync(join(workspace, "Assets", "Scripts"), { recursive: true });
+        writeFileSync(join(workspace, "Assets", "Scripts", "Board.cs"), "the sub-agent's board", "utf8");
+        const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+        await channel.sendText(msg.chatId as string, "I created Board.cs");
+      });
+      const other = await acquireProjectWriteLock(project, { timeoutMs: 1_000 });
+      try {
+        expect(other.acquired).toBe(true);
+        manager = new DelegationManager(buildManagerOpts({
+          delegationLog,
+          projectPath: project,
+          workspaceLeaseManager: leases,
+        }));
+
+        await expect(manager.delegate({ ...request(), toolContext: { ...TEST_TOOL_CONTEXT, projectPath: project } }))
+          .rejects.toThrow(/did not publish/);
+
+        expect(existsSync(join(project, "Assets", "Scripts", "Board.cs"))).toBe(false);
+        expect(readFileSync(join(workspace, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("the sub-agent's board");
+        // …and the kept lease is still the manager's to publish once the lock is free.
+        other.release();
+        await leases.dispose();
+        expect(readFileSync(join(project, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("the sub-agent's board");
+      } finally {
+        other.release();
+        rmSync(project, { recursive: true, force: true });
+        rmSync(leaseRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("a delegated sub-agent works in its caller's tree", () => {
+    // A caller inside a workspace lease has toolContext.projectPath = its lease.
+    // The delegation lease was seeded from the project root instead: the
+    // sub-agent reviewed a tree without the caller's edits, and its commit
+    // landed in the real project behind the caller's lease.
+    function capturingLeaseManager() {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const commit = vi.fn().mockResolvedValue({
+        written: [], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null, quarantined: 0,
+      });
+      const acquireLease = vi.fn().mockResolvedValue({
+        id: "lease-1", kind: "temp-copy", sourceRoot: "/tmp/leases/task-1", leaseRoot: "/tmp/leases",
+        path: "/tmp/leases/delegation-1", createdAt: Date.now(), commit, release,
+      });
+      return { manager: { acquireLease } as never, acquireLease };
+    }
+    const leasedCaller: ToolContext = {
+      ...TEST_TOOL_CONTEXT,
+      projectPath: "/tmp/leases/task-1",
+      workingDirectory: "/tmp/leases/task-1",
+      sourceProjectPath: "/test/project",
+    };
+    const delegateFrom = (toolContext: ToolContext): DelegationRequest => ({
+      type: "code_review", task: "Review Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
+    });
+
+    it("seeds the sub-agent's lease from the caller's lease, never the project root", async () => {
+      const leases = capturingLeaseManager();
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: leases.manager }));
+
+      await manager.delegate(delegateFrom(leasedCaller));
+
+      expect(leases.acquireLease).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceRoot: "/tmp/leases/task-1", forceTempCopy: true }),
+      );
+    });
+
+    it("a caller working in the project itself still leases the project", async () => {
+      const leases = capturingLeaseManager();
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: leases.manager }));
+
+      await manager.delegate(delegateFrom(TEST_TOOL_CONTEXT));
+
+      expect(leases.acquireLease.mock.calls[0]![0]).not.toHaveProperty("sourceRoot");
+    });
+
+    it("without isolation the sub-agent runs in the caller's tree, not the project root", async () => {
+      manager = new DelegationManager(buildManagerOpts({ delegationLog }));
+
+      await manager.delegate(delegateFrom(leasedCaller));
+
+      expect(orchestratorOpts.projectPath).toBe("/tmp/leases/task-1");
+    });
+
+    it("with real leases: the sub-agent sees the caller's edit and publishes into the caller's lease", async () => {
+      const project = mkdtempSync(join(tmpdir(), "deleg-tree-project-"));
+      const leaseRoot = mkdtempSync(join(tmpdir(), "deleg-tree-leases-"));
+      try {
+        mkdirSync(join(project, "Assets", "Scripts"), { recursive: true });
+        writeFileSync(join(project, "Assets", "Scripts", "Tile.cs"), "tile", "utf8");
+        const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false });
+        const task = await leases.acquireLease({ label: "task" });
+        // The caller's own, unpublished edit.
+        writeFileSync(join(task.path, "Assets", "Scripts", "Board.cs"), "the caller's board", "utf8");
+
+        let sawCallerEdit = false;
+        orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+          const tree = orchestratorOpts.projectPath as string;
+          sawCallerEdit = existsSync(join(tree, "Assets", "Scripts", "Board.cs"));
+          writeFileSync(join(tree, "Assets", "Scripts", "BoardReview.cs"), "// reviewed", "utf8");
+          const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+          await channel.sendText(msg.chatId as string, "reviewed");
+        });
+        manager = new DelegationManager(buildManagerOpts({ delegationLog, projectPath: project, workspaceLeaseManager: leases }));
+
+        await manager.delegate(delegateFrom({
+          ...TEST_TOOL_CONTEXT,
+          projectPath: task.path,
+          workingDirectory: task.path,
+          sourceProjectPath: project,
+        }));
+
+        expect(sawCallerEdit, "the reviewer measured a tree without the caller's edit").toBe(true);
+        expect(readFileSync(join(task.path, "Assets", "Scripts", "BoardReview.cs"), "utf8")).toBe("// reviewed");
+        expect(existsSync(join(project, "Assets", "Scripts", "BoardReview.cs")), "published behind the caller's lease").toBe(false);
+        await leases.dispose();
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+        rmSync(leaseRoot, { recursive: true, force: true });
+      }
     });
   });
 

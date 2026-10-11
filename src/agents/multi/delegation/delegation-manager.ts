@@ -14,7 +14,10 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { getLoggerSafe } from "../../../utils/logger.js";
+import { judgePublication } from "../../../tasks/publication.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
@@ -774,12 +777,29 @@ export class DelegationManager {
         }
       } catch (err) {
         commitError = err;
-        getLoggerSafe().error("Delegated workspace commit failed — sub-agent work discarded", {
+        getLoggerSafe().error("Delegated workspace commit failed — the workspace is KEPT for salvage", {
           subAgentId,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     };
+    // release() deletes the workspace. When the commit threw, could not write
+    // a file (a whole-commit lock failure is one), or could not quarantine a
+    // conflict, the workspace is the ONLY copy of that work — the same rule
+    // WorkspaceLeaseManager.dispose keeps for shutdown. A preserved conflict
+    // is not: its bytes are under the quarantine.
+    const leaseHoldsOnlyCopy = (): boolean => {
+      if (commitError !== undefined) return true;
+      if (!commitOutcome) return false;
+      const conflicts = commitOutcome.conflicts.length;
+      return commitOutcome.failed.length > 0 || conflicts - (commitOutcome.quarantined ?? conflicts) > 0;
+    };
+    // The tree the CALLER works in. Under a workspace lease that is its lease,
+    // not the project root: seeding from the root handed the sub-agent a tree
+    // without the caller's edits, and its commit published into the real
+    // project behind the caller's lease — whose own commit then found the
+    // file changed since its seed and quarantined the caller's version.
+    const callerTree = callerWorkTree(request.toolContext?.projectPath, this.opts.projectPath);
 
     // Held outside the try so the finally can release it: an Orchestrator owns a
     // session-cleanup timer and a budget listener that otherwise outlive the run.
@@ -789,6 +809,9 @@ export class DelegationManager {
         ? await this.opts.workspaceLeaseManager.acquireLease({
           label: `delegation-${request.type}`,
           workerId: subAgentId,
+          // A copy, as background-executor seeds a nested worker: a git
+          // worktree would branch from HEAD and drop the caller's uncommitted edits.
+          ...(callerTree ? { sourceRoot: callerTree, forceTempCopy: true } : {}),
         })
         : undefined;
       // The timeout is armed before the lease, and acquisition can wait on orphan salvage and
@@ -802,7 +825,7 @@ export class DelegationManager {
         providerManager,
         tools: subAgentTools,
         channel: captureChannel,
-        projectPath: workspaceLease?.path ?? this.opts.projectPath,
+        projectPath: workspaceLease?.path ?? callerTree ?? this.opts.projectPath,
         readOnly: this.opts.readOnly,
         requireConfirmation: false,
         defaultLanguage: this.opts.defaultLanguage,
@@ -937,13 +960,28 @@ export class DelegationManager {
       }
 
       // Publish the sub-agent's files BEFORE anything records success: a commit
-      // that throws means the work was discarded, which is a failed delegation,
-      // not a completed one.
+      // that throws means the work never reached the project, which is a
+      // failed delegation, not a completed one.
       await commitWorkspace();
       if (commitError !== undefined) {
         throw new Error(
-          "Delegated workspace commit failed — sub-agent work discarded: " +
+          "Delegated workspace commit failed — the sub-agent's work was not published" +
+            (workspaceLease ? ` (its workspace is kept at ${workspaceLease.path})` : "") + ": " +
             (commitError instanceof Error ? commitError.message : String(commitError)),
+        );
+      }
+      // …and so is one that RETURNED having published nothing, or not the
+      // change the run was about. Only a throw used to fail the delegation: a
+      // whole-commit lock failure came back as `failed`, the delegation
+      // reported success with "0 file(s) applied", and the finally deleted the
+      // only copy. The one adjudicator background-executor uses decides it.
+      // The message keeps the "commit failed" prefix: escalation must not
+      // re-run the work at a pricier tier to lose it the same way.
+      const publicationLoss = commitOutcome ? judgePublication(commitOutcome).loss : undefined;
+      if (publicationLoss !== undefined) {
+        throw new Error(
+          `Delegated workspace commit failed — it did not publish the sub-agent's work: ${publicationLoss}` +
+            (workspaceLease && leaseHoldsOnlyCopy() ? ` (its workspace is kept at ${workspaceLease.path})` : ""),
         );
       }
       const commitSummary = commitOutcome
@@ -1058,7 +1096,17 @@ export class DelegationManager {
       // layer down, and easy to miss because the delegation path has its own
       // lease lifecycle. A no-op when the success path already committed.
       await commitWorkspace();
-      await workspaceLease?.release().catch(() => {});
+      if (workspaceLease && leaseHoldsOnlyCopy()) {
+        // NOT RELEASED, on every path — success, failure, timeout, cancel. The
+        // manager still tracks it, so its shutdown commit retries the
+        // publication, and the boot salvage pass recovers it after a crash.
+        getLoggerSafe().error("Delegated workspace NOT released — its work has not been published", {
+          subAgentId,
+          workspace: workspaceLease.path,
+        });
+      } else {
+        await workspaceLease?.release().catch(() => {});
+      }
       // The delegate's entry in the shared store is per-run: drop it with the
       // run, or every delegation leaves one behind for the daemon's lifetime.
       this.opts.authorizedPathsStore?.delete(delegateChatId);
@@ -1479,6 +1527,23 @@ export class DelegationManager {
       );
     });
   }
+}
+
+/**
+ * The caller's working tree when it is not the project root (a workspace
+ * lease), else undefined. Lexical and real forms are both compared: a /var vs
+ * /private/var spelling of the project itself is not a different tree.
+ */
+function callerWorkTree(callerPath: string | undefined, projectPath: string): string | undefined {
+  if (!callerPath) return undefined;
+  const caller = resolve(callerPath);
+  if (caller === resolve(projectPath)) return undefined;
+  try {
+    if (realpathSync(caller) === realpathSync(projectPath)) return undefined;
+  } catch {
+    /* a path that does not resolve is compared lexically only */
+  }
+  return caller;
 }
 
 /**
