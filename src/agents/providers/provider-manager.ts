@@ -398,7 +398,10 @@ export class ProviderManager {
 
   getActiveInfo(chatId: string): ProviderActiveInfo {
     const pref = this.resolveEffectivePreference(chatId);
-    if (!pref) {
+    // getProvider routes a preference outside a strict chain on the chain, so
+    // that is what runs and what is reported. Naming the excluded provider here
+    // sent supervisor planning to it by name.
+    if (!pref || !this.allowsProvider(pref.providerName)) {
       const defaultProviderName = this.getDefaultPrimaryName();
       return this.withHealth({
         providerName: defaultProviderName,
@@ -656,9 +659,13 @@ export class ProviderManager {
   /**
    * Get a provider instance by name. Used by ProviderRouter to
    * materialize a routing decision into an IAIProvider.
-   * Returns null if provider cannot be created.
+   * Returns null if provider cannot be created or a strict chain excludes it.
    */
   getProviderByName(name: string, model?: string): IAIProvider | null {
+    // Null, not the configured chain: a caller that asked by name labels
+    // whatever comes back with that name, so the chain answered as "openai"
+    // and a cross-provider review was the worker reviewing itself.
+    if (!this.allowsProvider(name)) return null;
     return this.buildResilientProvider(canonicalizeProviderName(name) ?? name, model);
   }
 
@@ -708,6 +715,9 @@ export class ProviderManager {
   }
 
   getPrimaryProviderByName(name: string, model?: string): IAIProvider | null {
+    // A bare provider is the hardest door to see past: no chain, no cooldown
+    // gate, so an excluded account built here is simply called.
+    if (!this.allowsProvider(name)) return null;
     return this.buildPrimaryProvider(canonicalizeProviderName(name) ?? name, model);
   }
 
@@ -792,6 +802,10 @@ export class ProviderManager {
    */
   getVisionProvider(): { provider: IAIProvider; name: string; model?: string } | null {
     for (const entry of this.listAvailable()) {
+      // listAvailable is every credential, and openai sorts first among the
+      // presets: every visual-conformance check went to the account a strict
+      // chain reserved for other work, past its cooldowns.
+      if (!this.allowsProvider(entry.name)) continue;
       const capabilities = this.getProviderCapabilities(entry.name, entry.defaultModel);
       if (capabilities?.vision !== true) continue;
       const provider = this.buildPrimaryProvider(entry.name, entry.defaultModel);
@@ -863,7 +877,9 @@ export class ProviderManager {
     const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
     const preferredProvider = preferred?.providerName;
     const primaryName = canonicalizeProviderName(preferredProvider) || this.getDefaultPrimaryName();
-    if (preferred?.selectionMode === "strada-hard-pin") {
+    // A pin outside a strict chain is routed on the chain, as getProvider does;
+    // offering it as the whole pool handed the router the excluded provider.
+    if (preferred?.selectionMode === "strada-hard-pin" && this.allowsProvider(primaryName)) {
       return this.isAvailable(primaryName) ? [primaryName] : [];
     }
     const orderedPool = this.buildFallbackOrder(primaryName).filter((name) => this.isAvailable(name));

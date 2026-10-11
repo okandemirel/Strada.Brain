@@ -216,7 +216,13 @@ export function initializeSupervisorStage(
     const triageProviderName = params.config.supervisor.triageProvider;
     let triageProvider: import("../../agents/providers/provider.interface.js").IAIProvider | undefined;
     try {
-      triageProvider = params.providerManager.getProviderByName(triageProviderName) ?? undefined;
+      triageProvider = params.providerManager.getProviderByName(triageProviderName)
+        // A strict chain refuses a triage provider outside it by name; triage
+        // on the chain, as every system-level caller does, rather than losing
+        // LLM triage to the refusal.
+        ?? (params.providerManager.allowsProvider?.(triageProviderName) === false
+          ? params.providerManager.getProvider("")
+          : undefined);
     } catch {
       params.logger.warn("Supervisor triage provider not available, using heuristic-only matching", {
         triageProvider: triageProviderName,

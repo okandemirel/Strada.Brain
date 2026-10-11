@@ -72,6 +72,21 @@ describe("a credential bench belongs to the key that earned it (measured 2026-09
     expect(registry.isAvailable("seat-k")).toBe(true);
   });
 
+  it("a chain spelled 'anthropic' reconciles the bench Claude records under 'claude'", () => {
+    // ClaudeProvider records health as "claude" whichever accepted name the
+    // chain uses; reconciling under "anthropic" never saw that entry, so a
+    // rotated ANTHROPIC_API_KEY kept the old key's 8h bench (audit providers#4).
+    const fresh = new ProviderHealthRegistry();
+    const URL = "https://api.anthropic.com";
+    fresh.reconcileSeatIdentities(new Map([["anthropic", ProviderHealthRegistry.seatIdentity(URL, "m", "sk-old")]]));
+    fresh.recordCredentialRejected("claude", "401 invalid x-api-key");
+    expect(fresh.isAvailable("claude")).toBe(false);
+    const rotated = ProviderHealthRegistry.seatIdentity(URL, "m", "sk-new");
+    expect(fresh.reconcileSeatIdentities(new Map([["anthropic", rotated]]))).toEqual(["claude"]);
+    expect(fresh.isAvailable("claude")).toBe(true);
+    expect(fresh.isAvailable("anthropic")).toBe(true);
+  });
+
   it("a stamp from before the fingerprint existed is upgraded, not cleared, when endpoint and model still match", () => {
     registry.reconcileSeatIdentities(new Map([["seat-u", `${GO_URL}|deepseek-flash`]])); // old two-part stamp
     registry.recordQuotaExhausted("seat-u", "quota");

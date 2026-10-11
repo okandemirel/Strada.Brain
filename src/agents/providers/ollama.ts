@@ -179,7 +179,11 @@ export class OllamaProvider implements IAIProvider {
       input: tc.function.arguments as import("../../types/index.js").JsonObject,
     }));
 
-    const stopReason = toolCalls.length > 0 ? "tool_use" : "end_turn";
+    // "length" is Ollama's word for hitting num_predict. Reported as end_turn,
+    // a cut-off answer was delivered as finished and never continued.
+    const stopReason = toolCalls.length > 0
+      ? "tool_use"
+      : data.done_reason === "length" ? "max_tokens" : "end_turn";
 
     return {
       text,
@@ -211,6 +215,8 @@ interface OllamaResponse {
       function: { name: string; arguments: Record<string, unknown> };
     }>;
   };
+  /** Why generation stopped: "stop", "length" (num_predict reached), "load", "unload". */
+  done_reason?: string;
   prompt_eval_count?: number;
   eval_count?: number;
 }

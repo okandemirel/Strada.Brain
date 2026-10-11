@@ -191,6 +191,27 @@ describe("a routed provider that cannot be built (ORC-20)", () => {
 
     expect(resolveConsensusReviewAssignment(ctx, currentAssignment, currentAssignment, "chat:web:1")).toBeNull();
   });
+
+  it("consensus picks the alternate reviewer from the strict chain, not from every credential", () => {
+    // Strict chain opencode,opencode2 with the OpenAI subscription still
+    // configured: openai is listed first, the manager refuses to build it, and
+    // a real alternate inside the chain was never tried (audit providers#6).
+    const current = makeProvider("opencode");
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue(undefined),
+        getProviderByName: vi.fn((name: string) => (name === "openai" ? null : makeProvider(name))),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([{ name: "openai" }, { name: "opencode" }, { name: "opencode2" }]),
+        listRoutable: vi.fn().mockReturnValue([{ name: "opencode" }, { name: "opencode2" }]),
+      },
+    } as any;
+    const currentAssignment = { role: "executor", providerName: "opencode", provider: current } as any;
+
+    const reviewer = resolveConsensusReviewAssignment(ctx, currentAssignment, currentAssignment, "chat:web:1");
+    expect(reviewer?.providerName).toBe("opencode2");
+    expect(reviewer?.provider.name).toBe("opencode2");
+  });
 });
 
 describe("the routing history names the provider each turn runs on (N-2)", () => {

@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-import { canonicalizeProviderName } from "./provider-identity.js";
+import { providerRecordKey } from "./provider-identity.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
 export type ProviderHealthStatus = "healthy" | "degraded" | "down";
@@ -164,9 +164,13 @@ export class ProviderHealthRegistry {
    * string let those two miss each other, and a miss reads as healthy — which
    * is how a quota-blocked provider kept being handed goals for five runs.
    * Unknown names still get their own entry via the lowercase fallback.
+   *
+   * "anthropic" folds into "claude", where ClaudeProvider records: a chain
+   * spelled "anthropic" reconciled its seat identity against an entry that
+   * never existed, and a rotated key kept the old key's 8h bench.
    */
   private norm(name: string): string {
-    return canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    return providerRecordKey(name);
   }
 
   constructor(config: Partial<ProviderHealthConfig> = {}) {
@@ -217,6 +221,20 @@ export class ProviderHealthRegistry {
     // clearing it (the 2026-09-10 rotation). The boot-time stamp lives here.
     const identity = entry.identity ?? previous?.identity ?? this.seatIdentities.get(normalized);
     this.entries.set(normalized, identity === undefined ? entry : { ...entry, identity });
+    // A LOG OF WHEN FAILURES HAPPENED, which a later SUCCESS does not erase.
+    // `lastFailureAt` is cleared the moment the provider answers again, so a
+    // run killed by inactivity BECAUSE of a fifteen-minute stall was judged
+    // against a chain that had since healed — and the campaign charged the
+    // sprint an attempt for the provider's outage (measured live 2026-09-14
+    // 04:58; the same class as Codex 2026-09-08 06:58). Kept here, where every
+    // failure class passes: in recordFailure alone it missed 429s, 503s and
+    // quota walls. Every failure path raises the count by one; no success does.
+    if (entry.consecutiveFailures > (previous?.consecutiveFailures ?? 0)) {
+      ProviderHealthRegistry.failureLog.push({ at: Date.now(), provider: normalized });
+      if (ProviderHealthRegistry.failureLog.length > ProviderHealthRegistry.FAILURE_LOG_LIMIT) {
+        ProviderHealthRegistry.failureLog.splice(0, ProviderHealthRegistry.failureLog.length - ProviderHealthRegistry.FAILURE_LOG_LIMIT);
+      }
+    }
     if (
       previous?.status !== entry.status ||
       previous?.cooldownUntil !== entry.cooldownUntil
@@ -260,16 +278,6 @@ export class ProviderHealthRegistry {
   recordFailure(providerName: string, error: string): void {
     const normalized = this.norm(providerName);
     const failures = this.nextFailureCount(normalized);
-    // A LOG OF WHEN FAILURES HAPPENED, which a later SUCCESS does not erase.
-    // `lastFailureAt` is cleared the moment the provider answers again, so a
-    // run killed by inactivity BECAUSE of a fifteen-minute stall was judged
-    // against a chain that had since healed — and the campaign charged the
-    // sprint an attempt for the provider's outage (measured live 2026-09-14
-    // 04:58; the same class as Codex 2026-09-08 06:58).
-    ProviderHealthRegistry.failureLog.push({ at: Date.now(), provider: normalized });
-    if (ProviderHealthRegistry.failureLog.length > ProviderHealthRegistry.FAILURE_LOG_LIMIT) {
-      ProviderHealthRegistry.failureLog.splice(0, ProviderHealthRegistry.failureLog.length - ProviderHealthRegistry.FAILURE_LOG_LIMIT);
-    }
 
     if (failures >= this.config.downThreshold) {
       this.markDown(normalized, this.config.downCooldownMs, error, true);

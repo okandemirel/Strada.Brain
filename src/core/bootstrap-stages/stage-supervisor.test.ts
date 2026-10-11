@@ -88,3 +88,47 @@ describe("initializeSupervisorStage — degradation is reported, not just logged
     expect(onDegraded).not.toHaveBeenCalled();
   });
 });
+
+describe("the triage provider under a strict chain", () => {
+  function triageFor(providerManager: Record<string, unknown>): unknown {
+    let captured: unknown = "not called";
+    initializeSupervisorStage(
+      {
+        config: makeConfig(true),
+        logger: createMockLogger(),
+        providerManager: providerManager as never,
+        goalDecomposer: { setDecompositionContext: vi.fn() } as never,
+      },
+      {
+        createCapabilityMatcher: (triage) => {
+          captured = triage;
+          throw new Error("stop after triage resolution");
+        },
+      },
+    );
+    return captured;
+  }
+
+  it("triages on the chain when the configured triage provider is outside it", () => {
+    // getProviderByName no longer answers an excluded name with the chain, so
+    // the stage asks for the chain itself instead of dropping LLM triage.
+    const chain = { name: "chain(opencode->opencode2)" };
+    const triage = triageFor({
+      getProviderByName: vi.fn(() => null),
+      allowsProvider: vi.fn((name: string) => name !== "groq"),
+      getProvider: vi.fn(() => chain),
+    });
+    expect(triage).toBe(chain);
+  });
+
+  it("an unbuildable triage provider inside the chain still means heuristic-only triage", () => {
+    const getProvider = vi.fn();
+    const triage = triageFor({
+      getProviderByName: vi.fn(() => null),
+      allowsProvider: vi.fn(() => true),
+      getProvider,
+    });
+    expect(triage).toBeUndefined();
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+});

@@ -847,4 +847,34 @@ describe("the failure log a later success does not erase", () => {
     // A later attempt is not charged with an earlier attempt's failures.
     expect(ProviderHealthRegistry.failuresSince(Date.now() + 1000)).toBe(0);
   });
+
+  it("counts every failure class, not only the generic one (audit providers#5)", () => {
+    // A stall on 429/503 or a quota wall is routed to its own record method;
+    // none of them reached the log, so the stall read as "no provider failed".
+    const health = new ProviderHealthRegistry({ downThreshold: 2 });
+    const start = Date.now();
+    const classified: Array<[string, () => void]> = [
+      ["overloaded", () => health.recordOverloaded("p1", "503 overloaded")],
+      ["overloaded short", () => health.recordOverloadedShort("p2", "429 rate limited")],
+      ["credential", () => health.recordCredentialRejected("p3", "401")],
+      ["quota", () => health.recordQuotaExhausted("p4", "403 quota")],
+      ["free tier", () => health.recordFreeTierExhausted("p5", "FreeUsageLimitError")],
+      ["quota short", () => health.recordQuotaExhaustedShort("p6", "403 quota")],
+      ["hard stop", () => health.recordQuotaHardStop("p7", 3_600_000, "429 resets in 1h")],
+    ];
+    for (const [i, [label, record]] of classified.entries()) {
+      record();
+      expect(ProviderHealthRegistry.failuresSince(start), label).toBe(i + 1);
+    }
+
+    // A generic failure that crosses the down threshold is still one failure.
+    health.recordFailure("p8", "timeout");
+    health.recordFailure("p8", "timeout");
+    expect(ProviderHealthRegistry.failuresSince(start)).toBe(classified.length + 2);
+
+    // Successes are not failures.
+    health.recordSuccess("p1", "probe");
+    health.recordSuccess("p2");
+    expect(ProviderHealthRegistry.failuresSince(start)).toBe(classified.length + 2);
+  });
 });

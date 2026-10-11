@@ -112,6 +112,25 @@ describe("OllamaProvider", () => {
     expect(result.stopReason).toBe("tool_use");
   });
 
+  it("reports an answer cut off at num_predict as max_tokens, so the runner continues it", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          message: { content: "public class Half" },
+          done_reason: "length",
+          prompt_eval_count: 100,
+          eval_count: 4096,
+        }),
+      text: () => Promise.resolve(""),
+    });
+
+    const provider = new OllamaProvider();
+    const result = await provider.chat("sys", [{ role: "user", content: "write it" }], []);
+
+    expect(result.stopReason).toBe("max_tokens");
+  });
+
   it("throws on API error", async () => {
     mockFetch.mockResolvedValue({
       ok: false,

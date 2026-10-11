@@ -665,8 +665,10 @@ export function resolveConsensusReviewAssignment(
     return preferredReviewer;
   }
 
-  const fallbackReviewName = ctx.providerManager
-    .listAvailable()
+  // What may route, not every credential: under a strict chain the first
+  // credentialed outsider was picked, refused, and the review dropped while a
+  // chain sibling could have given it.
+  const fallbackReviewName = (ctx.providerManager.listRoutable?.() ?? ctx.providerManager.listAvailable())
     .find((provider) => provider.name !== currentAssignment.providerName)?.name;
   if (!fallbackReviewName) {
     return null;
