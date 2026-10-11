@@ -79,7 +79,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
   // The stage shares the root's authorization store with every sub-agent.
   authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() };
     const fakeChannel = {};
-    const fakeToolRegistry = { getAllTools: vi.fn(() => []) };
+    const fakeToolRegistry = { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) };
     const fakeProviderManager = { isAvailable: vi.fn(() => false) };
     const fakeSoulLoader = {};
     const fakeDmPolicy = {};
@@ -144,7 +144,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
         taskManager: { submit, on: vi.fn() } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["taskManager"],
         orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["orchestrator"],
         providerManager: { isAvailable: vi.fn(() => false) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["providerManager"],
-        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["toolRegistry"],
+        toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["toolRegistry"],
         channel: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["channel"],
         metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["metrics"],
         soulLoader: {} as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[0]["soulLoader"],
@@ -164,7 +164,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     const fakeAgentRegistry = { initialize: vi.fn() };
     const fakeDaemonStorage = { getDatabase: vi.fn(() => ({})) };
     const fakeOrchestrator = { addTool: vi.fn(), authorizationStore: () => new Map<string, readonly string[]>() };
-    const fakeToolRegistry = { getAllTools: vi.fn(() => []) };
+    const fakeToolRegistry = { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) };
     const fakeProviderManager = { isAvailable: vi.fn(() => false) };
     const fakeDaemonContext = {} as Record<string, unknown>;
     const fakeStradaDeps = { coreInstalled: false, modulesInstalled: false, mcpInstalled: false, coreSource: "local", modulesSource: "local", mcpSource: "local" };
@@ -217,7 +217,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
         taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
         orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
         providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
-        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as StageParams["toolRegistry"],
         channel: {} as unknown as StageParams["channel"],
         metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
         soulLoader: {} as unknown as StageParams["soulLoader"],
@@ -254,7 +254,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
         taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
         orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
         providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
-        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as StageParams["toolRegistry"],
         channel: {} as unknown as StageParams["channel"],
         metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
         soulLoader: {} as unknown as StageParams["soulLoader"],
@@ -299,7 +299,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
         taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
         orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
         providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
-        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as StageParams["toolRegistry"],
         channel: {} as unknown as StageParams["channel"],
         metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
         soulLoader: {} as unknown as StageParams["soulLoader"],
@@ -346,7 +346,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
           taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
           orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
           providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
-          toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+          toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as StageParams["toolRegistry"],
           channel: {} as unknown as StageParams["channel"],
           metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
           soulLoader: {} as unknown as StageParams["soulLoader"],
@@ -418,7 +418,7 @@ describe("initializeMultiAgentDelegationStage — the root orchestrator's delega
         taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
         orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool } as unknown as StageParams["orchestrator"],
         providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
-        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        toolRegistry: { getAllTools: vi.fn(() => []), getMetadataMap: vi.fn(() => new Map()) } as unknown as StageParams["toolRegistry"],
         channel: {} as unknown as StageParams["channel"],
         metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
         soulLoader: {} as unknown as StageParams["soulLoader"],

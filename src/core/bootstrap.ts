@@ -2040,6 +2040,8 @@ async function bootstrapImpl(
       commandHandler.setUnifiedBudgetManager(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
+      // A delegated run's USD cap is seeded from the same headroom.
+      delegationManager?.setUnifiedBudgetManager(unifiedBudgetManager);
       disposables.push("agentManager", () => agentManager?.shutdown());
       disposables.push("delegationManager", () => delegationManager?.shutdown());
       // Activate capability-aware delegation scoring with the live model catalog

@@ -869,6 +869,8 @@ export class Orchestrator {
   }
   private readonly channel: IChannelAdapter;
   private readonly projectPath: string;
+  /** The project's real root; differs from `projectPath` only when this orchestrator is rooted in a lease. */
+  private readonly sourceProjectPath: string;
   private readonly readOnly: boolean;
   private readonly requireConfirmation: boolean;
   private readonly memoryManager?: IMemoryManager;
@@ -1133,6 +1135,12 @@ export class Orchestrator {
     tools: ITool[];
     channel: IChannelAdapter;
     projectPath: string;
+    /**
+     * The real project root when `projectPath` is a leased copy of it, as it
+     * is for a delegated sub-agent. The vault and the shell's source-path
+     * redirect are keyed to the real root; defaults to `projectPath`.
+     */
+    sourceProjectPath?: string;
     readOnly: boolean;
     requireConfirmation: boolean;
     memoryManager?: IMemoryManager;
@@ -1228,6 +1236,7 @@ export class Orchestrator {
     this.vaultWriteHookBudgetMs = opts.vaultWriteHookBudgetMs ?? 200;
     this.channel = opts.channel;
     this.projectPath = opts.projectPath;
+    this.sourceProjectPath = opts.sourceProjectPath ?? opts.projectPath;
     this.readOnly = opts.readOnly;
     this.requireConfirmation = opts.requireConfirmation;
     this.memoryManager = opts.memoryManager;
@@ -1960,16 +1969,18 @@ export class Orchestrator {
    * Resolved by path rather than by registry presence: the self-vault of
    * Strada.Brain's own source is always registered, and counting it would tell
    * the agent this project is indexed when it is not — the exact mistake that
-   * made the old hint counterproductive.
+   * made the old hint counterproductive. The real root, not a lease: no vault
+   * is registered against a lease, so a delegate was told "NOT indexed" while
+   * its vault tools resolve the project's vault.
    *
    * listFiles() is synchronous by design here; the prompt is rebuilt on a
    * synchronous path and stats() is async.
    */
   private describeVaultAvailability(): VaultAvailability | undefined {
     this.vaultHintState = this.currentVaultHintState();
-    if (!this.vaultRegistry || !this.projectPath) return undefined;
+    if (!this.vaultRegistry || !this.sourceProjectPath) return undefined;
     try {
-      const vault = this.vaultRegistry.resolveVaultForPath(this.projectPath);
+      const vault = this.vaultRegistry.resolveVaultForPath(this.sourceProjectPath);
       if (!vault) return { indexedFileCount: 0, frameworkFileCount: 0 };
       // First index still running: what it lists so far is partial.
       if (this.vaultRegistry.getInitState?.(vault.id)?.status === "indexing") {
@@ -1988,9 +1999,9 @@ export class Orchestrator {
 
   /** What the vault hint depends on: the project's vault and its init status. */
   private currentVaultHintState(): string {
-    if (!this.vaultRegistry || !this.projectPath) return "off";
+    if (!this.vaultRegistry || !this.sourceProjectPath) return "off";
     try {
-      const vault = this.vaultRegistry.resolveVaultForPath(this.projectPath);
+      const vault = this.vaultRegistry.resolveVaultForPath(this.sourceProjectPath);
       if (!vault) return "none";
       return `${vault.id}:${this.vaultRegistry.getInitState?.(vault.id)?.status ?? "untracked"}`;
     } catch {
@@ -4801,7 +4812,7 @@ export class Orchestrator {
           chatId,
           command,
           mode,
-          { ...options, projectPath, sourceProjectPath: this.projectPath },
+          { ...options, projectPath, sourceProjectPath: this.sourceProjectPath },
           input,
         );
       }
@@ -5218,8 +5229,9 @@ export class Orchestrator {
     const toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore } = {
       projectPath,
       // Survives the lease swap above, so vault lookups still resolve to the
-      // project the vault is registered against.
-      sourceProjectPath: this.projectPath,
+      // project the vault is registered against. Not this.projectPath: a
+      // delegate's orchestrator is rooted in its lease.
+      sourceProjectPath: this.sourceProjectPath,
       // Files the user named in a channel message for this chat, readable on
       // that authority even when they sit outside the project. Never derived
       // from the task prompt: for a worker or delegate that is model-written.

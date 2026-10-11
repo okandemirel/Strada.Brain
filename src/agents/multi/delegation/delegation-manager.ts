@@ -22,7 +22,10 @@ import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
 import type { ITool } from "../../tools/tool.interface.js";
+import type { ToolMetadata } from "../../../core/tool-registry-types.js";
+import type { UnifiedBudgetManager } from "../../../budget/unified-budget-manager.js";
 import type { AgentBudgetTracker } from "../agent-budget-tracker.js";
+import type { SharedOrchestratorDeps } from "../agent-manager.js";
 import type { AgentId } from "../agent-types.js";
 import type { StradaDepsStatus } from "../../../config/strada-deps.js";
 import type { StradaDependencyConfig } from "../../../config/config.js";
@@ -81,6 +84,19 @@ export interface DelegationManagerOptions {
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly parentTools: ITool[];
+  /**
+   * The registry's live metadata map, as the root and per-agent orchestrators
+   * get it. Without it a Strada.MCP writer (no metadata of its own) read as
+   * read-only and parallel-safe in a delegate, and a bridge tool was offered
+   * with the editor closed.
+   */
+  readonly toolMetadataByName: ReadonlyMap<string, ToolMetadata>;
+  /**
+   * The run dependencies bootstrap gives the root orchestrator (TASK_* limits,
+   * learning, intervention and consensus hooks, loop and conformance
+   * settings), for the delegated orchestrators that were built without them.
+   */
+  readonly sharedOrchestratorDeps: SharedOrchestratorDeps;
   readonly apiKeys: Record<string, string | undefined>;
   readonly providerCredentials?: ProviderCredentialMap;
   /** Per-provider base-URL overrides (e.g. OpenCode's OPENCODE_BASE_URL = Zen vs Go).
@@ -222,6 +238,9 @@ export class DelegationManager {
    */
   private modelIntelligence?: ModelIntelligenceLookup;
 
+  /** Settable for the same reason: bootstrap builds it after this manager. */
+  private unifiedBudgetManager?: UnifiedBudgetManager;
+
   constructor(opts: DelegationManagerOptions) {
     this.opts = opts;
     this.modelIntelligence = opts.modelIntelligence;
@@ -230,6 +249,15 @@ export class DelegationManager {
   /** Wire (or refresh) the live model-intelligence catalog used for scoring. */
   setModelIntelligence(modelIntelligence: ModelIntelligenceLookup | undefined): void {
     this.modelIntelligence = modelIntelligence;
+  }
+
+  /**
+   * The run's USD cap is seeded from this manager's headroom. A delegate
+   * without it ran with an Infinity cap past the daily wall whenever it had no
+   * calling run's budget to carve from.
+   */
+  setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
+    this.unifiedBudgetManager = mgr;
   }
 
   /**
@@ -813,10 +841,17 @@ export class DelegationManager {
           : `Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
       }
       const orchestrator = new Orchestrator({
+        ...this.opts.sharedOrchestratorDeps,
         providerManager,
         tools: subAgentTools,
+        // The live map: a Unity writer is a write and runs serially, and a
+        // bridge tool is offered only while the editor is up.
+        toolMetadataByName: this.opts.toolMetadataByName,
         channel: captureChannel,
         projectPath: workspaceLease?.path ?? callerTree ?? this.opts.projectPath,
+        // The caller's real root: vaults are registered against it, never
+        // against the lease this orchestrator is rooted in.
+        sourceProjectPath: request.toolContext?.sourceProjectPath ?? this.opts.projectPath,
         readOnly: this.opts.readOnly,
         requireConfirmation: false,
         defaultLanguage: this.opts.defaultLanguage,
@@ -833,6 +868,10 @@ export class DelegationManager {
         onUsage,
       });
       delegateOrchestrator = orchestrator;
+      // Disposed in the finally, which drops the budget listener this adds.
+      if (this.unifiedBudgetManager) {
+        orchestrator.setUnifiedBudgetManager(this.unifiedBudgetManager);
+      }
       // Carry the user's authorization across the instance boundary, keyed to
       // the delegate's own chat id. The parent's tool context is the only
       // source: the delegate's brief below is parent-model text, and the

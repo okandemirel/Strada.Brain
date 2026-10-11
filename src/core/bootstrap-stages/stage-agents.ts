@@ -258,6 +258,10 @@ export async function initializeMultiAgentDelegationStage(
       stradaDeps: params.stradaDeps,
       stradaConfig: params.config.strada,
       parentTools: params.toolRegistry.getAllTools(),
+      // A delegate runs the same tools and the same kind of run as a chat
+      // turn: the registry's live metadata and the root's run dependencies.
+      toolMetadataByName: params.toolRegistry.getMetadataMap(),
+      sharedOrchestratorDeps: params.sharedOrchestratorDeps,
       apiKeys: collectApiKeys(params.config),
       providerCredentials: collectProviderCredentials(params.config),
       // Merge the resolved Ollama base URL in (it lives in config.ollamaBaseUrl, NOT

@@ -982,6 +982,8 @@ describe("bootstrap-stages", () => {
     const createAgentManager = vi.fn().mockReturnValue(agentManager);
     const createDelegationManager = vi.fn().mockReturnValue(delegationManager);
     const vaultRegistry = { _tag: "vault-registry" } as any;
+    const toolMetadata = new Map([["tool-1", { readOnly: false }]]);
+    const sharedOrchestratorDeps = { _tag: "shared-orchestrator-deps" } as any;
     const taskManager = {
       submit: vi.fn(),
     } as any;
@@ -1025,6 +1027,7 @@ describe("bootstrap-stages", () => {
       } as any,
       toolRegistry: {
         getAllTools: vi.fn().mockReturnValue([{ name: "tool-1" }]),
+        getMetadataMap: vi.fn().mockReturnValue(toolMetadata),
       } as any,
       channel: { _tag: "channel" } as any,
       metrics: { _tag: "metrics" } as any,
@@ -1045,6 +1048,7 @@ describe("bootstrap-stages", () => {
       stradaDeps: { coreInstalled: true, mcpInstalled: false, warnings: [] } as any,
       vaultRegistry,
       vaultWriteHookBudgetMs: 123,
+      sharedOrchestratorDeps,
     }, {
       createAgentRegistry: vi.fn().mockReturnValue(agentRegistry),
       createAgentBudgetTracker: vi.fn().mockReturnValue(agentBudgetTracker),
@@ -1065,6 +1069,9 @@ describe("bootstrap-stages", () => {
     expect(createDelegationManager).toHaveBeenCalledWith(expect.objectContaining({
       vaultRegistry,
       vaultWriteHookBudgetMs: 123,
+      // A delegate runs the same tools and kind of run as a chat turn.
+      toolMetadataByName: toolMetadata,
+      sharedOrchestratorDeps,
     }));
     expect(agentManager.setBackgroundTaskSubmitter).toHaveBeenCalledWith(expect.any(Function));
     const submitter = agentManager.setBackgroundTaskSubmitter.mock.calls[0]?.[0];
