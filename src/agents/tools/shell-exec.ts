@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import path from "node:path";
 import { normalizeToolPathInput, validatePath } from "../../security/path-guard.js";
 import { lexShell, type ShellLex, type ShellWord } from "../../security/shell-lexer.js";
 import { runProcess } from "../../utils/process-runner.js";
@@ -95,6 +95,24 @@ export function redirectSourceProjectPath(
   return sourceRoot && sourceRoot !== projectRoot && command.includes(sourceRoot)
     ? command.split(sourceRoot).join(projectRoot)
     : command;
+}
+
+/**
+ * working_directory as shell_exec reads it against `projectRoot`: an absolute
+ * path into the source project names the workspace's twin (see execute). The
+ * shell review resolves it through this too, so it judges the directory the
+ * command runs in.
+ */
+export function redirectSourceWorkingDirectory(
+  requested: string,
+  sourceRoot: string | undefined,
+  projectRoot: string,
+  paths: path.PlatformPath = path,
+): string {
+  if (!requested || !sourceRoot || sourceRoot === projectRoot || !paths.isAbsolute(requested)) return requested;
+  // Separator-agnostic (a "/" prefix test never matched on Windows).
+  const mapped = normalizeToolPathInput(sourceRoot, requested, paths);
+  return mapped.ok ? mapped.relativePath : requested;
 }
 
 export class ShellExecTool implements ITool {
@@ -224,8 +242,7 @@ export class ShellExecTool implements ITool {
       timeoutMs = Math.floor(parsed);
     }
 
-    // Resolve and validate working directory using path-guard
-    let relWd = String(input["working_directory"] ?? "");
+    // Resolve and validate working directory using path-guard.
     // Under a workspace lease `projectPath` is the lease copy, but the agent
     // knows the project by its REAL path (the GDD, the prompt and every user
     // message name it). Naming it is not an escape attempt — it is the same
@@ -233,12 +250,11 @@ export class ShellExecTool implements ITool {
     // Measured 2026-09-02 on Sprint 7: six shell_exec calls refused with
     // "working directory must be within the project", each costing the
     // delivery sprint a turn.
-    const sourceRoot = context.sourceProjectPath;
-    if (relWd && sourceRoot && sourceRoot !== context.projectPath && isAbsolute(relWd)) {
-      // Separator-agnostic (a "/" prefix test never matched on Windows).
-      const mapped = normalizeToolPathInput(sourceRoot, relWd);
-      if (mapped.ok) relWd = mapped.relativePath;
-    }
+    const relWd = redirectSourceWorkingDirectory(
+      String(input["working_directory"] ?? ""),
+      context.sourceProjectPath,
+      context.projectPath,
+    );
     let cwd = context.projectPath;
     if (relWd) {
       const pathCheck = await validatePath(context.projectPath, relWd);

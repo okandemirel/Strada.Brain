@@ -235,7 +235,14 @@ export async function reviewShellCommandWithProvider(
   // demanded ("looks destructive"), deadlocking delivery. The review still
   // runs — its evidence stays in the trace — but an allowlisted command cannot
   // end in "rejected"/"inconclusive".
-  const allowlisted = matchProjectScopedAllowlist(command, options.projectPath, options.sourceProjectPath);
+  // It reads working_directory as shell_exec does: the line runs there, and a
+  // relative path or `git checkout <name>` names a file from there.
+  const allowlisted = matchProjectScopedAllowlist(
+    command,
+    options.projectPath,
+    options.sourceProjectPath,
+    String(input["working_directory"] ?? ""),
+  );
 
   try {
     const response = await streamOrChatText(

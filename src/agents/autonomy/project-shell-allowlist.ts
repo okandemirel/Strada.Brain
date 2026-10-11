@@ -25,7 +25,7 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { destructiveShellFlag } from "../../security/dm-policy.js";
 import { plainCommands, type ShellWord } from "../../security/shell-lexer.js";
-import { redirectSourceProjectPath } from "../tools/shell-exec.js";
+import { redirectSourceProjectPath, redirectSourceWorkingDirectory } from "../tools/shell-exec.js";
 
 export interface ProjectShellAllowlistMatch {
   /** Human-readable rule that approved the command. */
@@ -43,6 +43,11 @@ interface Scope {
    * prints the real form (`pwd`), so a command can name it either way.
    */
   readonly names: readonly string[];
+  /**
+   * Where the shell runs the line: the root, or shell_exec's working_directory
+   * under it. Relative paths, $PWD and git's pathspecs name files from here.
+   */
+  readonly cwd: string;
   /** Path semantics of the root: a drive-letter or UNC root reads as Windows on any host. */
   readonly paths: path.PlatformPath;
 }
@@ -68,14 +73,43 @@ function namesFor(root: string): string[] {
   }
 }
 
-/** True when `candidate`, resolved against the root, stays inside it under one of its names. */
-function inside(candidate: string, scope: Scope): boolean {
-  const { paths, root } = scope;
-  const resolved = paths.resolve(root, candidate);
+/** True when the absolute `target` is the root or under it, by one of the root's names. */
+function within(target: string, scope: Omit<Scope, "cwd">): boolean {
+  const { paths } = scope;
   return scope.names.some((name) => {
-    const rel = paths.relative(name, resolved);
+    const rel = paths.relative(name, target);
     return rel === "" || (!paths.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${paths.sep}`));
   });
+}
+
+/** True when `candidate`, resolved where the shell runs, stays inside the root. */
+function inside(candidate: string, scope: Scope): boolean {
+  return within(scope.paths.resolve(scope.cwd, candidate), scope);
+}
+
+/**
+ * The directory shell_exec runs the line in, read as it reads its
+ * working_directory: a source-tree path names the lease, and an existing
+ * directory is known by its real path (validatePath). Undefined outside the
+ * root, where shell_exec refuses to run and nothing is pre-approved.
+ */
+function workingDirectoryOf(
+  requested: string,
+  sourceRoot: string | undefined,
+  scope: Omit<Scope, "cwd">,
+): string | undefined {
+  if (!requested) return scope.root;
+  const lexical = scope.paths.resolve(
+    scope.root,
+    redirectSourceWorkingDirectory(requested, sourceRoot, scope.root, scope.paths),
+  );
+  let cwd = lexical;
+  try {
+    cwd = realpathSync.native(lexical);
+  } catch {
+    // Not on disk: known by its name, as validatePath knows a missing path.
+  }
+  return within(cwd, scope) ? cwd : undefined;
 }
 
 /** The pieces of a word that can name a path: `--out=x`, `-p:x`, `a,b`; a drive colon stays whole. */
@@ -99,7 +133,7 @@ function boundedWord(word: ShellWord, scope: Scope): boolean {
   // A glob that can begin with `-` can expand to an option (a file named
   // `-delete`), and a `.`-led glob component can match `..`.
   if (word.glob && (/^[-*?[]/.test(word.value) || /(?:^|[\\/])\.[^\\/]*[*?[]/.test(word.value))) return false;
-  const pwd = (text: string) => text.replace(/\$\{PWD\}|\$PWD(?!\w)/g, scope.root);
+  const pwd = (text: string) => text.replace(/\$\{PWD\}|\$PWD(?!\w)/g, scope.cwd);
   const views = [word.value, cmdView(word)];
   return views.every((view) => pathPieces(pwd(view)).every((piece) => inside(piece, scope)));
 }
@@ -275,13 +309,13 @@ function gitMergeIntegrates(args: readonly string[]): boolean {
 
 /**
  * `git checkout <branch>`. With a PATH instead of a branch, checkout throws
- * away that path's uncommitted work, so a name that exists in the project is
- * left to the reviewer.
+ * away that path's uncommitted work, so a name that exists where git resolves
+ * the pathspec (the shell's directory) is left to the reviewer.
  */
 function gitCheckoutSwitches(args: readonly string[], scope: Scope): boolean {
   const ref = args[0];
   if (args.length !== 1 || ref === undefined || !GIT_REF.test(ref)) return false;
-  return !existsSync(scope.paths.resolve(scope.root, ref));
+  return !existsSync(scope.paths.resolve(scope.cwd, ref));
 }
 
 const RULES: readonly AllowlistRule[] = [
@@ -303,8 +337,9 @@ const RULES: readonly AllowlistRule[] = [
       const at = flags.indexOf("-projectPath");
       const project = at < 0 ? undefined : flags[at + 1];
       if (project === undefined) return false;
-      if (project === "$PWD" || project === "${PWD}") return true;
-      return scope.paths.isAbsolute(project) && scope.names.some((name) => scope.paths.relative(name, project) === "");
+      // $PWD is the project only when the shell runs at its root, not in a working_directory below it.
+      const opened = project === "$PWD" || project === "${PWD}" ? scope.cwd : project;
+      return scope.paths.isAbsolute(opened) && scope.names.some((name) => scope.paths.relative(name, opened) === "");
     },
   },
   {
@@ -361,18 +396,23 @@ const RULES: readonly AllowlistRule[] = [
  * `projectRoot` is where the command runs: under a workspace lease, the
  * lease. `sourceRoot` is the project the lease was cut from; shell_exec
  * points a command's mention of it at the lease, and so does this.
+ * `workingDirectory` is shell_exec's input of that name: the line runs there.
  */
 export function matchProjectScopedAllowlist(
   requested: string,
   projectRoot: string | undefined,
   sourceRoot?: string,
+  workingDirectory = "",
 ): ProjectShellAllowlistMatch | null {
   if (!projectRoot || !requested.trim()) return null;
   const command = redirectSourceProjectPath(requested, sourceRoot, projectRoot);
   // Nothing destructiveShellFlag names or suspects is pre-approved: a match
   // overrides the reviewer, so it must rest on a command read in full.
   if (destructiveShellFlag(command) !== null) return null;
-  const scope: Scope = { root: projectRoot, names: namesFor(projectRoot), paths: pathsFor(projectRoot) };
+  const root = { root: projectRoot, names: namesFor(projectRoot), paths: pathsFor(projectRoot) };
+  const cwd = workingDirectoryOf(workingDirectory, sourceRoot, root);
+  if (cwd === undefined) return null;
+  const scope: Scope = { ...root, cwd };
   const stages = plainCommands(command.trim(), ["|"], {
     cmd: process.platform === "win32" || scope.paths === path.win32,
   });

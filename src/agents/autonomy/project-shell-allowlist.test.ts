@@ -279,18 +279,30 @@ describe("the Unity batchmode rule on Windows and Linux (AUT-17)", () => {
   });
 });
 
+/**
+ * The Hub editor for the root's platform. The rule reads a drive-letter root
+ * as Windows on any host and accepts only Unity.exe there, and tmpdir() is
+ * such a root on the windows-test job.
+ */
+function unityEditorFor(root: string): string {
+  return /^[A-Za-z]:[\\/]|^\\\\/.test(root)
+    ? '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.22f1\\Editor\\Unity.exe"'
+    : '"/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity"';
+}
+
 describe("a command run in a workspace lease (autonomy#4)", () => {
   // A leased worker's shell runs in the lease, and shell_exec points the
   // source path at the lease before it runs. The allowlist judged the line
   // against the source tree instead, so a file that exists only in the lease
   // read as a branch and `git checkout <it>` was pre-approved.
-  const unity = '"/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity"';
+  let unity = "";
   let base = "";
   let source = "";
   let lease = "";
 
   beforeAll(() => {
     base = mkdtempSync(join(tmpdir(), "allowlist-lease-"));
+    unity = unityEditorFor(base);
     source = join(base, "source");
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     mkdirSync(join(base, "lease-real", "Assets", "Scripts"), { recursive: true });
@@ -299,6 +311,8 @@ describe("a command run in a workspace lease (autonomy#4)", () => {
     // is handed over by one, and the shell in it prints the other (`pwd`).
     lease = join(base, "lease");
     symlinkSync(join(base, "lease-real"), lease, "dir");
+    // A link inside the project back to its root.
+    symlinkSync(join(base, "lease-real"), join(base, "lease-real", "Assets", "Root"), "dir");
   });
 
   afterAll(() => {
@@ -308,6 +322,26 @@ describe("a command run in a workspace lease (autonomy#4)", () => {
   it("reads a file only the lease has as a path, not a branch", () => {
     expect(matchProjectScopedAllowlist("git checkout Assets/Scripts/New.cs", lease, source)).toBeNull();
     expect(matchProjectScopedAllowlist("git checkout main", lease, source)?.rule).toContain("integration");
+  });
+
+  it("looks for the file in the working_directory git resolves the pathspec from", () => {
+    // Run in Assets/Scripts, `git checkout New.cs` discards the lease's edits
+    // to Assets/Scripts/New.cs; judged from the root it read as a branch.
+    for (const workingDirectory of [
+      "Assets/Scripts",
+      join(source, "Assets", "Scripts"),
+      join(realpathSync.native(lease), "Assets", "Scripts"),
+    ]) {
+      expect(matchProjectScopedAllowlist("git checkout New.cs", lease, source, workingDirectory), workingDirectory).toBeNull();
+      expect(matchProjectScopedAllowlist("git checkout main", lease, source, workingDirectory)?.rule).toContain("integration");
+    }
+  });
+
+  it("resolves `..` from the directory the shell is really in", () => {
+    // shell_exec runs in Assets/Root's real path, the lease root, so `..`
+    // leaves the lease; spelled out, it would have stayed in Assets.
+    expect(matchProjectScopedAllowlist("cat ../source/Assets/x", lease, source, "Assets/Root")).toBeNull();
+    expect(matchProjectScopedAllowlist("cat Assets/Scripts/New.cs", lease, source, "Assets/Root")).not.toBeNull();
   });
 
   it("reads the source path as the lease, the way shell_exec runs it", () => {
@@ -336,6 +370,59 @@ describe("a command run in a workspace lease (autonomy#4)", () => {
       `cat ${source}-secrets/key`,
     ]) {
       expect(matchProjectScopedAllowlist(command, lease, source), command).toBeNull();
+    }
+  });
+});
+
+describe("a lease root shaped like tmpdir() on the windows-test job", () => {
+  // The lease tests above take their root from tmpdir(), a drive-letter path
+  // on Windows. With the macOS editor hard-coded, the match below was null
+  // there and the windows-test job went red.
+  const base = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\allowlist-lease-x";
+  const source = `${base}\\source`;
+  const lease = `${base}\\lease`;
+
+  it("reads the source path as the lease with the Windows editor", () => {
+    const unity = unityEditorFor(lease);
+    expect(
+      matchProjectScopedAllowlist(`${unity} -batchmode -runTests -projectPath ${source}`, lease, source)?.rule,
+    ).toContain("unity-batchmode");
+    expect(matchProjectScopedAllowlist(`${unity} -batchmode -runTests -projectPath ${base}`, lease, source)).toBeNull();
+  });
+
+  it("maps a working_directory in the source tree onto the lease", () => {
+    expect(matchProjectScopedAllowlist("cat ..\\ProjectSettings\\x.asset", lease, source, `${source}\\Assets`)).not.toBeNull();
+    expect(matchProjectScopedAllowlist("cat ..\\..\\secrets.txt", lease, source, `${source}\\Assets`)).toBeNull();
+    expect(matchProjectScopedAllowlist("cat x.txt", lease, source, `${base}\\elsewhere`)).toBeNull();
+  });
+});
+
+describe("a command run in a working_directory", () => {
+  // shell_exec runs the line in <root>/<working_directory>, and the allowlist
+  // judged it against the root: relative paths, $PWD and git's pathspecs all
+  // named other files than the ones the shell would touch.
+  const root = "/Users/dev/PixelFlow";
+  const unity = unityEditorFor(root);
+
+  it("reads $PWD as the subdirectory, which is not the project Unity would open", () => {
+    expect(matchProjectScopedAllowlist(`${unity} -batchmode -quit -projectPath "$PWD"`, root, undefined, "Assets")).toBeNull();
+    expect(
+      matchProjectScopedAllowlist(`${unity} -batchmode -quit -projectPath "$PWD"`, root, undefined, ".")?.rule,
+    ).toContain("unity-batchmode");
+    expect(
+      matchProjectScopedAllowlist(`${unity} -batchmode -quit -projectPath ${root}`, root, undefined, "Assets")?.rule,
+    ).toContain("unity-batchmode");
+  });
+
+  it("resolves relative paths from the subdirectory", () => {
+    expect(matchProjectScopedAllowlist("cat ../ProjectSettings/ProjectVersion.txt", root, undefined, "Assets")).not.toBeNull();
+    expect(matchProjectScopedAllowlist("cat ../../.ssh/id_ed25519", root, undefined, "Assets")).toBeNull();
+    expect(matchProjectScopedAllowlist('cat "$PWD/../../x"', root, undefined, "Assets")).toBeNull();
+  });
+
+  it("pre-approves nothing in a directory outside the project", () => {
+    for (const workingDirectory of ["..", "../Other", "/Users/dev", "Assets/../../Other"]) {
+      expect(matchProjectScopedAllowlist("ls", root, undefined, workingDirectory), workingDirectory).toBeNull();
     }
   });
 });

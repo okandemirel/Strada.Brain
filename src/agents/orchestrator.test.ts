@@ -5885,13 +5885,18 @@ DONE`,
     // its deterministic allowlist to the source tree: a file that exists only
     // in the lease read as a branch there, so `git checkout <file>` overrode a
     // reviewer rejection and threw away the lease's edits to it.
-    const unity = "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
+    let unity: string;
     let base: string;
     let source: string;
     let lease: string;
 
     beforeEach(() => {
       base = mkdtempSync(join(tmpdir(), "strada-lease-review-"));
+      // The allowlist reads a drive-letter root (tmpdir() on the windows-test
+      // job) as Windows, where only the Hub's Unity.exe is the editor.
+      unity = /^[A-Za-z]:[\\/]/.test(base)
+        ? '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.22f1\\Editor\\Unity.exe"'
+        : "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
       source = join(base, "source");
       lease = join(base, "lease");
       mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
@@ -5904,7 +5909,7 @@ DONE`,
       rmSync(base, { recursive: true, force: true });
     });
 
-    async function runLeasedShell(chatId: string, command: string) {
+    async function runLeasedShell(chatId: string, command: string, extra: Record<string, unknown> = {}) {
       const shellTool = createMockTool("shell_exec", true);
       const leasedOrch = new Orchestrator({
         providerManager: {
@@ -5923,7 +5928,7 @@ DONE`,
         { text: "Working in the workspace.", toolCalls: [], stopReason: "end_turn", usage },
         {
           text: "",
-          toolCalls: [{ id: `tc-${chatId}`, name: "shell_exec", input: { command } }],
+          toolCalls: [{ id: `tc-${chatId}`, name: "shell_exec", input: { command, ...extra } }],
           stopReason: "tool_use",
           usage,
         },
@@ -5953,6 +5958,18 @@ DONE`,
 
     it("leaves `git checkout <a file only the lease has>` to the reviewer", async () => {
       const shellTool = await runLeasedShell("bg-lease-checkout", "git checkout Assets/Scripts/New.cs");
+
+      expect(shellTool.execute).not.toHaveBeenCalled();
+      const toolResults = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
+      expect(toolResults.some((content) => content.includes("Self-managed write review rejected"))).toBe(true);
+    });
+
+    it("leaves the checkout to the reviewer when the working_directory makes it name the file", async () => {
+      // shell_exec runs it in Assets/Scripts, where git reads `New.cs` as the
+      // lease's file; judged from the lease root it read as a branch.
+      const shellTool = await runLeasedShell("bg-lease-checkout-wd", "git checkout New.cs", {
+        working_directory: "Assets/Scripts",
+      });
 
       expect(shellTool.execute).not.toHaveBeenCalled();
       const toolResults = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
