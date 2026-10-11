@@ -66,6 +66,13 @@ export class ObservationEngine {
     }
   }
 
+  /** Tell every observer that tracks the user that they were just active. */
+  recordUserActivity(): void {
+    for (const obs of this.observers) {
+      obs.recordActivity?.();
+    }
+  }
+
   /**
    * Collect all pending observations from all registered observers.
    * Returns priority-sorted, deduplicated observations.

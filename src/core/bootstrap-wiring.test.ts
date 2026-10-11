@@ -521,6 +521,9 @@ describe("wireMessageHandler", () => {
     await channel._emit({ chatId: "c1", text: "hi", userId: "u1" });
 
     expect(hb.onUserActivity).toHaveBeenCalledTimes(1);
+    // The chat travels with it: it is where the Agent Core's notify/escalate go
+    // (audit agent-core-goals#2).
+    expect(hb.onUserActivity).toHaveBeenCalledWith("c1");
   });
 
   it("marks task as failed when routing throws", async () => {

@@ -59,4 +59,6 @@ export interface Observer {
   start?(): void;
   /** Stop monitoring and clean up resources */
   stop?(): void;
+  /** The user was just active (a message reached the daemon). */
+  recordActivity?(): void;
 }

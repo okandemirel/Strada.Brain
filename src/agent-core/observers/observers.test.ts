@@ -5,29 +5,53 @@ import { BuildStateObserver } from "./build-state-observer.js";
 import { GitStateObserver, summarizeGitStatus, describeGitStatus, shouldReportGitGrowth, GIT_SUMMARY_PREFIX } from "./git-state-observer.js";
 import { FileWatchObserver } from "./file-watch-observer.js";
 import { TestResultObserver } from "./test-result-observer.js";
+import { TriggerRegistry } from "../../daemon/trigger-registry.js";
+import { TypedEventBus } from "../../core/event-bus.js";
+import type { DaemonEventMap } from "../../daemon/daemon-events.js";
 
 describe("TriggerObserver", () => {
-  it("reports fired triggers", () => {
-    const registry = {
-      getAll: () => [
-        { metadata: { name: "daily-check", type: "cron", description: "Run tests" }, getState: () => "fired" },
-        { metadata: { name: "backup", type: "cron" }, getState: () => "active" },
-      ],
-    };
-    const observer = new TriggerObserver(registry);
+  // Real triggers only ever report "active" | "paused" | "backed_off" | "disabled"; a fire is
+  // the heartbeat's daemon:trigger_fired event (audit agent-core-goals#7: the observer waited
+  // for a "fired" state no trigger has, and its stub tests returned one).
+  function setup() {
+    const registry = new TriggerRegistry();
+    for (const [name, description] of [["daily-check", "Run tests"], ["backup", "Back up saves"]] as const) {
+      registry.register({
+        metadata: { name, type: "cron", description },
+        shouldFire: () => false,
+        onFired: () => {},
+        getNextRun: () => null,
+        getState: () => "active",
+      });
+    }
+    const bus = new TypedEventBus<DaemonEventMap>();
+    const observer = new TriggerObserver(registry, bus);
+    return { bus, observer };
+  }
+
+  it("reports a trigger the heartbeat fired, once", () => {
+    const { bus, observer } = setup();
+    bus.emit("daemon:trigger_fired", { triggerName: "daily-check", taskId: "task_9", timestamp: Date.now() });
     const obs = observer.collect();
     expect(obs).toHaveLength(1);
     expect(obs[0]!.source).toBe("trigger");
     expect(obs[0]!.summary).toContain("daily-check");
+    expect(obs[0]!.summary).toContain("Run tests");
+    expect(obs[0]!.context).toMatchObject({ triggerName: "daily-check", taskId: "task_9" });
+    // The fire already became its own task: context for AgentCore, not work to start again.
+    expect(obs[0]!.actionable).toBe(false);
+    expect(observer.collect()).toHaveLength(0);
   });
 
-  it("returns empty when no triggers fired", () => {
-    const registry = {
-      getAll: () => [
-        { metadata: { name: "idle", type: "cron" }, getState: () => "active" },
-      ],
-    };
-    const observer = new TriggerObserver(registry);
+  it("returns empty when no trigger fired, whatever the triggers' states", () => {
+    const { observer } = setup();
+    expect(observer.collect()).toHaveLength(0);
+  });
+
+  it("stops listening when stopped", () => {
+    const { bus, observer } = setup();
+    observer.stop();
+    bus.emit("daemon:trigger_fired", { triggerName: "backup", timestamp: Date.now() });
     expect(observer.collect()).toHaveLength(0);
   });
 });

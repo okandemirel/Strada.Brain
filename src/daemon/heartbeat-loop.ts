@@ -598,9 +598,11 @@ export class HeartbeatLoop {
 
   /**
    * Record user activity timestamp and abort any in-progress consolidation (MEM-13).
-   * Called from message handler when user sends a message.
+   * Called from message handler when user sends a message. The Agent Core hears it too: the
+   * chat is where its notify/escalate go, and its user-activity observer tracks idle time.
    */
-  onUserActivity(): void {
+  onUserActivity(chatId?: string): void {
+    this.agentCore?.onUserActivity(chatId);
     this.lastUserActivity = Date.now();
     if (this.consolidationRunning && this.consolidationAbort) {
       this.consolidationAbort.abort();

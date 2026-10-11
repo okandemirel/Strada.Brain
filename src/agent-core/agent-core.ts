@@ -46,8 +46,15 @@ const UNPARSED_COOLDOWN_MINUTES = 60;
 const LLM_PRIORITY_THRESHOLD_CEILING = 80;
 const PRIORITY_THRESHOLD_OVERRIDE_TTL_MS = 30 * 60_000;
 const BELOW_THRESHOLD_RECHECK_MINUTES = 5;
+/** Messages decided before anyone has written to the daemon: the newest few are kept. */
+const MAX_HELD_FOR_OPERATOR = 10;
 
 export class AgentCore {
+  /**
+   * The daemon's own task identity (its submissions and their outcomes). NOT a chat a person
+   * reads: no channel claims it, so a message sent to it is buffered for a socket that never
+   * connects (web) or refused (Telegram). Human-visible output goes to {@link operatorChatId}.
+   */
   static readonly AGENT_CHAT_ID = "agent-core";
   static readonly AGENT_CHANNEL_TYPE = "daemon";
 
@@ -59,6 +66,14 @@ export class AgentCore {
   private readonly unparsedRounds = new Map<string, number>();
   /** Said once per process, not once per round. */
   private unparsedReported = false;
+  /**
+   * The chat the user last wrote from — where notify/escalate go, as the NotificationRouter and
+   * DigestReporter bind theirs (audit agent-core-goals#2: they went to "agent-core", which no
+   * channel owns, and the user never saw a question asked of them).
+   */
+  private operatorChatId?: string;
+  /** Decided while no chat was known; delivered on the first tick that has one. */
+  private readonly heldForOperator: string[] = [];
   /** Maps submitted task IDs to the instinct IDs that informed the decision */
   private readonly taskInstinctMap = new Map<TaskId, { instinctIds: string[]; createdAt: number }>();
   /** Multi-provider routing: selects best provider per task. */
@@ -107,6 +122,9 @@ export class AgentCore {
     let batch: AgentObservation[] = [];
     let consumed = false;
     try {
+      // Already decided: delivering it needs no reasoning call, budget or provider.
+      if (this.heldForOperator.length > 0 && this.operatorChatId) await this.deliverHeldForOperator();
+
       // Rate limit (respect runtime override if set)
       const effectiveIntervalMs = this.runtimeOverrides.reasoningIntervalMs ?? this.config.minReasoningIntervalMs;
       if (Date.now() - this.lastReasoningMs < effectiveIntervalMs) return;
@@ -282,6 +300,9 @@ export class AgentCore {
       // observation collected with it — and a one-shot observer does not
       // report the same unchanged failure again (Codex 2026-09-11 M#3).
       const handled = new Set<string>();
+      // A notify/escalate put off for a foreground task postpones the decision about the WHOLE
+      // batch; set when that happens so the rest of the batch comes back with it.
+      let postponedForForeground = false;
 
       // 4. ACT
       switch (decision.action) {
@@ -322,27 +343,22 @@ export class AgentCore {
         case "notify":
           if (decision.message) {
             if (this.deferHumanVisibleDecision(decision, ranked[0], activeForegroundTaskCount)) {
+              if (ranked[0]) handled.add(ranked[0].id);
+              postponedForForeground = true;
               break;
             }
-            // Find any connected user channel to notify
-            try {
-              await this.channel.sendText(AgentCore.AGENT_CHAT_ID, decision.message);
-            } catch {
-              this.logger.debug("AgentCore: no channel for notification");
-            }
+            await this.sendToOperator(decision.message, "notification");
           }
           break;
 
         case "escalate":
           if (decision.question) {
             if (this.deferHumanVisibleDecision(decision, ranked[0], activeForegroundTaskCount)) {
+              if (ranked[0]) handled.add(ranked[0].id);
+              postponedForForeground = true;
               break;
             }
-            try {
-              await this.channel.sendText(AgentCore.AGENT_CHAT_ID, `[Agent needs input] ${decision.question}`);
-            } catch {
-              this.logger.debug("AgentCore: no channel for escalation");
-            }
+            await this.sendToOperator(`[Agent needs input] ${decision.question}`, "escalation");
           }
           break;
 
@@ -425,17 +441,14 @@ export class AgentCore {
               this.requeueUnacted(batch, "unparsed-decision-exhausted", UNPARSED_COOLDOWN_MINUTES);
               if (!this.unparsedReported) {
                 this.unparsedReported = true;
-                try {
-                  void Promise.resolve(this.channel?.sendText?.(
-                    AgentCore.AGENT_CHAT_ID,
-                    `I could not read my own reasoning ${MAX_UNPARSED_ROUNDS} times in a row (${decision.reasoning}). ` +
-                      "The observations are held for an hour; the reasoning provider needs a look.",
-                  // A channel that is offline rejects, and the synchronous
-                  // try/catch around this never saw it — an unhandled
-                  // rejection in the daemon that is carrying out the recovery
-                  // (Codex 2026-09-11 J#18).
-                  )).catch(() => { /* the log already carries it */ });
-                } catch { /* the log already carries it */ }
+                // sendToOperator never rejects: an offline channel used to be an
+                // unhandled rejection in the daemon that is carrying out the
+                // recovery (Codex 2026-09-11 J#18).
+                void this.sendToOperator(
+                  `I could not read my own reasoning ${MAX_UNPARSED_ROUNDS} times in a row (${decision.reasoning}). ` +
+                    "The observations are held for an hour; the reasoning provider needs a look.",
+                  "unparsed-reasoning warning",
+                );
               }
             } else {
               this.requeueUnacted(batch, "unparsed-decision", UNACTED_BATCH_RECHECK_MINUTES);
@@ -456,11 +469,18 @@ export class AgentCore {
       // …only for the arms that act on a SUBSET. "wait" and "adjust" are
       // decisions about the whole batch (and the threshold path defers what it
       // drops itself); "execute" and "batch" answer the observations they
-      // name and used to acknowledge the rest.
-      if (decision.action === "execute" || decision.action === "batch") {
+      // name and used to acknowledge the rest. "defer" puts off the top
+      // observation only, and a notify/escalate postponed for a foreground task
+      // put off only the top one too — the rest of the batch was destroyed
+      // with them (audit agent-core-goals#3).
+      if (decision.action === "execute" || decision.action === "batch" || decision.action === "defer" || postponedForForeground) {
         const unhandled = batch.filter((o) => !handled.has(o.id));
         if (unhandled.length > 0) {
-          this.requeueUnacted(unhandled, `unhandled-by-${decision.action}`, UNACTED_BATCH_RECHECK_MINUTES);
+          this.requeueUnacted(
+            unhandled,
+            postponedForForeground ? "postponed-for-foreground" : `unhandled-by-${decision.action}`,
+            postponedForForeground ? FOREGROUND_DECISION_DEFER_MINUTES : UNACTED_BATCH_RECHECK_MINUTES,
+          );
         }
       }
       consumed = true;
@@ -479,6 +499,56 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /**
+   * A person wrote to the daemon: their chat is where AgentCore speaks from now on, and the
+   * observers that track the user hear about it (audit agent-core-goals#7: the
+   * UserActivityObserver was built inline and never told, so it reported the user idle for good).
+   */
+  onUserActivity(chatId?: string): void {
+    if (chatId) this.operatorChatId = chatId;
+    this.observationEngine.recordUserActivity();
+  }
+
+  /**
+   * Say something to the operator. With no chat known yet the text is held for the first tick
+   * that has one, not sent to a chat id no channel owns. Never rejects.
+   */
+  private async sendToOperator(text: string, what: string): Promise<void> {
+    const chatId = this.operatorChatId;
+    if (!chatId) {
+      if (this.heldForOperator.length >= MAX_HELD_FOR_OPERATOR) this.heldForOperator.shift();
+      this.heldForOperator.push(text);
+      this.logger.warn(`AgentCore: ${what} held — no one has written to the daemon yet`, {
+        held: this.heldForOperator.length,
+        text: text.slice(0, 120),
+      });
+      return;
+    }
+    try {
+      await this.channel.sendText(chatId, text);
+    } catch (error) {
+      this.logger.warn(`AgentCore: ${what} could not be delivered`, {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async deliverHeldForOperator(): Promise<void> {
+    if (!this.operatorChatId) return;
+    // The same courtesy a fresh notify/escalate gets: not in the middle of the user's own task.
+    let foreground = 0;
+    try {
+      foreground = this.taskManager.countActiveForegroundTasks?.([AgentCore.AGENT_CHAT_ID]) ?? 0;
+    } catch {
+      // Unknown is not busy: the tick itself only runs between foreground tasks.
+    }
+    if (foreground > 0) return;
+    for (const text of this.heldForOperator.splice(0)) {
+      await this.sendToOperator(text, "held message");
+    }
   }
 
   /** Drop LLM-set source boosts whose TTL has passed. */

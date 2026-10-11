@@ -160,22 +160,24 @@ describe("AgentCore OODA Integration", () => {
   });
 
   /* 6c. Action type: notify */
-  it("action notify -> channel.sendText called", async () => {
+  it("action notify -> channel.sendText called on the operator's chat", async () => {
     const m = createMocks({ chatResponse: { action: "notify", message: "Build is green", reasoning: "informing" } });
     const core = buildCore(m);
+    core.onUserActivity("op-chat");
     await core.tick();
 
-    expect(m.channel.sendText).toHaveBeenCalledWith("agent-core", "Build is green");
+    expect(m.channel.sendText).toHaveBeenCalledWith("op-chat", "Build is green");
     expect(m.taskManager.submit).not.toHaveBeenCalled();
   });
 
   /* 6d. Action type: escalate */
-  it("action escalate -> channel.sendText called with question prefix", async () => {
+  it("action escalate -> channel.sendText called with question prefix on the operator's chat", async () => {
     const m = createMocks({ chatResponse: { action: "escalate", question: "Should I deploy?", reasoning: "need approval" } });
     const core = buildCore(m);
+    core.onUserActivity("op-chat");
     await core.tick();
 
-    expect(m.channel.sendText).toHaveBeenCalledWith("agent-core", "[Agent needs input] Should I deploy?");
+    expect(m.channel.sendText).toHaveBeenCalledWith("op-chat", "[Agent needs input] Should I deploy?");
     expect(m.taskManager.submit).not.toHaveBeenCalled();
   });
 

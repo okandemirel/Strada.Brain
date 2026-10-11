@@ -1911,7 +1911,9 @@ async function bootstrapImpl(
         const observationEngine = new ObservationEngine();
 
         // Register observers that wrap existing infrastructure
-        observationEngine.register(new TriggerObserver(triggerRegistry));
+        // Fires are heard on the bus the heartbeat announces them on; user activity reaches the
+        // observer through heartbeatLoop.onUserActivity → AgentCore.onUserActivity.
+        observationEngine.register(new TriggerObserver(triggerRegistry, daemonBus));
         observationEngine.register(new UserActivityObserver(daemonConfig.heartbeat.intervalMs * 5));
         observationEngine.register(new GitStateObserver(config.unityProjectPath));
         // Build health flows through the process-wide publication every
@@ -2180,8 +2182,9 @@ async function bootstrapImpl(
         normalizedMsg.chatId,
         extractUserAuthorizedPaths(typeof normalizedMsg.text === "string" ? normalizedMsg.text : ""),
       );
-      // Interrupt consolidation on user activity (MEM-13)
-      heartbeatLoop?.onUserActivity();
+      // Interrupt consolidation on user activity (MEM-13); the chat is where the
+      // Agent Core's notify/escalate go.
+      heartbeatLoop?.onUserActivity(normalizedMsg.chatId);
       if (identityManager) {
         identityManager.recordActivity();
         identityManager.incrementMessages();

@@ -581,6 +581,7 @@ describe("unreadable reasoning is bounded (Codex 2026-09-11 H#15)", () => {
     const core = new AgentCore(engine, new PriorityScorer(), provider as any, taskManager as any, channel as any, budget, undefined, {
       minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10,
     });
+    core.onUserActivity("op-chat");
     const deferred: Array<{ minutes: number }> = [];
     const realDefer = engine.defer.bind(engine);
     vi.spyOn(engine, "defer").mockImplementation((obs: never, minutes: number) => {
@@ -603,6 +604,8 @@ describe("unreadable reasoning is bounded (Codex 2026-09-11 H#15)", () => {
     // The first rounds put it back quickly; once the patience is spent the
     // recheck is an hour and the trouble is reported exactly once.
     expect(deferred.some((d) => d.minutes >= 60)).toBe(true);
-    expect(channel.sendText.mock.calls.filter((c: unknown[]) => String(c[1]).includes("could not read my own reasoning"))).toHaveLength(1);
+    const warnings = channel.sendText.mock.calls.filter((c: unknown[]) => String(c[1]).includes("could not read my own reasoning"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]![0]).toBe("op-chat");
   });
 });

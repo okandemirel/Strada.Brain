@@ -53,7 +53,8 @@ src/agent-core/
 ### AgentCore
 Runs as part of HeartbeatLoop.tick(). Each tick: collect observations → score priorities → LLM reasoning → act or wait. Protected by tickInFlight guard, 30s rate limit, budget floor (10%), and priority threshold (30).
 AgentCore does not directly take over an in-flight PAOR execution loop. Its job is to notice opportunities, submit proactive goals, and feed the orchestrator more work; the orchestrator still owns code-edit execution, verification, and loop recovery for those tasks.
-When a foreground user task is already active, AgentCore now treats human-visible `notify` / `escalate` actions as deferrable control-plane signals instead of printing into the live session. The observation is re-queued for later review so OODA stays proactive without hijacking PAOR execution.
+When a foreground user task is already active, AgentCore now treats human-visible `notify` / `escalate` actions as deferrable control-plane signals instead of printing into the live session. The whole batch is re-queued for later review so OODA stays proactive without hijacking PAOR execution.
+`notify` / `escalate` go to the chat the user last wrote from (HeartbeatLoop.onUserActivity → AgentCore.onUserActivity), never to the internal `agent-core` task id, which no channel owns. Anything decided before anyone has written is held and delivered on the first tick after a chat is known.
 
 ### ObservationEngine
 Collects from registered observers, deduplicates within 60s window, maintains history (100 entries max). Priority-sorted output.

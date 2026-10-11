@@ -87,8 +87,9 @@ export function wireMessageHandler(
     if (activityRegistryRef && channelTypeName) {
       activityRegistryRef.recordActivity(channelTypeName, normalizedMsg.chatId);
     }
-    // Interrupt consolidation on user activity (MEM-13)
-    heartbeatLoopRef?.onUserActivity();
+    // Interrupt consolidation on user activity (MEM-13); the chat is where the
+    // Agent Core's notify/escalate go.
+    heartbeatLoopRef?.onUserActivity(normalizedMsg.chatId);
     // Track activity and messages for identity persistence
     if (identityManager) {
       identityManager.recordActivity();

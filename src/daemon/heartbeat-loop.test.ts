@@ -585,6 +585,13 @@ describe("HeartbeatLoop", () => {
     expect(countTicks() - before).toBe(6);
   });
 
+  it("user activity reaches the Agent Core with the chat it came from (audit agent-core-goals#2/#7)", () => {
+    const core = { tick: vi.fn(), onUserActivity: vi.fn() };
+    loop.setAgentCore(core as never);
+    loop.onUserActivity("chat-9");
+    expect(core.onUserActivity).toHaveBeenCalledWith("chat-9");
+  });
+
   it("tick() iterates over registry.getActive() and calls shouldFire(now)", async () => {
     const t1 = makeTrigger("t1", { shouldFire: false });
     const t2 = makeTrigger("t2", { shouldFire: false });
