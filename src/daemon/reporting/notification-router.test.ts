@@ -12,6 +12,14 @@ import { getLoggerSafe } from "../../utils/logger.js";
 import { HubChannel } from "../../channels/hub/hub-channel.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
+import { Command } from "commander";
+import { ApprovalQueue } from "../security/approval-queue.js";
+import { DeployTrigger } from "../triggers/deploy-trigger.js";
+import type { DeploymentConfig } from "../deployment/deployment-types.js";
+import type { ReadinessChecker } from "../deployment/readiness-checker.js";
+import type { DeploymentExecutor } from "../deployment/deployment-executor.js";
+import type { CircuitBreaker } from "../resilience/circuit-breaker.js";
+import { registerDaemonCommands } from "../daemon-cli.js";
 
 describe("NotificationRouter", () => {
   let storage: DaemonStorage;
@@ -878,6 +886,105 @@ describe("NotificationRouter", () => {
       await router.drainBufferedNotifications(at + 1);
       expect(cli.sendMarkdown).toHaveBeenCalledWith("cli-local", expect.stringContaining("CLI-owned goal finished"));
       expect(reasons()).toEqual([]);
+    });
+  });
+
+  describe("approval requests (daemon#4)", () => {
+    const deployConfig: DeploymentConfig = {
+      enabled: true,
+      scriptPath: "scripts/deploy.sh",
+      testCommand: "npm test",
+      targetBranch: "main",
+      requireCleanGit: true,
+      testTimeoutMs: 300000,
+      executionTimeoutMs: 600000,
+      cooldownMinutes: 30,
+      notificationUrgency: "high",
+    };
+
+    /** The real proposal path: DeployTrigger.onFired -> ApprovalQueue.enqueue -> daemon:approval_requested. */
+    function proposeDeployment(urgency: DeploymentConfig["notificationUrgency"]): void {
+      const queue = new ApprovalQueue(storage, 30, eventBus);
+      const trigger = new DeployTrigger(
+        { invalidateCache: vi.fn(), checkReadiness: vi.fn() } as unknown as ReadinessChecker,
+        queue,
+        { isOpen: () => false } as unknown as CircuitBreaker,
+        { logProposal: () => "proposal-1", isInProgress: () => false } as unknown as DeploymentExecutor,
+        { ...deployConfig, notificationUrgency: urgency },
+        { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      );
+      trigger.onFired(new Date());
+    }
+
+    it("announces a deployment proposal at DEPLOY_NOTIFICATION_URGENCY, so its default 'high' reaches chat", async () => {
+      const router = createRouter();
+      router.start();
+
+      proposeDeployment("high");
+
+      await vi.waitFor(() => expect(mockSender.sendMarkdown).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(mockSender.sendMarkdown).mock.calls[0]![1]).toContain("**[HIGH]** Approval needed: deployment");
+      expect(storage.getNotificationHistory(10)[0]).toMatchObject({ urgency: "high", deliveredTo: ["chat", "dashboard"] });
+      router.stop();
+    });
+
+    it("lets a deployment proposal set to 'critical' through quiet hours", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-21T12:00:00Z"));
+      const router = createRouter({ quietConfig: { enabled: true, startHour: 0, endHour: 23 } });
+      router.start();
+
+      proposeDeployment("critical");
+
+      await vi.waitFor(() => expect(mockSender.sendMarkdown).toHaveBeenCalledTimes(1));
+      expect(storage.getBufferedNotifications()).toEqual([]);
+      router.stop();
+    });
+
+    it("keeps an approval whose producer names no urgency at medium", async () => {
+      const router = createRouter();
+      router.start();
+
+      new ApprovalQueue(storage, 30, eventBus).enqueue("file_write", { path: "a.txt" });
+
+      await vi.waitFor(() => expect(storage.getNotificationHistory(10)).toHaveLength(1));
+      expect(storage.getNotificationHistory(10)[0]).toMatchObject({ urgency: "medium", deliveredTo: ["dashboard"] });
+      router.stop();
+    });
+
+    it("names only `strada daemon` commands that exist, with the arguments they take", async () => {
+      const everyLevelToChat = { silent: ["dashboard"], low: ["chat"], medium: ["chat"], high: ["chat"], critical: ["chat"] };
+      const router = createRouter({ config: { routing: everyLevelToChat } });
+      router.start();
+
+      proposeDeployment("medium");
+      eventBus.emit("daemon:trigger_failed", { triggerName: "nightly", error: "boom", circuitState: "OPEN", timestamp: Date.now() });
+      eventBus.emit("daemon:budget_warning", { usedUsd: 4, limitUsd: 5, pct: 0.8, timestamp: Date.now() });
+
+      await vi.waitFor(() => expect(mockSender.sendMarkdown).toHaveBeenCalledTimes(3));
+      const hints = vi.mocked(mockSender.sendMarkdown).mock.calls
+        .flatMap(([, markdown]) => [...markdown.matchAll(/strada (daemon [^,()\n]+)/g)].map((m) => m[1]!.trim()));
+      expect(hints.filter((hint) => /^daemon (approve|deny) /.test(hint))).toHaveLength(2);
+
+      const program = new Command();
+      registerDaemonCommands(program, () => undefined);
+      // Walk the registered command tree as commander does; what is left are the arguments.
+      const resolve = (hint: string) => {
+        let command = program;
+        const path: string[] = [];
+        const words = hint.split(/\s+/);
+        while (words.length > 0) {
+          const sub = command.commands.find((c) => c.name() === words[0]);
+          if (!sub) break;
+          command = sub;
+          path.push(words.shift()!);
+        }
+        return { hint, runs: command.commands.length === 0 && path.length > 1, path: path.join(" "), extraArguments: words.length - command.registeredArguments.length };
+      };
+      for (const hint of hints) {
+        expect(resolve(hint)).toMatchObject({ hint, runs: true, extraArguments: 0 });
+      }
+      router.stop();
     });
   });
 

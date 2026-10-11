@@ -8,6 +8,7 @@
 
 import type { ApprovalStatus, CircuitState } from "./daemon-types.js";
 import type { GoalStatus } from "../goals/types.js";
+import type { UrgencyLevel } from "./reporting/notification-types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -95,6 +96,8 @@ export interface ApprovalRequestedEvent {
   readonly approvalId: string;
   readonly toolName: string;
   readonly triggerName?: string;
+  /** How urgently a person must hear of it; the requester knows (a deploy: DEPLOY_NOTIFICATION_URGENCY). */
+  readonly urgency?: UrgencyLevel;
   readonly timestamp: number;
 }
 

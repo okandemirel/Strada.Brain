@@ -15,6 +15,7 @@ import type { DaemonStorage } from "../daemon-storage.js";
 import type { ApprovalEntry, ApprovalStatus, AuditEntry } from "../daemon-types.js";
 import type { IEventBus } from "../../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon-events.js";
+import type { UrgencyLevel } from "../reporting/notification-types.js";
 import {
   safeRecordProjectHistory,
   type ProjectHistoryRecorder,
@@ -63,11 +64,13 @@ export class ApprovalQueue {
   /**
    * Enqueue a tool execution request for approval.
    * Creates a pending entry with an expiration based on the configured timeout.
+   * `urgency` is how the request is announced; without one it is "medium".
    */
   enqueue(
     toolName: string,
     params: Record<string, unknown>,
     triggerName?: string,
+    urgency?: UrgencyLevel,
   ): ApprovalEntry {
     const now = Date.now();
     const entry: ApprovalEntry = {
@@ -86,6 +89,7 @@ export class ApprovalQueue {
       approvalId: entry.id,
       toolName,
       triggerName,
+      ...(urgency ? { urgency } : {}),
       timestamp: now,
     });
 

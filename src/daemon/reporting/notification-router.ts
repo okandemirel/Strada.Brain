@@ -490,10 +490,10 @@ export class NotificationRouter {
 
     subscribe("daemon:approval_requested", (e) => {
       this.notify({
-        level: "medium",
+        level: e.urgency ?? "medium",
         title: `Approval needed: ${e.toolName}`,
         message: `Write operation '${e.toolName}' requires approval (ID: ${e.approvalId})`,
-        actionHint: `Run: strada daemon approve ${e.approvalId}`,
+        actionHint: `Run: strada daemon approve ${e.approvalId} (or strada daemon deny ${e.approvalId})`,
         sourceEvent: "daemon:approval_requested",
         timestamp: e.timestamp,
       });

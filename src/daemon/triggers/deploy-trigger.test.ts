@@ -206,7 +206,7 @@ describe("DeployTrigger", () => {
   });
 
   describe("onFired", () => {
-    it("logs proposal and enqueues in approval queue", () => {
+    it("logs proposal and enqueues in approval queue, announced at DEPLOY_NOTIFICATION_URGENCY", () => {
       trigger.setCachedReadiness(createReadyResult());
       trigger.onFired(new Date());
 
@@ -219,6 +219,7 @@ describe("DeployTrigger", () => {
           gitClean: true,
         }),
         "deploy-readiness",
+        "high",
       );
     });
 
@@ -437,6 +438,7 @@ describe("DeployTrigger", () => {
           readinessTimestamp: 0,
         }),
         "deploy-readiness",
+        "high",
       );
     });
   });

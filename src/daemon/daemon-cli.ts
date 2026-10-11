@@ -6,6 +6,7 @@
  *   strada daemon trigger -- Manually fire a named trigger
  *   strada daemon reset   -- Reset circuit breaker for a trigger to CLOSED
  *   strada daemon audit   -- Show recent approval/denial decisions
+ *   strada daemon approve|deny <id> -- Decide a pending approval (a deploy proposal, a write tool)
  *   strada daemon config  -- Show all daemon settings
  *   strada daemon budget  -- Budget management (reset)
  *   strada daemon digest  -- Send immediate digest (or --dry-run to preview)
@@ -279,6 +280,42 @@ export function registerDaemonCommands(
 
       printAuditLog(ctx.approvalQueue.getAuditLog(limit));
     });
+
+  // =========================================================================
+  // daemon approve <id> / daemon deny <id>
+  // =========================================================================
+  // The approval notification names these: without them an approval had no
+  // way to be decided short of a hand-made POST, and expired unanswered.
+  for (const action of ["approve", "deny"] as const) {
+    daemon
+      .command(`${action} <id>`)
+      .description(action === "approve" ? "Approve a pending approval (e.g. a deployment proposal)" : "Deny a pending approval")
+      .action(async (rawId: string) => {
+        if (!UUID_RE.test(rawId)) {
+          console.error("Invalid approval ID format. Expected UUID.");
+          process.exitCode = 1;
+          return;
+        }
+        const id = rawId.toLowerCase();
+        const ctx = getDaemonContext();
+        if (!ctx) {
+          // A decision that did not land (expired, already decided) is a 409 naming it.
+          const answer = await post(`${action} ${id}`, `/api/daemon/approvals/${id}/${action}`, {}, RemoteStatusSchema);
+          if (answer) printApprovalDecided(id, answer.status);
+          return;
+        }
+
+        const result = action === "approve" ? ctx.approvalQueue.approve(id) : ctx.approvalQueue.deny(id);
+        if (!result.applied) {
+          console.error(result.status === "missing"
+            ? `Approval ${id} not found.`
+            : `Approval ${id} is ${result.status}, not pending: ${action} not applied.`);
+          process.exitCode = 1;
+          return;
+        }
+        printApprovalDecided(id, result.status);
+      });
+  }
 
   // =========================================================================
   // daemon config
@@ -1538,6 +1575,10 @@ function printTriggerFire(name: string, outcome: TriggerFireView): void {
       process.exitCode = 1;
       return;
   }
+}
+
+function printApprovalDecided(id: string, status: string): void {
+  console.log(`Approval ${id} ${status}.`);
 }
 
 function printCircuitReset(name: string): void {

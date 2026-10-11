@@ -332,6 +332,46 @@ describe("daemon budget reset", () => {
 });
 
 // =============================================================================
+// APPROVE / DENY (daemon#4: the approval notification names these commands)
+// =============================================================================
+
+describe("daemon approve|deny <id>", () => {
+  const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+  it("decides the pending approval and says so", async () => {
+    const approve = vi.fn(() => ({ applied: true, status: "approved" }));
+    const deny = vi.fn(() => ({ applied: true, status: "denied" }));
+    const ctx = makeMockContext({ approvalQueue: { approve, deny, getPending: vi.fn(() => []) } as any });
+
+    expect((await runDaemonCommand(() => ctx, ["approve", ID])).stdout).toBe(`Approval ${ID} approved.`);
+    expect(approve).toHaveBeenCalledWith(ID);
+    expect((await runDaemonCommand(() => ctx, ["deny", ID])).stdout).toBe(`Approval ${ID} denied.`);
+    expect(deny).toHaveBeenCalledWith(ID);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("names a decision that did not land, and exits non-zero", async () => {
+    const approve = vi.fn(() => ({ applied: false, status: "expired" }));
+    const ctx = makeMockContext({ approvalQueue: { approve, getPending: vi.fn(() => []) } as any });
+
+    const { stdout, stderr } = await runDaemonCommand(() => ctx, ["approve", ID]);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(`Approval ${ID} is expired, not pending: approve not applied.`);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses an id that is not an approval id before touching the queue", async () => {
+    const approve = vi.fn();
+    const ctx = makeMockContext({ approvalQueue: { approve, getPending: vi.fn(() => []) } as any });
+
+    const { stderr } = await runDaemonCommand(() => ctx, ["approve", "../../budget/reset"]);
+    expect(stderr).toBe("Invalid approval ID format. Expected UUID.");
+    expect(approve).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+// =============================================================================
 // DIGEST SUBCOMMAND (Plan 18-02)
 // =============================================================================
 
@@ -1187,6 +1227,32 @@ describe("daemon commands over the dashboard API from a shell (COR-13)", () => {
 
     const missing = await run(["trigger", "nope"], baseUrl);
     expect(missing.stderr).toBe("Trigger 'nope' not found");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("daemon approve and deny post to the approval's route with the operator token; a decision that did not land exits non-zero", async () => {
+    const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const { baseUrl, seen } = await startRuntime({
+      [`POST /api/daemon/approvals/${ID}/approve`]: [
+        { body: { status: "approved" } },
+        { status: 409, body: { error: "Approval is expired, not pending — approve not applied" } },
+      ],
+      [`POST /api/daemon/approvals/${ID}/deny`]: { body: { status: "denied" } },
+    });
+
+    expect((await run(["approve", ID.toUpperCase()], baseUrl)).stdout).toBe(`Approval ${ID} approved.`);
+    expect((await run(["deny", ID], baseUrl)).stdout).toBe(`Approval ${ID} denied.`);
+    expect(process.exitCode).toBeUndefined();
+    expect(seen.map((s) => [s.line, s.operator, s.body])).toEqual([
+      [`POST /api/daemon/approvals/${ID}/approve`, OPERATOR, {}],
+      [`POST /api/daemon/approvals/${ID}/deny`, OPERATOR, {}],
+    ]);
+
+    const late = await run(["approve", ID], baseUrl);
+    expect(late.stdout).toBe("");
+    expect(late.stderr).toBe(
+      `Cannot approve ${ID}: the dashboard at ${baseUrl} refused POST /api/daemon/approvals/${ID}/approve: Approval is expired, not pending — approve not applied`,
+    );
     expect(process.exitCode).toBe(1);
   });
 

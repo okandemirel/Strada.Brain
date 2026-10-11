@@ -25,6 +25,7 @@ vi.mock("../utils/logger.js", async (importOriginal) => {
 });
 
 const AGENT = "123e4567-e89b-42d3-a456-426614174000";
+const APPROVAL = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
 /** Owner first, then a guest: a genuinely shared instance. */
 function identities() {
@@ -55,7 +56,12 @@ function fakeDaemon() {
     },
     registry: { getByName: vi.fn() },
     budgetTracker: { resetBudget: vi.fn() },
-    approvalQueue: { getAuditLog: vi.fn(() => [{ id: 1, toolName: "shell_exec", decision: "approved", timestamp: 1 }]) },
+    approvalQueue: {
+      getAuditLog: vi.fn(() => [{ id: 1, toolName: "shell_exec", decision: "approved", timestamp: 1 }]),
+      getById: vi.fn((id: string) => ({ id, toolName: "deployment", params: {}, status: "pending", createdAt: 1, expiresAt: Date.now() + 60_000 })),
+      approve: vi.fn(() => ({ applied: true, status: "approved" })),
+      deny: vi.fn(() => ({ applied: true, status: "denied" })),
+    },
     storage: { upsertCircuitState: vi.fn() },
     config: {},
     digestReporter: { sendDigest: vi.fn(async () => "sent"), previewDigest: vi.fn(() => "**preview**") },
@@ -97,6 +103,9 @@ function operatorCalls(daemon: ReturnType<typeof fakeDaemon>) {
     { path: "/api/consolidation/run", body: {}, spy: ctx.consolidationEngine.runCycle, status: 202 },
     { path: "/api/consolidation/undo", body: { logId: "log-1" }, spy: ctx.consolidationEngine.undo },
     { path: "/api/deployment/check", body: {}, spy: ctx.readinessChecker.checkReadiness, status: 202 },
+    // daemon#4: `strada daemon approve|deny <id>`, the commands the approval notification names.
+    { path: `/api/daemon/approvals/${APPROVAL}/approve`, body: {}, spy: ctx.approvalQueue.approve },
+    { path: `/api/daemon/approvals/${APPROVAL}/deny`, body: {}, spy: ctx.approvalQueue.deny },
   ].map((call) => ({ status: 200, ...call }));
 }
 
@@ -131,6 +140,7 @@ async function start(options: { dashboardToken?: string } = {}): Promise<Started
   );
   server.setDaemonContext({
     cliContext: daemon.ctx as unknown as DaemonContext,
+    approvalQueue: daemon.ctx.approvalQueue as never,
   });
   server.registerConsolidationDeploymentServices({ readinessChecker: daemon.ctx.readinessChecker });
   try {
@@ -212,7 +222,7 @@ describe("the local operator credential file (COR-13)", () => {
 describe("what the operator token opens (COR-13)", () => {
   it("allowlists only routes that are owner-only for every other caller", () => {
     const samples = operatorCalls(fakeDaemon()).map((call) => call.path);
-    expect(samples).toHaveLength(LOCAL_OPERATOR_ROUTES.length + 2); // three agent actions share one pattern
+    expect(samples).toHaveLength(LOCAL_OPERATOR_ROUTES.length + 3); // three agent actions share one pattern, approve and deny another
     for (const path of samples) {
       expect(ownerOnlyProxySurface(path), path).toBe("instance:control");
     }

@@ -138,6 +138,9 @@ export class DeployTrigger implements ITrigger {
         readinessTimestamp: this.cachedReadiness?.timestamp ?? 0,
       },
       "deploy-readiness",
+      // DEPLOY_NOTIFICATION_URGENCY: announced at medium, a proposal stayed out
+      // of chat by default and could not be raised past quiet hours.
+      this.config.notificationUrgency,
     );
 
     this.proposalPending = true;
