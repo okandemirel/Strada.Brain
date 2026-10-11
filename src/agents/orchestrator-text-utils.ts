@@ -30,17 +30,39 @@ const PROVIDER_REASONING_BLOCK_RE =
 // autonomous so it can work without the player" and "Otonom mod aktif mi?"
 // each enabled it — any autonomy word anywhere before "work"/"aktif" counted —
 // while "otonom modu aç" did not, because \b is ASCII-only and never closes a
-// word after "ç". Each clause is now judged alone: a question never counts, an
-// English command opens its clause, a Turkish one closes it (Turkish is
-// verb-final), and only the bare imperative counts — "çalışsın"/"çalışan"
-// describe a game object, "açma" negates.
-const AUTONOMY_ENABLE_EN_RE =
-  /^(?:(?:please|pls|ok(?:ay)?|now|so|just|then|and|also|from\s+now\s+on)[\s,]+)*(?:(?:enable|activate|turn\s+on|switch\s+on|switch\s+to|go\s+into|go|enter|use|start)\s+(?:the\s+)?(?:autonomous\s+mode|full\s+autonomy|autonomy(?:\s+mode)?|autonomous$)|(?:you\s+have|i\s+give\s+you|i\s+grant\s+you|take|use)\s+full\s+(?:autonomy|authority))(?![\p{L}\p{N}])/iu;
-const AUTONOMY_ENABLE_TR_RE =
-  /(?<![\p{L}\p{N}])(?:(?:otonom|autonom)(?:\s+(?:mod(?:u|a|da)?|olarak))?\s+(?:a[çc](?:[ıi]n)?|aktif\s+et|aktifle[şs]tir|etkinle[şs]tir|ba[şs]lat|ge[çc]|[çc]al[ıi][şs](?:[ıi]n)?|ilerle(?:yin)?|devam\s+et)|(?:otonom|autonom)\s+modu?\s+(?:aktif|etkin|a[çc][ıi]k)\s+olsun|(?:onay|approval)\s+(?:sormadan|istemeden|beklemeden)\s+(?:ilerle|devam\s+et|[çc]al[ıi][şs])|(?:sana\s+)?tam\s+yetki\s+ver(?:iyorum|dim)?|tam\s+yetkilisin|tam\s+yetkiyle\s+(?:ilerle|devam\s+et|[çc]al[ıi][şs]))(?:\s+(?:l[üu]tfen|art[ıi]k))?$/iu;
-const AUTONOMY_QUESTION_RE =
-  /\?|^(?:how|what|why|when|where|which|who|does|do|did|is|are|was|were|can|could|would|will|should|shall|may|might)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(?:m[iıuü](?:s[iıuü]n(?:[iıuü]z)?|y[iıuü]m|y[iıuü]z|d[iıuü]r)?|nedir|nas[ıi]l|neden|niye|hangi)(?![\p{L}\p{N}])/iu;
-const AUTONOMY_CLAUSE_SPLIT_RE = /[,;:]+|\s+(?:and|then|ve|sonra)\s+/iu;
+// word after "ç".
+//
+// A whole sentence must be the directive: a command verb and its target, with
+// only courtesy words before ("please", "lütfen", "bu görev için") and only
+// scope words after ("for this task", "now"). Anything else — a game target
+// ("for the enemy AI", "Düşman yapay zekası için"), a condition ("when the
+// target is lost", "Butona basınca"), a negation ("açma", "don't"), a question
+// mark or a quote — makes it a feature request or a remark, and only the bare
+// imperative counts ("çalışsın"/"çalışan" describe a game object). And
+// "autonomous mode" / "otonom mod" is an everyday game-feature name and
+// "continue without waiting for confirmation" an everyday purchase-flow spec,
+// so those forms only count as the message's opening sentence ("Add a drone.
+// Switch to autonomous mode." specifies the drone); a grant that can only mean
+// the assistant (full autonomy, "sana tam yetki veriyorum" — the bare "tam
+// yetki ver" hands authority to something else) counts as any sentence, as it
+// closes a settings message ("My name is Okan. ... Use full autonomy.").
+const AUTONOMY_LEAD_SRC = String.raw`(?:please|pls|ok(?:ay)?|alright|yes|hi|hello|hey|now|so|just|also|go\s+ahead\s+and|i\s+want\s+you\s+to|from\s+now\s+on|for\s+(?:this|the\s+rest\s+of\s+(?:this|the))\s+(?:task|session|conversation|chat|project)|l[üu]tfen|art[ıi]k|bundan\s+sonra|[şs]imdi|hemen|tamam|peki|evet|hadi|merhaba|selam|bu\s+(?:(?:g[öo]rev|i[şs]|oturum|konu[şs]ma|proje)\s+i[çc]in|g[öo]revde|oturumda|konu[şs]mada|projede))`;
+const AUTONOMY_TAIL_SRC = String.raw`(?:please|now|right\s+now|from\s+now\s+on|for\s+(?:this|the\s+rest\s+of\s+(?:this|the))\s+(?:task|session|conversation|chat|project)|l[üu]tfen|art[ıi]k|hemen|[şs]imdi|bundan\s+sonra|bu\s+(?:g[öo]rev|i[şs]|oturum|konu[şs]ma|proje)\s+i[çc]in)`;
+const AUTONOMY_JOIN_SRC = String.raw`(?:\s*,\s*|\s+)(?:and\s+then|and|then|ve|sonra|ard[ıi]ndan)\s+|\s*,\s*`;
+const AUTONOMY_GRANT_SRC = String.raw`(?:enable|activate|turn\s+on|switch\s+to|use|take|you\s+have|i\s+give\s+you|i\s+grant\s+you)\s+full\s+(?:autonomy|authority)|(?:sana\s+)?tam\s+yetki\s+ver(?:iyorum|dim)|tam\s+yetkilisin|tam\s+yetkiyle\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
+const AUTONOMY_MODE_SRC = String.raw`(?:enable|activate|turn\s+on|switch\s+on|switch\s+to|go\s+into|enter|use|start)\s+(?:the\s+)?(?:autonomous\s+mode|autonomy(?:\s+mode)?)|(?:turn|switch)\s+(?:the\s+)?autonomous\s+mode\s+on|go\s+(?:fully\s+)?autonomous|(?:work|proceed|continue)\s+(?:fully\s+)?autonomously|(?:otonom|autonom)(?:\s+(?:mod(?:u|unu|una|a|da|unda)?|olarak))?\s+(?:a[çc](?:[ıi]n)?|aktif\s+(?:et|edin)|aktifle[şs]tir(?:in)?|etkinle[şs]tir(?:in)?|ba[şs]lat(?:[ıi]n)?|ge[çc](?:in|elim)?|[çc]al[ıi][şs](?:[ıi]n|al[ıi]m|abilirsin(?:iz)?)?|ilerle(?:yin|yelim|yebilirsin(?:iz)?)?|devam\s+(?:et|edin))|(?:otonom|autonom)\s+mod(?:u|unu)?\s+(?:aktif|etkin|a[çc][ıi]k)\s+olsun|(?:proceed|continue|keep\s+going|go\s+ahead)\s+without\s+(?:asking(?:\s+me)?\s+for|waiting\s+for)\s+(?:approval|confirmation|permission)|(?:onay|approval|izin)\s+(?:sormadan|istemeden|beklemeden)\s+(?:ilerle(?:yin)?|devam\s+(?:et|edin)|[çc]al[ıi][şs](?:[ıi]n)?)`;
+const autonomySentenceRe = (directive: string): RegExp => {
+  const segment = String.raw`(?:${AUTONOMY_LEAD_SRC}[\s,]+)*(?:${directive})(?:,?\s+${AUTONOMY_TAIL_SRC})*`;
+  return new RegExp(String.raw`^${segment}(?:(?:${AUTONOMY_JOIN_SRC})${segment})*$`, "iu");
+};
+const AUTONOMY_OPENING_SENTENCE_RE = autonomySentenceRe(`${AUTONOMY_GRANT_SRC}|${AUTONOMY_MODE_SRC}`);
+const AUTONOMY_GRANT_SENTENCE_RE = autonomySentenceRe(AUTONOMY_GRANT_SRC);
+// "Hi!" or "Tamam." before the directive does not move it off the opening.
+const AUTONOMY_LEAD_ONLY_RE = new RegExp(String.raw`^${AUTONOMY_LEAD_SRC}(?:[\s,]+${AUTONOMY_LEAD_SRC})*$`, "iu");
+// The directive is one short sentence. The anchored patterns backtrack
+// quadratically on long comma/space runs (a 64 KB pasted sentence took ~2 s),
+// so longer sentences are never directives and are not matched at all.
+const AUTONOMY_SENTENCE_MAX_CHARS = 200;
 const AUTONOMY_DISABLE_RE =
   /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:kapat|kapa|disable|turn\s+off|devre\s+dışı|devre\s+disi|çalışma|calisma)\b|\b(?:onay|approval)\b.*\b(?:sor|iste|ask\s+first|require)\b)/iu;
 const ULTRATHINK_ENABLE_RE =
@@ -626,13 +648,19 @@ export function sanitizeRetrievalContent(text: string, source: string): string {
 }
 
 function isAutonomyEnableDirective(text: string): boolean {
-  for (const rawSentence of text.match(/[^.!?\n]+[.!?]*/gu) ?? []) {
-    const sentence = rawSentence.trim();
-    if (AUTONOMY_QUESTION_RE.test(sentence)) continue;
-    for (const rawClause of sentence.split(AUTONOMY_CLAUSE_SPLIT_RE)) {
-      const clause = rawClause.trim().replace(/[\s.!…]+$/u, "");
-      if (AUTONOMY_ENABLE_EN_RE.test(clause) || AUTONOMY_ENABLE_TR_RE.test(clause)) return true;
+  // "İ" has no simple case folding, so /i never matches it to "i".
+  const normalized = text.normalize("NFC").replace(/İ/gu, "i");
+  let opening = true;
+  for (const rawSentence of normalized.match(/[^.!?\n]+[.!?]*/gu) ?? []) {
+    if (rawSentence.length > AUTONOMY_SENTENCE_MAX_CHARS) {
+      opening = false;
+      continue;
     }
+    // A trailing "?" stays and fails the match: a question never counts.
+    const sentence = rawSentence.trim().replace(/[\s.!…]+$/u, "");
+    const directiveRe = opening ? AUTONOMY_OPENING_SENTENCE_RE : AUTONOMY_GRANT_SENTENCE_RE;
+    if (directiveRe.test(sentence)) return true;
+    if (!AUTONOMY_LEAD_ONLY_RE.test(sentence)) opening = false;
   }
   return false;
 }

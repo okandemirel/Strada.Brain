@@ -57,44 +57,159 @@ describe("orchestrator-text-utils", () => {
     });
   });
 
-  // Natural-language autonomy turns write confirmations off for 24 h and is
-  // stored in the profile, so a mention must never count as the switch.
+  // Natural-language autonomy turns write confirmations off for 24 h, is stored
+  // in the profile and sends no notice, so only an instruction to the assistant
+  // may count. "autonomous mode" / "otonom mod" is also an everyday game-feature
+  // name, so a command that carries a game target, a condition or a later
+  // position in the message is a feature request, not the switch.
   describe("natural-language autonomy directive", () => {
     const autonomyFor = (prompt: string) =>
       extractNaturalLanguageDirectiveUpdates({ latestProfile: null, prompt, nowMs: 0 }).autonomousMode;
 
-    it.each([
-      "How does autonomous mode work?",
-      "Does autonomous mode work with git push?",
-      "Make the enemy AI autonomous so it can work without the player",
-      "Do you have full authority to delete files?",
-      "Enemy NPCs should be autonomous and work in squads",
-      "Why did the autonomous agent stop? Can you make it work again?",
-      "The boss has full authority over the minions",
-      "otonom mod nedir?",
-      "Otonom mod aktif mi?",
-      "otonom mod nasıl aktif edilir?",
-      "otonom mod etkin mi",
-      "Commit onay istemeden push edilir mi?",
-      "otonom modu açma",
-      "Düşmanlar otonom çalışsın, oyuncuya ihtiyaç duymasın",
-      "otonom çalışan bir düşman yapay zekası yap",
-    ])("leaves autonomy alone for %j", (prompt) => {
-      expect(autonomyFor(prompt)).toBeUndefined();
+    const mustNotEnable: Record<"en" | "tr", string[]> = {
+      en: [
+        // questions
+        "How does autonomous mode work?",
+        "What does autonomous mode do?",
+        "Does autonomous mode work with git push?",
+        "Can you enable autonomous mode?",
+        "Should I turn on autonomous mode for this task?",
+        "Enable autonomous mode?",
+        "Do you have full authority to delete files?",
+        "Why did the autonomous agent stop? Can you make it work again?",
+        // explanations
+        "Autonomous mode lets the agent skip write confirmations.",
+        "Explain how to enable autonomous mode.",
+        // negations
+        "Don't enable autonomous mode",
+        "Please don't enable autonomous mode.",
+        "Do not turn on autonomous mode yet.",
+        "Never use full autonomy.",
+        "Under no circumstances, enable autonomous mode",
+        "I don't want you to use full autonomy.",
+        // quoted text
+        'The button label says "Enable autonomous mode".',
+        '"Use full autonomy" is the tooltip text',
+        "> Enable autonomous mode",
+        // conditions and game features
+        "If the build passes, enable autonomous mode.",
+        "Make the enemy AI autonomous so it can work without the player",
+        "Enemy NPCs should be autonomous and work in squads",
+        "The boss has full authority over the minions",
+        "Enable autonomous mode for the enemy AI",
+        "Activate autonomous mode on the turret after 5 seconds",
+        "Start autonomous mode in the RoverController coroutine",
+        "Use the autonomous mode toggle in the settings menu",
+        "Turn on autonomous mode when the player is idle",
+        "Switch to autonomous mode and attack the nearest enemy",
+        "Add a drone with patrol and chase states. Switch to autonomous mode when the target is lost.",
+        "Add a drone with patrol and chase states. Switch to autonomous mode.",
+        "Fix the bug in EnemyAI.cs and enable autonomous mode for the bots",
+        "Add a Buy button to the shop. Continue without waiting for confirmation.",
+      ],
+      tr: [
+        // questions
+        "otonom mod nedir?",
+        "Otonom mod aktif mi?",
+        "otonom mod etkin mi",
+        "otonom mod nasıl aktif edilir?",
+        "Otonom mod nasıl açılır?",
+        "otonom mod ne işe yarar",
+        "Otonom modu açar mısın?",
+        "Commit onay istemeden push edilir mi?",
+        "Neden otonom moda geçtin?",
+        // negations and other tenses
+        "otonom modu açma",
+        "Lütfen otonom modu açma",
+        "Asla otonom modu açma",
+        "Otonom modu açmayın",
+        "Otonom modu açmak istemiyorum",
+        "Otonom modu açtım",
+        // quoted text and explanations
+        'Butonun etiketi "otonom modu aç" olsun',
+        "Otonom mod açıkken onay sorulmuyor",
+        // conditions and game features
+        "Düşmanlar otonom çalışsın, oyuncuya ihtiyaç duymasın",
+        "otonom çalışan bir düşman yapay zekası yap",
+        "Düşman yapay zekası için otonom modu aç",
+        "Butona basınca otonom modu aç",
+        "Drone hedefi kaybedince otonom moda geç",
+        "Oyuncu ölünce düşmanlar otonom çalış",
+        "Ayarlar menüsüne otonom modu aç butonu ekle",
+        "Otonom modu aç, düşman yapay zekası için",
+        "Drone'a devriye ve kovalama durumları ekle. Otonom moda geç.",
+        "Mağazaya satın al butonu ekle. Onay beklemeden devam et.",
+        "Admin rolü ekle. Tam yetki ver.",
+      ],
+    };
+
+    const shouldEnable: Record<"en" | "tr", string[]> = {
+      en: [
+        "Enable autonomous mode",
+        "ENABLE AUTONOMOUS MODE",
+        "Please enable autonomous mode.",
+        "Turn on autonomous mode for this task",
+        "Activate autonomous mode now.",
+        "Switch to autonomous mode, please",
+        "Ok, enter autonomous mode.",
+        "Go ahead and enable autonomous mode",
+        "From now on, use autonomous mode.",
+        "Turn autonomous mode on.",
+        "Go autonomous.",
+        "Work autonomously from now on.",
+        "Use full autonomy.",
+        "Enable full autonomy for this session.",
+        "You have full autonomy.",
+        "I give you full autonomy for this project.",
+        "Proceed without asking for approval.",
+        "Enable autonomous mode. Then refactor the inventory system.",
+        "Hi! Enable autonomous mode for the rest of this session.",
+        // A grant to the assistant also counts after other settings.
+        "My name is Okan. Use full autonomy.",
+      ],
+      tr: [
+        "otonom modu aç",
+        "OTONOM MODU AÇ",
+        "otonom modu ac",
+        "otonom modu aktif et",
+        "otonom modunu aç",
+        "Otonom modu açın",
+        "Lütfen otonom moda geç.",
+        "Otonom moda geçelim",
+        "otonom çalış",
+        "otonom çalışabilirsin",
+        "Artık otonom çalış",
+        "Bundan sonra otonom modda çalış.",
+        "Tamam, otonom modu başlat",
+        "Şimdi otonom modu etkinleştir",
+        "Otonom mod aktif olsun",
+        "Bu oturum için otonom modu aç",
+        "Bu görev için autonom çalış ve approval sormadan ilerle.",
+        "onay sormadan ilerle lütfen",
+        "ONAY SORMADAN İLERLE",
+        "Onay beklemeden devam et",
+        "sana tam yetki veriyorum",
+        "Tam yetkiyle ilerle.",
+        "Otonom modu aç. Sonra build hatalarını düzelt.",
+        "Adım Okan. Sana tam yetki veriyorum.",
+      ],
+    };
+
+    const table = (byLanguage: Record<"en" | "tr", string[]>) =>
+      (["en", "tr"] as const).flatMap((language) => byLanguage[language].map((prompt) => [language, prompt] as const));
+
+    it("covers at least 15 phrasings per language and direction", () => {
+      for (const byLanguage of [mustNotEnable, shouldEnable]) {
+        expect(byLanguage.en.length).toBeGreaterThanOrEqual(15);
+        expect(byLanguage.tr.length).toBeGreaterThanOrEqual(15);
+      }
     });
 
-    it.each([
-      "Use full autonomy.",
-      "Bu görev için autonom çalış ve approval sormadan ilerle.",
-      "otonom modu aktif et",
-      "otonom modu aç",
-      "OTONOM MODU AÇ",
-      "otonom çalış",
-      "onay sormadan ilerle lütfen",
-      "sana tam yetki veriyorum",
-      "Please enable autonomous mode.",
-      "Turn on autonomous mode for this task",
-    ])("enables autonomy for the directive %j", (prompt) => {
+    it.each(table(mustNotEnable))("leaves autonomy off for the %s non-directive %j", (_language, prompt) => {
+      expect(autonomyFor(prompt)).not.toEqual(expect.objectContaining({ enabled: true }));
+    });
+
+    it.each(table(shouldEnable))("enables autonomy for the %s directive %j", (_language, prompt) => {
       expect(autonomyFor(prompt)).toEqual({ enabled: true, expiresAt: 86_400_000 });
     });
   });
