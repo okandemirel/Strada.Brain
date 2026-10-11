@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SoulLoader } from "./soul-loader.js";
-import { writeFile, unlink, mkdir, rm } from "node:fs/promises";
+import { writeFile, unlink, mkdir, rm, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -80,6 +80,56 @@ describe("SoulLoader", () => {
     expect(loader.getContent()).toBe("content");
     loader.shutdown();
     expect(loader.getContent()).toBe("");
+  });
+
+  describe("hot reload", () => {
+    // An editor that saves atomically writes a temp file and renames it over soul.md. A watcher
+    // bound to the replaced file fired for the first save and never again (measured 2026-10 with
+    // the real loader: v0, v1, v1, v1), so every later personality edit was ignored until restart.
+    async function atomicSave(file: string, content: string): Promise<void> {
+      const tmp = join(testDir, `.${file}.${randomUUID()}.tmp`);
+      await writeFile(tmp, content);
+      await rename(tmp, join(testDir, file));
+    }
+    const settle = { timeout: 3000, interval: 20 };
+
+    it("keeps reloading soul.md after the first atomic save", async () => {
+      await writeFile(join(testDir, "soul.md"), "v0");
+      loader = new SoulLoader(testDir, { watchIntervalMs: 50 });
+      await loader.initialize();
+      expect(loader.getContent()).toBe("v0");
+
+      await atomicSave("soul.md", "v1");
+      await vi.waitFor(() => expect(loader.getContent()).toBe("v1"), settle);
+      await atomicSave("soul.md", "v2");
+      await vi.waitFor(() => expect(loader.getContent()).toBe("v2"), settle);
+      // An in-place write after a replacement lands on the new file, not the one first watched.
+      await writeFile(join(testDir, "soul.md"), "v3");
+      await vi.waitFor(() => expect(loader.getContent()).toBe("v3"), settle);
+    });
+
+    it("keeps reloading a channel override after the first atomic save", async () => {
+      await writeFile(join(testDir, "soul.md"), "default");
+      await writeFile(join(testDir, "soul-telegram.md"), "t0");
+      loader = new SoulLoader(testDir, { channelOverrides: { telegram: "soul-telegram.md" }, watchIntervalMs: 50 });
+      await loader.initialize();
+
+      await atomicSave("soul-telegram.md", "t1");
+      await vi.waitFor(() => expect(loader.getContent("telegram")).toBe("t1"), settle);
+      await atomicSave("soul-telegram.md", "t2");
+      await vi.waitFor(() => expect(loader.getContent("telegram")).toBe("t2"), settle);
+    });
+
+    it("stops reloading after shutdown", async () => {
+      await writeFile(join(testDir, "soul.md"), "v0");
+      loader = new SoulLoader(testDir, { watchIntervalMs: 50 });
+      await loader.initialize();
+      loader.shutdown();
+
+      await atomicSave("soul.md", "v1");
+      await new Promise((r) => setTimeout(r, 500));
+      expect(loader.getContent()).toBe("");
+    });
   });
 
   // Security tests

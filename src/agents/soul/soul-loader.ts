@@ -6,7 +6,7 @@
  */
 
 import { readFile, realpath, readdir, writeFile, unlink } from "node:fs/promises";
-import { watch, mkdirSync, existsSync, type FSWatcher } from "node:fs";
+import { watchFile as pollPath, unwatchFile, mkdirSync, existsSync } from "node:fs";
 import { resolve, join, sep } from "node:path";
 import { getLogger } from "../../utils/logger.js";
 import type { ChannelType } from "../../channels/channel-messages.interface.js";
@@ -14,10 +14,12 @@ import type { ChannelType } from "../../channels/channel-messages.interface.js";
 const DEFAULT_SOUL_FILE = "soul.md";
 const MAX_SOUL_FILE_SIZE = 10 * 1024; // 10 KB
 const DEBOUNCE_MS = 200;
+const WATCH_INTERVAL_MS = 1000;
 
 export class SoulLoader {
   private cache = new Map<string, string>();
-  private watchers: FSWatcher[] = [];
+  /** Stops one file's polling each. */
+  private watchers: Array<() => void> = [];
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private switchInFlight = false;
   private activeProfileName = "default";
@@ -27,12 +29,15 @@ export class SoulLoader {
   private readonly channelOverrides: Map<string, string>;
   private readonly channelOverridesRecord: Record<string, string>;
   private readonly customProfilesDir: string;
+  private readonly watchIntervalMs: number;
 
   constructor(
     projectPath: string,
     options?: {
       soulFile?: string;
       channelOverrides?: Record<string, string>;
+      /** How often watched soul files are checked for a change. */
+      watchIntervalMs?: number;
     },
   ) {
     this.basePath = projectPath;
@@ -42,6 +47,7 @@ export class SoulLoader {
     );
     this.channelOverridesRecord = Object.fromEntries(this.channelOverrides);
     this.customProfilesDir = join(projectPath, ".strada-memory", "profiles");
+    this.watchIntervalMs = options?.watchIntervalMs ?? WATCH_INTERVAL_MS;
   }
 
   /**
@@ -150,8 +156,8 @@ export class SoulLoader {
    * Shutdown — stop file watchers and debounce timers.
    */
   shutdown(): void {
-    for (const watcher of this.watchers) {
-      watcher.close();
+    for (const stopWatching of this.watchers) {
+      stopWatching();
     }
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
@@ -448,27 +454,28 @@ export class SoulLoader {
   private watchFile(key: string, fileName: string): void {
     const filePath = resolve(this.basePath, fileName);
 
+    // Poll the path rather than fs.watch the file. An editor that saves atomically (temp file
+    // renamed over soul.md) replaces the file, and fs.watch stays bound to the one it opened:
+    // it fired for the first save and never again, so later edits were ignored until restart.
+    // A stat of the path sees the replacement, a symlink's current target, and a file that is
+    // deleted and written again.
+    const onChange = (): void => {
+      // Debounce — editors fire multiple events per save
+      const existing = this.debounceTimers.get(key);
+      if (existing) clearTimeout(existing);
+      this.debounceTimers.set(
+        key,
+        setTimeout(() => {
+          this.debounceTimers.delete(key);
+          getLogger().info("Soul file changed, reloading", { key, file: fileName });
+          void this.loadFile(key, fileName);
+        }, DEBOUNCE_MS),
+      );
+    };
+
     try {
-      const watcher = watch(filePath, (eventType) => {
-        // Handle both change and rename events (editors use atomic write → rename)
-        if (eventType === "change" || eventType === "rename") {
-          // Debounce — editors fire multiple events per save
-          const existing = this.debounceTimers.get(key);
-          if (existing) clearTimeout(existing);
-          this.debounceTimers.set(
-            key,
-            setTimeout(() => {
-              this.debounceTimers.delete(key);
-              getLogger().info("Soul file changed, reloading", { key, file: fileName });
-              void this.loadFile(key, fileName);
-            }, DEBOUNCE_MS),
-          );
-        }
-      });
-      watcher.on("error", () => {
-        // File may have been deleted — not an error
-      });
-      this.watchers.push(watcher);
+      pollPath(filePath, { interval: this.watchIntervalMs }, onChange);
+      this.watchers.push(() => unwatchFile(filePath, onChange));
     } catch {
       // Watch failure is non-fatal
     }
