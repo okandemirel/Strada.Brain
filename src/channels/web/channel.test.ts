@@ -29,6 +29,10 @@ import type { WorkspaceEventMap } from "../../dashboard/workspace-events.js";
 import type { LearningEventMap } from "../../core/event-bus.js";
 import type { DaemonEventMap } from "../../daemon/daemon-events.js";
 import { EventEmitter } from "node:events";
+import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
+import { CapabilityMatcher } from "../../supervisor/capability-matcher.js";
+import { ProviderAssigner } from "../../supervisor/provider-assigner.js";
+import type { GoalTree } from "../../goals/types.js";
 
 type WsHandler = (payload?: Buffer) => void;
 
@@ -515,6 +519,77 @@ describe("WebChannel monitor profile boundary (13F5 / 4.7)", () => {
 
     goals.stop();
     tasks.stop();
+    monitor.stop();
+    await channel.disconnect();
+  });
+
+  // ── The supervisor named nobody on its wave and node narration ──
+  //
+  // The dispatcher quotes up to three node labels (the request, split) in its
+  // wave_start activity, narrative and canvas summary, a node's label in its
+  // narrative and canvas card, and a failed node's output in its activity. None
+  // of those frames carried the scope the dispatcher holds, and none named a
+  // board the monitor bridge knew (a wave has no node; activity names its node
+  // as taskId), so every profile got Alice's labels, live and on replay.
+  it("keeps one profile's supervisor run from another profile, live or on replay", async () => {
+    const channel = new WebChannel();
+    const bus = new TypedEventBus<WorkspaceEventMap>();
+    const monitor = createMonitorBridge(bus, (message) => channel.broadcastRaw(message));
+    monitor.start();
+
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+
+    const now = Date.now();
+    const tree = {
+      rootId: "sup-root",
+      sessionId: A,
+      taskDescription: "Fix the secret payment exploit",
+      createdAt: now,
+      nodes: new Map(
+        [
+          ["sup-root", null, 0, "Fix the secret payment exploit", []],
+          ["rotate", "sup-root", 1, "Rotate the secret payment key", []],
+          ["patch", "sup-root", 1, "Patch the secret exploit in StoreManager", ["rotate"]],
+        ].map(([id, parentId, depth, task, dependsOn]) => [
+          id,
+          { id, parentId, depth, task, dependsOn, status: "pending", createdAt: now, updatedAt: now },
+        ]),
+      ),
+    } as unknown as GoalTree;
+    const brain = new SupervisorBrain({
+      config: {
+        enabled: true, complexityThreshold: "complex", maxParallelNodes: 2,
+        nodeTimeoutMs: 5_000, verificationMode: "disabled", verificationBudgetPct: 15,
+        triageProvider: "groq", maxFailureBudget: 3, diversityCap: 0.6,
+      },
+      decomposer: { shouldDecompose: () => true, decomposeProactive: async () => tree } as never,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner([
+        { name: "claude", model: "sonnet", scores: { reasoning: 0.9, vision: 0.9, "code-gen": 0.9, "tool-use": 0.9, "long-context": 0.9, speed: 0.5, cost: 0.4, quality: 0.9, creative: 0.8 } },
+      ]),
+      eventEmitter: bus,
+    });
+    brain.setExecuteNode(async (node) => ({
+      nodeId: node.id,
+      status: node.id === "patch" ? "failed" : "ok",
+      output: node.id === "patch" ? "the secret vault refused the patch" : "done",
+      artifacts: [], toolResults: [], provider: "claude", model: "sonnet", cost: 0, duration: 1,
+    }));
+
+    await brain.execute("Fix the secret payment exploit", { chatId: "chat-alice", conversationId: A });
+
+    const aliceActivity = JSON.stringify(typesOf(alice.socket, "monitor:agent_activity"));
+    expect(aliceActivity).toContain("Rotate the secret payment key");
+    expect(aliceActivity).toContain("the secret vault refused the patch");
+    expect(JSON.stringify(typesOf(alice.socket, "progress:narrative"))).toContain("Rotate the secret payment key");
+    expect(JSON.stringify(typesOf(alice.socket, "canvas:agent_draw"))).toContain("Patch the secret exploit");
+    expect(JSON.stringify(bob.socket.getSentMessages())).not.toContain("secret");
+
+    bob.socket.close();
+    const bobAgain = connectProfile(channel, B);
+    expect(JSON.stringify(bobAgain.socket.getSentMessages())).not.toContain("secret");
+
     monitor.stop();
     await channel.disconnect();
   });

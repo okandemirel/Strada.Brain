@@ -201,20 +201,26 @@ export class SupervisorBrain {
     return Math.round(base * Math.min(workConcentration, 6));
   }
 
-  private emitActivity(detail: string, taskId?: string, action = "supervisor_update"): void {
+  // `scope` is the run's conversation scope. A narrating frame without it names
+  // no board the monitor bridge knows, so every portal identity gets it, live
+  // and on replay — and the narration quotes the request (an abort's cause, a
+  // rejected node's output, the plan's node cards).
+  private emitActivity(scope: string, detail: string, taskId?: string, action = "supervisor_update"): void {
     this.emitter?.emit("monitor:agent_activity", {
       ...(taskId ? { taskId } : {}),
       action,
       detail,
       timestamp: Date.now(),
+      ...(scope ? { conversationId: scope } : {}),
     });
   }
 
-  private emitNarrative(narrative: string, lang: string, nodeId?: string): void {
+  private emitNarrative(scope: string, narrative: string, lang: string, nodeId?: string): void {
     this.emitter?.emit("progress:narrative", {
       ...(nodeId ? { nodeId } : {}),
       narrative,
       lang,
+      ...(scope ? { conversationId: scope } : {}),
     });
   }
 
@@ -381,11 +387,12 @@ export class SupervisorBrain {
         nodeCount: 0, // updated after decomposition
       });
       const activation = buildSupervisorActivationNarrative(task);
-      this.emitNarrative(activation.narrative, activation.language);
-      this.emitActivity(activation.narrative, context.chatId, "supervisor_activated");
+      this.emitNarrative(conversationScope, activation.narrative, activation.language);
+      this.emitActivity(conversationScope, activation.narrative, context.chatId, "supervisor_activated");
       this.emitter?.emit("workspace:mode_suggest", {
         mode: "monitor",
         reason: activation.narrative,
+        conversationId: conversationScope,
       });
       await this.reportUpdate(context, activation.markdown);
 
@@ -656,14 +663,17 @@ export class SupervisorBrain {
         totalWaves: waves.length,
         fallback: decomposedGoalTree.planSummary === "Fallback single-step execution",
       });
-      this.emitNarrative(plan.narrative, plan.language);
-      this.emitActivity(plan.narrative, context.chatId, "supervisor_plan_ready");
-      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasPlan({
-        rootId: String(decomposedGoalTree.rootId),
-        task,
-        nodes: visibleAssignedNodes,
-        summary: plan.canvasSummary,
-      }));
+      this.emitNarrative(conversationScope, plan.narrative, plan.language);
+      this.emitActivity(conversationScope, plan.narrative, context.chatId, "supervisor_plan_ready");
+      this.emitter?.emit("canvas:agent_draw", {
+        ...buildSupervisorCanvasPlan({
+          rootId: String(decomposedGoalTree.rootId),
+          task,
+          nodes: visibleAssignedNodes,
+          summary: plan.canvasSummary,
+        }),
+        conversationId: conversationScope,
+      });
       await this.reportUpdate(context, plan.markdown);
 
       // Check abort after assignment
@@ -734,13 +744,16 @@ export class SupervisorBrain {
       if (verificationPlanned) {
         this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
         const verification = buildSupervisorVerificationNarrative(task);
-        this.emitNarrative(verification.narrative, verification.language);
-        this.emitActivity(verification.narrative, "aggregate", "supervisor_verify_start");
-        this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-          rootId: String(decomposedGoalTree.rootId),
-          summary: verification.canvasSummary,
-          tone: "active",
-        }));
+        this.emitNarrative(conversationScope, verification.narrative, verification.language);
+        this.emitActivity(conversationScope, verification.narrative, "aggregate", "supervisor_verify_start");
+        this.emitter?.emit("canvas:agent_draw", {
+          ...buildSupervisorCanvasSummaryUpdate({
+            rootId: String(decomposedGoalTree.rootId),
+            summary: verification.canvasSummary,
+            tone: "active",
+          }),
+          conversationId: conversationScope,
+        });
         await this.reportUpdate(context, verification.markdown);
       }
       const { results: verifiedResults, report: verificationReport } =
@@ -768,6 +781,7 @@ export class SupervisorBrain {
           });
           // Emit narrative for rejected nodes
           this.emitNarrative(
+            conversationScope,
             `Node rejected by verification: ${verifiedResults[i]!.output?.slice(0, 200) || "quality check failed"}`,
             "en",
             String(verifiedResults[i]!.nodeId),
@@ -848,13 +862,16 @@ export class SupervisorBrain {
           scopeLabel: this.config.verificationMode === "critical-only" ? "critical nodes" : "nodes",
         },
       });
-      this.emitNarrative(completion.narrative, completion.language);
-      this.emitActivity(completion.narrative, context.chatId, "supervisor_complete");
-      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-        rootId: String(decomposedGoalTree.rootId),
-        summary: completion.canvasSummary,
-        tone: supervisorResult.failed > 0 ? "error" : "success",
-      }));
+      this.emitNarrative(conversationScope, completion.narrative, completion.language);
+      this.emitActivity(conversationScope, completion.narrative, context.chatId, "supervisor_complete");
+      this.emitter?.emit("canvas:agent_draw", {
+        ...buildSupervisorCanvasSummaryUpdate({
+          rootId: String(decomposedGoalTree.rootId),
+          summary: completion.canvasSummary,
+          tone: supervisorResult.failed > 0 ? "error" : "success",
+        }),
+        conversationId: conversationScope,
+      });
 
       return supervisorResult;
     } catch (err: unknown) {
@@ -865,18 +882,22 @@ export class SupervisorBrain {
         task,
         reason: err instanceof Error ? err.message : String(err),
       });
-      this.emitNarrative(abort.narrative, abort.language);
-      this.emitActivity(abort.narrative, context.chatId, "supervisor_aborted");
+      this.emitNarrative(conversationScope, abort.narrative, abort.language);
+      this.emitActivity(conversationScope, abort.narrative, context.chatId, "supervisor_aborted");
       this.emitter?.emit("supervisor:aborted", {
         reason: err instanceof Error ? err.message : String(err),
         completedNodes: 0,
         partialResult: false,
+        conversationId: conversationScope,
       });
-      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-        rootId: goalRootId ?? context.chatId,
-        summary: abort.canvasSummary,
-        tone: "error",
-      }));
+      this.emitter?.emit("canvas:agent_draw", {
+        ...buildSupervisorCanvasSummaryUpdate({
+          rootId: goalRootId ?? context.chatId,
+          summary: abort.canvasSummary,
+          tone: "error",
+        }),
+        conversationId: conversationScope,
+      });
       // Name the actual cause. The generic "An error occurred during task
       // execution" swallowed "All providers are in cooldown" — downstream,
       // the campaign's reconcile defers on provider-outage wording and the

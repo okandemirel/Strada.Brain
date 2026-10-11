@@ -8,6 +8,7 @@ import { createBudget } from "../../agent-core/control/budget.js";
 import { createControlPlane } from "../../agent-core/control/control-plane.js";
 import { FakeClock } from "../../agent-core/control/clock.js";
 import type { HealthCore } from "../../agent-core/control/failure-ledger.js";
+import { createLogger } from "../../utils/logger.js";
 
 function makeGoalTree(nodes: Array<{ id: string; task: string; deps?: string[] }>): GoalTree {
   const nodeMap = new Map() as any;
@@ -854,6 +855,87 @@ describe("SupervisorBrain", () => {
         .map(([, payload]) => String(payload.rootId)),
     );
     expect([...taskUpdateRootIds]).toEqual([dagPayload.rootId]);
+  });
+
+  // The narration quotes the request: node labels in the wave and node
+  // narratives and canvas cards, a failed node's output in its activity, the
+  // cause in the abort narrative. A frame without the run's scope goes to every
+  // portal identity (see channel.test.ts, "keeps one profile's supervisor run").
+  const NARRATING_EVENTS = new Set([
+    "monitor:agent_activity",
+    "progress:narrative",
+    "canvas:agent_draw",
+    "workspace:mode_suggest",
+    "supervisor:node_failed",
+    "supervisor:aborted",
+  ]);
+
+  function narratingFrames(emitter: { emit: ReturnType<typeof vi.fn> }) {
+    return (emitter.emit.mock.calls as Array<[string, Record<string, unknown>]>)
+      .filter(([event]) => NARRATING_EVENTS.has(event));
+  }
+
+  it("names the run's conversation scope on every frame that narrates it", async () => {
+    const emitter = { emit: vi.fn() };
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: {
+        shouldDecompose: vi.fn().mockReturnValue(true),
+        decomposeProactive: vi.fn().mockResolvedValue(
+          makeGoalTree([
+            { id: "root", task: "Build auth" },
+            { id: "s1", task: "Create DB schema" },
+            { id: "s2", task: "Implement endpoint", deps: ["s1"] },
+            { id: "s3", task: "Write docs", deps: ["s2"] },
+          ]),
+        ),
+      } as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+    });
+    // s2 fails, so s3 is skipped: the failed and skipped narration is covered too.
+    brain.setExecuteNode(vi.fn().mockImplementation(async (node: any) => ({
+      nodeId: node.id, status: node.id === "s2" ? "failed" : "ok", output: `Out: ${node.task}`,
+      artifacts: [], toolResults: [], provider: "claude", model: "sonnet", cost: 0, duration: 1,
+    })));
+
+    await brain.execute("Build the authentication system", { chatId: "chat-1", conversationId: "conv-alice" });
+
+    const frames = narratingFrames(emitter);
+    const actions = frames.map(([, payload]) => payload.action).filter(Boolean);
+    expect(actions).toEqual(expect.arrayContaining([
+      "supervisor_activated", "supervisor_plan_ready", "supervisor_wave_start",
+      "supervisor_node_failed", "supervisor_node_skipped", "supervisor_complete",
+    ]));
+    for (const [event, payload] of frames) {
+      expect(payload.conversationId, `${event} ${JSON.stringify(payload)}`).toBe("conv-alice");
+    }
+  });
+
+  it("names the run's conversation scope on the abort narration", async () => {
+    // The abort path logs through getLogger, which throws until one exists.
+    createLogger("error", "test.log");
+    const emitter = { emit: vi.fn() };
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: {
+        shouldDecompose: vi.fn().mockReturnValue(true),
+        decomposeProactive: vi.fn().mockRejectedValue(new Error("planner choked on: Build the authentication system")),
+      } as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+    });
+    brain.setExecuteNode(vi.fn());
+
+    await brain.execute("Build the authentication system", { chatId: "chat-1", conversationId: "conv-alice" });
+
+    const frames = narratingFrames(emitter);
+    expect(frames.map(([, payload]) => payload.action)).toContain("supervisor_aborted");
+    for (const [event, payload] of frames) {
+      expect(payload.conversationId, `${event} ${JSON.stringify(payload)}`).toBe("conv-alice");
+    }
   });
 });
 

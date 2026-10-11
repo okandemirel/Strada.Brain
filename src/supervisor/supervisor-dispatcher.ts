@@ -231,12 +231,24 @@ export class SupervisorDispatcher {
     };
   }
 
+  /**
+   * The scope every narrating frame carries. The wave and node narration quotes
+   * node labels (the request, split) and node output; without a scope the
+   * monitor bridge stamps no origin — a wave names no node, and activity names
+   * its node as taskId — and every portal identity gets them, live and on
+   * replay.
+   */
+  private scope(): { conversationId?: string } {
+    return this.conversationId ? { conversationId: this.conversationId } : {};
+  }
+
   private emitActivity(detail: string, taskId?: string, action = "supervisor_dispatch"): void {
     this.emitter?.emit("monitor:agent_activity", {
       ...(taskId ? { taskId } : {}),
       action,
       detail,
       timestamp: Date.now(),
+      ...this.scope(),
     });
   }
 
@@ -309,6 +321,7 @@ export class SupervisorDispatcher {
       nodeId: String(node.id),
       narrative: feedback.narrative,
       lang: feedback.language,
+      ...this.scope(),
     });
   }
 
@@ -320,10 +333,10 @@ export class SupervisorDispatcher {
     if (this.terminatedNodes.has(nodeId) && (status === "running" || status === "verifying")) {
       return;
     }
-    this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasNodeUpdate({
-      node: this.getDisplayNode(node),
-      status,
-    }));
+    this.emitter?.emit("canvas:agent_draw", {
+      ...buildSupervisorCanvasNodeUpdate({ node: this.getDisplayNode(node), status }),
+      ...this.scope(),
+    });
   }
 
   private emitSkippedNode(node: TaggedGoalNode, reason: string): NodeResult {
@@ -533,12 +546,16 @@ export class SupervisorDispatcher {
         this.emitter?.emit("progress:narrative", {
           narrative: feedback.narrative,
           lang: feedback.language,
+          ...this.scope(),
         });
-        this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-          rootId: this.rootId,
-          summary: feedback.canvasSummary,
-          tone: "active",
-        }));
+        this.emitter?.emit("canvas:agent_draw", {
+          ...buildSupervisorCanvasSummaryUpdate({
+            rootId: this.rootId,
+            summary: feedback.canvasSummary,
+            tone: "active",
+          }),
+          ...this.scope(),
+        });
         this.emitActivity(feedback.narrative, undefined, "supervisor_wave_start");
       }
 
@@ -612,6 +629,7 @@ export class SupervisorDispatcher {
                 error: result.output ?? "Unknown error",
                 failureLevel: 1,
                 nextAction: "skip",
+                ...this.scope(),
               });
             } else {
               const workspaceStatus = result.status === "ok" ? "completed" : "skipped";

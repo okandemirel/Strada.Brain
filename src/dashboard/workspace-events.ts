@@ -218,13 +218,14 @@ export interface WorkspaceEventMap {
   'supervisor:wave_start': { waveIndex: number; nodes: Array<{ nodeId: string; provider: string }> }
   'supervisor:node_start': { nodeId: string; provider: string; model: string; wave: number }
   'supervisor:node_complete': { nodeId: string; status: string; duration: number; cost: number }
-  'supervisor:node_failed': { nodeId: string; error: string; failureLevel: number; nextAction: string }
+  /** `conversationId` on node_failed/aborted: the run's scope; `error` and `reason` can quote its request. */
+  'supervisor:node_failed': { nodeId: string; error: string; failureLevel: number; nextAction: string; conversationId?: string }
   'supervisor:escalation': { nodeId: string; fromProvider: string; toProvider: string; reason: string }
   'supervisor:wave_done': { waveIndex: number; results: Array<{ nodeId: string; status: string }>; totalCost: number }
   'supervisor:verify_start': { nodeId: string; verifierProvider: string }
   'supervisor:verify_done': { nodeId: string; verdict: string; issues?: string[] }
   'supervisor:complete': { totalNodes: number; succeeded: number; failed: number; skipped: number; cost: number; duration: number }
-  'supervisor:aborted': { reason: string; completedNodes: number; partialResult: boolean }
+  'supervisor:aborted': { reason: string; completedNodes: number; partialResult: boolean; conversationId?: string }
 
   // === Workspace meta events ===
   /** `conversationId`: the scope a reason quoting a request belongs to (dashboard#3). */
@@ -281,6 +282,12 @@ export interface WorkspaceEventMap {
     viewport?: { x: number; y: number; zoom: number }
     intent?: string
     autoSwitch?: boolean
+    /**
+     * The conversation scope whose request the shapes are labelled with (a
+     * supervisor plan's node cards). Set, the frame is that scope's own; unset,
+     * it goes to everybody.
+     */
+    conversationId?: string
   }
 
   'canvas:user_feedback': {
