@@ -113,11 +113,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     pluginDirs: [],
     bayesian: {} as Config["bayesian"],
     goalMaxDepth: 3,
-    goalMaxRetries: 3,
-    goalMaxFailures: 3,
-    goalParallelExecution: true,
-    goalMaxParallel: 3,
-    goal: {} as Config["goal"],
     toolChain: {} as Config["toolChain"],
     crossSession: {} as Config["crossSession"],
     agentName: "Strada",
@@ -352,6 +347,39 @@ describe("bootstrap-stages", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^Startup notice: Multi-agent .*STRADA_DAEMON_ENABLED=false/));
   });
 
+  it("names each retired setting the environment still sets", async () => {
+    // GOAL_MAX_PARALLEL and its siblings lost their reader with the GoalExecutor;
+    // setting one changed nothing and nothing said so.
+    const logger = createMockLogger();
+    const channel = { connect: vi.fn(async () => {}), isHealthy: vi.fn(() => true) } as any;
+    const bootReport = await finalizeChannelStartupStage({
+      channel,
+      logger,
+      config: { ...makeConfig(), retiredSettings: ["GOAL_MAX_PARALLEL"] } as Config,
+      channelType: "web",
+      daemonMode: true,
+      embeddingStatus: {
+        state: "active",
+        ragEnabled: true,
+        configuredProvider: "auto",
+        verified: true,
+        usingHashFallback: false,
+      },
+      deploymentWired: false,
+      alertingWired: false,
+      backupWired: false,
+      multiAgentWired: false,
+      delegationWired: false,
+      startupNotices: [],
+      moduleUrl: import.meta.url,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/^Startup notice: GOAL_MAX_PARALLEL is set but no longer read: .*SUPERVISOR_MAX_PARALLEL_NODES/),
+    );
+    expect(bootReport.startupNotices.some((n) => n.startsWith("GOAL_MAX_PARALLEL is set but no longer read"))).toBe(true);
+  });
+
   it("initializes runtime state and wires learning context", () => {
     const logger = createMockLogger();
     const metricsStorage = {
@@ -442,15 +470,7 @@ describe("bootstrap-stages", () => {
     } as any;
 
     const result = initializeGoalContextStage({
-      config: makeConfig({
-        goalMaxRetries: 5,
-        goalMaxFailures: 4,
-        goalParallelExecution: false,
-        goalMaxParallel: 2,
-        goal: {
-          maxRedecompositions: 6,
-        } as Config["goal"],
-      }),
+      config: makeConfig(),
       logger,
       provider: { name: "mock-provider" } as any,
       identityManager,

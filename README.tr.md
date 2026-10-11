@@ -443,7 +443,6 @@ Sohbette (hangi kanali kullaniyorsaniz):
 | `vault.enabled` | `false` | `STRADA_VAULT_ENABLED` | Vault alt sistemini ac/kapat |
 | `vault.writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Write-hook senkron butcesi |
 | `vault.debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | Watcher debounce |
-| `vault.embeddingFallback` | `'local'` | — | `'none'` veya `'local'` |
 | `vault.self.enabled` | `true` | — | SelfVault'u kapatmak icin `false` |
 
 Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.md](docs/vault.md)). Kaynak kod: [`src/vault/`](src/vault/).

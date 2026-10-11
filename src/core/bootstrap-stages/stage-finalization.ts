@@ -12,6 +12,7 @@ import { ProviderHealthRegistry } from "../../agents/providers/provider-health.j
 import { SoulLoader } from "../../agents/soul/index.js";
 import { resolveRuntimePaths } from "../../common/runtime-paths.js";
 import { buildBootReport, summarizeBootReport } from "../boot-report.js";
+import { describeRetiredSetting } from "../../config/retired-settings.js";
 import type {
   BootstrapEmbeddingStatus,
   RuntimeIntelligenceStageDeps,
@@ -317,6 +318,11 @@ export async function finalizeChannelStartupStage(params: {
     params.startupNotices.push(params.daemonMode
       ? "Multi-agent orchestration is enabled but was not built this boot; chats run on the single-agent path."
       : "Multi-agent orchestration and delegation are enabled (MULTI_AGENT_ENABLED=true) but are built only in daemon mode, and STRADA_DAEMON_ENABLED=false: chats run on the single-agent path, without per-chat agents or delegate tools.");
+  }
+
+  // A setting a release stopped reading is named here, not silently ignored.
+  for (const name of params.config.retiredSettings ?? []) {
+    params.startupNotices.push(describeRetiredSetting(name));
   }
 
   const runtimePaths = resolveRuntimePaths({ moduleUrl: params.moduleUrl });

@@ -528,7 +528,6 @@ npm start
 | `enabled` | `false` | Master-Schalter (`STRADA_VAULT_ENABLED=true`) |
 | `writeHookBudgetMs` | `200` | Max. synchroner Write-Hook in ms |
 | `debounceMs` | `800` | chokidar-Debounce in ms |
-| `embeddingFallback` | `'local'` | Lokaler Fallback, wenn Provider fehlschlaegt |
 | `self.enabled` | `true` | SelfVault aktivieren |
 
 **Phase 3 (in Planung):** Haiku-basierte Rolling Summaries, FrameworkVault-Upgrade mit semantischer Suche + Docstring-Extraktion, bidirektionale Kopplung mit der Lernpipeline.

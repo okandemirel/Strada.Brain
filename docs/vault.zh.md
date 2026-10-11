@@ -180,7 +180,6 @@ Vault 配置位于 `src/config/config.ts` 的 `vault` 段：
 | `enabled` | `false` | 主开关（env: `STRADA_VAULT_ENABLED`） |
 | `writeHookBudgetMs` | `200` | write-hook 同步预算（毫秒） |
 | `debounceMs` | `800` | chokidar watcher debounce |
-| `embeddingFallback` | `'local'` | `'none'` \| `'local'` — 云端 embedding 失败时的降级策略 |
 | `self.enabled` | `true` | 是否启用 SelfVault |
 
 环境变量：

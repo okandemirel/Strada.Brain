@@ -445,7 +445,6 @@ export const configSchema = z
       enabled: boolFromString(false),
       writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
       debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
-      embeddingFallback: z.enum(["none", "local"]).default("local"),
       self: z.object({
         enabled: boolFromString(true),
       }).prefault({}),
@@ -579,24 +578,6 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(5))
       .prefault("3"),
 
-    // Goal Execution Policy
-    goalMaxRetries: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(0).max(5))
-      .prefault("1"),
-    goalMaxFailures: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(20))
-      .prefault("3"),
-    goalParallelExecution: boolFromString(true),
-    goalMaxParallel: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(10))
-      .prefault("3"),
-
     // Per-provider HTTP concurrency: caps simultaneous in-flight provider HTTP calls
     // PER PROVIDER KEY so the fan-out of parallel agents/nodes/delegations does not
     // burst a single key past its concurrency/RPM ceiling (HTTP 429). Different
@@ -606,18 +587,6 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
       .prefault("3"),
-
-    // Goal Interactive Execution (Phase 16)
-    stradaGoalEscalationTimeoutMinutes: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(120))
-      .prefault("10"),
-    stradaGoalMaxRedecompositions: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(0).max(10))
-      .prefault("2"),
 
     // Tool Chain Synthesis
     toolChainEnabled: boolFromString(true),

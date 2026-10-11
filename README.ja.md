@@ -347,7 +347,6 @@ SelfVault は `vault.enabled=true` のとき自動で bootstrap されます。
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` |
-| `embeddingFallback` | `'local'` | — |
 | `self.enabled` | `true` | — |
 
 ### セキュリティハードニング（Phase 2 レビュー、commit `5563d48`）

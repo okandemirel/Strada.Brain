@@ -513,7 +513,7 @@ WebSocket `vault:update` broadcasts dirty-set batches.
 
 **Portal**: [`/admin/vaults`](http://localhost:3000/admin/vaults) — Files (tree + markdown/raw preview), Search (hybrid query), Graph (renders `graph.canvas` via `@xyflow/react` + `@dagrejs/dagre`).
 
-**Configuration**: `config.vault.enabled` (env `STRADA_VAULT_ENABLED`), `config.vault.writeHookBudgetMs` (default 200ms), `config.vault.debounceMs` (default 800ms), `config.vault.embeddingFallback` (`'none' | 'local'`), `config.vault.self.enabled` (set to `false` to opt out of SelfVault).
+**Configuration**: `config.vault.enabled` (env `STRADA_VAULT_ENABLED`), `config.vault.writeHookBudgetMs` (default 200ms), `config.vault.debounceMs` (default 800ms), `config.vault.self.enabled` (set to `false` to opt out of SelfVault).
 
 See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, query pipeline, HTTP API shapes, security posture, Phase 3 roadmap).
 

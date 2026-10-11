@@ -214,8 +214,12 @@ All flags live under `config.vault` (`src/config/config.ts`).
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` | Master switch for the vault subsystem |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Max ms the write-hook may block tool writes |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | chokidar debounce for FS change bursts |
-| `embeddingFallback` | `'local'` | — | `'none'` disables fallback; `'local'` uses a local embedder when provider returns null |
 | `self.enabled` | `true` | `STRADA_VAULT_SELF_ENABLED` | Set to `false` to opt out of SelfVault |
+
+`embeddingFallback` (`STRADA_VAULT_EMBEDDING_FALLBACK`) is retired: nothing read it.
+The vault always builds; with no embedding provider it indexes with a hash
+embedder, and its vector store is non-semantic, so retrieval is lexical either
+way. A boot that still finds the variable set names it as a startup notice.
 
 Obsidian flags live under `config.obsidian`:
 

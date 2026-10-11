@@ -232,7 +232,6 @@ Strada.Brain 自身のソースコードを index する特別な vault です�
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` | Vault サブシステム全体のオン/オフ |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Strada.Brain 自身の tool 書き込みに対する同期予算（ms） |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | chokidar watcher のデバウンス窓（ms） |
-| `embeddingFallback` | `'local'` | — | embedding 生成失敗時のフォールバック: `'none'` または `'local'` |
 | `self.enabled` | `true` | — | SelfVault の bootstrap。`false` にすると Strada.Brain 自身を index しない |
 
 `.env` 例:

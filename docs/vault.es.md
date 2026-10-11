@@ -174,7 +174,6 @@ Definida en `src/config/config.ts` bajo la clave `vault`:
 | `enabled` | `false` | Activa el subsistema de vault. Tambien via env `STRADA_VAULT_ENABLED=true`. |
 | `writeHookBudgetMs` | `200` | Presupuesto (ms) para que el write-hook sincronice antes de ceder. |
 | `debounceMs` | `800` | Debounce del watcher chokidar. |
-| `embeddingFallback` | `'local'` | `'none' \| 'local'`. Fallback si el proveedor de embeddings externo no esta disponible. |
 | `self.enabled` | `true` | Activa SelfVault (solo aplica si el vault general tambien esta activo). |
 
 Variables de entorno correspondientes:

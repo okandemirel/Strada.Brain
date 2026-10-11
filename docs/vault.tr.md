@@ -252,7 +252,6 @@ Portal `/admin/vaults` sayfasina **Graph** sekmesi eklendi.
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` | Vault alt sistemini ac/kapat |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Write-hook senkron butcesi (ms). Asimda asenkron kuyruk. |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | Chokidar watcher debounce suresi (ms) |
-| `embeddingFallback` | `'local'` | — | `'none'` veya `'local'`. Saglayici embedding dondurmezse davranis. |
 | `self.enabled` | `true` | — | SelfVault'u devre disi birakmak icin `false` yapin |
 
 Minimal acma:

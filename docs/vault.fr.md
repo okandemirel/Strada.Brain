@@ -209,7 +209,6 @@ Tous les flags vivent sous `config.vault` (`src/config/config.ts`).
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` | Interrupteur principal du sous-système vault |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Ms max. pendant lesquelles le write-hook peut bloquer les écritures d'outils |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | Debounce chokidar pour les rafales de changements FS |
-| `embeddingFallback` | `'local'` | — | `'none'` désactive le fallback ; `'local'` utilise un embedder local si le fournisseur renvoie `null` |
 | `self.enabled` | `true` | — | Mettre à `false` pour désactiver le SelfVault |
 
 ---

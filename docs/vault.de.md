@@ -216,7 +216,6 @@ Alle Vault-Optionen liegen unter `config.vault` (siehe `src/config/config.ts`):
 | `enabled` | `boolean` | `false` | Master-Schalter. Env: `STRADA_VAULT_ENABLED` |
 | `writeHookBudgetMs` | `number` | `200` | Max. synchroner Write-Hook-Budget in ms. Env: `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` |
 | `debounceMs` | `number` | `800` | chokidar-Debounce in ms. Env: `STRADA_VAULT_DEBOUNCE_MS` |
-| `embeddingFallback` | `'none' \| 'local'` | `'local'` | Lokaler Embedding-Fallback, wenn der Provider fehlschlaegt |
 | `self.enabled` | `boolean` | `true` | SelfVault einschliessen |
 
 ### Env-Beispiel

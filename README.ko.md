@@ -431,7 +431,7 @@ npm start
 
 **설정 (`config.vault`):**
 - `enabled: false` (env: `STRADA_VAULT_ENABLED=true`)
-- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`
+- `writeHookBudgetMs: 200`, `debounceMs: 800`
 - `self.enabled: true` — SelfVault 활성 여부
 
 **포털 UI** (`/admin/vaults`): **Files** 탭(트리 + 미리보기), **Search** 탭(하이브리드 쿼리), **Graph** 탭(심볼 그래프 시각화).

@@ -708,7 +708,7 @@ Strada.Brain 检测 [Strada.MCP](https://github.com/okandemirel/Strada.MCP)（Un
 - 新增 HTTP 接口：`GET /api/vaults/:id/canvas`、`GET /api/vaults/:id/symbols/by-name?q=X`、`GET /api/vaults/:id/symbols/:symbolId/callers`
 - 门户 Graph 标签页使用 `@xyflow/react` + `@dagrejs/dagre`（无新增前端依赖）
 
-**配置**（`config.vault`）：`enabled` 默认 `false`（通过 `STRADA_VAULT_ENABLED=true` 启用）；`writeHookBudgetMs: 200`、`debounceMs: 800`、`embeddingFallback: 'local'`、`self.enabled: true`。
+**配置**（`config.vault`）：`enabled` 默认 `false`（通过 `STRADA_VAULT_ENABLED=true` 启用）；`writeHookBudgetMs: 200`、`debounceMs: 800`、`self.enabled: true`。
 
 **快速开始：**
 

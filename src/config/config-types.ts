@@ -164,10 +164,6 @@ export type EnvVarName =
   | "BAYESIAN_VERDICT_RETRY_SUCCESS"
   | "BAYESIAN_VERDICT_FAILURE"
   | "GOAL_MAX_DEPTH"
-  | "GOAL_MAX_RETRIES"
-  | "GOAL_MAX_FAILURES"
-  | "GOAL_PARALLEL_EXECUTION"
-  | "GOAL_MAX_PARALLEL"
   | "PROVIDER_MAX_CONCURRENT_REQUESTS"
   | "STRADA_AGENT_NAME"
   | "STRADA_CROSS_SESSION_ENABLED"
@@ -194,8 +190,6 @@ export type EnvVarName =
   | "STRADA_CHECKLIST_MORNING_HOUR"
   | "STRADA_CHECKLIST_AFTERNOON_HOUR"
   | "STRADA_CHECKLIST_EVENING_HOUR"
-  | "STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"
-  | "STRADA_GOAL_MAX_REDECOMPOSITIONS"
 
   // Notification, Quiet Hours, Digest (Phase 18)
   | "STRADA_DIGEST_ENABLED"
@@ -365,8 +359,7 @@ export type EnvVarName =
   | "STRADA_VAULT_ENABLED"
   | "STRADA_VAULT_SELF_ENABLED"
   | "STRADA_VAULT_WRITE_HOOK_BUDGET_MS"
-  | "STRADA_VAULT_DEBOUNCE_MS"
-  | "STRADA_VAULT_EMBEDDING_FALLBACK";
+  | "STRADA_VAULT_DEBOUNCE_MS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -412,13 +405,6 @@ export type AIProviderName =
   | "opencode"
   | "openrouter"
   | "ollama";
-
-/** Goal interactive execution configuration (Phase 16) */
-export interface GoalConfig {
-  readonly maxFailures: number;
-  readonly escalationTimeoutMinutes: number;
-  readonly maxRedecompositions: number;
-}
 
 /** Memory re-retrieval configuration (Phase 17) */
 export interface ReRetrievalConfig {
@@ -726,7 +712,6 @@ export interface VaultConfig {
   readonly enabled: boolean;
   readonly writeHookBudgetMs: number;
   readonly debounceMs: number;
-  readonly embeddingFallback: 'none' | 'local';
   readonly self: {
     readonly enabled: boolean;
   };
@@ -852,12 +837,6 @@ export interface Config {
   // Goal Decomposition
   readonly goalMaxDepth: number;
 
-  // Goal Execution Policy
-  readonly goalMaxRetries: number;
-  readonly goalMaxFailures: number;
-  readonly goalParallelExecution: boolean;
-  readonly goalMaxParallel: number;
-
   /**
    * Max simultaneous in-flight HTTP calls PER PROVIDER (env
    * PROVIDER_MAX_CONCURRENT_REQUESTS, default 3). Bounds the fan-out burst of
@@ -867,8 +846,11 @@ export interface Config {
    */
   readonly providerMaxConcurrentRequests: number;
 
-  // Goal Interactive Execution (Phase 16)
-  readonly goal: GoalConfig;
+  /**
+   * Retired settings (src/config/retired-settings.ts) the environment still
+   * sets. Nothing reads their values; the boot names each one.
+   */
+  readonly retiredSettings?: readonly string[];
 
   // Tool Chain Synthesis
   readonly toolChain: ToolChainConfig;

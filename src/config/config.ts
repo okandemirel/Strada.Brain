@@ -19,6 +19,7 @@ import { resolveDotenvPath, resolveStradaHome } from "../common/runtime-paths.js
 import { mcpServerEntrySchema } from "./config-schema.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import { getPreset } from "./presets.js";
+import { findRetiredSettings } from "./retired-settings.js";
 import type { Config } from "./config-types.js";
 import { configSchema } from "./config-schema.js";
 export * from "./config-types.js";
@@ -341,17 +342,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     goalMaxDepth: rawConfig.goalMaxDepth,
-    goalMaxRetries: rawConfig.goalMaxRetries,
-    goalMaxFailures: rawConfig.goalMaxFailures,
-    goalParallelExecution: rawConfig.goalParallelExecution,
-    goalMaxParallel: rawConfig.goalMaxParallel,
     providerMaxConcurrentRequests: rawConfig.providerMaxConcurrentRequests,
-
-    goal: {
-      maxFailures: rawConfig.goalMaxFailures,
-      escalationTimeoutMinutes: rawConfig.stradaGoalEscalationTimeoutMinutes,
-      maxRedecompositions: rawConfig.stradaGoalMaxRedecompositions,
-    },
 
     toolChain: {
       enabled: rawConfig.toolChainEnabled,
@@ -892,7 +883,6 @@ interface EnvVars {
     enabled: string | undefined;
     writeHookBudgetMs: string | undefined;
     debounceMs: string | undefined;
-    embeddingFallback: string | undefined;
     self: {
       enabled: string | undefined;
     };
@@ -916,13 +906,7 @@ interface EnvVars {
   bayesianVerdictRetrySuccess: string | undefined;
   bayesianVerdictFailure: string | undefined;
   goalMaxDepth: string | undefined;
-  goalMaxRetries: string | undefined;
-  goalMaxFailures: string | undefined;
-  goalParallelExecution: string | undefined;
-  goalMaxParallel: string | undefined;
   providerMaxConcurrentRequests: string | undefined;
-  stradaGoalEscalationTimeoutMinutes: string | undefined;
-  stradaGoalMaxRedecompositions: string | undefined;
   toolChainEnabled: string | undefined;
   toolChainMinOccurrences: string | undefined;
   toolChainSuccessRateThreshold: string | undefined;
@@ -1323,7 +1307,6 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
       enabled: env["STRADA_VAULT_ENABLED"],
       writeHookBudgetMs: env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
       debounceMs: env["STRADA_VAULT_DEBOUNCE_MS"],
-      embeddingFallback: env["STRADA_VAULT_EMBEDDING_FALLBACK"],
       self: {
         enabled: env["STRADA_VAULT_SELF_ENABLED"],
       },
@@ -1355,13 +1338,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     bayesianVerdictRetrySuccess: env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
     bayesianVerdictFailure: env["BAYESIAN_VERDICT_FAILURE"],
     goalMaxDepth: env["GOAL_MAX_DEPTH"],
-    goalMaxRetries: env["GOAL_MAX_RETRIES"],
-    goalMaxFailures: env["GOAL_MAX_FAILURES"],
-    goalParallelExecution: env["GOAL_PARALLEL_EXECUTION"],
-    goalMaxParallel: env["GOAL_MAX_PARALLEL"],
     providerMaxConcurrentRequests: env["PROVIDER_MAX_CONCURRENT_REQUESTS"],
-    stradaGoalEscalationTimeoutMinutes: env["STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
-    stradaGoalMaxRedecompositions: env["STRADA_GOAL_MAX_REDECOMPOSITIONS"],
     toolChainEnabled: env["TOOL_CHAIN_ENABLED"],
     toolChainMinOccurrences: env["TOOL_CHAIN_MIN_OCCURRENCES"],
     toolChainSuccessRateThreshold: env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
@@ -1685,6 +1662,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   const resolved: Config = {
     ...config,
     unityProjectPath: pathResult.value,
+    retiredSettings: findRetiredSettings(activeEnv),
     providerModels,
     ...(Object.keys(providerBaseUrls).length > 0 ? { providerBaseUrls } : {}),
     // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)

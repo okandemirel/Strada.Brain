@@ -182,7 +182,6 @@ Phase 2 는 Phase 1 의 L3 하이브리드 검색 위에 **결정론적 L2 심�
 | `enabled` | `false` | `STRADA_VAULT_ENABLED` | Vault 서브시스템 전체 on/off |
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | write-hook 동기 예산 (ms) |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | chokidar debounce (ms) |
-| `embeddingFallback` | `'local'` | — | 원격 임베딩 실패 시 동작 (`'none' \| 'local'`) |
 | `self.enabled` | `true` | — | SelfVault 활성 여부 |
 
 활성화 예:

@@ -425,7 +425,7 @@ Introducido en **v4.2.69** (PR #11, 2026-04-14). Guia completa: [docs/vault.es.m
 
 **Configuracion (`config.vault`):**
 - `enabled: false` por defecto — activa con `STRADA_VAULT_ENABLED=true`
-- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`, `self.enabled: true`
+- `writeHookBudgetMs: 200`, `debounceMs: 800`, `self.enabled: true`
 
 **Inicio rapido:**
 
