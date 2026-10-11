@@ -193,6 +193,54 @@ describe("who files into whose folder", () => {
     expect(older.folderOwners.size).toBe(0);
   });
 
+  it("reads FolderOwner written as a switch expression", () => {
+    // The same mapping in the other form C# allows. Read as a switch
+    // statement only, this came back empty and Signals lost their folder.
+    const source = `
+        public static ComponentType FolderOwner(ComponentType type) => type switch
+        {
+            ComponentType.Signals => ComponentType.Events,
+            ComponentType.EntityMediator => ComponentType.View,
+            ComponentType.ModuleConfig or ComponentType.AssemblyDefinition => ComponentType.None,
+            _ => type,
+        };
+
+        public static ComponentType Successor(ComponentType type) => type switch
+        {
+            ComponentType.Service => ComponentType.Controller,
+            _ => type,
+        };
+    `;
+    expect([...parseFolderOwners(source)].sort()).toEqual([...current.folderOwners].sort());
+  });
+
+  it("reads only FolderOwner's own body, with or without a default arm", () => {
+    // No default: — the arms of the next method returning a ComponentType
+    // must not be taken for folder owners.
+    const source = `
+        public static ComponentType FolderOwner(ComponentType type)
+        {
+            switch (type)
+            {
+                case ComponentType.Signals: return ComponentType.Events;
+                case ComponentType.ModuleConfig or ComponentType.AssemblyDefinition: return ComponentType.None;
+            }
+            return type;
+        }
+
+        public static ComponentType Successor(ComponentType type)
+        {
+            switch (type) { case ComponentType.Service: return ComponentType.Controller; }
+            return type;
+        }
+    `;
+    expect([...parseFolderOwners(source)].sort()).toEqual([
+      ["AssemblyDefinition", null],
+      ["ModuleConfig", null],
+      ["Signals", "Events"],
+    ]);
+  });
+
   it("gives a component the folder its owner declares", () => {
     expect(folderForComponent(current, "Signals")).toBe("Scripts/Events");
     expect(folderForComponent(older, "Signals")).toBe("Scripts/Signals");
@@ -327,6 +375,29 @@ describe("describeFrameworkInstall — the runtime says what the project is", ()
     expect(msg).not.toContain("detected");
     expect(msg).toContain("module layout could not be read");
     expect(msg).toContain("ModuleLayout.cs");
+  });
+
+  it("still says it is a Strada project when only the layout cannot be read", () => {
+    // Module creation is what an unreadable layout blocks; the framework is
+    // there all the same, and building beside it instead of on it is the
+    // failure this notice exists for.
+    const projectPath = tempProject("notice-unreadable-guidance");
+    installCoreLayout(projectPath, { withLayout: false });
+    const msg = describeFrameworkInstall(projectPath);
+    expect(msg).toContain("this is a Strada project");
+    expect(msg).toContain("Runtime/");
+  });
+
+  it("calls an empty framework directory an incomplete checkout, not an installed framework", () => {
+    // A clone made without --recursive leaves the submodule directory empty.
+    const projectPath = tempProject("notice-empty");
+    mkdirSync(join(projectPath, CORE_INSTALL_PATH), { recursive: true });
+    expect(readModuleLayout(projectPath).status).toBe("incomplete");
+    const msg = describeFrameworkInstall(projectPath);
+    expect(msg).not.toMatch(/is installed/);
+    expect(msg).toMatch(/checkout is incomplete/);
+    expect(msg).toContain("git submodule update --init");
+    expect(msg).toContain("this is a Strada project");
   });
 
   it("reports absence without a framework directory", () => {

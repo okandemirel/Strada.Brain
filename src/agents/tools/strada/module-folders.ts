@@ -14,7 +14,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /** One folder entry of Strada.Core's module layout. */
 export interface DeclaredFolder {
@@ -86,21 +86,37 @@ export function parseDeclaredFolders(source: string): DeclaredFolder[] {
 }
 
 // `ModuleLayout.FolderOwner(ComponentType)`: a switch whose arms send a
-// component to the one whose folder it shares, fall-through arms included.
-// Read only up to its `default:` — the same file has other ComponentType
-// switches (IsSelected) that say nothing about folders.
+// component to the one whose folder it shares. Only that method's own body is
+// read — the same file has other ComponentType switches (IsSelected) that say
+// nothing about folders, and a switch with no `default:` used to run on into
+// them. Both forms C# allows are read: statement arms (`case A: case B:` or
+// `case A or B:`, then `return ComponentType.X;`) and expression arms
+// (`A or B => ComponentType.X`). Read as statements only, a FolderOwner
+// rewritten as a switch expression came back empty.
 const OWNER_METHOD_RE = /\bFolderOwner\s*\(\s*ComponentType\s+\w+\s*\)/;
-const OWNER_ARM_RE = /((?:case\s+ComponentType\.\w+\s*:\s*)+)return\s+ComponentType\.(\w+)\s*;/g;
+const STATEMENT_ARM_RE = /((?:case\s+[^:;{}]+:\s*)+)return\s+ComponentType\.(\w+)\s*;/g;
+const EXPRESSION_ARM_RE = /((?:ComponentType\.\w+\s*(?:or\s+)?)+)=>\s*ComponentType\.(\w+)/g;
 const CASE_RE = /ComponentType\.(\w+)/g;
+
+/** The body of the method whose signature ends at `from`: up to its closing brace or `;`. */
+function methodBody(source: string, from: number): string {
+  let depth = 0;
+  for (let i = from; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return source.slice(from, i + 1);
+    else if (ch === ";" && depth === 0) return source.slice(from, i + 1);
+  }
+  return source.slice(from);
+}
 
 /** Parse which components file into another's folder; empty when none is declared. */
 export function parseFolderOwners(source: string): Map<string, string | null> {
   const owners = new Map<string, string | null>();
   const start = OWNER_METHOD_RE.exec(source);
   if (!start) return owners;
-  const rest = source.slice(start.index);
-  const end = rest.search(/\bdefault\s*:/);
-  for (const arm of (end < 0 ? rest : rest.slice(0, end)).matchAll(OWNER_ARM_RE)) {
+  const body = methodBody(source, start.index + start[0].length);
+  for (const arm of [...body.matchAll(STATEMENT_ARM_RE), ...body.matchAll(EXPRESSION_ARM_RE)]) {
     const owner = arm[2] === "None" ? null : (arm[2] ?? null);
     for (const [, component] of (arm[1] ?? "").matchAll(CASE_RE)) {
       if (component && component !== owner) owners.set(component, owner);
@@ -117,22 +133,29 @@ export interface LayoutFs {
 const NODE_FS: LayoutFs = { exists: existsSync, read: (path) => readFileSync(path, "utf-8") };
 
 // "unreadable" is a framework that is there but whose layout this reader cannot
-// follow; `reason` says what each candidate file lacked.
+// follow; `reason` says what each candidate file lacked. "incomplete" is a
+// framework directory holding none of the candidate files at all — what a
+// clone made without --recursive leaves: an empty submodule directory.
+// Calling that "installed" sent the agent looking for a layout format problem
+// when the checkout had simply never happened.
 export type LayoutLookup =
   | { status: "declared"; layout: DeclaredLayout }
   | { status: "not-installed" }
+  | { status: "incomplete" }
   | { status: "unreadable"; reason: string };
 
 /** Read the layout a Strada.Core checkout rooted at `coreRoot` declares. */
 export function readLayoutAt(coreRoot: string, fs: LayoutFs = NODE_FS): LayoutLookup {
   if (!fs.exists(coreRoot)) return { status: "not-installed" };
   const problems: string[] = [];
+  let anyFound = false;
   for (const relative of LAYOUT_DECLARATION_FILES) {
     const file = join(coreRoot, relative);
     if (!fs.exists(file)) {
       problems.push(`${relative}: not found`);
       continue;
     }
+    anyFound = true;
     let source: string;
     try {
       source = fs.read(file);
@@ -147,8 +170,15 @@ export function readLayoutAt(coreRoot: string, fs: LayoutFs = NODE_FS): LayoutLo
     }
     return { status: "declared", layout: { file, folders, folderOwners: parseFolderOwners(source) } };
   }
+  if (!anyFound) return { status: "incomplete" };
   return { status: "unreadable", reason: problems.join("; ") };
 }
+
+/** What to do about a framework directory whose checkout never finished. */
+export const INCOMPLETE_CHECKOUT_HINT =
+  `none of its module layout files (${LAYOUT_DECLARATION_FILES.map((f) => basename(f)).join(", ")}) ` +
+  "are there, as with a submodule that was never checked out — run " +
+  "`git submodule update --init --recursive` in the project";
 
 /**
  * Read the layout the Strada.Core installed in this project declares.
@@ -261,10 +291,22 @@ export function describeFrameworkInstall(
       "writing anything a framework subsystem already provides."
     );
   }
+  // Only module creation is blocked by an unreadable layout; the framework is
+  // there, and building beside it instead of on it is what this notice exists
+  // to prevent — so the guidance stays.
   if (lookup.status === "unreadable") {
     return (
-      "Strada.Core is installed at " + CORE_INSTALL_PATH + " but its module layout could not be read (" +
-      lookup.reason + ") — strada_create_module will refuse until it can be."
+      "Strada.Core is installed at " + CORE_INSTALL_PATH +
+      " — this is a Strada project: build game code as Strada modules, and read the framework's " +
+      "Runtime/ sources before writing anything a framework subsystem already provides. Its module " +
+      "layout could not be read (" + lookup.reason + "), so strada_create_module will refuse until it can be."
+    );
+  }
+  if (lookup.status === "incomplete") {
+    return (
+      "Strada.Core directory present at " + CORE_INSTALL_PATH + ", but the framework checkout is incomplete: " +
+      INCOMPLETE_CHECKOUT_HINT + ". Even so, this is a Strada project: complete the checkout before " +
+      "building game code, since the game is built on the framework and strada_create_module refuses until then."
     );
   }
   return (

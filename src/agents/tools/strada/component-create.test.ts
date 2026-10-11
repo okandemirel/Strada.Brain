@@ -1,30 +1,41 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ComponentCreateTool } from "./component-create.js";
 import { createToolContext } from "../../../test-helpers.js";
+import type { ToolContext } from "../tool.interface.js";
 
 vi.mock("../../../security/path-guard.js", () => ({
-  validatePath: vi.fn().mockResolvedValue({ valid: true, fullPath: "/test/project/Assets/Test.cs" }),
+  validatePath: vi.fn(),
   isValidCSharpIdentifier: vi.fn().mockReturnValue(true),
   isValidCSharpType: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-}));
-
 import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../../security/path-guard.js";
-import { writeFile } from "node:fs/promises";
 
 describe("ComponentCreateTool", () => {
   let tool: ComponentCreateTool;
-  const ctx = createToolContext();
+  let root: string;
+  let ctx: ToolContext;
+  // The tool writes for real (exclusively, so it can never replace a file), so
+  // the project is a temp directory rather than a mocked filesystem.
+  const written = (relPath: string) => readFileSync(join(root, relPath), "utf-8");
 
   beforeEach(() => {
     tool = new ComponentCreateTool();
-    vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/Assets/Test.cs" });
+    root = mkdtempSync(join(tmpdir(), "strada-component-test-"));
+    ctx = createToolContext({ projectPath: root, workingDirectory: root });
+    vi.mocked(validatePath).mockImplementation(async (_root: string, relPath: string) => ({
+      valid: true,
+      fullPath: join(root, relPath),
+    }));
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
     vi.mocked(isValidCSharpType).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("creates a valid component with StructLayout attribute", async () => {
@@ -37,9 +48,8 @@ describe("ComponentCreateTool", () => {
 
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Component 'HealthComponent' created");
-    expect(writeFile).toHaveBeenCalled();
 
-    const writtenCode = vi.mocked(writeFile).mock.calls[0]![1] as string;
+    const writtenCode = written("Assets/Components/Health.cs");
     expect(writtenCode).toContain("using System.Runtime.InteropServices;");
     expect(writtenCode).toContain("using Strada.Core.ECS;");
     expect(writtenCode).toContain("[StructLayout(LayoutKind.Sequential)]");
@@ -56,8 +66,8 @@ describe("ComponentCreateTool", () => {
       fields: [{ name: "Value", type: "float3" }],
     }, ctx);
 
-    const writtenCode = vi.mocked(writeFile).mock.calls[0]![1] as string;
-    expect(writtenCode).toContain("using Unity.Mathematics;");
+    expect(result.isError).toBeUndefined();
+    expect(written("Assets/Vel.cs")).toContain("using Unity.Mathematics;");
   });
 
   it("returns error in read-only mode", async () => {

@@ -1712,7 +1712,8 @@ export class StradaConformanceGuard {
         `${incomplete.join("; ")}. ` +
         "A module without a *ModuleConfig.cs is never registered with the framework, and without an " +
         ".asmdef it cannot compile against Strada.Core at all — the folder layout alone does nothing. " +
-        "Create them (strada_create_module produces both) before declaring the task complete." +
+        "Create them before declaring the task complete: strada_create_module with `path` set to that " +
+        "folder creates whichever is missing and keeps every file already there unchanged." +
         lastAskNote(incompleteAsk)
       );
     }

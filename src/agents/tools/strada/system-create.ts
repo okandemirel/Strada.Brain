@@ -1,6 +1,5 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
+import { alreadyExists, createGeneratedFile } from "./generated-file.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 import { getFrameworkSchemaProvider } from "../../../intelligence/framework/framework-schema-provider.js";
@@ -9,7 +8,8 @@ export class SystemCreateTool implements ITool {
   readonly name = "strada_create_system";
   readonly description =
     "Create a new ECS System for Strada.Core. Systems process entities with specific component queries. " +
-    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystem (generic Burst with 1-4 component type args).";
+    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystem (generic Burst with 1-4 component type args). " +
+    "Refuses a path that already exists: it never overwrites a file.";
 
   readonly inputSchema = {
     type: "object",
@@ -182,8 +182,9 @@ export class SystemCreateTool implements ITool {
     });
 
     try {
-      await mkdir(dirname(pathCheck.fullPath), { recursive: true });
-      await writeFile(pathCheck.fullPath, code, "utf-8");
+      if ((await createGeneratedFile(context.projectPath, pathCheck.fullPath, code)) === "kept") {
+        return { content: alreadyExists("system", relPath), isError: true };
+      }
 
       const effectiveBase = burstComponentCount
         ? `BurstSystem<${name}Job, ${queryComponents.join(", ")}>`

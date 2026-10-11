@@ -1,6 +1,5 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../../security/path-guard.js";
+import { alreadyExists, createGeneratedFile } from "./generated-file.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
@@ -8,7 +7,8 @@ export class ComponentCreateTool implements ITool {
   readonly name = "strada_create_component";
   readonly description =
     "Create a new ECS component (unmanaged struct implementing IComponent) for Strada.Core. " +
-    "Components are data-only structs that can be attached to entities.";
+    "Components are data-only structs that can be attached to entities. " +
+    "Refuses a path that already exists: it never overwrites a file.";
 
   readonly inputSchema = {
     type: "object",
@@ -142,8 +142,9 @@ ${fieldLines}
 `;
 
     try {
-      await mkdir(dirname(pathCheck.fullPath), { recursive: true });
-      await writeFile(pathCheck.fullPath, code, "utf-8");
+      if ((await createGeneratedFile(context.projectPath, pathCheck.fullPath, code)) === "kept") {
+        return { content: alreadyExists("component", relPath), isError: true };
+      }
 
       return {
         content: [

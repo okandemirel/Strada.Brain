@@ -1,47 +1,48 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { sep } from "node:path";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import { ModuleCreateTool } from "./module-create.js";
 import { createToolContext } from "../../../test-helpers.js";
+import { installCoreDeclaration } from "./core-declaration-fixture.js";
+import type { ToolContext } from "../tool.interface.js";
 
 vi.mock("../../../security/path-guard.js", () => ({
-  validatePath: vi.fn().mockResolvedValue({ valid: true, fullPath: "/test/project/Assets/Modules/Combat" }),
+  validatePath: vi.fn(),
   isValidCSharpIdentifier: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-}));
-
-// This suite runs against a project that only exists in mocks, so the on-disk
-// framework the tool reads its folder list from is not there. Supply the
-// declaration itself — the same text a real Strada.Core checkout carries.
-vi.mock("./module-folders.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./module-folders.js")>();
-  const { CORE_DECLARATION_SOURCE } = await import("./core-declaration-fixture.js");
-  return {
-    ...actual,
-    readModuleLayout: () => ({
-      status: "declared" as const,
-      layout: {
-        file: "/test/project/Packages/Submodules/Strada.Core/Editor/ModuleGenerator/Config/DirectoryStructureConfig.cs",
-        folders: actual.parseDeclaredFolders(CORE_DECLARATION_SOURCE),
-        folderOwners: actual.parseFolderOwners(CORE_DECLARATION_SOURCE),
-      },
-    }),
-  };
-});
-
-import { isValidCSharpIdentifier } from "../../../security/path-guard.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 
 describe("ModuleCreateTool", () => {
   let tool: ModuleCreateTool;
-  const ctx = createToolContext();
+  let root: string;
+  let ctx: ToolContext;
+  const moduleRoot = () => join(root, "Assets", "Modules", "CombatModule");
+  // The tool writes for real (exclusively, so it never replaces a file), so
+  // the project is a temp directory with the framework's declaration installed,
+  // the same text a real Strada.Core checkout carries.
+  const written = (rel: string) => readFileSync(join(moduleRoot(), ...rel.split("/")), "utf-8");
+  const entries = (kind: "dirs" | "files") =>
+    readdirSync(moduleRoot(), { recursive: true, withFileTypes: true })
+      .filter((e) => (kind === "dirs" ? e.isDirectory() : e.isFile()))
+      .map((e) => join(e.parentPath, e.name).slice(moduleRoot().length + 1).split(sep).join("/"))
+      .sort();
 
   beforeEach(() => {
     tool = new ModuleCreateTool();
+    root = mkdtempSync(join(tmpdir(), "strada-module-test-"));
+    installCoreDeclaration(root);
+    ctx = createToolContext({ projectPath: root, workingDirectory: root });
+    vi.mocked(validatePath).mockImplementation(async (_root: string, relPath: string) => ({
+      valid: true,
+      fullPath: join(root, relPath),
+    }));
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("creates full module with system and service", async () => {
@@ -54,22 +55,26 @@ describe("ModuleCreateTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Module 'Combat' created");
 
-    // The module root, plus every folder Strada.Core's declaration gives this
-    // component selection: Scripts and its four code folders, Tests/Runtime and
-    // Tests/Editor, and the eleven authored-asset folders a module gets by
-    // default. Counting them here is what catches the list silently changing.
-    expect(mkdir).toHaveBeenCalledTimes(19);
+    // Every folder Strada.Core's declaration gives this component selection:
+    // Scripts and its four code folders, Tests/Runtime and Tests/Editor, and
+    // the eleven authored-asset folders a module gets by default (Tests and Art
+    // are their parents). Listing them here is what catches the list silently
+    // changing.
+    expect(entries("dirs")).toEqual([
+      "Art", "Art/Materials", "Art/Models", "Art/Prefabs", "Art/Textures",
+      "Audio", "Prefabs", "Resources", "Scenes", "Scriptables",
+      "Scripts", "Scripts/Components", "Scripts/Interfaces", "Scripts/Services", "Scripts/Systems",
+      "Settings", "Sprites",
+      "Tests", "Tests/Editor", "Tests/Runtime",
+    ]);
 
     // asmdef + ModuleConfig + System + Interface + Impl, plus the two default
-    // test assemblies = 5 files
-    expect(writeFile).toHaveBeenCalledTimes(7);
+    // test assemblies = 7 files
+    expect(entries("files")).toHaveLength(7);
+    expect((result.metadata as { createdFiles: string[] }).createdFiles).toHaveLength(7);
 
     // Verify asmdef content
-    const asmdefCall = vi.mocked(writeFile).mock.calls.find(
-      (c) => String(c[0]).endsWith(".asmdef")
-    );
-    expect(asmdefCall).toBeTruthy();
-    const asmdefContent = JSON.parse(asmdefCall![1] as string);
+    const asmdefContent = JSON.parse(written("Combat.asmdef"));
     expect(asmdefContent.references).toEqual([
       "Strada.Core",
       "Unity.Burst",
@@ -79,22 +84,14 @@ describe("ModuleCreateTool", () => {
     ]);
 
     // Verify ModuleConfig uses RegisterService pattern
-    const configCall = vi.mocked(writeFile).mock.calls.find(
-      (c) => String(c[0]).endsWith("CombatModuleConfig.cs")
-    );
-    expect(configCall).toBeTruthy();
-    const configCode = configCall![1] as string;
+    const configCode = written("Scripts/CombatModuleConfig.cs");
     expect(configCode).toContain("class CombatModuleConfig : ModuleConfig");
     expect(configCode).toContain("RegisterService<ICombatService, CombatService>");
     expect(configCode).toContain("using Strada.Core.Modules;");
     expect(configCode).toContain("using Strada.Core.DI;");
 
     // Verify system uses correct API
-    const systemCall = vi.mocked(writeFile).mock.calls.find(
-      (c) => String(c[0]).endsWith("CombatSystem.cs")
-    );
-    expect(systemCall).toBeTruthy();
-    const systemCode = systemCall![1] as string;
+    const systemCode = written("Scripts/Systems/CombatSystem.cs");
     expect(systemCode).toContain("using Strada.Core.ECS.Systems;");
     expect(systemCode).toContain("using Strada.Core.Modules;");
     expect(systemCode).toContain("[StradaSystem]");
@@ -103,12 +100,7 @@ describe("ModuleCreateTool", () => {
     expect(systemCode).toContain("protected override void OnDispose()");
     expect(systemCode).not.toContain("World.Query");
 
-    const serviceCall = vi.mocked(writeFile).mock.calls.find(
-      // The separator keeps ICombatService.cs out; the tool joins native paths.
-      (c) => String(c[0]).endsWith(`${sep}CombatService.cs`)
-    );
-    expect(serviceCall).toBeTruthy();
-    const serviceCode = serviceCall![1] as string;
+    const serviceCode = written("Scripts/Services/CombatService.cs");
     expect(serviceCode).toContain("using Strada.Core.Patterns;");
     expect(serviceCode).toContain("class CombatService : Service, ICombatService");
   });
@@ -122,7 +114,7 @@ describe("ModuleCreateTool", () => {
 
     expect(result.isError).toBeUndefined();
     // asmdef + ModuleConfig + the two default test assemblies = 4 files
-    expect(writeFile).toHaveBeenCalledTimes(4);
+    expect(entries("files")).toHaveLength(4);
   });
 
   it("returns error for lowercase module name", async () => {
@@ -150,28 +142,25 @@ describe("ModuleCreateTool", () => {
   it("returns error in read-only mode", async () => {
     const result = await tool.execute(
       { name: "Combat" },
-      createToolContext({ readOnly: true })
+      createToolContext({ projectPath: root, workingDirectory: root, readOnly: true })
     );
     expect(result.isError).toBe(true);
   });
 
   it("uses default path and namespace", async () => {
     await tool.execute({ name: "Combat" }, ctx);
-    // Default path: Assets/Modules/Combat, namespace: Game.Modules.Combat
-    const configCode = vi.mocked(writeFile).mock.calls.find(
-      (c) => String(c[0]).endsWith("CombatModuleConfig.cs")
-    )![1] as string;
-    expect(configCode).toContain("namespace Game.Modules.Combat");
+    // Default path: Assets/Modules/CombatModule, namespace: Game.Modules.Combat
+    expect(written("Scripts/CombatModuleConfig.cs")).toContain("namespace Game.Modules.Combat");
   });
 
   it("creates correct directory structure", async () => {
     await tool.execute({ name: "Combat" }, ctx);
-    const mkdirCalls = vi.mocked(mkdir).mock.calls.map((c) => String(c[0]));
-    expect(mkdirCalls.some((d) => d.endsWith("Systems"))).toBe(true);
-    expect(mkdirCalls.some((d) => d.endsWith("Services"))).toBe(true);
-    expect(mkdirCalls.some((d) => d.endsWith("Components"))).toBe(true);
+    const dirs = entries("dirs");
+    expect(dirs).toContain("Scripts/Systems");
+    expect(dirs).toContain("Scripts/Services");
+    expect(dirs).toContain("Scripts/Components");
     // Mediators was never a folder the framework declared.
-    expect(mkdirCalls.some((d) => d.endsWith("Mediators"))).toBe(false);
-    expect(mkdirCalls.some((d) => d.endsWith("Interfaces"))).toBe(true);
+    expect(dirs.some((d) => d.endsWith("Mediators"))).toBe(false);
+    expect(dirs).toContain("Scripts/Interfaces");
   });
 });

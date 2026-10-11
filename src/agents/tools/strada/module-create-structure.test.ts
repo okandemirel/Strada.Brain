@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtempSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
@@ -195,5 +195,28 @@ describe("a framework whose layout lives in ModuleLayout.cs", () => {
     expect(result.content).not.toMatch(/not installed/);
     expect(result.content).toMatch(/module layout could not be read/);
     expect(result.content).toMatch(/ModuleLayout\.cs/);
+  });
+
+  it("calls an empty framework directory an incomplete checkout", async () => {
+    // An uninitialised submodule: the directory is there, nothing in it is.
+    const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-empty-core-"));
+    mkdirSync(join(projectPath, "Packages", "Submodules", "Strada.Core"), { recursive: true });
+    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath } as never);
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toMatch(/is installed/);
+    expect(result.content).toMatch(/checkout is incomplete/);
+    expect(existsSync(join(projectPath, "Assets"))).toBe(false);
+  });
+
+  it("describes both layouts without calling either one current", () => {
+    // The schema is static text the model reads whichever Strada.Core a
+    // project pins, and the older layout is the one a fresh clone still gets.
+    const props = new ModuleCreateTool().inputSchema.properties as Record<string, { description: string }>;
+    for (const key of ["include_signals", "include_commands"]) {
+      expect(props[key]!.description).not.toMatch(/current Strada\.Core/i);
+    }
+    expect(props["include_signals"]!.description).toMatch(/Scripts\/Signals/);
+    expect(props["include_signals"]!.description).toMatch(/Scripts\/Events/);
+    expect(props["include_commands"]!.description).toMatch(/Scripts\/Commands/);
   });
 });

@@ -1,12 +1,14 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir } from "node:fs/promises";
+import { basename, join, sep } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
+import { createGeneratedFile } from "./generated-file.js";
 import {
   readModuleLayout,
   foldersForModule,
   folderForComponent,
   optionalFolderPaths,
   CORE_INSTALL_PATH,
+  INCOMPLETE_CHECKOUT_HINT,
 } from "./module-folders.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
@@ -15,7 +17,8 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions), so they always match what the Unity generator produces.";
+    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions), so they always match what the Unity generator produces. " +
+    "Safe on a module folder that already holds code: files already there are kept as they are, never overwritten, and only the missing ones are created; the result lists which were kept.";
 
   readonly inputSchema = {
     type: "object",
@@ -53,7 +56,7 @@ export class ModuleCreateTool implements ITool {
       include_signals: {
         type: "boolean",
         description:
-          "Include the folder signals go in — their own where the framework declares one, otherwise the folder it files them with (Scripts/Events in current Strada.Core). Default: false",
+          "Include the folder signals go in, as the installed Strada.Core declares it: Scripts/Signals in a layout that gives them their own, Scripts/Events in one that files them with events (ModuleLayout.cs). Default: false",
       },
       include_model: {
         type: "boolean",
@@ -70,7 +73,7 @@ export class ModuleCreateTool implements ITool {
       include_commands: {
         type: "boolean",
         description:
-          "Include a Scripts/Commands/ folder where the framework declares one. Current Strada.Core declares none; the result then says so. Default: false",
+          "Include a Scripts/Commands/ folder where the installed Strada.Core declares one. The older layout (DirectoryStructureConfig.cs) declares one; the newer one (ModuleLayout.cs) does not, and the result then says so. Default: false",
       },
       include_editor: {
         type: "boolean",
@@ -154,6 +157,15 @@ export class ModuleCreateTool implements ITool {
             `Error: Strada.Core is not installed at ${CORE_INSTALL_PATH}, and it is where a module's ` +
             `folder structure is declared. Install the framework first — guessing the structure is how a ` +
             `module ends up in a shape the framework never agreed to.`,
+          isError: true,
+        };
+      }
+      if (lookup.status === "incomplete") {
+        return {
+          content:
+            `Error: the Strada.Core checkout is incomplete — ${CORE_INSTALL_PATH} is there, but ` +
+            `${INCOMPLETE_CHECKOUT_HINT}. No module was created — guessing the structure is how a module ` +
+            `ends up in a shape the framework never agreed to.`,
           isError: true,
         };
       }
@@ -249,10 +261,28 @@ export class ModuleCreateTool implements ITool {
 
       await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 
+      // Nothing already in the module is replaced. The conformance gate sends
+      // the agent here for a module folder that holds code but lacks its
+      // config or assembly, so this call has to fill those gaps and leave the
+      // code alone — it used to truncate every template path it shared.
+      const keptFiles: string[] = [];
+      const place = async (rel: string, content: string): Promise<boolean> => {
+        const outcome = await createGeneratedFile(context.projectPath, join(fullBase, ...rel.split("/")), content);
+        (outcome === "created" ? createdFiles : keptFiles).push(`${modulePath}/${rel}`);
+        return outcome === "created";
+      };
+      // Unity takes one .asmdef per folder; a second one beside a hand-written
+      // assembly stops every assembly in the project from compiling.
+      const placeAssembly = async (folder: string, fileName: string, content: string): Promise<void> => {
+        const existing = await assemblyIn(join(fullBase, ...folder.split("/").filter(Boolean)));
+        if (existing) keptFiles.push(`${modulePath}/${folder ? `${folder}/` : ""}${existing}`);
+        else await place(`${folder ? `${folder}/` : ""}${fileName}`, content);
+      };
+
       // 1. Assembly Definition
-      const asmdefPath = join(fullBase, `${name}.asmdef`);
-      await writeFile(
-        asmdefPath,
+      await placeAssembly(
+        "",
+        `${name}.asmdef`,
         JSON.stringify(
           {
             name: `Game.Modules.${name}`,
@@ -272,9 +302,7 @@ export class ModuleCreateTool implements ITool {
           null,
           2
         ),
-        "utf-8"
       );
-      createdFiles.push(`${modulePath}/${name}.asmdef`);
 
       // 1b. Test assemblies, one per test mode.
       //
@@ -289,9 +317,9 @@ export class ModuleCreateTool implements ITool {
           { dir: "Editor", suffix: "Editor.Tests", editorOnly: true },
         ];
         for (const spec of testAssemblies) {
-          const testAsmdefPath = join(fullBase, "Tests", spec.dir, `${moduleAssembly}.${spec.suffix}.asmdef`);
-          await writeFile(
-            testAsmdefPath,
+          await placeAssembly(
+            `Tests/${spec.dir}`,
+            `${moduleAssembly}.${spec.suffix}.asmdef`,
             JSON.stringify(
               {
                 name: `${moduleAssembly}.${spec.suffix}`,
@@ -313,41 +341,45 @@ export class ModuleCreateTool implements ITool {
               null,
               2
             ),
-            "utf-8"
           );
-          createdFiles.push(`${modulePath}/Tests/${spec.dir}/${moduleAssembly}.${spec.suffix}.asmdef`);
         }
       }
 
-      // 2. ModuleConfig
-      const moduleConfigPath = join(fullBase, "Scripts", `${name}ModuleConfig.cs`);
-      await writeFile(moduleConfigPath, generateModuleConfig(name, namespace, includeService), "utf-8");
-      createdFiles.push(`${modulePath}/Scripts/${name}ModuleConfig.cs`);
+      // 2. ModuleConfig — one per module, wherever in it the author put it: a
+      // second <Name>ModuleConfig class is a duplicate definition.
+      const existingConfig = await moduleConfigIn(fullBase);
+      if (existingConfig) keptFiles.push(`${modulePath}/${existingConfig}`);
+      else await place(`Scripts/${name}ModuleConfig.cs`, generateModuleConfig(name, namespace, includeService));
 
       // 3. Optional System
       if (includeSystem) {
-        const systemPath = join(fullBase, "Scripts", "Systems", `${name}System.cs`);
-        await writeFile(systemPath, generateSystem(name, namespace), "utf-8");
-        createdFiles.push(`${modulePath}/Scripts/Systems/${name}System.cs`);
+        await place(`Scripts/Systems/${name}System.cs`, generateSystem(name, namespace));
       }
 
       // 4. Optional Service
+      let serviceCreated = false;
       if (includeService) {
-        const interfacePath = join(fullBase, "Scripts", "Services", `I${name}Service.cs`);
-        const implPath = join(fullBase, "Scripts", "Services", `${name}Service.cs`);
-
-        await writeFile(interfacePath, generateServiceInterface(name, namespace), "utf-8");
-        await writeFile(implPath, generateServiceImpl(name, namespace), "utf-8");
-
-        createdFiles.push(`${modulePath}/Scripts/Services/I${name}Service.cs`);
-        createdFiles.push(`${modulePath}/Scripts/Services/${name}Service.cs`);
+        await place(`Scripts/Services/I${name}Service.cs`, generateServiceInterface(name, namespace));
+        serviceCreated = await place(`Scripts/Services/${name}Service.cs`, generateServiceImpl(name, namespace));
       }
 
+      const headline =
+        keptFiles.length === 0
+          ? `Module '${name}' created successfully!`
+          : createdFiles.length === 0
+            ? `Module '${name}' already exists at ${modulePath}: every file it would create is there and was kept as it was. Nothing was overwritten.`
+            : `Module '${name}' completed at ${modulePath}: created what was missing and kept ${keptFiles.length} existing file(s) as they were. Nothing was overwritten.`;
       const result = [
-        `Module '${name}' created successfully!`,
+        headline,
         "",
         "Created files:",
-        ...createdFiles.map((f) => `  ${f}`),
+        ...(createdFiles.length > 0 ? createdFiles.map((f) => `  ${f}`) : ["  (none)"]),
+        ...(keptFiles.length > 0
+          ? ["", "Kept (already existed, left unchanged):", ...keptFiles.map((f) => `  ${f}`)]
+          : []),
+        ...(existingConfig && serviceCreated
+          ? ["", `The kept ${existingConfig} was not changed: register I${name}Service there yourself.`]
+          : []),
         "",
         "Folder structure:",
         `  ${modulePath}/`,
@@ -366,11 +398,28 @@ export class ModuleCreateTool implements ITool {
           : `  4. Add systems under Scripts/Systems/ when you need them`,
       ].join("\n");
 
-      return { content: result, metadata: { createdFiles } };
+      return { content: result, metadata: { createdFiles, keptFiles } };
     } catch {
       return { content: "Error: could not create module", isError: true };
     }
   }
+}
+
+/** The .asmdef a folder already holds, if any. */
+async function assemblyIn(dir: string): Promise<string | null> {
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  return entries.sort().find((entry) => /\.asmdef$/i.test(entry)) ?? null;
+}
+
+/** A *ModuleConfig.cs anywhere in the module, module-relative with "/" separators. */
+async function moduleConfigIn(moduleRoot: string): Promise<string | null> {
+  const entries = await readdir(moduleRoot, { recursive: true }).catch(() => [] as string[]);
+  return (
+    entries
+      .map((entry) => entry.split(sep).join("/"))
+      .sort()
+      .find((entry) => /ModuleConfig\.cs$/i.test(entry)) ?? null
+  );
 }
 
 function generateModuleConfig(

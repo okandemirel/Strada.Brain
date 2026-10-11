@@ -1,28 +1,40 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MediatorCreateTool } from "./mediator-create.js";
 import { createToolContext } from "../../../test-helpers.js";
+import type { ToolContext } from "../tool.interface.js";
 
 vi.mock("../../../security/path-guard.js", () => ({
-  validatePath: vi.fn().mockResolvedValue({ valid: true, fullPath: "/test/project/Med.cs" }),
+  validatePath: vi.fn(),
   isValidCSharpIdentifier: vi.fn().mockReturnValue(true),
   isValidCSharpType: vi.fn().mockReturnValue(true),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-}));
-
-import { isValidCSharpIdentifier } from "../../../security/path-guard.js";
-import { writeFile } from "node:fs/promises";
+import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 
 describe("MediatorCreateTool", () => {
   let tool: MediatorCreateTool;
-  const ctx = createToolContext();
+  let root: string;
+  let ctx: ToolContext;
+  // The tool writes for real (exclusively, so it can never replace a file), so
+  // the project is a temp directory rather than a mocked filesystem.
+  const written = (relPath: string) => readFileSync(join(root, relPath), "utf-8");
 
   beforeEach(() => {
     tool = new MediatorCreateTool();
+    root = mkdtempSync(join(tmpdir(), "strada-mediator-test-"));
+    ctx = createToolContext({ projectPath: root, workingDirectory: root });
+    vi.mocked(validatePath).mockImplementation(async (_root: string, relPath: string) => ({
+      valid: true,
+      fullPath: join(root, relPath),
+    }));
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("creates mediator with bindings", async () => {
@@ -43,7 +55,7 @@ describe("MediatorCreateTool", () => {
     expect(result.content).toContain("Mediator 'EnemyMediator' created");
     expect(result.content).toContain("Bindings: 1");
 
-    const code = vi.mocked(writeFile).mock.calls[0]![1] as string;
+    const code = written("Assets/Med.cs");
     expect(code).toContain("class EnemyMediator : EntityMediator<EnemyView>");
     expect(code).toContain("Bind<Health, float>");
   });
@@ -56,7 +68,8 @@ describe("MediatorCreateTool", () => {
       namespace: "Game",
     }, ctx);
 
-    const code = vi.mocked(writeFile).mock.calls[0]![1] as string;
+    expect(result.isError).toBeUndefined();
+    const code = written("Assets/Med.cs");
     expect(code).toContain("Add component bindings here");
     expect(result.content).toContain("No bindings configured");
   });
