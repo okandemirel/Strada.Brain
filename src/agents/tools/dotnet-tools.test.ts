@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTestOutput } from "./dotnet-tools.js";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTrxReport } from "./dotnet-tools.js";
 import type { ToolContext } from "./tool.interface.js";
 import { checkReadOnlyBlock, getReadOnlySystemPrompt } from "../../security/read-only-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
+import { SelfVerification } from "../autonomy/self-verification.js";
 
 // The "handles dotnet not installed gracefully" tests previously ran the REAL `dotnet` binary:
 // on a runner WITH dotnet installed (GitHub ubuntu-latest) that meant an actual `dotnet build`
@@ -83,142 +86,39 @@ Bar.cs(3,3): error CS0003: err2
   });
 });
 
-describe("parseTestOutput", () => {
-  it("parses passed tests", () => {
-    const output = `
-  Passed MyNamespace.MyTests.TestAdd [5ms]
-  Passed MyNamespace.MyTests.TestSub [2ms]
-
-Total:     2
-Passed:    2
-Failed:    0
-Skipped:   0
-`;
-    const { tests, summary } = parseTestOutput(output);
-    expect(tests).toHaveLength(2);
-    expect(tests[0]!.outcome).toBe("passed");
-    expect(tests[0]!.name).toBe("MyNamespace.MyTests.TestAdd");
-    expect(tests[0]!.duration).toBe("5ms");
-  });
-
-  it("parses failed tests", () => {
-    const output = `
-  Passed MyTests.Good [1ms]
-  Failed MyTests.Bad [10ms]
-
-Total:     2
-Passed:    1
-Failed:    1
-Skipped:   0
-`;
-    const { tests, summary } = parseTestOutput(output);
-    expect(tests).toHaveLength(2);
-    expect(summary.passed).toBe(1);
-    expect(summary.failed).toBe(1);
-    expect(summary.total).toBe(2);
-  });
-
-  it("parses skipped tests", () => {
-    const output = `
-  Passed A [1ms]
-  Skipped B
-  Skipped C
-
-Total:     3
-Passed:    1
-Failed:    0
-Skipped:   2
-`;
-    const { tests, summary } = parseTestOutput(output);
-    expect(tests).toHaveLength(3);
-    expect(summary.skipped).toBe(2);
-  });
-
-  it("handles summary line format", () => {
-    const output = `Total:  10, Passed:  8, Failed:  1, Skipped:  1`;
-    const { summary } = parseTestOutput(output);
-    expect(summary.total).toBe(10);
-    expect(summary.passed).toBe(8);
-    expect(summary.failed).toBe(1);
-    expect(summary.skipped).toBe(1);
-  });
-
-  it("handles empty output", () => {
-    const { tests, summary } = parseTestOutput("");
-    expect(tests).toHaveLength(0);
-    expect(summary.total).toBe(0);
-  });
-});
-
 /**
- * TLS-9 (audited 2026-09-24): the fixtures above were written to fit the
- * parser. These follow what `dotnet test` prints: vstest's console logger
- * (src/vstest.console/Internal/ConsoleLogger.cs and its Resources.resx —
- * TestRunSummary, TestRunSummaryTotalTests/PassedTests/FailedTests,
- * "  Failed <name> [<duration>]", "  Error Message:", "  Stack Trace:").
- * No SDK was available to capture a live run, so each line reproduces those
- * format strings exactly, padding included.
+ * The console parser these replaced read the verdict from text the SDK
+ * localizes; its fixtures were English and synthesized ("No SDK was
+ * available to capture a live run"). The TRX shapes below follow a report
+ * captured from a live run (see FAILING_TRX).
  */
-describe("parseTestOutput on the SDK's own output", () => {
-  const NORMAL_FAILING = [
-    "  Determining projects to restore...",
-    "  All projects are up-to-date for restore.",
-    "  Game.Tests -> /work/Game.Tests/bin/Debug/net8.0/Game.Tests.dll",
-    "Test run for /work/Game.Tests/bin/Debug/net8.0/Game.Tests.dll (.NETCoreApp,Version=v8.0)",
-    "Microsoft (R) Test Execution Command Line Tool Version 17.8.0 (x64)",
-    "Copyright (c) Microsoft Corporation.  All rights reserved.",
-    "",
-    "Starting test execution, please wait...",
-    "A total of 1 test files matched the specified pattern.",
-    "  Passed Game.Tests.BoardTests.ClearsRow [3 ms]",
-    "  Failed Game.Tests.BoardTests.DropsPiece [12 ms]",
-    "  Error Message:",
-    "   Expected: 4",
-    "  But was:  3",
-    "  Stack Trace:",
-    "     at Game.Tests.BoardTests.DropsPiece() in /work/Game.Tests/BoardTests.cs:line 27",
-    "",
-    "  Failed Game.Tests.BoardTests.ScoresCombo [< 1 ms]",
-    "  Error Message:",
-    "   System.NullReferenceException : Object reference not set to an instance of an object.",
-    "  Stack Trace:",
-    "     at Game.Tests.BoardTests.ScoresCombo() in /work/Game.Tests/BoardTests.cs:line 41",
-    "",
-    "Test Run Failed.",
-    "Total tests: 3",
-    "     Passed: 1",
-    "     Failed: 2",
-    " Total time: 0.8421 Seconds",
-  ].join("\n");
-
-  it("attaches each failure's message to its test (the header carries a duration)", () => {
-    const { tests } = parseTestOutput(NORMAL_FAILING);
-    const failed = tests.filter((t) => t.outcome === "failed");
-    expect(failed.map((t) => t.name)).toEqual(["Game.Tests.BoardTests.DropsPiece", "Game.Tests.BoardTests.ScoresCombo"]);
-    expect(failed[0]!.errorMessage).toContain("Expected: 4");
-    expect(failed[1]!.errorMessage).toContain("NullReferenceException");
+describe("parseTrxReport", () => {
+  it("counts error, timeout and aborted results as failures and decodes the message", () => {
+    const report = parseTrxReport(
+      [
+        `<TestRun><Results>`,
+        `<UnitTestResult testName="Ns.T.Equal(a: &quot;x&quot;)" outcome="Failed"><Output><ErrorInfo><Message>Assert.Equal() Failure&#xA;Expected: 4 &amp; Actual: 3 &lt;none&gt; &amp;lt;b&amp;gt;</Message></ErrorInfo></Output></UnitTestResult>`,
+        `<UnitTestResult testName="Ns.T.Hangs" outcome="Timeout" />`,
+        `<UnitTestResult testName="Ns.T.Fine" outcome="Passed" />`,
+        `</Results><ResultSummary outcome="Failed">`,
+        `<Counters total="4" executed="4" passed="1" failed="1" error="1" timeout="1" aborted="0" notExecuted="0" />`,
+        `</ResultSummary></TestRun>`,
+      ].join("\n"),
+    );
+    expect(report).not.toBeNull();
+    expect(report!.summary).toEqual({ total: 4, passed: 1, failed: 3, skipped: 0 });
+    expect(report!.failures.map((f) => f.name)).toEqual(['Ns.T.Equal(a: "x")', "Ns.T.Hangs"]);
+    // Decoded once: text that held a literal "&lt;b&gt;" keeps it.
+    expect(report!.failures[0]!.errorMessage).toBe("Assert.Equal() Failure\nExpected: 4 & Actual: 3 <none> &lt;b&gt;");
   });
 
-  it("reads the run's totals, not the per-test lines that survived a tail cut", () => {
-    // process-runner keeps the TAIL: the first failed test fell off the front.
-    const tail = NORMAL_FAILING.slice(NORMAL_FAILING.indexOf("  Failed Game.Tests.BoardTests.ScoresCombo"));
-    expect(parseTestOutput(tail).summary).toEqual({ total: 3, passed: 1, failed: 2, skipped: 0 });
+  it("reads a skipped test as neither passed nor failed", () => {
+    expect(parseTrxReport(FAILING_TRX)!.summary).toEqual({ total: 5, passed: 3, failed: 1, skipped: 1 });
   });
 
-  it("sums the minimal-verbosity line of every test assembly", () => {
-    const minimal = [
-      "Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration: 20 ms - Game.Tests.dll (net8.0)",
-      "Passed!  - Failed:     0, Passed:     5, Skipped:     1, Total:     6, Duration: 8 ms - Game.Editor.Tests.dll (net8.0)",
-    ].join("\n");
-    expect(parseTestOutput(minimal).summary).toEqual({ total: 9, passed: 6, failed: 2, skipped: 1 });
-  });
-
-  it("sums the normal-verbosity blocks of several test projects", () => {
-    const twoRuns = [
-      "Test Run Failed.", "Total tests: 3", "     Passed: 1", "     Failed: 2", " Total time: 0.8 Seconds",
-      "Test Run Successful.", "Total tests: 4", "     Passed: 3", "    Skipped: 1", " Total time: 0.2 Seconds",
-    ].join("\n");
-    expect(parseTestOutput(twoRuns).summary).toEqual({ total: 7, passed: 4, failed: 2, skipped: 1 });
+  it("returns null, not an empty run, for a report with no summary", () => {
+    expect(parseTrxReport(`<TestRun id="x"><Results>`)).toBeNull();
+    expect(parseTrxReport("")).toBeNull();
   });
 });
 
@@ -235,6 +135,242 @@ describe("dotnet_test's verdict line follows the exit code (TLS-9)", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("Result: FAILED");
     expect(result.content).not.toContain("Result: PASSED");
+  });
+});
+
+/**
+ * Captured 2026-10-11 from dotnet 10.0.400 (Homebrew) on this machine —
+ * LANG=C.UTF-8, macOS UI language tr-TR — running a scratch xunit project
+ * with `dotnet test -c Debug -v normal --logger trx`. The console is the
+ * SDK's own text, trimmed; the TRX keeps every element and attribute the
+ * verdict depends on.
+ */
+const PRUNE_LINE =
+  "         Failed to load prune package data from PrunePackageData folder, loading from targeting packs instead";
+const TURKISH_PASSING_CONSOLE = [
+  "     1>AddPrunePackageReferences:",
+  "         Loading prune package data from PrunePackageData folder",
+  PRUNE_LINE,
+  "         Game.Tests -> /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll",
+  "/work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll (.NETCoreApp,Version=v10.0) için test çalıştırması",
+  "Toplam 1 test dosyası belirtilen desenle eşleşti.",
+  "  Başarılı Game.Tests.BoardTests.ClearsRow [4 ms]",
+  "  Başarılı Game.Tests.BoardTests.Cases(n: 1) [< 1 ms]",
+  "",
+  "Test Çalıştırması Başarılı.",
+  "Toplam test sayısı: 2",
+  "     Geçti: 2",
+  " Toplam süre: 0,4120 Saniye",
+].join("\n");
+const TURKISH_FAILING_CONSOLE = [
+  "     1>AddPrunePackageReferences:",
+  "         Loading prune package data from PrunePackageData folder",
+  PRUNE_LINE,
+  "  Başarılı Game.Tests.BoardTests.ClearsRow [4 ms]",
+  "  Atlandı Game.Tests.BoardTests.Later [1 ms]",
+  "  Başarılı Game.Tests.BoardTests.Cases(n: 1) [< 1 ms]",
+  "  Başarılı Game.Tests.BoardTests.Cases(n: 2) [< 1 ms]",
+  "  Başarısız Game.Tests.BoardTests.BoardSwapFails [< 1 ms]",
+  "  Hata İletisi:",
+  "   swap broke",
+  "  Yığın İzleme:",
+  "     at Game.Tests.BoardTests.BoardSwapFails() in /work/Game.Tests/UnitTest1.cs:line 9",
+  "",
+  "Test Çalıştırması Başarısız.",
+  "Toplam test sayısı: 5",
+  "     Geçti: 3",
+  "     Başarısız: 1",
+  "    Atlandı: 1",
+  " Toplam süre: 0,5091 Saniye",
+].join("\n");
+
+function trxResult(name: string, outcome: string, message?: string): string {
+  const head =
+    `    <UnitTestResult executionId="e-${name}" testId="t-${name}" testName="${name}" computerName="host" ` +
+    `duration="00:00:00.0003766" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="${outcome}" ` +
+    `testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d"`;
+  return message === undefined
+    ? `${head} />`
+    : `${head}>\n      <Output>\n        <ErrorInfo>\n          <Message>${message}</Message>\n` +
+        `          <StackTrace>   at ${name}() in /work/Game.Tests/UnitTest1.cs:line 9</StackTrace>\n` +
+        `        </ErrorInfo>\n      </Output>\n    </UnitTestResult>`;
+}
+
+function trx(counters: { total: number; executed: number; passed: number; failed: number }, results: string[] = []): string {
+  return [
+    `﻿<?xml version="1.0" encoding="utf-8"?>`,
+    `<TestRun id="d2eff84b" name="@host 2026-10-11 14:09:00" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">`,
+    ...(results.length > 0 ? ["  <Results>", ...results, "  </Results>"] : []),
+    `  <ResultSummary outcome="${counters.failed > 0 ? "Failed" : "Completed"}">`,
+    `    <Counters total="${counters.total}" executed="${counters.executed}" passed="${counters.passed}" ` +
+      `failed="${counters.failed}" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" ` +
+      `notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />`,
+    `  </ResultSummary>`,
+    `</TestRun>`,
+  ].join("\n");
+}
+
+const FAILING_TRX = trx({ total: 5, executed: 4, passed: 3, failed: 1 }, [
+  trxResult("Game.Tests.BoardTests.ClearsRow", "Passed"),
+  trxResult("Game.Tests.BoardTests.Cases(n: 2)", "Passed"),
+  trxResult("Game.Tests.BoardTests.Cases(n: 1)", "Passed"),
+  trxResult("Game.Tests.BoardTests.Later", "NotExecuted", "not yet"),
+  trxResult("Game.Tests.BoardTests.BoardSwapFails", "Failed", "swap broke"),
+]);
+const PASSING_TRX = trx({ total: 2, executed: 2, passed: 2, failed: 0 }, [
+  trxResult("Game.Tests.BoardTests.ClearsRow", "Passed"),
+  trxResult("Game.Tests.BoardTests.Cases(n: 1)", "Passed"),
+]);
+/** What a filter that matches nothing leaves behind: a report of zero tests. */
+const ZERO_TEST_TRX = trx({ total: 0, executed: 0, passed: 0, failed: 0 });
+
+/**
+ * One `dotnet test` run: the console it printed, its exit code, and the TRX
+ * reports it left in the directory it was told to write them to.
+ */
+function dotnetTestRun(run: { stdout: string; exitCode: number; trx?: string[]; timedOut?: boolean }): { resultsDir: () => string | undefined } {
+  let dir: string | undefined;
+  vi.mocked(runProcess).mockImplementationOnce(async (call) => {
+    const at = call.args.indexOf("--results-directory");
+    dir = at >= 0 ? call.args[at + 1] : undefined;
+    if (dir !== undefined && run.trx) {
+      mkdirSync(dir, { recursive: true });
+      run.trx.forEach((xml, i) => writeFileSync(join(dir!, `host_2026-10-11_14_09_0${i}_net10.0.trx`), xml));
+    }
+    return { stdout: run.stdout, stderr: "", exitCode: run.exitCode, timedOut: run.timedOut === true, durationMs: 5 };
+  });
+  return { resultsDir: () => dir };
+}
+
+describe("dotnet_test's verdict comes from the TRX report and the exit code (tools#1)", () => {
+  const tool = new DotnetTestTool();
+
+  it("reads an all-passing run as PASSED, whatever language the console spoke", async () => {
+    dotnetTestRun({ stdout: TURKISH_PASSING_CONSOLE, exitCode: 0, trx: [PASSING_TRX] });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: PASSED");
+    expect(result.content).toContain("Total: 2 | Passed: 2 | Failed: 0 | Skipped: 0");
+    // The MSBuild message is not a test, and error recovery keys on "FAILED".
+    expect(result.content).not.toContain("FAILED");
+    expect(result.content).not.toContain("prune package data");
+    expect(result.isError).toBe(false);
+  });
+
+  it("names the test that failed and its message, not a log line that starts with 'Failed'", async () => {
+    dotnetTestRun({ stdout: TURKISH_FAILING_CONSOLE, exitCode: 1, trx: [FAILING_TRX] });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.content).toContain("Total: 5 | Passed: 3 | Failed: 1 | Skipped: 1");
+    expect(result.content).toContain("✗ Game.Tests.BoardTests.BoardSwapFails");
+    expect(result.content).toContain("swap broke");
+    expect(result.content).not.toContain("✗ to load prune package data");
+    expect(result.isError).toBe(true);
+  });
+
+  it("says NOT MEASURED, never PASSED, when a filter matched no test", async () => {
+    dotnetTestRun({
+      stdout: "No test matches the given testcase filter `FullyQualifiedName~Nope` in /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll",
+      exitCode: 0,
+      trx: [ZERO_TEST_TRX],
+    });
+    const result = await tool.execute({ filter: "FullyQualifiedName~Nope", no_build: true }, ctx);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).not.toContain("PASSED");
+    // The reason dotnet gave is shown, so the model can fix its filter.
+    expect(result.content).toContain("No test matches the given testcase filter");
+  });
+
+  it("says NOT MEASURED when the run wrote no report at all (nothing to test was found)", async () => {
+    dotnetTestRun({ stdout: "  Game.Core -> /work/Game.Core/bin/Debug/net10.0/Game.Core.dll\n\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)", exitCode: 0 });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).not.toContain("PASSED");
+  });
+
+  it("is never green on a report it cannot read, whatever the console claims", async () => {
+    dotnetTestRun({
+      stdout: "Passed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3, Duration: 8 ms - Game.Tests.dll (net8.0)",
+      exitCode: 0,
+      trx: [`<?xml version="1.0" encoding="utf-8"?>\n<TestRun id="x" name="cut short">\n  <Results>\n`],
+    });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).not.toContain("PASSED");
+  });
+
+  it("says NOT MEASURED when every test was skipped", async () => {
+    dotnetTestRun({
+      stdout: "",
+      exitCode: 0,
+      trx: [trx({ total: 1, executed: 0, passed: 0, failed: 0 }, [trxResult("Game.Tests.BoardTests.Later", "NotExecuted", "not yet")])],
+    });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).toContain("Skipped: 1");
+  });
+
+  it("is FAILED when the report records a failure, even if dotnet exited 0", async () => {
+    dotnetTestRun({ stdout: "", exitCode: 0, trx: [FAILING_TRX] });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.isError).toBe(true);
+  });
+
+  it("sums the reports of every test project in a solution", async () => {
+    dotnetTestRun({ stdout: "", exitCode: 1, trx: [FAILING_TRX, PASSING_TRX] });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Total: 7 | Passed: 5 | Failed: 1 | Skipped: 1");
+  });
+
+  it("shows the output when the run failed before any test did (a build error)", async () => {
+    dotnetTestRun({
+      stdout: "/work/Game/Board.cs(12,5): error CS1002: ; expected [/work/Game/Game.csproj]\n\nBuild FAILED.",
+      exitCode: 1,
+    });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.content).toContain("error CS1002");
+  });
+
+  it("is FAILED, and says it was stopped, when a run hung past its time limit", async () => {
+    dotnetTestRun({ stdout: "  Passed Game.Tests.BoardTests.ClearsRow [4 ms]", exitCode: 124, timedOut: true });
+    const result = await tool.execute({}, ctx);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.content).toContain("stopped at its time limit");
+    expect(result.isError).toBe(true);
+  });
+
+  it("removes the report directory it made", async () => {
+    const run = dotnetTestRun({ stdout: "", exitCode: 0, trx: [PASSING_TRX] });
+    await tool.execute({}, ctx);
+    expect(run.resultsDir()).toBeDefined();
+    expect(existsSync(run.resultsDir()!)).toBe(false);
+  });
+});
+
+/**
+ * The verdict line is what the self-verification gate reads. A zero-test run
+ * exits 0, and that exit emptied the unrun-test debt (tools#1 claim 3).
+ */
+describe("a dotnet_test run that measured nothing does not settle the test gate", () => {
+  async function gateAfter(run: { stdout: string; exitCode: number; trx?: string[] }): Promise<SelfVerification> {
+    const verifier = new SelfVerification();
+    verifier.track("file_write", { path: "Game.Tests/BoardTests.cs" }, { toolCallId: "w", content: "written", isError: false });
+    dotnetTestRun(run);
+    const result = await new DotnetTestTool().execute({}, ctx);
+    verifier.track("dotnet_test", {}, { toolCallId: "t", content: result.content, isError: result.isError, metadata: result.metadata });
+    return verifier;
+  }
+
+  it("keeps the written tests owed after a run of zero tests", async () => {
+    const verifier = await gateAfter({ stdout: "", exitCode: 0, trx: [ZERO_TEST_TRX] });
+    expect(verifier.needsVerification()).toBe(true);
+    expect(verifier.getPrompt()).toContain("[TESTS NOT RUN]");
+  });
+
+  it("still clears them after a run that passed", async () => {
+    const verifier = await gateAfter({ stdout: TURKISH_PASSING_CONSOLE, exitCode: 0, trx: [PASSING_TRX] });
+    expect(verifier.needsVerification()).toBe(false);
   });
 });
 
@@ -346,6 +482,8 @@ describe("dotnet tools spawn with the default-deny environment", () => {
       expect(call.env!["PATH"]).toBe(process.env["PATH"]);
       expect(call.env!["DOTNET_NOLOGO"]).toBe("1");
       expect(call.env!["DOTNET_CLI_TELEMETRY_OPTOUT"]).toBe("1");
+      // The machine's UI language reached the output (Turkish on this host).
+      expect(call.env!["DOTNET_CLI_UI_LANGUAGE"]).toBe("en");
     } finally {
       delete process.env["STRADA_TEST_PROVIDER_API_KEY"];
     }

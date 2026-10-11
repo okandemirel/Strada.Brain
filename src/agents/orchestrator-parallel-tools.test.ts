@@ -8,6 +8,9 @@
  * the serial loop the instant a non-safe call appears — so writes stay strictly ordered and a read
  * AFTER a write stays serial. Results remain keyed by toolCallId and ordered by original position.
  */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Orchestrator } from "./orchestrator.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -159,5 +162,56 @@ describe("executeToolCalls — read-only parallelization", () => {
     // The two leading reads overlap (max 2); the write runs after, alone.
     expect(tracker.max).toBe(2);
     expect(results.map((r) => r.toolCallId)).toEqual(["r1", "g1", "w1"]);
+  });
+});
+
+/**
+ * tools#5: dotnet_build and dotnet_test are registered read-only (they edit no
+ * source), so a turn's [dotnet_build, dotnet_test {no_build}] went into the
+ * parallel group — and the test ran the previous build's DLL from bin/ while
+ * the new compile was still writing it.
+ */
+describe("executeToolCalls — dotnet build and test share one obj/ and bin/", () => {
+  it("runs a turn's dotnet_build then dotnet_test one after the other", async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), "strada-dotnet-par-"));
+    try {
+      // The dotnet tools are offered only where there is something to build.
+      writeFileSync(join(projectPath, "Game.sln"), "");
+      const tracker = { active: 0, max: 0 };
+      const build = createTrackingTool("dotnet_build", false, tracker);
+      const test = createTrackingTool("dotnet_test", false, tracker);
+      const orch = new Orchestrator({
+        providerManager: {
+          getProvider: () => createMockProvider(),
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as never,
+        tools: [build, test] as never,
+        channel: createMockChannel() as never,
+        projectPath,
+        readOnly: false,
+        requireConfirmation: false,
+        // As tool-registry.ts registers them.
+        toolMetadataByName: new Map([
+          ["dotnet_build", { readOnly: true, available: true }],
+          ["dotnet_test", { readOnly: true, available: true }],
+        ]),
+      });
+
+      const results = await (orch as never as {
+        executeToolCalls(chatId: string, calls: unknown[], opts: unknown): Promise<Array<{ toolCallId: string }>>;
+      }).executeToolCalls("chat-dotnet", [
+        { id: "b1", name: "dotnet_build", input: {} },
+        { id: "t1", name: "dotnet_test", input: { no_build: true } },
+      ], {});
+
+      expect(build.execute).toHaveBeenCalledTimes(1);
+      expect(test.execute).toHaveBeenCalledTimes(1);
+      expect(tracker.max).toBe(1);
+      expect(build.execute.mock.invocationCallOrder[0]!).toBeLessThan(test.execute.mock.invocationCallOrder[0]!);
+      expect(results.map((r) => r.toolCallId)).toEqual(["b1", "t1"]);
+    } finally {
+      rmSync(projectPath, { recursive: true, force: true });
+    }
   });
 });

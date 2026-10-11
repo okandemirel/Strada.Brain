@@ -871,7 +871,12 @@ export class ToolRegistry {
       readOnly: false,
     });
 
-    // .NET operations — only mark available if dotnet CLI is installed
+    // .NET operations — only mark available if dotnet CLI is installed.
+    // readOnly:true means "edits no source": as writes they would be withheld
+    // from non-executor roles and the planning/reflecting phases, and queued
+    // for approval in the daemon. They do share one obj/ and bin/, so
+    // isParallelSafeToolCall keeps them serial (audit tools#5); READ_ONLY_MODE
+    // refuses them through read-only-guard.ts.
     const dotnetAvailable = isDotnetCliAvailable();
     this.register(new DotnetBuildTool(), {
       category: ToolCategories.DOTNET,

@@ -5194,6 +5194,13 @@ export class Orchestrator {
     if (isUnityEditorExclusiveTool(name)) {
       return false;
     }
+    // The same for .NET: dotnet_build and dotnet_test are read-only (they edit
+    // no source) but both run MSBuild over one obj/ and bin/. Side by side,
+    // `dotnet_test {no_build}` ran the previous build's DLL while the new
+    // compile was still writing it, and passed code nobody had tested.
+    if (DOTNET_PROJECT_TOOLS.has(name)) {
+      return false;
+    }
     // Require a POSITIVE read-only classification from the flattened metadata cache (which already
     // merges registration + intrinsic metadata with a WRITE_OPERATIONS fallback). Unknown → serial.
     return this.toolMetadataByName.get(name)?.readOnly === true;

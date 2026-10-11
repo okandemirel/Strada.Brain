@@ -835,6 +835,10 @@ export function verificationIsConclusive(body: string, opts: { shell?: boolean; 
   if (/"?is(?:Compiling|Reloading)"?\s*[:=]\s*true|\bcompilation in progress\b|\bcompiling\b\s*\.{3}/i.test(text)) return false;
   // A help screen is the tool explaining itself, not a build.
   if (/^\s*(?:usage|description):/im.test(text) && !/\berror\b|\bpassed\b|\bsucceeded\b/i.test(text)) return false;
+  // A run that measured nothing: dotnet_test says so when no test executed or
+  // its report could not be read. dotnet exits 0 for a filter that matches
+  // nothing, and that exit emptied the unrun-test debt (audit tools#1).
+  if (/^Result: NOT MEASURED\b/m.test(text)) return false;
   return true;
 }
 
