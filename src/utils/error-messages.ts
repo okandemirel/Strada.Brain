@@ -17,24 +17,34 @@ type ErrorCategory =
   | "task_interrupted"
   | "unknown";
 
+/**
+ * What each category looks like when a provider or the runtime states it.
+ *
+ * A bare substring is not enough: the words turn up inside the very errors the
+ * classifier must leave alone. "network" is in Assets/Scripts/Networking/ and
+ * NetworkManager, "401" in a token count of 140123, "authentication" in
+ * AuthenticationManager.cs, "budget" in `reading 'budget'`. Each of those came
+ * back as a provider diagnosis and the real error was dropped. So a status code
+ * must be stated as one, and a word must come in the phrase the error uses.
+ * Order matters when a message carries two: a context overflow quotes token
+ * counts, so it is read before the status codes.
+ */
+const CATEGORY_PATTERNS: ReadonlyArray<readonly [ErrorCategory, RegExp]> = [
+  ["providers_exhausted", /\ball providers failed\b|\bno providers available\b/i],
+  ["network", /\bfetch failed\b|\bECONNREFUSED\b|\bENOTFOUND\b|\bnetwork ?(?:error|request failed|is unreachable|unreachable)\b/i],
+  ["budget", /\bbudget (?:is )?(?:exceeded|exhausted)\b/i],
+  ["rate_limit", /\brate limit/i],
+  ["cancelled", /\btask cancelled\b|\baborted\b/i],
+  ["context_length", /\bcontext length\b|\btoo many tokens\b|\bmaximum context\b/i],
+  ["auth", /\b(?:API error|HTTP|status(?: code)?:?) 401\b|^401\b|\bunauthorized\b|\binvalid api key\b|\bauthentication(?:_error\b| (?:failed|error|required)\b)/i],
+  ["task_interrupted", /\btask interrupted\b/i],
+];
+
 /** Classify an error string into a known category. */
-function classifyCategory(lower: string): ErrorCategory {
-  if (lower.includes("all providers failed") || lower.includes("no providers available")) {
-    return "providers_exhausted";
+function classifyCategory(msg: string): ErrorCategory {
+  for (const [category, pattern] of CATEGORY_PATTERNS) {
+    if (pattern.test(msg)) return category;
   }
-  if (lower.includes("fetch failed") || lower.includes("econnrefused") || lower.includes("enotfound") || lower.includes("network")) {
-    return "network";
-  }
-  if (lower.includes("budget")) return "budget";
-  if (lower.includes("rate limit")) return "rate_limit";
-  if (lower.includes("task cancelled") || lower.includes("aborted")) return "cancelled";
-  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid api key") || lower.includes("authentication")) {
-    return "auth";
-  }
-  if (lower.includes("context length") || lower.includes("too many tokens") || lower.includes("maximum context")) {
-    return "context_length";
-  }
-  if (lower.includes("task interrupted")) return "task_interrupted";
   return "unknown";
 }
 
@@ -71,7 +81,7 @@ const TASK_MESSAGES: Record<ErrorCategory, string | null> = {
  */
 export function classifyErrorMessage(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error ?? "");
-  const category = classifyCategory(msg.toLowerCase());
+  const category = classifyCategory(msg);
 
   const mapped = INTERACTIVE_MESSAGES[category];
   if (mapped) return mapped;
@@ -87,7 +97,7 @@ export function classifyErrorMessage(error: unknown): string {
  * tasks don't have an immediate conversation context.
  */
 export function classifyTaskErrorMessage(error: string): string {
-  const category = classifyCategory(error.toLowerCase());
+  const category = classifyCategory(error);
 
   // task_interrupted messages are already user-friendly (startup recovery)
   if (category === "task_interrupted") return error;
@@ -98,6 +108,19 @@ export function classifyTaskErrorMessage(error: string): string {
   const brief = sanitizeBrief(error);
   if (brief) return `Task failed: ${brief}. You can try submitting it again.`;
   return "This task failed unexpectedly. You can try submitting it again.";
+}
+
+/**
+ * A thrown tool error, as the model should read it.
+ *
+ * A tool's failure is not an AI-provider failure, so the provider categories do
+ * not apply: "Could not connect to the AI provider" for a missing file sent the
+ * agent after an outage that never happened. The model gets the real message,
+ * with keys and absolute paths stripped as for any displayed error.
+ */
+export function describeToolError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  return sanitizeBrief(msg) || "the tool threw without a message";
 }
 
 /**

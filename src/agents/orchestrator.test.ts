@@ -6080,6 +6080,49 @@ DONE`,
     expect(toolResultBlock?.is_error).toBe(true);
   });
 
+  it("gives the model a thrown tool error as itself, not as an AI-provider diagnosis", async () => {
+    readTool.execute.mockRejectedValueOnce(
+      new Error("ENOENT: no such file or directory, open 'Assets/Scripts/Networking/PlayerSync.cs'"),
+    );
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Plan: read the file.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "Assets/Scripts/Networking/PlayerSync.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 50, outputTokens: 30 },
+      })
+      .mockResolvedValueOnce({
+        text: "The file is missing.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 100, outputTokens: 60 },
+      });
+
+    const promise = orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat1",
+      userId: "user1",
+      text: "Read the file",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const messages = mockProvider.chat.mock.calls[2]![1] as any[];
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
+    expect(toolResultBlock?.content).toContain("ENOENT");
+    expect(toolResultBlock?.content).not.toContain("AI provider");
+    expect(toolResultBlock?.is_error).toBe(true);
+  });
+
   it("cleanupSessions removes expired sessions", async () => {
     // Create a session by handling a message
     const promise = orch.handleMessage({

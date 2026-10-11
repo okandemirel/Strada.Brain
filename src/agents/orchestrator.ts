@@ -160,7 +160,7 @@ import type {
   TrajectoryStep,
   TrajectoryOutcome,
 } from "../learning/index.js";
-import { classifyErrorMessage } from "../utils/error-messages.js";
+import { classifyErrorMessage, describeToolError } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
   TaskClassification,
@@ -5312,7 +5312,7 @@ export class Orchestrator {
       ctx.logger.error("Tool call gate failed", { chatId: ctx.chatId, tool: tc.name, error: errMsg });
       return {
         toolCallId: tc.id,
-        content: `Tool execution failed: ${classifyErrorMessage(error)}`,
+        content: `Tool execution failed: ${describeToolError(error)}`,
         isError: true,
       };
     }
@@ -5861,11 +5861,11 @@ export class Orchestrator {
       this.trackToolError(breakerScope.key, activeToolCall.name, true, breakerTarget);
 
       // A thrown error is a failure too (Codex review 2026-09-09): the model
-      // sees the classified line; the whole message is kept on disk.
+      // sees the sanitized brief; the whole message is kept on disk.
       const archivedFailure = archiveToolFailure({ tool: activeToolCall.name, chatId, input: activeToolCall.input, content: errMsg });
       return {
         toolCallId: activeToolCall.id,
-        content: `Tool execution failed: ${classifyErrorMessage(error)}`,
+        content: `Tool execution failed: ${describeToolError(error)}`,
         isError: true,
         ...(archivedFailure ? { metadata: { archivedFailure } } : {}),
       };
