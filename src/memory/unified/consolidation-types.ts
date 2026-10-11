@@ -101,6 +101,15 @@ export interface ConsolidationLogEntry {
   readonly agentId?: string;
 }
 
+/** A completed merge that was decided on character-histogram similarity. */
+export interface HistogramMerge {
+  /** consolidation_log id — what `undo` takes */
+  readonly logId: string;
+  readonly summaryEntryId: string;
+  readonly sourceEntryIds: readonly string[];
+  readonly timestamp: number;
+}
+
 // =============================================================================
 // STATS TYPES
 // =============================================================================

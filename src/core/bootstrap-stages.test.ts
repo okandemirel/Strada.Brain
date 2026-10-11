@@ -1215,6 +1215,63 @@ describe("bootstrap-stages", () => {
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("will not merge anything"));
   });
 
+  it("offers undo for merges an earlier version made on histogram vectors, and undoes none itself (memory-rag#2)", async () => {
+    const logger = createMockLogger();
+    const notices: string[] = [];
+    const merges = [
+      { logId: "log-3", summaryEntryId: "s3", sourceEntryIds: ["s1", "s2"], timestamp: 3 },
+      { logId: "log-2", summaryEntryId: "s2", sourceEntryIds: ["c", "d"], timestamp: 2 },
+      { logId: "log-1", summaryEntryId: "s1", sourceEntryIds: ["a", "b"], timestamp: 1 },
+    ];
+    const engine = {
+      findHistogramMerges: vi.fn().mockReturnValue(merges),
+      undo: vi.fn(),
+    };
+    const stage = (onDegraded?: (notice: string) => void) => initializeMemoryConsolidationStage({
+      config: makeConfig({
+        memory: {
+          dbPath: MEMORY_DIR,
+          unified: { dimensions: 4 },
+          consolidation: { enabled: true, idleMinutes: 10, threshold: 0.8 },
+          decay: { exemptDomains: [] },
+        } as Config["memory"],
+      }),
+      logger,
+      memoryManager: { _tag: "memory-manager" } as any,
+      cachedEmbeddingProvider: undefined,
+      providerManager: { getProvider: vi.fn() } as any,
+      heartbeatLoop: { setConsolidationEngine: vi.fn() } as any,
+      daemonContext: {} as any,
+      onDegraded,
+    }, {
+      isAgentDbAdapter: vi.fn().mockReturnValue(true),
+      getConsolidationInternals: vi.fn().mockReturnValue({
+        sqliteDb: { _tag: "sqlite" },
+        entries: [],
+        hnswStore: { _tag: "hnsw" },
+      }),
+      createMemoryConsolidationEngine: vi.fn().mockReturnValue(engine as any),
+    });
+
+    await stage((notice) => notices.push(notice));
+
+    expect(engine.undo).not.toHaveBeenCalled();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/3 earlier merges/);
+    expect(notices[0]).toContain("memory:consolidation-undo");
+    // Newest first: a merge of a summary must be undone before that summary's own.
+    expect(notices[0]).toMatch(/log-3.*log-2.*log-1/);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("character-histogram"),
+      expect.objectContaining({ logIds: ["log-3", "log-2", "log-1"] }),
+    );
+
+    engine.findHistogramMerges.mockReturnValue([]);
+    notices.length = 0;
+    await stage((notice) => notices.push(notice));
+    expect(notices).toEqual([]);
+  });
+
   it("initializes deployment wiring and preserves warning-only script validation", async () => {
     const logger = createMockLogger();
     const readinessChecker = {

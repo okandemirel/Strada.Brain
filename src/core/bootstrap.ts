@@ -2114,6 +2114,7 @@ async function bootstrapImpl(
         daemonContext: daemonContext!,
         unifiedBudgetManager,
         tierRouter: delegationManager?.getTierRouter(),
+        onDegraded: (notice) => startupNotices.push(notice),
       });
 
       await initializeDeploymentStage({

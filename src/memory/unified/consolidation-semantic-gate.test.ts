@@ -184,3 +184,87 @@ describe("consolidation with an embedding provider", () => {
     expect(reopened.getConsolidationInternals().entries.get(summaryId)?.embeddingProvenance).toBe("toy-embedder:8d");
   });
 });
+
+describe("merges made on histogram vectors before the gate (memory-rag#2)", () => {
+  const dirs: string[] = [];
+  const open: AgentDBMemory[] = [];
+
+  afterEach(async () => {
+    for (const m of open.splice(0)) await m.shutdown();
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  // The SHA-256 stand-in the bootstrap wiring used without a provider: noise
+  // with negative components, so the summary row is not histogram-shaped and
+  // carries no provenance — it loads back as "unknown".
+  const standIn = async (text: string): Promise<number[]> =>
+    Array.from({ length: DIMENSIONS }, (_, i) => Math.sin(text.length * 31 + i));
+
+  it("lists them newest first for undo, changes nothing by listing, and the listed undo order restores every original", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "consolidation-gate-"));
+    dirs.push(dir);
+    const memory = new AgentDBMemory(memoryConfig(dir));
+    open.push(memory);
+    expect((await memory.initialize()).kind).toBe("ok");
+    const ids: string[] = [];
+    for (const text of UNRELATED) {
+      ids.push((await memory.storeNote(text, [], MemoryTier.Persistent, { chatId: "c1" as never })).id as string);
+    }
+    const untouched = (await memory.storeNote("Release notes go out on Fridays", [], MemoryTier.Persistent, { chatId: "c1" as never })).id as string;
+
+    // What the engine did before findClusters checked provenance: merge on
+    // histogram cosine, then merge the two summaries again (depth 2).
+    const engine = engineFor(memory, [], standIn);
+    const internals = memory.getConsolidationInternals();
+    const db = internals.sqliteDb!;
+    const tier = MemoryTier.Persistent;
+    await engine.processCluster({ seedId: ids[0]!, memberIds: [ids[0]!, ids[1]!], avgSimilarity: 0.9, tier });
+    await engine.processCluster({ seedId: ids[2]!, memberIds: [ids[2]!, ids[3]!], avgSimilarity: 0.88, tier });
+    const summaries = (db.prepare("SELECT summary_entry_id AS id FROM consolidation_log ORDER BY rowid").all() as Array<{ id: string }>).map((r) => r.id);
+    expect(summaries).toHaveLength(2);
+    await engine.processCluster({ seedId: summaries[0]!, memberIds: [summaries[0]!, summaries[1]!], avgSimilarity: 0.86, tier });
+    const logs = (db.prepare("SELECT id FROM consolidation_log WHERE status = 'completed' ORDER BY rowid").all() as Array<{ id: string }>).map((r) => r.id);
+    expect(logs).toHaveLength(3);
+    for (const id of ids) expect(internals.entries.has(id)).toBe(false);
+
+    const snapshot = () => ({
+      memories: db.prepare("SELECT id, consolidated_into, value FROM memories ORDER BY id").all(),
+      log: db.prepare("SELECT id, status FROM consolidation_log ORDER BY id").all(),
+      entries: [...internals.entries.keys()].sort(),
+    });
+    const before = snapshot();
+
+    const merges = engine.findHistogramMerges();
+
+    // The depth-2 merge is listed although its own sources are summaries: it
+    // holds what the histogram merges made, and must be undone first.
+    expect(merges.map((m) => m.logId)).toEqual([logs[2], logs[1], logs[0]]);
+    expect(merges[2]).toMatchObject({ summaryEntryId: summaries[0], sourceEntryIds: [ids[0], ids[1]] });
+    expect(snapshot()).toEqual(before);
+
+    for (const merge of merges) await engine.undo(merge.logId);
+    for (const id of [...ids, untouched]) expect(internals.entries.has(id)).toBe(true);
+    expect(engine.findHistogramMerges()).toEqual([]);
+  });
+
+  it("does not list merges made on provider vectors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "consolidation-gate-"));
+    dirs.push(dir);
+    const embed = async (text: string): Promise<number[]> => {
+      const v = new Array<number>(8).fill(-0.01);
+      v[/health|regen/i.test(text) ? 0 : 1] = 1;
+      return v;
+    };
+    const memory = new AgentDBMemory(memoryConfig(dir, {
+      dimensions: 8, embeddingProvider: embed, embeddingProviderId: "toy-embedder:8d",
+    }));
+    open.push(memory);
+    expect((await memory.initialize()).kind).toBe("ok");
+    await memory.storeNote("Player health regenerates slowly", [], MemoryTier.Persistent, { chatId: "c1" as never });
+    await memory.storeNote("Health regen for the player is slow", [], MemoryTier.Persistent, { chatId: "c1" as never });
+
+    const engine = engineFor(memory, [], embed);
+    expect((await engine.runCycle(new AbortController().signal)).processed).toBe(1);
+    expect(engine.findHistogramMerges()).toEqual([]);
+  });
+});

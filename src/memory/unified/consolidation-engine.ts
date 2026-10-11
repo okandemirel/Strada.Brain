@@ -15,6 +15,7 @@ import type {
   ConsolidationResult,
   ConsolidationStats,
   ConsolidationTierStats,
+  HistogramMerge,
   MemoryCluster,
 } from "./consolidation-types.js";
 import {
@@ -23,7 +24,7 @@ import {
   TFIDF_PROVENANCE,
   UNKNOWN_PROVENANCE,
 } from "./unified-memory.interface.js";
-import { toVectorEntry } from "./agentdb-vector.js";
+import { isHashBasedEmbedding, toVectorEntry } from "./agentdb-vector.js";
 import { extractTerms } from "../text-index.js";
 import { UNSCOPED_CHAT_ID, isExplicitlyShared } from "../retrieval-filters.js";
 import type { FilterableEntry } from "../retrieval-filters.js";
@@ -1036,6 +1037,53 @@ export class MemoryConsolidationEngine {
     }
 
     this.logger.info("[Consolidation] Undo completed", { logId, summaryEntryId, restoredCount: sourceEntryIds.length });
+  }
+
+  /**
+   * Completed merges decided on character-histogram similarity, newest first:
+   * the order `undo` must take them in when a later merge consumed an earlier
+   * summary. Until findClusters checked provenance (memory-rag#2), a daemon
+   * without an embedding provider merged unrelated memories this way; each
+   * summary carries a stand-in vector that loads back as "unknown", and its
+   * originals left recall. Read-only: only an operator can tell a wanted merge
+   * from a wrong one, so this lists what `undo` can restore and undoes nothing.
+   */
+  findHistogramMerges(): HistogramMerge[] {
+    const logs = this.db.prepare(
+      "SELECT id, summary_entry_id, source_entry_ids, timestamp FROM consolidation_log WHERE status = ? ORDER BY timestamp, rowid",
+    ).all(STATUS_COMPLETED) as Array<{ id: string; summary_entry_id: string; source_entry_ids: string; timestamp: number }>;
+    const sourceRow = this.db.prepare("SELECT value, embedding FROM memories WHERE id = ?");
+    const onHistogram = (id: string): boolean => {
+      const row = sourceRow.get(id) as { value: string; embedding: Buffer | null } | undefined;
+      if (!row) return false;
+      let provenance: unknown;
+      try {
+        provenance = (JSON.parse(row.value) as Record<string, unknown>).embeddingProvenance;
+      } catch {
+        return false;
+      }
+      if (provenance !== undefined) return provenance === HISTOGRAM_PROVENANCE;
+      // Rows written before provenance existed: classified by shape, as on load.
+      if (!row.embedding) return false;
+      const floats = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      return isHashBasedEmbedding("", Array.from(floats));
+    };
+
+    // A merge of a listed merge's summary holds the same wrong merge.
+    const tainted = new Set<string>();
+    const merges: HistogramMerge[] = [];
+    for (const log of logs) {
+      let sourceEntryIds: string[];
+      try {
+        sourceEntryIds = JSON.parse(log.source_entry_ids) as string[];
+      } catch {
+        continue;
+      }
+      if (!sourceEntryIds.some((id) => tainted.has(id) || onHistogram(id))) continue;
+      tainted.add(log.summary_entry_id);
+      merges.push({ logId: log.id, summaryEntryId: log.summary_entry_id, sourceEntryIds, timestamp: log.timestamp });
+    }
+    return merges.reverse();
   }
 
   // ---------------------------------------------------------------------------

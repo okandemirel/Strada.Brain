@@ -378,6 +378,8 @@ export async function initializeMemoryConsolidationStage(
     unifiedBudgetManager?: Pick<UnifiedBudgetManager, "recordCost">;
     /** Resolves memory.consolidation.modelTier to a "provider:model" spec. */
     tierRouter?: Pick<TierRouter, "resolveProviderSpec">;
+    /** Receives a startup notice the operator must act on. */
+    onDegraded?: (notice: string) => void;
   },
   deps: MemoryConsolidationStageDeps = {},
 ): Promise<MemoryConsolidationStageResult> {
@@ -498,6 +500,34 @@ export async function initializeMemoryConsolidationStage(
       idleMinutes: params.config.memory.consolidation.idleMinutes,
     });
     params.daemonContext.consolidationEngine = resolvedEngine;
+
+    // Merges made on character histograms before the provenance gate
+    // (memory-rag#2): unrelated memories behind one summary, the originals out
+    // of recall. Only the operator can tell a wanted merge from a wrong one,
+    // so they are offered for undo, not undone. A failed lookup must not undo
+    // the wiring above.
+    let histogramMerges: ReadonlyArray<{ logId: string }> = [];
+    try {
+      histogramMerges = resolvedEngine.findHistogramMerges?.() ?? [];
+    } catch (error) {
+      params.logger.warn("Memory consolidation: could not check for merges made on histogram vectors", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (histogramMerges.length > 0) {
+      const logIds = histogramMerges.map((m) => m.logId);
+      params.logger.warn(
+        "Memory consolidation: earlier merges were made on character-histogram vectors, not meaning — the originals are kept, hidden from recall",
+        { count: logIds.length, logIds },
+      );
+      const shown = logIds.slice(0, 5).join(", ");
+      const more = logIds.length > 5 ? ` and ${logIds.length - 5} more (all in the log)` : "";
+      params.onDegraded?.(
+        `Memory consolidation: ${logIds.length} earlier merge${logIds.length === 1 ? " was" : "s were"} made on character-histogram vectors, not meaning. ` +
+          "The original memories are kept but hidden from recall. Restore them with `strada daemon memory:consolidation-undo <logId>`, " +
+          `newest first: ${shown}${more}.`,
+      );
+    }
 
     params.logger.info("Memory consolidation engine initialized", {
       idleMinutes: params.config.memory.consolidation.idleMinutes,

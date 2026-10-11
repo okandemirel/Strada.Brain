@@ -87,6 +87,8 @@ export interface DaemonContext {
     preview(): Promise<{ clusters: Array<{ seedId: string; memberIds: string[]; avgSimilarity: number; tier: string }>; estimatedCostPerCluster: number; totalEstimatedCost: number }>;
     runCycle(signal: AbortSignal): Promise<{ status: string; processed: number; remaining: number; clustersFound: number; costUsd: number }>;
     undo(logId: string): void | Promise<void>;
+    /** Completed merges made on histogram vectors, newest first (read-only). */
+    findHistogramMerges?(): ReadonlyArray<{ logId: string }>;
   };
   deploymentExecutor?: {
     getHistory(limit?: number): Array<{ id: string; proposedAt: number; approvedAt?: number; approvedBy?: string; agentId?: string; status: string; scriptOutput?: string; duration?: number; error?: string }>;
