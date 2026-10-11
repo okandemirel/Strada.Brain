@@ -41,8 +41,12 @@ const GDD_HEAD_CHARS = 50_000;
 const GDD_TAIL_CHARS = 30_000;
 const GDD_OUTLINE_CHARS = 20_000;
 
-/** The planner's instructions, sized by the GDD's measured scope (see gdd-scope.ts). */
-export function plannerSystem(scope: GddScope): string {
+/**
+ * The planner's instructions, sized by the GDD's measured scope (see gdd-scope.ts).
+ * `gddSaved` is false for a design no file in the project holds: its sprints
+ * cannot point at the document, so they carry what they need of it.
+ */
+export function plannerSystem(scope: GddScope, gddSaved = true): string {
   const asks: string[] = [];
   if (scope.asks.ui) asks.push("UI/screen flow (every screen the GDD names, wired Home → play → result)");
   if (scope.asks.audio) asks.push("audio (music and SFX bound to AudioSources in the shipped scenes)");
@@ -55,6 +59,14 @@ export function plannerSystem(scope: GddScope): string {
     `Measured scope of this GDD: ${scope.headings.length} sections, ${scope.elements} scheduled elements` +
     (scope.levels !== undefined ? `, ${scope.levels} levels` : "") +
     `, ${scope.screens} named screens.`;
+  // ONE INSTRUCTION ABOUT THE DOCUMENT. A text-only design was told here to
+  // "reference the GDD by its path" while the user line said it has none
+  // (review campaign-artifacts P3): a sprint pointed at no file sends its
+  // agent to whatever design document the repo holds.
+  const gddRule = gddSaved
+    ? "Reference the GDD by its project-relative path (given below) rather than restating it."
+    : "This GDD is NOT saved in the project, so no agent can open it: restate in the prompt, in the GDD's own words and numbers, everything the milestone needs from it (elements, rules, values, screens, art direction), and never send an agent to look for a GDD file — one found in the repo is another document.";
+  const promptWords = gddSaved ? "150-600 words" : "150-1000 words, the restated GDD content included";
   return `You are a campaign planner for an autonomous game-development system.
 
 You receive a game design document (GDD) for a Unity project built with the Strada.Core framework, and you produce the MILESTONE LADDER: the ordered list of sprints that builds the whole game, start to finish.
@@ -71,8 +83,8 @@ Rules:
 - The FINAL milestone also owns BUILD HYGIENE: the FIRST enabled scene in Build Settings must be the entry scene a person opens to play the game, and every scene enabled after it must be one the game itself loads (menu, levels, results) — a game that spans several scenes keeps them. Every verification/scaffolding scene the campaign created (InitTestScene*, *Verification, *Verified, *Showcase, *Boundary, Assembled*) must be DISABLED in Build Settings — not deleted: the write-back carries only deletions of files the system itself wrote — and its report must name the entry scene and list what it disabled.
 - Every element the GDD schedules must end its milestone with a real, BOUND visual: source it with unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) first, generate it when nothing fits — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for dimensional ones (stages, characters) — both use the machine's installed open-weights model automatically and SAY when they fell back to a procedural placeholder; a placeholder is not the element's visual, unity_prerender_frames to turn a 3D prefab into 2D angle frames in the project's own style when the GDD wants 2D rendered from 3D — and bind it into the element's prefab. Code for an element without its visual is a milestone that is not done.
 - Never plan a milestone whose output is a question for the user, and never re-plan what the GDD already specifies — the design document is the complete instruction.
-- A sprint prompt must be self-contained: it cannot assume a previous sprint's conversation is remembered, only that its commits landed in the repo. Reference the GDD by its project-relative path (given below) rather than restating it.
-- Keep each prompt focused: 150-600 words. Cover the milestone, don't narrate the whole GDD.
+- A sprint prompt must be self-contained: it cannot assume a previous sprint's conversation is remembered, only that its commits landed in the repo. ${gddRule}
+- Keep each prompt focused: ${promptWords}. Cover the milestone, don't narrate the whole GDD.
 
 Respond ONLY with JSON:
 {"milestones": [{"title": "Sprint A — ...", "prompt": "...", "coveredSections": ["<heading>", ...], "deliverables": ["<thing>", ...]}, ...], "excluded": ["<item>: <the GDD's reason>", ...]}`;
@@ -272,7 +284,7 @@ export class CampaignPlanner {
       throw new Error("campaign planning requires an LLM provider");
     }
     const scope = measureGddScope(gddText);
-    const system = plannerSystem(scope);
+    const system = plannerSystem(scope, gddPath !== undefined);
     const planning = await this.gddForPlanning(gddText);
 
     // NO FILE, NO PATH: a supplied design that could not be saved into the

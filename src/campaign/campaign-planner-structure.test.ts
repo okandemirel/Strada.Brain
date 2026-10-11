@@ -14,14 +14,17 @@ const GDD = "# Pigs\n## 1. Core Loop\nMerge pigs.\n## 2. Levels\nThere are 30 le
 const sprint = (title: string, sections: string[], prompt = "Build it end to end, compile green, PlayMode green unfiltered, capture a frame, commit per unit.") =>
   ({ title, prompt, coveredSections: sections, deliverables: [`${title} scene`] });
 
-function fakeProvider(replies: string[]): { calls: string[]; provider: unknown } {
+function fakeProvider(replies: string[]): { calls: string[]; systems: string[]; provider: unknown } {
   const calls: string[] = [];
+  const systems: string[] = [];
   return {
     calls,
+    systems,
     provider: {
       name: "fake",
       capabilities: { streaming: false },
-      chat: async (_system: string, messages: Array<{ content: string }>) => {
+      chat: async (system: string, messages: Array<{ content: string }>) => {
+        systems.push(system);
         calls.push(String(messages[0]?.content ?? ""));
         return { text: replies[Math.min(calls.length - 1, replies.length - 1)]! };
       },
@@ -65,6 +68,19 @@ describe("CampaignPlanner.planMilestones", () => {
     await new CampaignPlanner(textOnly.provider as never).planMilestones(GDD, undefined);
     expect(textOnly.calls[0]).toContain("GDD project-relative path: none — this design is not saved in the project");
     expect(textOnly.calls[0]).not.toContain("undefined");
+  });
+
+  it("does not tell the planner to reference a path a text-only GDD does not have (review campaign-artifacts P3)", async () => {
+    const ladder = JSON.stringify({ milestones: [sprint("A", ["Pigs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
+    const onDisk = fakeProvider([ladder]);
+    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Pigs_GDD.md");
+    expect(onDisk.systems[0]).toContain("Reference the GDD by its project-relative path");
+    const textOnly = fakeProvider([ladder]);
+    await new CampaignPlanner(textOnly.provider as never).planMilestones(GDD, undefined);
+    // The system prompt and the user line said opposite things.
+    expect(textOnly.systems[0]).not.toContain("Reference the GDD by its project-relative path");
+    expect(textOnly.systems[0]).toContain("NOT saved in the project");
+    expect(textOnly.systems[0]).toContain("restate");
   });
 
   it("keeps the first ladder when the second round covers no more, and records what stays unclaimed", async () => {

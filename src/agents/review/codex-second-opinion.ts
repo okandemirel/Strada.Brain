@@ -205,11 +205,32 @@ export async function runCodexSecondOpinion(opts: CodexRunOptions, spawnImpl: Co
   }
 }
 
+/**
+ * How much of a GDD that is not in the project the review prompt quotes. The
+ * prompt travels as ONE command-line argument, and Windows caps a whole
+ * command line at 32,767 characters.
+ */
+export const REVIEW_GDD_QUOTE_CHARS = 16_000;
+
+/** Where the reviewer finds the GDD: its path, or — when no file holds it — its text. */
+function reviewGddLines(gddPath: string | undefined, gddText: string | undefined): string[] {
+  if (gddPath !== undefined) return [`GDD: ${gddPath} — read it.`];
+  // "(unknown path) — read it" sent the reviewer looking, and the design
+  // document it found in the project was another one (review
+  // campaign-artifacts P3).
+  const notHere = "GDD: not saved in this project — do not look for one there: a design document you find in the project is another document.";
+  if (gddText === undefined) return [`${notHere} No text of it was handed over; judge against the measurements below.`];
+  const cut = gddText.length > REVIEW_GDD_QUOTE_CHARS
+    ? ` (the first ${REVIEW_GDD_QUOTE_CHARS} of ${gddText.length} characters; the rest is not quoted)`
+    : "";
+  return [`${notHere} Its text${cut}:`, "<gdd>", gddText.slice(0, REVIEW_GDD_QUOTE_CHARS), "</gdd>"];
+}
+
 /** The delivery question, with the campaign's own measurements handed over so the reviewer argues against evidence, not prose. */
-export function deliveryReviewPrompt(params: { gddPath: string | undefined; measurements: readonly string[]; ladder: readonly string[] }): string {
+export function deliveryReviewPrompt(params: { gddPath: string | undefined; gddText?: string; measurements: readonly string[]; ladder: readonly string[] }): string {
   return [
     "You are an independent, adversarial release reviewer for a Unity game built autonomously from a GDD.",
-    `GDD: ${params.gddPath ?? "(unknown path)"} — read it.`,
+    ...reviewGddLines(params.gddPath, params.gddText),
     "The build system's own measurements of the tree as it stands:",
     ...params.measurements.map((m) => `- ${m}`),
     "Its milestone ladder:",

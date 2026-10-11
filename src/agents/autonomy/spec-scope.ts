@@ -330,6 +330,23 @@ export function assessSpecScope(
   } catch {
     return { scheduled: 0, missing: [], gddPath: doc };
   }
+  return assessSpecScopeOfText(projectPath, text, doc, listFiles, readFile);
+}
+
+/**
+ * The same check against a document the caller already holds. A design that
+ * lives only as text (never saved into the project) has no path to give, and
+ * passing none made `assessSpecScope` discover one: the largest markdown under
+ * docs/, which is another document (review campaign-artifacts P2).
+ */
+export function assessSpecScopeOfText(
+  projectPath: string,
+  text: string,
+  /** What the report names as the document: its path, or null for text alone. */
+  doc: string | null,
+  listFiles?: (assetsRoot: string) => string[],
+  readFile?: (path: string) => string,
+): SpecCoverageReport {
   const read: { partial?: boolean } = {};
   const elements = extractScheduledElements(text, read);
   if (elements.length === 0) {

@@ -99,6 +99,22 @@ describe("codex second opinion", () => {
     expect(p).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
   });
 
+  it("hands a GDD that is not in the project over as text, bounded, instead of '(unknown path) — read it' (review campaign-artifacts P3)", () => {
+    const p = deliveryReviewPrompt({ gddPath: undefined, gddText: "# Space GDD\n\nThree asteroid fields.", measurements: [], ladder: [] });
+    expect(p).not.toContain("(unknown path)");
+    expect(p).toContain("not saved in this project");
+    expect(p).toContain("Three asteroid fields.");
+    // The prompt travels as one command-line argument: a long document is cut, and says so.
+    const long = "# Big GDD\n\n" + "Lore. ".repeat(40_000);
+    const bounded = deliveryReviewPrompt({ gddPath: undefined, gddText: long, measurements: [], ladder: [] });
+    expect(bounded.length).toBeLessThan(30_000);
+    expect(bounded).toContain(`of ${long.length} characters`);
+    // A campaign with a file is still pointed at it, and its text is not inlined.
+    const onDisk = deliveryReviewPrompt({ gddPath: "docs/G.md", gddText: "# Space GDD\n\nThree asteroid fields.", measurements: [], ladder: [] });
+    expect(onDisk).toContain("GDD: docs/G.md — read it.");
+    expect(onDisk).not.toContain("Three asteroid fields.");
+  });
+
   describe("starting the CLI (PRV-20)", () => {
     it("ends the options before the prompt, so a prompt starting with \"-\" stays the prompt", async () => {
       let seen: string[] = [];

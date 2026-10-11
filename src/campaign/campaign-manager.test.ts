@@ -4783,6 +4783,103 @@ describe("CampaignManager", () => {
       expect(internals(manager).gddTextOf(second)).toBe(supplied);
       expect(internals(manager).gddDriftOf(second)).toBeUndefined();
     });
+
+    describe("a text-only campaign is judged and briefed from its own text (review campaign-artifacts)", () => {
+      /** A campaign whose shared GDD was never saved into the project: text, no path. */
+      const textOnlyRow = (gddText: string): Campaign =>
+        ({
+          id: "c_text_only", chatId: "chat-text-only", channelType: "cli", userId: "u1", projectRoot, gddText,
+          state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
+        }) as unknown as Campaign;
+      const schedule = (title: string, rows: string): string =>
+        `# ${title}\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n${rows}`;
+      const privateOf = (m: CampaignManager) =>
+        m as unknown as {
+          measureDeliveryStructure(c: Campaign): { refusal?: string; lines: string[] };
+          gapSprint(c: Campaign, round: number, index: number, item: string): { prompt: string };
+          gatherIndependentReview(c: Campaign): Promise<void>;
+          independentReviewer: (p: { projectRoot: string; prompt: string }) => Promise<{ ok: boolean; model: string; text: string; ms: number }>;
+        };
+
+      it("the delivery's element schedule is the campaign's own, never the largest document in docs/ (P2)", () => {
+        // docs/ holds ANOTHER game's GDD whose schedule this game never had:
+        // discovery read it and refused the delivery for its Dragon Boss.
+        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L7 | Dragon Boss | set piece |\n"));
+        mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
+        writeFileSync(join(projectRoot, "Assets", "Scripts", "Cube.cs"), "public class Cube {}");
+        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Cube GDD", "| L1 | Cube | basic |\n")));
+        const ownText = `${own.refusal ?? ""}\n${own.lines.join("\n")}`;
+        expect(ownText).not.toContain("Dragon Boss");
+        expect(own.lines.join("\n")).toContain("all 1 scheduled element(s) have a trace in code");
+        // …and the campaign's OWN schedule is still held against the code.
+        const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Rocket GDD", "| L3 | Rocket Launcher | late game |\n")));
+        expect(missing.refusal).toContain("L3 Rocket Launcher");
+        expect(missing.refusal).not.toContain("Dragon Boss");
+      });
+
+      it("a docs/GDD.md that holds another document is never adopted as the campaign's path (P3)", async () => {
+        const supplied = "# Space GDD\n\n" + "Pilot a ship through three asteroid fields; the game ships 3 levels. ".repeat(4);
+        const another = "# Farm GDD\n\nGrow carrots across 12 seasons.";
+        writeFileSync(join(projectRoot, "docs", "GDD.md"), another);
+        // The save fails: a folder squats on docs/Space_GDD.md.
+        mkdirSync(join(projectRoot, "docs", "Space_GDD.md"), { recursive: true });
+        const share = {
+          channelType: "cli", chatId: "cli-local", userId: "u1", text: "",
+          attachments: [{ type: "document", name: "Space_GDD.md", data: Buffer.from(supplied, "utf8") }],
+          timestamp: new Date(),
+        } as unknown as IncomingMessage;
+        expect(await manager.tryHandleIncoming(share)).toBe(true);
+        await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+        const campaign = storage.listActive()[0]!;
+        expect(campaign.gddPath).toBeUndefined();
+        expect(readFileSync(join(projectRoot, "docs", "GDD.md"), "utf8")).toBe(another);
+        expect(internals(manager).gddTextOf(campaign)).toBe(supplied);
+      });
+
+      it("a named path whose write fails is not kept: the row is text-only (P3)", async () => {
+        const text = "# GDD\n\nSquatted: the game ships 2 levels.";
+        mkdirSync(join(projectRoot, "docs", "Squat_GDD.md"), { recursive: true });
+        const campaign = manager.startFromGdd(ctx, text, "docs/Squat_GDD.md");
+        expect(campaign.gddPath).toBeUndefined();
+        expect(campaign.gddText).toBe(text);
+        // Whatever planning adopts afterwards holds THIS text.
+        await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+        const planned = storage.get(campaign.id)!;
+        if (planned.gddPath !== undefined) expect(readFileSync(join(projectRoot, planned.gddPath), "utf8")).toBe(text);
+      });
+
+      it("a gap sprint carries the GDD's own words instead of sending the worker to look for a file (P3)", () => {
+        const gdd = "# Space GDD\n\n## Rocket\n\nThe rocket fires every 3 seconds and costs 40 fuel.";
+        const sprint = privateOf(manager).gapSprint(textOnlyRow(gdd), 1, 0, "Rocket: absent");
+        expect(sprint.prompt).toContain("The rocket fires every 3 seconds and costs 40 fuel.");
+        expect(sprint.prompt).toContain("not saved in the project");
+        // A document too large to quote whole: the passages ABOUT the item travel.
+        const lore = Array.from({ length: 3000 }, (_, i) => `Lore paragraph ${i}: the kingdom's history, told at length.`).join("\n\n");
+        const big = `# Space GDD\n\n${lore}\n\n## Rocket\n\nThe rocket fires every 3 seconds and costs 40 fuel.\n\n${lore}`;
+        const bigSprint = privateOf(manager).gapSprint(textOnlyRow(big), 1, 0, "Rocket: absent");
+        expect(bigSprint.prompt).toContain("The rocket fires every 3 seconds and costs 40 fuel.");
+        expect(bigSprint.prompt.length).toBeLessThan(big.length / 4);
+        // A campaign whose document is in the project is still pointed at it.
+        const onDisk = privateOf(manager).gapSprint({ ...textOnlyRow(gdd), gddPath: "docs/Game_GDD.md" } as Campaign, 1, 0, "Rocket: absent");
+        expect(onDisk.prompt).toContain("docs/Game_GDD.md");
+        expect(onDisk.prompt).not.toContain("costs 40 fuel");
+      });
+
+      it("the independent reviewer is handed the GDD's text, not '(unknown path) — read it' (P3)", async () => {
+        const seen: string[] = [];
+        privateOf(manager).independentReviewer = async ({ prompt }) => {
+          seen.push(prompt);
+          return { ok: true, model: "fake-astra", text: "VERDICT: DELIVERABLE", ms: 1 };
+        };
+        const row = textOnlyRow("# Space GDD\n\nPilot a ship through three asteroid fields.");
+        storage.save(row);
+        await privateOf(manager).gatherIndependentReview(row);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).not.toContain("(unknown path)");
+        expect(seen[0]).toContain("Pilot a ship through three asteroid fields.");
+        expect(seen[0]).toContain("not saved in this project");
+      });
+    });
   });
 
   it("a requirement is not its diagnostics (Codex 2026-09-12 AD#15)", () => {

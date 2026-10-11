@@ -35,7 +35,7 @@ import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
-import { COVERAGE_ASK_WINDOW } from "./campaign-planner.js";
+import { COVERAGE_ASK_WINDOW, quoteIsAbout } from "./campaign-planner.js";
 import {
   contentFingerprint,
   decodeRequirement,
@@ -82,7 +82,7 @@ import {
 } from "../history/project-history-recorder.js";
 import { isTerminalFailureReport } from "../agents/autonomy/verifier-pipeline.js";
 import { assessBuiltAsSpecified, asksForFlatArt, PLACEHOLDER_GRADE_RULE } from "../agents/autonomy/built-as-specified.js";
-import { assessSpecScope } from "../agents/autonomy/spec-scope.js";
+import { assessSpecScopeOfText } from "../agents/autonomy/spec-scope.js";
 import { describeDimensionality } from "../agents/autonomy/gdd-dimensionality.js";
 import { describeMedia } from "../agents/autonomy/gdd-media.js";
 import type { Campaign, CampaignMilestone,
@@ -1163,6 +1163,10 @@ export class CampaignManager {
           writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
         } catch (err) {
           getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
+          // …AND WITHOUT THE PATH: the file there does not hold this text, and
+          // planning adopts a path only for a row that has none (review
+          // campaign-artifacts P3), so a kept one went to the planner as is.
+          gddPath = undefined;
         }
       }
     }
@@ -6570,10 +6574,23 @@ export class CampaignManager {
 
   /** One gap, one sprint — the audit's list is a ladder, not a prompt. */
   private gapSprint(campaign: Campaign, round: number, index: number, item: string): CampaignMilestone {
-    const gddRef = campaign.gddPath ?? "the GDD";
+    // A GDD THAT IS NOT IN THE PROJECT IS QUOTED, never pointed at: "the GDD"
+    // sent the worker looking for a file, and the design document it found in
+    // the repo was another one (review campaign-artifacts P3).
+    const gddRef = campaign.gddPath ?? "the GDD quoted below";
     // The id travels in the PERSISTED requirement, never in what a worker or a
     // person reads: the title and the prompt carry the requirement itself.
     const shown = requirementText(item);
+    const quoted =
+      campaign.gddPath !== undefined
+        ? []
+        : [
+            "",
+            "This campaign's GDD is not saved in the project, so no file holds it — do not look for one: a design document in the repo is another document. What it says:",
+            "<gdd>",
+            campaign.gddText !== undefined ? quoteGddFor(campaign.gddText, shown) : "(the campaign carries no GDD text — the item above is all there is)",
+            "</gdd>",
+          ];
     return {
       id: index === 0 ? `mcov${round}` : `mcov${round}-${index + 1}`,
       title: `Coverage completion ${round}.${index + 1} — ${shown.slice(0, 60)}`,
@@ -6588,6 +6605,7 @@ export class CampaignManager {
         "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
         "Commit per logical unit. End with a summary naming the item and the evidence it is done.",
         "This is an autonomous campaign sprint — do not ask the user questions; make the strong choice and continue.",
+        ...quoted,
       ].join("\n"),
       status: "pending" as const,
       attempts: 0,
@@ -7461,11 +7479,20 @@ export class CampaignManager {
       // 2026-09-10). A scheduled element the code never mentions is an
       // objective gap, and delivering without it is delivering another game.
       let refusal = report.refusal ?? media.refusal;
-      const scope = assessSpecScope(this.projectRoot, campaign.gddPath ? join(this.projectRoot, campaign.gddPath) : undefined);
+      // …OF THE DOCUMENT EVERY OTHER LINE HERE WAS JUDGED AGAINST. With no path
+      // the check discovered one, the largest markdown under docs/: for a
+      // text-only campaign that is another game's GDD (or a file outside the
+      // project behind a linked docs/), and its schedule refused a delivery
+      // for elements this game never had (review campaign-artifacts P2).
+      const scope =
+        gddText === undefined ? undefined : assessSpecScopeOfText(this.projectRoot, gddText, campaign.gddPath ?? null);
+      if (scope === undefined) {
+        lines.push("GDD element schedule: this campaign carries no readable GDD text — nothing was compared against the code");
+      }
       // A SCHEDULE THIS READER COULD NOT PARSE is not an absent schedule:
       // zero elements suppressed the whole check, so a converted table read
       // as "the document schedules nothing" (Codex 2026-09-12 Y#4).
-      if (scope.scheduleUnreadable === true) {
+      if (scope?.scheduleUnreadable === true) {
         lines.push(
           "GDD element schedule: the document HOLDS a schedule table and none of its rows could be read — " +
           "nothing was compared against the code",
@@ -7473,13 +7500,13 @@ export class CampaignManager {
       }
       // A TABLE READ ONLY AS FAR AS ITS FIRST BREAK certifies nothing about
       // the rows below it (Codex 2026-09-12 AC J1).
-      if (scope.schedulePartial === true) {
+      if (scope?.schedulePartial === true) {
         lines.push(
           `GDD element schedule: the reader stopped part-way through the table — the ${scope.scheduled} element(s) below ` +
           "are what it read, not what the document schedules",
         );
       }
-      if (scope.scheduled > 0) {
+      if (scope !== undefined && scope.scheduled > 0) {
         if (scope.missing.length === 0) {
           lines.push(`GDD element schedule: all ${scope.scheduled} scheduled element(s) have a trace in code`);
         } else {
@@ -7522,6 +7549,9 @@ export class CampaignManager {
     const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
     const prompt = deliveryReviewPrompt({
       gddPath: campaign.gddPath,
+      // A GDD that is not in the project travels as text: "(unknown path) —
+      // read it" sent the reviewer to whatever document the repo held.
+      gddText: campaign.gddText,
       measurements: structural?.structureFindings ?? ["(no structural measurement recorded)"],
       ladder: campaign.milestones.map((m) => `${m.id} ${m.title}: ${m.status}`),
     });
@@ -8872,4 +8902,32 @@ function readGddFile(projectRoot: string, gddPath: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** How much of a GDD that is not in the project one sprint prompt carries. */
+const TEXT_ONLY_GDD_QUOTE_CHARS = 24_000;
+
+/**
+ * What a sprint prompt quotes of a GDD no agent can open: the whole text when
+ * it fits; otherwise its passages about `topic` (a heading travels with the
+ * block under it), in document order. A cut always says it is one.
+ */
+function quoteGddFor(gddText: string, topic: string, budget: number = TEXT_ONLY_GDD_QUOTE_CHARS): string {
+  if (gddText.length <= budget) return gddText;
+  const blocks: string[] = [];
+  for (const block of gddText.split(/\n\s*\n/)) {
+    const previous = blocks[blocks.length - 1];
+    if (previous !== undefined && /^\s{0,3}#{1,6}\s[^\n]*$/.test(previous)) blocks[blocks.length - 1] = `${previous}\n\n${block}`;
+    else blocks.push(block);
+  }
+  const picked: string[] = [];
+  let used = 0;
+  for (const block of blocks) {
+    if (used + block.length > budget || !quoteIsAbout(topic, block)) continue;
+    picked.push(block);
+    used += block.length + 2;
+  }
+  const quoted = picked.length > 0 ? picked.join("\n\n") : gddText.slice(0, budget);
+  const cut = picked.length > 0 ? "only its passages about this item are quoted" : `only its first ${budget} are quoted`;
+  return `${quoted}\n\n[… the GDD runs ${gddText.length} characters; ${cut} …]`;
 }
