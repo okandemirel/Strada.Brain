@@ -179,6 +179,8 @@ export class AgentDBMemory implements IUnifiedMemory {
   private sqliteInitFailed = false;
   /** memory.db failed integrity_check and REINDEX did not repair it (set by initSqlite). */
   private sqliteIntegrityFailed = false;
+  /** memory.db could not be opened; the store runs on an in-memory SQLite (set by initSqlite). */
+  private sqliteVolatile = false;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
@@ -228,6 +230,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       set sqliteInitFailed(v) { self.sqliteInitFailed = v; },
       get sqliteIntegrityFailed() { return self.sqliteIntegrityFailed; },
       set sqliteIntegrityFailed(v: boolean | undefined) { self.sqliteIntegrityFailed = v === true; },
+      get sqliteVolatile() { return self.sqliteVolatile; },
+      set sqliteVolatile(v: boolean | undefined) { self.sqliteVolatile = v === true; },
       get sqliteStatements() { return self.sqliteStatements; },
       get entries() { return self.entries; },
     };
@@ -1455,6 +1459,12 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     if (this.sqliteInitFailed) {
       issues.push("SQLite initialization failed — persistence unavailable");
+    }
+
+    // The in-memory fallback lets initialize() succeed, so without this the
+    // store read healthy while every write was lost at restart.
+    if (this.sqliteVolatile) {
+      issues.push("memory.db could not be opened — running on in-memory SQLite, writes will not survive a restart");
     }
 
     // The integrity verdict used to go nowhere (audited 2026-09-02).

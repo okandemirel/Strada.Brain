@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createLogger } from "../../utils/logger.js";
 import { AgentDBMemory, _setNowFn, _resetNowFn } from "./agentdb-memory.js";
+import { AgentDBAdapter } from "./agentdb-adapter.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 
 // Initialize logger for tests
@@ -369,6 +370,28 @@ describe("AgentDBMemory", () => {
       const health = memory.getIndexHealth();
       expect(health.isHealthy).toBe(false);
       expect(health.issues.some((i) => i.includes("integrity_check"))).toBe(true);
+    });
+
+    // memory-rag#7: when memory.db cannot be opened, initSqlite runs on an
+    // in-memory database that loses every write at restart, and health said
+    // healthy — so readiness was green and the bootstrap's on-disk fallback
+    // never ran.
+    it("names an in-memory fallback store as degraded", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "agentdb-volatile-"));
+      mkdirSync(join(dir, "memory.db")); // a path SQLite cannot open as a file
+      const volatile = new AgentDBMemory({ ...(memory as any).config, dbPath: dir });
+      try {
+        expect((await volatile.initialize()).kind).toBe("ok");
+        expect((volatile as any).sqliteDb.name).toBe(":memory:"); // precondition: the fallback ran
+
+        const health = volatile.getIndexHealth();
+        expect(health.isHealthy).toBe(false);
+        expect(health.issues.some((i) => /in-memory/i.test(i))).toBe(true);
+        expect(new AgentDBAdapter(volatile).getHealth()).toMatchObject({ healthy: false, indexHealth: "degraded" });
+      } finally {
+        await volatile.shutdown();
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 

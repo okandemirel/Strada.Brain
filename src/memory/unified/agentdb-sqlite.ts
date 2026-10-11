@@ -92,6 +92,12 @@ export interface AgentDBSqliteContext {
    * run initSqlite need not declare it (audited 2026-09-02).
    */
   sqliteIntegrityFailed?: boolean;
+  /**
+   * memory.db could not be opened and the store runs on an in-memory
+   * database: every write is lost at restart, so getIndexHealth must not say
+   * healthy. Optional for the same reason as sqliteIntegrityFailed.
+   */
+  sqliteVolatile?: boolean;
   readonly sqliteStatements: Map<string, Database.Statement>;
   readonly entries: Map<string, UnifiedMemoryEntry>;
 }
@@ -175,6 +181,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
   assertNoMaintenanceExclusion(resolveStradaHome(), `open ${sqlitePath}`);
   try {
     ctx.sqliteDb = new Database(sqlitePath);
+    ctx.sqliteVolatile = false;
 
     // Validate and auto-repair on corruption. The verdict used to be
     // discarded, so an unrepairable memory.db was opened and reported
@@ -219,6 +226,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
       migratePatternDedup(ctx.sqliteDb);
       ensureConsolidationColumns(ctx.sqliteDb);
       prepareSqliteStatements(ctx);
+      ctx.sqliteVolatile = true;
       getLoggerSafe().warn("[AgentDBMemory] Running with in-memory SQLite fallback — data will not survive restarts");
     } catch (fallbackError) {
       getLoggerSafe().error(
