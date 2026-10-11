@@ -117,6 +117,34 @@ function tokenCosine(tokensA: Set<string>, tokensB: Set<string>): number {
   return shared / Math.sqrt(tokensA.size * tokensB.size) || 0;
 }
 
+/** Lower-cased words, split on anything that is not a letter or digit (so snake_case and a->b chains split). */
+function words(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 0);
+}
+
+/** A request's words joined so a phrase can be looked up in it whole-word. */
+function phraseIndex(text: string): string {
+  return ` ${words(text).join(" ")} `;
+}
+
+/** Fewest words a trigger needs before finding it in a request counts: one word is a topic, not a rule. */
+const MIN_TRIGGER_PHRASE_WORDS = 2;
+
+/**
+ * What a trigger found whole inside a request scores. A request that names the
+ * trigger is about it, but it is not a copy of it: this stays below the
+ * duplicate bar (CONFIDENCE_THRESHOLDS.SIMILAR), which retrieval's eager merge
+ * reads as "the same rule".
+ */
+const TRIGGER_IN_REQUEST_SIMILARITY = 0.8;
+
+/** Does the request (a {@link phraseIndex}) contain the trigger's words, in order, as a phrase? */
+function requestNamesTrigger(requestIndex: string, trigger: string): boolean {
+  const triggerWords = words(trigger);
+  if (triggerWords.length < MIN_TRIGGER_PHRASE_WORDS) return false;
+  return requestIndex.includes(` ${triggerWords.join(" ")} `);
+}
+
 /**
  * The fuzzy score a 0.6·fuzzy + 0.4·cosine blend needs to reach `minScore`,
  * given its cosine part. Below it the blend misses the bar whatever the exact
@@ -303,6 +331,15 @@ export class PatternMatcher {
       maxResults?: number;
       typeFilter?: string;
       scope?: ScopeContext;
+      /**
+       * The query is a request (a prompt, a task), not another trigger. A trigger
+       * it names as a phrase then matches whatever the request's length: the
+       * symmetric blend is capped by the length ratio, so a short trigger inside
+       * a sentence scored near 0 and, with no embedder, retrieval returned
+       * nothing at all. Trigger-to-trigger comparison (the pipeline's duplicate
+       * check) leaves this off and stays symmetric.
+       */
+      queryIsRequest?: boolean;
     } = {}
   ): Promise<PatternMatch[]> {
     const {
@@ -310,6 +347,7 @@ export class PatternMatcher {
       maxResults = 5,
       typeFilter,
       scope,
+      queryIsRequest = false,
     } = options;
 
     // Choose retrieval path based on scope context. The vectors are read only
@@ -342,6 +380,7 @@ export class PatternMatcher {
 
     // The query is the whole prompt: tokenize it once, not per candidate.
     const queryTokens = tokenSet(triggerPattern);
+    const requestIndex = queryIsRequest ? phraseIndex(triggerPattern) : undefined;
     // The lowest score anything below is discarded at: the admission bar, or in
     // scope mode the eager-dedup bar when that is lower.
     const scoreFloor = scope ? Math.min(minSimilarity, CONFIDENCE_THRESHOLDS.SIMILAR) : minSimilarity;
@@ -356,7 +395,10 @@ export class PatternMatcher {
         : fuzzyFloor > 1 ? 0 : stringSimilarity(instinct.triggerPattern, triggerPattern, fuzzyFloor);
 
       // Combined similarity score
-      let similarity = exactMatch ? 1.0 : (fuzzySim * 0.6 + cosineSim * 0.4);
+      const blended = fuzzySim * 0.6 + cosineSim * 0.4;
+      const named = !exactMatch && requestIndex !== undefined && blended < TRIGGER_IN_REQUEST_SIMILARITY
+        && requestNamesTrigger(requestIndex, instinct.triggerPattern);
+      let similarity = exactMatch ? 1.0 : named ? TRIGGER_IN_REQUEST_SIMILARITY : blended;
       let confidence = similarity * instinct.confidence;
 
       // Apply scope and recency boosts when scope context provided
@@ -379,6 +421,8 @@ export class PatternMatcher {
           instinct,
           matchReason: exactMatch
             ? "Exact pattern match"
+            : named
+            ? "Trigger named in the request"
             : `Similarity: ${(similarity * 100).toFixed(1)}%`,
           matchedFields: ["triggerPattern"],
           priority: Math.round(confidence * 100),

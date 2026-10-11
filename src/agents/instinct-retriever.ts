@@ -194,10 +194,13 @@ export class InstinctRetriever {
     const findOptions: {
       minSimilarity: number;
       maxResults: number;
+      queryIsRequest: boolean;
       scope?: ScopeContext;
     } = {
       minSimilarity: 0.4,
       maxResults: maxResults + 10,
+      // A prompt or a tool call, never another trigger: a trigger it names counts.
+      queryIsRequest: true,
     };
 
     if (this.scopeContext) {

@@ -125,7 +125,7 @@ describe("InstinctRetriever", () => {
     // maxResults is maxInsights + 10 to account for post-filtering of deprecated instincts
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalledWith(
       "some task",
-      { minSimilarity: 0.4, maxResults: 13 },
+      { minSimilarity: 0.4, maxResults: 13, queryIsRequest: true },
     );
   });
 
