@@ -31,6 +31,32 @@ describe("deleting a directory of the system's own output", () => {
     expect(isSystemOutputDirectory("Assets/Scripts")).toBe(false);
   });
 
+  it("does not take a person's folder for output because of its name", () => {
+    // The system writes its output at the project root. A Build/ of
+    // hand-written build scripts, or Recordings/ of authored audio, deeper in
+    // the tree is a person's files.
+    for (const authored of [
+      "Assets/Scripts/Build",
+      "Assets/Editor/Build",
+      "Assets/Audio/Recordings",
+      "Assets/Prefabs/Artifacts",
+      "Assets/Models/obj",
+      "Assets/Modules/Inventory/temp",
+    ]) {
+      expect(isSystemOutputDirectory(authored), authored).toBe(false);
+    }
+    expect(isSystemOutputDirectory("Build/StandaloneOSX")).toBe(true);
+    expect(isSystemOutputDirectory(".strada/lease-changes")).toBe(true);
+  });
+
+  it("refuses 51 files in a nested folder named like an output folder", async () => {
+    fill("Assets/Scripts/Build", 51);
+    const result = await new FileDeleteDirectoryTool().execute({ path: "Assets/Scripts/Build" }, ctx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("limit: 50");
+    expect(existsSync(join(root, "Assets", "Scripts", "Build", "frame_0.png"))).toBe(true);
+  });
+
   it("removes 51 captured frames, and still refuses 51 of a person's files", async () => {
     fill("Artifacts/UfoPlayModeCapture", 51);
     const captures = await new FileDeleteDirectoryTool().execute({ path: "Artifacts/UfoPlayModeCapture" }, ctx());

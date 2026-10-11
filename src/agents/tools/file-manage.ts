@@ -286,9 +286,15 @@ export class FileRenameTool implements ITool {
 
 // ─── file_delete_directory ────────────────────────────────────────────────────
 
-/** Files a commit never publishes and a person never authored. */
+/**
+ * Files a commit never publishes and a person never authored. Anchored to the
+ * project root, which is where Unity and this system write their output: the
+ * same names deeper in the tree (Assets/Scripts/Build, Assets/Audio/Recordings)
+ * are a person's folders, and matched at any depth they got the 2000-file cap.
+ * Matched against the project-relative path toProjectRelative returns.
+ */
 const SYSTEM_OUTPUT_DIR_RE =
-  /(?:^|[\\/])(?:Artifacts|Recordings|Logs|Temp|obj|Build|Builds|\.strada)(?:[\\/]|$)/i;
+  /^(?:Artifacts|Recordings|Logs|Temp|obj|Build|Builds|\.strada)(?:[\\/]|$)/i;
 
 /** Ordinary directories: a low cap, because this guard exists for a person's files. */
 const DELETE_DIR_LIMIT = 50;
