@@ -755,6 +755,13 @@ export class SessionManager {
   readonly sessions = new Map<string, Session>();
   readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly lastPersistTime = new Map<string, number>();
+  /**
+   * Session writes not yet settled. The disk write runs after the memory store and nobody awaits
+   * it, and an eviction or a mid-run trim does not await the memory store either: a run resolved
+   * with its session still being written, and its owner shut the memory down or removed the
+   * sessions directory underneath that write. dispose() waits for these.
+   */
+  private readonly pendingWrites = new Set<Promise<unknown>>();
   private readonly deps: SessionManagerDeps;
   private staleSessionCleanupInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -788,12 +795,32 @@ export class SessionManager {
     this.staleSessionCleanupInterval = interval;
   }
 
-  /** Stop the periodic stale session cleanup. */
-  dispose(): void {
+  /**
+   * Stop the periodic stale session cleanup. Resolves once every session write started so far
+   * has settled, so the caller can shut the memory down or remove the sessions directory next.
+   */
+  dispose(): Promise<void> {
     if (this.staleSessionCleanupInterval) {
       clearInterval(this.staleSessionCleanupInterval);
       this.staleSessionCleanupInterval = undefined;
     }
+    return this.flushPendingWrites();
+  }
+
+  private async flushPendingWrites(): Promise<void> {
+    // A settling memory store starts the disk write, so loop until nothing new was added.
+    while (this.pendingWrites.size > 0) {
+      await Promise.allSettled([...this.pendingWrites]);
+    }
+  }
+
+  private trackWrite<T>(write: Promise<T>): Promise<T> {
+    this.pendingWrites.add(write);
+    const settle = (): void => {
+      this.pendingWrites.delete(write);
+    };
+    write.then(settle, settle);
+    return write;
   }
 
   // ── Serialization ─────────────────────────────────────────────────────────
@@ -912,15 +939,15 @@ export class SessionManager {
     await writeFileAtomic(this.sessionFilePath(chatId), json, { mode: 0o600 });
   }
 
-  /** Fire-and-forget {@link persistSessionToDisk}; a failure is logged, never thrown. */
+  /** Unawaited {@link persistSessionToDisk} that dispose() still waits for; a failure is logged, never thrown. */
   private persistSessionToDiskInBackground(chatId: string, session: Session): void {
     if (!this.deps.sessionsDir) return;
-    this.persistSessionToDisk(chatId, session).catch((err) => {
+    void this.trackWrite(this.persistSessionToDisk(chatId, session).catch((err) => {
       getLogger().debug("Session disk persist failed", {
         chatId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }));
   }
 
   private static readonly MAX_SESSION_FILE_BYTES = 512 * 1024; // 512KB safety cap
@@ -1267,7 +1294,7 @@ export class SessionManager {
    * Persist conversation messages to memory so the agent remembers them next session.
    * Debounced by default — pass `force: true` for trim evictions and session cleanup.
    */
-  async persistSessionToMemory(
+  persistSessionToMemory(
     chatId: string,
     messages: ConversationMessage[],
     force = false,
@@ -1285,6 +1312,17 @@ export class SessionManager {
      * session's owner applies.
      */
     owner: { readonly userId: string | undefined } = { userId: session?.memoryOwnerId },
+  ): Promise<void> {
+    // Tracked whether or not the caller awaits it: an eviction and a mid-run trim do not.
+    return this.trackWrite(this.storeSessionInMemory(chatId, messages, force, session, owner));
+  }
+
+  private async storeSessionInMemory(
+    chatId: string,
+    messages: ConversationMessage[],
+    force: boolean,
+    session: Session | undefined,
+    owner: { readonly userId: string | undefined },
   ): Promise<void> {
     // Memory disabled means no persistence at all, the session file included: a user who
     // turned memory off must not get transcripts under <project>/.strada-memory. Deliberate,
@@ -1362,7 +1400,7 @@ export class SessionManager {
       });
     }
 
-    // Fire-and-forget disk persistence
+    // Not awaited by the run; dispose() waits for it.
     if (session) this.persistSessionToDiskInBackground(chatId, session);
   }
 

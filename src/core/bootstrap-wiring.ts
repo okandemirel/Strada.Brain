@@ -197,6 +197,11 @@ export function setupCleanup(orchestrator: Orchestrator): ReturnType<typeof setI
 export interface ShutdownOptions {
   dashboard?: DashboardServer;
   ragPipeline?: IRAGPipeline;
+  /**
+   * The root orchestrator — disposed before the memory closes: a finished run's session is
+   * still being written to memory and to disk, and exiting cut that write off.
+   */
+  orchestrator?: { dispose(): Promise<void> | void };
   memoryManager?: IMemoryManager;
   /** Embedding cache — persisted to disk on shutdown so runtime-computed vectors survive a restart (otherwise every restart re-embeds from scratch). */
   cachedEmbeddingProvider?: { shutdown(): Promise<void> };
@@ -462,6 +467,10 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       if (dashboard) {
         await runStep("dashboard", () => dashboard.stop());
+      }
+
+      if (options.orchestrator) {
+        await runStep("orchestrator", () => options.orchestrator!.dispose());
       }
 
       if (ragPipeline) {

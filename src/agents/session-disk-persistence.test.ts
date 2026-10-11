@@ -107,6 +107,46 @@ describe("session disk persistence (ORC-16)", () => {
     sm.dispose();
   });
 
+  // The disk write is started after the memory store and nobody awaits it: a run resolved, its
+  // owner removed the sessions directory (or shut the daemon down) and the write landed in a
+  // directory being deleted — ENOTEMPTY — or never landed at all.
+  it("dispose() resolves only after a finished run's session write has landed", async () => {
+    const sm = new SessionManager(deps(dir));
+    const session = sm.getOrCreateSession("chat-run-end");
+    sm.appendVisibleUserMessage(session, "build the castle");
+    sm.appendVisibleAssistantMessage(session, "castle built");
+    await sm.persistSessionToMemory("chat-run-end", sm.getVisibleTranscript(session), true);
+
+    await sm.dispose();
+
+    expect(readdirSync(dir)).toEqual(["chat-run-end.json"]);
+  });
+
+  // An agent's eviction runs cleanupSessions → dispose → memory.shutdown: the memory store
+  // still running at that point met a closed memory.
+  it("dispose() resolves only after an evicted session's memory and disk writes have landed", async () => {
+    const stored: string[] = [];
+    const d = deps(dir);
+    Object.assign(d.memoryManager!, {
+      storeConversation: vi.fn(async (chatId: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        stored.push(chatId);
+        return { kind: "ok", value: undefined };
+      }),
+    });
+    const sm = new SessionManager(d);
+    const session = sm.getOrCreateSession("chat-evicted");
+    sm.appendVisibleUserMessage(session, "remember the tower");
+    sm.appendVisibleAssistantMessage(session, "noted: tower");
+    session.lastActivity = new Date(Date.now() - 2 * 3600_000);
+    expect(sm.cleanupSessions(3600_000)).toEqual(["chat-evicted"]);
+
+    await sm.dispose();
+
+    expect(stored).toEqual(["chat-evicted"]);
+    expect(readdirSync(dir)).toEqual(["chat-evicted.json"]);
+  });
+
   it("stale-session cleanup also removes an interrupted write's temp file", () => {
     const stale = join(dir, "chat-x.json.0f0f.tmp");
     writeFileSync(stale, "{\"mess");

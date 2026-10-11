@@ -6044,12 +6044,14 @@ export class Orchestrator {
   /**
    * Release what this instance holds past its useful life: the session manager's cleanup timer
    * and the budget-config listener. For the per-agent and per-delegation instances that are
-   * dropped long before the process exits.
+   * dropped long before the process exits, and for the root one at shutdown. Resolves once the
+   * session writes its runs started have landed: await it before shutting the memory down.
    */
-  dispose(): void {
-    this.sessionManager.dispose();
+  dispose(): Promise<void> {
+    const writesSettled = this.sessionManager.dispose();
     this.budgetConfigUnsubscribe?.();
     this.budgetConfigUnsubscribe = undefined;
+    return writesSettled;
   }
 
   cleanupSessions(maxAgeMs: number = 3_600_000): void {

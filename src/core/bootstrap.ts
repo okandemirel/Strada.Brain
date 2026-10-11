@@ -2499,6 +2499,7 @@ async function bootstrapImpl(
       dashboard,
       canvasStorage,
       ragPipeline,
+      orchestrator,
       memoryManager,
       cachedEmbeddingProvider,
       channel,

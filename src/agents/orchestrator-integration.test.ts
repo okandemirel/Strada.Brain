@@ -25,7 +25,7 @@ import { MemorySearchTool } from "./tools/memory-search.js";
 import { createToolContext } from "../test-helpers.js";
 import { BackgroundExecutor } from "../tasks/background-executor.js";
 import type { ChatId } from "../types/index.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -40,6 +40,18 @@ import {
 // per-run temp dir, not under /tmp/test-project/.strada-memory where they leaked
 // across runs and were restored into later ones.
 const TEST_MEMORY_DB_PATH = mkdtempSync(join(tmpdir(), "strada-orch-test-memory-"));
+
+// A run's session file is still being written when the run resolves; dispose() waits for it.
+// Removing the directory first raced that write (ENOTEMPTY under load).
+const liveOrchestrators: Orchestrator[] = [];
+function createOrchestrator(opts: ConstructorParameters<typeof Orchestrator>[0]): Orchestrator {
+  const orch = new Orchestrator(opts);
+  liveOrchestrators.push(orch);
+  return orch;
+}
+afterEach(async () => {
+  await Promise.all(liveOrchestrators.splice(0).map((orch) => orch.dispose()));
+});
 afterAll(() => rmSync(TEST_MEMORY_DB_PATH, { recursive: true, force: true }));
 
 // ─── Logger mock (must match existing test pattern) ──────────────────────────
@@ -261,7 +273,7 @@ describe("Orchestrator Integration", () => {
         .mockResolvedValueOnce(toolResponse("Analysis complete.\n**DONE**"))
         .mockResolvedValue(approvalResponse());
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -293,7 +305,7 @@ describe("Orchestrator Integration", () => {
         toolResponse("Working...", "file_read"),
       );
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -341,7 +353,7 @@ describe("Orchestrator Integration", () => {
         .mockResolvedValueOnce(toolResponse("Done with analysis.", undefined))
         .mockResolvedValue(approvalResponse());
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -386,7 +398,7 @@ describe("Orchestrator Integration", () => {
           usage: { inputTokens: 50, outputTokens: 30 },
         });
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -422,7 +434,7 @@ describe("Orchestrator Integration", () => {
         getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
       };
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -682,8 +694,41 @@ describe("Orchestrator Integration", () => {
       }
     });
 
+    it("a disposed orchestrator has finished writing the session file of its last run", async () => {
+      const memoryDbPath = mkdtempSync(join(TEST_MEMORY_DB_PATH, "dispose-"));
+      const orch = createOrchestrator({
+        providerManager: makeProviderManager(mockProvider),
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        memoryDbPath,
+        memoryManager: {
+          retrieve: vi.fn().mockResolvedValue({ kind: "ok", value: [] }),
+          storeConversation: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+          getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+        } as any,
+      });
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse("Plan: answer."))
+        .mockResolvedValueOnce(toolResponse("Answered."));
+      await orch.handleMessage({
+        channelType: "cli",
+        chatId: "dispose-flush-1",
+        userId: "user1",
+        text: "Answer me",
+        timestamp: new Date(),
+      });
+
+      await orch.dispose();
+
+      // The final file, not a temp file still being renamed into place.
+      expect(readdirSync(join(memoryDbPath, "sessions"))).toEqual(["dispose-flush-1.json"]);
+    });
+
     it("carries agent state across turns within same session", async () => {
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -751,7 +796,7 @@ describe("Orchestrator Integration", () => {
     });
 
     it("accumulates visible messages correctly across handleMessage calls", async () => {
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -795,7 +840,7 @@ describe("Orchestrator Integration", () => {
   describe("Intervention pipeline through loops", () => {
 
     it("interaction policy blocks background task when explicit plan review is required", async () => {
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -883,7 +928,7 @@ describe("Orchestrator Integration", () => {
         .mockResolvedValueOnce(toolResponse("CONTINUE - one more", "file_read"))
         .mockResolvedValueOnce(toolResponse("Analysis complete."));
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -949,7 +994,7 @@ describe("Orchestrator Integration", () => {
         .mockResolvedValueOnce(toolResponse("All steps completed.\n**DONE**"))
         .mockResolvedValue(approvalResponse());
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,
@@ -998,7 +1043,7 @@ describe("Orchestrator Integration", () => {
         .mockResolvedValueOnce(toolResponse("Step 3", "file_read"))
         .mockResolvedValueOnce(toolResponse("Done."));
 
-      const orch = new Orchestrator({
+      const orch = createOrchestrator({
         providerManager: makeProviderManager(mockProvider),
         tools: [readTool],
         channel: mockChannel,

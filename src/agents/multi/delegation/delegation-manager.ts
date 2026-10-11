@@ -1150,7 +1150,7 @@ export class DelegationManager {
       // The delegate's entry in the shared store is per-run: drop it with the
       // run, or every delegation leaves one behind for the daemon's lifetime.
       this.opts.authorizedPathsStore?.delete(delegateChatId);
-      delegateOrchestrator?.dispose();
+      await delegateOrchestrator?.dispose();
       this.cleanup(subAgentId);
       markSettled();
     }

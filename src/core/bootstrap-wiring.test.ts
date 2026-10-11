@@ -201,6 +201,27 @@ describe("createShutdownHandler", () => {
     clearInterval(interval);
   });
 
+  it("waits for the root orchestrator's session writes before closing the memory", async () => {
+    const order: string[] = [];
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel: makeChannel(),
+      cleanupInterval: interval,
+      orchestrator: {
+        dispose: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          order.push("session writes landed");
+        },
+      },
+      memoryManager: { shutdown: vi.fn(async () => { order.push("memory.shutdown"); }) } as any,
+    } as any);
+
+    await shutdown();
+
+    expect(order).toEqual(["session writes landed", "memory.shutdown"]);
+    clearInterval(interval);
+  });
+
   it("stops learningPipeline when present", async () => {
     const channel = makeChannel();
     const learningPipeline = { stop: vi.fn() } as any;

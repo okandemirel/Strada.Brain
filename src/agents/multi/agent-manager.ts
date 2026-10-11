@@ -566,7 +566,8 @@ export class AgentManager {
 
     if (force) {
       liveAgent.orchestrator.cleanupSessions();
-      liveAgent.orchestrator.dispose();
+      // The session writes land before the memory they write to closes.
+      await liveAgent.orchestrator.dispose();
       await liveAgent.memory.shutdown();
       this.agents.delete(liveAgent.instance.key);
     }
@@ -643,8 +644,11 @@ export class AgentManager {
     const closePromises: Promise<unknown>[] = [];
     for (const [, liveAgent] of this.agents) {
       liveAgent.orchestrator.cleanupSessions();
-      liveAgent.orchestrator.dispose();
-      closePromises.push(liveAgent.memory.shutdown());
+      // The session writes land before the memory they write to closes.
+      closePromises.push((async () => {
+        await liveAgent.orchestrator.dispose();
+        await liveAgent.memory.shutdown();
+      })());
     }
 
     await Promise.allSettled(closePromises);
@@ -1152,7 +1156,7 @@ export class AgentManager {
   private async evictAgent(key: string, liveAgent: LiveAgent): Promise<void> {
     // Clean up orchestrator sessions, then release its timer and listeners
     liveAgent.orchestrator.cleanupSessions();
-    liveAgent.orchestrator.dispose();
+    const sessionWritesSettled = liveAgent.orchestrator.dispose();
 
     // Remove from in-memory map (synchronous — visible to callers immediately)
     this.agents.delete(key);
@@ -1162,7 +1166,8 @@ export class AgentManager {
 
     this.eventBus.emit("agent:evicted", this.buildLifecycleEvent(liveAgent.instance));
 
-    // Close memory last (awaited so SQLite flushes properly)
+    // Close memory last (awaited so SQLite flushes properly), after the session writes into it
+    await sessionWritesSettled;
     await liveAgent.memory.shutdown();
   }
 

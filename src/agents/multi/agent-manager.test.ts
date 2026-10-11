@@ -1220,6 +1220,90 @@ describe("AgentManager", () => {
       // After shutdown, active count should be 0
       expect(manager.getActiveCount()).toBe(0);
     });
+
+    // cleanupSessions() starts the evicted sessions' memory and disk writes without awaiting
+    // them; the memory used to close while they were still running.
+    it("closes an agent's memory only after its orchestrator's session writes have landed", async () => {
+      const { Orchestrator } = await import("../orchestrator.js");
+      const { AgentDBMemory } = await import("../../memory/unified/agentdb-memory.js");
+      const order: string[] = [];
+      /** The agent created last: its dispose() settles only when the returned callback is called. */
+      const holdLastAgentsWrites = (label: string): (() => void) => {
+        const orch = vi.mocked(Orchestrator).mock.results.at(-1)!.value as { dispose: unknown };
+        const memory = vi.mocked(AgentDBMemory).mock.results.at(-1)!.value as { shutdown: unknown };
+        let land!: () => void;
+        const landed = new Promise<void>((resolve) => { land = resolve; });
+        orch.dispose = vi.fn(() => landed.then(() => { order.push(`${label} writes landed`); }));
+        memory.shutdown = vi.fn(async () => { order.push(`${label} memory closed`); });
+        return land;
+      };
+      const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+      // A force stop.
+      await manager.routeMessage(makeMsg({ chatId: "chat-stop" }));
+      const landStop = holdLastAgentsWrites("stop");
+      const stopped = manager.stopAgent(manager.getAllAgents()[0]!.id, true);
+      await settle();
+      expect(order).toEqual([]);
+      landStop();
+      await stopped;
+      expect(order).toEqual(["stop writes landed", "stop memory closed"]);
+
+      // Process shutdown.
+      order.length = 0;
+      await manager.routeMessage(makeMsg({ chatId: "chat-shutdown" }));
+      const landShutdown = holdLastAgentsWrites("shutdown");
+      const shutDown = manager.shutdown();
+      await settle();
+      expect(order).toEqual([]);
+      landShutdown();
+      await shutDown;
+      expect(order).toEqual(["shutdown writes landed", "shutdown memory closed"]);
+    });
+
+    it("an idle eviction closes the memory only after the session writes have landed", async () => {
+      const { Orchestrator } = await import("../orchestrator.js");
+      const { AgentDBMemory } = await import("../../memory/unified/agentdb-memory.js");
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 10_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [], getMetadataMap: () => new Map() } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+      const now = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(now);
+        await idleManager.routeMessage(makeMsg({ chatId: "chat-idle" }));
+        const orch = vi.mocked(Orchestrator).mock.results.at(-1)!.value as { dispose: unknown };
+        const memory = vi.mocked(AgentDBMemory).mock.results.at(-1)!.value as { shutdown: Mock };
+        let land!: () => void;
+        orch.dispose = vi.fn(() => new Promise<void>((resolve) => { land = resolve; }));
+        memory.shutdown = vi.fn(async () => undefined);
+
+        vi.setSystemTime(now + 15_000);
+        idleManager.evictIdleAgents();
+        expect(idleManager.getActiveCount()).toBe(0);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(memory.shutdown).not.toHaveBeenCalled();
+
+        land();
+        await vi.waitFor(() => expect(memory.shutdown).toHaveBeenCalledTimes(1));
+      } finally {
+        vi.useRealTimers();
+        await idleManager.shutdown();
+      }
+    });
   });
 
   // ===========================================================================
