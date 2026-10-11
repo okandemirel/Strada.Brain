@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTrxReport } from "./dotnet-tools.js";
 import type { ToolContext } from "./tool.interface.js";
@@ -345,6 +346,141 @@ describe("dotnet_test's verdict comes from the TRX report and the exit code (too
     await tool.execute({}, ctx);
     expect(run.resultsDir()).toBeDefined();
     expect(existsSync(run.resultsDir()!)).toBe(false);
+  });
+});
+
+/**
+ * `--no-build` runs whatever the last successful compile left in bin/. After
+ * a build that failed, that is the code from BEFORE the edit. Measured
+ * 2026-10-11 with dotnet 10.0.400 on a scratch xunit project: an edit that
+ * broke the compile and added a failing test, dotnet_build exit 1 (CS1002),
+ * then dotnet_test {no_build} read "Result: PASSED, Total: 1" and the gate
+ * cleared the compile and test debt of code that never compiled.
+ */
+describe("dotnet_test {no_build} after a build that failed (stale bin/)", () => {
+  const COMPILE_ERROR =
+    "  Determining projects to restore...\n  All projects are up-to-date for restore.\n" +
+    "/work/Game.Tests/UnitTest1.cs(8,11): error CS1002: ; expected [/work/Game.Tests/Game.Tests.csproj]\n\nBuild FAILED.\n\n" +
+    "/work/Game.Tests/UnitTest1.cs(8,11): error CS1002: ; expected [/work/Game.Tests/Game.Tests.csproj]\n    0 Warning(s)\n    1 Error(s)";
+  let defaultImpl: typeof runProcess | undefined;
+  const roots: string[] = [];
+  beforeEach(() => {
+    defaultImpl = vi.mocked(runProcess).getMockImplementation();
+  });
+  afterEach(() => {
+    vi.mocked(runProcess).mockImplementation(defaultImpl!);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /**
+   * dotnet over one project: a build (or a building test) compiles the source
+   * as it is now; `--no-build` runs the last DLL that compiled, whose one
+   * test passes.
+   */
+  function dotnetOnDisk(source: { compiles: boolean; testsFail?: boolean }): { calls: () => string[][] } {
+    const calls: string[][] = [];
+    vi.mocked(runProcess).mockImplementation(async (call) => {
+      calls.push(call.args);
+      const done = { stderr: "", timedOut: false, durationMs: 5 };
+      if (!call.args.includes("--no-build") && !source.compiles) return { ...done, stdout: COMPILE_ERROR, exitCode: 1 };
+      if (call.args[0] === "build") return { ...done, stdout: "  Game.Tests -> /work/bin/Game.Tests.dll\n\nBuild succeeded.", exitCode: 0 };
+      const at = call.args.indexOf("--results-directory");
+      mkdirSync(call.args[at + 1]!, { recursive: true });
+      writeFileSync(join(call.args[at + 1]!, "host_net10.0.trx"), source.testsFail ? FAILING_TRX : PASSING_TRX);
+      // What 10.0.400 printed for a run whose tests failed: "Build FAILED.",
+      // and no MSBuild error line.
+      return source.testsFail
+        ? { ...done, stdout: "  Failed Game.Tests.BoardTests.BoardSwapFails [1 ms]\n\nBuild FAILED.\n    0 Warning(s)\n    0 Error(s)", exitCode: 1 }
+        : { ...done, stdout: "", exitCode: 0 };
+    });
+    return { calls: () => calls };
+  }
+
+  const workspace = (): ToolContext => {
+    const root = mkdtempSync(join(tmpdir(), "strada-stale-dll-"));
+    roots.push(root);
+    for (const name of ["Game.Core", "Game.Tests"]) {
+      mkdirSync(join(root, name));
+      writeFileSync(join(root, name, `${name}.csproj`), `<Project Sdk="Microsoft.NET.Sdk" />`);
+    }
+    return { projectPath: root, workingDirectory: root, readOnly: false };
+  };
+  const testsProject = "Game.Tests/Game.Tests.csproj";
+
+  it("does not run the last good DLL after the build failed, and names the failure", async () => {
+    const at = workspace();
+    const dotnet = dotnetOnDisk({ compiles: false });
+    const verifier = new SelfVerification();
+    verifier.track("file_write", { path: "Game.Tests/UnitTest1.cs" }, { toolCallId: "w", content: "written", isError: false });
+
+    const build = await new DotnetBuildTool().execute({ project: testsProject }, at);
+    expect(build.isError).toBe(true);
+    verifier.track("dotnet_build", { project: testsProject }, { toolCallId: "b", content: build.content, isError: build.isError, metadata: build.metadata });
+
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).not.toContain("PASSED");
+    expect(result.content).toContain("CS1002");
+    expect(result.content).toContain(testsProject);
+    expect(result.isError).toBe(false);
+    // Nothing ran: the DLL in bin/ is not the code on disk.
+    expect(dotnet.calls().filter((args) => args[0] === "test")).toEqual([]);
+
+    verifier.track("dotnet_test", { project: testsProject, no_build: true }, { toolCallId: "t", content: result.content, isError: result.isError, metadata: result.metadata });
+    expect(verifier.needsVerification()).toBe(true);
+  });
+
+  it("runs again once a build of the same target has succeeded", async () => {
+    const at = workspace();
+    const source = { compiles: false };
+    dotnetOnDisk(source);
+    await new DotnetBuildTool().execute({ project: testsProject }, at);
+    source.compiles = true;
+    expect((await new DotnetBuildTool().execute({ project: testsProject }, at)).isError).toBe(false);
+
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+    expect(result.content).toContain("Result: PASSED");
+  });
+
+  it("is refused after a failed build of another project in the workspace (a referenced library is stale too)", async () => {
+    const at = workspace();
+    const source = { compiles: false };
+    dotnetOnDisk(source);
+    await new DotnetBuildTool().execute({ project: "Game.Core/Game.Core.csproj" }, at);
+    source.compiles = true;
+    await new DotnetBuildTool().execute({ project: testsProject }, at);
+
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+    expect(result.content).toContain("Result: NOT MEASURED");
+    expect(result.content).toContain("Game.Core/Game.Core.csproj");
+  });
+
+  it("treats a building dotnet_test that failed to compile as a failed build, and one that exited 0 as a clean one", async () => {
+    const at = workspace();
+    const source = { compiles: false };
+    dotnetOnDisk(source);
+    expect((await new DotnetTestTool().execute({ project: testsProject }, at)).content).toContain("Result: FAILED");
+    expect((await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at)).content).toContain("Result: NOT MEASURED");
+
+    source.compiles = true;
+    expect((await new DotnetTestTool().execute({ project: testsProject }, at)).content).toContain("Result: PASSED");
+    expect((await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at)).content).toContain("Result: PASSED");
+  });
+
+  it("does not read a building run whose TESTS failed as a failed build", async () => {
+    const at = workspace();
+    dotnetOnDisk({ compiles: true, testsFail: true });
+    expect((await new DotnetTestTool().execute({ project: testsProject }, at)).content).toContain("Result: FAILED");
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, at);
+    expect(result.content).toContain("Result: FAILED");
+    expect(result.content).toContain("✗ Game.Tests.BoardTests.BoardSwapFails");
+  });
+
+  it("does not hold one workspace's failed build against another", async () => {
+    dotnetOnDisk({ compiles: false });
+    await new DotnetBuildTool().execute({ project: testsProject }, workspace());
+    const result = await new DotnetTestTool().execute({ project: testsProject, no_build: true }, workspace());
+    expect(result.content).toContain("Result: PASSED");
   });
 });
 

@@ -1,6 +1,6 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runProcess } from "../../utils/process-runner.js";
 import { validatePath, normalizeToolPathInput } from "../../security/path-guard.js";
 import { buildShellEnv } from "./shell-env-policy.js";
@@ -45,6 +45,62 @@ function configurationArg(input: Record<string, unknown>): string | undefined {
 }
 
 const CONFIGURATION_ERROR = "Error: 'configuration' must be a build configuration name such as Debug or Release";
+
+// ─── builds that failed ───────────────────────────────────────────────────────
+
+/**
+ * Per workspace, the builds that failed and have not since been followed by a
+ * clean build of the same target and configuration.
+ *
+ * A failed compile leaves bin/ holding the last build that succeeded, and
+ * `dotnet test --no-build` runs that DLL. Measured 2026-10-11 with dotnet
+ * 10.0.400: an edit that broke the compile and added a failing test, then
+ * dotnet_build exit 1, then dotnet_test {no_build} read "Result: PASSED,
+ * Total: 1" (the old test alone), and the gate cleared the compile and test
+ * debt of code that never compiled. Running the two calls in order closed a
+ * race, not this.
+ */
+const failedBuilds = new Map<string, Map<string, string>>();
+const MAX_TRACKED_WORKSPACES = 256;
+
+/**
+ * A compile (CS1002), restore (NU1101) or MSBuild (MSB3027) error line. A
+ * `dotnet test` whose tests failed prints none, only "Build FAILED.", so this
+ * is what tells its failed build from its failed tests (measured, 10.0.400).
+ */
+const MSBUILD_ERROR_LINE = /^.*?:\s+error\s+[A-Z]{2,}\d+:.*$/m;
+
+/** The real path, so a lexical and a resolved spelling of one root agree. */
+async function workspaceKey(projectPath: string): Promise<string> {
+  return realpath(projectPath).catch(() => resolve(projectPath));
+}
+
+function recordBuild(
+  workspace: string,
+  by: "dotnet_build" | "dotnet_test",
+  target: { fullPath?: string; label: string },
+  config: string,
+  result: { exitCode: number; timedOut: boolean; output: string },
+): void {
+  const key = `${target.fullPath ?? ""}\0${config}`;
+  let failures = failedBuilds.get(workspace);
+  if (result.exitCode === 0 && !result.timedOut) {
+    failures?.delete(key);
+    if (failures?.size === 0) failedBuilds.delete(workspace);
+    return;
+  }
+  if (!failures) {
+    failures = new Map();
+    failedBuilds.set(workspace, failures);
+    if (failedBuilds.size > MAX_TRACKED_WORKSPACES) failedBuilds.delete(failedBuilds.keys().next().value!);
+  }
+  const firstError = MSBUILD_ERROR_LINE.exec(result.output)?.[0].trim().slice(0, 300);
+  failures.set(
+    key,
+    `${by} of ${target.label} (${config}): ${result.timedOut ? "timed out" : `exit code ${result.exitCode}`}`
+      + (firstError ? ` — ${firstError}` : ""),
+  );
+}
 
 // ─── dotnet_build ─────────────────────────────────────────────────────────────
 
@@ -122,6 +178,7 @@ export class DotnetBuildTool implements ITool {
 
     const args = ["build"];
 
+    const target: { fullPath?: string; label: string } = { label: "the project root" };
     if (input["project"]) {
       const normalized = normalizeToolPathInput(context.projectPath, String(input["project"]));
       if (!normalized.ok) {
@@ -132,6 +189,8 @@ export class DotnetBuildTool implements ITool {
         return { content: `Error: ${pathCheck.error}`, isError: true };
       }
       args.push(pathCheck.fullPath);
+      target.fullPath = pathCheck.fullPath;
+      target.label = normalized.relativePath;
     }
 
     const config = configurationArg(input);
@@ -149,6 +208,7 @@ export class DotnetBuildTool implements ITool {
 
     const combined = result.stdout + "\n" + result.stderr;
     const parsed = parseBuildOutput(combined);
+    recordBuild(await workspaceKey(context.projectPath), "dotnet_build", target, config, { ...result, output: combined });
 
     const parts: string[] = [];
     parts.push(`dotnet build (${config})`);
@@ -364,7 +424,9 @@ export class DotnetTestTool implements ITool {
       },
       no_build: {
         type: "boolean",
-        description: "Skip build before testing. Use after a successful build.",
+        description:
+          "Skip build before testing. Use after a successful build; while a build in this " +
+          "workspace has failed since, the run is refused as NOT MEASURED (bin/ holds older code).",
       },
     },
     required: [],
@@ -380,6 +442,7 @@ export class DotnetTestTool implements ITool {
 
     const args = ["test"];
 
+    const target: { fullPath?: string; label: string } = { label: "the project root" };
     if (input["project"]) {
       const normalized = normalizeToolPathInput(context.projectPath, String(input["project"]));
       if (!normalized.ok) {
@@ -390,6 +453,8 @@ export class DotnetTestTool implements ITool {
         return { content: `Error: ${pathCheck.error}`, isError: true };
       }
       args.push(pathCheck.fullPath);
+      target.fullPath = pathCheck.fullPath;
+      target.label = normalized.relativePath;
     }
 
     const config = configurationArg(input);
@@ -400,7 +465,26 @@ export class DotnetTestTool implements ITool {
       args.push("--filter", String(input["filter"]));
     }
 
-    if (input["no_build"]) {
+    const workspace = await workspaceKey(context.projectPath);
+    const noBuild = Boolean(input["no_build"]);
+    if (noBuild) {
+      // Any failed build in the workspace, not only this target's: a test
+      // project's bin/ holds a copy of every library it references.
+      const stale = [...(failedBuilds.get(workspace)?.values() ?? [])];
+      if (stale.length > 0) {
+        return {
+          content: [
+            `dotnet test (${config})`,
+            "\nResult: NOT MEASURED",
+            "Not run: with no_build, dotnet test runs the DLLs the last successful build left in bin/, " +
+              "and a build that failed after it means they are not the code on disk:",
+            ...stale.map((failure) => `  ${failure}`),
+            "Fix the build and run dotnet_build again, or run dotnet_test without no_build so it compiles what it tests.",
+          ].join("\n"),
+          isError: false,
+          metadata: { verdict: "NOT MEASURED" },
+        };
+      }
       args.push("--no-build");
     }
 
@@ -414,6 +498,12 @@ export class DotnetTestTool implements ITool {
     try {
       const result = await run("dotnet", args, context.projectPath, TEST_TIMEOUT_MS);
       const combined = result.stdout + "\n" + result.stderr;
+      // A run that built is a build: a clean exit leaves bin/ current, and a
+      // compile error leaves it as stale as a failed dotnet_build. A run whose
+      // tests failed says nothing about the build either way.
+      if (!noBuild && ((result.exitCode === 0 && !result.timedOut) || MSBUILD_ERROR_LINE.test(combined))) {
+        recordBuild(workspace, "dotnet_test", target, config, { ...result, output: combined });
+      }
       const { reports, unreadable } = await readTrxReports(resultsDir);
       const summary: TestSummary = { total: 0, passed: 0, failed: 0, skipped: 0 };
       for (const report of reports) {
