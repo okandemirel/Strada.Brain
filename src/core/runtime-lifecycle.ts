@@ -3,6 +3,7 @@ import { formatChannelSpec, isValidChannelSpec, parseChannelSpec } from "../chan
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
+import type { RuntimeLockHolder } from "./runtime-lock.js";
 import { SHUTDOWN_TIMEOUT_MS } from "./shutdown-exit-code.js";
 
 export interface StopRuntimeProcessesOptions {
@@ -27,16 +28,31 @@ export interface StopRuntimeProcessesResult {
 export const DEFAULT_STOP_TIMEOUT_MS = SHUTDOWN_TIMEOUT_MS + 5_000;
 const DEFAULT_POLL_MS = 200;
 
+/**
+ * This install's runtime processes. The scan matches on cwd === install root,
+ * which only a source checkout satisfies: every other install chdirs to its
+ * config root, so its runtime is found through the runtime lock instead.
+ */
 export function getMatchingLocalRuntimeProcesses(
   inspection: LocalRuntimeInspection,
   currentPid: number = process.pid,
+  lockHolder: RuntimeLockHolder | null = null,
 ): RuntimeProcessInfo[] {
   const installRoot = path.resolve(inspection.installRoot);
-  return inspection.runtimes.filter((runtime) => (
-    runtime.cwd !== null
-    && path.resolve(runtime.cwd) === installRoot
-    && runtime.pid !== currentPid
+  // Only a holder whose pid means something here can be signalled from here.
+  const holder = lockHolder?.local && lockHolder.holder.pid !== currentPid ? lockHolder.holder : null;
+  const matching = inspection.runtimes.filter((runtime) => (
+    runtime.pid !== currentPid
+    && ((runtime.cwd !== null && path.resolve(runtime.cwd) === installRoot) || runtime.pid === holder?.pid)
   ));
+  if (holder && !matching.some((runtime) => runtime.pid === holder.pid)) {
+    matching.push({
+      pid: holder.pid,
+      cwd: null,
+      command: holder.channel ? `start --channel ${holder.channel}` : "start",
+    });
+  }
+  return matching;
 }
 
 export function inferChannelFromRuntimeCommand(

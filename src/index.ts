@@ -38,7 +38,12 @@ import { reloadEnvAfterSetup } from "./core/setup-env-reload.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { installEnvProxy, reportEnvProxy } from "./common/env-proxy.js";
-import { acquireRuntimeLock, STALE_AFTER_MS as RUNTIME_LOCK_STALE_AFTER_MS } from "./core/runtime-lock.js";
+import {
+  acquireRuntimeLock,
+  readRuntimeLockHolder,
+  STALE_AFTER_MS as RUNTIME_LOCK_STALE_AFTER_MS,
+  type RuntimeLockHolder,
+} from "./core/runtime-lock.js";
 import {
   getSafeCurrentWorkingDirectory,
   initializeRuntimeEnvironment,
@@ -585,7 +590,7 @@ async function startApp(
   if (parseChannelSpec(channelType).includes("web") && !activeWizard) {
     const updater = await createCliAutoUpdater(config.autoUpdate);
     const inspection = await updater.inspectLocalRuntimes();
-    const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+    const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, await readThisInstallRuntimeLockHolder());
     const matchingWebRuntimes = matchingRuntimes.filter((runtime) => (
       parseChannelSpec(inferChannelFromRuntimeCommand(runtime.command, getConfiguredDefaultChannel())).includes("web")
     ));
@@ -889,11 +894,21 @@ function warnIfWindows(): boolean {
   return false;
 }
 
+/**
+ * This install's runtime as its lock names it, read the way `start` acquires
+ * it. Outside a source checkout the runtime's cwd is the config root, where
+ * the process scan does not look.
+ */
+async function readThisInstallRuntimeLockHolder(): Promise<RuntimeLockHolder | null> {
+  return readRuntimeLockHolder({ installRoot: runtimePaths.installRoot, configRoot: runtimePaths.configRoot });
+}
+
 async function runStatusCommand(): Promise<void> {
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
-  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+  const lockHolder = await readThisInstallRuntimeLockHolder();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, lockHolder);
 
   console.log(`Install root: ${inspection.installRoot}`);
   console.log(`Version: v${updater.getCurrentVersion()}`);
@@ -908,7 +923,11 @@ async function runStatusCommand(): Promise<void> {
   }
 
   if (matchingRuntimes.length === 0) {
-    console.log("Runtime: no active process detected for this install.");
+    console.log(
+      lockHolder && !lockHolder.local
+        ? `Runtime: held by PID ${lockHolder.holder.pid} on ${lockHolder.holder.host ?? "another host"} in another container or host; it cannot be stopped from here.`
+        : "Runtime: no active process detected for this install.",
+    );
   } else {
     console.log(`Runtime: ${matchingRuntimes.length} active process${matchingRuntimes.length === 1 ? "" : "es"} for this install.`);
     for (const runtime of matchingRuntimes) {
@@ -918,7 +937,8 @@ async function runStatusCommand(): Promise<void> {
   }
 
   const foreignRuntimes = inspection.runtimes.filter((runtime) => (
-    runtime.cwd === null || path.resolve(runtime.cwd) !== inspection.installRoot
+    (runtime.cwd === null || path.resolve(runtime.cwd) !== inspection.installRoot)
+    && !matchingRuntimes.some((matching) => matching.pid === runtime.pid)
   ));
   if (foreignRuntimes.length > 0) {
     console.log("Other local Strada runtimes:");
@@ -953,7 +973,7 @@ async function runKillCommand(force: boolean): Promise<void> {
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
-  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, await readThisInstallRuntimeLockHolder());
 
   if (matchingRuntimes.length === 0) {
     console.log(`No running Strada runtime detected for ${inspection.installRoot}.`);
@@ -985,7 +1005,7 @@ async function runRestartCommand(
   if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
-  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection, process.pid, await readThisInstallRuntimeLockHolder());
   const defaultChannel = getConfiguredDefaultChannel();
   const inferredChannel = matchingRuntimes[0]
     ? inferChannelFromRuntimeCommand(matchingRuntimes[0].command, defaultChannel)

@@ -308,6 +308,26 @@ function refusal(state: LockState | null, recoveryFile?: string): AcquireResult 
   };
 }
 
+export interface RuntimeLockHolder {
+  holder: LockPayload;
+  /** False when it runs on another host or in another container: it cannot be signalled from here. */
+  local: boolean;
+}
+
+/**
+ * The live runtime holding this install's lock, judged as a starter would,
+ * or null. Reads only. A runtime whose working directory is the config root
+ * (a packaged install, the Docker image, STRADA_SOURCE_CHECKOUT=false) is
+ * invisible to the process scan, which matches on cwd; its lock still names it.
+ */
+export async function readRuntimeLockHolder(opts: { installRoot: string; configRoot: string }): Promise<RuntimeLockHolder | null> {
+  for (const path of [installLockPath(opts.configRoot, opts.installRoot, "runtime"), legacyRuntimeLockPath(opts.installRoot)]) {
+    const state = await readLockState(path);
+    if (state?.payload && holderIsLive(state)) return { holder: state.payload, local: isLocalOwner(state.payload) };
+  }
+  return null;
+}
+
 /**
  * Try to become THE runtime for this install. Returns `{ acquired: false, holder }`
  * when a live instance already holds the lock. The returned `release()` removes the
