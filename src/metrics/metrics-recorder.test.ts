@@ -308,3 +308,38 @@ describe("MetricsRecorder.recordRetrievalMetrics against a REAL MetricsStorage",
     expect(warnSpy.mock.calls[0]?.[0]).toMatch(/NOT being recorded/);
   });
 });
+
+// ─── A failed task-metric write stays telemetry (audited 2026-10-11) ─────────
+
+describe("MetricsRecorder.endTask when the task-metric write fails", () => {
+  let tempDir: string;
+  let storage: MetricsStorage;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "metrics-recorder-endtask-"));
+    storage = new MetricsStorage(join(tempDir, "learning.db"));
+    storage.initialize();
+    warnSpy.mockClear();
+    return () => {
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    };
+  });
+
+  it("does not throw into the caller, logs once, and settles the pending entry", () => {
+    // port.ts persistTerminal calls this first, inside the try that persists the
+    // session, the journal snapshot and the goal tree: a throw here skipped all of it.
+    const recorder = new MetricsRecorder(storage);
+    const first = recorder.startTask({ sessionId: "chat_1", taskDescription: "a", taskType: "interactive" });
+    const second = recorder.startTask({ sessionId: "chat_1", taskDescription: "b", taskType: "interactive" });
+    storage.close(); // shutdown closed learning.db under a run still in flight
+
+    const result = { agentPhase: AgentPhase.COMPLETE, iterations: 1, toolCallCount: 0 };
+    expect(() => recorder.endTask(first, result)).not.toThrow();
+    expect(() => recorder.endTask(second, result)).not.toThrow();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/NOT being recorded/);
+    expect((recorder as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+});

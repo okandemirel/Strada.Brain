@@ -31,6 +31,7 @@ export class MetricsRecorder {
   private readonly storage: MetricsStorage;
   private readonly pending = new Map<string, PendingTask>();
   private retrievalWriteFailureLogged = false;
+  private taskWriteFailureLogged = false;
 
   constructor(storage: MetricsStorage) {
     this.storage = storage;
@@ -61,6 +62,12 @@ export class MetricsRecorder {
   /**
    * Record the final metric for a completed task.
    * Maps AgentPhase to three-state CompletionStatus.
+   *
+   * Fire-and-forget like recordRetrievalMetrics: the caller (port.ts
+   * persistTerminal) runs this first in the try that persists the session,
+   * the journal snapshot, the goal tree and the instinct credits, so a throw
+   * here (learning.db closed at shutdown, SQLITE_BUSY/FULL) used to skip all
+   * of that work and leak the pending entry.
    */
   endTask(
     metricId: string,
@@ -86,23 +93,32 @@ export class MetricsRecorder {
       result.terminatedByIterationBudget ?? result.hitMaxIterations ?? false,
     );
 
-    this.storage.recordTaskMetric({
-      id: metricId,
-      sessionId: pendingTask.sessionId,
-      parentTaskId: pendingTask.parentTaskId,
-      taskType: pendingTask.taskType,
-      taskDescription: pendingTask.taskDescription,
-      completionStatus,
-      paorIterations: result.iterations,
-      toolCallCount: result.toolCallCount,
-      instinctIds: pendingTask.instinctIds,
-      instinctCount: pendingTask.instinctIds.length,
-      startedAt: pendingTask.startedAt,
-      completedAt,
-      durationMs: completedAt - pendingTask.startedAt,
-    });
-
-    this.pending.delete(metricId);
+    try {
+      this.storage.recordTaskMetric({
+        id: metricId,
+        sessionId: pendingTask.sessionId,
+        parentTaskId: pendingTask.parentTaskId,
+        taskType: pendingTask.taskType,
+        taskDescription: pendingTask.taskDescription,
+        completionStatus,
+        paorIterations: result.iterations,
+        toolCallCount: result.toolCallCount,
+        instinctIds: pendingTask.instinctIds,
+        instinctCount: pendingTask.instinctIds.length,
+        startedAt: pendingTask.startedAt,
+        completedAt,
+        durationMs: completedAt - pendingTask.startedAt,
+      });
+    } catch (error) {
+      if (!this.taskWriteFailureLogged) {
+        this.taskWriteFailureLogged = true;
+        getLoggerSafe().warn("Task metrics write failed — task telemetry is NOT being recorded", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      this.pending.delete(metricId);
+    }
   }
 
   /**
