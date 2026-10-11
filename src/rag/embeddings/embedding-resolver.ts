@@ -8,7 +8,7 @@
 import type { Config } from "../../config/config.js";
 import { EMBEDDING_PRESETS } from "../../common/constants.js";
 import { PROVIDER_PRESETS } from "../../agents/providers/provider-registry.js";
-import { OpenAIEmbeddingProvider } from "./openai-embeddings.js";
+import { OpenAIEmbeddingProvider, knownEmbeddingDimensions } from "./openai-embeddings.js";
 import { OllamaEmbeddingProvider } from "./ollama-embeddings.js";
 import type { IEmbeddingProvider } from "../rag.interface.js";
 
@@ -97,12 +97,21 @@ function createEmbeddingProvider(
     ? options.dimensionsOverride
     : undefined;
 
+  // preset.dimensions is the size of preset.model only. Declaring it for any
+  // other model built the index at the wrong size (3-large returns 3072, not
+  // 1536) and every insert failed. For a model the table does not list it
+  // stays a guess, which boot verification measures.
+  const model = options.modelOverride ?? preset.model;
+  const dimensions = model === preset.model
+    ? preset.dimensions
+    : knownEmbeddingDimensions(model) ?? preset.dimensions;
+
   return {
     provider: new OpenAIEmbeddingProvider({
       apiKey,
-      model: options.modelOverride ?? preset.model,
+      model,
       baseUrl,
-      dimensions: preset.dimensions,
+      dimensions,
       requestDimensions,
       batchSize: preset.maxBatchSize,
       label: preset.label,

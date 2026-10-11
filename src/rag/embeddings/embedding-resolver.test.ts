@@ -162,6 +162,27 @@ describe("resolveEmbeddingProvider", () => {
     expect(result!.provider.name).toContain("text-embedding-3-large");
   });
 
+  // memory-rag#5: the preset's size (1536, text-embedding-3-small's) was
+  // declared for any model, so the index was built at 1536 while the API
+  // returned 3072-wide vectors and every insert failed.
+  it("declares the configured model's size, not the preset model's", () => {
+    for (const dimensions of [undefined, 3072]) {
+      const config = makeConfig({
+        openaiApiKey: "oai-key",
+        rag: { enabled: true, provider: "openai", model: "text-embedding-3-large", dimensions, contextMaxTokens: 4000 },
+      });
+      expect(resolveEmbeddingProvider(config)!.provider.dimensions, `EMBEDDING_DIMENSIONS=${dimensions}`).toBe(3072);
+    }
+  });
+
+  it("keeps the preset's size for a model the table does not list (the gemini preset's model)", () => {
+    const config = makeConfig({
+      geminiApiKey: "gem-key",
+      rag: { enabled: true, provider: "gemini", model: "gemini-embedding-exp-03-07", contextMaxTokens: 4000 },
+    });
+    expect(resolveEmbeddingProvider(config)!.provider.dimensions).toBe(3072);
+  });
+
   it("gemini uses gemini-embedding-2-preview with 3072 dimensions", () => {
     const config = makeConfig({
       geminiApiKey: "gem-key",

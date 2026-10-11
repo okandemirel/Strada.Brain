@@ -21,7 +21,28 @@ export async function verifyEmbeddingProviderConnection(
   }
 
   try {
-    await cachedEmbeddingProvider.embed(["test"]);
+    const probe = await cachedEmbeddingProvider.embed(["test"]);
+    // A reply proves the endpoint, not the size: every index is built at the
+    // declared size, and a vector of another one failed each insert while
+    // this said verified. Measure it and adopt what the provider returns.
+    const declared = cachedEmbeddingProvider.dimensions;
+    const measured = probe?.embeddings?.[0]?.length;
+    if (typeof measured === "number" && measured > 0 && measured !== declared) {
+      cachedEmbeddingProvider.adoptMeasuredDimensions(measured);
+      const notice =
+        `Embedding provider ${cachedEmbeddingProvider.name} declared ${declared} dimensions ` +
+        `but returns ${measured}; using ${measured}.`;
+      logger.warn(notice);
+      return {
+        cachedEmbeddingProvider,
+        embeddingStatus: {
+          ...embeddingStatus,
+          verified: true,
+          activeDimensions: measured,
+          notice,
+        },
+      };
+    }
     logger.info("Embedding provider verified");
     return {
       cachedEmbeddingProvider,

@@ -22,6 +22,8 @@ import {
   verifyEmbeddingProviderConnection,
 } from "./bootstrap-stages.js";
 import { isTransientEmbeddingVerificationError } from "./bootstrap.js";
+import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
+import { createLogger } from "../utils/logger.js";
 import type * as winston from "winston";
 
 function createMockLogger(): winston.Logger {
@@ -206,6 +208,43 @@ describe("bootstrap-stages", () => {
       usingHashFallback: false,
     });
     expect(result.embeddingStatus.notice).toContain("retrying on demand");
+  });
+
+  // memory-rag#5: a model neither the model table nor the preset lists gets a
+  // guessed size, and every vector index is built at it. Verification embedded
+  // a probe, ignored its length and said verified, so each insert failed on
+  // the size while the status read active/verified.
+  it("adopts the size the provider's vectors really have and says so", async () => {
+    createLogger("error", join(MEMORY_DIR, "verify-size.log"));
+    const logger = createMockLogger();
+    const inner = {
+      name: "ollama:qwen3-embedding",
+      dimensions: 16,
+      embed: vi.fn(async (texts: string[]) => ({
+        embeddings: texts.map(() => new Array(32).fill(0.1)),
+        usage: { totalTokens: 1 },
+      })),
+    };
+    const provider = new CachedEmbeddingProvider(inner);
+
+    const result = await verifyEmbeddingProviderConnection(
+      provider,
+      {
+        state: "active",
+        ragEnabled: true,
+        configuredProvider: "ollama",
+        activeDimensions: 16,
+        verified: false,
+        usingHashFallback: false,
+      },
+      logger,
+      isTransientEmbeddingVerificationError,
+    );
+
+    expect(result.cachedEmbeddingProvider).toBe(provider);
+    expect(provider.dimensions).toBe(32);
+    expect(result.embeddingStatus).toMatchObject({ verified: true, activeDimensions: 32 });
+    expect(result.embeddingStatus.notice).toMatch(/16.*32/);
   });
 
   it("falls back to hash embeddings for non-transient verification failures", async () => {

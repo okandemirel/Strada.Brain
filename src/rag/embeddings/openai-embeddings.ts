@@ -8,6 +8,11 @@ const KNOWN_MODELS: Record<string, number> = {
   "text-embedding-ada-002": 1536,
 };
 
+/** The native vector size of a model this provider knows, or undefined. */
+export function knownEmbeddingDimensions(model: string): number | undefined {
+  return KNOWN_MODELS[model];
+}
+
 const DEFAULT_BATCH_SIZE = 100;
 const MAX_RETRIES = 3;
 

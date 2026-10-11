@@ -42,10 +42,12 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
   }
 
   get dimensions(): number {
-    return this.inner.dimensions;
+    return this.measuredDimensions ?? this.inner.dimensions;
   }
 
   private readonly inner: IEmbeddingProvider;
+  /** Set by adoptMeasuredDimensions when real vectors disagree with the declared size. */
+  private measuredDimensions: number | undefined;
   private readonly maxCacheSize: number;
   private readonly persistPath: string | undefined;
 
@@ -62,6 +64,17 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
     this.maxCacheSize = opts.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE;
     this.persistPath = opts.persistPath;
     this.cache = new LRUCache<string, number[]>(this.maxCacheSize);
+  }
+
+  /**
+   * The inner provider's size comes from a model table or a preset, a guess
+   * for a model neither lists, and every vector index is built at
+   * `dimensions`. Report the size its vectors were measured at instead. The
+   * persisted cache stays keyed by the declared size, which is stable across
+   * restarts.
+   */
+  adoptMeasuredDimensions(dimensions: number): void {
+    if (Number.isInteger(dimensions) && dimensions > 0) this.measuredDimensions = dimensions;
   }
 
   // ---------------------------------------------------------------------------
