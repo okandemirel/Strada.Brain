@@ -399,19 +399,22 @@ export async function initializeMemoryConsolidationStage(
       return {};
     }
 
+    // No SHA-256 stand-in without a provider: a noise vector let a summary of
+    // unrelated memories through (audit memory-rag#2). The engine clusters only
+    // provider vectors, so without one it merges nothing; it is still wired so
+    // undo can restore what earlier cycles merged.
+    const cachedEmbeddingProvider = params.cachedEmbeddingProvider;
+    if (!cachedEmbeddingProvider) {
+      params.logger.warn(
+        "Memory consolidation will not merge anything: no embedding provider, and hash-fallback vectors do not measure meaning",
+      );
+    }
     const generateEmbedding = async (text: string): Promise<number[]> => {
-      if (params.cachedEmbeddingProvider) {
-        const batch = await params.cachedEmbeddingProvider.embed([text]);
-        return batch.embeddings[0] as number[];
+      if (!cachedEmbeddingProvider) {
+        throw new Error("Memory consolidation needs an embedding provider to embed a summary");
       }
-      const { createHash } = await import("node:crypto");
-      const hash = createHash("sha256").update(text).digest();
-      const dims = params.config.memory.unified.dimensions;
-      const vec = new Array<number>(dims);
-      for (let i = 0; i < dims; i++) {
-        vec[i] = (hash[i % hash.length]! / 128) - 1;
-      }
-      return vec;
+      const batch = await cachedEmbeddingProvider.embed([text]);
+      return batch.embeddings[0] as number[];
     };
 
     // MEMORY_CONSOLIDATION_MODEL_TIER names a tier, and the tier map names its

@@ -250,7 +250,7 @@ instinct recall works in this deployment (it falls back to lexical matching).
 | Heartbeat loop | Yes | unit | partial | `STRADA_DAEMON_*` configured in `.env`. |
 | Circuit breaker / resilience | Yes | unit | Yes (logic) | |
 | Budget tracker | Yes | unit | Yes (logic) | Daily budget configured. |
-| Consolidation engine | Yes | unit + integration | partial | Memory consolidation; semantic steps inherit hash-fallback degradation. |
+| Consolidation engine | Yes | unit + integration | partial | Memory consolidation. Clusters only provider vectors: under hash fallback it merges nothing (histogram similarity is not meaning). |
 | Bootstrap (staged) | Yes | unit + integration | Yes (boots locally) | Graceful degradation: a non-primary provider failing no longer aborts boot; per-step try/catch; shutdown-leak fixes landed. |
 | Autonomous loop | Yes | unit | **Not assumed** | `AUTONOMOUS_DEFAULT_ENABLED` configured; long-running autonomous behavior is **not** covered by automated e2e. |
 

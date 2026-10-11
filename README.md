@@ -757,6 +757,7 @@ Memory entries naturally decay over time using an exponential decay model, while
 
 **Idle consolidation:**
 - During low-activity periods, the consolidation engine identifies semantically similar memories using HNSW clustering
+- Clustering needs an embedding provider: without one, vectors are character histograms whose similarity measures text length, not meaning, so nothing is clustered or merged (undo and stats still work)
 - Related memories are merged into consolidated summaries, reducing storage and improving retrieval quality
 - Soft-delete with undo: consolidated source memories are marked as consolidated (not physically deleted) and can be restored
 

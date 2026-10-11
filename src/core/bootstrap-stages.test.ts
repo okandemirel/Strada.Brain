@@ -1065,7 +1065,7 @@ describe("bootstrap-stages", () => {
     expect(result.delegationManager).toBe(delegationManager);
   });
 
-  it("initializes memory consolidation with hash fallback embeddings and daemon wiring", async () => {
+  it("wires memory consolidation without an embedding provider, but hands it no stand-in embedder (memory-rag#2)", async () => {
     const logger = createMockLogger();
     const heartbeatLoop = {
       setConsolidationEngine: vi.fn(),
@@ -1109,10 +1109,13 @@ describe("bootstrap-stages", () => {
       }),
     });
 
-    const vector = await engineOptions.generateEmbedding("abc");
+    // The SHA-256 stand-in embedded a summary of unrelated memories as noise;
+    // without a provider there is nothing to embed with, so the merge fails
+    // before it touches a row. The engine stays wired for undo and stats.
+    await expect(engineOptions.generateEmbedding("abc")).rejects.toThrow(/embedding provider/);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("will not merge anything"));
     const summary = await engineOptions.summarizeWithLLM(["a", "b"]);
 
-    expect(vector).toHaveLength(4);
     expect(summary.summary).toBe("summary");
     expect(provider.chat).toHaveBeenCalled();
     expect(heartbeatLoop.setConsolidationEngine).toHaveBeenCalledWith(consolidationEngine, {
@@ -1126,6 +1129,44 @@ describe("bootstrap-stages", () => {
         idleMinutes: 10,
       }),
     );
+  });
+
+  it("embeds consolidation summaries with the embedding provider when there is one", async () => {
+    const logger = createMockLogger();
+    let engineOptions: any;
+    const embed = vi.fn().mockResolvedValue({ embeddings: [[0.5, 0.5, 0.5, 0.5]] });
+
+    await initializeMemoryConsolidationStage({
+      config: makeConfig({
+        memory: {
+          dbPath: MEMORY_DIR,
+          unified: { dimensions: 4 },
+          consolidation: { enabled: true, idleMinutes: 10, threshold: 0.8 },
+          decay: { exemptDomains: [] },
+        } as Config["memory"],
+      }),
+      logger,
+      memoryManager: { _tag: "memory-manager" } as any,
+      cachedEmbeddingProvider: { embed } as any,
+      providerManager: { getProvider: vi.fn() } as any,
+      heartbeatLoop: { setConsolidationEngine: vi.fn() } as any,
+      daemonContext: {} as any,
+    }, {
+      isAgentDbAdapter: vi.fn().mockReturnValue(true),
+      getConsolidationInternals: vi.fn().mockReturnValue({
+        sqliteDb: { _tag: "sqlite" },
+        entries: [],
+        hnswStore: { _tag: "hnsw" },
+      }),
+      createMemoryConsolidationEngine: vi.fn().mockImplementation((options) => {
+        engineOptions = options;
+        return { _tag: "consolidation-engine" };
+      }),
+    });
+
+    expect(await engineOptions.generateEmbedding("abc")).toEqual([0.5, 0.5, 0.5, 0.5]);
+    expect(embed).toHaveBeenCalledWith(["abc"]);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("will not merge anything"));
   });
 
   it("initializes deployment wiring and preserves warning-only script validation", async () => {

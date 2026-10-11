@@ -40,6 +40,7 @@ interface MemEntry {
   importance: string;
   importanceScore: number;
   embedding: number[];
+  embeddingProvenance?: string;
   createdAt: number;
   lastAccessedAt: number;
   accessCount: number;
@@ -62,6 +63,8 @@ function makeMemEntry(id: string, content: string, overrides: Partial<MemEntry> 
     importance: "medium",
     importanceScore: 0.5,
     embedding: [0.1, 0.2, 0.3, 0.4],
+    // A semantic embedder's label: findClusters ignores histogram vectors.
+    embeddingProvenance: "test-embedder",
     createdAt: Date.now() - 100000,
     lastAccessedAt: Date.now(),
     accessCount: 0,
@@ -497,6 +500,42 @@ describe("findClusters", () => {
     expect(clusters[0]!.memberIds).toContain("c1");
     expect(clusters[0]!.memberIds).toContain("c2");
     expect(clusters[0]!.tier).toBe(MemoryTier.Ephemeral);
+  });
+
+  // memory-rag#2: a histogram cosine above the threshold says the texts have
+  // similar length, not similar meaning; neither does a vector of unknown or
+  // unlabelled origin, nor a score across two embedders.
+  it.each([
+    ["histogram", "histogram", "histogram"],
+    ["unknown", "unknown", "unknown"],
+    ["unlabelled", undefined, undefined],
+    ["two embedders", "test-embedder", "other-embedder"],
+  ])("does not cluster on %s vectors even above the threshold", async (_label, seedProvenance, neighbourProvenance) => {
+    const entries = new Map<string, unknown>();
+    entries.set("c1", makeMemEntry("c1", "User prefers dark theme", {
+      tier: MemoryTier.Ephemeral,
+      embeddingProvenance: seedProvenance,
+    }));
+    entries.set("c2", makeMemEntry("c2", "Boss fight music loops", {
+      tier: MemoryTier.Ephemeral,
+      embeddingProvenance: neighbourProvenance,
+    }));
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "c1", score: 1.0 },
+        { id: "c2", score: 0.95 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const engine = new MemoryConsolidationEngine(makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.85, minClusterSize: 2 }),
+    }));
+
+    expect(await engine.findClusters(MemoryTier.Ephemeral)).toEqual([]);
   });
 
   it("should not form cluster below minClusterSize", async () => {

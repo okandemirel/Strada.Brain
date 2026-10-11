@@ -17,7 +17,12 @@ import type {
   ConsolidationTierStats,
   MemoryCluster,
 } from "./consolidation-types.js";
-import { MemoryTier } from "./unified-memory.interface.js";
+import {
+  MemoryTier,
+  HISTOGRAM_PROVENANCE,
+  TFIDF_PROVENANCE,
+  UNKNOWN_PROVENANCE,
+} from "./unified-memory.interface.js";
 import { toVectorEntry } from "./agentdb-vector.js";
 import { extractTerms } from "../text-index.js";
 import { UNSCOPED_CHAT_ID, isExplicitlyShared } from "../retrieval-filters.js";
@@ -86,6 +91,8 @@ interface MemoryEntryLike {
   importance: string;
   importanceScore: number;
   embedding: number[];
+  /** Which embedder made `embedding` (plan 0-B.9); see hasSemanticVector. */
+  embeddingProvenance?: string;
   createdAt: number;
   lastAccessedAt: number;
   accessCount: number;
@@ -205,6 +212,25 @@ export function summaryOwnership(members: ReadonlyArray<OwnedRow>): SummaryOwner
   }
   const { shared: _dropped, ...privateOwnership } = first;
   return privateOwnership;
+}
+
+/**
+ * True when the entry's vector came from a semantic embedder, so its cosine to
+ * another vector of the same embedder says something about meaning.
+ *
+ * Without an embedding provider every AgentDB vector is a character histogram,
+ * and the histogram cosine of unrelated sentences of similar length is
+ * 0.83-0.95 — above the 0.85 default threshold. Clustering on it merged
+ * unrelated memories into one summary and soft-deleted the originals on the
+ * default daemon path (audit memory-rag#2). A vector of unknown origin, or one
+ * with no label, cannot vouch for itself either.
+ */
+function hasSemanticVector(entry: MemoryEntryLike): boolean {
+  const provenance = entry.embeddingProvenance;
+  return provenance !== undefined
+    && provenance !== HISTOGRAM_PROVENANCE
+    && provenance !== UNKNOWN_PROVENANCE
+    && provenance !== TFIDF_PROVENANCE;
 }
 
 /** Minimal HNSW write mutex interface */
@@ -442,6 +468,7 @@ export class MemoryConsolidationEngine {
       if (this.getDepth(entry) >= this.config.maxDepth) continue;
       if (now - entry.createdAt < this.config.minAgeMs) continue;
       if (consolidatedIds.has(entry.id)) continue;
+      if (!hasSemanticVector(entry)) continue;
       eligible.push(entry);
     }
 
@@ -471,6 +498,8 @@ export class MemoryConsolidationEngine {
 
         const neighborEntry = this.entries.get(neighbor.id);
         if (!neighborEntry) continue;
+        // Scores compare only within one embedder's space.
+        if (neighborEntry.embeddingProvenance !== entry.embeddingProvenance) continue;
         if (neighborEntry.tier !== tier) continue;
         if (ownershipKey(neighborEntry) !== seedOwnership) continue;
         if (this.isExempt(neighborEntry)) continue;
@@ -534,6 +563,13 @@ export class MemoryConsolidationEngine {
 
     const contents = memberEntries.map((e) => e.content);
     const versions = memberEntries.map((e) => e.version);
+    // findClusters admits one semantic embedder per cluster, and the wiring
+    // embeds the summary with that same provider. Without the stamp a summary
+    // loaded back as "unknown" and left vector search until a re-embed pass.
+    const provenances = new Set(memberEntries.map((e) => e.embeddingProvenance));
+    const summaryProvenance = provenances.size === 1 && hasSemanticVector(memberEntries[0]!)
+      ? memberEntries[0]!.embeddingProvenance
+      : undefined;
 
     // Summarize via LLM
     const llmResult = await this.summarizeWithLLM(contents);
@@ -582,6 +618,7 @@ export class MemoryConsolidationEngine {
       importance: "medium",
       importanceScore: maxImportanceScore,
       embedding: summaryEmbedding,
+      ...(summaryProvenance !== undefined ? { embeddingProvenance: summaryProvenance } : {}),
       createdAt: now,
       lastAccessedAt: now,
       accessCount: 0,
@@ -631,6 +668,7 @@ export class MemoryConsolidationEngine {
       importanceScore: summaryEntry.importanceScore,
       domain: summaryEntry.domain,
       chatId: summaryEntry.chatId,
+      ...(summaryProvenance !== undefined ? { embeddingProvenance: summaryProvenance } : {}),
       // Identity scope travels with the summary (finding 17) — loadEntries
       // reads userId/projectId back out of this blob, and a summary that lost
       // them would be an identity-less row that matches every scope.
