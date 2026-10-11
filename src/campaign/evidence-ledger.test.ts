@@ -149,6 +149,9 @@ describe("artifactDigest", () => {
   });
 
   it("a remembered digest is not reused once the bytes change, even at the same size and mtime (CMP-11)", async () => {
+    // Files this fresh are never remembered (a coarse filesystem clock cannot
+    // vouch for them); evidence-ledger-coarse-clock.test.ts reaches the memory
+    // with settled stamps and checks ctime there.
     const app = bundle("Same.app", Buffer.alloc(4096, 1));
     const exe = join(app, "Contents", "MacOS", "Game");
     const before = artifactDigest(app);

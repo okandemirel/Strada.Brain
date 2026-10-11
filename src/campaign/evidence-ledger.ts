@@ -224,6 +224,7 @@ export function describeLedgerRow(row: LedgerRow): string {
 export function artifactDigest(path: string | undefined): string | undefined {
   if (path === undefined || path === "") return undefined;
   try {
+    const startedNs = wallClockNs();
     const files = artifactFiles(path);
     const signature = digestSignature(files);
     const cached = digestCache.get(path);
@@ -243,7 +244,7 @@ export function artifactDigest(path: string | undefined): string | undefined {
         closeSync(fd);
       }
     }
-    return rememberDigest(path, signature, hash.digest("hex"));
+    return rememberDigest(path, files, signature, hash.digest("hex"), startedNs);
   } catch {
     // An artifact that is not there has no digest, and saying so is the point.
     return undefined;
@@ -262,6 +263,7 @@ export function artifactDigest(path: string | undefined): string | undefined {
 export async function artifactDigestAsync(path: string | undefined): Promise<string | undefined> {
   if (path === undefined || path === "") return undefined;
   try {
+    const startedNs = wallClockNs();
     const files = await artifactFilesAsync(path);
     const signature = digestSignature(files);
     const cached = digestCache.get(path);
@@ -273,7 +275,7 @@ export async function artifactDigestAsync(path: string | undefined): Promise<str
         hash.update(piece as Buffer);
       }
     }
-    return rememberDigest(path, signature, hash.digest("hex"));
+    return rememberDigest(path, files, signature, hash.digest("hex"), startedNs);
   } catch {
     return undefined;
   }
@@ -286,6 +288,8 @@ interface DigestFile {
   readonly size: bigint;
   /** What would change if the bytes did: size, mtime, ctime and inode, at nanosecond precision. */
   readonly stamp: string;
+  /** The later of mtime and ctime: when the file last changed, by the filesystem's clock. */
+  readonly changedNs: bigint;
 }
 
 const DIGEST_CHUNK_BYTES = 1024 * 1024;
@@ -297,9 +301,25 @@ const DIGEST_CHUNK_BYTES = 1024 * 1024;
  * file's size, mtime, ctime and inode are what they were: a same-size
  * rewrite moves ctime even when mtime is put back, and a replaced file is a
  * new inode.
+ *
+ * …WHEN THE STAMPS COULD HAVE MOVED. A filesystem stamps in ticks — NTFS on
+ * the system clock's ~15.6 ms tick, HFS+ and ext3 in whole seconds, FAT in
+ * two — so a same-size rewrite inside the tick of the write before it leaves
+ * every stamp as it was. An Android expansion file rewritten right after its
+ * .apk was hashed kept the old digest on windows-test (2f8041bc): the memory
+ * answered for bytes nobody read. As git treats a racily clean index entry, a
+ * digest is remembered only when every file it covers last changed a full
+ * window before the walk began; a newer artifact is read again next time.
  */
 const digestCache = new Map<string, { readonly signature: string; readonly digest: string }>();
 const DIGEST_CACHE_MAX = 32;
+// Wider than FAT's two-second tick, with room for a stamp from a clock that
+// runs a little ahead of this one.
+const DIGEST_SETTLED_NS = 5_000_000_000n;
+
+function wallClockNs(): bigint {
+  return BigInt(Date.now()) * 1_000_000n;
+}
 
 function digestSignature(files: readonly DigestFile[]): string {
   const hash = createHash("sha256");
@@ -307,8 +327,9 @@ function digestSignature(files: readonly DigestFile[]): string {
   return hash.digest("hex");
 }
 
-function rememberDigest(path: string, signature: string, digest: string): string {
+function rememberDigest(path: string, files: readonly DigestFile[], signature: string, digest: string, startedNs: bigint): string {
   digestCache.delete(path);
+  if (files.some((file) => file.changedNs > startedNs - DIGEST_SETTLED_NS)) return digest;
   digestCache.set(path, { signature, digest });
   if (digestCache.size > DIGEST_CACHE_MAX) {
     const oldest = digestCache.keys().next().value;
@@ -332,7 +353,13 @@ function digestHeader(path: string): Hash {
 }
 
 function digestFile(at: string, rel: string, st: BigIntStats): DigestFile {
-  return { at, rel, size: st.size, stamp: `${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}` };
+  return {
+    at,
+    rel,
+    size: st.size,
+    stamp: `${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}`,
+    changedNs: st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs,
+  };
 }
 
 /**
