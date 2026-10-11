@@ -1096,26 +1096,20 @@ async function bootstrapImpl(
             rootPath,
             kind: "generic",
           });
-          vaultRegistry.register(vault);
+          // Indexed in the background like the Unity and self vaults, and
+          // tracked like them: an untracked init left this vault "untracked"
+          // for good, so the agent's vault hint showed a frozen partial count
+          // instead of "still being indexed" and was never rebuilt when the
+          // walk finished, and the portal showed no indexing state.
+          const { indexInBackground } = await import("./bootstrap-stages/stage-knowledge.js");
+          indexInBackground(vaultRegistry, vault, "Project vault", () =>
+            vault.startWatch(config.vault?.debounceMs ?? 800),
+          );
           logger.info("[vault] auto-registered generic vault from setup config", {
             id: vault.id,
             name: basename(rootPath),
             rootPath,
           });
-          // Fire-and-log init + watcher so bootstrap never blocks on indexing
-          // a potentially large directory.
-          void (async () => {
-            try {
-              await vault.init();
-              await vault.startWatch(config.vault?.debounceMs ?? 800);
-              logger.info(`[vault] async init complete for ${vault.id}`);
-            } catch (err) {
-              logger.warn(`[vault] async init failed for ${vault.id}`, {
-                error: err instanceof Error ? err.message : String(err),
-                stack: err instanceof Error ? err.stack : undefined,
-              });
-            }
-          })();
         } else if (!config.unityProjectPath) {
           logger.info("[vault] skipping auto-register: no unityProjectPath configured");
         } else {
@@ -1137,6 +1131,7 @@ async function bootstrapImpl(
         // each incident.
         try {
           const { frameworkVaultTargets } = await import("../vault/framework-vault-targets.js");
+          const { indexInBackground } = await import("./bootstrap-stages/stage-knowledge.js");
           // installRoot, not cwd: runtime-paths chdirs the process to the Strada
           // home at startup, so cwd here is ~/.strada and the vault registered
           // under the name "Strada.Brain" indexed the config directory instead
@@ -1163,23 +1158,18 @@ async function bootstrapImpl(
               rootPath: target.rootPath,
               kind: "generic",
             });
-            vaultRegistry.register(vault, target.name);
+            indexInBackground(
+              vaultRegistry,
+              vault,
+              `Framework vault (${target.name})`,
+              () => vault.startWatch(config.vault?.debounceMs ?? 800),
+              target.name,
+            );
             logger.info("[vault] registered framework vault", {
               id: vault.id,
               name: target.name,
               rootPath: target.rootPath,
             });
-            void (async () => {
-              try {
-                await vault.init();
-                await vault.startWatch(config.vault?.debounceMs ?? 800);
-                logger.info(`[vault] async init complete for ${vault.id} (${target.name})`);
-              } catch (err) {
-                logger.warn(`[vault] async init failed for ${vault.id} (${target.name})`, {
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              }
-            })();
           }
         } catch (err) {
           logger.warn("[vault] framework vault registration failed", {
@@ -1211,24 +1201,19 @@ async function bootstrapImpl(
             embedding: vaultEmbedding,
             vectorStore: createVaultVectorStore(),
           });
-          vaultRegistry.register(knowledgeVault, "Dev Knowledge");
+          const { indexInBackground } = await import("./bootstrap-stages/stage-knowledge.js");
+          indexInBackground(
+            vaultRegistry,
+            knowledgeVault,
+            "Dev-knowledge vault",
+            () => knowledgeVault.startWatch(config.vault?.debounceMs ?? 800),
+            "Dev Knowledge",
+          );
           devKnowledgeVaultRegistered = true;
           logger.info("[vault] registered dev-knowledge vault", {
             id: knowledgeVault.id,
             rootPath: knowledgeRoot,
           });
-          // Fire-and-log init + watcher so bootstrap never blocks on indexing.
-          void (async () => {
-            try {
-              await knowledgeVault.init();
-              await knowledgeVault.startWatch(config.vault?.debounceMs ?? 800);
-              logger.info(`[vault] async init complete for ${knowledgeVault.id}`);
-            } catch (err) {
-              logger.warn(`[vault] async init failed for ${knowledgeVault.id}`, {
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          })();
         } else {
           logger.info("[vault] skipping dev-knowledge vault: no unityProjectPath configured");
         }

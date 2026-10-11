@@ -161,13 +161,14 @@ export interface VaultStartup<V extends IVault> {
  * shutdown's disposeAll (which stops the walk) and reports "indexing" until it
  * is done; queries meanwhile see what is indexed so far.
  */
-function indexInBackground<V extends IVault>(
+export function indexInBackground<V extends IVault>(
   registry: VaultRegistry,
   vault: V,
   label: string,
   afterInit?: () => Promise<void>,
+  name?: string,
 ): VaultStartup<V> {
-  registry.register(vault);
+  registry.register(vault, name);
   const init = vault.init();
   registry.trackInit(vault, init);
   const ready = (async () => {

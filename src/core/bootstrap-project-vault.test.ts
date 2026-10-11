@@ -35,6 +35,8 @@ const { seen, snapshot, initializeToolRegistryStageMock } = vi.hoisted(() => ({
     selfRoot: undefined as string | undefined,
     ownerKind: undefined as string | undefined,
     ownerRoot: undefined as string | undefined,
+    /** Registry init status per vault id, read where the orchestrator's hint reads it. */
+    initStates: {} as Record<string, string | undefined>,
   },
   initializeToolRegistryStageMock: vi.fn(),
 }));
@@ -69,6 +71,9 @@ vi.mock("./bootstrap-stages.js", () => ({
         const owner = snapshot.projectPath ? registry.resolveVaultForPath(snapshot.projectPath) : undefined;
         snapshot.ownerKind = owner?.kind;
         snapshot.ownerRoot = owner?.rootPath;
+        snapshot.initStates = Object.fromEntries(
+          registry.list().map((v) => [v.id, registry.getInitState(v.id)?.status]),
+        );
       }),
     },
     stoppableServers: undefined,
@@ -202,6 +207,7 @@ describe("bootstrap registers a code vault for the configured project", () => {
     snapshot.selfRoot = undefined;
     snapshot.ownerKind = undefined;
     snapshot.ownerRoot = undefined;
+    snapshot.initStates = {};
     seen.registry = undefined;
     initializeToolRegistryStageMock.mockReset();
     initializeToolRegistryStageMock.mockImplementation(async () => {
@@ -260,5 +266,24 @@ describe("bootstrap registers a code vault for the configured project", () => {
 
     expect(snapshot.ownerKind).toBe("self");
     expect(snapshot.ids.filter((id) => id.startsWith("generic:"))).toEqual([]);
+  });
+
+  it("tracks the init of every vault it indexes in the background, so 'still indexing' is reported", async () => {
+    // The orchestrator's vault hint and the portal read getInitState(); a vault
+    // indexed in an untracked fire-and-forget init stays "untracked" for good,
+    // so the agent was shown a frozen partial count instead of "still being
+    // indexed", and the hint was never rebuilt when the walk finished. With the
+    // self vault off, Brain's own checkout registers as a framework vault too.
+    const project = join(root, "Game");
+    mkdirSync(project, { recursive: true });
+
+    await expect(bootWith(project, { enabled: false, self: { enabled: false } })).rejects.toThrow(STOP);
+
+    const ids = Object.keys(snapshot.initStates);
+    expect(ids.some((id) => id.startsWith("generic:"))).toBe(true);
+    expect(ids.some((id) => id.startsWith("knowledge:"))).toBe(true);
+    expect(ids.filter((id) => id.startsWith("generic:")).length).toBeGreaterThanOrEqual(2);
+    const untracked = ids.filter((id) => !/^(indexing|ready)$/.test(snapshot.initStates[id] ?? ""));
+    expect(untracked).toEqual([]);
   });
 });
