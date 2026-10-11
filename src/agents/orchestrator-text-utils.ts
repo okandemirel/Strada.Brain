@@ -24,8 +24,23 @@ const RESPONSE_FORMAT_CUSTOM_RE =
   /(?:(?:şu|su|this|following)\s+format(?:ta)?(?:\s+(?:cevap\s+ver|reply|respond))?|(?:cevap|yanıt|reply|respond)(?:ların|ler?n)?\s*(?:şöyle|like\s+this|in\s+this\s+format))(?:\s+ol(?:sun|malı|acak))?\s*[:\-]?\s*(.+)$/iu;
 const PROVIDER_REASONING_BLOCK_RE =
   /(?:<reasoning>|<think>)\s*[\r\n][\s\S]*?[\r\n]\s*(?:<\/reasoning>|<\/think>)\s*(?:[\r\n]+)?/giu;
-const AUTONOMY_ENABLE_RE =
-  /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:çalış|calis|aç|ac|aktif|etkin|enable|turn\s+on|work|ilerle)\b|\b(?:onay|approval)\b.*\b(?:sormadan|istemeden|without\s+asking|without\s+approval)\b|\b(?:tam\s+yetki|full\s+autonomy|full\s+authority)\b)/iu;
+// Natural-language autonomy turns write confirmations off for 24 h and is
+// stored in the profile, so it must come from an instruction, not a mention.
+// Measured 2026-10-11: "How does autonomous mode work?", "Make the enemy AI
+// autonomous so it can work without the player" and "Otonom mod aktif mi?"
+// each enabled it — any autonomy word anywhere before "work"/"aktif" counted —
+// while "otonom modu aç" did not, because \b is ASCII-only and never closes a
+// word after "ç". Each clause is now judged alone: a question never counts, an
+// English command opens its clause, a Turkish one closes it (Turkish is
+// verb-final), and only the bare imperative counts — "çalışsın"/"çalışan"
+// describe a game object, "açma" negates.
+const AUTONOMY_ENABLE_EN_RE =
+  /^(?:(?:please|pls|ok(?:ay)?|now|so|just|then|and|also|from\s+now\s+on)[\s,]+)*(?:(?:enable|activate|turn\s+on|switch\s+on|switch\s+to|go\s+into|go|enter|use|start)\s+(?:the\s+)?(?:autonomous\s+mode|full\s+autonomy|autonomy(?:\s+mode)?|autonomous$)|(?:you\s+have|i\s+give\s+you|i\s+grant\s+you|take|use)\s+full\s+(?:autonomy|authority))(?![\p{L}\p{N}])/iu;
+const AUTONOMY_ENABLE_TR_RE =
+  /(?<![\p{L}\p{N}])(?:(?:otonom|autonom)(?:\s+(?:mod(?:u|a|da)?|olarak))?\s+(?:a[çc](?:[ıi]n)?|aktif\s+et|aktifle[şs]tir|etkinle[şs]tir|ba[şs]lat|ge[çc]|[çc]al[ıi][şs](?:[ıi]n)?|ilerle(?:yin)?|devam\s+et)|(?:otonom|autonom)\s+modu?\s+(?:aktif|etkin|a[çc][ıi]k)\s+olsun|(?:onay|approval)\s+(?:sormadan|istemeden|beklemeden)\s+(?:ilerle|devam\s+et|[çc]al[ıi][şs])|(?:sana\s+)?tam\s+yetki\s+ver(?:iyorum|dim)?|tam\s+yetkilisin|tam\s+yetkiyle\s+(?:ilerle|devam\s+et|[çc]al[ıi][şs]))(?:\s+(?:l[üu]tfen|art[ıi]k))?$/iu;
+const AUTONOMY_QUESTION_RE =
+  /\?|^(?:how|what|why|when|where|which|who|does|do|did|is|are|was|were|can|could|would|will|should|shall|may|might)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(?:m[iıuü](?:s[iıuü]n(?:[iıuü]z)?|y[iıuü]m|y[iıuü]z|d[iıuü]r)?|nedir|nas[ıi]l|neden|niye|hangi)(?![\p{L}\p{N}])/iu;
+const AUTONOMY_CLAUSE_SPLIT_RE = /[,;:]+|\s+(?:and|then|ve|sonra)\s+/iu;
 const AUTONOMY_DISABLE_RE =
   /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:kapat|kapa|disable|turn\s+off|devre\s+dışı|devre\s+disi|çalışma|calisma)\b|\b(?:onay|approval)\b.*\b(?:sor|iste|ask\s+first|require)\b)/iu;
 const ULTRATHINK_ENABLE_RE =
@@ -610,17 +625,93 @@ export function sanitizeRetrievalContent(text: string, source: string): string {
   return result.clean;
 }
 
-/** Simple heuristic language detection from text content. */
+function isAutonomyEnableDirective(text: string): boolean {
+  for (const rawSentence of text.match(/[^.!?\n]+[.!?]*/gu) ?? []) {
+    const sentence = rawSentence.trim();
+    if (AUTONOMY_QUESTION_RE.test(sentence)) continue;
+    for (const rawClause of sentence.split(AUTONOMY_CLAUSE_SPLIT_RE)) {
+      const clause = rawClause.trim().replace(/[\s.!…]+$/u, "");
+      if (AUTONOMY_ENABLE_EN_RE.test(clause) || AUTONOMY_ENABLE_TR_RE.test(clause)) return true;
+    }
+  }
+  return false;
+}
+
+// ASCII-typed Turkish carries no special letters, so its common words count.
+const LANGUAGE_FUNCTION_WORDS = new Map<string, string>([
+  ...[
+    "merhaba", "selam", "nasıl", "nasil", "proje", "yardım", "yardim", "bir", "ile", "için", "icin",
+    "bu", "şu", "ve", "gibi", "daha", "çok", "cok", "şimdi", "simdi", "sonra", "lütfen", "lutfen",
+    "tamam", "evet", "hayır", "hayir", "değil", "degil", "olarak", "nedir", "neden", "artık", "artik",
+    "misin", "mısın", "musun", "müsün",
+  ].map((word) => [word, "tr"] as const),
+  ...["hallo", "projekt", "hilfe"].map((word) => [word, "de"] as const),
+  ...["hola", "proyecto", "ayuda"].map((word) => [word, "es"] as const),
+  ...["bonjour", "projet", "aide"].map((word) => [word, "fr"] as const),
+]);
+const LANGUAGE_SKIPPED_SPAN_RE = /```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”/gu;
+const CJK_RUN_RE = /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/gu;
+const LANGUAGE_WORD_RE = /[¡¿]?\p{L}+(?:['’]\p{L}+)*/gu;
+
+/**
+ * Heuristic language detection from text content; null means "no evidence".
+ *
+ * The result is written into the user's profile and English is never
+ * detected, so a false hit sticks. Measured 2026-10-11: one character used to
+ * decide — "Make a Pokémon-style battle system" read as French, "Rename the
+ * Müller NPC" as Turkish, "Add a button labeled 決定" as Japanese — and asset
+ * names and localized strings are everyday text in a game project. A language
+ * now has to carry a third of the words, by a unique letter or word or by two
+ * shared ones; ç/ö/ü are shared by Turkish, German and French, so they never
+ * decide alone. Code and double-quoted spans are skipped; single quotes are
+ * Turkish suffix apostrophes ("Unity'de").
+ */
 export function detectLanguageFromText(text: string): string | null {
-  const lower = text.toLowerCase();
-  if (/[çğıöşüÇĞİÖŞÜ]/.test(text) || /\b(merhaba|selam|nasıl|proje|yardım|bir|ile|için)\b/.test(lower)) return "tr";
-  if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text)) return "ja";
-  if (/[\uAC00-\uD7AF]/.test(text)) return "ko";
-  if (/[\u4E00-\u9FFF]/.test(text) && !/[\u3040-\u309F\uAC00-\uD7AF]/.test(text)) return "zh";
-  if (/[äöüßÄÖÜ]/.test(text) || /\b(hallo|projekt|hilfe)\b/.test(lower)) return "de";
-  if (/[ñ¡¿]/.test(text) || /\b(hola|proyecto|ayuda)\b/.test(lower)) return "es";
-  if (/[àâæçéèêëïîôœùûüÿ]/.test(text) || /\b(bonjour|projet|aide)\b/.test(lower)) return "fr";
-  return null;
+  const scanned = text.normalize("NFC").replace(LANGUAGE_SKIPPED_SPAN_RE, " ");
+  const strong = new Map<string, number>();
+  const weak = new Map<string, number>();
+  const add = (counts: Map<string, number>, lang: string, by = 1) => counts.set(lang, (counts.get(lang) ?? 0) + by);
+  let units = 0;
+
+  // CJK has no spaces between words; two characters stand in for one word.
+  for (const run of scanned.match(CJK_RUN_RE) ?? []) {
+    const runUnits = Math.ceil(run.length / 2);
+    units += runUnits;
+    add(strong, /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/u.test(run) ? "ja" : /[\uAC00-\uD7AF]/u.test(run) ? "ko" : "zh", runUnits);
+  }
+  for (const word of scanned.replace(CJK_RUN_RE, " ").match(LANGUAGE_WORD_RE) ?? []) {
+    units += 1;
+    // "İ".toLowerCase() leaves a combining dot that no list entry carries.
+    const lower = word.toLowerCase().replace(/\u0307/gu, "");
+    const functionWordLang = LANGUAGE_FUNCTION_WORDS.get(lower.replace(/^[¡¿]/u, ""));
+    if (functionWordLang) add(strong, functionWordLang);
+    else if (/[ğışĞİŞ]/u.test(word)) add(strong, "tr");
+    else if (/[äß]/u.test(lower)) add(strong, "de");
+    else if (/[ñ¡¿]/u.test(lower)) add(strong, "es");
+    else {
+      if (/[çöü]/u.test(lower)) add(weak, "tr");
+      if (/[öü]/u.test(lower)) add(weak, "de");
+      if (/[àâæçéèêëïîôœùûüÿ]/u.test(lower)) add(weak, "fr");
+      if (/[áíóú]/u.test(lower)) add(weak, "es");
+    }
+  }
+
+  let best: string | null = null;
+  let bestScore = 0;
+  let tied = false;
+  for (const lang of new Set([...strong.keys(), ...weak.keys()])) {
+    const score = (strong.get(lang) ?? 0) + (weak.get(lang) ?? 0);
+    if (score > bestScore) {
+      best = lang;
+      bestScore = score;
+      tied = false;
+    } else if (score === bestScore) {
+      tied = true;
+    }
+  }
+  if (!best || tied || bestScore * 3 < units) return null;
+  if (!strong.has(best) && bestScore < 2) return null;
+  return best;
 }
 
 export function extractNaturalLanguageDirectiveUpdates(params: {
@@ -704,7 +795,7 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
 
   if (AUTONOMY_DISABLE_RE.test(trimmed)) {
     updates.autonomousMode = { enabled: false };
-  } else if (AUTONOMY_ENABLE_RE.test(trimmed)) {
+  } else if (isAutonomyEnableDirective(trimmed)) {
     updates.autonomousMode = {
       enabled: true,
       expiresAt: (params.nowMs ?? Date.now()) + autonomyWindowMs,

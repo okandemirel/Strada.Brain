@@ -6,6 +6,7 @@ import {
   detectAssistantPersonaPreference,
   detectAssistantPersonalityPreference,
   detectPromptInjection,
+  detectLanguageFromText,
   DIRECTIVE_PATTERNS,
   extractExactResponseLiteral,
   extractNaturalLanguageDirectiveUpdates,
@@ -53,6 +54,88 @@ describe("orchestrator-text-utils", () => {
     expect(updates.autonomousMode).toEqual({
       enabled: true,
       expiresAt: 1_700_086_400_000,
+    });
+  });
+
+  // Natural-language autonomy turns write confirmations off for 24 h and is
+  // stored in the profile, so a mention must never count as the switch.
+  describe("natural-language autonomy directive", () => {
+    const autonomyFor = (prompt: string) =>
+      extractNaturalLanguageDirectiveUpdates({ latestProfile: null, prompt, nowMs: 0 }).autonomousMode;
+
+    it.each([
+      "How does autonomous mode work?",
+      "Does autonomous mode work with git push?",
+      "Make the enemy AI autonomous so it can work without the player",
+      "Do you have full authority to delete files?",
+      "Enemy NPCs should be autonomous and work in squads",
+      "Why did the autonomous agent stop? Can you make it work again?",
+      "The boss has full authority over the minions",
+      "otonom mod nedir?",
+      "Otonom mod aktif mi?",
+      "otonom mod nasıl aktif edilir?",
+      "otonom mod etkin mi",
+      "Commit onay istemeden push edilir mi?",
+      "otonom modu açma",
+      "Düşmanlar otonom çalışsın, oyuncuya ihtiyaç duymasın",
+      "otonom çalışan bir düşman yapay zekası yap",
+    ])("leaves autonomy alone for %j", (prompt) => {
+      expect(autonomyFor(prompt)).toBeUndefined();
+    });
+
+    it.each([
+      "Use full autonomy.",
+      "Bu görev için autonom çalış ve approval sormadan ilerle.",
+      "otonom modu aktif et",
+      "otonom modu aç",
+      "OTONOM MODU AÇ",
+      "otonom çalış",
+      "onay sormadan ilerle lütfen",
+      "sana tam yetki veriyorum",
+      "Please enable autonomous mode.",
+      "Turn on autonomous mode for this task",
+    ])("enables autonomy for the directive %j", (prompt) => {
+      expect(autonomyFor(prompt)).toEqual({ enabled: true, expiresAt: 86_400_000 });
+    });
+  });
+
+  // The detected language is written into the profile and English is never
+  // detected, so a stray asset name or localized string must not decide it.
+  describe("detectLanguageFromText", () => {
+    it.each([
+      "Make a Pokémon-style battle system",
+      "Rename the Müller NPC",
+      "Add a button labeled 決定 to the menu",
+      "Add a café scene",
+      "Fix the naïve AI",
+      "Add an aide-de-camp NPC",
+      "use the ile file",
+      "Set the label to `Başla` in the menu",
+      'Show "Hoş geldin" on the title screen',
+    ])("keeps the profile language for the English prompt %j", (prompt) => {
+      expect(detectLanguageFromText(prompt)).toBeNull();
+      expect(
+        extractNaturalLanguageDirectiveUpdates({ latestProfile: null, prompt }).language,
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ["Merhaba", "tr"],
+      ["Düşmanları ekle", "tr"],
+      ["etmiyor gibi gözüküyor emin misin?", "tr"],
+      ["bu dosyayi duzelt", "tr"],
+      ["Temp altında `strada_autonomy_smoke.txt` oluştur.", "tr"],
+      ["PlayerController.cs içindeki Update metodunu düzelt, Rigidbody velocity hesaplaması yanlış", "tr"],
+      ["ボタンを追加して", "ja"],
+      ["PlayerController の Update メソッドを修正して", "ja"],
+      ["안녕하세요", "ko"],
+      ["Hallo, schön dich zu sehen", "de"],
+      ["Hola, necesito ayuda con mi proyecto", "es"],
+      ["¿Dónde está el botón?", "es"],
+      ["Bonjour, aide-moi avec le projet", "fr"],
+      ["Le café est fermé", "fr"],
+    ])("detects %j as %s", (prompt, language) => {
+      expect(detectLanguageFromText(prompt)).toBe(language);
     });
   });
 
