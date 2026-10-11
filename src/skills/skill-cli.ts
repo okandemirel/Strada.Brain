@@ -39,7 +39,8 @@ export function registerSkillCommands(program: Command): void {
   // The default project is the directory `strada` was started in, not
   // process.cwd(): the CLI changes into its config root (~/.strada) before
   // any command runs, and from there ~/.strada/skills — the managed tier —
-  // reads as a workspace and gets an approval nothing ever consults.
+  // reads as a workspace and gets an approval nothing ever consults. A
+  // relative --project is resolved from that directory for the same reason.
   // =========================================================================
 
   skill
@@ -47,7 +48,7 @@ export function registerSkillCommands(program: Command): void {
     .description("Approve a workspace skill's current code, or its `inject: always` knowledge, for this project (recorded outside the project)")
     .option("--project <dir>", "Project root (default: current directory)")
     .action(async (name: string, opts: { project?: string }) => {
-      const projectRoot = opts.project ?? resolveLaunchCwd();
+      const projectRoot = resolve(resolveLaunchCwd(), opts.project ?? ".");
       const found = await findWorkspaceSkill(projectRoot, name);
       if (!found) return;
       try {
@@ -64,7 +65,7 @@ export function registerSkillCommands(program: Command): void {
     .description("Revoke a workspace skill's approval for this project")
     .option("--project <dir>", "Project root (default: current directory)")
     .action(async (name: string, opts: { project?: string }) => {
-      const projectRoot = opts.project ?? resolveLaunchCwd();
+      const projectRoot = resolve(resolveLaunchCwd(), opts.project ?? ".");
       const found = await findWorkspaceSkill(projectRoot, name);
       if (!found) return;
       const removed = await revokeWorkspaceSkill(projectRoot, found.path);

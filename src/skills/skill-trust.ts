@@ -82,7 +82,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
-import { findOutsideImports, findOutsidePackageTargets, isSkillCodeFile } from "./skill-import-scan.js";
+import { HASH_EXCLUDED_DIRS, findOutsideImports, findOutsidePackageTargets, isSkillCodeFile } from "./skill-import-scan.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -164,9 +164,6 @@ export type SkillContentScan =
       readonly sha256: null;
       readonly exceeded: SkillScanLimitBreach;
     });
-
-/** Directory names excluded from the hash (see the module comment). `node_modules` is NOT here (round 7 #10). */
-const EXCLUDED_DIRS = new Set([".git"]);
 
 /** Scan budget (round 7 #11). Exceeding any of these fails closed. */
 export const SKILL_SCAN_MAX_FILES = 5_000;
@@ -495,7 +492,7 @@ export async function scanSkillContent(
         continue;
       }
       if (entry.isDirectory()) {
-        if (EXCLUDED_DIRS.has(entry.name)) continue;
+        if (HASH_EXCLUDED_DIRS.has(entry.name)) continue;
         if (depth + 1 > limits.maxDepth) {
           exceeded = { limit: "depth", max: limits.maxDepth, at: toRel(full) };
           return;
@@ -693,8 +690,9 @@ function outsideImportRefusal(found: readonly string[]): string {
   const shown = found.length > 8 ? [...found.slice(0, 8), `and ${found.length - 8} more`] : found;
   return (
     "Workspace skill loads code from outside its directory, or from a file the scan does not read, which the approval cannot cover " +
-    "(only node: built-ins, and literal relative imports that never climb out of the skill directory and name a " +
-    'JavaScript/TypeScript, extensionless, .json or .node file, can be approved; a package.json "main" is held to the same rule; ' +
+    "(only node: built-ins other than node:module, and literal relative imports that never climb out of the skill directory " +
+    "or into .git and name a JavaScript/TypeScript, extensionless, .json or .node file, can be approved; require may appear " +
+    'only as a direct call with a literal, and comments and strings are read too; a package.json "main" is held to the same rule; ' +
     `vendor or bundle dependencies into the skill): ${shown.join(", ")}`
   );
 }

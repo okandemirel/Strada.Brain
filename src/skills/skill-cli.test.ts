@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 import { access, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { registerSkillCommands } from "./skill-cli.js";
 import { approveWorkspaceSkill, assessWorkspaceSkillTrust } from "./skill-trust.js";
 
@@ -110,6 +110,15 @@ describe("skill trust / untrust default to the directory strada was started in",
     await run("untrust", "demo");
     expect(logs.join("\n")).toContain("approval revoked");
     expect((await assessWorkspaceSkillTrust(project, join(project, "skills", "demo"), "demo")).trusted).toBe(false);
+  }, 30_000);
+
+  it("resolves a relative --project against the launch directory, not the config root", async () => {
+    process.env["STRADA_LAUNCH_CWD"] = dirname(project);
+    await run("trust", "demo", "--project", basename(project));
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(logs.join("\n")).toContain(`approved for ${await realpath(project)}`);
+    await run("untrust", "demo", "--project", basename(project));
+    expect(logs.join("\n")).toContain("approval revoked");
   }, 30_000);
 
   it("refuses ~/.strada as a project: its skills/ is the managed directory, so nothing would consult the record", async () => {

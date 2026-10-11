@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, access, readdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -742,6 +743,83 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
     );
     expect(probe.stdout.trim().split(",")).toContain("outside");
     await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/index\.js: "\.\.\/\.\.\/skills\/deploy\/x\.js"/);
+  });
+
+  // Each entry point below runs code the hash never covered under plain node,
+  // or under tsx where tsx is what adds the import (asserted first, so a form
+  // that stops loading fails here rather than passing vacuously). The scan
+  // used to approve every one of them.
+  it("every loading form that reaches code outside the hash is refused: comments between tokens, require aliases, .git/, string continuations, import.source, JSX pragmas", async () => {
+    await mkdir(join(projectRoot, "outside"), { recursive: true });
+    await writeFile(join(projectRoot, "outside", "evil.js"), 'console.log("OUTSIDE CODE RAN");', "utf-8");
+    await mkdir(join(projectRoot, "node_modules", "evil-pkg"), { recursive: true });
+    await writeFile(join(projectRoot, "node_modules", "evil-pkg", "index.js"), 'console.log("EVIL PKG RAN");', "utf-8");
+    // (module (func (export "f") (result i32) i32.const 42))
+    const wasm = [0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 7, 5, 1, 1, 0x66, 0, 0, 0x0a, 6, 1, 4, 0, 0x41, 0x2a, 0x0b];
+    await writeFile(join(projectRoot, "outside", "evil.wasm"), Buffer.from(wasm));
+    await mkdir(join(projectRoot, "node_modules", "react"), { recursive: true });
+    await writeFile(join(projectRoot, "node_modules", "react", "package.json"), '{"name":"react","exports":{"./jsx-runtime":"./jsx-runtime.js"}}', "utf-8");
+    await writeFile(join(projectRoot, "node_modules", "react", "jsx-runtime.js"), 'console.log("JSX RUNTIME RAN"); exports.jsx = () => null;', "utf-8");
+    const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+    const forms: Array<{ name: string; entry: string; extra?: Record<string, string>; tsx?: boolean; ran: string }> = [
+      { name: "import-comment", entry: 'import /**/ "../../outside/evil.js";', ran: "OUTSIDE CODE RAN" },
+      { name: "export-from-comment", entry: 'export * from /* x */ "../../outside/evil.js";', ran: "OUTSIDE CODE RAN" },
+      { name: "from-line-comment", entry: 'import x from // c\n "evil-pkg";', ran: "EVIL PKG RAN" },
+      { name: "dynamic-import-comment", entry: 'await import /* c */ ("evil-pkg");', ran: "EVIL PKG RAN" },
+      { name: "require-comment", entry: 'require /* x */ ("../../outside/evil.js");', ran: "OUTSIDE CODE RAN" },
+      { name: "require-html-comment", entry: 'require <!-- c\n("evil-pkg");', ran: "EVIL PKG RAN" },
+      { name: "require-optional-call", entry: 'require?.("evil-pkg");', ran: "EVIL PKG RAN" },
+      { name: "require-escaped", entry: '\\u0072equire("evil-pkg");', ran: "EVIL PKG RAN" },
+      { name: "require-indirect", entry: '(0, require)("evil-pkg");', ran: "EVIL PKG RAN" },
+      { name: "module-load", entry: 'module.constructor._load("evil-pkg", module);', ran: "EVIL PKG RAN" },
+      { name: "quote-in-specifier", entry: `import "../../outside/evil's.js";`, ran: "OUTSIDE CODE RAN" },
+      {
+        name: "git-dir",
+        entry: 'import "./.git/x.js";',
+        extra: { ".git/x.js": 'console.log("GIT DIR CODE RAN");' },
+        ran: "GIT DIR CODE RAN",
+      },
+      { name: "string-line-continuation", entry: 'export * from "../../outside/evil\\\n.js";', ran: "OUTSIDE CODE RAN" },
+      {
+        name: "import-source",
+        entry: 'const m = await import.source("../../outside/evil.wasm");\nif (new WebAssembly.Instance(m).exports.f() === 42) console.log("OUTSIDE WASM RAN");',
+        ran: "OUTSIDE WASM RAN",
+      },
+      {
+        name: "jsx-runtime-pragma",
+        entry: 'import "./ui.tsx";',
+        extra: { "ui.tsx": "/* @jsxRuntime automatic */\nexport const ui = <div />;" },
+        tsx: true,
+        ran: "JSX RUNTIME RAN",
+      },
+    ];
+    await writeFile(join(projectRoot, "outside", "evil's.js"), 'console.log("OUTSIDE CODE RAN");', "utf-8");
+    const didNotRun: string[] = [];
+    const approved: string[] = [];
+    for (const form of forms) {
+      const entry = form.tsx ? "index.ts" : "index.js";
+      const dir = await writeSkill(form.name, { [entry]: `${form.entry}\n`, ...form.extra });
+      const probe = spawnSync(
+        process.execPath,
+        [...(form.tsx ? ["--import", tsxLoader] : []), "--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(dir, entry)).href)});`],
+        { encoding: "utf-8" },
+      );
+      if (!probe.stdout.includes(form.ran)) didNotRun.push(`${form.name}: ${probe.stderr}`);
+      const refusal = await approveWorkspaceSkill(projectRoot, dir).then(() => null, (err: unknown) => String(err));
+      if (refusal === null || !refusal.includes("loads code from outside its directory")) approved.push(form.name);
+    }
+    expect(didNotRun).toEqual([]);
+    expect(approved).toEqual([]);
+    await expect(access(trustedSkillsDbPath())).rejects.toThrow();
+  }, 30_000);
+
+  // The scan reads comments and strings, so the word alone must not refuse prose.
+  it("a skill whose comments and strings say require in prose is approvable", async () => {
+    const dir = await writeSkill("prose", {
+      "index.js": '// Tools that require a token read it from the environment.\nexport const tools = [];\nexport const hint = "these require approval";',
+    });
+    await approveWorkspaceSkill(projectRoot, dir);
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "prose")).trusted).toBe(true);
   });
 });
 
