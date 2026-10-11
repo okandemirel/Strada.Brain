@@ -278,6 +278,26 @@ describe("AgentDBAdapter", () => {
       expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
     });
 
+    it("forwards a type filter on a text query and drops other types on the hybrid path", async () => {
+      const conversation = {
+        entry: { id: "mem_c" as MemoryId, type: "conversation", chatId: "c1", content: "talk" } as unknown as MemoryEntry,
+        score: 0.9 as NormalizedScore,
+      };
+      const note = {
+        entry: { id: "mem_n" as MemoryId, type: "note", content: "jot" } as unknown as MemoryEntry,
+        score: 0.8 as NormalizedScore,
+      };
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockResolvedValue([conversation, note]);
+      (mockDb.retrieveHybrid as ReturnType<typeof vi.fn>).mockResolvedValue([conversation, note]);
+
+      const text = await adapter.retrieve({ mode: "text", query: "q", limit: 5, types: ["note"] });
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("q", expect.objectContaining({ types: ["note"] }));
+      expect(text.kind === "ok" && text.value.map((r) => r.entry.id)).toEqual(["mem_n"]);
+
+      const hybrid = await adapter.retrieve({ mode: "hybrid", query: "q", limit: 5, types: ["note"] });
+      expect(hybrid.kind === "ok" && hybrid.value.map((r) => r.entry.id)).toEqual(["mem_n"]);
+    });
+
     it("falls back to agentdb.retrieve() when query is empty", async () => {
       (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 

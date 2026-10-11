@@ -1,5 +1,7 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
-import type { IMemoryManager } from "../../memory/memory.interface.js";
+import type { IMemoryManager, MemoryScope } from "../../memory/memory.interface.js";
+import { UNSCOPED_CHAT_ID } from "../../memory/retrieval-filters.js";
+import type { ChatId } from "../../types/index.js";
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 
 /**
@@ -45,7 +47,7 @@ export class MemorySearchTool implements ITool {
 
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext
+    context: ToolContext
   ): Promise<ToolExecutionResult> {
     const query = String(input["query"] ?? "");
     if (!query) {
@@ -56,12 +58,22 @@ export class MemorySearchTool implements ITool {
     const rawLimit = input["limit"];
     const limit = Math.min(Math.max(typeof rawLimit === "number" ? rawLimit : 5, 1), 10);
 
+    // The caller's chat and person, as automatic recall scopes them (plan
+    // 3.9): one memory serves every user of a multi-user channel, and an
+    // unscoped search returned another chat's private conversation. A caller
+    // with no chat sees only entries no chat owns, never everyone's.
+    const scope: MemoryScope = {
+      chatId: (context.chatId || UNSCOPED_CHAT_ID) as ChatId,
+      ...(context.userId ? { userId: context.userId } : {}),
+    };
+
     try {
       const result = await this.memory.retrieve({
         mode: "text",
         query,
         limit,
         minScore: 0.1,
+        scope,
         ...(memoryType ? { types: [memoryType] } : {}),
       });
 

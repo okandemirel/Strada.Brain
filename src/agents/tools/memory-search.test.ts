@@ -138,6 +138,28 @@ describe("MemorySearchTool", () => {
     }));
   });
 
+  it("scopes the search to the caller's chat and user", async () => {
+    const mm = createMockMemoryManager();
+    const tool = new MemorySearchTool(mm);
+
+    await tool.execute({ query: "test" }, createToolContext({ chatId: "bob-dm", userId: "bob" }));
+
+    expect(mm.retrieve).toHaveBeenCalledWith(expect.objectContaining({
+      scope: { chatId: "bob-dm", userId: "bob" },
+    }));
+  });
+
+  it("narrows a caller with no chat to entries no chat owns, never everyone's", async () => {
+    const mm = createMockMemoryManager();
+    const tool = new MemorySearchTool(mm);
+
+    await tool.execute({ query: "test" }, createToolContext());
+
+    expect(mm.retrieve).toHaveBeenCalledWith(expect.objectContaining({
+      scope: { chatId: "default" },
+    }));
+  });
+
   it("clamps limit to max 10", async () => {
     const mm = createMockMemoryManager();
     const tool = new MemorySearchTool(mm);

@@ -255,6 +255,11 @@ interface BaseRetrievalOptions {
   readonly sortBy?: SortOrder;
   /** Filter by tags (all must match) */
   readonly tags?: string[];
+  /**
+   * Filter by entry type in any mode, not only `mode: "type"`: memory_search
+   * sends it with a text query, and the AgentDB text path used to drop it.
+   */
+  readonly types?: MemoryEntryType[];
   /** Filter by importance */
   readonly importance?: MemoryImportance[];
   /** Include archived entries */

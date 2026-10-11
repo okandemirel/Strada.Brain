@@ -193,11 +193,13 @@ export class AgentDBAdapter implements IMemoryManager {
       } else {
         const embedding = "embedding" in options ? options.embedding : undefined;
         // plan 3.9: the identity scope travels into the vector path (and its
-        // text fallback) — it used to be dropped here.
+        // text fallback) — it used to be dropped here. So does the type
+        // filter: memory_search asking for notes got conversations back.
         results = await this.agentdb.retrieveSemantic(query, {
           limit: this.expandLimit(options.limit),
           embedding,
           scope: options.scope,
+          types: options.types,
         });
       }
 
@@ -1034,7 +1036,7 @@ export class AgentDBAdapter implements IMemoryManager {
     results: RetrievalResult[],
     options: Pick<
       RetrievalOptions,
-      "limit" | "minScore" | "sortBy" | "tags" | "importance" | "includeArchived" | "after" | "before"
+      "limit" | "minScore" | "sortBy" | "tags" | "types" | "importance" | "includeArchived" | "after" | "before"
     >,
   ): RetrievalResult[] {
     const normalized = results
@@ -1066,13 +1068,18 @@ export class AgentDBAdapter implements IMemoryManager {
     score: number,
     options: Pick<
       RetrievalOptions,
-      "minScore" | "tags" | "importance" | "includeArchived" | "after" | "before"
+      "minScore" | "tags" | "types" | "importance" | "includeArchived" | "after" | "before"
     >,
   ): boolean {
     if (options.minScore !== undefined && score < options.minScore) {
       return false;
     }
     if (options.tags && !options.tags.every((tag) => entry.tags.includes(tag))) {
+      return false;
+    }
+    // The hybrid path takes no type filter of its own; checked here so no
+    // mode can return a type the caller excluded.
+    if (options.types && options.types.length > 0 && !options.types.includes(entry.type)) {
       return false;
     }
     if (options.importance && !options.importance.includes(entry.importance)) {
