@@ -38,7 +38,7 @@
  */
 
 import { randomInt } from "node:crypto";
-import { appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -468,8 +468,17 @@ async function main(argv) {
 }
 
 /* c8 ignore start — CLI wiring; the reporting and redaction rules are unit-tested */
-const invokedDirectly = process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(scriptPath);
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared lexically, a symlinked directory on the way skipped main().
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(scriptPath);
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   process.exitCode = await main(process.argv.slice(2));
   // A kept-alive socket must not hold the job open past its verdict.
   setTimeout(() => process.exit(), 5_000).unref();

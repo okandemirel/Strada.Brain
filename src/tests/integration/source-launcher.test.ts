@@ -1,6 +1,6 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -831,6 +831,73 @@ describe.skipIf(process.platform === "win32")("source launcher signal handling (
     process.kill(childPid, "SIGKILL");
     // Was: exit code 1, which hid that the app had been killed.
     expect(await exited).toEqual({ code: null, signal: "SIGKILL" });
+  }, 60_000);
+});
+
+/**
+ * Node runs the entry module from its realpath, so `import.meta.url` never keeps
+ * a symlink, while process.argv[1] is the path as typed. The launcher's "am I
+ * the entry point?" guard compared the two as strings, so started through a
+ * symlinked directory (macOS /var -> /private/var, a ~/code link, Fedora
+ * Atomic's /home -> /var/home) it took itself for an import, never ran main(),
+ * and exited 0 without a word: `./strada <cmd>` in such a checkout did nothing.
+ * The temp root is resolved first so the link is the only symlink in play, on
+ * Linux CI as much as on macOS.
+ *
+ * POSIX only, like OPS-25: a symlink on Windows needs a privilege.
+ */
+describe.skipIf(process.platform === "win32")("source launcher started through a symlinked checkout", () => {
+  let tempParent = "";
+  let checkoutLink = "";
+
+  beforeAll(() => {
+    tempParent = realpathSync(mkdtempSync(path.join(os.tmpdir(), "strada-launcher-symlink-")));
+    const checkout = path.join(tempParent, "checkout");
+    mkdirSync(path.join(checkout, "scripts"), { recursive: true });
+    mkdirSync(path.join(checkout, "src"));
+    copyFileSync(
+      path.join(process.cwd(), "scripts", "source-launcher.mjs"),
+      path.join(checkout, "scripts", "source-launcher.mjs"),
+    );
+    copyFileSync(path.join(process.cwd(), "strada"), path.join(checkout, "strada"));
+    chmodSync(path.join(checkout, "strada"), 0o755);
+    writeFileSync(path.join(checkout, "package.json"), '{"name":"launcher-symlink-fixture","private":true}\n');
+    symlinkSync(path.join(process.cwd(), "node_modules"), path.join(checkout, "node_modules"), "dir");
+    writeFileSync(path.join(checkout, "src", "index.ts"), [
+      "process.stdout.write(`stand-in app ran: ${process.argv.slice(2).join(\" \")}\\n`);",
+      "process.exitCode = 3;",
+      "",
+    ].join("\n"));
+    checkoutLink = path.join(tempParent, "checkout-link");
+    symlinkSync(checkout, checkoutLink, "dir");
+  });
+
+  afterAll(() => {
+    rmSync(tempParent, { recursive: true, force: true });
+  });
+
+  function runThroughLink(command: string, args: string[]) {
+    const result = spawnSync(command, args, {
+      cwd: checkoutLink,
+      env: { ...process.env, STRADA_SKIP_STALE_REBUILD: "1", STRADA_NODE_PATH: process.execPath },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  it("runs the app when node is handed the launcher by a symlinked path", () => {
+    const run = runThroughLink(process.execPath, [path.join(checkoutLink, "scripts", "source-launcher.mjs"), "cli"]);
+    // Was: { status: 0, output: "" }.
+    expect(run.output).toContain("stand-in app ran: cli");
+    expect(run.status).toBe(3);
+  }, 60_000);
+
+  it("runs the app when ./strada is started inside a symlinked checkout", () => {
+    // The wrapper finds its root with `pwd`, which keeps the link.
+    const run = runThroughLink(path.join(checkoutLink, "strada"), ["cli"]);
+    expect(run.output).toContain("stand-in app ran: cli");
+    expect(run.status).toBe(3);
   }, 60_000);
 });
 

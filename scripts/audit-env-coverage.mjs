@@ -18,8 +18,8 @@
  * npm:    npm run audit:env
  */
 
-import { readdirSync, readFileSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -207,6 +207,17 @@ function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared as strings, a symlinked directory on the way skipped main().
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   main();
 }

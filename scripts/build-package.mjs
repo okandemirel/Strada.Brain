@@ -1,7 +1,7 @@
-import { cpSync, rmSync, mkdirSync, readdirSync, statSync, copyFileSync } from "node:fs";
+import { cpSync, rmSync, mkdirSync, readdirSync, realpathSync, statSync, copyFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -149,8 +149,15 @@ function main() {
   }
 }
 
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared as strings, a symlinked directory on the way skipped main().
 function isDirectExecution() {
-  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectExecution()) {

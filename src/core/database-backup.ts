@@ -2042,10 +2042,18 @@ export async function runBackupCli(argv: readonly string[]): Promise<number> {
 }
 
 /* c8 ignore start — CLI wiring, exercised by scripts/backup.sh */
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared lexically, an install root behind a symlink skipped the CLI,
+// and backup.sh read the silence as "No databases found".
+function isDirectExecution(): boolean {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   process.exitCode = await runBackupCli(process.argv.slice(2));
 }
 /* c8 ignore stop */

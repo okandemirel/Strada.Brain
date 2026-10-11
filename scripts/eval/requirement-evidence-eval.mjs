@@ -52,9 +52,10 @@
  *     made by this harness.
  */
 
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { EXIT, STATE } from "./learning-eval-core.mjs";
 
@@ -409,8 +410,17 @@ export async function main() {
   return verdict.exitCode;
 }
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url;
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared as strings, a symlinked directory on the way skipped main().
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(__filename);
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {

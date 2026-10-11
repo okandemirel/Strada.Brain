@@ -38,6 +38,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -967,10 +968,17 @@ async function main(argv) {
 }
 
 /* c8 ignore start — CLI wiring; the reporting rules are unit-tested */
-const invokedDirectly =
-  process.argv[1] !== undefined
-  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared lexically, a symlinked directory on the way skipped main().
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   process.exitCode = await main(process.argv.slice(2));
 }
 /* c8 ignore stop */

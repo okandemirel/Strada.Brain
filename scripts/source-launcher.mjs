@@ -1,8 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -1329,9 +1329,19 @@ export function main(argv = process.argv.slice(2)) {
   );
 }
 
+/**
+ * Node runs the entry module from its realpath while argv[1] keeps the path as
+ * typed, so a string comparison failed whenever a symlinked directory was on
+ * the way (macOS /var -> /private/var, a ~/code link, Fedora Atomic's /home ->
+ * /var/home): main() never ran and `./strada <cmd>` exited 0 without a word.
+ */
 function isDirectExecution() {
   if (!process.argv[1]) return false;
-  return import.meta.url === pathToFileURL(process.argv[1]).href;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectExecution()) {

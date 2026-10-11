@@ -12,7 +12,7 @@
  * its consumers' installs, so a publish needs one that matches this release.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,10 +51,18 @@ export function checkPublishLock({ packageJson, shrinkwrap }) {
 }
 
 /* c8 ignore start — CLI wiring; the decision is unit-tested */
-const invokedDirectly =
-  process.argv[1] !== undefined
-  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared lexically, a symlinked directory on the way skipped the check
+// and the publish went ahead.
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const readJson = (file) => JSON.parse(readFileSync(path.join(root, file), "utf8"));
   const verdict = checkPublishLock({

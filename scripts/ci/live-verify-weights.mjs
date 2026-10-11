@@ -36,7 +36,7 @@
 
 import childProcess, { spawnSync } from "node:child_process";
 import dns from "node:dns";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
@@ -510,8 +510,17 @@ async function main(argv) {
 }
 
 /* c8 ignore start — CLI wiring; the reporting rules are unit-tested */
-const invokedDirectly = process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(scriptPath);
-if (invokedDirectly) {
+// Node runs the entry module from its realpath while argv[1] keeps the path as
+// typed: compared lexically, a symlinked directory on the way skipped main().
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(scriptPath);
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   process.exitCode = await main(process.argv.slice(2));
 }
 /* c8 ignore stop */

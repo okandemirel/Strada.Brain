@@ -39,9 +39,10 @@
  *     is against an ABSOLUTE rubric.
  */
 
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
   EXIT,
@@ -410,10 +411,18 @@ async function main() {
 }
 
 // Only run when this file IS the entry point, so a test can import the module
-// without the harness executing and calling process.exit underneath it.
-const invokedDirectly =
-  process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url;
-if (invokedDirectly) {
+// without the harness executing and calling process.exit underneath it. Node
+// runs the entry from its realpath while argv[1] keeps the path as typed, so
+// both are resolved: a symlinked directory on the way used to skip main().
+function isDirectExecution() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(__filename);
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution()) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
