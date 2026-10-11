@@ -142,6 +142,15 @@ export class ObsidianApiClient {
     await this.request<void>('PUT', `/vault/${encoded}`, content);
   }
 
+  /**
+   * Append to the end of a note, creating it when missing. POST, not PUT: the
+   * API's PUT replaces the whole file, which turned every append into a wipe.
+   */
+  async appendNote(path: string, content: string): Promise<void> {
+    const encoded = encodeURIComponent(path);
+    await this.request<void>('POST', `/vault/${encoded}`, content);
+  }
+
   /** Delete a note. */
   async deleteNote(path: string): Promise<void> {
     const encoded = encodeURIComponent(path);

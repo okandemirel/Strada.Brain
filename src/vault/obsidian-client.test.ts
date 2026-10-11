@@ -67,6 +67,20 @@ describe("ObsidianApiClient write path", () => {
     expect(headers["Target"]).toBe("Log");
   });
 
+  it("appendNote POSTs the raw markdown with no target, so the note is appended to, not replaced", async () => {
+    const md = "- fixed the spawner\n";
+    await client.appendNote("Daily/2026-10-11.md", md);
+
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://localhost:27124/vault/Daily%2F2026-10-11.md");
+    // PUT is the API's replace-the-file verb.
+    expect(opts.method).toBe("POST");
+    expect(opts.body).toBe(md);
+    const headers = opts.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("text/markdown");
+    expect(headers["Target-Type"]).toBeUndefined();
+  });
+
   it("still JSON-encodes non-string bodies", async () => {
     mockFetch.mockResolvedValue({
       ok: true,

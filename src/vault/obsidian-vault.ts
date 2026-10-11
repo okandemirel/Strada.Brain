@@ -382,6 +382,17 @@ export class ObsidianVault implements IVault {
     }
   }
 
+  /** Append content to the end of an Obsidian note, creating it when missing. */
+  async appendNote(relPath: string, content: string): Promise<void> {
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
+    try {
+      await this.client.appendNote(safeRelPath, content);
+      await this.reindexFile(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
+  }
+
   /** Append content to a heading in an Obsidian note. */
   async appendToHeading(relPath: string, heading: string, content: string): Promise<void> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));

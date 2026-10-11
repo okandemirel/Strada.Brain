@@ -1,3 +1,5 @@
+import { canonicalVaultPath } from '../../vault/path-policy.js';
+import type { IVault } from '../../vault/vault.interface.js';
 import { vaultNotFound } from './vault-not-found.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
@@ -57,19 +59,31 @@ export class VaultWriteNoteTool {
       return { content: "Error: 'content' is required", isError: true };
     }
 
-    let targetVaults;
+    let targetVaults: IVault[];
     if (vaultId) {
       const vault = registry.resolve(vaultId);
-      targetVaults = vault ? [vault] : [];
-    } else if (context.projectPath) {
-      const projectVault = registry.resolveVaultForPath(context.projectPath, context.projectPath);
-      targetVaults = projectVault ? [projectVault] : registry.list();
+      if (!vault) {
+        return { content: vaultNotFound(vaultId, registry.ids()), isError: true };
+      }
+      targetVaults = [vault];
     } else {
-      targetVaults = registry.list();
-    }
-
-    if (!targetVaults.length) {
-      return { content: vaultId ? vaultNotFound(vaultId, registry.ids()) : 'no vaults registered', isError: true };
+      // sourceProjectPath first: under a workspace lease `projectPath` is the
+      // lease directory, which no vault is registered against. The miss used to
+      // fall back to every registered vault, so one note landed in the game,
+      // the vendored Strada.Core and Strada.MCP packages, the knowledge vault
+      // and Strada.Brain's own tree. An unresolved project is now a refusal.
+      const lookupPath = context.sourceProjectPath || context.projectPath;
+      const owner = lookupPath ? registry.resolveVaultForPath(lookupPath, lookupPath) : undefined;
+      if (!owner || !ownsProject(owner, lookupPath)) {
+        const ids = registry.ids();
+        return {
+          content: ids.length
+            ? `Error: no vault is registered for this project, so nothing was written. Pass vaultId to choose one: ${ids.join(', ')}`
+            : 'no vaults registered',
+          isError: true,
+        };
+      }
+      targetVaults = [owner];
     }
 
     const started = Date.now();
@@ -108,6 +122,15 @@ export class VaultWriteNoteTool {
       metadata: { executionTimeMs: Date.now() - started, vaultsWritten: written.length },
     };
   }
+}
+
+/**
+ * Bootstrap's own test for "this vault indexes the project": rooted at it, or
+ * a project-code vault above it. A self, Obsidian or knowledge vault above the
+ * project only contains it, and writing there puts the note in another tree.
+ */
+function ownsProject(vault: IVault, projectRoot: string): boolean {
+  return vault.kind === 'unity-project' || canonicalVaultPath(vault.rootPath) === canonicalVaultPath(projectRoot);
 }
 
 function hasReindexFile(vault: unknown): vault is { reindexFile(path: string): Promise<boolean> } {

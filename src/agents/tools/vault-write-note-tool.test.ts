@@ -5,6 +5,8 @@ import type { ToolContext } from './tool.interface.js';
 function makeVault(overrides: { id?: string; supportsWrite?: boolean; failWrite?: boolean; supportsRefresh?: boolean } = {}) {
   return {
     id: overrides.id ?? 'v1',
+    kind: 'unity-project',
+    rootPath: '/project',
     writeFile: overrides.supportsWrite !== false
       ? overrides.failWrite
         ? vi.fn().mockRejectedValue(new Error('disk full'))

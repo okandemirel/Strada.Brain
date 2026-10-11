@@ -81,8 +81,11 @@ export class VaultGraphExploreTool {
     if (vaultId) {
       const vault = registry.resolve(vaultId);
       targetVaults = vault ? [vault] : [];
-    } else if (context.projectPath) {
-      const projectVault = registry.resolveVaultForPath(context.projectPath, context.projectPath);
+    } else if (context.sourceProjectPath || context.projectPath) {
+      // The lease directory owns no vault, so resolving on it fell back to
+      // exploring every vault, Strada.Brain's own source included.
+      const lookupPath = context.sourceProjectPath || context.projectPath;
+      const projectVault = registry.resolveVaultForPath(lookupPath, lookupPath);
       targetVaults = projectVault ? [projectVault] : registry.list();
     } else {
       targetVaults = registry.list();

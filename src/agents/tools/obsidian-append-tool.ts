@@ -74,7 +74,8 @@ export class ObsidianAppendTool {
       if (heading) {
         await vault.appendToHeading(path, heading, content);
       } else {
-        await vault.writeNote(path, content);
+        // writeNote is a PUT, which replaced the whole note with this one line.
+        await vault.appendNote(path, content);
       }
       return {
         content: `appended to ${path}${heading ? ` under "${heading}"` : ''} in vault ${vault.id}`,
