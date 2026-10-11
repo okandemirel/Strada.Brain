@@ -861,6 +861,44 @@ describe("SetupWizard path validation", () => {
     expect(body.effectiveConfig.UNITY_PROJECT_PATH).toBe(homedir());
   });
 
+  it("keeps configured web and dashboard ports when Save re-runs on another port (COR-2, web path)", async () => {
+    // The person moved Strada off 3000/3100; the wizard came up on 3001
+    // because the running runtime held 3000. The portal asks about neither port.
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    fs.writeFileSync(
+      path.join(tempCwd, ".env"),
+      ["UNITY_PROJECT_PATH=/tmp/old", "WEB_CHANNEL_PORT=4000", "DASHBOARD_PORT=4100", ""].join("\n"),
+    );
+
+    const wizard = new SetupWizard({ port: 3001 });
+    expect((await saveWizard(wizard)).read().statusCode).toBe(200);
+
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    expect(envContent).toContain("WEB_CHANNEL_PORT=4000");
+    expect(envContent).toContain("DASHBOARD_PORT=4100");
+    expect(envContent).not.toContain("WEB_CHANNEL_PORT=3001");
+    expect(envContent).not.toContain("DASHBOARD_PORT=3100");
+  });
+
+  it("writes the wizard's port and the default dashboard port on a first save", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+
+    const wizard = new SetupWizard({ port: 3001 });
+    expect((await saveWizard(wizard)).read().statusCode).toBe(200);
+
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    expect(envContent).toContain("WEB_CHANNEL_PORT=3001");
+    expect(envContent).toContain("DASHBOARD_PORT=3100");
+  });
+
   it("writes a submitted daemon budget and Obsidian fields and reads them back (2.1 / D24)", async () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);

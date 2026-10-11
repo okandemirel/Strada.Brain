@@ -377,8 +377,6 @@ export const SETUP_OWNED_ENV_KEYS: ReadonlySet<string> = new Set<string>([
   "LANGUAGE_PREFERENCE",
   "SYSTEM_PRESET",
   "DEFAULT_CHANNEL",
-  "WEB_CHANNEL_PORT",
-  "DASHBOARD_PORT",
   "STRADA_BUDGET_DAILY_USD",
   "STRADA_DAEMON_ENABLED",
   "STRADA_DAEMON_DAILY_BUDGET",
@@ -410,7 +408,12 @@ export function setupOwnedEnvKeysFor(config: Record<string, string>): ReadonlySe
   return keys;
 }
 
-/** Written only when absent: a hand-edited value (LOG_LEVEL=debug) is never reset. */
+/**
+ * Written only when absent: a hand-edited value (LOG_LEVEL=debug) is never reset.
+ * The ports are here too: the portal never asks for them, and the wizard's own
+ * port is wherever it found a free one, so a configured WEB_CHANNEL_PORT=4000
+ * must not become the 3001 the wizard happened to bind (COR-2, web path).
+ */
 export const SETUP_DEFAULT_ENV_KEYS: ReadonlySet<string> = new Set<string>([
   "STREAMING_ENABLED",
   "REQUIRE_EDIT_CONFIRMATION",
@@ -419,6 +422,8 @@ export const SETUP_DEFAULT_ENV_KEYS: ReadonlySet<string> = new Set<string>([
   "TASK_DELEGATION_ENABLED",
   "LOG_LEVEL",
   "STRADA_VAULT_ENABLED",
+  "WEB_CHANNEL_PORT",
+  "DASHBOARD_PORT",
 ]);
 
 export function hasConfiguredEmbeddingCandidate(config: Record<string, unknown>): boolean {
