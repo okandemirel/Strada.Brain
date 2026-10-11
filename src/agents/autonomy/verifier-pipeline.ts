@@ -10,9 +10,9 @@ import type {
 } from "./completion-review.js";
 import {
   collectCompletionReviewEvidence,
-  isVerificationStep,
   MUTATION_TOOL_NAMES,
   shouldRunCompletionReview,
+  verificationStepVerdict,
 } from "./completion-review.js";
 import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verification.js";
 
@@ -430,11 +430,12 @@ export function collectVerifierPipelineEvidence(params: {
   // read as "the same error three times, the approach is not working" and the
   // finished repair was sent back for a replan (Codex 2026-09-12 AE#7). A
   // successful change or verification ENDS the streak; a successful read
-  // between two identical failures does not, because it repaired nothing.
+  // between two identical failures does not, because it repaired nothing —
+  // nor does a check that answered without a verdict, or answered red.
   const sinceRepair: Array<(typeof params.state.stepResults)[number]> = [];
   for (let i = params.state.stepResults.length - 1; i >= 0; i--) {
     const step = params.state.stepResults[i]!;
-    if (step.success && (MUTATION_TOOL_NAMES.has(step.toolName) || isVerificationStep(step.toolName, step.summary))) break;
+    if (step.success && (MUTATION_TOOL_NAMES.has(step.toolName) || verificationStepVerdict(step) === "passed")) break;
     if (!step.success) sinceRepair.unshift(step);
   }
   const recentFailureSteps = sinceRepair.slice(-5);
@@ -670,7 +671,10 @@ function buildTargetedReproVerifierCheck(
   const recentFailureLines = evidence.recentFailures.slice(-3);
   const recentLogLines = evidence.recentLogIssues.slice(-3);
   const hasOpenFailurePath = recentFailureLines.length > 0 && !evidence.hasTerminalFailureReport;
-  const hasUnverifiedLogIssue = recentLogLines.length > 0 && evidence.verificationStepCount === 0;
+  // The log issues are those after the last verdict (the review cutoff), so
+  // none has been verified since. A count of the run's verifications let one
+  // compile at the start excuse every error logged after it.
+  const hasUnverifiedLogIssue = recentLogLines.length > 0;
 
   if (!hasOpenFailurePath && !hasUnverifiedLogIssue) {
     return {

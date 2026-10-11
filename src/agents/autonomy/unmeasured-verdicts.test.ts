@@ -8,6 +8,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentPhase, type AgentState, type StepResult } from "../agent-state.js";
 import { collectCompletionReviewEvidence, isVerificationStep } from "./completion-review.js";
+import { stallClassOf } from "./constants.js";
+import { ControlLoopTracker } from "./control-loop-tracker.js";
 import { SelfVerification, getLatestGlobalBuildState } from "./self-verification.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 
@@ -364,5 +366,206 @@ describe("unity_test_rerun_failed answers with the same record (autonomy#1, sibl
     noop.track("unity_test_rerun_failed", {}, ok(JSON.stringify({ status: "noop", detail: "No failed tests were found to rerun.", previousRunId: null }, null, 2)));
     expect(noop.needsVerification()).toBe(true);
     expect(noop.getState().pendingFiles.has("Assets/Scripts/Player.cs")).toBe(true);
+  });
+});
+
+/** Strada.MCP's compile status when nothing could verify the project (local-diagnostics.ts), as the step list keeps it. */
+const UNAVAILABLE_COMPILE_STATUS = JSON.stringify({
+  source: "unavailable",
+  bridgeMethod: "editor.compileStatus",
+  verified: false,
+  message: "Compile status is UNKNOWN — nothing could verify this project.",
+  compile: { isCompiling: false, isReloading: false, lastSucceeded: null, compileIssueCount: null },
+}, null, 2).slice(0, 200);
+
+describe("a verifier call that measured nothing is not work done (autonomy#0, review)", () => {
+  it("finds no work in a run whose only check never answered", () => {
+    for (const check of [
+      step("unity_compile_status", true, UNAVAILABLE_COMPILE_STATUS, 1_100),
+      step("unity_compile_status", true, '{"status":"unknown"}', 1_100),
+      step("dotnet_test", true, "dotnet test (Debug)\n\nResult: NOT MEASURED\nNo test ran: dotnet test wrote no test report.", 1_100),
+      step("shell_exec", false, "$ npm test\nExit code: 127 | Duration: 4ms\n\n--- stderr ---\nsh: npm: command not found", 1_100),
+    ]) {
+      resetNoWorkEvidenceGates();
+      const p = plan([step("file_read", true, "read Assets/Scripts/Player.cs", 1_000), check], "Fixed the null reference in Player; the project compiles. Done.");
+      expect(p.evidence.verificationStepCount, check.summary).toBe(0);
+      expect(p.initialDecision, check.summary).not.toBe("approve");
+    }
+    // The ones that did not fail are asked for work; a failed call is asked to reproduce first.
+    resetNoWorkEvidenceGates();
+    expect(plan([step("unity_compile_status", true, UNAVAILABLE_COMPILE_STATUS, 1_100)], "Fixed it; the project compiles. Done.").gate ?? "").toContain("NO WORK EVIDENCE");
+    resetNoWorkEvidenceGates();
+    const bridgeDown = plan([step("unity_test_run", false, "Unity bridge unavailable. Start Unity Editor to use this tool.", 1_100)]);
+    expect(bridgeDown.evidence.verificationStepCount).toBe(0);
+    expect(bridgeDown.initialDecision).not.toBe("approve");
+  });
+
+  it("still counts a check that answered, red or green", () => {
+    for (const check of [
+      step("unity_verify_change", false, "error CS0103: The name 'Speed' does not exist", 1_100),
+      step("unity_compile_status", true, '{"source":"bridge","verified":true,"compile":{"lastSucceeded":false,"compileIssueCount":2}}', 1_100),
+      step("unity_test_run", true, unityTestRecord("Failed", { passed: 3, failed: 2 }).slice(0, 200), 1_100),
+      // A record whose counts the step list cut off is still the run it reports.
+      step("unity_test_run", true, `{\n  "available": true,\n  "runId": "4f3c2a1b9e8d4c7f8a6b5c4d3e2f1a0b",\n  "mode": "edit",\n  "status": "completed",\n  "result": "Passed",\n  "createdAt": 1760000000000,\n  "startedAt": 1760000000123,\n  "finishedAt": 17`, 1_100),
+      step("dotnet_build", true, "dotnet build (Debug)\nExit code: 0\nBuild succeeded. 0 Error(s)", 1_100),
+    ]) {
+      resetNoWorkEvidenceGates();
+      const p = plan([step("file_read", true, "read Assets/Scripts/Player.cs", 1_000), check], "Fixed the null reference in Player; the project compiles. Done.");
+      expect(p.evidence.verificationStepCount, check.summary).toBe(1);
+      expect(p.gate ?? "", check.summary).not.toContain("NO WORK EVIDENCE");
+    }
+  });
+
+  it("does not end a same-error streak at a check that answered without a verdict, or answered red", () => {
+    const failure = (n: number) => step("dotnet_build", false, "error CS0101: the namespace already contains a definition", 1_000 + n);
+    for (const between of [
+      step("unity_compile_status", true, '{"status":"unknown"}', 1_500),
+      step("unity_compile_status", true, UNAVAILABLE_COMPILE_STATUS, 1_500),
+      step("unity_compile_status", true, '{"success":false,"compileIssueCount":2}', 1_500),
+    ]) {
+      const p = plan([failure(1), failure(2), between, failure(3)], "Fixed the duplicate definition.");
+      expect(p.evidence.consecutiveSameErrors, between.summary).toBe(3);
+      expect(p.initialDecision, between.summary).toBe("replan");
+    }
+  });
+
+  it("asks for targeted verification of an error logged after the last verdict, and not of one logged before it", () => {
+    const verifiedAt = Date.now() - 5_000;
+    const planWithLog = (loggedAt: number) => planVerifierPipeline({
+      prompt: "Add the pig and its sprite",
+      draft: "Added the pig controller and its sprite; the project compiles. Done.",
+      state: createState([
+        step("file_write", true, "wrote Assets/Scripts/PigController.cs", verifiedAt - 1_000),
+        step("unity_verify_change", true, "compile green", verifiedAt),
+        step("unity_generate_sprite", true, "generated Assets/Art/Pig.png", verifiedAt + 500),
+      ]),
+      task: DEBUG_TASK,
+      verificationState: {
+        pendingFiles: new Set<string>(),
+        touchedFiles: new Set(["Assets/Scripts/PigController.cs"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: verifiedAt,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [{
+        timestamp: new Date(loggedAt).toISOString(),
+        level: "error",
+        message: "NullReferenceException in PigController.Update",
+        meta: { chatId: "chat-unmeasured" },
+      }],
+      chatId: "chat-unmeasured",
+      taskStartedAtMs: verifiedAt - 10_000,
+    });
+
+    const after = planWithLog(verifiedAt + 1_000);
+    expect(after.initialDecision).toBe("continue");
+    expect(after.gate ?? "").toContain("TARGETED VERIFICATION REQUIRED");
+
+    const before = planWithLog(verifiedAt - 500);
+    expect(before.gate ?? "").not.toContain("TARGETED VERIFICATION REQUIRED");
+  });
+});
+
+describe("the build settings stay a check for the read-only stall (autonomy#2, review)", () => {
+  it("is neutral whatever its registry metadata says, so reading beside it is still a streak", () => {
+    expect(stallClassOf("unity_build_settings", { readOnly: false })).toBe("neutral");
+    expect(stallClassOf("unity_build_settings")).toBe("neutral");
+    const tracker = new ControlLoopTracker({
+      staleAnalysisThreshold: 100,
+      toolMetadata: (name) => (name === "unity_build_settings" ? { readOnly: false } : undefined),
+    });
+    for (let i = 0; i < 6; i++) {
+      tracker.markToolExecution("file_read", `file_read:{"path":"a${i}"}`);
+      tracker.markToolExecution("unity_build_settings", 'unity_build_settings:{"action":"get"}', "ok:StandaloneOSX");
+    }
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(6);
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+  });
+
+  it("keeps the inspections reading and the checks neutral", () => {
+    for (const tool of ["unity_console_read", "unity_test_results", "unity_test_list", "csharp_symbol_search"]) {
+      expect(stallClassOf(tool, { readOnly: true }), tool).toBe("reading");
+    }
+    for (const tool of ["unity_compile_status", "unity_verify_change", "dotnet_test"]) {
+      expect(stallClassOf(tool, { readOnly: false }), tool).toBe("neutral");
+    }
+  });
+});
+
+/** A shell_exec result as the tool formats it: the echo, the footer, then stdout. */
+function shellRun(command: string, stdout: string, exitCode = 0) {
+  return {
+    toolCallId: "t",
+    content: `$ ${command}\nExit code: ${exitCode} | Duration: 2400ms\n\n--- stdout ---\n${stdout}`,
+    isError: exitCode !== 0,
+    metadata: { exitCode },
+  };
+}
+
+// Real console output (dotnet SDK 10.0.400 with xunit, vitest 4.1.11), paths shortened.
+const DOTNET_HEAD = [
+  "  Determining projects to restore...",
+  "  All projects are up-to-date for restore.",
+  "  Game.Tests -> /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll",
+  "Test run for /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll (.NETCoreApp,Version=v10.0)",
+  "A total of 1 test files matched the specified pattern.",
+].join("\n");
+const DOTNET_NO_MATCH = `${DOTNET_HEAD}\nNo test matches the given testcase filter \`FullyQualifiedName~Nope\` in /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll\n`;
+const DOTNET_NO_TESTS = `${DOTNET_HEAD}\nNo test is available in /work/Game.Tests/bin/Debug/net10.0/Game.Tests.dll. Make sure that test discoverer & executors are registered and platform & framework version settings are appropriate and try again.\n`;
+const VITEST_ALL_FILTERED = "\n RUN  v4.1.11 /work\n\n\n Test Files  1 skipped (1)\n      Tests  21 skipped (21)\n   Start at  19:14:54\n   Duration  637ms (transform 275ms, setup 35ms, import 309ms, tests 0ms, environment 0ms)\n";
+const VITEST_NO_FILES = "\n RUN  v4.1.11 /work\n\nNo test files found, exiting with code 0\n\nfilter: src/zzz\ninclude: src/**/*.test.ts\n";
+
+describe("a test run that ran no test has no verdict, wherever it ran (tools#1, shell sibling)", () => {
+  it("keeps the written tests and the compile owed after a shell run that executed nothing", () => {
+    for (const [command, stdout] of [
+      ["dotnet test --filter FullyQualifiedName~Nope", DOTNET_NO_MATCH],
+      ["dotnet test --no-build --filter FullyQualifiedName~Nope", DOTNET_NO_MATCH],
+      ["dotnet test Game.Tests", DOTNET_NO_TESTS],
+      ["npx vitest run -t nomatch", VITEST_ALL_FILTERED],
+      ["npx vitest run src/zzz --passWithNoTests", VITEST_NO_FILES],
+    ] as const) {
+      const v = wrote("Game.Tests/BoardTests.cs");
+      v.track("shell_exec", { command }, shellRun(command, stdout));
+      expect(v.needsVerification(), command).toBe(true);
+      expect(v.getState().lastBuildOk, command).toBeNull();
+      expect(v.getState().lastVerificationAt, command).toBeNull();
+      const prompt = v.getPrompt();
+      expect(prompt, command).toContain("[TESTS NOT RUN]");
+      expect(prompt, command).toContain("NOT MEASURED");
+      expect(prompt, command).not.toContain("[TESTS FAILING]");
+    }
+  });
+
+  it("still settles on a run where some project ran tests and passed", () => {
+    // A filter across a solution: one project matched it, the other did not.
+    const v = wrote("Game.Tests/BoardTests.cs");
+    const command = "dotnet test v2z.slnx --filter FullyQualifiedName~ClearsRow";
+    v.track("shell_exec", { command }, shellRun(command, [
+      DOTNET_NO_MATCH.replace(/Game\.Tests/gu, "Empty.Tests"),
+      "Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1, Duration: 10 ms - Game.Tests.dll (net10.0)",
+    ].join("\n")));
+    expect(v.needsVerification()).toBe(false);
+    expect(v.getState().lastBuildOk).toBe(true);
+
+    const vitest = wrote("src/thing.test.ts");
+    vitest.track("shell_exec", { command: "npx vitest run" }, shellRun("npx vitest run", " Test Files  1 passed | 1 skipped (2)\n      Tests  3 passed | 21 skipped (24)\n"));
+    expect(vitest.needsVerification()).toBe(false);
+  });
+
+  it("keeps a red red beside a project that ran nothing, masked exit or not", () => {
+    const failed = "Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 12 ms - Game.Tests.dll (net10.0)";
+    const red = wrote("Game.Tests/BoardTests.cs");
+    red.track("shell_exec", { command: "dotnet test" }, shellRun("dotnet test", `${DOTNET_NO_TESTS}\n${failed}`, 1));
+    expect(red.getState().lastBuildOk).toBe(false);
+    expect(red.getPrompt()).toContain("[TESTS FAILING]");
+    expect(red.getPrompt()).not.toContain("NOT MEASURED");
+
+    const masked = wrote("Game.Tests/BoardTests.cs");
+    const command = "dotnet test 2>&1 | tail -20";
+    masked.track("shell_exec", { command }, shellRun(command, `${DOTNET_NO_TESTS}\n${failed}`));
+    expect(masked.getState().lastBuildOk).toBe(false);
+    expect(masked.getPrompt()).toContain("[TESTS FAILING]");
   });
 });

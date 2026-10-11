@@ -12,7 +12,7 @@
 
 import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
-import { MUTATION_TOOLS, COMPILABLE_EXT, INSPECTING_VERIFY_TOOLS, extractFilePaths, isVerificationToolName } from "./constants.js";
+import { MUTATION_TOOLS, COMPILABLE_EXT, NON_MEASURING_VERIFY_TOOLS, extractFilePaths, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { lexShell, type ShellOperator } from "../../security/shell-lexer.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
@@ -376,24 +376,8 @@ export class SelfVerification {
           ? executedTool.output
           : (typeof result.content === "string" ? result.content : "");
         const testRecord = UNITY_TEST_RECORD_TOOLS.has(executedTool.toolName) ? unityTestRecordVerdict(bodyText) : undefined;
-        const bodyReportsFailure =
-          testRecord === "failed"
-          || (runsTests(executedTool.toolName, executedTool.input) && reportsTestFailure(bodyText))
-          // A BODY THAT SAYS IT FAILED IS A FAILURE, whatever the flag says:
-          // `{"success":false,"compileIssueCount":3}` cleared the debt of
-          // every edited file (Codex 2026-09-13 AF#3).
-          || /"?success"?\s*[:=]\s*false/i.test(bodyText)
-          || /"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(bodyText)
-          || /\bbuild failed\b|\bcompilation failed\b|\b[1-9]\d* Error\(s\)/i.test(bodyText)
-          // A UNITY RUN THAT DIED IS NOT A RUN THAT PASSED. unity_playmode_verify
-          // judged the results file alone and wrote "ran clean … unityExit=1"
-          // with isError: false; the editor that exited 1 or was killed at its
-          // allowance after writing the file counted as green (Codex
-          // 2026-09-17 on 7cb9d8a3 #2, reproduced against the vendored tool).
-          // …and only from a Unity tool's own summary: fixture text saying
-          // "unityExit=1" in a passing dotnet or npm run is not a Unity exit
-          // (Codex 2026-09-17 round 4 #11).
-          || (executedTool.toolName.startsWith("unity_") && /\bunityExit=(-?\d+)\b/.test(bodyText) && /\bunityExit=(-?\d+)\b/.exec(bodyText)![1] !== "0");
+        const testRun = runsTests(executedTool.toolName, executedTool.input);
+        const bodyReportsFailure = testRecord === "failed" || outputReportsFailure(executedTool.toolName, bodyText, testRun);
         // A RED TEST RECORD IS A FAILING TEST RUN, whichever tool returned it.
         // Only a run of the suite clears it (below): a green record read back
         // may be any run's, and a rerun of the old failures is not the suite.
@@ -402,7 +386,7 @@ export class SelfVerification {
         // "No matches" and a console read cleared the compile debt of every
         // edited file, because "did not fail" was read as "compiled" (Codex
         // 2026-09-12 AE#3). They answer questions; they do not build.
-        if (INSPECTING_VERIFY_TOOLS.has(executedTool.toolName)) continue;
+        if (NON_MEASURING_VERIFY_TOOLS.has(executedTool.toolName)) continue;
         // A VERIFIER THAT NEVER RAN HAS NO VERDICT. A timeout, a bridge that
         // was down, or a refused call came back as "tests failing" and a red
         // published build, though nothing was measured (autonomy#5). It still
@@ -427,12 +411,17 @@ export class SelfVerification {
         const shell = executedTool.toolName === "shell_exec";
         const needsVerdict = shell
           && shellVerification(typeof executedTool.input["command"] === "string" ? executedTool.input["command"] : "") === "maybe";
+        // A TEST RUN THAT RAN NO TEST settles nothing either, wherever it ran:
+        // `dotnet test` through the shell exits 0 when its filter matches
+        // nothing, and that exit emptied the written-test debt that the
+        // dotnet_test tool's own NOT MEASURED keeps (tools#1 review).
+        const noTestRan = testRun && !bodyReportsFailure ? noTestRanLine(bodyText) : null;
         // A masked exit status that printed a failure verdict has failed.
         const conclusive = testRecord === "failed"
-          || (testRecord !== "unmeasured"
+          || (testRecord !== "unmeasured" && noTestRan === null
             && ((needsVerdict && bodyReportsFailure) || verificationIsConclusive(bodyText, { shell, needsVerdict })));
         if (!executedTool.isError && !conclusive) {
-          this.unmeasured = { tool: executedTool.toolName, detail: bodyText, neverRan: false };
+          this.unmeasured = { tool: executedTool.toolName, detail: noTestRan ?? bodyText, neverRan: false };
           continue;
         }
         this.unmeasured = null;
@@ -839,9 +828,9 @@ const CONSOLE_REPORTING_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 // The tools that answer a QUESTION about the tree rather than building it are
-// constants.ts INSPECTING_VERIFY_TOOLS: a private, shorter copy here left out
-// unity_test_results and unity_test_list, which the stall check already
-// called inspections (audit autonomy#2).
+// constants.ts NON_MEASURING_VERIFY_TOOLS: a private, shorter copy here left
+// out unity_test_results and unity_test_list, which the stall check already
+// called inspections, and unity_build_settings (audit autonomy#2).
 
 /**
  * Does this verifier's own output settle anything?
@@ -966,6 +955,85 @@ const TEST_FAILURE_VERDICTS: readonly RegExp[] = [
 
 function reportsTestFailure(text: string): boolean {
   return TEST_FAILURE_VERDICTS.some((re) => re.test(text));
+}
+
+/** A verifier's own output saying it failed, whatever its error flag says. */
+function outputReportsFailure(toolName: string, text: string, testRun: boolean): boolean {
+  return (testRun && reportsTestFailure(text))
+    // A BODY THAT SAYS IT FAILED IS A FAILURE, whatever the flag says:
+    // `{"success":false,"compileIssueCount":3}` cleared the debt of
+    // every edited file (Codex 2026-09-13 AF#3).
+    || /"?success"?\s*[:=]\s*false/i.test(text)
+    || /"?compileIssueCount"?\s*[:=]\s*[1-9]/i.test(text)
+    || /\bbuild failed\b|\bcompilation failed\b|\b[1-9]\d* Error\(s\)/i.test(text)
+    // A UNITY RUN THAT DIED IS NOT A RUN THAT PASSED. unity_playmode_verify
+    // judged the results file alone and wrote "ran clean … unityExit=1"
+    // with isError: false; the editor that exited 1 or was killed at its
+    // allowance after writing the file counted as green (Codex
+    // 2026-09-17 on 7cb9d8a3 #2, reproduced against the vendored tool).
+    // …and only from a Unity tool's own summary: fixture text saying
+    // "unityExit=1" in a passing dotnet or npm run is not a Unity exit
+    // (Codex 2026-09-17 round 4 #11).
+    || (toolName.startsWith("unity_") && /\bunityExit=(-?\d+)\b/.test(text) && /\bunityExit=(-?\d+)\b/.exec(text)![1] !== "0");
+}
+
+/**
+ * A test runner's own words for a run that executed no test, each anchored
+ * to its line. Measured 2026-10-11: dotnet 10.0.400 (VSTest, xunit) exits 0
+ * on both dotnet lines, and vitest 4.1.11 exits 0 when -t filtered every
+ * test out or --passWithNoTests found no file.
+ */
+const NO_TEST_RAN_LINES: readonly RegExp[] = [
+  /^No test matches the given testcase filter\b/m, // dotnet test
+  /^No test is available in\b/m, // dotnet test: no test in the project, or no adapter
+  /^No test files found, exiting with code 0\b/m, // vitest
+  /^\s*Tests\s+\d+ (?:skipped|todo)(?: \| \d+ (?:skipped|todo))* \(\d+\)\s*$/m, // vitest
+];
+
+/**
+ * …and its words for tests that ran and passed. A filter across a solution
+ * leaves "No test matches" from every project it missed beside the one it
+ * hit, and that run measured the tests it ran.
+ */
+const TESTS_PASSED_LINES: readonly RegExp[] = [
+  /\bPassed!\s+-\s+Failed:\s*\d+,\s*Passed:\s*[1-9]/, // dotnet test, minimal verbosity
+  /^\s*Passed:\s*[1-9]\d*\s*$/m, // dotnet test, normal verbosity
+  /^\s*Tests\s+(?:\d+ \w+ \| )*[1-9]\d* passed\b/m, // vitest
+];
+
+/** The runner's line saying no test ran, or null when none says so or some test passed. */
+function noTestRanLine(text: string): string | null {
+  if (TESTS_PASSED_LINES.some((re) => re.test(text))) return null;
+  for (const re of NO_TEST_RAN_LINES) {
+    const line = re.exec(text)?.[0];
+    if (line !== undefined) return line.trim();
+  }
+  return null;
+}
+
+/**
+ * What one verifier call answered, read from what a step list keeps of it:
+ * its error flag and the head of its output. The completion review counts
+ * verification steps and ends same-error streaks on them, and a call that
+ * measured nothing — a bridge that was down, a status of "unknown", a compile
+ * status that verified nothing, a test run that ran no test — counted as work
+ * done and as a repair (autonomy#0 review). Only what the head SHOWS makes a
+ * call unmeasured: a test record cut off before its counts is not empty.
+ */
+export function verifierOutputVerdict(toolName: string, isError: boolean, output: string): "passed" | "failed" | "unmeasured" {
+  const shell = toolName === "shell_exec";
+  const testRun = runsTests(toolName, { command: shell ? /^\$ ([^\n]*)/u.exec(output)?.[1] ?? "" : "" });
+  const record = UNITY_TEST_RECORD_TOOLS.has(toolName) ? unityTestRecordVerdict(output) : undefined;
+  if (record === "failed" || outputReportsFailure(toolName, output, testRun)) return "failed";
+  if (isError) {
+    // A step keeps no metadata; the shell's footer, right after its echo, says how it ended.
+    const footer = shell ? /^\$ [^\n]*\nExit code: (\d+)[^\n]*(\n⚠ Command timed out)?/u.exec(output) : null;
+    const metadata = footer ? { exitCode: Number(footer[1]), timedOut: footer[2] !== undefined } : undefined;
+    return verifierNeverRan(output, metadata) ? "unmeasured" : "failed";
+  }
+  const countsCutOff = /"result"\s*:\s*"Passed"/u.test(output) && !/"passed"\s*:/u.test(output);
+  if ((record === "unmeasured" && !countsCutOff) || (testRun && noTestRanLine(output) !== null)) return "unmeasured";
+  return verificationIsConclusive(output, { shell }) ? "passed" : "unmeasured";
 }
 
 function runsTests(toolName: string, input: Record<string, unknown>): boolean {

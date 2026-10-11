@@ -1,5 +1,5 @@
-import type { AgentState } from "../agent-state.js";
-import type { VerificationState } from "./self-verification.js";
+import type { AgentState, StepResult } from "../agent-state.js";
+import { verifierOutputVerdict, type VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
 import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
@@ -152,7 +152,10 @@ export function collectCompletionReviewEvidence(params: {
     .slice(-8)
     .map((step) => `[${step.success ? "OK" : "FAIL"}] ${step.toolName}: ${step.summary}`);
   const inspectionStepCount = params.state.stepResults.filter((step) => INSPECTION_TOOL_NAMES.has(step.toolName)).length;
-  const verificationStepCount = params.state.stepResults.filter((step) => isVerificationStep(step.toolName, step.summary)).length;
+  const verificationStepCount = params.state.stepResults.filter((step) => {
+    const verdict = verificationStepVerdict(step);
+    return verdict !== null && verdict !== "unmeasured";
+  }).length;
   const mutationStepCount = params.state.stepResults.filter((step) => MUTATION_TOOL_NAMES.has(step.toolName)).length;
 
   return {
@@ -398,6 +401,20 @@ export function isVerificationStep(toolName: string, summary: string): boolean {
   // same-error streak (audit autonomy#0). A read of the console or of an old
   // test record is not a verification either.
   return runsVerificationCheck(toolName);
+}
+
+/**
+ * What a verification step measured, or null for a step that is not one. The
+ * name says a call RAN a check, not that the check answered: counting every
+ * such call approved a run whose only check was a compile status saying it
+ * verified nothing, and let a status of "unknown" end a same-error streak
+ * (autonomy#0 review).
+ */
+export function verificationStepVerdict(
+  step: Pick<StepResult, "toolName" | "success" | "summary">,
+): "passed" | "failed" | "unmeasured" | null {
+  if (!isVerificationStep(step.toolName, step.summary)) return null;
+  return verifierOutputVerdict(step.toolName, !step.success, step.summary);
 }
 
 
