@@ -9971,6 +9971,25 @@ describe("CampaignManager", () => {
       expect(tasks.submitted).toHaveLength(1);
     });
 
+    // owner-commands-2: the audited scenario on a RUNNING campaign — another
+    // member edits the GDD through an ordinary task, then says "amend gdd" to
+    // make it the delivery baseline in the owner's place.
+    it("'amend gdd' on a running campaign leaves the approved document unless its owner says it", async () => {
+      const gdd = "# GDD\n\nThe game ships 3 levels.";
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
+      const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+      await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+      const edited = `${gdd}\n\n## Guest's cut\n\nOne level is enough.`;
+      writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), edited);
+
+      expect(await manager.tryHandleIncoming(incoming("amend gdd", "someone-else"))).toBe(true);
+      expect(messages.at(-1)!.text).toContain("Only the person who started this campaign can amend its GDD");
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(gdd));
+
+      expect(await manager.tryHandleIncoming(incoming("amend gdd"))).toBe(true);
+      expect(storage.get(campaign.id)!.gddSha256).toBe(sha(edited));
+    });
+
     it("only the campaign's owner revives it, in the chat or by command (campaign#5)", async () => {
       const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
       await waitFor(() => expect(tasks.submitted).toHaveLength(1));

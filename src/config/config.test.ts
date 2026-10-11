@@ -51,6 +51,9 @@ describe("loadConfig", () => {
     delete process.env["TEAMS_APP_TENANT_ID"];
     delete process.env["TEAMS_ALLOWED_USER_IDS"];
     delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
+    for (const key of ["TELEGRAM_OWNER_USER_IDS", "DISCORD_OWNER_USER_IDS", "SLACK_OWNER_USER_IDS", "TEAMS_OWNER_USER_IDS"]) {
+      delete process.env[key];
+    }
     delete process.env["JWT_SECRET"];
     delete process.env["REQUIRE_MFA"];
     delete process.env["REQUIRE_EDIT_CONFIRMATION"];
@@ -611,6 +614,11 @@ describe("loadConfig", () => {
       TEAMS_APP_TENANT_ID: "tenant-abc",
       TEAMS_ALLOWED_USER_IDS: "user-a,user-b",
       TEAMS_ALLOW_OPEN_ACCESS: "true",
+      TEAMS_OWNER_USER_IDS: "user-a",
+      ALLOWED_TELEGRAM_USER_IDS: "1,2",
+      TELEGRAM_OWNER_USER_IDS: "1",
+      DISCORD_OWNER_USER_IDS: "user-2",
+      SLACK_OWNER_USER_IDS: "U1, U2",
     });
 
     const config = loadConfig();
@@ -624,7 +632,12 @@ describe("loadConfig", () => {
       appTenantId: "tenant-abc",
       allowedUserIds: ["user-a", "user-b"],
       allowOpenAccess: true,
+      ownerUserIds: ["user-a"],
     });
+    // The operator on each shared roster.
+    expect(config.telegram.ownerUserIds).toEqual([1]);
+    expect(config.discord.ownerUserIds).toEqual(["user-2"]);
+    expect(config.slack.ownerUserIds).toEqual(["U1", "U2"]);
   });
 
   it("applies default values", () => {

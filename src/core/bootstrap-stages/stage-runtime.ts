@@ -380,6 +380,9 @@ export async function initializeTaskRuntimeStage(
       instanceAuthority: chatInstanceAuthority(chatChannelAccessFromConfig(params.config), params.channel),
     },
   );
+  // "Full autonomy please" is `/autonomous on` in words, read by the
+  // orchestrator on every chat turn: it asks the rule the command answers to.
+  params.orchestrator.setCommandGate(commandHandler.commandGate);
   if (params.providerRouter) {
     commandHandler.setProviderRouter(params.providerRouter);
   }

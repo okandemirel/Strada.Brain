@@ -104,6 +104,7 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
     identityKey: string,
     queryText: string,
     userId: string | undefined,
+    channelType?: string,
   ): Promise<void>;
   getTaskExecutionContext(): { readonly identityKey?: string; readonly taskRunId?: string } | undefined;
   /**
@@ -197,6 +198,7 @@ export async function loadRunPersonalization(
     identityKey: string,
     queryText: string,
     userId: string | undefined,
+    channelType?: string,
   ): Promise<{
     profile: UserProfile | null;
     personaContent: string | undefined;
@@ -210,7 +212,8 @@ export async function loadRunPersonalization(
         deps.sessionManager.persistTimeMap.set(`touch:${identityKey}`, Date.now());
       }
     }
-    await deps.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId);
+    // The caller's channel, so a directive sentence is judged by who said it.
+    await deps.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId, channelType);
     profile = deps.userProfileStore?.getProfile(identityKey) ?? profile;
 
     if (deps.dmPolicy && deps.userProfileStore) {
@@ -355,6 +358,7 @@ export async function setupAgentCoreRun(
       identityKey,
       queryText,
       request.userId,
+      request.channelType,
     );
 
     const vaultContext = await computeVaultContext(deps, queryText);

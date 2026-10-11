@@ -675,6 +675,7 @@ describe("bootstrap-stages", () => {
       setProjectPath: vi.fn(),
       setCampaignManager: vi.fn(),
       setRealTreeGuardian: vi.fn(),
+      commandGate: vi.fn(),
     } as any;
     const messageRouter = { _tag: "message-router" } as any;
     const daemonEventBus = { _tag: "daemon-bus" } as any;
@@ -693,6 +694,7 @@ describe("bootstrap-stages", () => {
     } as any;
     const orchestrator = {
       setTaskManager: vi.fn(),
+      setCommandGate: vi.fn(),
     } as any;
 
     const result = await initializeTaskRuntimeStage({
@@ -728,6 +730,7 @@ describe("bootstrap-stages", () => {
     expect(taskStorage.initialize).toHaveBeenCalled();
     expect(backgroundExecutor.setTaskManager).toHaveBeenCalledWith(taskManager);
     expect(orchestrator.setTaskManager).toHaveBeenCalledWith(taskManager);
+    expect(orchestrator.setCommandGate).toHaveBeenCalledWith(commandHandler.commandGate);
     expect(taskManager.recoverOnStartup).toHaveBeenCalled();
     expect(taskManager.on).toHaveBeenCalledWith("task:created", expect.any(Function));
     expect(autoUpdater.init).toHaveBeenCalled();
@@ -761,11 +764,12 @@ describe("bootstrap-stages", () => {
           ? { facts: { shared: true, ownerProfileId: "owner" }, role: caller.userId === "owner" ? "owner" as const : "guest" as const }
           : undefined,
     } as any;
+    const orchestrator = { setTaskManager: vi.fn(), setCommandGate: vi.fn() };
     const { commandHandler } = await initializeTaskRuntimeStage({
       daemonMode: false,
       config: makeConfig(),
       logger: createMockLogger(),
-      orchestrator: { setTaskManager: vi.fn() } as any,
+      orchestrator: orchestrator as any,
       providerManager: { getProvider: vi.fn() } as any,
       channel,
       dmPolicy: {} as any,
@@ -796,6 +800,17 @@ describe("bootstrap-stages", () => {
 
     await commandHandler.handle("chat-o", "token", ["5000"], "owner", "web");
     expect(updateConfig).toHaveBeenCalledWith({ interactiveTokenBudget: 5000 });
+
+    // The orchestrator reads "full autonomy please" itself; the stage gives it
+    // the rule `/autonomous on` answers to.
+    expect(orchestrator.setCommandGate).toHaveBeenCalledTimes(1);
+    const gate = orchestrator.setCommandGate.mock.calls[0]![0] as (
+      caller: { chatId: string; userId?: string; channelType?: string }, command: string, args: readonly string[],
+    ) => Promise<boolean>;
+    channel.sendText.mockClear();
+    expect(await gate({ chatId: "chat-g", userId: "guest", channelType: "web" }, "autonomous", ["on"])).toBe(true);
+    expect(channel.sendText).toHaveBeenCalledWith("chat-g", expect.stringMatching(/^Refused: guest identity guest may not control this instance/));
+    expect(await gate({ chatId: "chat-o", userId: "owner", channelType: "web" }, "autonomous", ["on"])).toBe(false);
   });
 
   it("loads heartbeat triggers into the shared trigger registry and tracks webhook triggers", () => {

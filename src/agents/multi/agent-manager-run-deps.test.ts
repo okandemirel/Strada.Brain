@@ -281,6 +281,24 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
     expect(held["supervisorComplexityThreshold"]).toBe("moderate");
     expect(held["conformanceFrameworkPathsOnly"]).toBe(true);
   });
+
+  // The per-agent orchestrator runs every chat turn and reads "full autonomy
+  // please" as `/autonomous on`: it must ask the command handler's owner rule,
+  // whether the agent was built after the handler was set or before.
+  it("gives each agent's orchestrator the command handler's owner rule", async () => {
+    const gate = vi.fn(async () => true);
+    const handler = { commandGate: gate } as never;
+
+    manager = buildManager(registryWithUnityWriter(), sharedDeps());
+    const early = await chatTurnOrchestrator(manager, "chat-before-handler");
+    manager.setCommandHandler(handler);
+    const late = await chatTurnOrchestrator(manager, "chat-after-handler");
+    expect(late).not.toBe(early);
+
+    for (const orchestrator of [early, late]) {
+      expect((orchestrator as unknown as Record<string, unknown>)["commandGate"]).toBe(gate);
+    }
+  });
 });
 
 // =============================================================================

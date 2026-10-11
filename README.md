@@ -954,6 +954,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 |----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Token from @BotFather |
 | `ALLOWED_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs (required, deny-all if empty) |
+| `TELEGRAM_OWNER_USER_IDS` | Comma-separated user IDs of the operator: on a roster of more than one person (or one opened by a role or open access) only they keep the owner-only chat commands and their plain-language forms; unset, nobody does. Each must also be allowed |
 
 **Discord:**
 | Variable | Description |
@@ -962,6 +963,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `DISCORD_GUILD_ID` | Discord guild ID used for scoped command registration and startup validation |
 | `ALLOWED_DISCORD_USER_IDS` | Comma-separated user IDs (deny-all if empty) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Comma-separated role IDs for role-based access |
+| `DISCORD_OWNER_USER_IDS` | Comma-separated user IDs of the operator: on a roster of more than one person (or one opened by a role or open access) only they keep the owner-only chat commands and their plain-language forms; unset, nobody does. Each must also be allowed |
 
 **Slack:**
 | Variable | Description |
@@ -971,6 +973,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `SLACK_SIGNING_SECRET` | Signing secret from Slack app |
 | `ALLOWED_SLACK_USER_IDS` | Comma-separated user IDs (**open to all if empty**) |
 | `ALLOWED_SLACK_WORKSPACES` | Comma-separated workspace IDs (**open to all if empty**) |
+| `SLACK_OWNER_USER_IDS` | Comma-separated user IDs of the operator: on a roster of more than one person (or one opened by a role or open access) only they keep the owner-only chat commands and their plain-language forms; unset, nobody does. Each must also be allowed |
 | `SLACK_HTTP_PORT` | Port for the HTTP receiver when Socket Mode is off (default `3000`; binds `BIND_HOST`) |
 
 **Teams:**
@@ -980,6 +983,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `TEAMS_APP_PASSWORD` | Microsoft Teams app password |
 | `TEAMS_ALLOWED_USER_IDS` | Comma-separated Teams user IDs allowed to message the bot |
 | `TEAMS_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Teams traffic without a user allowlist |
+| `TEAMS_OWNER_USER_IDS` | Comma-separated user IDs of the operator: on a roster of more than one person (or one opened by a role or open access) only they keep the owner-only chat commands and their plain-language forms; unset, nobody does. Each must also be allowed |
 | `TEAMS_PORT` | Port of the Bot Framework webhook listener (default `3978`; binds `BIND_HOST`) |
 
 ### Features

@@ -149,6 +149,9 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     telegram: {
       botToken: rawConfig.telegramBotToken,
       allowedUserIds: rawConfig.allowedTelegramUserIds ?? [],
+      // The operator on a shared roster (see chatChannelAccessFromConfig); only
+      // surfaced when named, so an untouched config keeps its shape.
+      ...(rawConfig.telegramOwnerUserIds?.length ? { ownerUserIds: rawConfig.telegramOwnerUserIds } : {}),
     },
 
     discord: {
@@ -156,6 +159,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       guildId: rawConfig.discordGuildId,
       allowedUserIds: rawConfig.allowedDiscordUserIds ?? [],
       allowedRoleIds: rawConfig.allowedDiscordRoleIds ?? [],
+      ...(rawConfig.discordOwnerUserIds?.length ? { ownerUserIds: rawConfig.discordOwnerUserIds } : {}),
     },
 
     slack: {
@@ -165,6 +169,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       socketMode: rawConfig.slackSocketMode,
       allowedWorkspaces: rawConfig.allowedSlackWorkspaces,
       allowedUserIds: rawConfig.allowedSlackUserIds,
+      ...(rawConfig.slackOwnerUserIds?.length ? { ownerUserIds: rawConfig.slackOwnerUserIds } : {}),
     },
 
     teams: {
@@ -177,6 +182,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       ...(rawConfig.teamsAppTenantId ? { appTenantId: rawConfig.teamsAppTenantId } : {}),
       allowedUserIds: rawConfig.teamsAllowedUserIds ?? [],
       allowOpenAccess: rawConfig.teamsAllowOpenAccess,
+      ...(rawConfig.teamsOwnerUserIds?.length ? { ownerUserIds: rawConfig.teamsOwnerUserIds } : {}),
     },
 
     security: {
@@ -811,22 +817,26 @@ interface EnvVars {
   providerChain: string | undefined;
   telegramBotToken: string | undefined;
   allowedTelegramUserIds: string | undefined;
+  telegramOwnerUserIds: string | undefined;
   discordBotToken: string | undefined;
   discordGuildId: string | undefined;
   allowedDiscordUserIds: string | undefined;
   allowedDiscordRoleIds: string | undefined;
+  discordOwnerUserIds: string | undefined;
   slackBotToken: string | undefined;
   slackSigningSecret: string | undefined;
   slackAppToken: string | undefined;
   slackSocketMode: string | undefined;
   allowedSlackWorkspaces: string | undefined;
   allowedSlackUserIds: string | undefined;
+  slackOwnerUserIds: string | undefined;
   teamsAppId: string | undefined;
   teamsAppPassword: string | undefined;
   teamsAppType: string | undefined;
   teamsAppTenantId: string | undefined;
   teamsAllowedUserIds: string | undefined;
   teamsAllowOpenAccess: string | undefined;
+  teamsOwnerUserIds: string | undefined;
   jwtSecret: string | undefined;
   requireMfa: string | undefined;
   requireEditConfirmation: string | undefined;
@@ -1245,22 +1255,26 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     providerChain: env["PROVIDER_CHAIN"],
     telegramBotToken: env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: env["ALLOWED_TELEGRAM_USER_IDS"],
+    telegramOwnerUserIds: env["TELEGRAM_OWNER_USER_IDS"],
     discordBotToken: env["DISCORD_BOT_TOKEN"],
     discordGuildId: env["DISCORD_GUILD_ID"],
     allowedDiscordUserIds: env["ALLOWED_DISCORD_USER_IDS"],
     allowedDiscordRoleIds: env["ALLOWED_DISCORD_ROLE_IDS"],
+    discordOwnerUserIds: env["DISCORD_OWNER_USER_IDS"],
     slackBotToken: env["SLACK_BOT_TOKEN"],
     slackSigningSecret: env["SLACK_SIGNING_SECRET"],
     slackAppToken: env["SLACK_APP_TOKEN"],
     slackSocketMode: env["SLACK_SOCKET_MODE"],
     allowedSlackWorkspaces: env["ALLOWED_SLACK_WORKSPACES"],
     allowedSlackUserIds: env["ALLOWED_SLACK_USER_IDS"],
+    slackOwnerUserIds: env["SLACK_OWNER_USER_IDS"],
     teamsAppId: env["TEAMS_APP_ID"],
     teamsAppPassword: env["TEAMS_APP_PASSWORD"],
     teamsAppType: env["TEAMS_APP_TYPE"],
     teamsAppTenantId: env["TEAMS_APP_TENANT_ID"],
     teamsAllowedUserIds: env["TEAMS_ALLOWED_USER_IDS"],
     teamsAllowOpenAccess: env["TEAMS_ALLOW_OPEN_ACCESS"],
+    teamsOwnerUserIds: env["TEAMS_OWNER_USER_IDS"],
     jwtSecret: env["JWT_SECRET"],
     requireMfa: env["REQUIRE_MFA"],
     requireEditConfirmation: env["REQUIRE_EDIT_CONFIRMATION"],

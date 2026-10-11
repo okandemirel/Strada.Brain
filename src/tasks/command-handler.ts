@@ -48,7 +48,10 @@ import { getLoggerSafe } from "../utils/logger.js";
 // only on the caller's own task, and every form the model calls owner-only
 // (`commandPrivilege`: /daemon start, /autonomous on, /token, /routing preset,
 // /persona delete, /campaign revive, /run …) is the instance owner's — as is
-// the plain-language budget change that stands in for `/token`.
+// each plain-language form that stands in for one ("I raised the budget to
+// 100000k" for `/token`, "full autonomy please" for `/autonomous on`, "kampanya
+// devam" for `/campaign revive`), which the layer that reads the sentence asks
+// through `commandGate`.
 
 /** Who typed the command. */
 export interface ChatCaller {
@@ -68,13 +71,20 @@ export interface ChatCaller {
  *            the budget to 100000k") reaches the same power without one.
  *   roster — the channel admits callers by id. Exactly one listed id and no
  *            other way in is a single-identity instance owned by that id;
- *            anything else is shared, and since no owner is recorded for a chat
- *            channel its instance powers are refused (the portal, the dashboard
- *            and the CLI remain the owner's controls).
+ *            anything else is shared. On a shared roster the owner is the
+ *            operator named for the channel (`ownerIds`, from
+ *            <CHANNEL>_OWNER_USER_IDS); with none named nobody is, and its
+ *            instance powers are refused to everyone.
  */
 export type ChatChannelAccess =
   | { readonly kind: "gated" }
-  | { readonly kind: "roster"; readonly userIds: readonly string[]; readonly openMembership?: boolean };
+  | {
+    readonly kind: "roster";
+    readonly userIds: readonly string[];
+    readonly openMembership?: boolean;
+    /** The operator's ids on this channel; they win over the single-id inference. */
+    readonly ownerIds?: readonly string[];
+  };
 
 /** The model's facts about this instance as one caller's channel sees it, and the caller's role. */
 export interface ChatInstanceStanding {
@@ -85,6 +95,13 @@ export interface ChatInstanceStanding {
 export interface ChatInstanceAuthority {
   standingOf(caller: ChatCaller): ChatInstanceStanding;
 }
+
+/**
+ * The owner rule a chat command answers to, for a layer that reads its
+ * plain-language form itself. Resolves true when it refused, and the caller
+ * has been told why.
+ */
+export type ChatCommandGate = (caller: ChatCaller, command: TaskCommand, args: readonly string[]) => Promise<boolean>;
 
 /**
  * A channel that issues its own identities (the web portal) and can say how a
@@ -113,15 +130,18 @@ export function chatInstanceAuthority(
       // A route nobody described vouches for nobody.
       if (!access) return { facts: { shared: true }, role: "unidentified" };
       if (access.kind === "gated") return SOLE_OWNER;
-      const ids = [...new Set(access.userIds.map((id) => id.trim()).filter(Boolean))];
-      if (ids.length === 1 && access.openMembership !== true) {
-        const owner = ids[0]!;
-        return {
-          facts: { shared: false, ownerProfileId: owner },
-          role: caller.userId?.trim() === owner ? "owner" : "guest",
-        };
-      }
-      return { facts: { shared: true }, role: "guest" };
+      const distinct = (list: readonly string[]) => [...new Set(list.map((id) => id.trim()).filter(Boolean))];
+      const ids = distinct(access.userIds);
+      const sole = ids.length === 1 && access.openMembership !== true;
+      // A shared roster has an owner only when one is named: without that,
+      // tightening the gate refused the operator every owner-only form too.
+      const named = distinct(access.ownerIds ?? []);
+      const owners = named.length > 0 ? named : sole ? ids : [];
+      const userId = caller.userId?.trim();
+      return {
+        facts: { shared: !sole, ...(owners.length === 1 ? { ownerProfileId: owners[0]! } : {}) },
+        role: userId && owners.includes(userId) ? "owner" : "guest",
+      };
     },
   };
 }
@@ -133,17 +153,23 @@ export function chatChannelAccessFromConfig(
   return {
     web: { kind: "gated" },
     cli: { kind: "gated" },
-    telegram: { kind: "roster", userIds: (config.telegram?.allowedUserIds ?? []).map(String) },
+    telegram: {
+      kind: "roster",
+      userIds: (config.telegram?.allowedUserIds ?? []).map(String),
+      ownerIds: (config.telegram?.ownerUserIds ?? []).map(String),
+    },
     discord: {
       kind: "roster",
       userIds: config.discord?.allowedUserIds ?? [],
       openMembership: (config.discord?.allowedRoleIds ?? []).length > 0,
+      ownerIds: config.discord?.ownerUserIds ?? [],
     },
-    slack: { kind: "roster", userIds: config.slack?.allowedUserIds ?? [] },
+    slack: { kind: "roster", userIds: config.slack?.allowedUserIds ?? [], ownerIds: config.slack?.ownerUserIds ?? [] },
     teams: {
       kind: "roster",
       userIds: config.teams?.allowedUserIds ?? [],
       openMembership: config.teams?.allowOpenAccess === true,
+      ownerIds: config.teams?.ownerUserIds ?? [],
     },
   };
 }
@@ -156,7 +182,7 @@ export interface CampaignStatusSource {
   /** Stop this chat's active campaign; the caller must own it. */
   cancelByCommand?(chatId: string, userId: string): Promise<boolean>;
   /** Let the campaign layer's sentences ask the rule its commands answer to; resolves true when refused. */
-  setCommandGate?(gate: (caller: ChatCaller, command: TaskCommand, args: readonly string[]) => Promise<boolean>): void;
+  setCommandGate?(gate: ChatCommandGate): void;
 }
 
 /** The slice of RealTreeGuardian the channels' status commands need. */
@@ -308,8 +334,15 @@ export class CommandHandler {
   setCampaignManager(source: CampaignStatusSource | undefined): void {
     this.campaignStatusSource = source;
     // "kampanya devam" is `/campaign revive` in words: it asks the same rule.
-    source?.setCommandGate?.((caller, command, args) => this.refusedForCaller(caller, command, args));
+    source?.setCommandGate?.(this.commandGate);
   }
+
+  /**
+   * The rule `handle` applies before dispatch, for a layer that turns a
+   * sentence into the same power ("full autonomy please" in the orchestrator,
+   * "kampanya devam" in the campaign layer).
+   */
+  readonly commandGate: ChatCommandGate = (caller, command, args) => this.refusedForCaller(caller, command, args);
 
   /** Wire the real-tree guardian so `/guardian` and `/campaign` can show its last verdict. */
   setRealTreeGuardian(source: GuardianStatusSource | undefined): void {

@@ -189,12 +189,14 @@ export const configSchema = z
     // Telegram
     telegramBotToken: z.string().optional(),
     allowedTelegramUserIds: commaSeparatedNumberList,
+    telegramOwnerUserIds: commaSeparatedNumberList,
 
     // Discord
     discordBotToken: z.string().optional(),
     discordGuildId: z.string().optional(),
     allowedDiscordUserIds: commaSeparatedList,
     allowedDiscordRoleIds: commaSeparatedList,
+    discordOwnerUserIds: commaSeparatedList,
 
     // Slack
     slackBotToken: z.string().optional(),
@@ -203,6 +205,7 @@ export const configSchema = z
     slackSocketMode: boolFromString(true),
     allowedSlackWorkspaces: commaSeparatedList,
     allowedSlackUserIds: commaSeparatedList,
+    slackOwnerUserIds: commaSeparatedList,
 
     // Teams
     teamsAppId: z.string().optional(),
@@ -211,6 +214,7 @@ export const configSchema = z
     teamsAppTenantId: z.string().optional(),
     teamsAllowedUserIds: commaSeparatedList,
     teamsAllowOpenAccess: boolFromString(false),
+    teamsOwnerUserIds: commaSeparatedList,
 
     // Security
     jwtSecret: z.string().min(1).optional(),

@@ -63,19 +63,23 @@ export type EnvVarName =
   | "DISCORD_GUILD_ID"
   | "ALLOWED_DISCORD_USER_IDS"
   | "ALLOWED_DISCORD_ROLE_IDS"
+  | "DISCORD_OWNER_USER_IDS"
   | "SLACK_BOT_TOKEN"
   | "SLACK_SIGNING_SECRET"
   | "SLACK_APP_TOKEN"
   | "SLACK_SOCKET_MODE"
   | "ALLOWED_SLACK_WORKSPACES"
   | "ALLOWED_SLACK_USER_IDS"
+  | "SLACK_OWNER_USER_IDS"
   | "TEAMS_APP_ID"
   | "TEAMS_APP_PASSWORD"
   | "TEAMS_APP_TYPE"
   | "TEAMS_APP_TENANT_ID"
   | "TEAMS_ALLOWED_USER_IDS"
   | "TEAMS_ALLOW_OPEN_ACCESS"
+  | "TEAMS_OWNER_USER_IDS"
   | "ALLOWED_TELEGRAM_USER_IDS"
+  | "TELEGRAM_OWNER_USER_IDS"
   | "JWT_SECRET"
   | "REQUIRE_MFA"
   | "REQUIRE_EDIT_CONFIRMATION"
@@ -531,6 +535,12 @@ export interface SlackConfig {
   readonly socketMode: boolean;
   readonly allowedWorkspaces?: string[];
   readonly allowedUserIds?: string[];
+  /**
+   * The operator on this channel: ids that hold the instance owner's chat
+   * powers (owner-only commands and their plain-language forms) when the
+   * channel admits more than one person. Each must also be admitted.
+   */
+  readonly ownerUserIds?: string[];
 }
 
 /** Discord configuration */
@@ -539,12 +549,16 @@ export interface DiscordConfig {
   readonly guildId?: string;
   readonly allowedUserIds: string[];
   readonly allowedRoleIds: string[];
+  /** See SlackConfig.ownerUserIds. */
+  readonly ownerUserIds?: string[];
 }
 
 /** Telegram configuration */
 export interface TelegramConfig {
   readonly botToken?: string;
   readonly allowedUserIds: number[];
+  /** See SlackConfig.ownerUserIds. */
+  readonly ownerUserIds?: number[];
 }
 
 /** Microsoft Teams / Bot Framework app tenancy model */
@@ -564,6 +578,8 @@ export interface TeamsConfig {
   readonly appTenantId?: string;
   readonly allowedUserIds: string[];
   readonly allowOpenAccess: boolean;
+  /** See SlackConfig.ownerUserIds. */
+  readonly ownerUserIds?: string[];
 }
 
 /** Security configuration */

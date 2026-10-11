@@ -66,7 +66,7 @@ or the web chat. The ones an operator needs:
 | Command | Does |
 |---|---|
 | `/campaign` (`/kampanya`) | measured campaign status: milestones, attempts, time box, compile, play-through, player build, GDD numbers, proofs still owed, current task, self-revival timer |
-| `/campaign revive` / `kampanya devam` | resume a NOT DELIVERED or failed campaign now with a fresh budget (it also resumes by itself 15 min after a NOT DELIVERED report); only the person who started the campaign |
+| `/campaign revive` / `kampanya devam` | resume a NOT DELIVERED or failed campaign now with a fresh budget (it also resumes by itself 15 min after a NOT DELIVERED report); only the person who started the campaign, and on a shared chat roster only if that person is the operator (§6c) |
 | `/campaign cancel` / `kampanya iptal` | stop the chat's campaign, including one paused for a self-revival, so nothing more is submitted; only the person who started it |
 | `amend gdd` | accept the GDD as it is on disk now as the approved one (clears a drift refusal), also after a NOT DELIVERED report; only the person who started the campaign |
 | `/campaign measure` / `/measure` | run the delivery-gate structural measurement on the project now |
@@ -159,6 +159,21 @@ browser gets a fresh one, and the first to connect owns the instance again.
 |---|---|---|
 | `deny:guest-owner-only` / `deny:unidentified` on settings, daemon control or a change review | the refusal names the identity and the owner | you are a guest on this instance: hand ownership over as above, or ask the owner |
 | `unavailable:identity-store` (HTTP 503) on those surfaces | the log line `identity store could not be opened` / `not examinable` | the identity database exists and cannot be read (permissions on `<memory.dbPath>`, a lock, a corrupt page). Nothing is granted while it cannot be read — fix the file, no restart needed |
+
+## 6c. The operator on a shared chat roster
+
+Telegram, Discord, Slack and Teams admit people by id. A roster of exactly one
+id is that person's instance. A roster of more (or one a Discord role or Teams
+open access opens) is shared, and there only the ids named in
+`TELEGRAM_OWNER_USER_IDS`, `DISCORD_OWNER_USER_IDS`, `SLACK_OWNER_USER_IDS` or
+`TEAMS_OWNER_USER_IDS` keep the owner-only chat commands (`/daemon start|stop`,
+`/autonomous on|off`, `/token`, `/routing preset`, `/persona switch|create|delete`,
+`/model` changes, `/vault init|sync`, `/campaign revive`, `/run`) and the
+sentences that stand in for them ("I raised the budget to 100000k", "full
+autonomy please", "kampanya devam"). Everyone else gets `Refused: guest identity
+<id> may not …`. With no id named, nobody on a shared roster has these powers,
+the operator included, and a failed campaign then revives only by itself.
+Each named id must also be admitted by the channel's allowlist.
 
 ## 7. Checks you can run yourself
 

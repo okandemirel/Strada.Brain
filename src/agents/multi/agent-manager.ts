@@ -365,6 +365,11 @@ export class AgentManager {
   /** Set the command handler so prefix commands bypass the LLM pipeline */
   setCommandHandler(handler: CommandHandler): void {
     this.commandHandler = handler;
+    // Each agent's orchestrator reads "full autonomy please" as `/autonomous
+    // on`, so it asks the rule the command answers to (see buildAgentResources).
+    for (const liveAgent of this.agents.values()) {
+      liveAgent.orchestrator.setCommandGate(handler.commandGate);
+    }
   }
 
   /** Route non-command messages into the background task system instead of interactive LLM turns. */
@@ -913,6 +918,9 @@ export class AgentManager {
     }
     if (this.opts.taskCheckpointStore) {
       orchestrator.setTaskCheckpointStore(this.opts.taskCheckpointStore);
+    }
+    if (this.commandHandler) {
+      orchestrator.setCommandGate(this.commandHandler.commandGate);
     }
 
     // Inject delegation tools if factory is available (Phase 24)

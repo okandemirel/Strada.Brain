@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { CommandHandler, chatChannelAccessFromConfig, chatInstanceAuthority } from "./command-handler.js";
+import { loadConfig } from "../config/config.js";
 import type { TaskCommand } from "./types.js";
 import { commandPrivilege } from "../channels/web/instance-access.js";
 import { DMPolicy } from "../security/dm-policy.js";
@@ -1216,6 +1217,60 @@ describe("One owner rule for every chat command and its plain-language form (own
       if (w.replies.some((r) => r.startsWith("Refused"))) refused.push(label(form));
     }
     expect(refused).toEqual([]);
+  });
+
+  // On a shared roster every caller was a guest, the operator included, so the
+  // gate above refused the owner every one of these forms too: nobody could
+  // revive a failed campaign from chat, and no other surface revives one. The
+  // operator is named per channel, from the environment, and keeps them all;
+  // the rest of the roster is refused exactly as before.
+  it("leaves the operator named for a shared roster every one of those powers, and nobody else", async () => {
+    const config = loadConfig({
+      UNITY_PROJECT_PATH: process.cwd(),
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      ALLOWED_TELEGRAM_USER_IDS: "111,222",
+      TELEGRAM_OWNER_USER_IDS: "111",
+    });
+    const named = () => chatInstanceAuthority(chatChannelAccessFromConfig(config));
+    const ownerRefused: string[] = [];
+    const guestLeaks: string[] = [];
+    for (const form of forms.filter((f) => f.privilege.kind === "owner-only")) {
+      const owner = world(named());
+      await run(owner, OWNER, form.command, form.args);
+      if (owner.replies.some((r) => r.startsWith("Refused"))) ownerRefused.push(label(form));
+
+      const guest = world(named());
+      await run(guest, GUEST, form.command, form.args);
+      const refused = guest.replies.length === 1
+        && /^Refused: guest identity 222 may not .* only the instance owner 111 may/.test(guest.replies[0]!);
+      if (!refused || guest.touched.length > 0) {
+        guestLeaks.push(`${label(form)} → touched [${guest.touched.join(", ")}], replied ${JSON.stringify(guest.replies)}`);
+      }
+    }
+    expect(ownerRefused).toEqual([]);
+    expect(guestLeaks).toEqual([]);
+  });
+
+  it("names the operator on every roster channel, a role- or open-admitted one included", () => {
+    const authority = chatInstanceAuthority(chatChannelAccessFromConfig(loadConfig({
+      UNITY_PROJECT_PATH: process.cwd(),
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      ALLOWED_DISCORD_ROLE_IDS: "role",
+      DISCORD_OWNER_USER_IDS: "d-op",
+      ALLOWED_SLACK_USER_IDS: "U1,U2",
+      SLACK_OWNER_USER_IDS: "U2",
+      TEAMS_ALLOW_OPEN_ACCESS: "true",
+      TEAMS_OWNER_USER_IDS: "t-op, t-op2",
+      ALLOWED_TELEGRAM_USER_IDS: "111,222",
+    })));
+    const role = (channelType: string, userId: string) => authority.standingOf({ chatId: "c", userId, channelType }).role;
+    expect([role("discord", "d-op"), role("discord", "someone-with-the-role")]).toEqual(["owner", "guest"]);
+    expect([role("slack", "U2"), role("slack", "U1")]).toEqual(["owner", "guest"]);
+    expect([role("teams", "t-op"), role("teams", "t-op2"), role("teams", "anyone")]).toEqual(["owner", "owner", "guest"]);
+    // Still shared: naming the operator does not make the others' traffic theirs.
+    expect(authority.standingOf({ chatId: "c", userId: "d-op", channelType: "discord" }).facts.shared).toBe(true);
+    // Nobody named, nobody owns a shared roster (the rule before this).
+    expect(role("telegram", "111")).toBe("guest");
   });
 
   it("keeps a guest's reads and own-traffic forms open, and never hands it the owner's task", async () => {

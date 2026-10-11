@@ -151,6 +151,7 @@ import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 // goalTreeToDagPayload moved to orchestrator-goal-decomposition.ts
 import type { MonitorLifecycle } from '../dashboard/monitor-lifecycle.js';
 import type { TaskManager } from "../tasks/task-manager.js";
+import type { ChatCaller, ChatCommandGate } from "../tasks/command-handler.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import {
@@ -1040,6 +1041,10 @@ export class Orchestrator {
   private static readonly MAX_DISTINCT_TOOL_ERRORS = 12;
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
+  /** The owner rule the chat commands answer to; see setCommandGate. */
+  private commandGate?: ChatCommandGate;
+  /** Recent verdicts of that rule on directive sentences; see directiveRefused. */
+  private readonly directiveVerdicts = new Map<string, { readonly refused: boolean; readonly at: number }>();
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
   private readonly autonomousDefaultEnabled: boolean;
@@ -1426,8 +1431,8 @@ export class Orchestrator {
         this.buildFreshRunSession(request, queryText, supportsVision),
       buildFixedSupervisorExecutionStrategy: (prompt, identityKey, providerName, modelId, provider) =>
         this.buildFixedSupervisorExecutionStrategy(prompt, identityKey, providerName, modelId, provider),
-      maybeUpdateUserProfileFromPrompt: (chatId, identityKey, queryText, userId) =>
-        this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId),
+      maybeUpdateUserProfileFromPrompt: (chatId, identityKey, queryText, userId, channelType) =>
+        this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId, channelType),
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       errorLearningHooks: () => this.errorLearningHooks ?? undefined,
       runResponse: (chatId) => this.buildRunResponse(chatId),
@@ -2580,6 +2585,17 @@ export class Orchestrator {
   }
 
   /**
+   * The owner rule `/autonomous on` and `/persona switch` answer to
+   * (CommandHandler.commandGate). A sentence that does the same ("full
+   * autonomy please", "use the formal persona") asks it too; unset, as in
+   * embedded use, the caller is the sole user and nothing is refused.
+   */
+  setCommandGate(gate: ChatCommandGate | undefined): void {
+    this.commandGate = gate;
+    this.directiveVerdicts.clear();
+  }
+
+  /**
    * Record the most recent routing metadata (channelType, userId, conversationId)
    * for a chat. Used by {@link continueFromCheckpoint} to synthesize an
    * {@link IncomingMessage} on a checkpoint-driven resume.
@@ -3702,7 +3718,7 @@ export class Orchestrator {
       }
     }
 
-    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, text, userId);
+    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, text, userId, msg.channelType);
 
     // Teaching intent detection: explicit teaching from user (Learning Pipeline v2)
     if (this.learningPipeline && TeachingParser.isTeachingIntent(text)) {
@@ -6067,6 +6083,7 @@ export class Orchestrator {
     profileKey: string,
     prompt: string,
     userId?: string,
+    channelType?: string,
   ): Promise<void> {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
@@ -6081,6 +6098,23 @@ export class Orchestrator {
         ...(this.soulLoader?.getProfiles() ?? []),
       ],
     });
+    // `/persona switch` and `/autonomous on|off` said in words. The commands
+    // are the instance owner's; the sentences set them for anyone on a shared
+    // roster or portal, past the rule the command answers to.
+    const caller: ChatCaller = {
+      chatId,
+      ...(userId !== undefined ? { userId } : {}),
+      ...(channelType ? { channelType } : {}),
+    };
+    if (updates.activePersona && (await this.directiveRefused(caller, prompt, "persona", ["switch", updates.activePersona]))) {
+      delete updates.activePersona;
+    }
+    if (
+      updates.autonomousMode
+      && (await this.directiveRefused(caller, prompt, "autonomous", [updates.autonomousMode.enabled ? "on" : "off"]))
+    ) {
+      delete updates.autonomousMode;
+    }
     const profileUpdates: Record<string, unknown> = {};
 
     if (updates.language) {
@@ -6115,6 +6149,31 @@ export class Orchestrator {
         userId,
       );
     }
+  }
+
+  /**
+   * Does the owner rule refuse this sentence's power to this caller? A turn
+   * reads its sentence twice (handleMessage, then its run's prologue), so the
+   * verdict is kept for a minute: a refused caller is told once, not per read.
+   */
+  private async directiveRefused(
+    caller: ChatCaller,
+    prompt: string,
+    command: "persona" | "autonomous",
+    args: readonly string[],
+  ): Promise<boolean> {
+    const gate = this.commandGate;
+    if (!gate) return false;
+    const now = Date.now();
+    for (const [key, verdict] of this.directiveVerdicts) {
+      if (now - verdict.at > 60_000) this.directiveVerdicts.delete(key);
+    }
+    const key = [caller.chatId, caller.userId ?? "", caller.channelType ?? "", command, ...args, prompt.trim()].join("\u0000");
+    const kept = this.directiveVerdicts.get(key);
+    if (kept) return kept.refused;
+    const refused = await gate(caller, command, args);
+    this.directiveVerdicts.set(key, { refused, at: now });
+    return refused;
   }
 
   private getRuntimeArtifactMatchKey(taskRunId?: string, chatId?: string): string | null {
