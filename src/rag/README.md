@@ -67,7 +67,7 @@ Soft delete only (`markDelete()`). Deleted indices tracked in a Set and filtered
 
 ### FileVectorStore (`vector-store.ts`) — Legacy
 
-Flat `Float32Array` storage with an inline hand-rolled HNSW implementation (pure TypeScript). Switches to HNSW search automatically when >100 entries. Persists to `vectors.bin` + `chunks.json`. Kept as fallback during migration.
+Flat `Float32Array` storage with an inline hand-rolled HNSW implementation (pure TypeScript). Searches scan every vector exactly up to 2^24 stored floats (chunks × dimensions, e.g. ~11k chunks at 1536 dims); past that, the first search that needs the HNSW graph builds it, and later writes keep it up to date. Persists to `vectors.bin` + `chunks.json`. Kept as fallback during migration.
 
 ## Quantization (`hnsw/quantization.ts`)
 

@@ -31,6 +31,14 @@ const FLUSH_DEBOUNCE_MS = 5_000;
 const HNSW_M = 16; // Number of bi-directional links for each element
 const HNSW_EF_CONSTRUCTION = 200; // Size of dynamic list for nearest neighbors
 const HNSW_EF_SEARCH = 100; // Size of dynamic list for search
+/**
+ * Up to this many stored floats (chunks x dimensions) a search scans every
+ * vector: about 20 ms at the limit (~11k chunks at 1536 dims). Building the JS
+ * graph blocks the event loop for seconds even at 3000 chunks of 768 dims, and
+ * every boot used to pay for it. The graph is built only past this size, by
+ * the first search that needs it.
+ */
+const EXACT_SCAN_MAX_FLOATS = 1 << 24;
 
 /**
  * HNSW (Hierarchical Navigable Small World) index node
@@ -40,6 +48,41 @@ interface HNSWNode {
   vector: Float32Array;
   level: number;
   connections: Map<number, Set<number>>; // level -> indices of connected nodes
+  /** Removed: still walked through, never returned or linked to. */
+  deleted: boolean;
+}
+
+/** `v` scaled to length 1 (a zero vector stays zero), as a new array. */
+function unitVector(v: Float32Array): Float32Array {
+  let norm = 0;
+  for (let i = 0; i < v.length; i++) norm += v[i]! * v[i]!;
+  const out = new Float32Array(v);
+  if (norm === 0) return out;
+  const scale = 1 / Math.sqrt(norm);
+  for (let i = 0; i < out.length; i++) out[i]! *= scale;
+  return out;
+}
+
+/** Cosine similarity of two unit vectors. */
+function dot(a: Float32Array, b: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i]! * b[i]!;
+  return sum;
+}
+
+/** Inserts `item` into `list`, which is kept in ascending score order. */
+function insertByScore(
+  list: Array<{ idx: number; score: number }>,
+  item: { idx: number; score: number },
+): void {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid]!.score < item.score) lo = mid + 1;
+    else hi = mid;
+  }
+  list.splice(lo, 0, item);
 }
 
 /**
@@ -197,6 +240,7 @@ class HNSWIndex {
   private idToIndex: Map<string, number> = new Map();
   private entryPoint: number = -1;
   private maxLevel: number = 0;
+  private deletedCount = 0;
   private readonly m: number;
   private readonly efConstruction: number;
   private readonly efSearch: number;
@@ -230,11 +274,14 @@ class HNSWIndex {
     }
 
     const level = this.randomLevel();
+    // Stored at unit length, so every comparison below is a plain dot product.
+    const unit = unitVector(vector);
     const node: HNSWNode = {
       id,
-      vector: new Float32Array(vector), // Copy to ensure isolation
+      vector: unit,
       level,
       connections: new Map(),
+      deleted: false,
     };
 
     const newIndex = this.nodes.length;
@@ -250,12 +297,12 @@ class HNSWIndex {
     // Insert into layers from top to level+1 (find entry point)
     let currEp = this.entryPoint;
     for (let l = this.maxLevel; l > level; l--) {
-      currEp = this.searchLayerClosest(vector, currEp, l);
+      currEp = this.searchLayerClosest(unit, currEp, l);
     }
 
     // Insert at each level from min(level, maxLevel) down to 0
     for (let l = Math.min(level, this.maxLevel); l >= 0; l--) {
-      const neighbors = this.searchLayerKNN(vector, currEp, this.efConstruction, l);
+      const neighbors = this.searchLayerKNN(unit, currEp, this.efConstruction, l);
       this.connectNewNode(newIndex, neighbors, l);
       currEp = neighbors[0]?.idx ?? currEp;
     }
@@ -272,9 +319,14 @@ class HNSWIndex {
   update(id: string, vector: Float32Array): void {
     const idx = this.idToIndex.get(id);
     if (idx === undefined) return;
-    
-    // Simple update - in production, you'd want to rewire connections
-    this.nodes[idx]!.vector = new Float32Array(vector);
+    const current = this.nodes[idx]!.vector;
+    const unit = unitVector(vector);
+    if (current.length === unit.length && current.every((v, i) => v === unit[i])) return;
+
+    // The node's links were chosen for its old vector; a moved node has to be
+    // linked where it now sits, or searches near it never reach it.
+    this.remove(id);
+    this.add(id, vector);
   }
 
   /**
@@ -284,52 +336,42 @@ class HNSWIndex {
     const idx = this.idToIndex.get(id);
     if (idx === undefined) return;
 
-    // Mark as removed (soft delete for performance)
-    // In production, implement proper rewiring
+    // The node stays in the graph as a waypoint: dropping it cut off every
+    // node that was only reached through it. The graph is rebuilt once the
+    // removed nodes outnumber the live ones.
     this.idToIndex.delete(id);
-    this.nodes[idx] = null as unknown as HNSWNode;
+    this.nodes[idx]!.deleted = true;
+    this.deletedCount++;
+    if (this.deletedCount > this.idToIndex.size) this.compact();
   }
 
-  /** First non-removed node index, or -1 if the index is empty. */
-  private firstLiveNode(): number {
-    for (let i = 0; i < this.nodes.length; i++) {
-      if (this.nodes[i]) return i;
-    }
-    return -1;
+  /** Rebuilds the graph from the live nodes alone. */
+  private compact(): void {
+    const live = this.nodes.filter((node) => !node.deleted);
+    this.clear();
+    for (const node of live) this.add(node.id, node.vector);
   }
 
   /**
    * Search for k nearest neighbors
    */
   search(query: Float32Array, k: number): Array<{ id: string; score: number }> {
-    if (this.nodes.length === 0 || this.entryPoint < 0) return [];
+    if (this.idToIndex.size === 0 || this.entryPoint < 0) return [];
 
     const ef = Math.max(k, this.efSearch);
+    const unit = unitVector(query);
     let currEp = this.entryPoint;
-    // The entry point may have been soft-removed (remove() nulls the slot but
-    // does not update entryPoint). Fall back to any live node so traversal
-    // never starts from a null reference.
-    if (!this.nodes[currEp]) {
-      currEp = this.firstLiveNode();
-      if (currEp < 0) return [];
-    }
 
     // Search from top layer down to layer 1
     for (let l = this.maxLevel; l > 0; l--) {
-      currEp = this.searchLayerClosest(query, currEp, l);
+      currEp = this.searchLayerClosest(unit, currEp, l);
     }
 
     // Search layer 0 with full ef
-    const candidates = this.searchLayerKNN(query, currEp, ef, 0);
-    
+    const candidates = this.searchLayerKNN(unit, currEp, ef, 0);
+
     // Return top k
-    return candidates
-      .slice(0, k)
-      .filter(c => this.nodes[c.idx] !== null)
-      .map(c => ({
-        id: this.nodes[c.idx]!.id,
-        score: VectorOps.cosineSimilarity(query, this.nodes[c.idx]!.vector),
-      }));
+    return candidates.slice(0, k).map((c) => ({ id: this.nodes[c.idx]!.id, score: c.score }));
   }
 
   /**
@@ -337,32 +379,24 @@ class HNSWIndex {
    */
   private searchLayerClosest(query: Float32Array, entryPoint: number, level: number): number {
     let curr = entryPoint;
-    const currNode = this.nodes[curr];
-    if (!currNode) return curr; // entry was soft-removed — nothing to traverse
-    let currDist = -VectorOps.cosineSimilarity(query, currNode.vector);
+    let currScore = dot(query, this.nodes[curr]!.vector);
     let changed = true;
 
     const visited = new Set<number>([curr]);
 
     while (changed) {
       changed = false;
-      const node = this.nodes[curr];
-      if (!node) break;
-      const connections = node.connections.get(level);
+      const connections = this.nodes[curr]!.connections.get(level);
       if (!connections) break;
 
       for (const neighbor of connections) {
         if (visited.has(neighbor)) continue;
         visited.add(neighbor);
 
-        // Skip soft-removed neighbors still referenced by this node's edges.
-        const neighborNode = this.nodes[neighbor];
-        if (!neighborNode) continue;
-
-        const neighborDist = -VectorOps.cosineSimilarity(query, neighborNode.vector);
-        if (neighborDist < currDist) {
+        const score = dot(query, this.nodes[neighbor]!.vector);
+        if (score > currScore) {
           curr = neighbor;
-          currDist = neighborDist;
+          currScore = score;
           changed = true;
         }
       }
@@ -372,7 +406,7 @@ class HNSWIndex {
   }
 
   /**
-   * Search layer for k nearest neighbors
+   * Search layer for the ef nearest live neighbors, best first
    */
   private searchLayerKNN(
     query: Float32Array,
@@ -380,70 +414,40 @@ class HNSWIndex {
     ef: number,
     level: number
   ): Array<{ idx: number; score: number }> {
-    const entryNode = this.nodes[entryPoint];
-    if (!entryNode) return []; // entry was soft-removed
-    const candidates: Array<{ idx: number; score: number }> = [];
+    const entryNode = this.nodes[entryPoint]!;
+    const entry = { idx: entryPoint, score: dot(query, entryNode.vector) };
     const visited = new Set<number>([entryPoint]);
-    const entryScore = VectorOps.cosineSimilarity(query, entryNode.vector);
+    // Both lists ascend by score: the next node to expand is the last
+    // candidate, the worst kept result is the first.
+    const candidates = [entry];
+    const results = entryNode.deleted ? [] : [entry];
 
-    candidates.push({ idx: entryPoint, score: entryScore });
+    while (candidates.length > 0) {
+      const current = candidates.pop()!;
+      // Nothing left to expand can improve a full result list.
+      if (results.length >= ef && current.score < results[0]!.score) break;
 
-    // Simple greedy best-first search
-    const unchecked = new Set<number>([entryPoint]);
-
-    while (unchecked.size > 0) {
-      // Get best unchecked
-      let bestIdx = -1;
-      let bestScore = -1;
-      for (const idx of unchecked) {
-        const node = this.nodes[idx];
-        if (!node) { unchecked.delete(idx); continue; }
-        const score = VectorOps.cosineSimilarity(query, node.vector);
-        if (score > bestScore) {
-          bestScore = score;
-          bestIdx = idx;
-        }
-      }
-
-      if (bestIdx < 0) break;
-      unchecked.delete(bestIdx);
-
-      // Check neighbors
-      const bestNode = this.nodes[bestIdx];
-      if (!bestNode) continue;
-      const connections = bestNode.connections.get(level);
+      const connections = this.nodes[current.idx]!.connections.get(level);
       if (!connections) continue;
 
       for (const neighbor of connections) {
         if (visited.has(neighbor)) continue;
         visited.add(neighbor);
 
-        // Skip soft-removed neighbors still referenced by this node's edges.
-        const neighborNode = this.nodes[neighbor];
-        if (!neighborNode) continue;
+        const neighborNode = this.nodes[neighbor]!;
+        const score = dot(query, neighborNode.vector);
+        if (results.length >= ef && score <= results[0]!.score) continue;
 
-        const score = VectorOps.cosineSimilarity(query, neighborNode.vector);
-
-        // Add if better than worst in candidates or if candidates < ef
-        if (candidates.length < ef) {
-          candidates.push({ idx: neighbor, score });
-          unchecked.add(neighbor);
-        } else if (score > candidates[candidates.length - 1]!.score) {
-          candidates[candidates.length - 1] = { idx: neighbor, score };
-          unchecked.add(neighbor);
-        }
-
-        // Keep candidates sorted and trimmed
-        if (candidates.length > 1) {
-          candidates.sort((a, b) => b.score - a.score);
-          if (candidates.length > ef) {
-            candidates.length = ef;
-          }
+        const item = { idx: neighbor, score };
+        insertByScore(candidates, item);
+        if (!neighborNode.deleted) {
+          insertByScore(results, item);
+          if (results.length > ef) results.shift();
         }
       }
     }
 
-    return candidates;
+    return results.reverse();
   }
 
   /**
@@ -457,8 +461,7 @@ class HNSWIndex {
     const mMax = level === 0 ? this.m * 2 : this.m;
     const newNode = this.nodes[newIdx]!;
 
-    // Select best m neighbors
-    const selected = neighbors.slice(0, mMax);
+    const selected = this.selectNeighbors(neighbors, this.m);
     const connections = new Set<number>(selected.map(n => n.idx));
     newNode.connections.set(level, connections);
 
@@ -488,15 +491,36 @@ class HNSWIndex {
     const conns = node.connections.get(level);
     if (!conns || conns.size <= mMax) return;
 
-    // Simple heuristic: keep first mMax (could be improved with distance-based selection)
-    const newConns = new Set<number>();
-    let count = 0;
-    for (const conn of conns) {
-      if (count >= mMax) break;
-      newConns.add(conn);
-      count++;
+    // Choose by distance. Keeping the oldest links dropped the back-link to
+    // every node added after this one filled up, so a search could reach only
+    // the first few dozen nodes ever inserted.
+    const ranked = [...conns]
+      .map((idx) => ({ idx, score: dot(node.vector, this.nodes[idx]!.vector) }))
+      .sort((a, b) => b.score - a.score);
+    node.connections.set(level, new Set(this.selectNeighbors(ranked, mMax).map((r) => r.idx)));
+  }
+
+  /**
+   * HNSW neighbor-selection heuristic: walking `candidates` best first, keep
+   * one only if it is closer to the base node than to every one kept so far.
+   * Plain nearest-m links all point into the node's own cluster, so clusters
+   * end up joined by nothing and a search stays in whichever it entered.
+   */
+  private selectNeighbors(
+    candidates: Array<{ idx: number; score: number }>,
+    m: number
+  ): Array<{ idx: number; score: number }> {
+    if (candidates.length <= m) return candidates;
+    const selected: Array<{ idx: number; score: number }> = [];
+    for (const candidate of candidates) {
+      if (selected.length >= m) break;
+      const vector = this.nodes[candidate.idx]!.vector;
+      const diverse = selected.every(
+        (kept) => dot(vector, this.nodes[kept.idx]!.vector) <= candidate.score,
+      );
+      if (diverse) selected.push(candidate);
     }
-    node.connections.set(level, newConns);
+    return selected;
   }
 
   /**
@@ -514,6 +538,7 @@ class HNSWIndex {
     this.idToIndex.clear();
     this.entryPoint = -1;
     this.maxLevel = 0;
+    this.deletedCount = 0;
   }
 }
 
@@ -525,7 +550,9 @@ export class FileVectorStore implements IVectorStore {
   private readonly dimensions: number;
   private chunks: CodeChunk[] = [];
   private vectors: Float32Array = new Float32Array(0);
-  private hnswIndex: HNSWIndex;
+  /** Built on demand by search(); kept in step with the store once built. */
+  private hnswIndex: HNSWIndex | null = null;
+  private readonly exactScanMaxFloats: number;
 
   /** chunk id → position index in chunks / vectors */
   private idIndex: Map<string, number> = new Map();
@@ -536,10 +563,10 @@ export class FileVectorStore implements IVectorStore {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlush: boolean = false;
 
-  constructor(storePath: string, dimensions: number) {
+  constructor(storePath: string, dimensions: number, options: { exactScanMaxFloats?: number } = {}) {
     this.storePath = storePath;
     this.dimensions = dimensions;
-    this.hnswIndex = new HNSWIndex(dimensions);
+    this.exactScanMaxFloats = options.exactScanMaxFloats ?? EXACT_SCAN_MAX_FLOATS;
   }
 
   // ---------------------------------------------------------------------------
@@ -597,7 +624,7 @@ export class FileVectorStore implements IVectorStore {
       this.vectors = new Float32Array(0);
       this.idIndex = new Map();
       this.fileIndex = new Map();
-      this.hnswIndex.clear();
+      this.hnswIndex = null;
     }
   }
 
@@ -667,7 +694,7 @@ export class FileVectorStore implements IVectorStore {
       this.setVector(idx, entry.vector);
       
       // Update HNSW index
-      this.hnswIndex.update(entry.id, new Float32Array(entry.vector));
+      this.hnswIndex?.update(entry.id, new Float32Array(entry.vector));
       
       // File index: remove old filePath association if it changed.
       if (oldFilePath !== entry.chunk.filePath) {
@@ -695,7 +722,7 @@ export class FileVectorStore implements IVectorStore {
         this.addToFileIndex(entry.chunk.filePath, entry.id);
         
         // Add to HNSW index
-        this.hnswIndex.add(entry.id, new Float32Array(entry.vector));
+        this.hnswIndex?.add(entry.id, new Float32Array(entry.vector));
       }
     }
   }
@@ -717,7 +744,7 @@ export class FileVectorStore implements IVectorStore {
       const chunk = this.chunks[i]!;
       if (idsToRemove.has(chunk.id)) {
         this.fileIndex.get(chunk.filePath)?.delete(chunk.id);
-        this.hnswIndex.remove(chunk.id);
+        this.hnswIndex?.remove(chunk.id);
         continue;
       }
       
@@ -752,11 +779,11 @@ export class FileVectorStore implements IVectorStore {
 
     const queryFloat = new Float32Array(queryVector);
     
-    // Use HNSW for approximate search when dataset is large enough. A query
-    // for every chunk (a file-scoped search ranks the whole store) takes the
-    // exact scan: the graph reached 36 of 400 chunks, so the scope filter
-    // never saw the in-scope ones.
-    if (n > 100 && topK < n && this.hnswIndex.size > 0) {
+    // Use HNSW for approximate search when a scan would be slow (see
+    // EXACT_SCAN_MAX_FLOATS). A query for every chunk (a file-scoped search
+    // ranks the whole store) always takes the exact scan.
+    if (topK < n && n * this.dimensions > this.exactScanMaxFloats) {
+      this.hnswIndex ??= this.buildHnswIndex();
       const hnswResults = this.hnswIndex.search(queryFloat, topK);
       return hnswResults.map(r => ({
         id: r.id,
@@ -766,7 +793,7 @@ export class FileVectorStore implements IVectorStore {
       }));
     }
 
-    // Fallback to exact search for small datasets
+    // Exact scan
     const vectors: Float32Array[] = [];
     for (let i = 0; i < n; i++) {
       vectors.push(this.vectors.subarray(i * this.dimensions, (i + 1) * this.dimensions));
@@ -821,17 +848,21 @@ export class FileVectorStore implements IVectorStore {
   private rebuildIndexes(): void {
     this.idIndex = new Map();
     this.fileIndex = new Map();
-    this.hnswIndex.clear();
+    this.hnswIndex = null;
 
     for (let i = 0; i < this.chunks.length; i++) {
       const chunk = this.chunks[i]!;
       this.idIndex.set(chunk.id, i);
       this.addToFileIndex(chunk.filePath, chunk.id);
-      
-      // Rebuild HNSW index
-      const vector = this.vectors.subarray(i * this.dimensions, (i + 1) * this.dimensions);
-      this.hnswIndex.add(chunk.id, vector);
     }
+  }
+
+  private buildHnswIndex(): HNSWIndex {
+    const index = new HNSWIndex(this.dimensions);
+    for (let i = 0; i < this.chunks.length; i++) {
+      index.add(this.chunks[i]!.id, this.vectors.subarray(i * this.dimensions, (i + 1) * this.dimensions));
+    }
+    return index;
   }
 
   private markDirty(): void {
