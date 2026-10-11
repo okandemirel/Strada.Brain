@@ -149,3 +149,23 @@ describe("README.md matches the supported project matrix", () => {
     });
   });
 });
+
+/**
+ * AUTO_UPDATE_BUILD_TIMEOUT_MIN decides when a slow install or build is rolled
+ * back, and reached the English table only; AUTO_UPDATE_NOTIFY was missing
+ * from two translations as well (review of 1dbe763e). Each README's table is
+ * held to the variables the config actually reads.
+ */
+describe("every README lists every auto-update variable the config reads", () => {
+  const configSource = readFileSync(join(import.meta.dirname, "config.ts"), "utf8");
+  const variables = [...new Set([...configSource.matchAll(/env\["(AUTO_UPDATE_[A-Z_]+)"\]/gu)].map((m) => m[1]))];
+
+  it.each(["README.md", ...["de", "es", "fr", "ja", "ko", "tr", "zh"].map((lang) => `README.${lang}.md`)])("%s", (file) => {
+    expect(variables).toContain("AUTO_UPDATE_BUILD_TIMEOUT_MIN");
+    const text = readFileSync(join(import.meta.dirname, "..", "..", file), "utf8");
+    const rows = text.split("\n").filter((line) => line.startsWith("| `AUTO_UPDATE_"));
+    for (const variable of variables) {
+      expect(rows.some((row) => row.startsWith(`| \`${variable}\``)), `${file} has a row for ${variable}`).toBe(true);
+    }
+  });
+});

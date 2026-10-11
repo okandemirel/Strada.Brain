@@ -103,6 +103,29 @@ describe("update lock (COR-3)", () => {
     }
   });
 
+  // Review of 1dbe763e: a holder whose start time cannot be read keeps its
+  // lock for a fixed 30 minutes, but with 15-minute install and build steps
+  // a failing update (pull, two installs, build, boot smoke, then the
+  // rollback's two installs and rebuild) runs well past that.
+  it("a live holder it cannot identify keeps its lock for as long as a failing update can run", async () => {
+    const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    try {
+      await once(holder, "spawn");
+      const { updater, lockPath } = makeUpdater();
+      // No startTime: written by an updater that could not read its own.
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, timestamp: Date.now() - 45 * 60_000 }));
+
+      expect(updater.acquireLock()).toBe(false);
+      expect(updater.wasLockedOut()).toBe(true);
+
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, timestamp: Date.now() - 3 * 60 * 60_000 }));
+      expect(updater.acquireLock()).toBe(true);
+      updater.releaseLock();
+    } finally {
+      holder.kill();
+    }
+  });
+
   it("release leaves a lock that is no longer ours alone", () => {
     const { updater, lockPath } = makeUpdater();
     expect(updater.acquireLock()).toBe(true);

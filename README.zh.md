@@ -252,9 +252,12 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 | `AUTO_UPDATE_ENABLED` | `true` | 启用/禁用自动更新 |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 检查频率（小时） |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 应用更新前的空闲分钟数 |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | 更新（及其回滚）中每个安装或构建步骤允许的分钟数，超时则回滚更新 |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm 分发标签：`stable` 或 `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | 检查或安装更新时发送通知 |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | 更新后空闲时自动重启（需要 `strada daemon`） |
+
+**更新失败或等待时。** 安装、构建或健康检查失败时，checkout 会回滚到更新前的提交；但如果更新期间有受跟踪的文件被修改，则拒绝回滚，以免丢弃任何人的工作，checkout 保留失败的提交。无论哪种情况，失败的提交（npm 安装则为版本）都会记录在 `.strada/auto-update-hold.json`（npm 安装位于配置根目录下按安装区分的目录）中暂缓：更新器不会再自动重试它，并且在尝试更新的版本之前，会等待一段随每次连续失败而加倍的退避时间（一个检查间隔，然后 2 倍、4 倍，最多 8 倍）。`strada status` 会显示暂缓，`POST /api/update` 返回 `held_back`，`strada update` 可立即重试，更新成功后暂缓解除。更新后，守护进程只在聊天空闲且没有任务运行时才重启；等待期间每 30 分钟记录一次日志，两小时后请求手动重启，并且在重启之前不会开始新的更新。
 
 ---
 

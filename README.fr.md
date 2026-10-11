@@ -252,9 +252,12 @@ Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennem
 | `AUTO_UPDATE_ENABLED` | `true` | Activer/d&eacute;sactiver la mise &agrave; jour automatique |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Fr&eacute;quence de v&eacute;rification (heures) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes d'inactivit&eacute; avant d'appliquer la mise &agrave; jour |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | Minutes que peut prendre chaque &eacute;tape d'installation ou de build d'une mise &agrave; jour (et de son rollback) avant que la mise &agrave; jour soit annul&eacute;e |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag : `stable` ou `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | Envoyer des notifications lors des v&eacute;rifications ou des installations de mises &agrave; jour |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Red&eacute;marrage automatique apr&egrave;s mise &agrave; jour (`strada daemon` requis) |
+
+**Quand une mise &agrave; jour &eacute;choue ou attend.** Si l'installation, le build ou le contr&ocirc;le de sant&eacute; &eacute;choue, le checkout revient au commit pr&eacute;c&eacute;dent, sauf si des fichiers suivis ont &eacute;t&eacute; modifi&eacute;s pendant la mise &agrave; jour : le rollback est alors refus&eacute; pour ne d&eacute;truire le travail de personne, et le checkout garde le commit en &eacute;chec. Dans les deux cas, le commit (ou la version npm) en &eacute;chec est retenu dans `.strada/auto-update-hold.json` (pour une installation npm, dans un r&eacute;pertoire propre &agrave; cette installation sous la racine de configuration) : le programme de mise &agrave; jour ne le r&eacute;essaie jamais de lui-m&ecirc;me et, avant toute version plus r&eacute;cente, attend un d&eacute;lai qui double &agrave; chaque &eacute;chec cons&eacute;cutif (un intervalle de v&eacute;rification, puis deux, quatre, au plus huit). `strada status` affiche la retenue, `POST /api/update` r&eacute;pond `held_back`, `strada update` r&eacute;essaie imm&eacute;diatement, et une mise &agrave; jour r&eacute;ussie la l&egrave;ve. Apr&egrave;s une mise &agrave; jour, le daemon ne red&eacute;marre que lorsque le chat est inactif et qu'aucune t&acirc;che ne tourne ; pendant l'attente il le journalise toutes les 30 minutes, demande un red&eacute;marrage manuel au bout de deux heures et ne lance aucune autre mise &agrave; jour avant d'avoir red&eacute;marr&eacute;.
 
 ---
 

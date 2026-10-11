@@ -253,8 +253,12 @@ Strada.Brain comprueba automaticamente las actualizaciones diariamente y las apl
 | `AUTO_UPDATE_ENABLED` | `true` | Habilitar/deshabilitar actualizacion automatica |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Frecuencia de comprobacion (horas) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutos inactivo antes de aplicar actualizacion |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | Minutos que puede tardar cada paso de instalacion o compilacion de una actualizacion (y de su rollback) antes de revertirla |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` o `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | Enviar notificaciones cuando se comprueban o instalan actualizaciones |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Reinicio automatico despues de actualizacion (requiere `strada daemon`) |
+
+**Cuando una actualizacion falla o espera.** Si falla la instalacion, la compilacion o la comprobacion de salud, el checkout vuelve al commit anterior, salvo que durante la actualizacion se hayan modificado archivos versionados: entonces el rollback se rechaza para no descartar el trabajo de nadie, y el checkout conserva el commit fallido. En ambos casos el commit (o la version de npm) fallido queda retenido en `.strada/auto-update-hold.json` (en una instalacion npm, en un directorio propio de esa instalacion bajo la raiz de configuracion): el actualizador nunca lo reintenta por si mismo y, antes de probar algo mas nuevo, espera un plazo que se duplica con cada fallo consecutivo (un intervalo de comprobacion, luego el doble, el cuadruple, como maximo ocho veces). `strada status` muestra la retencion, `POST /api/update` responde `held_back`, `strada update` reintenta de inmediato y una actualizacion correcta la elimina. Tras una actualizacion, el daemon solo se reinicia cuando el chat esta inactivo y no hay tareas en curso; mientras espera lo registra cada 30 minutos, pide un reinicio manual a las dos horas y no inicia otra actualizacion hasta haberse reiniciado.
 
 ---
 

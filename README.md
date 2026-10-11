@@ -336,6 +336,8 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 | `AUTO_UPDATE_NOTIFY` | `true` | Send update notifications when checks or installs occur |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle (requires `strada daemon`) |
 
+**When an update fails or waits.** A failed install, build or health check rolls the checkout back to the commit it came from — unless tracked files changed while the update ran: then the rollback is refused, so nobody's edits are discarded, and the checkout keeps the failed commit. Either way the failed commit (or npm version) is held back in `.strada/auto-update-hold.json` (for an npm install, in a per-install directory under the config root): the updater never retries it on its own, and before trying anything newer it waits a backoff that doubles with each consecutive failure (one check interval, then 2×, 4×, at most 8×). `strada status` shows the hold, `POST /api/update` answers `held_back`, `strada update` retries at once, and a successful update clears it. After an update the daemon restarts only once the chat is idle and no task runs; while it waits it logs every 30 minutes, asks for a manual restart after two hours, and starts no further update until it has restarted.
+
 ---
 
 ## Web Portal

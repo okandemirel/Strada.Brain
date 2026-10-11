@@ -256,9 +256,12 @@ Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugu
 | `AUTO_UPDATE_ENABLED` | `true` | Oto-guncellemeyi etkinlestir/devre disi birak |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Kontrol sikliği (saatler) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Guncellemeleri uygulamadan onceki bekleme suresi (dakikalar) |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | Bir guncellemenin (ve geri alinmasinin) her kurulum veya derleme adiminin, guncelleme geri alinmadan once surebilecegi dakika |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` veya `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | Guncelleme kontrolu veya kurulumu gerceklestiginde bildirim gonder |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi otomatik yeniden baslat (`strada daemon` gerektirir) |
+
+**Bir guncelleme basarisiz oldugunda veya beklediginde.** Kurulum, derleme veya saglik kontrolu basarisiz olursa checkout onceki commit'e geri alinir; ancak guncelleme sirasinda izlenen dosyalar degistiyse, kimsenin emegi silinmesin diye geri alma reddedilir ve checkout basarisiz commit'te kalir. Her iki durumda da basarisiz commit (npm'de surum) `.strada/auto-update-hold.json` dosyasinda bekletilir (npm kurulumunda, yapilandirma kokunun altinda o kuruluma ait bir dizinde): guncelleyici onu kendiliginden asla tekrar denemez ve daha yeni bir guncellemeyi, her ardisik basarisizlikta iki katina cikan bir sure (bir kontrol araligi, sonra 2, 4, en fazla 8 kati) dolmadan denemez. `strada status` bekletmeyi gosterir, `POST /api/update` `held_back` doner, `strada update` hemen yeniden dener ve basarili bir guncelleme bekletmeyi kaldirir. Guncellemeden sonra daemon yalnizca sohbet bostayken ve calisan gorev yokken yeniden baslar; beklerken bunu 30 dakikada bir loglar, iki saat sonra elle yeniden baslatma ister ve yeniden baslayana kadar yeni bir guncelleme baslatmaz.
 
 ---
 

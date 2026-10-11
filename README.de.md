@@ -252,8 +252,12 @@ Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn d
 | `AUTO_UPDATE_ENABLED` | `true` | Aktiviert/deaktiviert automatische Updates |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Prueffrequenz (Stunden) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minuten Untaetigkeit vor Update-Anwendung |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | Minuten, die jeder Installations- oder Build-Schritt eines Updates (und seines Rollbacks) dauern darf, bevor das Update zurueckgerollt wird |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` oder `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | Benachrichtigungen bei Update-Pruefungen und -Installationen senden |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Automatischer Neustart nach Update (`strada daemon` erforderlich) |
+
+**Wenn ein Update fehlschlaegt oder wartet.** Scheitert Installation, Build oder Gesundheitscheck, wird der Checkout auf den vorherigen Commit zurueckgesetzt — ausser es wurden waehrend des Updates versionierte Dateien geaendert: Dann wird der Rollback verweigert, damit keine Arbeit verloren geht, und der Checkout behaelt den fehlgeschlagenen Commit. In beiden Faellen wird der fehlgeschlagene Commit (bzw. die npm-Version) in `.strada/auto-update-hold.json` zurueckgehalten (bei einer npm-Installation in einem eigenen Verzeichnis pro Installation unter dem Config-Root): Der Updater versucht ihn nie von selbst erneut und wartet vor jedem neueren Update eine Frist ab, die sich mit jedem weiteren Fehlschlag verdoppelt (ein Pruefintervall, dann das Doppelte, Vierfache, hoechstens Achtfache). `strada status` zeigt die Sperre, `POST /api/update` antwortet mit `held_back`, `strada update` versucht es sofort erneut, und ein erfolgreiches Update hebt sie auf. Nach einem Update startet der Daemon erst neu, wenn der Chat untaetig ist und keine Aufgabe laeuft; waehrend er wartet, protokolliert er das alle 30 Minuten, bittet nach zwei Stunden um einen manuellen Neustart und beginnt bis zum Neustart kein weiteres Update.
 
 ---
 

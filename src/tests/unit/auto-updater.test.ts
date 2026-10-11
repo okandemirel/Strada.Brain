@@ -236,14 +236,16 @@ describe("AutoUpdater", () => {
       updater.releaseLock();
     });
 
-    it("should detect stale lock older than 30 minutes", async () => {
+    // Not 30 minutes: a failing update with 15-minute install and build steps
+    // runs for almost two hours (review of 1dbe763e).
+    it("should detect stale lock older than the longest update can run", async () => {
       const dir = makeTmpDir();
       const lockPath = path.join(dir, ".strada-update.lock");
       fs.writeFileSync(
         lockPath,
         JSON.stringify({
           pid: process.pid,
-          timestamp: Date.now() - 31 * 60 * 1000,
+          timestamp: Date.now() - 3 * 60 * 60 * 1000,
         }),
       );
 

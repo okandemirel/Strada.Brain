@@ -252,9 +252,12 @@ Strada.Brain은 매일 자동으로 업데이트를 확인하고 유휴 상태�
 | `AUTO_UPDATE_ENABLED` | `true` | 자동 업데이트 활성화/비활성화 |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 확인 빈도 (시간) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 업데이트 적용 전 유휴 시간 (분) |
+| `AUTO_UPDATE_BUILD_TIMEOUT_MIN` | `15` | 업데이트(및 롤백)의 각 설치/빌드 단계에 허용되는 시간 (분). 초과하면 업데이트가 롤백됩니다 |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` 또는 `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | 확인 또는 설치 시 업데이트 알림 전송 |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | 업데이트 후 자동 재시작 (`strada daemon` 필요) |
+
+**업데이트가 실패하거나 대기할 때.** 설치, 빌드 또는 헬스 체크가 실패하면 checkout 은 이전 커밋으로 되돌아갑니다. 단, 업데이트 중에 추적 파일이 변경되었다면 누구의 작업도 지우지 않도록 롤백을 거부하고, checkout 은 실패한 커밋을 그대로 유지합니다. 어느 경우든 실패한 커밋(npm 은 버전)은 `.strada/auto-update-hold.json`(npm 설치는 설정 루트 아래 설치별 디렉터리)에 보류로 기록되어 자동으로 다시 시도되지 않으며, 더 새로운 업데이트도 연속 실패마다 두 배로 늘어나는 대기 시간(확인 주기의 1배, 2배, 4배, 최대 8배)이 지나야 시도합니다. `strada status` 가 보류를 표시하고, `POST /api/update` 는 `held_back` 을 반환하며, `strada update` 는 즉시 다시 시도하고, 업데이트가 성공하면 보류가 해제됩니다. 업데이트 후 데몬은 채팅이 유휴 상태이고 실행 중인 작업이 없을 때만 재시작합니다. 기다리는 동안 30분마다 로그를 남기고, 2시간이 지나면 수동 재시작을 요청하며, 재시작하기 전에는 다음 업데이트를 시작하지 않습니다.
 
 ---
 

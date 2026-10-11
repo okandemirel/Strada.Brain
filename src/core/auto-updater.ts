@@ -6,15 +6,16 @@ import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import {
-  clearUpdateHold, describeRollback, describeUpdateHold, describeWhen, readUpdateHold, recordUpdateEvent, writeUpdateHold,
-  type RollbackOutcome, type UpdateEventKind, type UpdateHold,
+  clearUpdateHold, describeRollback, describeSpan, describeUpdateHold, describeWhen, readUpdateHold, recordUpdateEvent,
+  writeUpdateHold, type RollbackOutcome, type UpdateEventKind, type UpdateHold,
 } from "./update-history.js";
 import { planTreeKill } from "../utils/process-runner.js";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
-import { installLockPath } from "./runtime-lock.js";
+import { installLockPath, installRootKey, installStateDir } from "./runtime-lock.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
 const UPDATE_TIMEOUT = 5 * 60 * 1000;
+/** The least a holder that cannot be identified keeps the lock; see maxUpdateDurationMs. */
 const STALE_LOCK_MAX_AGE = 30 * 60 * 1000;
 /**
  * Boot smoke budget. The script itself gives the daemon BOOT_SMOKE_TIMEOUT_S
@@ -36,6 +37,14 @@ const MAX_BACKOFF_DOUBLINGS = 3;
 const OUTPUT_TAIL_CHARS = 1500;
 /** How often a pending update, or a restart after one, looks again for idleness. */
 const IDLE_POLL_MS = 30_000;
+/** How often a restart that waits for idleness says so in the log. */
+const RESTART_WAIT_LOG_EVERY_MS = 30 * 60_000;
+/**
+ * After this long a waiting restart asks the operator to restart by hand. It
+ * never forces one: aborting the work that keeps it waiting is what the wait
+ * is for (audit core-bootstrap#1).
+ */
+const RESTART_WAIT_WARN_AFTER_MS = 2 * 60 * 60_000;
 
 type LockPackages = Record<string, { version?: string; optional?: boolean } | undefined>;
 
@@ -873,6 +882,7 @@ export class AutoUpdater {
   async performUpdate(): Promise<boolean> {
     if (!this.acquireLock()) return false;
 
+    this.updateInFlight = true;
     try {
       const method = this.detectInstallMethod();
       const updated = method === "git"
@@ -881,6 +891,7 @@ export class AutoUpdater {
       if (updated) clearUpdateHold(this.getUpdateRecordsRoot());
       return updated;
     } finally {
+      this.updateInFlight = false;
       this.releaseLock();
     }
   }
@@ -894,10 +905,15 @@ export class AutoUpdater {
    * Where the update history and hold live: a checkout's own .strada, and for
    * a package install the writable config root. `npm install` replaces a
    * package install's directory, and a root-owned global prefix refused the
-   * hold while the log reported it written (review of 7fc26d9f).
+   * hold while the log reported it written (review of 7fc26d9f). Under the
+   * config root they are keyed by install root, as the update lock is
+   * (COR-21): every package install of a user shared one hold, so a failure
+   * in one project held back and backed off the others, and `strada status`
+   * in one showed another's last update (review of 1dbe763e).
    */
   getUpdateRecordsRoot(): string {
-    return this.detectInstallMethod() === "git" ? this.installRoot : this.resolveStateRoot();
+    if (this.detectInstallMethod() === "git") return this.installRoot;
+    return path.join(installStateDir(this.resolveStateRoot()), installRootKey(this.installRoot));
   }
 
   /**
@@ -968,7 +984,7 @@ export class AutoUpdater {
    * with some other way. A stale hold kept `strada status` reporting it and
    * made the next newer commit wait out its backoff (review of 7fc26d9f).
    */
-  private settleUpToDate(): void {
+  private settleUpToDate(check: UpdateCheckResult): void {
     if (this.idleCheckHandle) {
       clearInterval(this.idleCheckHandle);
       this.idleCheckHandle = null;
@@ -982,7 +998,15 @@ export class AutoUpdater {
     }
     const root = this.getUpdateRecordsRoot();
     const hold = readUpdateHold(root);
-    if (hold) {
+    // A rollback that was refused, broke off or had nothing to go back to
+    // left the failed target installed, so finding nothing newer than it is
+    // the failure itself, not a catch-up. Clearing it there dropped "NOT
+    // rolled back" from `strada status` on the very next check (review of
+    // 1dbe763e). It goes once the install has moved past the target, or with
+    // a successful update.
+    const failedTargetInPlace = hold?.rollback !== undefined && hold.rollback !== "rolled-back"
+      && (check.latestRevision ?? check.latestVersion) === hold.target;
+    if (hold && !failedTargetInPlace) {
       clearUpdateHold(root);
       this.announcedHoldAt = null;
       getLoggerSafe().info("Auto-update hold cleared — this install already has what it held back", {
@@ -1572,7 +1596,18 @@ export class AutoUpdater {
 
     // The holder cannot be identified: a live PID holds the lock until it is
     // old enough that no update can still be running under it.
-    return Date.now() - content.timestamp > STALE_LOCK_MAX_AGE;
+    return Date.now() - content.timestamp > Math.max(STALE_LOCK_MAX_AGE, this.maxUpdateDurationMs());
+  }
+
+  /**
+   * The longest a failing git update can hold the lock: the pull, two
+   * installs and a build, the launcher refresh and the boot smoke, then the
+   * rollback's two installs and rebuild, plus its git bookkeeping. A fixed
+   * 30 minutes fell below this once each install and build step got
+   * AUTO_UPDATE_BUILD_TIMEOUT_MIN (15 by default; review of 1dbe763e).
+   */
+  private maxUpdateDurationMs(): number {
+    return 6 * this.stepTimeoutMs() + 2 * UPDATE_TIMEOUT + BOOT_SMOKE_TIMEOUT + 10 * VERSION_CHECK_TIMEOUT;
   }
 
   /**
@@ -1719,7 +1754,7 @@ export class AutoUpdater {
 
   async requestImmediateCheck(): Promise<UpdateCheckResult> {
     const result = await this.checkForUpdate();
-    if (!result.error && !result.available) this.settleUpToDate();
+    if (!result.error && !result.available) this.settleUpToDate(result);
     if (!result.error && result.available && result.latestVersion) {
       // A push is no reason to skip the hold: in September a push landed
       // between every pair of failed attempts.
@@ -1734,12 +1769,18 @@ export class AutoUpdater {
       this.savePendingVersion();
       if (this.config.notify && this.notifyFn) {
         this.notifyFn(
-          `Update available: Strada Brain ${result.latestVersion} (triggered by webhook). Will update when idle.`,
+          `Update available: Strada Brain ${result.latestVersion} (triggered by webhook). ${this.whenItUpdates()}`,
         );
       }
       this.startIdleMonitoring();
     }
     return result;
+  }
+
+  private whenItUpdates(): string {
+    return this.restartPending
+      ? "Will update after the pending restart onto the last update."
+      : "Will update when idle.";
   }
 
   private async runUpdateCheck(resuming = false): Promise<void> {
@@ -1759,7 +1800,7 @@ export class AutoUpdater {
       return;
     }
     if (!result.available || !result.latestVersion) {
-      this.settleUpToDate();
+      this.settleUpToDate(result);
       return;
     }
 
@@ -1775,15 +1816,35 @@ export class AutoUpdater {
 
     if (this.config.notify && this.notifyFn) {
       this.notifyFn(
-        `Update available: Strada Brain ${result.latestVersion}. Will update when idle.`,
+        `Update available: Strada Brain ${result.latestVersion}. ${this.whenItUpdates()}`,
       );
     }
 
     this.startIdleMonitoring();
   }
 
+  /**
+   * Whether this process must not start an update now. Not after shutdown():
+   * the process is going down. Nor while a restart onto the last update is
+   * pending: the restart polls for the same idleness the update waits for,
+   * and SIGTERMed an update a webhook had queued during the wait in the
+   * middle of its build — no health check, no rollback, no record, its npm
+   * still writing dist/ while the daemon booted onto it (review of
+   * 1dbe763e). The pending version stays saved, and the restarted process
+   * checks it again (init).
+   */
+  private mustNotStartUpdate(): boolean {
+    if (this.stopped) return true;
+    if (!this.restartPending) return false;
+    this.savePendingVersion();
+    getLoggerSafe().info("Auto-update waits for the pending restart — the restarted process checks again", {
+      pending: this.pendingVersion,
+    });
+    return true;
+  }
+
   private startIdleMonitoring(): void {
-    if (this.idleCheckHandle) return;
+    if (this.idleCheckHandle || this.mustNotStartUpdate()) return;
 
     this.idleCheckHandle = setInterval(async () => {
       if (!this.isIdleNow()) return;
@@ -1801,7 +1862,7 @@ export class AutoUpdater {
       const recheck = await this.checkForUpdate();
       if (!recheck.error) {
         if (!recheck.available || !recheck.latestVersion) {
-          this.settleUpToDate();
+          this.settleUpToDate(recheck);
           return;
         }
         this.pendingTarget = recheck.latestRevision ?? recheck.latestVersion;
@@ -1813,8 +1874,12 @@ export class AutoUpdater {
         this.standDown(hold);
         return;
       }
+      // Asked again after the check: a restart may have been armed, or the
+      // updater shut down, while it ran.
+      if (this.mustNotStartUpdate()) return;
 
       const attemptedAt = Date.now();
+      const attempting = this.pendingTarget;
       try {
         const success = await this.performUpdate();
         if (!success) {
@@ -1835,7 +1900,11 @@ export class AutoUpdater {
           );
         }
         if (restart) this.restartWhenIdle(this.config.autoRestartDelayMs ?? 2000);
-        this.clearPendingVersion();
+        // A check during the update may have queued a newer one. Clearing it
+        // here deleted it from disk before the restart, and the restarted
+        // process had only its own check to find it again.
+        if (this.pendingTarget === attempting) this.clearPendingVersion();
+        else this.savePendingVersion();
       } catch (err) {
         const held = readUpdateHold(this.getUpdateRecordsRoot());
         if (held && held.at >= attemptedAt) {
@@ -1863,29 +1932,61 @@ export class AutoUpdater {
   }
 
   private restartHandle: ReturnType<typeof setTimeout> | null = null;
+  /** Set once a restart is armed, and kept through its SIGTERM: no update starts after it. */
+  private restartPending = false;
+  private updateInFlight = false;
+  private stopped = false;
 
   /**
    * SIGTERM this process so setupShutdownHandlers shuts it down gracefully
    * (DB flush, connection close) and the daemon wrapper restarts it on the
-   * clean exit — once nothing is running. Idleness was read only before an
-   * update that takes minutes, and work that started meanwhile (a chat, the
-   * campaign's next sprint) was aborted by the shutdown two seconds after the
-   * update finished (audit core-bootstrap#1). Only the restart waits; the
-   * update is done.
+   * clean exit — once nothing is running, this process's own update included.
+   * Idleness was read only before an update that takes minutes, and work that
+   * started meanwhile (a chat, the campaign's next sprint) was aborted by the
+   * shutdown two seconds after the update finished (audit core-bootstrap#1).
+   * Only the restart waits; the update is done.
    */
   private restartWhenIdle(delayMs: number): void {
-    let announced = false;
+    // One restart: a second loop outlived shutdown(), which clears only the
+    // newest handle, and its SIGTERM read as a forced exit (review of 1dbe763e).
+    if (this.restartHandle) clearTimeout(this.restartHandle);
+    this.restartPending = true;
+    const installed = this.getCurrentVersion();
+    const armedAt = Date.now();
+    let loggedAt: number | null = null;
+    let warned = false;
     const attempt = (): void => {
       this.restartHandle = null;
-      if (this.isIdleNow()) {
+      if (this.isIdleNow() && !this.updateInFlight) {
         process.kill(process.pid, "SIGTERM");
         return;
       }
-      if (!announced) {
-        announced = true;
+      // Until the restart, the old code in memory runs beside the new code on
+      // disk, and later lazy imports load the new (COR-15). The wait has no
+      // bound, so it keeps saying so rather than once.
+      const now = Date.now();
+      if (loggedAt === null || now - loggedAt >= RESTART_WAIT_LOG_EVERY_MS) {
+        loggedAt = now;
         getLoggerSafe().info("Auto-update restart waits until nothing is running", {
+          installed,
+          waited: describeSpan(now - armedAt),
           runningTasks: this.executor.hasRunningTasks(),
+          updateRunning: this.updateInFlight,
         });
+      }
+      if (!warned && now - armedAt >= RESTART_WAIT_WARN_AFTER_MS) {
+        warned = true;
+        // Stopping this process is all the restart does: the daemon starts it
+        // again on the new code.
+        const message =
+          `Strada updated to ${installed} ${describeSpan(now - armedAt)} ago and has not been idle since, so it has not ` +
+          "restarted onto it; until it does, it runs the old code beside the new. Restart it when the work allows: " +
+          `stopping PID ${process.pid} is enough, the daemon starts it again.`;
+        getLoggerSafe().warn("Auto-update restart still waits — restart by hand when the work allows", {
+          installed,
+          waited: describeSpan(now - armedAt),
+        });
+        if (this.config.notify && this.notifyFn) this.notifyFn(message);
       }
       this.restartHandle = setTimeout(attempt, IDLE_POLL_MS);
     };
@@ -1893,6 +1994,7 @@ export class AutoUpdater {
   }
 
   shutdown(): void {
+    this.stopped = true;
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;

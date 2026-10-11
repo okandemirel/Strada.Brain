@@ -269,6 +269,41 @@ describe("a rollback never discards uncommitted work", () => {
     expect(readUpdateHold(repo.checkout)).toMatchObject({ target: repo.next, rollback: "refused" });
   });
 
+  // Review of 1dbe763e: after a refused rollback the checkout still holds the
+  // failed commit, so the very next check found nothing newer and cleared the
+  // hold as caught up. `strada status` lost "NOT rolled back", and the log
+  // said the install already had what it held back.
+  it("keeps the hold of a refused rollback until the checkout moves past the failed commit", async () => {
+    const repo = behindCheckout();
+    const u = realUpdater(repo.checkout, [], {
+      npm: async (args) => {
+        if (args[0] === "run" && args[1] === "build" && git(repo.checkout, "rev-parse", "HEAD") === repo.next) {
+          writeFileSync(join(repo.checkout, "README.md"), "# app\nhalf-done edit\n");
+          throw new Error("npm exited with code 2: src/app.ts(1,1): error TS1005: ';' expected.");
+        }
+        return "";
+      },
+    });
+    await expect(u.performUpdate()).rejects.toThrow("TS1005");
+
+    try {
+      expect(await u.requestImmediateCheck()).toMatchObject({ available: false, error: null });
+      expect(readUpdateHold(repo.checkout)).toMatchObject({ target: repo.next, rollback: "refused" });
+
+      // The operator commits the edit and pulls a fix by hand.
+      git(repo.checkout, "commit", "-q", "-am", "finish the edit");
+      writeFileSync(join(repo.seed, "app.ts"), "export const version = 3;\n");
+      git(repo.seed, "commit", "-q", "-am", "three");
+      git(repo.seed, "push", "-q", git(repo.checkout, "remote", "get-url", "origin"), "main");
+      git(repo.checkout, "pull", "-q", "--no-rebase", "origin", "main");
+
+      expect(await u.requestImmediateCheck()).toMatchObject({ available: false, error: null });
+      expect(readUpdateHold(repo.checkout)).toBeNull();
+    } finally {
+      u.shutdown();
+    }
+  });
+
   it("keeps an edit made during the health check to a file the update itself changed", async () => {
     const repo = behindCheckout();
     const edit = "export const version = 3; // work in progress\n";

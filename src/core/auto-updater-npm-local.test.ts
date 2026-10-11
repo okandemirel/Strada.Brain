@@ -294,13 +294,20 @@ describe("npm-local update runs in the owning package", () => {
  * package installs kept the fixed 5-minute budget the git builds outgrew.
  */
 describe("an npm update is recorded, held and budgeted like a git one", () => {
+  /** Where `strada status` reads this install's records: under the writable state root. */
+  const recordsOf = (updater: AutoUpdater, stateRoot: string): string => {
+    const root = updater.getUpdateRecordsRoot();
+    expect(path.relative(stateRoot, root).startsWith("..")).toBe(false);
+    return root;
+  };
+
   it("records a successful update in the history `strada status` reads", async () => {
     const { installRoot } = makeOwnerTree({ installedVersion: "1.0.0" });
     const stateRoot = makeTmpDir();
     const updater = makeUpdater({ installRoot, calls: [], latest: "2.0.0", stateRoot });
 
     await expect(updater.performUpdate()).resolves.toBe(true);
-    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "pulled", from: "1.0.0" });
+    expect(readUpdateHistory(recordsOf(updater, stateRoot)).at(-1)).toMatchObject({ kind: "pulled", from: "1.0.0" });
   });
 
   it("records a failed install's rollback", async () => {
@@ -309,7 +316,8 @@ describe("an npm update is recorded, held and budgeted like a git one", () => {
     const updater = makeUpdater({ installRoot, calls: [], latest: "2.0.0", stateRoot, failInstall: true });
 
     await expect(updater.performUpdate()).rejects.toThrow(/npm install failed/);
-    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "rolled-back", from: "2.0.0", to: "1.0.0" });
+    expect(readUpdateHistory(recordsOf(updater, stateRoot)).at(-1))
+      .toMatchObject({ kind: "rolled-back", from: "2.0.0", to: "1.0.0" });
   });
 
   it("holds a version whose health check failed back under the writable state root, and records the rollback", async () => {
@@ -324,13 +332,14 @@ describe("an npm update is recorded, held and budgeted like a git one", () => {
     });
 
     await expect(updater.performUpdate()).rejects.toThrow("/health never answered");
-    expect(readUpdateHold(stateRoot)).toMatchObject({
+    const records = recordsOf(updater, stateRoot);
+    expect(readUpdateHold(records)).toMatchObject({
       target: "2.0.0",
       step: "the post-update health check",
       rollback: "rolled-back",
     });
     expect(readUpdateHold(installRoot)).toBeNull();
-    expect(readUpdateHistory(stateRoot).at(-1)).toMatchObject({ kind: "rolled-back" });
+    expect(readUpdateHistory(records).at(-1)).toMatchObject({ kind: "rolled-back" });
   });
 
   it("gives the package install the operator's AUTO_UPDATE_BUILD_TIMEOUT_MIN, not a fixed 5 minutes", async () => {
@@ -351,5 +360,35 @@ describe("an npm update is recorded, held and budgeted like a git one", () => {
     await expect(updater.performUpdate()).rejects.toThrow(/npm install failed/);
     const reinstall = calls.find((c) => c.cmd === "npm" && c.args.length === 1 && c.args[0] === "install");
     expect(reinstall?.timeoutMs).toBe(25 * 60_000);
+  });
+
+  // Review of 1dbe763e: every package install of a user wrote the one
+  // <config root>/.strada/auto-update{,-hold}.json, while the update lock
+  // beside it is keyed per install (COR-21). A failed health check in one
+  // project held back and backed off the other, and `strada status` in one
+  // showed the other's last update.
+  it("keeps the history and hold of installs that share a config root apart", async () => {
+    const stateRoot = makeTmpDir();
+    const failing = makeOwnerTree({ installedVersion: "1.0.0" });
+    const healthy = makeOwnerTree({ installedVersion: "1.0.0" });
+    const a = makeUpdater({
+      installRoot: failing.installRoot,
+      calls: [],
+      latest: "2.0.0",
+      stateRoot,
+      healthChecker: async () => { throw new Error("boot smoke failed: /health never answered"); },
+    });
+    const b = makeUpdater({ installRoot: healthy.installRoot, calls: [], latest: "2.0.0", stateRoot });
+    await expect(a.performUpdate()).rejects.toThrow("/health never answered");
+
+    try {
+      const result = await b.requestImmediateCheck();
+      expect(result).toMatchObject({ available: true, error: null });
+      expect(result.heldBack).toBeUndefined();
+      expect(readUpdateHistory(b.getUpdateRecordsRoot())).toEqual([]);
+      expect(readUpdateHold(a.getUpdateRecordsRoot())).toMatchObject({ target: "2.0.0" });
+    } finally {
+      b.shutdown();
+    }
   });
 });

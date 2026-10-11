@@ -8,8 +8,8 @@
  * last one. Kept short (last HISTORY_LIMIT events), written atomically.
  *
  * Every function takes the root whose `.strada/` holds the files: a git
- * checkout's own root, a package install's writable config root
- * (AutoUpdater.getUpdateRecordsRoot()).
+ * checkout's own root, or a package install's own directory under the
+ * writable config root (AutoUpdater.getUpdateRecordsRoot()).
  */
 
 import * as fs from "node:fs";
