@@ -508,7 +508,12 @@ export interface Campaign {
    * empty one.
    */
   requirementsUnreadable?: boolean;
-  /** Row ids whose system-written check could not be made to work; a person decides. */
+  /**
+   * Row ids whose system-written check could not be made to work; a person
+   * decides. Derived at load from the ledger rows whose status is
+   * `check-fault` (`checkFaultsOf` in campaign-storage.ts), never a column: a
+   * fault persists only as that row status, so set the row, not just this list.
+   */
   checkFaults?: string[];
   /** When this campaign first ran under the scope gate (epoch ms). */
   scopeGateSince?: number;

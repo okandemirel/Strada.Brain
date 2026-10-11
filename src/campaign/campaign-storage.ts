@@ -4,14 +4,33 @@
  * SQLite persistence for campaigns, following the GoalStorage pattern:
  * better-sqlite3, shared pragmas, prepared statements. Milestones ride as a
  * JSON column — the ladder is small (<=12) and always read/written whole.
+ *
+ * The scope gate (GDD plan W03) adds the requirement ledger as a column, the
+ * canonical bytes of the system's acceptance files, and an append-only log of
+ * every verdict the judge reached with the input that reached it.
  */
 
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../memory/unified/sqlite-pragmas.js";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Campaign, CampaignMilestone, CampaignState } from "./types.js";
 import { ACTIVE_CAMPAIGN_STATES } from "./types.js";
+import type {
+  AcceptanceSource,
+  AcceptanceTestRef,
+  AcceptanceWriter,
+  GreenBasis,
+  GreenInput,
+  GreenReason,
+  Judgement,
+  ReasonClass,
+  RequirementLedger,
+  RequirementRow,
+  ScopeGateMode,
+} from "./scope-types.js";
+import { ACCEPTANCE_DIR, REQUIREMENT_KINDS, REQUIREMENT_STATUSES } from "./scope-types.js";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -35,6 +54,38 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 CREATE INDEX IF NOT EXISTS idx_campaigns_state ON campaigns(state);
 CREATE INDEX IF NOT EXISTS idx_campaigns_chat ON campaigns(chat_id, state);
+CREATE TABLE IF NOT EXISTS campaign_acceptance (
+  campaign_id TEXT NOT NULL,
+  milestone_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  source BLOB NOT NULL,
+  meta_json TEXT NOT NULL,
+  written_at INTEGER NOT NULL,
+  PRIMARY KEY (campaign_id, path)
+);
+CREATE TABLE IF NOT EXISTS campaign_judgements (
+  seq INTEGER PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  milestone_id TEXT NOT NULL,
+  attempt_key TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  mode TEXT NOT NULL,
+  green INTEGER NOT NULL,
+  state TEXT,
+  basis TEXT,
+  revision TEXT NOT NULL,
+  reasons_json TEXT NOT NULL,
+  caveats_json TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_judgements_attempt
+  ON campaign_judgements(campaign_id, milestone_id, attempt_key, at);
+CREATE TRIGGER IF NOT EXISTS campaign_judgements_no_update BEFORE UPDATE ON campaign_judgements
+BEGIN SELECT RAISE(ABORT, 'campaign_judgements is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS campaign_judgements_no_delete BEFORE DELETE ON campaign_judgements
+BEGIN SELECT RAISE(ABORT, 'campaign_judgements is append-only'); END;
 `;
 
 interface CampaignRow {
@@ -73,6 +124,8 @@ interface CampaignRow {
   independent_review?: string | null;
   coverage_queue_unreadable?: number | null;
   verified_sessions?: string | null;
+  requirements_json?: string | null;
+  scope_gate_since?: number | null;
 }
 
 /**
@@ -206,7 +259,83 @@ function rowToCampaign(row: CampaignRow): Campaign {
       const verified = parseVerifiedSessions(row.verified_sessions);
       return verified === undefined ? {} : { verifiedSessions: verified };
     })(),
+    ...(() => {
+      const read = parseRequirementLedger(row.requirements_json);
+      const faults = checkFaultsOf(read.ledger);
+      return {
+        ...(read.ledger ? { requirements: read.ledger } : {}),
+        ...(read.unreadable ? { requirementsUnreadable: true as const } : {}),
+        ...(faults.length > 0 ? { checkFaults: faults } : {}),
+      };
+    })(),
+    scopeGateSince: row.scope_gate_since ?? undefined,
   };
+}
+
+/**
+ * Row ids whose system-written check could not be made to work, in ledger
+ * order. `Campaign.checkFaults` is this, derived at every load and never
+ * stored on its own: the row's status already records the fault, and a second
+ * list would keep naming a row after a repair, a waiver or an amendment had
+ * moved it on. A fault therefore persists only as `status: "check-fault"`.
+ */
+export function checkFaultsOf(ledger: RequirementLedger | undefined): string[] {
+  return ledger === undefined ? [] : ledger.rows.filter((row) => row.status === "check-fault").map((row) => row.rid);
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * The stored ledger, or nothing — and AN UNREADABLE LEDGER IS NOT AN ABSENT
+ * ONE (the AD#18 lesson of the gap queue). It is read whole or not at all: a
+ * ledger with one damaged row dropped is a ledger that forgot an obligation,
+ * and the next save would make the loss permanent. Only the shape later code
+ * keys on is checked (a known version, rows with a unique id, a known kind and
+ * status); anything the type system already guarantees for a ledger this code
+ * wrote passes, so what fails is damage or a format this reader predates.
+ */
+function parseRequirementLedger(raw: string | null | undefined): { ledger?: RequirementLedger; unreadable?: true } {
+  if (raw === null || raw === undefined || raw.trim() === "") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { unreadable: true };
+  }
+  return isReadableLedger(parsed) ? { ledger: parsed } : { unreadable: true };
+}
+
+function isReadableLedger(value: unknown): value is RequirementLedger {
+  if (!isRecord(value) || value.version !== 1) return false;
+  if (typeof value.gddSha256 !== "string" || !isFiniteNumber(value.gddRevision)) return false;
+  if (!isFiniteNumber(value.extractedAtMs) || !isFiniteNumber(value.llmAdded)) return false;
+  const overflow = value.overflow;
+  if (!isRecord(overflow) || !isFiniteNumber(overflow.count) || !Array.isArray(overflow.sections)) return false;
+  if (!Array.isArray(value.numberingGaps) || !Array.isArray(value.rows)) return false;
+  const rids = new Set<string>();
+  for (const row of value.rows as unknown[]) {
+    // Results, budgets and waivers are all keyed by rid: two rows sharing one is damage.
+    if (!isReadableRow(row) || rids.has(row.rid)) return false;
+    rids.add(row.rid);
+  }
+  return true;
+}
+
+function isReadableRow(row: unknown): row is RequirementRow {
+  return (
+    isRecord(row) &&
+    typeof row.rid === "string" &&
+    row.rid !== "" &&
+    typeof row.encoded === "string" &&
+    typeof row.text === "string" &&
+    typeof row.section === "string" &&
+    (REQUIREMENT_KINDS as readonly unknown[]).includes(row.kind) &&
+    (REQUIREMENT_STATUSES as readonly unknown[]).includes(row.status) &&
+    Array.isArray(row.ownership) &&
+    Array.isArray(row.checks)
+  );
 }
 
 function parseIndependentReview(raw: string): Campaign["independentReview"] | undefined {
@@ -303,12 +432,18 @@ const ADDED_COLUMNS: ReadonlyArray<{ readonly name: string; readonly type: strin
   // than one batch is only fully played across several runs — and nothing
   // remembered which ones had been played (Codex AJ#11).
   { name: "verified_sessions", type: "TEXT" },
+  // GDD plan W03: the requirement ledger, read from the approved gddText.
+  // NULL is "no ledger", which is what every campaign from before it reads.
+  { name: "requirements_json", type: "TEXT" },
+  { name: "scope_gate_since", type: "INTEGER" },
 ];
 
 export class CampaignStorage {
   private readonly db: Database.Database;
+  private readonly readOnly: boolean;
 
   constructor(dbPath: string, options: CampaignStorageOptions = {}) {
+    this.readOnly = options.readOnly === true;
     if (options.readOnly) {
       this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
       this.db.pragma("busy_timeout = 5000");
@@ -357,6 +492,12 @@ export class CampaignStorage {
   }
 
   save(campaign: Campaign): void {
+    // A ledger this process could not read is kept as stored, not overwritten
+    // with NULL: the AF#2 shape, where the next save erased the damaged
+    // obligations for good. The flag is derived from those same bytes at every
+    // load, so it survives without a column of its own; a rebuilt ledger
+    // (`requirements` set) replaces them and clears it.
+    const keepStoredLedger = campaign.requirements === undefined && campaign.requirementsUnreadable === true;
     this.db
       .prepare(
         `INSERT INTO campaigns (
@@ -367,8 +508,9 @@ export class CampaignStorage {
           independent_review, coverage_queue_unreadable, verified_sessions,
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
-          stop_requested_at, stop_generation, gdd_sha256, gdd_revision
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          stop_requested_at, stop_generation, gdd_sha256, gdd_revision,
+          requirements_json, scope_gate_since
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -396,7 +538,9 @@ export class CampaignStorage {
           stop_requested_at = excluded.stop_requested_at,
           stop_generation = excluded.stop_generation,
           gdd_sha256 = excluded.gdd_sha256,
-          gdd_revision = excluded.gdd_revision`,
+          gdd_revision = excluded.gdd_revision,
+          scope_gate_since = excluded.scope_gate_since,
+          requirements_json = CASE WHEN ? = 1 THEN campaigns.requirements_json ELSE excluded.requirements_json END`,
       )
       .run(
         campaign.id,
@@ -438,7 +582,140 @@ export class CampaignStorage {
         campaign.stopGeneration ?? null,
         campaign.gddSha256 ?? null,
         campaign.gddRevision ?? null,
+        campaign.requirements !== undefined ? JSON.stringify(campaign.requirements) : null,
+        campaign.scopeGateSince ?? null,
+        // Binds the `?` in the CASE above, which follows every VALUES placeholder.
+        keepStoredLedger ? 1 : 0,
       );
+  }
+
+  /**
+   * Store the canonical bytes of one acceptance file, replacing what was
+   * stored at that path. These bytes are what every restore writes back over
+   * the project, so a file is refused, loudly, unless they are exactly what a
+   * later `listAcceptance` will return: the source must encode to UTF-8 and
+   * back unchanged, `sha256` must be the hash of those bytes, and the path
+   * must lie under ACCEPTANCE_DIR (a restore writes there and nowhere else).
+   */
+  putAcceptance(campaignId: string, file: AcceptanceSource, writtenAtMs: number): void {
+    assertAcceptancePath(file.path);
+    const bytes = Buffer.from(file.source, "utf8");
+    if (bytes.toString("utf8") !== file.source) {
+      throw new Error(
+        `acceptance file ${file.path}: the source is not valid UTF-8 text (a lone surrogate), so the stored bytes would not be the source given`,
+      );
+    }
+    const actual = sha256Hex(bytes);
+    if (actual !== file.sha256) {
+      throw new Error(`acceptance file ${file.path}: sha256 ${file.sha256} is not the hash of its source (${actual})`);
+    }
+    const meta: AcceptanceMeta = { writer: file.writer, revisions: file.revisions, tests: file.tests };
+    this.db
+      .prepare(
+        `INSERT INTO campaign_acceptance (campaign_id, milestone_id, path, sha256, source, meta_json, written_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(campaign_id, path) DO UPDATE SET
+          milestone_id = excluded.milestone_id,
+          sha256 = excluded.sha256,
+          source = excluded.source,
+          meta_json = excluded.meta_json,
+          written_at = excluded.written_at`,
+      )
+      .run(campaignId, file.milestoneId, file.path, file.sha256, bytes, JSON.stringify(meta), writtenAtMs);
+  }
+
+  /**
+   * The campaign's acceptance files (one milestone's, when named), by path.
+   * Bytes that no longer hash to their sha256, or a writer and test list that
+   * cannot be read, throw: restoring damaged bytes as canonical would plant
+   * them in the project, and leaving the file out would have the restore
+   * delete it as foreign.
+   */
+  listAcceptance(campaignId: string, milestoneId?: string): StoredAcceptance[] {
+    if (this.tableMissing("campaign_acceptance")) return [];
+    const rows = (
+      milestoneId === undefined
+        ? this.db.prepare("SELECT * FROM campaign_acceptance WHERE campaign_id = ? ORDER BY path").all(campaignId)
+        : this.db
+            .prepare("SELECT * FROM campaign_acceptance WHERE campaign_id = ? AND milestone_id = ? ORDER BY path")
+            .all(campaignId, milestoneId)
+    ) as AcceptanceRow[];
+    return rows.map(rowToAcceptance);
+  }
+
+  /** Remove one stored acceptance file; false when there was none at that path. */
+  deleteAcceptance(campaignId: string, path: string): boolean {
+    return this.db.prepare("DELETE FROM campaign_acceptance WHERE campaign_id = ? AND path = ?").run(campaignId, path).changes > 0;
+  }
+
+  /**
+   * Append one verdict with the whole input the judge read, so any verdict
+   * can be replayed. The log is append-only — there is no update method, and
+   * triggers refuse UPDATE and DELETE on the table — and a second verdict for
+   * the same attempt in the same millisecond is a second entry, not an error.
+   * The milestone, mode and revision are the input's own, so the stored
+   * columns cannot disagree with the stored input.
+   */
+  appendJudgement(entry: JudgementEntry): StoredJudgement {
+    const { input, judgement } = entry;
+    const inputJson = JSON.stringify(input);
+    const inputSha256 = sha256Hex(Buffer.from(inputJson, "utf8"));
+    this.db
+      .prepare(
+        `INSERT INTO campaign_judgements (
+          campaign_id, milestone_id, attempt_key, at, mode, green, state, basis, revision,
+          reasons_json, caveats_json, input_json, input_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.campaignId,
+        input.milestoneId,
+        entry.attemptKey,
+        entry.atMs,
+        input.mode,
+        judgement.green ? 1 : 0,
+        judgement.green ? null : judgement.state,
+        judgement.green ? judgement.basis : null,
+        input.revision,
+        JSON.stringify(judgement.green ? [] : judgement.reasons),
+        JSON.stringify(judgement.green ? judgement.caveats : []),
+        inputJson,
+        inputSha256,
+      );
+    return {
+      campaignId: entry.campaignId,
+      milestoneId: input.milestoneId,
+      attemptKey: entry.attemptKey,
+      atMs: entry.atMs,
+      mode: input.mode,
+      revision: input.revision,
+      judgement,
+      input,
+      inputSha256,
+    };
+  }
+
+  /** The campaign's verdicts (one milestone's, when named), oldest first, in the order they were appended. */
+  listJudgements(campaignId: string, milestoneId?: string): StoredJudgement[] {
+    if (this.tableMissing("campaign_judgements")) return [];
+    const rows = (
+      milestoneId === undefined
+        ? this.db.prepare("SELECT * FROM campaign_judgements WHERE campaign_id = ? ORDER BY at, seq").all(campaignId)
+        : this.db
+            .prepare("SELECT * FROM campaign_judgements WHERE campaign_id = ? AND milestone_id = ? ORDER BY at, seq")
+            .all(campaignId, milestoneId)
+    ) as JudgementRow[];
+    return rows.map(rowToJudgement);
+  }
+
+  /**
+   * A read-only open never migrates (COR-22), so a database an older daemon
+   * wrote has none of the W03 tables: it holds no files and no verdicts, which
+   * is the truth, not an error. A read-write open created them in the constructor.
+   */
+  private tableMissing(table: string): boolean {
+    if (!this.readOnly) return false;
+    return this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) === undefined;
   }
 
   get(id: string): Campaign | undefined {
@@ -644,4 +921,179 @@ function parseGapQueue(raw: string | null | undefined): { gaps?: string[]; unrea
   if (items.length === 0) return parsed.length > 0 ? { unreadable: true } : {};
   // SOME entries usable and some not is still a partial loss.
   return items.length < parsed.length ? { gaps: items, unreadable: true } : { gaps: items };
+}
+
+// =============================================================================
+// ACCEPTANCE FILES AND VERDICTS (GDD plan W03)
+// =============================================================================
+
+/** An acceptance file as stored: its canonical bytes and when the system last wrote them. */
+export interface StoredAcceptance extends AcceptanceSource {
+  writtenAtMs: number;
+}
+
+/** One verdict to append, with the input the judge read. */
+export interface JudgementEntry {
+  readonly campaignId: string;
+  /** Which attempt of the milestone was judged; the settle path chooses the spelling. */
+  readonly attemptKey: string;
+  readonly atMs: number;
+  readonly input: GreenInput;
+  readonly judgement: Judgement;
+}
+
+export interface StoredJudgement {
+  readonly campaignId: string;
+  readonly milestoneId: string;
+  readonly attemptKey: string;
+  readonly atMs: number;
+  readonly mode: ScopeGateMode;
+  readonly revision: string;
+  readonly judgement: Judgement;
+  /** The judge's input exactly as appended; absent when `unreadable`. */
+  readonly input?: GreenInput;
+  readonly inputSha256: string;
+  /**
+   * Why this verdict cannot be replayed (its input no longer hashes to
+   * `inputSha256`, or a stored part does not parse). The entry is still
+   * listed: a dropped one would read as "never judged".
+   */
+  readonly unreadable?: string;
+}
+
+interface AcceptanceMeta {
+  writer: AcceptanceWriter;
+  revisions: number;
+  tests: AcceptanceTestRef[];
+}
+
+interface AcceptanceRow {
+  campaign_id: string;
+  milestone_id: string;
+  path: string;
+  sha256: string;
+  source: Buffer | string;
+  meta_json: string;
+  written_at: number;
+}
+
+interface JudgementRow {
+  campaign_id: string;
+  milestone_id: string;
+  attempt_key: string;
+  at: number;
+  mode: string;
+  green: number;
+  state: string | null;
+  basis: string | null;
+  revision: string;
+  reasons_json: string;
+  caveats_json: string;
+  input_json: string;
+  input_sha256: string;
+}
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** "/"-separated, relative, strictly under ACCEPTANCE_DIR, with no empty, "." or ".." segment. */
+function assertAcceptancePath(path: string): void {
+  const inside =
+    path.startsWith(`${ACCEPTANCE_DIR}/`) &&
+    !path.includes("\\") &&
+    path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  if (!inside) {
+    throw new Error(`acceptance file ${JSON.stringify(path)} is not a project-relative path under ${ACCEPTANCE_DIR}/`);
+  }
+}
+
+function rowToAcceptance(row: AcceptanceRow): StoredAcceptance {
+  const bytes = typeof row.source === "string" ? Buffer.from(row.source, "utf8") : Buffer.from(row.source);
+  const actual = sha256Hex(bytes);
+  if (actual !== row.sha256) {
+    throw new Error(
+      `stored acceptance file ${row.path} (campaign ${row.campaign_id}) no longer hashes to its sha256 ${row.sha256} (${actual}); its canonical bytes are damaged`,
+    );
+  }
+  const meta = parseAcceptanceMeta(row.meta_json);
+  if (meta === undefined) {
+    throw new Error(`stored acceptance file ${row.path} (campaign ${row.campaign_id}) has a writer and test list that cannot be read`);
+  }
+  return {
+    milestoneId: row.milestone_id,
+    path: row.path,
+    sha256: row.sha256,
+    source: bytes.toString("utf8"),
+    writer: meta.writer,
+    revisions: meta.revisions,
+    tests: meta.tests,
+    writtenAtMs: row.written_at,
+  };
+}
+
+const isWriter = (value: unknown): value is AcceptanceWriter =>
+  isRecord(value) &&
+  typeof value.provider === "string" &&
+  typeof value.model === "string" &&
+  (value.independence === "different-model" || value.independence === "same-model");
+
+function parseAcceptanceMeta(raw: string): AcceptanceMeta | undefined {
+  let meta: unknown;
+  try {
+    meta = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(meta) || !isWriter(meta.writer) || !isFiniteNumber(meta.revisions) || !Array.isArray(meta.tests)) return undefined;
+  const tests = meta.tests as unknown[];
+  const readable = tests.every(
+    (t) =>
+      isRecord(t) &&
+      typeof t.rid === "string" &&
+      typeof t.testName === "string" &&
+      typeof t.bodySha === "string" &&
+      (t.writer === undefined || isWriter(t.writer)),
+  );
+  return readable ? { writer: meta.writer, revisions: meta.revisions, tests: tests as AcceptanceTestRef[] } : undefined;
+}
+
+function rowToJudgement(row: JudgementRow): StoredJudgement {
+  const problems: string[] = [];
+  const parseList = <T>(raw: string, what: string): T[] => {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as T[];
+    } catch {
+      // reported below
+    }
+    problems.push(`its ${what} do not parse`);
+    return [];
+  };
+  let input: GreenInput | undefined;
+  if (sha256Hex(Buffer.from(row.input_json, "utf8")) !== row.input_sha256) {
+    problems.push(`its stored input no longer hashes to its input_sha256 ${row.input_sha256}`);
+  } else {
+    try {
+      input = JSON.parse(row.input_json) as GreenInput;
+    } catch {
+      problems.push("its stored input does not parse");
+    }
+  }
+  const judgement: Judgement =
+    row.green === 1
+      ? { green: true, basis: row.basis as GreenBasis, caveats: parseList<string>(row.caveats_json, "caveats") }
+      : { green: false, state: row.state as ReasonClass, reasons: parseList<GreenReason>(row.reasons_json, "reasons") };
+  return {
+    campaignId: row.campaign_id,
+    milestoneId: row.milestone_id,
+    attemptKey: row.attempt_key,
+    atMs: row.at,
+    mode: row.mode as ScopeGateMode,
+    revision: row.revision,
+    judgement,
+    ...(input === undefined ? {} : { input }),
+    inputSha256: row.input_sha256,
+    ...(problems.length > 0 ? { unreadable: problems.join("; ") } : {}),
+  };
 }
