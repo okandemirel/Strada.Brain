@@ -1149,28 +1149,51 @@ export function makeVerifyCompile(
   };
 }
 
+/** How much of the tool's output a suite run hands back: enough for every `error CS` line and failure message. */
+export const PLAYMODE_SUITE_CONTENT_CAP = 20_000;
+
 /**
  * The campaign's own run of the WHOLE PlayMode suite (CMP-8): unity_playmode_verify
  * with no filter and no categories, carrying the ticket's run id so the
  * producer stamps a receipt for it. A red suite is an answer, not a failure of
  * the dispatch: the record it wrote is the verdict, so nothing is thrown.
+ *
+ * The scope gate's acceptance batch (GDD-drift W08) is the same call narrowed
+ * to the exact test names it owns: the filter is forwarded, and the output
+ * comes back whole, because acceptance compile errors and failure messages
+ * appear only there. A blank filter is no filter, so a caller that passes none
+ * still makes the whole-suite call.
  */
 export function makeRunPlaymodeSuite(registry: {
   getAvailableToolNames(): readonly string[];
   execute(name: string, input: Record<string, unknown>, context: never): Promise<{ content?: unknown; isError?: boolean }>;
-}): (projectRoot: string, evidenceRunId: string) => Promise<{ receipt?: string; detail?: string }> {
-  return async (projectRoot, evidenceRunId) => {
+}): (
+  projectRoot: string,
+  evidenceRunId: string,
+  filter?: { readonly testFilter?: string; readonly categories?: string },
+) => Promise<{ receipt?: string; detail?: string; content?: string }> {
+  return async (projectRoot, evidenceRunId, filter) => {
     if (!registry.getAvailableToolNames().includes("unity_playmode_verify")) {
       throw new Error("unity_playmode_verify is not registered");
     }
+    const testFilter = filter?.testFilter?.trim();
+    const categories = filter?.categories?.trim();
     const result = await registry.execute(
       "unity_playmode_verify",
-      { evidenceRunId },
+      {
+        evidenceRunId,
+        ...(testFilter ? { testFilter } : {}),
+        ...(categories ? { categories } : {}),
+      },
       { projectPath: projectRoot, workingDirectory: projectRoot, readOnly: false } as never,
     );
     const content = String(result.content ?? "");
     const receipt = extractReceipt(content);
-    return { ...(receipt === undefined ? {} : { receipt }), ...(result.isError === true ? { detail: content.slice(0, 300) } : {}) };
+    return {
+      ...(receipt === undefined ? {} : { receipt }),
+      ...(result.isError === true ? { detail: content.slice(0, 300) } : {}),
+      content: content.slice(0, PLAYMODE_SUITE_CONTENT_CAP),
+    };
   };
 }
 

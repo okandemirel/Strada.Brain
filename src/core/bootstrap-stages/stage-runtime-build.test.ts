@@ -7,6 +7,7 @@ import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { receiptOfFailure } from "../../campaign/producer-failure.js";
+import type { AcceptanceSuiteRunner } from "../../campaign/scope-types.js";
 import { parsePlayerBuildOutput, buildEvidenceFromToolResult, makeRunPlayer, makeRunPlaymodeSuite, makeVerifyCompile, makeGuardianPlay, makeCampaignMessenger, extractReceipt, looksLikePlayer } from "./stage-runtime.js";
 import { HubChannel } from "../../channels/hub/hub-channel.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
@@ -78,6 +79,52 @@ describe("makeRunPlaymodeSuite — the campaign's own whole-suite run (CMP-8)", 
     expect(out.receipt).toBe(receipt);
     expect(out.detail).toContain("FAILED");
     await expect(makeRunPlaymodeSuite({ getAvailableToolNames: () => [], execute: async () => ({}) })("/p", "r1")).rejects.toThrow(/not registered/);
+  });
+});
+
+describe("makeRunPlaymodeSuite — the scope gate's filtered acceptance batch (GDD-drift W08)", () => {
+  const recording = (content: string, isError = false) => {
+    const asked: Array<Record<string, unknown>> = [];
+    return {
+      asked,
+      registry: {
+        getAvailableToolNames: () => ["unity_playmode_verify"],
+        execute: async (_name: string, input: Record<string, unknown>) => {
+          asked.push(input);
+          return { content, isError };
+        },
+      },
+    };
+  };
+
+  it("forwards the exact test names and the category to unity_playmode_verify, beside the run id", async () => {
+    const { asked, registry } = recording("PlayMode verification passed: 2 of 2 tests passed (filter: …)");
+    const filter = "Strada.Acceptance.M1.Acceptance_M1.R1_abc123;Strada.Acceptance.M1.Acceptance_M1.R2_def456";
+    // It is the campaign's acceptance runner as W00 typed it.
+    const runner: AcceptanceSuiteRunner = makeRunPlaymodeSuite(registry);
+    await runner("/p", "r2", { testFilter: filter, categories: "StradaAcceptance" });
+    expect(asked).toEqual([{ evidenceRunId: "r2", testFilter: filter, categories: "StradaAcceptance" }]);
+  });
+
+  it("a blank filter is no filter: the call stays the whole-suite call the existing callers make", async () => {
+    const { asked, registry } = recording("ok");
+    await makeRunPlaymodeSuite(registry)("/p", "r3", { testFilter: "  ", categories: "" });
+    await makeRunPlaymodeSuite(registry)("/p", "r4", {});
+    expect(asked).toEqual([{ evidenceRunId: "r3" }, { evidenceRunId: "r4" }]);
+  });
+
+  it("returns the tool's whole output, capped at 20k characters, so `error CS` lines and failure messages can be read", async () => {
+    const long = `Assets/StradaAcceptance/M1/Acceptance_M1.cs(12,5): error CS0246: The type 'Foo' could not be found\n${"x".repeat(30_000)}`;
+    const { registry } = recording(long, true);
+    const out = await makeRunPlaymodeSuite(registry)("/p", "r5", { testFilter: "Strada.Acceptance.M1.Acceptance_M1.R1_abc123" });
+    expect(out.content?.length).toBe(20_000);
+    expect(out.content === long.slice(0, 20_000)).toBe(true);
+    expect(out.content?.split("\n")[0]).toContain("error CS0246");
+    // The short detail an error carries is unchanged.
+    expect(out.detail).toBe(long.slice(0, 300));
+    const green = await makeRunPlaymodeSuite(recording("PlayMode verification passed: 1 of 1 tests passed").registry)("/p", "r6");
+    expect(green.content).toBe("PlayMode verification passed: 1 of 1 tests passed");
+    expect(green.detail).toBeUndefined();
   });
 });
 
