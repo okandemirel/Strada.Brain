@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import path, { resolve, sep, isAbsolute, join, relative } from "node:path";
+import path, { basename, resolve, sep, isAbsolute, join, relative } from "node:path";
 
 /**
  * Sensitive file patterns that should never be accessed through tools,
@@ -47,6 +47,21 @@ const BLOCKED_PATTERNS: RegExp[] = [
   /GoogleService-Info\.plist$/i,
   /\.npmrc$/i,
   /\.netrc$/i,
+  // Home-directory credential stores (audit 2026-10, security-config#5): this
+  // list is shell_exec's only check on the files a command names and holds for
+  // a path the user named outside the project, yet `cat ~/.docker/config.json`
+  // passed it — as did the ChatGPT login this product uses (~/.codex/auth.json)
+  // and the daemon's operator credential, which unlocks the operator routes.
+  /(?:^|[/\\])\.aws[/\\](?:credentials|config)$/i,
+  /(?:^|[/\\])\.git-credentials$/i,
+  /(?:^|[/\\])git[/\\]credentials$/i,
+  /(?:^|[/\\])\.docker[/\\]config\.json$/i,
+  /(?:^|[/\\])\.kube[/\\]config$/i,
+  /(?:^|[/\\])gh[/\\]hosts\.ya?ml$/i,
+  /(?:^|[/\\])\.pgpass$/i,
+  /(?:^|[/\\])\.codex[/\\]auth\.json$/i,
+  /(?:^|[/\\])opencode[/\\]auth\.json$/i,
+  /(?:^|[/\\])\.strada[/\\]locks[/\\][^/\\]*\.operator\.json$/i,
 ];
 
 export interface PathValidationResult {
@@ -135,8 +150,17 @@ export function normalizeToolPathInput(
   // path.relative, not a "/" prefix test: on Windows the root is `C:\proj`
   // (and may differ in case), so a hardcoded "/" refused every absolute
   // in-project path (review SEC-17).
-  const inside = pathApi.relative(pathApi.resolve(projectPath), pathApi.resolve(cleaned));
-  if (inside === ".." || inside.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(inside)) {
+  const relativeInside = (root: string, target: string): string | undefined => {
+    const inside = pathApi.relative(root, target);
+    return inside === ".." || inside.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(inside) ? undefined : inside;
+  };
+  // Then in the real form: a macOS lease root is /var/…, and pwd, git and
+  // build errors name the same directory /private/var/… (audit 2026-10).
+  // Only on this platform's own paths: realpath cannot read a win32 path here.
+  const inside =
+    relativeInside(pathApi.resolve(projectPath), pathApi.resolve(cleaned)) ??
+    (pathApi === path ? relativeInside(realpathOfNearest(projectPath), realpathOfNearest(cleaned)) : undefined);
+  if (inside === undefined) {
     return { ok: false, error: "Absolute path is outside the project directory" };
   }
   return { ok: true, relativePath: inside || "." };
@@ -242,12 +266,17 @@ export function projectRelativeTarget(projectRoot: string, rawPath: string): str
   return undefined;
 }
 
-/** The realpath of `p`, or of its nearest existing ancestor with the rest re-attached. */
+/**
+ * The realpath of `p`, or of its nearest existing ancestor with the rest re-attached.
+ * The native realpath, as validatePath's: the JS one keeps the letter case it
+ * was given, so on macOS `.../proj/Assets/X.cs` under a `.../Proj` root was
+ * "outside" here while validatePath landed it inside (review 2026-10).
+ */
 function realpathOfNearest(p: string): string {
   const rest: string[] = [];
   for (let current = resolve(p); ; ) {
     try {
-      return join(realpathSync(current), ...rest);
+      return join(realpathSync.native(current), ...rest);
     } catch {
       const parent = path.dirname(current);
       if (parent === current) return resolve(p);
@@ -284,11 +313,11 @@ function isInsideOrEqual(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-/** The realpath of `start` or of its nearest existing ancestor, up to AND including the filesystem root. */
-async function deepestExistingAncestor(start: string): Promise<string | undefined> {
+/** `start` or its nearest existing ancestor, up to AND including the filesystem root, with its realpath. */
+async function deepestExistingAncestor(start: string): Promise<{ path: string; real: string } | undefined> {
   for (let current = start; ; ) {
     try {
-      return await realpath(current);
+      return { path: current, real: await realpath(current) };
     } catch {
       const parent = resolve(current, "..");
       if (parent === current) return undefined;
@@ -333,9 +362,13 @@ export async function validatePath(
     };
   }
 
+  // realFullPath is what the caller gets: the realpath of an existing target,
+  // the path as resolved for a new one. realTarget is where it lands in real
+  // form, which is what containment is judged on (see below).
   let realFullPath: string;
+  let realTarget: string;
   try {
-    realFullPath = await realpath(rawFullPath);
+    realFullPath = realTarget = await realpath(rawFullPath);
   } catch {
     // If the target doesn't exist yet (e.g., for writes), validate the parent
     const parentDir = resolve(rawFullPath, "..");
@@ -353,6 +386,7 @@ export async function validatePath(
       }
       // Parent is valid; use the raw resolved path for the new file
       realFullPath = rawFullPath;
+      realTarget = join(realParent, basename(rawFullPath));
     } catch {
       // Parent doesn't exist: judge containment by the deepest ancestor that
       // DOES exist. The walk used to stop one short of the filesystem root, so
@@ -361,7 +395,7 @@ export async function validatePath(
       // and came back "Parent directory does not exist" instead of the
       // confinement refusal. No existing ancestor at all is outside, too.
       const ancestor = await deepestExistingAncestor(resolve(rawFullPath, ".."));
-      if (ancestor === undefined || !isInsideOrEqual(realRoot, ancestor)) {
+      if (ancestor === undefined || !isInsideOrEqual(realRoot, ancestor.real)) {
         return {
           valid: false,
           fullPath: rawFullPath,
@@ -388,8 +422,8 @@ export async function validatePath(
       // file_write then mkdir -p'd the chain and put the secret on disk. The
       // walk proves containment, not harmlessness: fall through to the shared
       // tail so the blocklist is consulted like every other accepted path. The
-      // missing components cannot be symlinks, so rawFullPath is the right
-      // string to test.
+      // missing components cannot be symlinks, so the real ancestor plus that
+      // tail is where the file lands.
       if (!options.allowMissingParents) {
         return {
           valid: false,
@@ -398,41 +432,30 @@ export async function validatePath(
         };
       }
       realFullPath = rawFullPath;
+      realTarget = join(ancestor.real, relative(ancestor.path, rawFullPath));
     }
   }
 
-  // Check that path is within project root (with trailing separator to avoid prefix collision)
-  if (realFullPath !== rawFullPath) {
-    // Path was resolved by realpath (existing file) — verify against realpath'd root
-    if (
-      realFullPath !== realRoot &&
-      !realFullPath.startsWith(realRoot + sep)
-    ) {
-      return {
-        valid: false,
-        fullPath: realFullPath,
-        error: outsideProjectError(projectRoot),
-      };
-    }
-  } else {
-    // New file (realpath failed, parent was validated above) or no-symlink system.
-    // Verify against the raw (un-symlinked) project root to catch traversal on Linux.
-    const rawRoot = resolve(projectRoot);
-    if (
-      rawFullPath !== rawRoot &&
-      !rawFullPath.startsWith(rawRoot + sep)
-    ) {
-      return {
-        valid: false,
-        fullPath: rawFullPath,
-        error: outsideProjectError(projectRoot),
-      };
-    }
+  // Containment is judged in the real form, against the real root. A target
+  // whose realpath came back unchanged was compared with the LEXICAL root, so
+  // with a root reached through a symlink — every macOS lease, /var being
+  // /private/var — an in-project path written the way pwd, git and build
+  // errors print it was refused as outside the directory it named (audit
+  // 2026-10). The lexical test guarded nothing the real one does not: inside
+  // the lexical root but outside the real one is a symlink escape.
+  if (!isInsideOrEqual(realRoot, realTarget)) {
+    return {
+      valid: false,
+      fullPath: realFullPath,
+      error: outsideProjectError(projectRoot),
+    };
   }
 
-  // Check against sensitive file patterns
-  for (const pattern of BLOCKED_PATTERNS) {
-    if (pattern.test(realFullPath)) {
+  // Check against sensitive file patterns; a new file in both forms, the one
+  // it is written through and the one it lands at (Assets/keys/x, with keys a
+  // symlink to .ssh, is .ssh/x).
+  for (const candidate of realTarget === realFullPath ? [realFullPath] : [realFullPath, realTarget]) {
+    if (BLOCKED_PATTERNS.some((pattern) => pattern.test(candidate))) {
       return {
         valid: false,
         fullPath: realFullPath,

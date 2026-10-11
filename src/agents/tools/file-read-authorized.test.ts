@@ -7,11 +7,12 @@
  * never sees the design at all.
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { FileReadTool } from "./file-read.js";
+import { extractUserAuthorizedPaths } from "../../security/user-authorized-paths.js";
 
 const tool = new FileReadTool();
 
@@ -116,5 +117,44 @@ describe("a sensitive file the user happened to name", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("sensitive");
     expect(result.content).not.toContain("PRIVATEKEYBODY");
+  });
+});
+
+/**
+ * "~/Desktop/My GDD.md" is how a person writes a path on their own machine.
+ * The authorization expanded nothing, so the document stayed unreadable
+ * (audit security-config#3); the read has to expand it the same way.
+ * os.homedir() follows $HOME on POSIX, which is what the test points.
+ */
+describe.skipIf(process.platform === "win32")("a document the user named from their home directory", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is read when the model passes the path as the user wrote it", async () => {
+    const { project } = setup();
+    const home = mkdtempSync(join(os.tmpdir(), "authz-home-"));
+    mkdirSync(join(home, "Desktop"));
+    writeFileSync(join(home, "Desktop", "My GDD.md"), "# Tilde\nA hex board.");
+    writeFileSync(join(home, "Desktop", "other.md"), "not named");
+    mkdirSync(join(home, ".aws"));
+    writeFileSync(join(home, ".aws", "credentials"), "aws_secret_access_key = AWSSECRETBODY\n");
+    vi.stubEnv("HOME", home);
+
+    const authorized = extractUserAuthorizedPaths(
+      'Build the game in "~/Desktop/My GDD.md", my keys are in ~/.aws/credentials',
+    );
+
+    const tilde = await tool.execute({ path: "~/Desktop/My GDD.md" }, ctx(project, authorized));
+    expect(tilde.isError).toBeUndefined();
+    expect(tilde.content).toContain("A hex board.");
+    const absolute = await tool.execute({ path: join(home, "Desktop", "My GDD.md") }, ctx(project, authorized));
+    expect(absolute.content).toContain("A hex board.");
+
+    // Expansion widens nothing: a neighbour stays unnamed, a named secret stays blocked.
+    expect((await tool.execute({ path: "~/Desktop/other.md" }, ctx(project, authorized))).isError).toBe(true);
+    const secret = await tool.execute({ path: "~/.aws/credentials" }, ctx(project, authorized));
+    expect(secret.isError).toBe(true);
+    expect(secret.content).not.toContain("AWSSECRETBODY");
   });
 });

@@ -107,6 +107,7 @@ const SAMPLE_NAMES = [
   "credentials.json", "secret.json", "secrets.json", "secret.yml", "secrets.yaml", "secrets.yml", "secret.yaml",
   "id_rsa", "id_ed25519", "x.pem", "x.key", "x.pfx", "x.p12", "x.keystore", "x.jks", "keystore.properties",
   "google-services.json", "GoogleService-Info.plist", ".npmrc", ".netrc",
+  ".git-credentials", ".pgpass", "config.json", "auth.json", "hosts.yml", "hosts.yaml", "x.operator.json",
 ];
 const SAMPLE_TAILS = [...SAMPLE_NAMES, ...SAMPLE_NAMES.map((name) => `x/${name}`)];
 

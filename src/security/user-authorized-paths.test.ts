@@ -4,7 +4,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   extractUserAuthorizedPaths,
   isUserAuthorizedPath,
@@ -30,8 +32,47 @@ describe("what the user asked to be read", () => {
     expect(found.sort()).toEqual([resolve("/a/one.md"), resolve("/b/two.md")]);
   });
 
-  it("finds a quoted path", () => {
-    expect(extractUserAuthorizedPaths('read "/a/my file.md"')).toContain(resolve("/a/my"));
+  it("finds a quoted path, spaces and all, and not the fragment before the first space", () => {
+    // This test used to assert the fragment "/a/my": the pattern stopped at
+    // the first space even inside quotes, so the file the user named was never
+    // authorized and a different one was (audit security-config#3).
+    expect(extractUserAuthorizedPaths('read "/a/my file.md"')).toEqual([resolve("/a/my file.md")]);
+    expect(extractUserAuthorizedPaths("read '/a/my file.md' please")).toEqual([resolve("/a/my file.md")]);
+    expect(extractUserAuthorizedPaths("read `/a/my file.md`")).toEqual([resolve("/a/my file.md")]);
+  });
+
+  it("authorizes the design document a user names with spaces in it", () => {
+    const authorized = extractUserAuthorizedPaths('Read "/Users/o/Desktop/Match 3 GDD.docx" and build that game.');
+
+    expect(isUserAuthorizedPath("/Users/o/Desktop/Match 3 GDD.docx", authorized)).toBe(true);
+    expect(isUserAuthorizedPath("/Users/o/Desktop/Match", authorized)).toBe(false);
+  });
+
+  it("takes an iCloud Drive path whole", () => {
+    expect(extractUserAuthorizedPaths('the spec is in "/Users/o/Library/Mobile Documents/com~apple~CloudDocs/GDD.md".'))
+      .toEqual([resolve("/Users/o/Library/Mobile Documents/com~apple~CloudDocs/GDD.md")]);
+  });
+
+  it("reads a path dragged into a terminal, with its spaces escaped", () => {
+    expect(extractUserAuthorizedPaths("read /Users/o/Desktop/Match\\ 3\\ GDD\\ \\(v2\\).docx and build it"))
+      .toEqual([resolve("/Users/o/Desktop/Match 3 GDD (v2).docx")]);
+  });
+
+  it("expands a path written from the home directory", () => {
+    expect(extractUserAuthorizedPaths("read ~/Desktop/gdd.md")).toEqual([join(homedir(), "Desktop", "gdd.md")]);
+    expect(extractUserAuthorizedPaths('read "~/Desktop/My GDD.md"')).toEqual([join(homedir(), "Desktop", "My GDD.md")]);
+    // ~user is another account's home; it is not expanded or authorized.
+    expect(extractUserAuthorizedPaths("read ~bob/gdd.md")).toEqual([]);
+  });
+
+  it("takes a file URL as the path it names", () => {
+    const named = resolve("/Users/o/Desktop/My GDD.docx");
+    expect(extractUserAuthorizedPaths(`open ${pathToFileURL(named).href} please`)).toEqual([named]);
+  });
+
+  it("is not thrown off by apostrophes or by quoted words that are not paths", () => {
+    expect(extractUserAuthorizedPaths("it's the user's doc at /a/b.md, isn't it")).toEqual([resolve("/a/b.md")]);
+    expect(extractUserAuthorizedPaths('call the game "Pixel Flow" and read /a/b.md')).toEqual([resolve("/a/b.md")]);
   });
 
   it("finds nothing in a message with no path", () => {
@@ -78,6 +119,15 @@ describe("what the authorization does not extend to", () => {
   it("matches an equivalent spelling of the same file", () => {
     // Same file, written with a redundant segment: still the file they named.
     expect(isUserAuthorizedPath("/Users/o/Desktop/./gdd.md", authorized)).toBe(true);
+  });
+
+  it("reads ~ the way the user meant it, and only for the file they named", () => {
+    const fromHome = extractUserAuthorizedPaths("read ~/Desktop/gdd.md");
+
+    expect(isUserAuthorizedPath("~/Desktop/gdd.md", fromHome)).toBe(true);
+    expect(isUserAuthorizedPath(join(homedir(), "Desktop", "gdd.md"), fromHome)).toBe(true);
+    expect(isUserAuthorizedPath("~/Desktop/other.md", fromHome)).toBe(false);
+    expect(isUserAuthorizedPath("~/Desktop/gdd.md/../../.ssh/id_rsa", fromHome)).toBe(false);
   });
 });
 

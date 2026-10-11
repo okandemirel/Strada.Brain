@@ -97,10 +97,10 @@ When rate limiting is enabled, an unset limit takes the built-in default (`DEFAU
 `validatePath(projectRoot, relativePath, { allowMissingParents? })`:
 
 1. Reject null bytes
-2. Resolve symlinks with `realpath()` on both root and target
+2. Resolve symlinks with `realpath()` on both root and target, and judge containment in that real form only, so a path written as `/private/var/…` is inside a root handed over as `/var/…` (every macOS lease)
 3. Trailing separator check (prevents `/project-evil` matching `/project`)
 4. For new files: walk up to first existing ancestor, validate it's within root. With `allowMissingParents` (write tools that `mkdir -p`) a missing parent chain is accepted once the deepest existing ancestor is proven inside the root.
-5. Block sensitive patterns on every accepted path, including the missing-parent case: `.env` and any `.env.*` suffix chain, `.git/config`, `.git/credentials`, SSH keys, `.pem`, `.key`, certificates, `node_modules/`, service account files
+5. Block sensitive patterns on every accepted path, including the missing-parent case and, for a new file, both the spelled and the real form: `.env` and any `.env.*` suffix chain, `.git/config`, `.git/credentials`, SSH keys, `.pem`, `.key`, certificates, `node_modules/`, service account files, and home-directory credential stores (`~/.aws/credentials|config`, `~/.git-credentials`, `git/credentials`, `~/.docker/config.json`, `~/.kube/config`, `gh/hosts.yml`, `~/.pgpass`, `~/.codex/auth.json`, `opencode/auth.json`, `.strada/locks/*.operator.json`)
 
 The blocklist matches names, not content. It is a per-tool guardrail, so each tool that can reach a file by another route consults `isSensitivePath()` itself: `shell_exec` checks the paths a command names (best-effort, `src/agents/tools/shell-sensitive-paths.ts`), `git_commit` refuses to stage or commit a blocklisted file (a deletion is allowed; the lease manager's own `.strada-lease-owner.json` / `.strada-lease-seed.json` at the repository's top level are left unstaged instead), and `git_diff` compares commits only (no `<rev>:<path>`, blob or tree) and leaves blocklisted files out of its output.
 

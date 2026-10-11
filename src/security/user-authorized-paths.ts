@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Files the user named themselves, and may therefore be read.
@@ -24,15 +26,54 @@ import { resolve } from "node:path";
  * directory, and never authorizes anything derived from an authorized path.
  */
 
-/** Absolute-looking paths in a message: POSIX /… and Windows C:\… */
-const PATH_PATTERN = /(?:^|[\s"'`(<])((?:\/|[A-Za-z]:[\\/])[^\s"'`)<>|]+)/gu;
+/**
+ * A quoted span that starts like a path is one path, spaces and all. Without
+ * this the pattern below stopped at the first space even inside quotes:
+ * "/Users/o/Desktop/Match 3 GDD.docx" authorized "/Users/o/Desktop/Match" and
+ * never the document (audit 2026-10, security-config#3).
+ */
+const QUOTED_PATH_PATTERN = /(["'`])((?:\/|~\/|[A-Za-z]:[\\/]|file:\/\/)(?:(?!\1)[^\n])*)\1/gu;
+
+/**
+ * Absolute-looking paths in a message: POSIX /… and ~/…, Windows C:\…, and
+ * file:// URLs. A POSIX path may carry shell escapes, as a path dragged into a
+ * terminal does (Match\ 3\ GDD.docx); a Windows path's backslashes are its
+ * separators.
+ */
+const PATH_PATTERN =
+  /(?:^|[\s"'`(<])((?:\/|~\/)(?:\\[^\n]|[^\s"'`)<>|\\])+|[A-Za-z]:[\\/][^\s"'`)<>|]+|file:\/\/[^\s"'`)<>|]+)/gu;
 
 /**
  * Trailing punctuation belongs to the sentence, not the path: "read /a/b.md."
- * names b.md, not "b.md.".
+ * names b.md, not "b.md.". An escaped character is the path's own.
  */
 function trimSentencePunctuation(candidate: string): string {
-  return candidate.replace(/[.,;:!?)\]}]+$/u, "");
+  return candidate.replace(/(?<!\\)[.,;:!?)\]}]+$/u, "");
+}
+
+/**
+ * A path as the user wrote it, as an absolute path: `~/` is their home
+ * directory (not another account's `~bob/`), everything else is resolved.
+ */
+export function resolveUserNamedPath(named: string): string {
+  return named.startsWith("~/") ? join(homedir(), named.slice(2)) : resolve(named);
+}
+
+/** What one matched candidate names, or undefined when it names no file. */
+function namedPathOf(candidate: string, quoted: boolean): string | undefined {
+  let text = trimSentencePunctuation(quoted ? candidate.trimEnd() : candidate);
+  if (/^file:\/\//iu.test(text)) {
+    try {
+      text = fileURLToPath(text);
+    } catch {
+      return undefined;
+    }
+  } else if (!quoted && (text.startsWith("/") || text.startsWith("~/"))) {
+    text = text.replace(/\\(.)/gu, "$1");
+  }
+  // A bare "/" or a path with no name is not a file the user asked for.
+  if (text.length < 2) return undefined;
+  return resolveUserNamedPath(text);
 }
 
 /** Every absolute path the user wrote, resolved and de-duplicated. */
@@ -40,11 +81,15 @@ export function extractUserAuthorizedPaths(message: string): string[] {
   if (!message) return [];
 
   const found = new Set<string>();
-  for (const match of message.matchAll(PATH_PATTERN)) {
-    const candidate = trimSentencePunctuation(match[1] ?? "");
-    // A bare "/" or a path with no name is not a file the user asked for.
-    if (candidate.length < 2) continue;
-    found.add(resolve(candidate));
+  // Quoted spans first, then blanked: their words are not paths of their own.
+  const unquoted = message.replace(QUOTED_PATH_PATTERN, (_span, _quote: string, candidate: string) => {
+    const named = namedPathOf(candidate, true);
+    if (named !== undefined) found.add(named);
+    return " ";
+  });
+  for (const match of unquoted.matchAll(PATH_PATTERN)) {
+    const named = namedPathOf(match[1] ?? "", false);
+    if (named !== undefined) found.add(named);
   }
   return [...found];
 }
@@ -89,6 +134,6 @@ export function isUserAuthorizedPath(
   authorized: readonly string[] | undefined,
 ): boolean {
   if (!authorized || authorized.length === 0) return false;
-  const resolved = resolve(target);
+  const resolved = resolveUserNamedPath(target);
   return authorized.some((candidate) => candidate === resolved);
 }

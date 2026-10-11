@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
 import { isSensitivePath, validatePath } from "../../security/path-guard.js";
 import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "./document-text.js";
-import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
+import { isUserAuthorizedPath, resolveUserNamedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
@@ -134,8 +134,9 @@ export class FileReadTool implements ITool {
         // Naming a path relaxes confinement only; the sensitive-file
         // blocklist is a separate guarantee and holds regardless of who
         // named the path. Checked against the real path so a symlink cannot
-        // hide the name.
-        const namedPath = pathResolve(relPath);
+        // hide the name. "~/…" is read as the user meant it, as it was
+        // authorized.
+        const namedPath = resolveUserNamedPath(relPath);
         const realNamedPath = await realpath(namedPath).catch(() => namedPath);
         if (isSensitivePath(namedPath) || isSensitivePath(realNamedPath)) {
           return {
@@ -143,7 +144,7 @@ export class FileReadTool implements ITool {
             isError: true,
           };
         }
-        return await readAuthorizedFile(relPath, offset, limit);
+        return await readAuthorizedFile(namedPath, offset, limit);
       }
       // The same help the ENOENT path gives. Measured 2026-08-21, 15:38: two
       // reads thirty seconds apart, one answered "that name is at: ..." and the
