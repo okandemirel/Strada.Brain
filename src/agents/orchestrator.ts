@@ -1043,9 +1043,8 @@ export class Orchestrator {
   private checkpointStore?: TaskCheckpointStore;
   /**
    * Last seen channelType/userId per chat. Populated on every handleMessage
-   * entry so that {@link continueFromCheckpoint} can synthesize an
-   * {@link IncomingMessage} with the correct routing metadata without
-   * forcing the caller (CommandHandler) to plumb it through.
+   * entry; {@link continueFromCheckpoint} falls back to it only for checkpoints
+   * written before they recorded their own channel and conversation.
    * Bounded at MAX_LAST_ROUTING_ENTRIES to avoid unbounded growth.
    */
   private readonly lastRoutingByChat = new Map<
@@ -2730,15 +2729,19 @@ export class Orchestrator {
       ].join("\n");
       await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, confirmation);
 
-      // Resolve routing metadata. Prefer the last recorded entry so we stay on
-      // the user's active channel; fall back to "web" (the default per the
-      // project configuration) when nothing is known.
-      const routing = this.lastRoutingByChat.get(chatId);
+      // Replay as the run's owner, where they were talking: both come from the
+      // checkpoint. The routing this orchestrator last saw for the chat is only
+      // a fallback for rows written before those fields existed — channel
+      // traffic goes router → task → runner and never records one, so its
+      // "web"/chatId defaults resumed the owner's run under another profile,
+      // memory and conversation scope. The caller ranks above it: a row that
+      // names no owner let the caller through the ownership check as one.
+      const lastSeen = this.lastRoutingByChat.get(chatId);
       const synthesized: IncomingMessage = {
-        channelType: routing?.channelType ?? "web",
+        channelType: (cp.channelType ?? lastSeen?.channelType ?? "web") as ChannelType,
         chatId,
-        conversationId: routing?.conversationId,
-        userId: routing?.userId ?? chatId,
+        conversationId: cp.channelType ? cp.conversationId : lastSeen?.conversationId,
+        userId: cp.userId || options?.userId || lastSeen?.userId || chatId,
         text,
         timestamp: new Date(),
       };
@@ -2837,6 +2840,8 @@ export class Orchestrator {
     taskId: string;
     chatId: string;
     userId?: string;
+    channelType?: string;
+    conversationId?: string;
     lastUserMessage: string;
     used: number;
     budget: number;
@@ -2850,6 +2855,8 @@ export class Orchestrator {
       taskId: params.taskId,
       chatId: params.chatId,
       ...(params.userId ? { userId: params.userId } : {}),
+      ...(params.channelType ? { channelType: params.channelType } : {}),
+      ...(params.conversationId ? { conversationId: params.conversationId } : {}),
       timestamp: Date.now(),
       stage: "budget_exceeded",
       lastUserMessage: params.lastUserMessage,
@@ -2868,6 +2875,8 @@ export class Orchestrator {
     taskId: string;
     chatId: string;
     userId?: string;
+    channelType?: string;
+    conversationId?: string;
     lastUserMessage: string;
     epoch: number;
     touchedFiles?: readonly string[];
@@ -2880,6 +2889,8 @@ export class Orchestrator {
       taskId: params.taskId,
       chatId: params.chatId,
       ...(params.userId ? { userId: params.userId } : {}),
+      ...(params.channelType ? { channelType: params.channelType } : {}),
+      ...(params.conversationId ? { conversationId: params.conversationId } : {}),
       timestamp: Date.now(),
       stage: "provider_failed",
       lastUserMessage: params.lastUserMessage,

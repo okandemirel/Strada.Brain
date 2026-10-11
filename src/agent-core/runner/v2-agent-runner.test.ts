@@ -486,7 +486,10 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
 
     // Interactive: the output-token budget is the interactive task budget; a worker run has no
     // token cap (its background-status mapping for a budget stop is pinned in stoppedStatus below).
-    const result = await drive(handles.clock, runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1" }), mkIO("interactive")));
+    const result = await drive(
+      handles.clock,
+      runner.run(mkRequest({ taskRunId: "task-42", userId: "u-1", channelType: "discord", conversationId: "conv-9" }), mkIO("interactive")),
+    );
 
     expect(result.reason).toBe("budget-exhausted:tokens");
     expect(saveSpy).toHaveBeenCalledTimes(1);
@@ -495,6 +498,9 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     expect(cp.budget).toBe(12); // the cap, not the (negative) remainder
     expect(cp.touchedFiles).toContain("a.cs");
     expect(cp.userId).toBe("u-1");
+    // Where the owner was talking: the resume replays the prompt there, as them.
+    expect(cp.channelType).toBe("discord");
+    expect(cp.conversationId).toBe("conv-9");
   });
 
   it("a running tool is not silence: the spine heartbeats every 30 s while a tool batch is in flight (measured 2026-09-09 01:38)", async () => {

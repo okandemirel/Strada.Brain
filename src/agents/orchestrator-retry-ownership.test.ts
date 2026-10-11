@@ -81,3 +81,68 @@ describe("resubmitBlockedTask enforces the task owner (ORC-14)", () => {
     expect(result.status).toBe("submitted");
   });
 });
+
+// /retry, /continue and the implicit resume rebuilt the request from the last
+// routing the main orchestrator's handleMessage recorded for the chat. Channel
+// traffic goes router → task → runner and never records one, so the resume ran
+// as channel "web", userId = chatId and no conversation: on the web channel
+// (chatId is the connection, the owner is the profile) and in any shared chat
+// that is somebody else's profile, autonomy, memory scope and learning.
+describe("continueFromCheckpoint resumes as the checkpoint's owner", () => {
+  function resumeHarness(cp: Record<string, unknown>) {
+    const h = harness(undefined);
+    const store = {
+      loadByTaskId: vi.fn(async () => cp),
+      loadLatest: vi.fn(async () => cp),
+      clear: vi.fn(async () => {}),
+      save: vi.fn(async () => {}),
+    };
+    h.orch.setTaskCheckpointStore(store as never);
+    return { ...h, store };
+  }
+  const base = { timestamp: 1, stage: "provider_failed", lastUserMessage: "build the second level", touchedFiles: [] };
+
+  it("replays a shared-channel checkpoint as its owner, on its channel", async () => {
+    const h = resumeHarness({ ...base, taskId: "task-7", chatId: "shared-channel", userId: "user-A", channelType: "discord" });
+    const result = await h.orch.continueFromCheckpoint("shared-channel", { taskId: "task-7", userId: "user-A" });
+    expect(result.status).toBe("resumed");
+    expect(h.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelType: "discord", chatId: "shared-channel", userId: "user-A", text: "build the second level",
+    }));
+  });
+
+  it("keeps a web owner's profile and conversation, not the connection's chat id", async () => {
+    const h = resumeHarness({
+      ...base, taskId: "task-8", chatId: "conn-5b1d", userId: "profile-7", channelType: "web", conversationId: "profile-7",
+    });
+    await h.orch.continueFromCheckpoint("conn-5b1d", { taskId: "task-8", userId: "profile-7" });
+    expect(h.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelType: "web", chatId: "conn-5b1d", userId: "profile-7", conversationId: "profile-7",
+    }));
+  });
+
+  it("a checkpoint with no recorded owner resumes as the caller, not as the chat id", async () => {
+    const h = resumeHarness({ ...base, taskId: "task-9", chatId: "shared-channel" });
+    await h.orch.continueFromCheckpoint("shared-channel", { taskId: "task-9", userId: "user-B" });
+    expect(h.handleMessage).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-B" }));
+  });
+
+  it("the orchestrator's checkpoint writers record where the owner was talking", async () => {
+    const h = resumeHarness({});
+    const writers = h.orch as unknown as {
+      saveBudgetExceededCheckpoint(p: Record<string, unknown>): Promise<void>;
+      saveRollingCheckpoint(p: Record<string, unknown>): Promise<void>;
+    };
+    const where = { channelType: "web", conversationId: "profile-7" };
+    await writers.saveBudgetExceededCheckpoint({
+      taskId: "task-1", chatId: "conn-5b1d", userId: "profile-7", lastUserMessage: "x", used: 1, budget: 2, ...where,
+    });
+    await writers.saveRollingCheckpoint({
+      taskId: "task-1", chatId: "conn-5b1d", userId: "profile-7", lastUserMessage: "x", epoch: 1, ...where,
+    });
+    expect(h.store.save).toHaveBeenCalledTimes(2);
+    for (const [cp] of h.store.save.mock.calls as unknown as Array<[Record<string, unknown>]>) {
+      expect(cp).toMatchObject(where);
+    }
+  });
+});

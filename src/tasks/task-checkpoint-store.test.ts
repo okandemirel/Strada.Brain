@@ -242,6 +242,14 @@ describe("TaskCheckpointStore — multi-user isolation", () => {
     expect(loaded?.stage).toBe("manual_pause");
     expect(loaded?.timestamp).toBe(now + 500);
   });
+
+  it("round-trips the owner's channel and conversation, which the resume replays the request on", async () => {
+    await store.save(makeCheckpoint({
+      taskId: "task-web", chatId: "conn-5b1d", userId: "profile-7", channelType: "web", conversationId: "profile-7",
+    }));
+    const loaded = await store.loadByTaskId("task-web");
+    expect(loaded).toMatchObject({ userId: "profile-7", channelType: "web", conversationId: "profile-7" });
+  });
 });
 
 /**

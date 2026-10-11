@@ -981,4 +981,23 @@ describe("pauseTask keeps the rolling checkpoint's files (TSK-14)", () => {
       touchedFiles: ["Assets/Scripts/Board.cs"],
     }));
   });
+
+  // The resume replays the prompt from the checkpoint as its owner; without
+  // the channel and conversation it ran as "web" with no conversation.
+  it("records the task's owner, channel and conversation for the resume", async () => {
+    const running = buildTask({
+      id: "task_pause2" as Task["id"], status: TaskStatus.executing,
+      chatId: "conn-5b1d", channelType: "web", conversationId: "profile-7", userId: "profile-7",
+    });
+    const storage = { load: vi.fn().mockReturnValue(running), updateStatus: vi.fn() } as any;
+    const manager = new TaskManager(storage, { pauseConversation: vi.fn() } as any);
+    const save = vi.fn().mockResolvedValue(undefined);
+    manager.setCheckpointStore({ loadByTaskIdSync: vi.fn().mockReturnValue(null), save } as any);
+
+    expect(manager.pauseTask(running.id)).toBe(true);
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: "conn-5b1d", userId: "profile-7", channelType: "web", conversationId: "profile-7",
+    }));
+  });
 });

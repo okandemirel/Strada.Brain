@@ -185,6 +185,9 @@ export interface BudgetCheckpointParams {
   readonly taskId: string;
   readonly chatId: string;
   readonly userId?: string;
+  /** Where the owner was talking: the resume replays the request there (PendingTaskCheckpoint). */
+  readonly channelType?: string;
+  readonly conversationId?: string;
   readonly lastUserMessage: string;
   /** OUTPUT tokens actually spent by the run at the stop. */
   readonly used: number;
@@ -199,6 +202,8 @@ export interface EpochCheckpointParams {
   readonly taskId: string;
   readonly chatId: string;
   readonly userId?: string;
+  readonly channelType?: string;
+  readonly conversationId?: string;
   readonly lastUserMessage: string;
   readonly epoch: number;
   /** Files the epoch's successful mutation steps touched — the checkpoint's

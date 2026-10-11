@@ -290,6 +290,8 @@ export class TaskManager extends EventEmitter {
         lastUserMessage: task.prompt,
         touchedFiles: existing?.touchedFiles ?? [],
         userId: task.userId,
+        channelType: task.channelType,
+        ...(task.conversationId ? { conversationId: task.conversationId } : {}),
       };
       void this.checkpointStore.save(cp).catch((err: unknown) => {
         getLogger().warn("Pause checkpoint could not be saved", {

@@ -974,6 +974,9 @@ export class V2AgentRunner implements AgentRunner {
           taskId: request.taskRunId ?? request.chatId,
           chatId: request.chatId,
           ...(request.userId ? { userId: request.userId } : {}),
+          // Where the owner was talking: a resume replays the prompt there, as them.
+          channelType: request.channelType,
+          ...(request.conversationId ? { conversationId: request.conversationId } : {}),
           lastUserMessage: request.prompt,
           epoch,
           // What the epoch's mutation steps actually touched — the checkpoint
@@ -1233,6 +1236,8 @@ export class V2AgentRunner implements AgentRunner {
       taskId: request.taskRunId ?? request.chatId,
       chatId: request.chatId,
       ...(request.userId ? { userId: request.userId } : {}),
+      channelType: request.channelType,
+      ...(request.conversationId ? { conversationId: request.conversationId } : {}),
       lastUserMessage: request.prompt,
       used: budget.spentOutputTokens(),
       budget: budget.outputTokenCap(),

@@ -702,6 +702,33 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(resetBudgetWindowSpy).toHaveBeenCalled();
   });
 
+  it("the rolling epoch checkpoint records the owner's channel and conversation for the resume", async () => {
+    // A resume replays the checkpoint's prompt as its owner, where they were talking. Without
+    // these the web channel's resume ran under the connection's chatId instead of the profile.
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(
+      resp({ text: "working", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }] }),
+    );
+    const taskConfig = { ...DEFAULT_TASK_CONFIG, backgroundEpochMaxIterations: 1, backgroundMaxEpochs: 2 } as TaskConfig;
+    const h = buildHarness(provider, undefined, undefined, undefined, taskConfig);
+    const persist = vi.spyOn(
+      h.orch as unknown as { persistCheckpoint: (cp: Record<string, unknown>) => Promise<void> },
+      "persistCheckpoint",
+    );
+
+    await drive(
+      h.clock,
+      h.runner.run(
+        mkRequest({ chatId: "conn-5b1d", userId: "profile-7", conversationId: "profile-7", channelType: "web" }),
+        mkIO("background"),
+      ),
+    );
+
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
+      stage: "provider_failed", chatId: "conn-5b1d", userId: "profile-7", channelType: "web", conversationId: "profile-7",
+    }));
+  });
+
   it("E (P-E): reaches the REAL REFLECTING boundary → real parseReflectionDecision drives termination", async () => {
     // The ONLY test that exercises the REAL portParseReflectionDecision (processReflectionPreamble):
     // 3 tool calls in one turn push stepResults.length to 3 → recordStepResultsAndCheckReflection

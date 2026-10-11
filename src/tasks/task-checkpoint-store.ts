@@ -39,6 +39,14 @@ export interface PendingTaskCheckpoint {
    * lookups to prevent cross-user resume in shared channels (CWE-639).
    */
   userId?: string;
+  /**
+   * Where the owner was talking when the run stopped. A resume replays the
+   * request as `userId` on this channel and conversation; on the web channel
+   * the chatId is one connection while the owner and the conversation are the
+   * profile. Absent on rows written before it was recorded.
+   */
+  channelType?: string;
+  conversationId?: string;
   timestamp: number;
   stage: CheckpointStage;
   lastUserMessage: string;
