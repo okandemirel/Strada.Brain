@@ -32,7 +32,10 @@ export function buildReasoningPrompt(params: {
   ];
 
   for (const obs of params.observations.slice(0, 10)) {
-    lines.push(`- [${obs.source}] (id: ${obs.id}, priority: ${obs.priority}) ${obs.summary}`);
+    // The rules below say "execute only for actionable observations"; without the flag the model
+    // could not tell a trigger fire whose task already runs from work still to do.
+    const informational = obs.actionable ? "" : ", informational";
+    lines.push(`- [${obs.source}] (id: ${obs.id}, priority: ${obs.priority}${informational}) ${obs.summary}`);
   }
 
   lines.push("");
@@ -112,6 +115,7 @@ export function buildReasoningPrompt(params: {
     "Rules:",
     "- Prefer 'wait' when observations are low-priority or informational",
     "- Prefer 'execute' only for actionable, high-priority observations",
+    "- An observation marked 'informational' reports something already handled (a trigger fire whose task or approval already exists) or context only: never 'execute' or 'batch' for it — such a goal is refused",
     "- Prefer 'notify' when the user should know about something but no action is needed",
     "- Prefer 'escalate' when you need user input to decide",
     "- Prefer 'batch' when multiple observations are related and should be handled together (max 20 IDs)",

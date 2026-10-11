@@ -308,6 +308,10 @@ export class AgentCore {
       switch (decision.action) {
         case "execute":
           if (decision.goal) {
+            if (!answersActionableWork(ranked, decision.batchObservationIds)) {
+              this.refuseInformationalGoal(decision.action, decision.goal, ranked);
+              break;
+            }
             const task = this.taskManager.submit(
               AgentCore.AGENT_CHAT_ID,
               AgentCore.AGENT_CHANNEL_TYPE,
@@ -364,6 +368,10 @@ export class AgentCore {
 
         case "batch":
           if (decision.batchObservationIds && decision.batchObservationIds.length > 0 && decision.goal) {
+            if (!answersActionableWork(ranked, decision.batchObservationIds)) {
+              this.refuseInformationalGoal(decision.action, decision.goal, ranked);
+              break;
+            }
             const idSet = new Set(decision.batchObservationIds);
             const matched = ranked.filter(o => idSet.has(o.id));
             const batchContext = matched.map(o => `[${o.source}] ${o.summary}`).join("; ");
@@ -619,6 +627,18 @@ export class AgentCore {
     });
   }
 
+  /**
+   * Nothing is submitted and nothing is marked handled: the informational observations are
+   * dropped by the requeue after the switch, and any actionable ones beside them come back.
+   */
+  private refuseInformationalGoal(action: "execute" | "batch", goal: string, ranked: readonly AgentObservation[]): void {
+    this.logger.info("AgentCore: refused a goal that answers only informational observations", {
+      action,
+      goal: goal.slice(0, 200),
+      topObservation: ranked[0]?.summary.slice(0, 120),
+    });
+  }
+
   private deferHumanVisibleDecision(
     decision: Pick<ActionDecision, "action">,
     observation: AgentObservation | undefined,
@@ -699,6 +719,22 @@ export class AgentCore {
   stop(): void {
     this.observationEngine.stop();
   }
+}
+
+/**
+ * Whether a goal answers anything that is work: the observations it names, or — naming none in
+ * this batch — the batch itself. A trigger fire the heartbeat already turned into its own task or
+ * approval is marked actionable:false, and a goal built only on it ran that work a second time
+ * (review of 254fa61a: one deploy fire, one reasoning call, one task submitted against its label —
+ * the run heartbeat-loop stopped starting on 2026-09-02).
+ */
+function answersActionableWork(
+  ranked: ReadonlyArray<{ id: string; actionable: boolean }>,
+  namedIds: readonly string[] | undefined,
+): boolean {
+  const named = new Set(namedIds ?? []);
+  const answered = ranked.filter((o) => named.has(o.id));
+  return (answered.length > 0 ? answered : ranked).some((o) => o.actionable);
 }
 
 /**

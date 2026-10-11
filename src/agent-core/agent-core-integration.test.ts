@@ -4,6 +4,10 @@ import { ObservationEngine } from "./observation-engine.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { createObservation, type Observer, type AgentObservation } from "./observation-types.js";
 import { parseReasoningResponse } from "./reasoning-prompt.js";
+import { TriggerObserver } from "./observers/trigger-observer.js";
+import { TriggerRegistry } from "../daemon/trigger-registry.js";
+import { TypedEventBus } from "../core/event-bus.js";
+import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { createLogger } from "../utils/logger.js";
 
 createLogger("error", "/dev/null");
@@ -680,6 +684,109 @@ describe("AgentCore OODA Integration", () => {
 
     // No instinct IDs were associated, so recordOutcome should not be called
     expect(instinctRetriever.recordOutcome).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  A trigger fire is context, not a second task                       */
+/* ------------------------------------------------------------------ */
+
+describe("AgentCore — a trigger fire does not become a second task", () => {
+  // The heartbeat has already turned the fire into its own task (or, for a deploy trigger, an
+  // approval); TriggerObserver marks the observation actionable:false for exactly that reason.
+  // Review of 254fa61a: nothing read the flag, so a provider answering "execute" submitted the
+  // trigger's work a second time — the deploy fire the heartbeat stopped submitting on 2026-09-02.
+  function setup(answer: (prompt: string) => Record<string, unknown>, extra: AgentObservation[] = []) {
+    const registry = new TriggerRegistry();
+    registry.register({
+      metadata: { name: "deploy-ready", type: "deploy", description: "Deployment readiness detection" },
+      shouldFire: () => false,
+      onFired: () => {},
+      getNextRun: () => null,
+      getState: () => "active",
+    });
+    const bus = new TypedEventBus<DaemonEventMap>();
+    const engine = new ObservationEngine();
+    engine.register(new TriggerObserver(registry, bus));
+    const pendingExtra = [...extra];
+    engine.register({ name: "extra", collect: () => pendingExtra.splice(0) });
+    const prompts: string[] = [];
+    const provider = {
+      chat: vi.fn(async (_system: string, messages: Array<{ content: string }>) => {
+        const prompt = messages[0]!.content;
+        prompts.push(prompt);
+        return makeLLMResponse(answer(prompt));
+      }),
+    };
+    const submit = vi.fn().mockReturnValue({ id: "task_second01" });
+    const core = new AgentCore(
+      engine, new PriorityScorer(), provider as any,
+      { submit, listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) } as any,
+      { sendText: vi.fn().mockResolvedValue(undefined) } as any,
+      { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) },
+      undefined,
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+    );
+    return { bus, engine, provider, submit, core, prompts };
+  }
+  const idOf = (prompt: string, source: string): string =>
+    new RegExp(`\\[${source}\\] \\(id: ([0-9a-f-]+)`).exec(prompt)![1]!;
+
+  it("an approval-only deploy fire answered with 'execute' submits nothing", async () => {
+    const { bus, provider, submit, core } = setup(() => ({
+      action: "execute", goal: "Deploy the build that is ready", reasoning: "deployment readiness detected",
+    }));
+    bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", timestamp: Date.now() });
+
+    await core.tick();
+
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("a fire whose task is already running, NAMED by 'execute' or 'batch', submits nothing", async () => {
+    for (const action of ["execute", "batch"] as const) {
+      const { bus, submit, core } = setup((prompt) => ({
+        action, goal: "Run the nightly check", batchObservationIds: [idOf(prompt, "trigger")], reasoning: "it fired",
+      }));
+      bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", taskId: "task_first01", timestamp: Date.now() });
+
+      await core.tick();
+
+      expect(submit, action).not.toHaveBeenCalled();
+    }
+  });
+
+  it("the prompt says which observation is informational, and real work beside a fire is still done", async () => {
+    const failure = createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
+    const { bus, submit, core, prompts } = setup(
+      (prompt) => ({ action: "execute", goal: "Fix the build", batchObservationIds: [idOf(prompt, "build")], reasoning: "broken" }),
+      [failure],
+    );
+    bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", taskId: "task_first01", timestamp: Date.now() });
+
+    await core.tick();
+
+    const lines = prompts[0]!.split("\n");
+    expect(lines.find((l) => l.startsWith("- [trigger]"))).toMatch(/informational/);
+    expect(lines.find((l) => l.startsWith("- [build]"))).not.toMatch(/informational/);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]![2]).toBe("Fix the build");
+  });
+
+  it("…but a goal naming only the fire is refused, and the failure beside it comes back", async () => {
+    const failure = createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
+    const { bus, engine, submit, core } = setup(
+      (prompt) => ({ action: "execute", goal: "Deploy now", batchObservationIds: [idOf(prompt, "trigger")], reasoning: "ready" }),
+      [failure],
+    );
+    bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", timestamp: Date.now() });
+
+    await core.tick();
+
+    expect(submit).not.toHaveBeenCalled();
+    // The fire is dropped (it is a report); the build failure is held for another round.
+    expect(engine.getDeferredCount()).toBe(1);
   });
 });
 
