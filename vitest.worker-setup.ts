@@ -19,11 +19,12 @@
  * Set on every file, not defaulted: a file that changed one of them and did
  * not put it back must not hand that to the next file in the worker.
  */
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { join } from "node:path";
 import { afterAll } from "vitest";
+import { newDecoyHome } from "./src/tests/helpers/decoy-home.js";
 
 const runRoot = process.env["STRADA_VITEST_TMP_ROOT"];
 if (runRoot) {
@@ -60,10 +61,7 @@ interface HomedirPatch {
 function installDecoyHome(root: string): void {
   const state = globalThis as typeof globalThis & { __stradaHomedirPatch?: HomedirPatch };
   const patch = (state.__stradaHomedirPatch ??= { realHomedir: os.homedir, realHome: os.homedir(), decoy: "" });
-  mkdirSync(join(root, "user-home"), { recursive: true });
-  // Canonical, as a real home is: macOS's temp root is /var → /private/var,
-  // and code that realpaths a path under home must get back the same string.
-  const decoy = realpathSync(mkdtempSync(join(root, "user-home", "file-")));
+  const decoy = newDecoyHome(root);
   patch.decoy = decoy;
   os.homedir = () => {
     const home = patch.realHomedir();

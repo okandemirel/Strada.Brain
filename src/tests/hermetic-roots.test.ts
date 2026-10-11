@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import os, { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,6 +26,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveProviderModelCatalogPath } from "../agents/providers/provider-model-catalog-store.js";
 import { setSkillEnabled } from "../skills/skill-config.js";
 import { takeSupervisorDeathMarker } from "../core/boot-report.js";
+import { newDecoyHome } from "./helpers/decoy-home.js";
 
 // What the source launcher and the daemon put in their children's environment.
 // A shell they spawned passes them on to the suite.
@@ -131,15 +133,34 @@ describe("the suite's runtime roots", () => {
     expect(JSON.parse(readFileSync(written, "utf8")).entries["hermetic-roots-probe"]).toEqual({ enabled: false });
   });
 
-  it("answers os.homedir() with an empty directory inside the run root, so nothing reaches the user's own ~/.strada", () => {
+  it("answers os.homedir() with an empty directory inside the run root, so nothing reaches the user's own ~/.strada", async () => {
     // Both spellings: `import { homedir }` binds the ESM export, `os.homedir`
     // reads the property.
-    // Canonical, as the decoy is (macOS: /var → /private/var).
-    const decoys = join(realpathSync(runRoot!), "user-home");
+    // Canonical, as the decoy is: the native realpath, which on windows-test
+    // turns the run root's C:\Users\RUNNER~1\… into C:\Users\runneradmin\….
+    const decoys = join(realpathSync.native(runRoot!), "user-home");
     for (const home of [homedir(), os.homedir()]) {
       expect(isInside(decoys, home), `homedir() is ${home}`).toBe(true);
       expect(readdirSync(home)).toEqual([]);
+      // The setup wizard's realpath, compared with homedir() by its tests.
+      expect(await realpath(home), "homedir() as the setup wizard resolves it").toBe(home);
     }
+  });
+
+  it("spells the decoy home as the filesystem does when the run root is spelled through an alias", async ({ skip }) => {
+    // windows-test's tmpdir, and so the run root, is C:\Users\RUNNER~1\…. The
+    // JS realpathSync resolves symlinks only and kept that 8.3 short name,
+    // while the setup wizard's realpath (fs/promises, native) answers
+    // C:\Users\runneradmin\…: every assertion comparing it with homedir()
+    // failed there. Another letter case is the same kind of alias, and one
+    // macOS and Windows both have.
+    const real = realpathSync.native(mkdtempSync(join(runRoot!, "alias-root-")));
+    const alias = join(dirname(real), basename(real).toUpperCase());
+    // A case-sensitive filesystem has no such alias, and no 8.3 names.
+    if (!existsSync(alias)) skip();
+    const decoy = newDecoyHome(alias);
+    expect(decoy).toBe(await realpath(decoy));
+    expect(dirname(decoy)).toBe(join(real, "user-home"));
   });
 
   it("still answers a HOME a test points elsewhere", () => {
