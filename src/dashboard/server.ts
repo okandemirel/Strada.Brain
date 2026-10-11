@@ -163,7 +163,7 @@ export class DashboardServer {
     VAULT_SEARCH_RATE_LIMIT_MAX,
     VAULT_SEARCH_RATE_LIMIT_WINDOW_MS,
   );
-  private dashboardToken?: string;
+  private readonly dashboardToken?: string;
   /** Where this run publishes its local operator credential (COR-13); unset = none. */
   private readonly operatorCredentialFile?: string;
   /** This run's operator token, set only once its file is written. Never logged, never served. */
@@ -271,8 +271,16 @@ export class DashboardServer {
      * and then no request is ever the local operator.
      */
     operatorCredentialFile?: string,
+    /**
+     * WEBSOCKET_DASHBOARD_AUTH_TOKEN. Fixed at construction: it used to arrive
+     * through setDaemonContext, after start() was already serving /api, so
+     * every boot answered without it until the daemon stage finished
+     * (core-bootstrap#2).
+     */
+    dashboardToken?: string,
   ) {
     this.port = port;
+    this.dashboardToken = dashboardToken || undefined;
     this.operatorCredentialFile = operatorCredentialFile;
     this.bindHost = bindHost;
     this.allowedHosts = allowedHosts;
@@ -390,7 +398,6 @@ export class DashboardServer {
     webhookTriggers?: Map<string, WebhookTrigger>;
     webhookSecret?: string;
     webhookRateLimit?: string;
-    dashboardToken?: string;
     identityManager?: IdentityStateManager;
     capabilityManifest?: string;
     startupNotices?: string[];
@@ -421,9 +428,6 @@ export class DashboardServer {
     }
     if (ctx.webhookSecret) {
       this.webhookSecret = ctx.webhookSecret;
-    }
-    if (ctx.dashboardToken) {
-      this.dashboardToken = ctx.dashboardToken;
     }
     if (ctx.webhookRateLimit) {
       const { maxRequests, windowMs } = parseRateLimit(ctx.webhookRateLimit);

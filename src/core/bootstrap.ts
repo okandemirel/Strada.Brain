@@ -1071,8 +1071,23 @@ async function bootstrapImpl(
       // was picked up by Unity discovery (typical case: vault.enabled=false,
       // or non-Unity project), register a plain-codebase vault so the portal
       // shows indexed content instead of "No vaults registered".
+      //
+      // Gated on whether a vault already indexes the project, not on an empty
+      // registry: SelfVault registers above on every default boot, so the
+      // emptiness check never held and the project was never indexed
+      // (core-bootstrap#3). A vault rooted at the project, or a project-code
+      // vault above it, covers it; a self, Obsidian or knowledge vault above
+      // it indexes only its own files.
       try {
-        if (config.unityProjectPath && vaultRegistry.list().length === 0) {
+        const { canonicalVaultPath } = await import("../vault/path-policy.js");
+        const projectRoot = config.unityProjectPath;
+        const projectOwner = projectRoot ? vaultRegistry.resolveVaultForPath(projectRoot) : undefined;
+        const projectIndexed =
+          projectRoot !== undefined &&
+          projectOwner !== undefined &&
+          (projectOwner.kind === "unity-project" ||
+            canonicalVaultPath(projectOwner.rootPath) === canonicalVaultPath(projectRoot));
+        if (config.unityProjectPath && !projectIndexed) {
           const { basename } = await import("node:path");
           const rootPath = config.unityProjectPath;
           const hash = createHash("sha1").update(rootPath).digest("hex").slice(0, 8);
@@ -1104,8 +1119,8 @@ async function bootstrapImpl(
         } else if (!config.unityProjectPath) {
           logger.info("[vault] skipping auto-register: no unityProjectPath configured");
         } else {
-          logger.info("[vault] skipping auto-register: registry already populated", {
-            count: vaultRegistry.list().length,
+          logger.info("[vault] skipping auto-register: project already indexed", {
+            vault: projectOwner?.id,
           });
         }
       } catch (err) {
@@ -2123,7 +2138,6 @@ async function bootstrapImpl(
           webhookTriggers,
           webhookSecret: daemonConfig.triggers.webhookSecret,
           webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
-          dashboardToken: config.websocketDashboard.authToken,
           identityManager,
           capabilityManifest: buildCapabilityManifest(),
           startupNotices: [...new Set(startupNotices)],
@@ -2384,7 +2398,6 @@ async function bootstrapImpl(
   if (dashboard && identityManager && !dashboard["identityManager"]) {
     dashboard.setDaemonContext({
       identityManager,
-      dashboardToken: config.websocketDashboard.authToken,
       startupNotices: [...new Set(startupNotices)],
       autoUpdater,
     });

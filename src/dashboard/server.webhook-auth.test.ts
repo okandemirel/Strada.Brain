@@ -21,10 +21,11 @@ afterEach(async () => {
 });
 
 async function startServer(pushEvent: ReturnType<typeof vi.fn>): Promise<number | undefined> {
-  server = new DashboardServer(0, new MetricsCollector(), () => undefined);
+  server = new DashboardServer(
+    0, new MetricsCollector(), () => undefined, undefined, undefined, undefined, undefined, undefined, "dashboard-token",
+  );
   const trigger = { metadata: { name: "ci" }, pushEvent } as unknown as WebhookTrigger;
   server.setDaemonContext({
-    dashboardToken: "dashboard-token",
     webhookSecret: "hook-secret",
     webhookTriggers: new Map([["ci", trigger]]),
   });

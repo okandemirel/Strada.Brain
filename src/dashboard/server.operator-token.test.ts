@@ -126,10 +126,11 @@ interface Started {
 async function start(options: { dashboardToken?: string } = {}): Promise<Started | null> {
   const file = join(dir, ".strada", "locks", "abc.operator.json");
   const daemon = fakeDaemon();
-  server = new DashboardServer(0, new MetricsCollector(), () => undefined, () => false, [], "127.0.0.1", [], file);
+  server = new DashboardServer(
+    0, new MetricsCollector(), () => undefined, () => false, [], "127.0.0.1", [], file, options.dashboardToken,
+  );
   server.setDaemonContext({
     cliContext: daemon.ctx as unknown as DaemonContext,
-    ...(options.dashboardToken ? { dashboardToken: options.dashboardToken } : {}),
   });
   server.registerConsolidationDeploymentServices({ readinessChecker: daemon.ctx.readinessChecker });
   try {

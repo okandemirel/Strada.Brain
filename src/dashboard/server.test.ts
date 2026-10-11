@@ -310,8 +310,9 @@ describe("DashboardServer", () => {
   it("does not warn about a missing auth token when a dashboard token is configured", async () => {
     loggerWarnSpy.mockClear();
     const metrics = new MetricsCollector();
-    server = new DashboardServer(0, metrics, () => undefined);
-    server.setDaemonContext({ dashboardToken: "test-token" });
+    server = new DashboardServer(
+      0, metrics, () => undefined, undefined, undefined, undefined, undefined, undefined, "test-token",
+    );
     if (!await safeStart(server)) return;
 
     const warned = loggerWarnSpy.mock.calls.some(

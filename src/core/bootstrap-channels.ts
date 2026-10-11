@@ -159,6 +159,9 @@ export async function initializeDashboard(
     // COR-13: the credential `strada daemon …` in a shell uses to reach this
     // runtime's state-changing routes, next to the runtime lock.
     operatorCredentialPath(runtimePaths.configRoot, runtimePaths.installRoot),
+    // Here, not with the daemon context: start() below serves /api at once,
+    // and anything later left it open for the rest of boot (core-bootstrap#2).
+    config.websocketDashboard.authToken,
   );
 
   try {
