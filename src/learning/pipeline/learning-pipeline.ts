@@ -52,6 +52,7 @@ import {
 } from "../types.js";
 import { createBrand, type ToolName, type TimestampMs, type JsonObject } from "../../types/index.js";
 import { seedAllFrameworkConventions } from "../seeds/framework-seeds.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
 /**
  * What a tool call acted on. A repair has to act on the same thing as the
@@ -1020,13 +1021,18 @@ export class LearningPipeline {
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
-  start(): void {
+  /**
+   * @param options.stradaDeps The packages bootstrap found in the project. Core
+   *   is always seeded; Modules and MCP conventions only when these say the
+   *   package is installed, so leaving them out never seeds those two.
+   */
+  start(options: { stradaDeps?: StradaDepsStatus } = {}): void {
     if (this.isRunning || !this.config.enabled) return;
 
     this.isRunning = true;
 
-    // Seed Strada.Core conventions on every boot (idempotent — skips existing patterns)
-    seedAllFrameworkConventions(this.storage).catch((_err) => {
+    // Seed framework conventions on every boot (idempotent — skips existing patterns)
+    seedAllFrameworkConventions(this.storage, options.stradaDeps).catch((_err) => {
       // Seed errors are non-fatal — conventions will be seeded on next boot
     });
 

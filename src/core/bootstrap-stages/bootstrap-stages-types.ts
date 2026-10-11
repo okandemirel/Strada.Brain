@@ -5,6 +5,7 @@ import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { IMemoryManager } from "../../memory/memory.interface.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
 import type { CachedEmbeddingProvider } from "../../rag/embeddings/embedding-cache.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { DashboardServer } from "../../dashboard/server.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
@@ -271,6 +272,7 @@ export interface KnowledgeStageDeps {
     config: Config,
     logger: winston.Logger,
     embeddingProvider?: CachedEmbeddingProvider,
+    stradaDeps?: StradaDepsStatus,
   ) => Promise<LearningResult>;
 }
 

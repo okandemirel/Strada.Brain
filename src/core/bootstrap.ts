@@ -29,7 +29,7 @@ import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { type DIContainer, createContainer } from "./di-container.js";
 import { ToolRegistry, classifyRuntimeToolMetadata } from "./tool-registry.js";
-import { checkStradaDeps } from "../config/strada-deps.js";
+import { checkStradaDeps, type StradaDepsStatus } from "../config/strada-deps.js";
 import type { FrameworkKnowledgeStore } from "../intelligence/framework/framework-knowledge-store.js";
 import { FrameworkStoreHandoff } from "./framework-store-handoff.js";
 import type { FrameworkSyncPipeline } from "../intelligence/framework/framework-sync-pipeline.js";
@@ -772,6 +772,7 @@ async function bootstrapImpl(
       logger,
       cachedEmbeddingProvider,
       startupNotices: runtimeStageNotices,
+      stradaDeps,
     },
     {
       initializeRAG,
@@ -2654,6 +2655,7 @@ async function initializeLearning(
   config: Config,
   logger: winston.Logger,
   embeddingProvider?: CachedEmbeddingProvider,
+  stradaDeps?: StradaDepsStatus,
 ): Promise<LearningResult> {
   const notices: string[] = [];
   try {
@@ -2706,7 +2708,7 @@ async function initializeLearning(
       eventBus,
     );
 
-    pipeline.start();
+    pipeline.start({ stradaDeps });
 
     const { InterventionEngine } = await import("../learning/intervention/intervention-engine.js");
     const interventionEngine = new InterventionEngine(learningStorage);

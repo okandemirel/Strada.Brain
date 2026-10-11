@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type * as winston from "winston";
 import type { Config } from "../../config/config.js";
 import type { CachedEmbeddingProvider } from "../../rag/embeddings/embedding-cache.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import type { IMemoryManager } from "../../memory/memory.interface.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
 import { MetricsStorage } from "../../metrics/metrics-storage.js";
@@ -19,6 +20,8 @@ export async function initializeKnowledgeStage(
     logger: winston.Logger;
     cachedEmbeddingProvider?: CachedEmbeddingProvider;
     startupNotices: string[];
+    /** What bootstrap found installed; the learning seeds depend on it. */
+    stradaDeps?: StradaDepsStatus;
   },
   deps: KnowledgeStageDeps,
 ): Promise<KnowledgeStageResult> {
@@ -36,6 +39,7 @@ export async function initializeKnowledgeStage(
     params.config,
     params.logger,
     params.cachedEmbeddingProvider,
+    params.stradaDeps,
   );
   startupNotices.push(...learningResult.notices);
 
