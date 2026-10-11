@@ -3297,14 +3297,28 @@ export class WebChannel
 
   /**
    * Whether an Origin/Referer is this server's OWN bound origin — the only one
-   * that may be forwarded to the dashboard. A configured proxy origin is trusted
-   * to talk to the portal, but the dashboard's own gate knows nothing about it,
-   * so forwarding it would turn a legitimate proxy topology into a 403 one hop
-   * later. The header is dropped instead and the dashboard sees the portal's
-   * header-less server-to-server read.
+   * that may be forwarded to the dashboard as it is.
    */
   private isOwnBoundOrigin(value: string): boolean {
     return isAllowedOrigin(value, { selfPort: this.boundPort });
+  }
+
+  /**
+   * The Origin/Referer the dashboard is handed for one the browser sent. The
+   * dashboard's same-origin gate trusts loopback ports only, so a configured
+   * proxy origin (round 10 #19) cannot be forwarded as it is — and dropping it
+   * was no better: with no dashboard token, a header-less MUTATION is refused
+   * there too (dashboard#1), so every write from the Vite dev proxy or an HTTPS
+   * reverse proxy got a 403 one hop later. This portal has already accepted
+   * that origin, so it vouches with its OWN origin, the one the dashboard
+   * trusts as the portal's port. Anything this portal does not accept is
+   * dropped, so nothing foreign is laundered through the proxy (13F6 / 4.8).
+   */
+  private dashboardFacingOrigin(value: string | undefined): string | undefined {
+    if (value === undefined) return undefined;
+    if (this.isOwnBoundOrigin(value)) return value;
+    if (this.isSelfOrigin(value)) return `http://127.0.0.1:${this.boundPort}`;
+    return undefined;
   }
 
   /**
@@ -3508,11 +3522,11 @@ export class WebChannel
         // page that merely reached the port.
         proxyHeaders["Authorization"] = `Bearer ${this.options.dashboardAuthToken}`;
       }
-      // Only this portal's own origin is forwarded, so the dashboard's own
-      // same-origin gate never sees a foreign loopback port laundered through
-      // the proxy (13F6 / 4.8).
-      if (originHeader && this.isOwnBoundOrigin(originHeader)) {
-        proxyHeaders["Origin"] = originHeader;
+      // Only an origin this portal accepted is forwarded, and only as one the
+      // dashboard's gate knows (see dashboardFacingOrigin).
+      const forwardedOrigin = this.dashboardFacingOrigin(originHeader);
+      if (forwardedOrigin) {
+        proxyHeaders["Origin"] = forwardedOrigin;
       }
       // WHO IS ASKING travels to the dashboard (round 12 #10). The routes
       // behind this proxy decide per identity — a change-review decision is
@@ -3529,8 +3543,9 @@ export class WebChannel
         proxyHeaders["x-strada-profile-id"] = claimedProfileId;
         proxyHeaders["x-strada-profile-token"] = claimedProfileToken;
       }
-      if (refererHeader && this.isOwnBoundOrigin(refererHeader)) {
-        proxyHeaders["Referer"] = refererHeader;
+      const forwardedReferer = this.dashboardFacingOrigin(refererHeader);
+      if (forwardedReferer) {
+        proxyHeaders["Referer"] = forwardedReferer;
       }
 
       const fetchOpts: RequestInit = {

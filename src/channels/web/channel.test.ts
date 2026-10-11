@@ -1002,10 +1002,22 @@ describe("WebChannel trusted proxy origins (round 10 #19)", () => {
   });
 
   // The dashboard's own gate knows nothing about the portal's proxy origins, so
-  // forwarding one would trade a 403 at the portal for a 403 one hop later.
-  it("does not forward a trusted proxy origin to the dashboard", async () => {
+  // forwarding one would trade a 403 at the portal for a 403 one hop later —
+  // and so did dropping it, for a mutation (dashboard#1). The portal vouches
+  // with its own origin instead; the real round trip is in
+  // channel.proxy-trusted-origin.test.ts.
+  it("forwards the portal's own origin, never the trusted proxy origin, to the dashboard", async () => {
     const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
     const { fetchMock } = await mutate(channel, { origin: VITE, referer: `${VITE}/monitor` });
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers["Origin"]).toBe("http://127.0.0.1:3000");
+    expect(headers["Referer"]).toBe("http://127.0.0.1:3000");
+    await channel.disconnect();
+  });
+
+  it("invents no origin for a header-less read", async () => {
+    const channel = new WebChannel(3000, 3100, { trustedOrigins: [VITE] });
+    const { fetchMock } = await read(channel, {});
     const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
     expect(headers).not.toHaveProperty("Origin");
     expect(headers).not.toHaveProperty("Referer");
