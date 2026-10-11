@@ -42,7 +42,11 @@ export class VaultInitTool {
     }
 
     if (!vault) return { content: vaultNotFound(vaultId, this.registry.ids()), isError: true };
-    await vault.init();
+    // Tracked like bootstrap's vaults: untracked, the agent's vault hint read a
+    // partial count instead of "still indexing" and the portal showed no state.
+    const init = vault.init();
+    this.registry.trackInit(vault, init);
+    await init;
     const watchable = vault as unknown;
     if (hasStartWatch(watchable)) {
       await watchable.startWatch();

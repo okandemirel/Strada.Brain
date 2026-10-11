@@ -723,7 +723,10 @@ export class CommandHandler {
     try {
       const existing = registry.get(target);
       const vault = existing ?? await registry.createAndRegister(target);
-      await vault.init();
+      // Tracked so the agent's vault hint and the portal see it indexing.
+      const init = vault.init();
+      registry.trackInit(vault, init);
+      await init;
       if (hasStartWatch(vault)) {
         await vault.startWatch();
       }

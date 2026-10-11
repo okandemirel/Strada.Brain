@@ -338,12 +338,15 @@ describe("CommandHandler /vault", () => {
       }),
     };
     const createAndRegister = vi.fn().mockResolvedValue(vault);
+    // Tracked, so the agent's vault hint and the portal see it indexing.
+    const trackInit = vi.fn();
     const handler = new CommandHandler(
       {} as never,
       { sendMarkdown, sendText } as never,
     );
     handler.setVaultRegistry({
       createAndRegister,
+      trackInit,
       list: () => [vault],
       get: (id: string) => id === "unity:new" ? vault : undefined,
     } as never);
@@ -352,6 +355,7 @@ describe("CommandHandler /vault", () => {
 
     expect(createAndRegister).toHaveBeenCalledWith("/tmp/project");
     expect(vault.init).toHaveBeenCalled();
+    expect(trackInit).toHaveBeenCalledWith(vault, expect.any(Promise));
     expect(vault.startWatch).toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledWith(
       "chat-1",

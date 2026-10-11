@@ -63,8 +63,12 @@ describe("which codebases get indexed", () => {
     const block = source.slice(at, at + 1500);
 
     expect(at, "bootstrap never asks which codebases to index").toBeGreaterThan(-1);
-    expect(block).toContain("vaultRegistry.register(vault, target.name)");
-    expect(block, "a vault that is never initialised indexes nothing").toContain("vault.init()");
+    // indexInBackground registers the vault under the target's name, runs its
+    // init and tracks it: a vault that is never initialised indexes nothing,
+    // and an untracked one reads "untracked" instead of "still indexing".
+    expect(block, "the target is never registered, initialised and tracked").toMatch(
+      /indexInBackground\(\s*vaultRegistry,\s*vault,[\s\S]*?target\.name,\s*\)/,
+    );
     expect(block, "the whole-repo Strada.Brain vault must stay skippable").toContain(
       't.name !== "Strada.Brain"',
     );
