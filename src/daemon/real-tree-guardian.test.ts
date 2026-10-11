@@ -421,6 +421,185 @@ describe("one fix task cannot hold the tree forever", () => {
     await guardian.tick({ ignoreForeground: true });
     expect(cancelled).toEqual(["task_fix1"]);
   });
+
+  /**
+   * Review of the queue-time fix (daemon#1 rework): with the budget no longer
+   * running for a queued fix, nothing re-verified the tree while it waited.
+   * A tree that sprint write-backs healed stayed reported red, the recovery
+   * was announced hours late, and the stale fix still ran on the real tree.
+   */
+  it("keeps verifying while the fix waits in the queue: red is not counted, green withdraws the fix and announces the recovery", async () => {
+    const { manager, submitted, cancelled } = makeTaskManager({ active: true, status: { status: TaskStatus.pending } });
+    const messages: string[] = [];
+    let green = false;
+    const verify = vi.fn(async () =>
+      green
+        ? { ok: true, ran: true, detail: "compile succeeded" }
+        : { ok: false, ran: true, detail: "Headless compile failed with 7 error(s)" },
+    );
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify,
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });   // red: fix submitted, queued behind the sprint
+    for (let i = 0; i < 6; i++) {                      // two hours of write-backs that change nothing
+      t += 20 * 60_000;
+      await guardian.tick({ ignoreForeground: true });
+    }
+    expect(verify).toHaveBeenCalledTimes(7);
+    expect(guardian.snapshot()).toMatchObject({
+      lastVerdict: "red",
+      lastCheckedAt: t,
+      fixTaskId: "task_fix1",
+      fixAttempts: 1,
+      attemptsWithoutProgress: 0,
+      escalated: false,
+    });
+    expect(submitted).toHaveLength(1);
+    expect(cancelled).toEqual([]);
+
+    green = true;                                      // a sprint write-back heals the tree
+    t += 20 * 60_000;
+    await guardian.tick({ ignoreForeground: true });
+    expect(cancelled).toEqual(["task_fix1"]);          // the queued fix is no longer needed
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "green", lastCheckedAt: t, fixAttempts: 0 });
+    expect(guardian.snapshot().fixTaskId).toBeUndefined();
+    expect(messages.filter((m) => m.includes("compiles again"))).toHaveLength(1);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("a queued fix that starts while the verdict is taken is not withdrawn by it", async () => {
+    const opts: { active: boolean; status: unknown } = { active: true, status: { status: TaskStatus.pending } };
+    const { manager, cancelled } = makeTaskManager(opts);
+    let green = false;
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => {
+        if (!green) return { ok: false, ran: true, detail: "Headless compile failed with 7 error(s)" };
+        opts.status = { status: TaskStatus.executing };   // the sprint ended mid-compile
+        return { ok: true, ran: true, detail: "compile succeeded" };
+      }),
+      projectRoot: "/p",
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });
+    green = true;
+    t += 20 * 60_000;
+    await guardian.tick({ ignoreForeground: true });
+    expect(cancelled).toEqual([]);
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "green", fixTaskId: "task_fix1" });
+  });
+
+  /**
+   * The cancel counted the overrun as an attempt without progress, and the
+   * verdict taken right after counted the same attempt again. Probed on the
+   * queue-time fix: two real overruns told the user "NOT converging — 4
+   * attempts in a row failed" after two fix tasks had run.
+   */
+  it("counts an overrun once: two overrunning fixes are two attempts, the third escalates", async () => {
+    const { manager, submitted, cancelled } = makeTaskManager({ status: { status: TaskStatus.executing } });
+    const messages: string[] = [];
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: false, ran: true, detail: "Headless compile failed with 4 error(s)" })),
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => t,
+    });
+    const overrun = async () => {
+      t += 15 * 60_000;
+      await guardian.tick();                           // first seen running
+      t += 50 * 60_000;
+      await guardian.tick();                           // 50 minutes in: taken back, re-verified
+    };
+
+    await guardian.tick();                             // red: the first fix
+    await overrun();
+    expect(cancelled).toHaveLength(1);
+    expect(guardian.snapshot().attemptsWithoutProgress).toBe(1);
+    await overrun();
+    expect(cancelled).toHaveLength(2);
+    expect(guardian.snapshot().attemptsWithoutProgress).toBe(2);
+    expect(messages.filter((m) => m.includes("NOT converging"))).toEqual([]);
+    expect(submitted).toHaveLength(3);
+
+    await overrun();
+    const escalation = messages.filter((m) => m.includes("NOT converging"));
+    expect(escalation).toHaveLength(1);
+    expect(escalation[0]).toContain("3 attempts in a row");
+  });
+});
+
+describe("the play rung's fix waits in the same queue", () => {
+  it("a queued play fix is played again, not withdrawn by a green compile, and withdrawn once the game plays", async () => {
+    const { manager, submitted, cancelled } = makeTaskManager({ active: true, status: { status: TaskStatus.pending } });
+    let playable = false;
+    const play = vi.fn(async () =>
+      playable
+        ? { ok: true, ran: true, detail: "PLAY-THROUGH OK" }
+        : { ok: false, ran: true, detail: "session 1 never ended after 60 actions" },
+    );
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () => ({ ok: true, ran: true, detail: "compile succeeded" })),
+      play,
+      projectRoot: "/p",
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });   // compiles, cannot be played: play fix queued
+    expect(submitted).toHaveLength(1);
+    t += 30 * 60_000;
+    await guardian.tick({ ignoreForeground: true });   // still unplayable: the queued fix still has work
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(cancelled).toEqual([]);
+    expect(submitted).toHaveLength(1);
+    expect(guardian.snapshot()).toMatchObject({ fixTaskId: "task_fix1", playFixAttempts: 1, lastPlayVerdict: "failed" });
+
+    playable = true;                                   // a write-back made it playable
+    t += 30 * 60_000;
+    await guardian.tick({ ignoreForeground: true });
+    expect(play).toHaveBeenCalledTimes(3);
+    expect(cancelled).toEqual(["task_fix1"]);
+    expect(guardian.snapshot().fixTaskId).toBeUndefined();
+    expect(guardian.snapshot().lastPlayVerdict).toBe("ok");
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("a queued play fix gives way to a compile fix when the tree stops compiling", async () => {
+    const { manager, submitted, cancelled } = makeTaskManager({ active: true, status: { status: TaskStatus.pending } });
+    let compiles = true;
+    let t = 1_000_000;
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () =>
+        compiles
+          ? { ok: true, ran: true, detail: "compile succeeded" }
+          : { ok: false, ran: true, detail: "Headless compile failed with 2 error(s)" },
+      ),
+      play: vi.fn(async () => ({ ok: false, ran: true, detail: "session 1 never ended after 60 actions" })),
+      projectRoot: "/p",
+      now: () => t,
+    });
+
+    await guardian.tick({ ignoreForeground: true });   // play fix queued
+    compiles = false;                                  // a write-back broke the build
+    t += 20 * 60_000;
+    await guardian.tick({ ignoreForeground: true });
+    expect(cancelled).toEqual(["task_fix1"]);
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]!.prompt).toContain("does not compile");
+    expect(guardian.snapshot()).toMatchObject({ lastVerdict: "red", fixTaskId: "task_fix1", fixAttempts: 1, attemptsWithoutProgress: 0 });
+  });
 });
 
 describe("the fix task is told the errors, not the whole verdict", () => {

@@ -106,8 +106,8 @@ const GREEN_HEARTBEAT_MS = 60 * 60_000;
  */
 const PLAY_MIN_INTERVAL_MS = 20 * 60_000;
 /**
- * How long ONE fix task may stay in flight before the guardian takes the tree
- * back.
+ * How long ONE fix task may run, counted from the first tick that sees it out
+ * of the queue, before the guardian takes the tree back.
  *
  * Measured live 2026-09-05 09:00–09:50, with a single owner and the
  * convergence guard already in place: one fix task ran 35+ minutes and drove
@@ -275,6 +275,8 @@ export class RealTreeGuardian {
    * over-counts one.
    */
   private fixTaskRunningSince = 0;
+  /** The rung the fix in the slot was submitted for: only that rung's verdict can make it unneeded. */
+  private fixRung: "compile" | "play" = "compile";
   private nextVerifyAt = 0;
   /** Fingerprint of the error list the current attempt streak is fixing. */
   private redFingerprint: string | undefined;
@@ -383,6 +385,9 @@ export class RealTreeGuardian {
       // In flight means ANY active status — a daemon task legitimately queues
       // as `pending` behind foreground work; reading that as "did not complete"
       // duplicated the fix task every tick (measured 2026-08-28 02:17).
+      // A fix that has not left the queue is not touching the tree, so the
+      // tree is verified while it waits; see `queuedFixId` below.
+      let queuedFixId: string | undefined;
       if (this.fixTaskId) {
         const fix = this.taskManager.getStatus(this.fixTaskId as TaskId);
         if (fix && ACTIVE_STATUSES.has(fix.status)) {
@@ -397,8 +402,9 @@ export class RealTreeGuardian {
             // Take the tree back. The task is looping inside itself and the
             // guardian cannot see it: from out here a 45-minute fix and a
             // 45-minute thrash look identical, and only one of them is worth
-            // waiting for. Cancelling counts as an attempt that did not
-            // improve anything, so the convergence guard can finally reach it.
+            // waiting for. The verdict below judges the cancelled attempt
+            // like any attempt that ended; counting it here as well counted
+            // every overrun twice.
             getLoggerSafe().warn("Real-tree fix task overran its budget — cancelling and re-diagnosing", {
               fixTaskId: this.fixTaskId,
               ranForMinutes: Math.round(ranForMs / 60_000),
@@ -411,12 +417,19 @@ export class RealTreeGuardian {
             this.fixTaskId = undefined;
             this.fixTaskStartedAt = 0;
             this.fixTaskRunningSince = 0;
-            this.attemptsWithoutProgress += 1;
+          } else if (fix.status === TaskStatus.pending) {
+            // Still queued (behind a sprint, for as long as it runs). Keep the
+            // slot and verify anyway: with no budget running for a queued fix,
+            // returning here left the tree unverified until the fix started,
+            // so a tree that write-backs healed read red for hours and the
+            // stale fix still ran on it. Nothing has run, so a red verdict
+            // counts nothing; a green one withdraws the fix.
+            queuedFixId = this.fixTaskId;
           } else {
             return;
           }
         }
-        if (this.fixTaskId) {
+        if (this.fixTaskId && !queuedFixId) {
           const settledOk = fix && (fix as { status?: string }).status === "completed";
           const finishedId = this.fixTaskId;
           this.fixTaskId = undefined;
@@ -446,6 +459,9 @@ export class RealTreeGuardian {
       this.blindStreak = 0;
       this.blindReported = false;
       if (verdict.ok) {
+        // A queued compile fix has nothing left to do. A queued play fix is
+        // judged by the play rung, not by this verdict.
+        if (queuedFixId && this.fixRung === "compile") this.withdrawQueuedFix(queuedFixId);
         this.lastVerdict = "green";
         this.lastErrorCount = 0;
         this.lastDetail = "";
@@ -470,7 +486,7 @@ export class RealTreeGuardian {
           getLoggerSafe().info("Real-tree guardian: tree is green", { projectRoot: this.projectRoot });
           this.lastGreenNoteAt = now;
         }
-        await this.maybePlay();
+        await this.maybePlay(queuedFixId && this.fixRung === "play" && this.isQueued(queuedFixId) ? queuedFixId : undefined);
         return;
       }
       this.wasRed = true;
@@ -488,6 +504,12 @@ export class RealTreeGuardian {
       this.lastVerdict = "red";
       this.lastErrorCount = errors;
       this.lastDetail = compactCompileDetail(verdict.detail).slice(0, 300);
+      if (queuedFixId) {
+        // A queued compile fix already carries this job, and no attempt has
+        // ended that this verdict could count. A queued play fix was written
+        // for a tree that compiled, so it gives way to a compile fix.
+        if (this.fixRung === "compile" || !this.withdrawQueuedFix(queuedFixId)) return;
+      }
       if (errors !== undefined) {
         if (errors < this.bestErrorCount) {
           this.bestErrorCount = errors;
@@ -562,6 +584,7 @@ export class RealTreeGuardian {
       this.fixTaskId = task.id;
       this.fixTaskStartedAt = this.now();
       this.fixTaskRunningSince = 0;
+      this.fixRung = "compile";
       this.nextVerifyAt = this.now() + POST_FIX_QUIET_MS;
       if (this.messenger) {
         await this.messenger(
@@ -586,9 +609,12 @@ export class RealTreeGuardian {
    * since the last play-through, never more often than PLAY_MIN_INTERVAL_MS.
    * A failed play-through is a red tree of its own kind: one fix task per
    * fingerprint, the same attempt cap, the same quiet period.
+   *
+   * `queuedFix` is a play fix still waiting in the queue: the game is played
+   * anyway, and a play-through that is ok withdraws it.
    */
-  private async maybePlay(): Promise<void> {
-    if (!this.play || !this.playDirty || this.fixTaskId) return;
+  private async maybePlay(queuedFix?: string): Promise<void> {
+    if (!this.play || !this.playDirty || (this.fixTaskId && this.fixTaskId !== queuedFix)) return;
     const now = this.now();
     if (this.lastPlayedAt > 0 && now - this.lastPlayedAt < PLAY_MIN_INTERVAL_MS) return;
     this.lastPlayedAt = now;
@@ -618,6 +644,8 @@ export class RealTreeGuardian {
       return;
     }
     if (verdict.ok) {
+      // Started meanwhile: it will write to the tree, so play again after it.
+      if (queuedFix && !this.withdrawQueuedFix(queuedFix)) this.playDirty = true;
       const recovered = this.lastPlayVerdict === "failed";
       this.lastPlayVerdict = "ok";
       this.lastPlayDetail = "";
@@ -631,6 +659,12 @@ export class RealTreeGuardian {
     }
     this.lastPlayVerdict = "failed";
     this.lastPlayDetail = verdict.detail.slice(0, 300);
+    if (queuedFix) {
+      // The queued fix still carries this job and nothing has run to count;
+      // it will write to the tree, so the obligation to play again stands.
+      this.playDirty = true;
+      return;
+    }
     const fingerprint = createHash("sha256").update(verdict.detail).digest("hex").slice(0, 16);
     if (fingerprint === this.playFingerprint) {
       if (this.playFixAttempts >= MAX_FIX_ATTEMPTS_PER_FINGERPRINT) {
@@ -669,6 +703,7 @@ export class RealTreeGuardian {
     this.fixTaskId = task.id;
     this.fixTaskStartedAt = now;
     this.fixTaskRunningSince = 0;
+    this.fixRung = "play";
     this.playDirty = true; // the fix will write back; play again after it
     this.nextVerifyAt = now + POST_FIX_QUIET_MS;
     if (this.messenger) {
@@ -677,6 +712,31 @@ export class RealTreeGuardian {
         `⚠️ The project compiles but cannot be played — I'm fixing it autonomously (attempt ${this.playFixAttempts}/${MAX_FIX_ATTEMPTS_PER_FINGERPRINT}).\n\`\`\`\n${verdict.detail.slice(0, 500)}\n\`\`\``,
       ).catch(() => undefined);
     }
+  }
+
+  /** The fix in the slot is `id` and has not left the queue. */
+  private isQueued(id: string): boolean {
+    return this.fixTaskId === id && this.taskManager.getStatus(id as TaskId)?.status === TaskStatus.pending;
+  }
+
+  /**
+   * Take back a fix that never left the queue, because the rung it was
+   * submitted for measured healthy without it. Nothing ran, so nothing is
+   * counted. False when it started while the verdict was being taken: a
+   * running fix is waited for like any other.
+   */
+  private withdrawQueuedFix(id: string): boolean {
+    if (!this.isQueued(id)) return false;
+    try {
+      this.taskManager.cancel(id as TaskId);
+    } catch {
+      /* already settled */
+    }
+    this.fixTaskId = undefined;
+    this.fixTaskStartedAt = 0;
+    this.fixTaskRunningSince = 0;
+    getLoggerSafe().info("Real-tree guardian withdrew a queued fix the tree no longer needs", { fixTaskId: id });
+    return true;
   }
 
   snapshot(): RealTreeGuardianSnapshot {
