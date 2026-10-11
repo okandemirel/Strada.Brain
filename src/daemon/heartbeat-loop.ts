@@ -38,12 +38,33 @@ import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type * as winston from "winston";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import { hasBudgetLimit } from "../budget/budget-types.js";
 
 /**
  * Hysteresis for the daemon:budget_warning latch: once warned, usage must fall
  * this far below warnPct before a new warning can fire (audited 2026-09-02).
  */
 const BUDGET_WARN_DEAD_BAND = 0.05;
+
+/**
+ * The unified global window that stopped the daemon, with its recorded spend
+ * and limit: the fuller of the limited daily/monthly windows, the one
+ * checkAndEmitEvents reports. Called only once isGlobalExceeded() is true —
+ * that gate also counts work still in flight, so recorded spend under the
+ * limit means reservations filled the rest, and the reason says so.
+ */
+function globalBudgetWall(manager: UnifiedBudgetManager): { usedUsd: number; limitUsd: number; reason: string } {
+  const { daily, monthly } = manager.getSnapshot().global;
+  const windows = [{ name: "daily", ...daily }, { name: "monthly", ...monthly }]
+    .filter((w) => hasBudgetLimit(w.limitUsd));
+  const wall = windows.reduce((a, b) => (b.pct > a.pct ? b : a), windows[0] ?? { name: "daily", ...daily });
+  const held = wall.usedUsd < wall.limitUsd ? ", the rest reserved by work in flight" : "";
+  return {
+    usedUsd: wall.usedUsd,
+    limitUsd: wall.limitUsd,
+    reason: `the global ${wall.name} budget is exhausted ($${wall.usedUsd.toFixed(2)} of $${wall.limitUsd.toFixed(2)}${held})`,
+  };
+}
 
 /**
  * Ledger retention (TSK-20). Budget entries outlive every reporting window
@@ -148,6 +169,8 @@ export class HeartbeatLoop {
    * a whole day) instead of once per crossing.
    */
   private daemonSubLimitExceededEmitted = false;
+  /** Same latch for the unified global daily/monthly wall (audited 2026-10-11, daemon#2). */
+  private globalBudgetExceededEmitted = false;
 
   /** Consolidation state (Phase 25) */
   private consolidationEngine?: ConsolidationEngineContract;
@@ -594,9 +617,22 @@ export class HeartbeatLoop {
     if (!manager) return undefined;
     manager.checkAndEmitEvents();
     if (manager.isGlobalExceeded()) {
-      this.eventBus.emit("daemon:budget_exceeded", { source: "unified", timestamp: now.getTime() } as never);
-      return "the global daily budget is exhausted";
+      // Audited 2026-10-11 (daemon#2): this emit carried no amounts (cast
+      // `as never`), so the router's formatter threw and the only channel
+      // notice that the daemon had stopped was dropped — once per tick, unlatched.
+      const wall = globalBudgetWall(manager);
+      if (!this.globalBudgetExceededEmitted) {
+        this.eventBus.emit("daemon:budget_exceeded", {
+          source: "unified",
+          usedUsd: wall.usedUsd,
+          limitUsd: wall.limitUsd,
+          timestamp: now.getTime(),
+        });
+        this.globalBudgetExceededEmitted = true;
+      }
+      return wall.reason;
     }
+    this.globalBudgetExceededEmitted = false;
     // The portal's "Daemon daily sub-limit" (subLimits.daemonDailyUsd) was
     // accepted, persisted and displayed but read by nothing on the dispatch
     // path — isSourceExceeded() had no production caller, so the setting
@@ -613,7 +649,7 @@ export class HeartbeatLoop {
           usedUsd,
           limitUsd,
           timestamp: now.getTime(),
-        } as never);
+        });
         this.daemonSubLimitExceededEmitted = true;
       }
       this.logger.info("Daemon daily sub-limit reached — triggers skipped", { usedUsd, limitUsd });
@@ -644,15 +680,20 @@ export class HeartbeatLoop {
       // Fall back to unified budget manager when dailyBudgetUsd is undefined
       const globalExceeded = this.unifiedBudgetManager.isGlobalExceeded();
       if (globalExceeded) {
-        if (!this.budgetExceededEmitted) {
+        // The global wall's own amounts (this sent the daemon's spend against a
+        // limit of $0.00), under the tick gate's latch: the next tick's gate
+        // sees the same wall and must not announce it a second time.
+        const wall = globalBudgetWall(this.unifiedBudgetManager);
+        if (!this.globalBudgetExceededEmitted) {
           this.eventBus.emit("daemon:budget_exceeded", {
-            usedUsd: budgetUsage.usedUsd,
-            limitUsd: 0,
+            source: "unified",
+            usedUsd: wall.usedUsd,
+            limitUsd: wall.limitUsd,
             timestamp: now.getTime(),
           });
-          this.budgetExceededEmitted = true;
+          this.globalBudgetExceededEmitted = true;
         }
-        return "the global daily budget is exhausted";
+        return wall.reason;
       } else if (this.budgetExceededEmitted) {
         this.budgetExceededEmitted = false;
         this.budgetWarningEmitted = false;

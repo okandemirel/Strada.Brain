@@ -18,6 +18,12 @@ import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
+import { TypedEventBus } from "../core/event-bus.js";
+import { DaemonStorage } from "./daemon-storage.js";
+import { NotificationRouter } from "./reporting/notification-router.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // =============================================================================
 // MOCKS
@@ -1331,6 +1337,156 @@ describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", 
     await loop.tick();
     expect(breaches()).toHaveLength(2);
     expect(breaches()[1]![1]).toMatchObject({ usedUsd: 6, limitUsd: 5 });
+  });
+});
+
+describe("HeartbeatLoop — the global budget wall reaches the operator once per crossing (audit daemon#2)", () => {
+  // tick() returns at the global wall before any trigger or AgentCore runs, so
+  // this emit is the only channel notice that the daemon stopped. It carried
+  // no usedUsd/limitUsd (cast `as never`), the router's formatter threw on it,
+  // safeHandler dropped the notification — and it was re-emitted every tick.
+  let tmpDir: string;
+  let notifStorage: DaemonStorage;
+  let bus: TypedEventBus<DaemonEventMap>;
+  let router: NotificationRouter;
+  let loop: HeartbeatLoop;
+  let taskManager: ReturnType<typeof makeTaskManager>;
+  let registry: TriggerRegistry;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "hb-global-wall-"));
+    notifStorage = new DaemonStorage(join(tmpDir, "daemon.db"));
+    notifStorage.initialize();
+    bus = new TypedEventBus<DaemonEventMap>();
+    router = new NotificationRouter({
+      config: {
+        minLevel: "low",
+        routing: { silent: ["dashboard"], low: ["dashboard"], medium: ["dashboard"], high: ["chat", "dashboard"], critical: ["chat", "dashboard"] },
+        groupingWindowMs: 30_000,
+      },
+      quietHoursConfig: { enabled: false, startHour: 22, endHour: 8, timezone: "UTC", bufferMax: 100 },
+      eventBus: bus,
+      storage: notifStorage,
+      channelSender: { sendText: vi.fn().mockResolvedValue(undefined), sendMarkdown: vi.fn().mockResolvedValue(undefined) },
+      chatId: "operator",
+    });
+    router.start();
+    registry = new TriggerRegistry();
+    taskManager = makeTaskManager();
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, makeBudgetTracker() as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, bus,
+      makeDaemonConfig(), makeLogger() as any,
+    );
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+  });
+
+  afterEach(() => {
+    loop.stop();
+    router.stop();
+    notifStorage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function delivered(): Promise<string[]> {
+    for (let i = 0; i < 50; i++) {
+      const messages = notifStorage.getNotificationHistory(10).map((h) => h.message);
+      if (messages.length > 0) return messages;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return [];
+  }
+
+  it("notifies with the amounts and emits once while spend stays over, then re-arms", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ dailyLimitUsd: 5 });
+    mgr.recordCost(6, "chat", {});
+    expect(mgr.isGlobalExceeded()).toBe(true);
+    loop.setUnifiedBudgetManager(mgr);
+    const emitSpy = vi.spyOn(bus, "emit");
+    const walls = () => emitSpy.mock.calls.filter((c) => c[0] === "daemon:budget_exceeded");
+    loop.start();
+
+    await loop.tick();
+    await loop.tick();
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(walls()).toHaveLength(1);
+    expect(walls()[0]![1]).toMatchObject({ source: "unified", usedUsd: 6, limitUsd: 5 });
+    expect(await delivered()).toContain("Budget exhausted: $6.00 / $5.00");
+
+    // The operator raises the limit: the daemon dispatches and the latch re-arms.
+    mgr.updateConfig({ dailyLimitUsd: 100 });
+    await loop.tick();
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    mgr.updateConfig({ dailyLimitUsd: 5 });
+    await loop.tick();
+    expect(walls()).toHaveLength(2);
+  });
+
+  it("reports the monthly wall's amounts when the monthly limit is the one reached", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ monthlyLimitUsd: 20 });
+    mgr.recordCost(25, "agent", { agentId: "a1" });
+    loop.setUnifiedBudgetManager(mgr);
+    const emitSpy = vi.spyOn(bus, "emit");
+    loop.start();
+
+    const outcome = loop.fireNow("t1");
+
+    expect(outcome).toMatchObject({ status: "refused", gate: "budget_exceeded" });
+    expect((outcome as { reason?: string }).reason).toContain("monthly");
+    const wall = emitSpy.mock.calls.find((c) => c[0] === "daemon:budget_exceeded");
+    expect(wall?.[1]).toMatchObject({ source: "unified", usedUsd: 25, limitUsd: 20 });
+    expect(await delivered()).toContain("Budget exhausted: $25.00 / $20.00");
+  });
+
+  it("gives the per-trigger fallback the wall's amounts too, not the daemon's spend against $0.00", async () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ dailyLimitUsd: 5 });
+    mgr.recordCost(6, "chat", {});
+    // The tick's own gate read the wall as clear; the spend crossed it before
+    // the trigger's budget check (a cost recorded mid-tick).
+    vi.spyOn(mgr, "isGlobalExceeded").mockReturnValueOnce(false);
+    const noDaemonLimit = { ...makeBudgetTracker(), getUsage: vi.fn(() => ({ usedUsd: 0.5, limitUsd: undefined, pct: 0 })) };
+    const fallbackLoop = new HeartbeatLoop(
+      registry, taskManager as any, noDaemonLimit as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, bus,
+      makeDaemonConfig(), makeLogger() as any,
+    );
+    fallbackLoop.setUnifiedBudgetManager(mgr);
+    const emitSpy = vi.spyOn(bus, "emit");
+    const walls = () => emitSpy.mock.calls.filter((c) => c[0] === "daemon:budget_exceeded");
+    fallbackLoop.start();
+    try {
+      await fallbackLoop.tick();
+      // The next tick's gate sees the same wall: one crossing, one notice.
+      await fallbackLoop.tick();
+    } finally {
+      fallbackLoop.stop();
+    }
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(walls()).toHaveLength(1);
+    expect(walls()[0]![1]).toMatchObject({ source: "unified", usedUsd: 6, limitUsd: 5 });
+    expect(await delivered()).toContain("Budget exhausted: $6.00 / $5.00");
+  });
+
+  it("says when work in flight, not recorded spend, filled the window", () => {
+    const mgr = new UnifiedBudgetManager(makeBudgetStorage(), { emit: () => {} }, {});
+    mgr.updateConfig({ dailyLimitUsd: 5 });
+    mgr.recordCost(2, "chat", {});
+    // isGlobalExceeded() also counts outstanding reservations, which the
+    // snapshot's recorded spend does not show.
+    vi.spyOn(mgr, "isGlobalExceeded").mockReturnValue(true);
+    loop.setUnifiedBudgetManager(mgr);
+    loop.start();
+
+    expect(loop.fireNow("t1")).toEqual({
+      status: "refused",
+      gate: "budget_exceeded",
+      reason: "the global daily budget is exhausted ($2.00 of $5.00, the rest reserved by work in flight)",
+    });
   });
 });
 

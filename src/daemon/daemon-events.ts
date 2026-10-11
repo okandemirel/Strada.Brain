@@ -49,6 +49,8 @@ export interface BudgetWarningEvent {
 
 /** Emitted when budget is fully exhausted */
 export interface BudgetExceededEvent {
+  /** The wall that stopped the daemon ("unified", "unified:daemon-sublimit"); absent for the daemon's own budget. */
+  readonly source?: string;
   readonly usedUsd: number;
   readonly limitUsd: number;
   readonly timestamp: number;
