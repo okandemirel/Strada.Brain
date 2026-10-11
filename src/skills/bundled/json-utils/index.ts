@@ -83,22 +83,53 @@ interface Difference {
   newValue?: unknown;
 }
 
+const MAX_DIFF_DEPTH = 50;
+const MAX_DIFF_COUNT = 1000;
+const MAX_NAMED_DEEP_PATHS = 5;
+
+/**
+ * The differences a walk collected, and what its limits kept it from comparing.
+ * Both limits used to end the walk silently, so nesting past depth 50 read as
+ * "No differences found." and a capped list as the complete one.
+ */
+interface DiffWalk {
+  diffs: Difference[];
+  /** Pairs of unequal values past MAX_DIFF_DEPTH that were not compared. */
+  deepSkipped: number;
+  deepPaths: string[];
+  /** The walk reached MAX_DIFF_COUNT with input still left to compare. */
+  countCapped: boolean;
+}
+
+function record(walk: DiffWalk, diff: Difference): void {
+  if (walk.diffs.length >= MAX_DIFF_COUNT) {
+    walk.countCapped = true;
+    return;
+  }
+  walk.diffs.push(diff);
+}
+
 /**
  * Recursively compare two values and collect differences.
  */
-const MAX_DIFF_DEPTH = 50;
-const MAX_DIFF_COUNT = 1000;
-
-function diffValues(a: unknown, b: unknown, path: string, diffs: Difference[], depth = 0): void {
-  // Guard against pathological input
-  if (depth > MAX_DIFF_DEPTH || diffs.length >= MAX_DIFF_COUNT) return;
-
+function diffValues(a: unknown, b: unknown, path: string, walk: DiffWalk, depth = 0): void {
   // Same value (handles primitives and null)
   if (a === b) return;
 
+  // Guard against pathological input
+  if (walk.diffs.length >= MAX_DIFF_COUNT) {
+    walk.countCapped = true;
+    return;
+  }
+  if (depth > MAX_DIFF_DEPTH) {
+    walk.deepSkipped++;
+    if (walk.deepPaths.length < MAX_NAMED_DEEP_PATHS) walk.deepPaths.push(path || "(root)");
+    return;
+  }
+
   // Type mismatch or one is null
   if (typeof a !== typeof b || a === null || b === null) {
-    diffs.push({ type: "changed", path: path || "(root)", oldValue: a, newValue: b });
+    record(walk, { type: "changed", path: path || "(root)", oldValue: a, newValue: b });
     return;
   }
 
@@ -108,19 +139,20 @@ function diffValues(a: unknown, b: unknown, path: string, diffs: Difference[], d
     for (let i = 0; i < maxLen; i++) {
       const itemPath = path ? `${path}[${i}]` : `[${i}]`;
       if (i >= a.length) {
-        diffs.push({ type: "added", path: itemPath, newValue: b[i] });
+        record(walk, { type: "added", path: itemPath, newValue: b[i] });
       } else if (i >= b.length) {
-        diffs.push({ type: "removed", path: itemPath, oldValue: a[i] });
+        record(walk, { type: "removed", path: itemPath, oldValue: a[i] });
       } else {
-        diffValues(a[i], b[i], itemPath, diffs, depth + 1);
+        diffValues(a[i], b[i], itemPath, walk, depth + 1);
       }
+      if (walk.countCapped) return;
     }
     return;
   }
 
   // One is array, other is not
   if (Array.isArray(a) !== Array.isArray(b)) {
-    diffs.push({ type: "changed", path: path || "(root)", oldValue: a, newValue: b });
+    record(walk, { type: "changed", path: path || "(root)", oldValue: a, newValue: b });
     return;
   }
 
@@ -133,18 +165,19 @@ function diffValues(a: unknown, b: unknown, path: string, diffs: Difference[], d
     for (const key of allKeys) {
       const childPath = path ? `${path}.${key}` : key;
       if (!(key in objA)) {
-        diffs.push({ type: "added", path: childPath, newValue: objB[key] });
+        record(walk, { type: "added", path: childPath, newValue: objB[key] });
       } else if (!(key in objB)) {
-        diffs.push({ type: "removed", path: childPath, oldValue: objA[key] });
+        record(walk, { type: "removed", path: childPath, oldValue: objA[key] });
       } else {
-        diffValues(objA[key], objB[key], childPath, diffs, depth + 1);
+        diffValues(objA[key], objB[key], childPath, walk, depth + 1);
       }
+      if (walk.countCapped) return;
     }
     return;
   }
 
   // Primitive values that differ
-  diffs.push({ type: "changed", path: path || "(root)", oldValue: a, newValue: b });
+  record(walk, { type: "changed", path: path || "(root)", oldValue: a, newValue: b });
 }
 
 /**
@@ -258,7 +291,9 @@ const jsonQuery: ITool = {
 
 const jsonDiff: ITool = {
   name: "json_diff",
-  description: "Compare two JSON objects and return a list of differences (added, removed, changed) with paths.",
+  description:
+    "Compare two JSON objects and return a list of differences (added, removed, changed) with paths. " +
+    `Lists at most ${MAX_DIFF_COUNT} differences and compares ${MAX_DIFF_DEPTH} levels deep; the result says when a limit was reached.`,
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -297,15 +332,32 @@ const jsonDiff: ITool = {
       return { content: `Error in b: ${parsedB.error}`, isError: true };
     }
 
-    const diffs: Difference[] = [];
-    diffValues(parsedA.value, parsedB.value, "", diffs);
+    const walk: DiffWalk = { diffs: [], deepSkipped: 0, deepPaths: [], countCapped: false };
+    diffValues(parsedA.value, parsedB.value, "", walk);
 
-    if (diffs.length === 0) {
-      return { content: "No differences found." };
+    const notes: string[] = [];
+    if (walk.countCapped) {
+      notes.push(`Listing stopped at ${MAX_DIFF_COUNT} differences; the rest of the input was not compared.`);
+    }
+    if (walk.deepSkipped > 0) {
+      const more = walk.deepSkipped > walk.deepPaths.length ? ", ..." : "";
+      notes.push(
+        `${walk.deepSkipped} value pair(s) nested deeper than ${MAX_DIFF_DEPTH} levels were not compared, under: ${walk.deepPaths.join(", ")}${more}.`,
+      );
+    }
+    const noteText = notes.map((note) => `\n\n[${note}]`).join("");
+
+    if (walk.diffs.length === 0) {
+      return {
+        content: notes.length === 0
+          ? "No differences found."
+          : `Comparison incomplete: no differences in the part compared.${noteText}`,
+      };
     }
 
-    const lines = diffs.map(formatDiff);
-    return { content: `Found ${diffs.length} difference(s):\n${lines.join("\n")}` };
+    const lines = walk.diffs.map(formatDiff);
+    const count = walk.countCapped ? `at least ${walk.diffs.length}` : `${walk.diffs.length}`;
+    return { content: `Found ${count} difference(s):\n${lines.join("\n")}${noteText}` };
   },
 };
 

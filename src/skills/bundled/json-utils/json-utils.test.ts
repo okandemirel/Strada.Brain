@@ -279,3 +279,61 @@ describe("json_diff", () => {
     expect(result.content).toContain("42 -> 99");
   });
 });
+
+// ---------------------------------------------------------------------------
+// json_diff's limits: a part it did not compare is not a part that matched
+// ---------------------------------------------------------------------------
+
+describe("json_diff limits", () => {
+  const tool = findTool("json_diff");
+
+  /** `levels` nested objects with `leaf` at the bottom. */
+  function nest(leaf: unknown, levels: number): string {
+    let value: unknown = leaf;
+    for (let i = 0; i < levels; i++) value = { n: value };
+    return JSON.stringify(value);
+  }
+
+  it("does not report equality for documents that differ below the depth limit", async () => {
+    const result = await tool.execute({ a: nest(1, 55), b: nest(2, 55) }, dummyContext);
+    expect(result.content).not.toBe("No differences found.");
+    expect(result.content).not.toMatch(/^No differences found/);
+    expect(result.content).toContain("not compared");
+    expect(result.content).toContain("deeper than 50");
+  });
+
+  it("still finds a difference within the depth limit, with no note", async () => {
+    const result = await tool.execute({ a: nest(1, 50), b: nest(2, 50) }, dummyContext);
+    expect(result.content).toContain("Found 1 difference(s)");
+    expect(result.content).not.toContain("not compared");
+  });
+
+  it("says the list is incomplete when it stops at 1000 differences", async () => {
+    const a = JSON.stringify(Array.from({ length: 1500 }, (_, i) => i));
+    const b = JSON.stringify(Array.from({ length: 1500 }, (_, i) => i + 1));
+    const result = await tool.execute({ a, b }, dummyContext);
+    expect(result.content).toContain("Found at least 1000 difference(s)");
+    expect(result.content).toContain("stopped at 1000");
+    expect(result.content.split("\n").filter((l: string) => l.startsWith("~ "))).toHaveLength(1000);
+  });
+
+  it("applies the 1000 cap to added array elements and keys too", async () => {
+    const big = JSON.stringify(Array.from({ length: 1500 }, (_, i) => i));
+    const added = await tool.execute({ a: "[]", b: big }, dummyContext);
+    expect(added.content.split("\n").filter((l: string) => l.startsWith("+ "))).toHaveLength(1000);
+    expect(added.content).toContain("stopped at 1000");
+
+    const wide = JSON.stringify(Object.fromEntries(Array.from({ length: 1500 }, (_, i) => [`k${i}`, i])));
+    const removed = await tool.execute({ a: wide, b: "{}" }, dummyContext);
+    expect(removed.content.split("\n").filter((l: string) => l.startsWith("- "))).toHaveLength(1000);
+    expect(removed.content).toContain("stopped at 1000");
+  });
+
+  it("keeps the plain count when exactly every difference was listed", async () => {
+    const a = JSON.stringify(Array.from({ length: 1000 }, (_, i) => i));
+    const b = JSON.stringify(Array.from({ length: 1000 }, (_, i) => i + 1));
+    const result = await tool.execute({ a, b }, dummyContext);
+    expect(result.content).toContain("Found 1000 difference(s)");
+    expect(result.content).not.toContain("stopped at");
+  });
+});
