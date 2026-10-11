@@ -64,7 +64,7 @@ Scores available providers against task classification using configurable preset
 These routing decisions are internal worker assignments only. The user still talks only to Strada; provider traces and phase outcomes are evidence of the control plane, not a direct chat identity switch.
 
 ### ConsensusManager
-When ConfidenceEstimator scores output below threshold, ConsensusManager verifies with a second provider. Strategies: "review" (ask if correct) or "re-execute" (same prompt to different provider). Graceful degradation: 1 provider = skip entirely.
+When ConfidenceEstimator scores output below threshold, ConsensusManager verifies with a second provider. Strategies: "review" (ask if correct) or "re-execute" (same prompt to different provider). A tool-calling turn is always reviewed, never re-executed: the reviewer is offered no tools, so a re-execution cannot answer with tool calls to compare. Graceful degradation: 1 provider = skip entirely.
 
 ## Agent Core v2 — Control Plane & AgentRunner Seam (staged migration, in progress)
 

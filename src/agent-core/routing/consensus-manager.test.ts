@@ -260,32 +260,43 @@ describe("ConsensusManager", () => {
 
   // --- Re-execute strategy tests ---
 
-  it("re-execute: tool disagreement (original has tools, second has none) -> agreed:false", async () => {
+  it("a tool-calling turn is reviewed, not re-executed: the reviewer is offered no tools (audit agent-core-goals#4)", async () => {
+    // A re-execution goes out with an empty tool list, so the reviewer can only answer in
+    // text, and "tools vs text" was reported as a disagreement that was never measured —
+    // injected into the next turn as a CONSENSUS REVIEWER OBJECTION.
     const mockReview = {
       name: "groq",
       chat: vi.fn().mockResolvedValue({
-        text: "I think we should just explain the concept.",
+        text: '{"approved": true, "reasoning": "writing the requested file is correct"}',
         toolCalls: [],
         stopReason: "end_turn",
       }),
     };
 
-    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
-    const result = await mgr.verify({
-      originalOutput: {
-        text: "Running tool",
-        toolCalls: [{ name: "file_write", input: { path: "/a.ts" } }],
-      },
-      originalProvider: "claude",
-      task: { type: "code-generation", complexity: "complex", criticality: "medium" },
-      confidence: 0.1, // very low -> re-execute
-      reviewProvider: mockReview as any,
-      prompt: "Create a new TypeScript file",
-    });
+    for (const mode of ["always", "auto"] as const) {
+      mockReview.chat.mockClear();
+      const mgr = new ConsensusManager({ mode, threshold: 1.0 });
+      const result = await mgr.verify({
+        originalOutput: {
+          text: "Running tool",
+          toolCalls: [{ name: "file_write", input: { path: "/a.ts" } }],
+        },
+        originalProvider: "claude",
+        task: { type: "code-generation", complexity: "complex", criticality: "medium" },
+        confidence: 0.1, // very low: re-execute for a text answer
+        reviewProvider: mockReview as any,
+        prompt: "Create a new TypeScript file",
+      });
 
-    expect(result.agreed).toBe(false);
-    expect(result.strategy).toBe("re-execute");
-    expect(result.reasoning).toContain("disagree");
+      expect(result.strategy, mode).toBe("review");
+      expect(result.agreed, mode).toBe(true);
+      expect(result.reasoning, mode).not.toContain("tools vs text");
+      // The reviewer judged the actual tool call…
+      const [, messages, tools] = mockReview.chat.mock.calls[0]!;
+      expect(JSON.stringify(messages), mode).toContain("file_write");
+      // …and was offered no tools, which is why it could never have re-executed one.
+      expect(tools, mode).toEqual([]);
+    }
   });
 
   it("re-execute: same tools used by both providers -> agreed:true", async () => {
@@ -301,8 +312,10 @@ describe("ConsensusManager", () => {
       }),
     };
 
+    // verify() never routes a tool turn to re-execute (the reviewer gets no tools); the
+    // structural comparison is pinned directly for a reviewer that does answer with tools.
     const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
-    const result = await mgr.verify({
+    const result = await (mgr as any).reExecuteStrategy({
       originalOutput: {
         text: "Writing file",
         toolCalls: [
@@ -312,7 +325,6 @@ describe("ConsensusManager", () => {
       },
       originalProvider: "claude",
       task: { type: "code-generation", complexity: "complex", criticality: "medium" },
-      confidence: 0.1,
       reviewProvider: mockReview as any,
       prompt: "Write two files",
     });
@@ -336,7 +348,7 @@ describe("ConsensusManager", () => {
     };
 
     const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
-    const result = await mgr.verify({
+    const result = await (mgr as any).reExecuteStrategy({
       originalOutput: {
         text: "Creating new files",
         toolCalls: [
@@ -347,7 +359,6 @@ describe("ConsensusManager", () => {
       },
       originalProvider: "claude",
       task: { type: "code-generation", complexity: "complex", criticality: "medium" },
-      confidence: 0.1,
       reviewProvider: mockReview as any,
       prompt: "Refactor the module",
     });

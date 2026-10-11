@@ -211,11 +211,16 @@ export class ConsensusManager {
     reviewProvider: IAIProvider;
     prompt: string;
   }): Promise<ConsensusResult> {
-    const strategy = this.shouldConsult(
+    const consulted = this.shouldConsult(
       params.confidence,
       params.task,
       2, // We have at least the review provider
     );
+    // A re-execution is sent with no tools (chatWithTimeoutRaw), so it can only answer in text:
+    // against a tool-calling turn it always "disagreed (tools vs text)" without comparing
+    // anything (audit agent-core-goals#4). The review strategy judges the serialized tool calls.
+    const strategy: ConsensusStrategy =
+      consulted === "re-execute" && (params.originalOutput.toolCalls?.length ?? 0) > 0 ? "review" : consulted;
 
     if (strategy === "skip") {
       return {
