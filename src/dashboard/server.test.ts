@@ -7,6 +7,8 @@ import type { MetricsAggregation } from "../metrics/metrics-types.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { setInstanceIdentityStore } from "../channels/web/instance-authorization.js";
+import type { RouteContext } from "./server-types.js";
+import { createChunkedReq, createMockRes, splitInsideCharacters } from "./test-support/mock-http.js";
 
 const loggerWarnSpy = vi.hoisted(() => vi.fn());
 
@@ -1870,5 +1872,27 @@ describe("DashboardServer: a suffix is not the route (round 15 #3)", () => {
     const ownerCanonical = await post("/api/user/autonomous?chatId=victim", as("owner-profile"));
     expect(ownerCanonical.status).toBe(200);
     expect(setAutonomousMode).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Audit dashboard#2: a body cut inside a character ─────────────────────────
+//
+// Every route behind the route context (personality profiles, settings,
+// webhooks) reads its body through ctx.readJsonBody. A body larger than one
+// socket read arrives in chunks cut at any byte, and each chunk was decoded on
+// its own: a Turkish or CJK character cut in two became U+FFFD inside a string
+// that still parsed, so the route stored the damaged text and answered 200.
+describe("DashboardServer: a request body cut inside a character (audit dashboard#2)", () => {
+  it("hands the route the text the client sent", async () => {
+    const server = new DashboardServer(0, new MetricsCollector(), () => undefined);
+    const ctx = (server as unknown as { buildRouteContext(): RouteContext }).buildRouteContext();
+    const content = "Kısa ve öz yanıt ver. 日本語で答えないで。";
+    const req = createChunkedReq(splitInsideCharacters(JSON.stringify({ name: "kişilik", content }), "ş", "ı", "日"));
+    const res = createMockRes();
+
+    const parsed = await ctx.readJsonBody<{ name: string; content: string }>(req, res, 12_288);
+
+    expect(parsed).toEqual({ name: "kişilik", content });
+    expect(res.writeHead).not.toHaveBeenCalled();
   });
 });

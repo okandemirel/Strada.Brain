@@ -4,9 +4,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import Database from "better-sqlite3";
 import { handleCanvasRoute } from "./canvas-routes.js";
 import {
+  createChunkedReq,
   createMockReq,
   createMockRes,
   responseJson,
+  splitInsideCharacters,
   waitForResponse,
   type MockRes,
 } from "./test-support/mock-http.js";
@@ -295,6 +297,24 @@ describe("handleCanvasRoute", () => {
 
       const saved2 = (storage.save as ReturnType<typeof vi.fn>).mock.calls[1]![0] as CanvasState;
       expect(saved2.id).toBe("session-abc");
+    });
+
+    // A board over one socket read reaches the dashboard in several chunks, cut
+    // at whatever byte the read ended on. Each chunk was decoded on its own, so a
+    // character cut in two became U+FFFD inside a string that still parsed: the
+    // save answered 200 and stored the damaged notes (audit dashboard#2).
+    it("keeps a multi-byte character the socket cut between two chunks", async () => {
+      const shapes = [{ id: "n1", type: "note", text: "Başlangıç sahnesi → oyuncu girişi; 日本語のメモ" }];
+      const body = JSON.stringify({ shapes });
+
+      const req = createChunkedReq(splitInsideCharacters(body, "ş", "→", "日"));
+      handleCanvasRoute("/api/canvas/session-abc", "PUT", req, res, storage);
+      await waitForResponse(res);
+
+      expect(res.statusCode).toBe(200);
+      const savedState = (storage.save as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CanvasState;
+      expect(savedState.shapes).not.toContain("\uFFFD");
+      expect(JSON.parse(savedState.shapes)).toEqual(shapes);
     });
 
     it("returns 400 for invalid JSON body", async () => {

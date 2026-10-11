@@ -34,6 +34,7 @@ import { CANVAS_VERSION_ABSENT } from "./canvas-storage.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 import { getLogger, getLoggerSafe } from "../utils/logger.js";
 import { safeDecodeSegment } from "./route-segment.js";
+import { readJsonBody } from "./json-body.js";
 import {
   authorizeInstanceRequest,
   verifiedRequestIdentity,
@@ -48,38 +49,7 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown): void 
   res.end(JSON.stringify(body));
 }
 
-function readJsonBody<T>(
-  req: IncomingMessage,
-  res: ServerResponse,
-  maxBytes = 1_048_576, // 1 MB — canvas shapes can be large
-): Promise<T | null> {
-  return new Promise((resolve) => {
-    let body = "";
-    let bodyBytes = 0;
-    let aborted = false;
-    req.on("data", (chunk: Buffer) => {
-      bodyBytes += chunk.length;
-      if (bodyBytes > maxBytes) {
-        aborted = true;
-        req.on("error", () => {});
-        req.destroy();
-        jsonResponse(res, 413, { error: "Request body too large" });
-        resolve(null);
-        return;
-      }
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      if (aborted) return;
-      try {
-        resolve(JSON.parse(body || "{}") as T);
-      } catch {
-        jsonResponse(res, 400, { error: "Invalid JSON body" });
-        resolve(null);
-      }
-    });
-  });
-}
+const MAX_CANVAS_BODY_BYTES = 1_048_576; // 1 MB — canvas shapes can be large
 
 /**
  * Connections the canvas may store: an id and the two shape ids it joins.
@@ -340,7 +310,7 @@ export function handleCanvasRoute(
       });
       return true;
     }
-    void readJsonBody<Partial<CanvasState>>(req, res).then((parsed) => {
+    void readJsonBody<Partial<CanvasState>>(req, res, MAX_CANVAS_BODY_BYTES).then((parsed) => {
       if (!parsed) return;
 
       if (!isValidSaveVersion(parsed.version)) {

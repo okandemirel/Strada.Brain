@@ -21,6 +21,7 @@ import { calculateProgress } from '../goals/goal-progress.js'
 import { authorizeInstanceRequest } from '../channels/web/instance-authorization.js'
 import { getLoggerSafe } from '../utils/logger.js'
 import { safeDecodeSegment } from './route-segment.js'
+import { readJsonBody } from './json-body.js'
 import { monitorReadScope, taskOrigin } from './monitor-read-scope.js'
 
 // =============================================================================
@@ -70,38 +71,7 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown): void 
   res.end(JSON.stringify(body))
 }
 
-function readJsonBody<T>(
-  req: IncomingMessage,
-  res: ServerResponse,
-  maxBytes = 4096,
-): Promise<T | null> {
-  return new Promise((resolve) => {
-    let body = ''
-    let bodyBytes = 0
-    let aborted = false
-    req.on('data', (chunk: Buffer) => {
-      bodyBytes += chunk.length
-      if (bodyBytes > maxBytes) {
-        aborted = true
-        req.on('error', () => {})
-        req.destroy()
-        jsonResponse(res, 413, { error: 'Request body too large' })
-        resolve(null)
-        return
-      }
-      body += chunk.toString()
-    })
-    req.on('end', () => {
-      if (aborted) return
-      try {
-        resolve(JSON.parse(body || '{}') as T)
-      } catch {
-        jsonResponse(res, 400, { error: 'Invalid JSON body' })
-        resolve(null)
-      }
-    })
-  })
-}
+const MAX_GATE_BODY_BYTES = 4096
 
 /** Serialize a GoalTree into a DAG structure for the monitor panel. */
 function serializeDag(tree: GoalTree): {
@@ -510,7 +480,7 @@ export function handleMonitorRoute(
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true
     }
-    void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
+    void readJsonBody<{ rootId?: string }>(req, res, MAX_GATE_BODY_BYTES).then((parsed) => {
       if (!parsed) return
       // Answered 200 'approved' unconditionally even when nothing subscribed to
       // monitor:gate_response, so the decision was dropped while the client
@@ -541,7 +511,7 @@ export function handleMonitorRoute(
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true
     }
-    void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
+    void readJsonBody<{ rootId?: string }>(req, res, MAX_GATE_BODY_BYTES).then((parsed) => {
       if (!parsed) return
       // Answered 200 'skipped' unconditionally even when nothing subscribed to
       // monitor:gate_response, so the decision was dropped while the client

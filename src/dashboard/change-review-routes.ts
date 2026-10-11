@@ -67,6 +67,7 @@ import {
 import { getLoggerSafe } from "../utils/logger.js";
 // Round 12 #12 / CHN-1: an id that does not decode is a 400, never a throw.
 import { safeDecodeSegment } from "./route-segment.js";
+import { readJsonBody } from "./json-body.js";
 
 /** Route prefix. Registered before the file-explorer routes, which 404 the rest. */
 export const CHANGE_REVIEW_ROUTE_PREFIX = "/api/workspace/change-review";
@@ -195,41 +196,6 @@ function portablePreview(preview: UndoPreview): UndoPreview {
     ...preview,
     entries: preview.entries.map((entry) => ({ ...entry, path: normalizeReviewPath(entry.path) })),
   };
-}
-
-function readJsonBody<T>(req: IncomingMessage, res: ServerResponse, maxBytes = MAX_BODY_BYTES): Promise<T | null> {
-  return new Promise((resolve) => {
-    let body = "";
-    let bytes = 0;
-    let aborted = false;
-    req.on("data", (chunk: Buffer) => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        aborted = true;
-        req.on("error", () => undefined);
-        req.destroy();
-        jsonResponse(res, 413, { error: "Request body too large" });
-        resolve(null);
-        return;
-      }
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      if (aborted) return;
-      try {
-        resolve(JSON.parse(body || "{}") as T);
-      } catch {
-        jsonResponse(res, 400, { error: "Invalid JSON body" });
-        resolve(null);
-      }
-    });
-    req.on("error", () => {
-      if (aborted) return;
-      aborted = true;
-      jsonResponse(res, 400, { error: "Request body could not be read" });
-      resolve(null);
-    });
-  });
 }
 
 /** The decisions, validated, or an error string. */
@@ -408,7 +374,7 @@ export function handleChangeReviewRoute(
     if (!allowed(req, res, `POST ${path}`)) return true;
     void (async () => {
       try {
-        const body = await readJsonBody<DecisionsRequest>(req, res);
+        const body = await readJsonBody<DecisionsRequest>(req, res, MAX_BODY_BYTES);
         if (body === null) return; // readJsonBody already answered
         const record = loadReview(projectRoot, reviewId, res);
         if (!record) return;

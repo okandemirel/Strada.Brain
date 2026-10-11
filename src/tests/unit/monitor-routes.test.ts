@@ -8,6 +8,7 @@ import {
   MonitorActivityLog,
 } from '../../dashboard/monitor-routes.js'
 import type { GoalNodeId, GoalTree, GoalNode } from '../../goals/types.js'
+import { createChunkedReq, splitInsideCharacters } from '../../dashboard/test-support/mock-http.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -309,6 +310,25 @@ describe('handleMonitorRoute', () => {
     expect(received).toHaveLength(1)
     expect((received[0] as any).action).toBe('approve')
     expect((received[0] as any).nodeId).toBe('node-1')
+  })
+
+  // A body cut inside a character (audit dashboard#2): each chunk was decoded
+  // on its own, so the halves of a multi-byte character became U+FFFD and the
+  // decision went out naming a root that does not exist.
+  it('POST /api/monitor/task/:id/approve keeps a root id the socket cut inside a character', async () => {
+    const received: unknown[] = []
+    workspaceBus.on('monitor:gate_response' as any, (ev: unknown) => { received.push(ev) })
+
+    const rootId = 'kök-ağaç-1'
+    const req = createChunkedReq(splitInsideCharacters(JSON.stringify({ rootId }), 'ö', 'ğ'))
+    const res = fakeRes()
+    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, undefined, workspaceBus as any, activityLog)
+
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(res._status).toBe(200)
+    expect(received).toHaveLength(1)
+    expect((received[0] as any).rootId).toBe(rootId)
   })
 
   it('POST /api/monitor/task/:id/skip emits gate_response with skip action', async () => {

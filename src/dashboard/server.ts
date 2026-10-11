@@ -43,6 +43,7 @@ import { handleCanvasRoute } from "./canvas-routes.js";
 import { handleWorkspaceRoute } from "./workspace-routes.js";
 import { CHANGE_REVIEW_ROUTE_PREFIX, handleChangeReviewRoute } from "./change-review-routes.js";
 import { handleProjectHistoryRoutes } from "./project-history-routes.js";
+import { readJsonBody } from "./json-body.js";
 import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -1187,33 +1188,7 @@ export class DashboardServer {
     res: import("node:http").ServerResponse,
     maxBytes = 4096,
   ): Promise<T | null> {
-    return new Promise((resolve) => {
-      let body = "";
-      let bodyBytes = 0;
-      let aborted = false;
-      req.on("data", (chunk: Buffer) => {
-        bodyBytes += chunk.length;
-        if (bodyBytes > maxBytes) {
-          aborted = true;
-          req.destroy();
-          res.writeHead(413, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Request body too large" }));
-          resolve(null);
-          return;
-        }
-        body += chunk.toString();
-      });
-      req.on("end", () => {
-        if (aborted) return;
-        try {
-          resolve(JSON.parse(body || "{}") as T);
-        } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid JSON body" }));
-          resolve(null);
-        }
-      });
-    });
+    return readJsonBody<T>(req, res, maxBytes);
   }
 
   /** Sensitive key name patterns for config masking. */

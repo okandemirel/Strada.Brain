@@ -24,7 +24,14 @@ import {
   setChangeReviewIdentityStore,
   type ChangeReviewIdentityStore,
 } from "./change-review-routes.js";
-import { createMockReq, createMockRes, responseJson, type MockRes } from "./test-support/mock-http.js";
+import {
+  createChunkedReq,
+  createMockReq,
+  createMockRes,
+  responseJson,
+  splitInsideCharacters,
+  type MockRes,
+} from "./test-support/mock-http.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 let source: string;
@@ -677,5 +684,36 @@ describe("change-review routes: keeping is review-wide too (round 12 #16)", () =
     expect(status).toBe(200);
     expect(json["outcome"]).toBe("kept");
     expect(readChangeReview(source, reviewId)!.status).toBe("kept");
+  });
+});
+
+describe("change-review routes: a body cut inside a character (audit dashboard#2)", () => {
+  // THE DEFECT. The decisions body was decoded one socket chunk at a time, so a
+  // file name with a Turkish letter cut between two chunks arrived as U+FFFD:
+  // the undo named a path the review never touched and the run stayed in.
+  it("reverts a file whose name the socket cut inside a character", async () => {
+    const created = join("Assets", "Kayıtlar", "Kayıt.cs");
+    const manager = new WorkspaceLeaseManager({
+      projectRoot: source,
+      leaseRoot,
+      preferGitWorktree: false,
+      additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+    });
+    const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
+    put(lease.path, created, "brand new");
+    const result = await lease.commit();
+    await lease.release();
+    const reviewId = result.changeReview!.id;
+    expect(readFileSync(join(source, created), "utf8")).toBe("brand new");
+
+    const body = JSON.stringify({ decisions: [{ path: "Assets/Kayıtlar/Kayıt.cs", decision: "undo" }] });
+    const res = createMockRes();
+    const req = createChunkedReq(splitInsideCharacters(body, "ı"));
+    handleChangeReviewRoute(`/api/workspace/change-review/${reviewId}/decisions`, "POST", req, res, source);
+    await answered(res);
+
+    expect((res as MockRes).statusCode).toBe(200);
+    expect(responseJson(res)["applied"]).toEqual(["Assets/Kayıtlar/Kayıt.cs"]);
+    expect(existsSync(join(source, created))).toBe(false);
   });
 });

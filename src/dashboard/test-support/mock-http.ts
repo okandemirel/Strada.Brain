@@ -51,6 +51,44 @@ export function createMockReq(body?: string): IncomingMessage {
 }
 
 /**
+ * Mock IncomingMessage that delivers the body as several data events, the way
+ * a socket hands over a body larger than one read: cut at whatever byte the
+ * read ended on, not at a character boundary.
+ */
+export function createChunkedReq(chunks: Buffer[]): IncomingMessage {
+  const emitter = new EventEmitter();
+  (emitter as unknown as { destroy: () => void }).destroy = () => undefined;
+  process.nextTick(() => {
+    for (const chunk of chunks) emitter.emit("data", chunk);
+    emitter.emit("end");
+  });
+  return emitter as unknown as IncomingMessage;
+}
+
+/**
+ * `text` as UTF-8 bytes, cut one byte into the first occurrence of each of
+ * `characters` — every cut lands inside a multi-byte character.
+ */
+export function splitInsideCharacters(text: string, ...characters: string[]): Buffer[] {
+  const bytes = Buffer.from(text, "utf8");
+  const cuts = characters.map((character) => {
+    const at = bytes.indexOf(Buffer.from(character, "utf8"));
+    if (at < 0 || Buffer.byteLength(character, "utf8") < 2) {
+      throw new Error(`"${character}" is not a multi-byte character of the text`);
+    }
+    return at + 1;
+  }).sort((a, b) => a - b);
+  const chunks: Buffer[] = [];
+  let from = 0;
+  for (const cut of cuts) {
+    chunks.push(bytes.subarray(from, cut));
+    from = cut;
+  }
+  chunks.push(bytes.subarray(from));
+  return chunks;
+}
+
+/**
  * Mock IncomingMessage for handlers that read the body themselves via
  * `for await (const chunk of req)` — must be a real async-iterable stream,
  * not a bare EventEmitter.
