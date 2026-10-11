@@ -8,7 +8,7 @@
  * transition, so a crash mid-sprint resumes instead of restarting the game.
  */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, artifactDigestAsync, describeLedgerRow } from "./evidence-ledger.js";
@@ -5349,8 +5349,23 @@ export class CampaignManager {
    * same-length rewrite is seen (round 3 #6); a walk that could not finish —
    * an unreadable entry, the file budget, a symlink cycle — is no
    * fingerprint at all, and binds nothing (round 3 #8, #9).
+   *
+   * …WHEN THE STAMPS COULD HAVE MOVED. A filesystem stamps in ticks (NTFS
+   * ~15.6 ms, HFS+ and ext3 whole seconds, FAT two), so a same-length rewrite
+   * inside the tick of the write before it keeps size, mtime and ctime: the
+   * fingerprint taken after a closure audit equalled the one taken before it,
+   * and the closure stood for a tree that had changed. As the evidence ledger
+   * treats a racily clean artifact (980b16d5), a file that last changed less
+   * than a settle window before this walk began is fingerprinted by its bytes
+   * as well. Its line differs from the stamps-only line it gets once settled,
+   * so a closure bound to a fresh tree is judged once more later: the price
+   * of never vouching for bytes nobody read.
    */
   private projectFingerprint(): string {
+    // Wider than FAT's two-second tick, with room for a clock a little ahead.
+    const settledNs = 5_000_000_000n;
+    const startedNs = BigInt(Date.now()) * 1_000_000n;
+    let chunk: Buffer | undefined;
     const hash = createHash("sha256");
     let files = 0;
     let dirs = 0;
@@ -5410,7 +5425,25 @@ export class CampaignManager {
           incomplete = true;
           return;
         }
-        hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
+        // The later of the two: a copy that preserved an old mtime changed the file at its ctime.
+        const changedNs = st.mtimeNs > st.ctimeNs ? st.mtimeNs : st.ctimeNs;
+        if (changedNs <= startedNs - settledNs) {
+          hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}\n`);
+          continue;
+        }
+        const bytes = createHash("sha256");
+        let fd: number | undefined;
+        try {
+          fd = openSync(child, "r");
+          chunk ??= Buffer.allocUnsafe(1024 * 1024);
+          for (let n = readSync(fd, chunk); n > 0; n = readSync(fd, chunk)) bytes.update(chunk.subarray(0, n));
+        } catch {
+          incomplete = true;
+          return;
+        } finally {
+          if (fd !== undefined) closeSync(fd);
+        }
+        hash.update(`${rel}/${entry}:${st.size}:${st.mtimeNs}:${st.ctimeNs}:bytes=${bytes.digest("hex")}\n`);
       }
     };
     walk(this.projectRoot, "");
