@@ -9,6 +9,7 @@ import type * as winston from "winston";
 const mockAgentDBInitialize = vi.fn();
 const mockStartAutoTiering = vi.fn();
 const mockSetDecayConfig = vi.fn();
+const mockStartDecay = vi.fn();
 
 vi.mock("../memory/unified/agentdb-memory.js", () => ({
   AgentDBMemory: vi.fn().mockImplementation(function () {
@@ -16,6 +17,7 @@ vi.mock("../memory/unified/agentdb-memory.js", () => ({
       initialize: mockAgentDBInitialize,
       startAutoTiering: mockStartAutoTiering,
       setDecayConfig: mockSetDecayConfig,
+      startDecay: mockStartDecay,
     };
   }),
 }));
@@ -186,6 +188,27 @@ describe("bootstrap-memory", () => {
       expect(mockSetDecayConfig).toHaveBeenCalledWith(config.memory.decay);
     });
 
+    // memory-rag#3: decay ran only inside the auto-tiering sweep, which is off
+    // by default, so the default-on decay never ran.
+    it("runs decay on its own timer when decay is on and auto-tiering is off (the defaults)", async () => {
+      const config = makeConfig({
+        memory: makeMemoryConfig({ decay: { ...makeMemoryConfig().decay, enabled: true } }),
+      });
+      await initializeMemory(config, logger);
+      expect(mockStartDecay).toHaveBeenCalledWith(config.memory.unified.autoTieringIntervalMs);
+      expect(mockStartAutoTiering).not.toHaveBeenCalled();
+    });
+
+    it("leaves decay to the auto-tiering sweep when auto-tiering is on, and starts none when decay is off", async () => {
+      const decayOn = { ...makeMemoryConfig().decay, enabled: true };
+      await initializeMemory(makeConfig({
+        memory: makeMemoryConfig({ decay: decayOn, unified: { ...makeMemoryConfig().unified, autoTiering: true } }),
+      }), logger);
+      await initializeMemory(makeConfig(), logger);
+      expect(mockStartAutoTiering).toHaveBeenCalledTimes(1);
+      expect(mockStartDecay).not.toHaveBeenCalled();
+    });
+
     it("warns when no embedding provider is available", async () => {
       const config = makeConfig();
       await initializeMemory(config, logger, undefined);
@@ -240,6 +263,7 @@ describe("bootstrap-memory", () => {
             initialize: mockAgentDBInitialize,
             startAutoTiering: mockStartAutoTiering,
             setDecayConfig: mockSetDecayConfig,
+            startDecay: mockStartDecay,
             reEmbedHashEntries: reEmbed,
           } as unknown as AgentDBMemory;
         });
@@ -296,6 +320,7 @@ describe("bootstrap-memory", () => {
           initialize: mockAgentDBInitialize,
           startAutoTiering: () => { throw new Error("timer setup failed"); },
           setDecayConfig: mockSetDecayConfig,
+          startDecay: mockStartDecay,
           shutdown,
         } as unknown as AgentDBMemory;
       });

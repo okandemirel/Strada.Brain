@@ -202,6 +202,11 @@ export async function initializeMemory(
     }
 
     agentdb.setDecayConfig(config.memory.decay);
+    // The auto-tiering sweep decays as its first step; with it off (the
+    // default) nothing else ran decay, so MEMORY_DECAY_ENABLED=true did nothing.
+    if (config.memory.decay.enabled && !config.memory.unified.autoTiering) {
+      agentdb.startDecay(config.memory.unified.autoTieringIntervalMs);
+    }
 
     // Fire-and-forget: migrate hash embeddings to real embeddings. The scan
     // runs on every boot (the marker no longer gates it — audited 2026-09-02),

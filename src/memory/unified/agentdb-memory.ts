@@ -81,6 +81,7 @@ import {
   calculateImportanceScore,
   enforceTierLimits as enforceTierLimitsHelper,
   autoTieringSweep as autoTieringSweepHelper,
+  decaySweep as decaySweepHelper,
 } from "./agentdb-tiering.js";
 
 import {
@@ -175,6 +176,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private searchTimes: number[] = [];
   private tieringTimer: ReturnType<typeof setInterval> | null = null;
   private tieringParams: { intervalMs: number; promotionThreshold: number; demotionTimeoutDays: number } | null = null;
+  private decayTimer: ReturnType<typeof setInterval> | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteInitFailed = false;
   /** memory.db failed integrity_check and REINDEX did not repair it (set by initSqlite). */
@@ -439,6 +441,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Stop auto-tiering timer before saving to prevent sweep during shutdown
       this.stopAutoTiering();
+      this.stopDecay();
 
       // Save entries
       await this.saveEntries();
@@ -546,6 +549,32 @@ export class AgentDBMemory implements IUnifiedMemory {
     if (this.tieringTimer) {
       clearInterval(this.tieringTimer);
       this.tieringTimer = null;
+    }
+  }
+
+  /**
+   * Run the decay pass alone on `intervalMs`, for when auto-tiering is off:
+   * decay otherwise ran only inside that sweep, so the default-on decay never
+   * ran while getDecayStats reported it enabled (audit memory-rag#3). Decay
+   * covers only the time not yet decayed (decayedAt), so it never compounds
+   * if the sweep runs too.
+   */
+  startDecay(intervalMs: number): void {
+    if (this.decayTimer) return;
+    this.decayTimer = setInterval(() => {
+      try {
+        decaySweepHelper(this.getTieringCtx());
+      } catch (e) {
+        getLoggerSafe().error("[AgentDBMemory] Decay sweep failed", { error: String(e) });
+      }
+    }, intervalMs);
+    this.decayTimer.unref();
+  }
+
+  stopDecay(): void {
+    if (this.decayTimer) {
+      clearInterval(this.decayTimer);
+      this.decayTimer = null;
     }
   }
 

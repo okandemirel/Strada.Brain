@@ -67,7 +67,22 @@ export function calculateImportanceScore(content: string, tier: MemoryTier): Nor
 // Tier limit enforcement
 // ---------------------------------------------------------------------------
 
-/** Enforce maximum entries per tier, evicting the lowest-scoring entries. */
+/**
+ * Where a tier's overflow goes instead of being deleted.
+ *
+ * Every conversation summary lands in Working, and only the auto-tiering sweep
+ * (off by default) ever moved an entry out of it, so deleting Working's
+ * overflow made conversation memory a ring buffer of its cap — the oldest
+ * turns were gone for good although the docs promise long-term storage
+ * (audit memory-rag#3). The overflow skips Ephemeral: its TTL would expire
+ * the moved rows within a day. Ephemeral's own cap is a documented eviction,
+ * and Persistent is the last tier, so both still delete.
+ */
+const OVERFLOW_TIER: Partial<Record<MemoryTier, MemoryTier>> = {
+  [MemoryTier.Working]: MemoryTier.Persistent,
+};
+
+/** Enforce maximum entries per tier: move the lowest-scoring overflow to a colder tier, or evict it. */
 export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: MemoryTier): Promise<void> {
   const maxEntries = ctx.config.maxEntriesPerTier[tier];
   const entries = Array.from(ctx.entries.values()).filter((e) => e.tier === tier);
@@ -89,8 +104,24 @@ export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: Memory
     };
     entries.sort((a, b) => evictionScore(a) - evictionScore(b));
 
-    // Remove lowest scoring entries
     const toRemove = entries.slice(0, entries.length - maxEntries);
+    const overflowTier = OVERFLOW_TIER[tier];
+    if (overflowTier !== undefined) {
+      for (const entry of toRemove) {
+        const moved = await ctx.demoteEntry(entry.id, overflowTier);
+        if (moved.kind === "err") {
+          // Left over the cap rather than deleted; the next write retries.
+          getLoggerSafe().warn("[AgentDBMemory] Tier overflow could not be moved", {
+            id: entry.id as string, from: tier, to: overflowTier, error: moved.error.message,
+          });
+        }
+      }
+      getLoggerSafe().debug("[AgentDBMemory] Moved tier overflow", { from: tier, to: overflowTier, moved: toRemove.length });
+      await enforceTierLimits(ctx, overflowTier);
+      return;
+    }
+
+    // Remove lowest scoring entries
     if (ctx.hnswStore) {
       const store = ctx.hnswStore;
       const ids = toRemove.map(e => e.id as string);
@@ -119,18 +150,14 @@ export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: Memory
 // Auto-tiering sweep (decay + promotion/demotion)
 // ---------------------------------------------------------------------------
 
-/** Run a full auto-tiering sweep: decay pass, then promote/demote entries. */
-export async function autoTieringSweep(
-  ctx: AgentDBTieringContext,
-  promotionThreshold: number,
-  demotionTimeoutDays: number,
-): Promise<void> {
+/**
+ * Exponential decay pass over every non-exempt entry. Runs inside the
+ * auto-tiering sweep and, with auto-tiering off, on its own timer
+ * (AgentDBMemory.startDecay) — it used to run only inside the sweep, so the
+ * default-on MEMORY_DECAY_ENABLED never decayed anything (audit memory-rag#3).
+ */
+export function decaySweep(ctx: AgentDBTieringContext): void {
   const now = getNow() as number;
-  const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
-  let promoted = 0;
-  let demoted = 0;
-
-  // --- Decay pass (before tiering) ---
   if (ctx.decayConfig?.enabled) {
     const lambdas: Record<MemoryTier, number> = {
       [MemoryTier.Working]: ctx.decayConfig.lambdas.working,
@@ -170,6 +197,20 @@ export async function autoTieringSweep(
       getLoggerSafe().debug("[AgentDBMemory] Decay sweep complete", { decayedCount: decayedEntryIds.length });
     }
   }
+}
+
+/** Run a full auto-tiering sweep: decay pass, then promote/demote entries. */
+export async function autoTieringSweep(
+  ctx: AgentDBTieringContext,
+  promotionThreshold: number,
+  demotionTimeoutDays: number,
+): Promise<void> {
+  const now = getNow() as number;
+  const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
+  let promoted = 0;
+  let demoted = 0;
+
+  decaySweep(ctx);
 
   const tieringSnapshot = Array.from(ctx.entries.values());
   for (const entry of tieringSnapshot) {

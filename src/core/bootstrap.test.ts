@@ -37,6 +37,7 @@ vi.mock("../memory/unified/agentdb-memory.js", () => {
       initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
       shutdown: vi.fn(),
       setDecayConfig: vi.fn(),
+      startDecay: vi.fn(),
     };
   });
   return { AgentDBMemory: MockAgentDBMemory };
@@ -229,6 +230,7 @@ function resetMocksToDefaults(): void {
       initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
       shutdown: vi.fn(),
       setDecayConfig: vi.fn(),
+      startDecay: vi.fn(),
     } as unknown as InstanceType<typeof AgentDBMemory>;
   });
 
@@ -304,6 +306,7 @@ describe("initializeMemory", () => {
         }),
         shutdown: vi.fn(),
         setDecayConfig: vi.fn(),
+        startDecay: vi.fn(),
       } as unknown as InstanceType<typeof AgentDBMemory>;
     });
 
@@ -321,6 +324,7 @@ describe("initializeMemory", () => {
         initialize: vi.fn().mockResolvedValue({ kind: "err", error: new Error("init failed") }),
         shutdown: vi.fn(),
         setDecayConfig: vi.fn(),
+        startDecay: vi.fn(),
       } as unknown as InstanceType<typeof AgentDBMemory>;
     });
 
@@ -526,6 +530,7 @@ describe("initializeMemory", () => {
           }),
           shutdown: vi.fn(),
           setDecayConfig: vi.fn(),
+          startDecay: vi.fn(),
         } as unknown as InstanceType<typeof AgentDBMemory>;
       });
 

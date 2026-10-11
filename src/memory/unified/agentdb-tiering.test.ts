@@ -182,32 +182,44 @@ describe("calculateImportanceScore", () => {
 // ---------------------------------------------------------------------------
 
 describe("enforceTierLimits", () => {
+  // Eviction mechanics run on a tier that still deletes. Working's overflow
+  // moves to Persistent instead (memory-rag#3, tested below).
+  const EVICTING = MemoryTier.Persistent;
+  function evictingCtx(
+    entries: Map<string, UnifiedMemoryEntry>,
+    overrides: Partial<AgentDBTieringContext> = {},
+  ): AgentDBTieringContext {
+    const ctx = makeTieringCtx(entries, overrides);
+    (ctx.config.maxEntriesPerTier as Record<MemoryTier, number>)[EVICTING] = 5;
+    return ctx;
+  }
+
   it("should not remove entries when under the limit", async () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
-    entries.set("e1", makeEntry("e1", "entry 1", { tier: MemoryTier.Working }));
-    entries.set("e2", makeEntry("e2", "entry 2", { tier: MemoryTier.Working }));
+    entries.set("e1", makeEntry("e1", "entry 1", { tier: EVICTING }));
+    entries.set("e2", makeEntry("e2", "entry 2", { tier: EVICTING }));
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
     expect(entries.size).toBe(2);
   });
 
   it("should remove lowest-scoring entries when over the limit", async () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
-    // Create 8 Working tier entries (limit is 5)
+    // Create 8 entries in a tier capped at 5
     for (let i = 0; i < 8; i++) {
       entries.set(`w${i}`, makeEntry(`w${i}`, `working ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: (i * 0.1) as NormalizedScore,
         accessCount: i,
       }));
     }
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
-    const remaining = Array.from(entries.values()).filter(e => e.tier === MemoryTier.Working);
+    const remaining = Array.from(entries.values()).filter(e => e.tier === EVICTING);
     expect(remaining.length).toBe(5);
   });
 
@@ -220,13 +232,13 @@ describe("enforceTierLimits", () => {
     // someone notices the agent forgot something it was told to remember.
     const entries = new Map<string, UnifiedMemoryEntry>();
     entries.set("vital", makeEntry("vital", "must survive", {
-      tier: MemoryTier.Working,
+      tier: EVICTING,
       importanceScore: 0.99 as NormalizedScore,
       accessCount: 50,
     }));
     for (let i = 0; i < 7; i++) {
       const e = makeEntry(`junk${i}`, `junk ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: 0.01 as NormalizedScore,
         accessCount: 0,
       });
@@ -235,8 +247,8 @@ describe("enforceTierLimits", () => {
       entries.set(`junk${i}`, e);
     }
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
     expect(entries.has("vital")).toBe(true);
   });
@@ -244,26 +256,26 @@ describe("enforceTierLimits", () => {
   it("should keep higher-scoring entries and remove lower-scoring ones", async () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
     entries.set("low", makeEntry("low", "low", {
-      tier: MemoryTier.Working,
+      tier: EVICTING,
       importanceScore: 0.1 as NormalizedScore,
       accessCount: 0,
     }));
     entries.set("high", makeEntry("high", "high", {
-      tier: MemoryTier.Working,
+      tier: EVICTING,
       importanceScore: 0.9 as NormalizedScore,
       accessCount: 50,
     }));
     // Fill up to exceed limit of 5
     for (let i = 0; i < 5; i++) {
       entries.set(`fill${i}`, makeEntry(`fill${i}`, `fill ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: 0.5 as NormalizedScore,
         accessCount: 10,
       }));
     }
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
     expect(entries.has("high")).toBe(true);
     expect(entries.has("low")).toBe(false);
@@ -273,15 +285,15 @@ describe("enforceTierLimits", () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
     for (let i = 0; i < 8; i++) {
       entries.set(`hw${i}`, makeEntry(`hw${i}`, `entry ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: (i * 0.1) as NormalizedScore,
         accessCount: i,
       }));
     }
 
     const mockHnsw = { remove: vi.fn(async () => {}) };
-    const ctx = makeTieringCtx(entries, { hnswStore: mockHnsw as any });
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries, { hnswStore: mockHnsw as any });
+    await enforceTierLimits(ctx, EVICTING);
 
     expect(mockHnsw.remove).toHaveBeenCalled();
   });
@@ -290,14 +302,14 @@ describe("enforceTierLimits", () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
     for (let i = 0; i < 8; i++) {
       entries.set(`p${i}`, makeEntry(`p${i}`, `entry ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: (i * 0.1) as NormalizedScore,
         accessCount: i,
       }));
     }
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
     // 3 entries should be removed (8 - 5 limit)
     expect(removePersistedEntry).toHaveBeenCalledTimes(3);
@@ -307,7 +319,7 @@ describe("enforceTierLimits", () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
     for (let i = 0; i < 8; i++) {
       entries.set(`w${i}`, makeEntry(`w${i}`, `working ${i}`, {
-        tier: MemoryTier.Working,
+        tier: EVICTING,
         importanceScore: 0.1 as NormalizedScore,
       }));
     }
@@ -315,11 +327,86 @@ describe("enforceTierLimits", () => {
       tier: MemoryTier.Ephemeral,
     }));
 
-    const ctx = makeTieringCtx(entries);
-    await enforceTierLimits(ctx, MemoryTier.Working);
+    const ctx = evictingCtx(entries);
+    await enforceTierLimits(ctx, EVICTING);
 
     // Ephemeral entry should be untouched
     expect(entries.has("eph1")).toBe(true);
+  });
+
+  // memory-rag#3: every conversation summary lands in Working and, with
+  // auto-tiering off (the default), nothing else drains it. Deleting its
+  // overflow made conversation memory a ring buffer of the cap.
+  it("moves Working overflow to Persistent instead of deleting it, lowest-scoring first", async () => {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < 8; i++) {
+      entries.set(`w${i}`, makeEntry(`w${i}`, `working ${i}`, {
+        tier: MemoryTier.Working,
+        importanceScore: (i * 0.1) as NormalizedScore,
+        accessCount: i,
+      }));
+    }
+    const demoteEntry = vi.fn(async (id: string, tier: MemoryTier) => {
+      (entries.get(id) as { tier: MemoryTier }).tier = tier;
+      return { kind: "ok" as const, value: entries.get(id) };
+    });
+    const mockHnsw = { remove: vi.fn(async () => {}) };
+    const ctx = makeTieringCtx(entries, { demoteEntry: demoteEntry as never, hnswStore: mockHnsw as never });
+
+    await enforceTierLimits(ctx, MemoryTier.Working);
+
+    expect(entries.size).toBe(8);
+    expect(demoteEntry.mock.calls).toEqual([
+      ["w0", MemoryTier.Persistent],
+      ["w1", MemoryTier.Persistent],
+      ["w2", MemoryTier.Persistent],
+    ]);
+    expect(removePersistedEntry).not.toHaveBeenCalled();
+    expect(mockHnsw.remove).not.toHaveBeenCalled();
+  });
+
+  it("moved overflow counts against the Persistent cap, which is the one that deletes", async () => {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < 20; i++) {
+      entries.set(`p${i}`, makeEntry(`p${i}`, `persistent ${i}`, {
+        tier: MemoryTier.Persistent,
+        importanceScore: 0.8 as NormalizedScore,
+      }));
+    }
+    for (let i = 0; i < 7; i++) {
+      entries.set(`w${i}`, makeEntry(`w${i}`, `working ${i}`, {
+        tier: MemoryTier.Working,
+        importanceScore: 0.3 as NormalizedScore,
+      }));
+    }
+    const demoteEntry = vi.fn(async (id: string, tier: MemoryTier) => {
+      (entries.get(id) as { tier: MemoryTier }).tier = tier;
+      return { kind: "ok" as const, value: entries.get(id) };
+    });
+    const ctx = makeTieringCtx(entries, { demoteEntry: demoteEntry as never });
+
+    await enforceTierLimits(ctx, MemoryTier.Working);
+
+    // Working cap 5, Persistent cap 20: two move, then the two lowest-scoring
+    // Persistent rows (the moved summaries) are evicted.
+    expect(demoteEntry).toHaveBeenCalledTimes(2);
+    expect([...entries.values()].filter((e) => e.tier === MemoryTier.Working)).toHaveLength(5);
+    expect([...entries.values()].filter((e) => e.tier === MemoryTier.Persistent)).toHaveLength(20);
+    expect(removePersistedEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Working overflow it could not move rather than deleting it", async () => {
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    for (let i = 0; i < 8; i++) {
+      entries.set(`w${i}`, makeEntry(`w${i}`, `working ${i}`, { tier: MemoryTier.Working }));
+    }
+    const demoteEntry = vi.fn(async () => ({ kind: "err" as const, error: new Error("write failed") }));
+    const ctx = makeTieringCtx(entries, { demoteEntry: demoteEntry as never });
+
+    await enforceTierLimits(ctx, MemoryTier.Working);
+
+    expect(entries.size).toBe(8);
+    expect(removePersistedEntry).not.toHaveBeenCalled();
   });
 });
 

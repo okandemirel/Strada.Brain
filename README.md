@@ -611,9 +611,10 @@ Strada also keeps ownership of the next step. If a provider returns an incomplet
 The active memory backend is `AgentDBMemory` -- SQLite with HNSW vector indexing and a three-tier auto-tiering architecture.
 
 **Three-tier memory:**
-- **Working memory** -- active session context, auto-promoted after sustained use
-- **Ephemeral memory** -- short-term storage, auto-evicted when capacity thresholds are reached
-- **Persistent memory** -- long-term storage, promoted from ephemeral based on access frequency and importance
+- **Working memory** -- active session context; conversation summaries land here. Past its cap (`MEMORY_TIER_WORKING_MAX`, default 100) the lowest-scoring entries move to Persistent memory; they are not deleted
+- **Ephemeral memory** -- short-term storage with a TTL (`MEMORY_EPHEMERAL_TTL_HOURS`, default 24), evicted when its cap (`MEMORY_TIER_EPHEMERAL_MAX`, default 1000) is reached
+- **Persistent memory** -- long-term storage. Its cap (`MEMORY_TIER_PERSISTENT_MAX`, default 10000) is the one limit that deletes Working or Persistent memory: past it, the lowest-scoring entries are removed
+- Promotion and demotion between tiers by access frequency and staleness run only with `MEMORY_AUTO_TIERING=true` (default off)
 
 **How it works:**
 - Session history is trimmed with provider-aware thresholds, and trimmed slices are persisted to memory before they leave the active context window
@@ -754,6 +755,7 @@ Memory entries naturally decay over time using an exponential decay model, while
 - Each memory entry has a decay score that decreases over time
 - Access frequency and importance boost decay resistance
 - Instincts are exempt from decay (never expire)
+- Runs every `MEMORY_AUTO_TIERING_INTERVAL_MS` (default 5 minutes) while `MEMORY_DECAY_ENABLED=true` (the default), with or without auto-tiering; a lower score only moves an entry earlier in eviction order, decay never deletes anything by itself
 
 **Idle consolidation:**
 - During low-activity periods, the consolidation engine identifies semantically similar memories using HNSW clustering
