@@ -57,6 +57,24 @@ CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_patterns_key ON patterns(pattern_key);
 CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON patterns(confidence DESC);
+
+-- The decay pass writes its score here, beside the row: an UPDATE of any
+-- memories column rewrites the row's pages, embedding included (~8 KB per row
+-- at 1536 dims), and decay moves nearly every score on every pass.
+CREATE TABLE IF NOT EXISTS memory_decay (
+  id TEXT PRIMARY KEY,
+  importance_score REAL NOT NULL,
+  decayed_at INTEGER NOT NULL
+) WITHOUT ROWID;
+
+-- A row write carries the entry's current score and decayedAt, so any decay
+-- state written before it is older and must not override it on load.
+CREATE TRIGGER IF NOT EXISTS memory_decay_clear_on_insert AFTER INSERT ON memories
+BEGIN DELETE FROM memory_decay WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS memory_decay_clear_on_update AFTER UPDATE OF value ON memories
+BEGIN DELETE FROM memory_decay WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS memory_decay_clear_on_delete AFTER DELETE ON memories
+BEGIN DELETE FROM memory_decay WHERE id = OLD.id; END;
 `;
 
 export interface MemoryRow {
@@ -67,6 +85,9 @@ export interface MemoryRow {
   embedding: Buffer | null;
   created_at: number;
   updated_at: number;
+  /** memory_decay columns joined in by getAllMemories (null when the row has none). */
+  decay_score?: number | null;
+  decay_at?: number | null;
 }
 
 export interface PatternRow {
@@ -254,13 +275,26 @@ export function prepareSqliteStatements(ctx: AgentDBSqliteContext): void {
       `),
   );
 
+  ctx.sqliteStatements.set(
+    "upsertDecayState",
+    ctx.sqliteDb!.prepare(`
+        INSERT INTO memory_decay (id, importance_score, decayed_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          importance_score = excluded.importance_score,
+          decayed_at = excluded.decayed_at
+      `),
+  );
+
   // Rows consolidation soft-deleted (consolidated_into set) stay on disk for
   // undo, but must not come back on load next to their summary.
   ctx.sqliteStatements.set(
     "getAllMemories",
-    ctx.sqliteDb!.prepare(
-      "SELECT * FROM memories WHERE consolidated_into IS NULL ORDER BY created_at DESC",
-    ),
+    ctx.sqliteDb!.prepare(`
+        SELECT m.*, d.importance_score AS decay_score, d.decayed_at AS decay_at
+        FROM memories m LEFT JOIN memory_decay d ON d.id = m.id
+        WHERE m.consolidated_into IS NULL ORDER BY m.created_at DESC
+      `),
   );
 
   ctx.sqliteStatements.set(
@@ -389,21 +423,22 @@ export function persistEntry(ctx: AgentDBSqliteContext, entry: UnifiedMemoryEntr
 }
 
 /**
- * Batch-persist decayed entries to SQLite inside a single transaction.
- * Only writes entries whose IDs are in the provided set.
+ * Batch-persist the decayed score and decayedAt of the given entries to
+ * memory_decay inside a single transaction. Decay changes nothing else, and
+ * the whole-row upsert rewrote each row's embedding pages to say so.
  */
 export function persistDecayedEntries(ctx: AgentDBSqliteContext, entryIds: string[]): void {
   if (!ctx.sqliteDb) return;
 
   try {
-    const stmt = ctx.sqliteStatements.get("upsertMemory");
+    const stmt = ctx.sqliteStatements.get("upsertDecayState");
     if (!stmt) return;
-    const idSet = new Set(entryIds);
 
     ctx.sqliteDb.transaction(() => {
-      for (const entry of ctx.entries.values()) {
-        if (!idSet.has(entry.id as string)) continue;
-        upsertEntryRow(stmt, entry);
+      for (const id of entryIds) {
+        const entry = ctx.entries.get(id);
+        if (!entry || entry.decayedAt === undefined) continue;
+        stmt.run(id, entry.importanceScore, entry.decayedAt);
       }
     })();
   } catch (error) {
@@ -431,6 +466,24 @@ export function removePersistedEntry(ctx: AgentDBSqliteContext, id: string): voi
 // ---------------------------------------------------------------------------
 // Bulk load / save
 // ---------------------------------------------------------------------------
+
+/**
+ * The score and decayedAt a loaded row stands for: the decay pass's
+ * memory_decay row when it has one (the triggers delete it on every later
+ * write of the row), else the row's own value.
+ */
+export function decayStateOf(
+  row: MemoryRow,
+  parsed: Record<string, unknown>,
+): { importanceScore: NormalizedScore; decayedAt: number | undefined } {
+  if (typeof row.decay_score === "number" && typeof row.decay_at === "number") {
+    return { importanceScore: row.decay_score as NormalizedScore, decayedAt: row.decay_at };
+  }
+  return {
+    importanceScore: (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
+    decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
+  };
+}
 
 /**
  * Load entries from SQLite into the provided entries map WITHOUT indexing into HNSW.
@@ -471,9 +524,7 @@ export async function loadEntriesWithoutHnsw(ctx: AgentDBSqliteContext): Promise
             : undefined,
           hnswIndex: (parsed.hnswIndex as number) ?? 0,
           version: (parsed.version as number) ?? 1,
-          importanceScore:
-            (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
-          decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
+          ...decayStateOf(row, parsed),
           persistentOrigin: parsed.persistentOrigin === true ? true : undefined,
           domain: parsed.domain as string | undefined,
           chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),

@@ -13,6 +13,7 @@ import {
   calculateImportanceScore,
   enforceTierLimits,
   autoTieringSweep,
+  DECAY_PERSIST_EPSILON,
 } from "./agentdb-tiering.js";
 import type { NormalizedScore } from "../../types/index.js";
 import { TextIndex } from "../text-index.js";
@@ -697,6 +698,45 @@ describe("autoTieringSweep", () => {
       }
 
       expect(entries.get("p1")!.importanceScore).toBeCloseTo(0.8 * Math.exp(-0.01), 6);
+    });
+
+    it("persists a score only once it has moved by the epsilon since the last write, and decays it in memory every pass", async () => {
+      // 2 days of 5-minute passes at 0.01/day: 0.8 crosses 0.79 after ~1.26
+      // days and would cross 0.78 after ~2.5, so exactly one write.
+      const start = Date.now();
+      const entries = new Map<string, UnifiedMemoryEntry>();
+      entries.set("p1", makeEntry("p1", "persistent note", {
+        tier: MemoryTier.Persistent,
+        importanceScore: 0.8 as NormalizedScore,
+        lastAccessedAt: start as any,
+      }));
+      const ctx = makeTieringCtx(entries, {
+        decayConfig: {
+          enabled: true,
+          lambdas: { working: 0.1, ephemeral: 0.05, persistent: 0.01 },
+          exemptDomains: [],
+          timeoutMs: 30000,
+        },
+      });
+
+      const step = 5 * 60_000;
+      const written: number[] = [];
+      vi.mocked(persistDecayedEntries).mockImplementation((_ctx, ids) => {
+        for (const id of ids) written.push(entries.get(id)!.importanceScore);
+      });
+      try {
+        for (let k = 1; k <= 576; k++) {
+          vi.mocked(getNow).mockReturnValue((start + k * step) as any);
+          await autoTieringSweep(ctx, 1_000, 7);
+        }
+      } finally {
+        vi.mocked(persistDecayedEntries).mockReset();
+      }
+
+      expect(written).toHaveLength(1);
+      expect(0.8 - written[0]!).toBeGreaterThanOrEqual(DECAY_PERSIST_EPSILON);
+      expect(0.8 - written[0]!).toBeLessThan(DECAY_PERSIST_EPSILON + 1e-4);
+      expect(entries.get("p1")!.importanceScore).toBeCloseTo(0.8 * Math.exp(-0.02), 6);
     });
 
     it("should batch-persist all decayed entries", async () => {

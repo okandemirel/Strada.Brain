@@ -756,6 +756,7 @@ Memory entries naturally decay over time using an exponential decay model, while
 - Access frequency and importance boost decay resistance
 - Instincts are exempt from decay (never expire)
 - Runs every `MEMORY_AUTO_TIERING_INTERVAL_MS` (default 5 minutes) while `MEMORY_DECAY_ENABLED=true` (the default), with or without auto-tiering; a lower score only moves an entry earlier in eviction order, decay never deletes anything by itself
+- A decayed score is written to disk only after it has moved by 0.01 since its last write, and only the score and its timestamp are written (not the memory row with its embedding); a restart recomputes the same score from what is stored
 
 **Idle consolidation:**
 - During low-activity periods, the consolidation engine identifies semantically similar memories using HNSW clustering

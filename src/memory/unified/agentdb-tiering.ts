@@ -5,7 +5,7 @@
  * decay sweeps, importance scoring, and tier limit enforcement.
  */
 
-import type { UnifiedMemoryConfig } from "./unified-memory.interface.js";
+import type { UnifiedMemoryConfig, UnifiedMemoryEntry } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { MemoryId, NormalizedScore, TimestampMs } from "../../types/index.js";
@@ -151,6 +151,22 @@ export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: Memory
 // ---------------------------------------------------------------------------
 
 /**
+ * How far a decayed score must move from the score last written for it before
+ * a pass writes it again. A 5-minute pass moves a Persistent score by about
+ * 2e-6, and writing every step wrote nearly every entry on every pass.
+ * Holding a write back loses nothing: what is on disk is a score together
+ * with the decayedAt it was decayed to, and decaying that pair to any later
+ * time gives the in-memory value, so a restart arrives at the same score.
+ */
+export const DECAY_PERSIST_EPSILON = 0.01;
+
+/**
+ * The score last written for each entry. An entry no pass has seen yet holds
+ * the score it was loaded or stored with, which is the one on disk.
+ */
+const persistedScores = new WeakMap<UnifiedMemoryEntry, number>();
+
+/**
  * Exponential decay pass over every non-exempt entry. Runs inside the
  * auto-tiering sweep and, with auto-tiering off, on its own timer
  * (AgentDBMemory.startDecay) — it used to run only inside the sweep, so the
@@ -183,15 +199,16 @@ export function decaySweep(ctx: AgentDBTieringContext): void {
       const lambda = lambdas[entry.tier];
       const decayed = entry.importanceScore * Math.exp(-daysUndecayed * lambda);
       const newScore = Math.max(decayed, 0.01) as NormalizedScore;
+      const written = persistedScores.get(entry) ?? entry.importanceScore;
       entry.decayedAt = now as TimestampMs;
+      entry.importanceScore = newScore;
 
-      if (newScore !== entry.importanceScore) {
-        entry.importanceScore = newScore;
-        decayedEntryIds.push(entry.id as string);
-      }
+      const moved = Math.abs(newScore - written) >= DECAY_PERSIST_EPSILON;
+      persistedScores.set(entry, moved ? newScore : written);
+      if (moved) decayedEntryIds.push(entry.id as string);
     }
 
-    // Batch persist only the entries whose scores actually changed
+    // Batch persist only the entries whose scores moved by the epsilon
     if (decayedEntryIds.length > 0) {
       persistDecayedEntries(ctx, decayedEntryIds);
       getLoggerSafe().debug("[AgentDBMemory] Decay sweep complete", { decayedCount: decayedEntryIds.length });

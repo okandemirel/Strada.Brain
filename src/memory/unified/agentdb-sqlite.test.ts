@@ -198,6 +198,7 @@ describe("initSqlite", () => {
 
     const expectedStatements = [
       "upsertMemory",
+      "upsertDecayState",
       "getAllMemories",
       "deleteMemory",
       "upsertPattern",
@@ -385,25 +386,28 @@ describe("persistDecayedEntries", () => {
     expect(() => persistDecayedEntries(ctx, ["e1"])).not.toThrow();
   });
 
-  it("should only persist entries whose IDs are in the provided set", () => {
+  it("should write only the score and decayedAt of the given entries, to memory_decay", () => {
     const runFn = vi.fn();
     const stmt = { run: runFn } as any;
+    const upsertRow = { run: vi.fn() } as any;
     const entries = new Map<string, UnifiedMemoryEntry>();
-    entries.set("e1", makeEntry("e1"));
-    entries.set("e2", makeEntry("e2"));
-    entries.set("e3", makeEntry("e3"));
+    entries.set("e1", makeEntry("e1", { importanceScore: 0.4, decayedAt: 1000 }));
+    entries.set("e2", makeEntry("e2", { importanceScore: 0.3, decayedAt: 1000 }));
+    entries.set("e3", makeEntry("e3", { importanceScore: 0.2, decayedAt: 2000, embedding: new Array(1536).fill(0.1) }));
 
     const mockDb = {
       transaction: vi.fn((fn: any) => () => fn()),
     } as any;
 
     const ctx = makeContext({ sqliteDb: mockDb, entries });
-    ctx.sqliteStatements.set("upsertMemory", stmt);
+    ctx.sqliteStatements.set("upsertDecayState", stmt);
+    ctx.sqliteStatements.set("upsertMemory", upsertRow);
 
     persistDecayedEntries(ctx, ["e1", "e3"]);
 
-    // Should have been called for e1 and e3 but not e2
-    expect(runFn).toHaveBeenCalledTimes(2);
+    // e1 and e3 but not e2, and never the row with its embedding
+    expect(runFn.mock.calls).toEqual([["e1", 0.4, 1000], ["e3", 0.2, 2000]]);
+    expect(upsertRow.run).not.toHaveBeenCalled();
   });
 
   it("should not throw when transaction fails", () => {
@@ -413,7 +417,7 @@ describe("persistDecayedEntries", () => {
     } as any;
 
     const ctx = makeContext({ sqliteDb: mockDb });
-    ctx.sqliteStatements.set("upsertMemory", stmt);
+    ctx.sqliteStatements.set("upsertDecayState", stmt);
 
     expect(() => persistDecayedEntries(ctx, ["e1"])).not.toThrow();
   });

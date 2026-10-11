@@ -56,6 +56,7 @@ import {
   removePersistedEntry as sqliteRemovePersistedEntry,
   saveAllEntries,
   bufferToEmbedding,
+  decayStateOf,
   type AgentDBSqliteContext,
   type MemoryRow,
   type PatternRow,
@@ -1575,9 +1576,7 @@ export class AgentDBMemory implements IUnifiedMemory {
               : undefined,
             hnswIndex: (parsed.hnswIndex as number) ?? 0,
             version: (parsed.version as number) ?? 1,
-            importanceScore:
-              (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
-            decayedAt: typeof parsed.decayedAt === "number" ? parsed.decayedAt : undefined,
+            ...decayStateOf(row, parsed),
             persistentOrigin: parsed.persistentOrigin === true ? true : undefined,
             domain: parsed.domain as string | undefined,
             chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
