@@ -174,6 +174,56 @@ describe("FallbackChainProvider", () => {
     expect(recordFailure).toHaveBeenCalledWith("p1", expect.stringContaining("stalled"));
   });
 
+  // providers#0: the orchestrator's stall watchdog aborts the COMPOSED signal it
+  // passes as options.signal and leaves the external one live. Every sibling was
+  // handed that dead signal, failed before a request left the machine, and was
+  // charged a failure — ending in a false "All providers failed".
+  describe("a caller signal that is already dead", () => {
+    function honoursSignal(name: string) {
+      const chat = vi.fn(async (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], opts?: { signal?: AbortSignal }) => {
+        if (opts?.signal?.aborted) throw opts.signal.reason;
+        return { text: `${name}-ok`, toolCalls: [], stopReason: "end_turn" as const, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+      });
+      return { provider: { ...createMockProvider(), name, chat } as IAIProvider, chat };
+    }
+
+    it("is not handed to the siblings when the watchdog fires mid-attempt", async () => {
+      const watchdog = new AbortController();
+      const external = new AbortController();
+      const stall = new Error("Streaming did not start within 100ms (thinking model)");
+      const stalled = vi.fn(async () => { watchdog.abort(stall); throw stall; });
+      const p1 = { ...createMockProvider(), name: "deepseek", chat: stalled } as IAIProvider;
+      const p2 = honoursSignal("kimi");
+      const p3 = honoursSignal("groq");
+      const recordFailure = vi.spyOn(ProviderHealthRegistry.getInstance(), "recordFailure");
+      loggerSpies.warn.mockClear();
+
+      await expect(new FallbackChainProvider([p1, p2.provider, p3.provider]).chatStream("sys", [], [], () => {}, {
+        signal: AbortSignal.any([watchdog.signal, external.signal]),
+        externalSignal: external.signal,
+      })).rejects.toThrow(/did not start within/);
+
+      expect(p2.chat).not.toHaveBeenCalled();
+      expect(p3.chat).not.toHaveBeenCalled();
+      // The member that was running keeps the failure it earned; nobody else is charged.
+      expect(recordFailure.mock.calls.map(([name]) => name)).toEqual(["deepseek"]);
+      expect(loggerSpies.warn).not.toHaveBeenCalledWith(expect.stringContaining("trying next"), expect.anything());
+    });
+
+    it("asks no member at all when it arrives already aborted", async () => {
+      const members = [honoursSignal("a"), honoursSignal("b"), honoursSignal("c")];
+      const recordFailure = vi.spyOn(ProviderHealthRegistry.getInstance(), "recordFailure");
+
+      await expect(new FallbackChainProvider(members.map((m) => m.provider)).chat("sys", [], [], {
+        signal: AbortSignal.abort(new Error("watchdog fired")),
+        externalSignal: new AbortController().signal,
+      })).rejects.toThrow(/watchdog fired/);
+
+      for (const m of members) expect(m.chat).not.toHaveBeenCalled();
+      expect(recordFailure).not.toHaveBeenCalled();
+    });
+  });
+
   // Audit #1/#2: a resolved-but-empty response must NOT short-circuit the chain as
   // a success — a silently-empty provider should fail over to the next healthy one.
   it("an empty first answer from the ONLY provider is retried, and its tokens travel as auxiliaryUsage (audit 03.4 / D22)", async () => {

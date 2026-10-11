@@ -425,6 +425,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       }),
       messages,
       options?.externalSignal,
+      options?.signal,
     );
   }
 
@@ -463,7 +464,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       return attempt.catch((err) => (
         emittedAny ? Promise.reject(new MidStreamFailureError(provider.name, err)) : Promise.reject(err)
       ));
-    }, messages, options?.externalSignal);
+    }, messages, options?.externalSignal, options?.signal);
   }
 
   async healthCheck(): Promise<boolean> {
@@ -777,6 +778,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     ) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
     externalSignal?: AbortSignal,
+    callerSignal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const health = ProviderHealthRegistry.getInstance();
@@ -823,6 +825,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;
+
+      // The caller's own signal is dead — the orchestrator's stall watchdog
+      // aborts the signal it composes over the external one and leaves the
+      // external one live. Every member handed it would fail before a request
+      // left the machine and be charged a failure it never made, ending in a
+      // false "All providers failed". The member that was running keeps the
+      // failure it earned. An external cancel keeps its own path below.
+      if (callerSignal?.aborted && !externalSignal?.aborted) {
+        throw attachLost(lastError ?? abortReasonOf(callerSignal));
+      }
 
       // Skip providers that are currently unhealthy (cooldown not expired)
       if (!health.isAvailable(provider.name)) {
@@ -1144,6 +1156,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
 
+        // Same dead signal as the check at the top of the loop. Stopping here
+        // keeps the logs below from announcing a sibling that will not be asked.
+        if (callerSignal?.aborted && remaining.length > 0) throw attachLost(lastError);
+
         // A hard quota stop is surfaced with a DISTINCT, accurate reason (not "rate-limited"
         // and not "unresponsive"): the provider's usage quota is exhausted and it has been
         // cooled down — we either fail over to the next provider, or terminate with the
@@ -1235,6 +1251,12 @@ function withCallerBackoff(
   caller: ((info: BackoffInfo) => void) | undefined,
 ): (info: BackoffInfo) => void {
   return caller ? (info) => { own(info); caller(info); } : own;
+}
+
+/** What an aborted signal was aborted with, as an Error (the fetch layer's rule). */
+function abortReasonOf(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new DOMException("This operation was aborted", "AbortError");
 }
 
 /** Rejects when the signal aborts; never resolves otherwise. */
