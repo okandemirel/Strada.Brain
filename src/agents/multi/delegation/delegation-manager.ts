@@ -613,16 +613,7 @@ export class DelegationManager {
     const providerConfig = this.resolveDelegationProviderConfig(tier, typeConfig);
     const provider = createProvider(this.buildDelegationProviderConfig(providerConfig.name, providerConfig.model));
 
-    const providerManager = new ProviderManager(
-      provider,
-      this.opts.providerCredentials ?? {},
-      this.opts.providerModels, // modelOverrides — sub-agent chains keep the deployment's pinned models
-      this.opts.preferencesDbPath,
-      [], // defaultProviderOrder
-      this.opts.providerBaseUrls?.["ollama"], // ollamaBaseUrl (threaded via the providerBaseUrls merge in stage-agents)
-      this.opts.providerBaseUrls, // baseUrlOverrides — keeps sub-agent chains on the configured (Go) endpoint
-      this.opts.providerResponseTimeoutMs, // first-response timeout so dead tier providers fail over fast
-    );
+    const providerManager = this.buildSubAgentProviderManager(provider, providerConfig.name);
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
     const systemPrompt =
@@ -1225,6 +1216,33 @@ export class DelegationManager {
       name: top.name,
       model: top.model,
     };
+  }
+
+  /**
+   * The sub-agent's own ProviderManager, over the deployment's shared
+   * preferences DB. Built with no chain and not strict, it routed a chat with
+   * no preference of its own by the brain-wide default — a selection the
+   * strict main manager ignores — so a deployment pinned to
+   * "opencode,opencode2" ran its delegated turns on OpenAI (review
+   * 2026-10-11). Under a strict chain it gets that chain, headed by the tier's
+   * provider so an unpreferred chat still names the provider it runs on.
+   */
+  private buildSubAgentProviderManager(provider: ReturnType<typeof createProvider>, providerName: string): ProviderManager {
+    const chain = [...new Set((this.opts.providerChain ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean))];
+    const strict = this.opts.chainIsExhaustive === true && chain.length > 0;
+    const head = providerName.trim().toLowerCase();
+    const order = !strict ? [] : chain.includes(head) ? [head, ...chain.filter((n) => n !== head)] : chain;
+    return new ProviderManager(
+      provider,
+      this.opts.providerCredentials ?? {},
+      this.opts.providerModels, // modelOverrides — sub-agent chains keep the deployment's pinned models
+      this.opts.preferencesDbPath,
+      order, // defaultProviderOrder
+      this.opts.providerBaseUrls?.["ollama"], // ollamaBaseUrl (threaded via the providerBaseUrls merge in stage-agents)
+      this.opts.providerBaseUrls, // baseUrlOverrides — keeps sub-agent chains on the configured (Go) endpoint
+      this.opts.providerResponseTimeoutMs, // first-response timeout so dead tier providers fail over fast
+      strict,
+    );
   }
 
   /** Is this provider inside the operator's chain, when that chain is exhaustive? */

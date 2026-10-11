@@ -11,6 +11,7 @@ import type { DelegationManagerOptions } from "./delegation-manager.js";
 import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
 import { createProvider } from "../../providers/provider-registry.js";
+import { ProviderManager } from "../../providers/provider-manager.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { setLiveChainMemberNames } from "../../providers/provider-outage.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
@@ -1066,6 +1067,52 @@ describe("DelegationManager", () => {
         mgr as unknown as { getDefaultModelForProvider(name: string): string }
       ).getDefaultModelForProvider("opencode");
       expect(resolved).toBe("nemotron-3.5-lightning-free");
+    });
+  });
+
+  // Review 2026-10-11, reproduced: the sub-agent's own ProviderManager was
+  // built with no chain and not strict, so a chat with no preference routed
+  // on the brain-wide default — chain(OpenAI) on a deployment pinned to
+  // PROVIDER_CHAIN_STRICT=opencode,opencode2. The real manager's routing under
+  // these arguments is pinned in delegation-chain-scope.test.ts.
+  describe("the sub-agent's own ProviderManager", () => {
+    const delegateReview = (mgr: DelegationManager) => mgr.delegate({
+      type: "code_review",
+      task: "Review this code",
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode: "sync",
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+    const builtWith = () => {
+      const args = vi.mocked(ProviderManager).mock.calls.at(-1)!;
+      return { order: args[4], strict: args[8] === true };
+    };
+
+    it("is built on the operator's strict chain, headed by the tier's provider", async () => {
+      const mgr = new DelegationManager(buildManagerOpts({
+        delegationLog,
+        providerChain: ["claude", "deepseek"],
+        chainIsExhaustive: true,
+      }));
+      vi.mocked(ProviderManager).mockClear();
+
+      await delegateReview(mgr);
+
+      expect(builtWith()).toEqual({ order: ["deepseek", "claude"], strict: true });
+    });
+
+    it("is built exactly as before when the chain is not strict", async () => {
+      const mgr = new DelegationManager(buildManagerOpts({
+        delegationLog,
+        providerChain: ["claude", "deepseek"],
+        chainIsExhaustive: false,
+      }));
+      vi.mocked(ProviderManager).mockClear();
+
+      await delegateReview(mgr);
+
+      expect(builtWith()).toEqual({ order: [], strict: false });
     });
   });
 
