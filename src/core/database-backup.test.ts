@@ -43,6 +43,7 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -455,6 +456,99 @@ describe("AgentDB and per-agent memory (core-rest#0)", () => {
     await restoreRuntimeData({ backupDir: destDir });
     expect(countRows(agentDbFile())).toBe(6);
     expect(countRows(agentMemoryFile())).toBe(4);
+  });
+});
+
+describe("data kept behind a symlinked directory (backup-receipt follow-up)", () => {
+  // The backup follows a linked directory because the runtime writes through
+  // it; the restore refused anything reached through a link, and one refused
+  // entry refuses the whole archive. Junctions on Windows: no privilege needed.
+  const linkDirectory = (target: string, link: string): void => {
+    mkdirSync(path.dirname(link), { recursive: true });
+    symlinkSync(target, link, "junction");
+  };
+
+  it("restores an AgentDB store moved to another volume through its link, with the rest of the archive", async () => {
+    const volume = path.join(root, "bigvol", "agentdb");
+    mkdirSync(volume, { recursive: true });
+    linkDirectory(volume, path.join(memoryRoot, "agentdb"));
+    seedDatabase(path.join(memoryRoot, "agentdb", "memory.db"), 6).close();
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 2).close();
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).databases.map((d) => d.relative).sort()).toEqual([
+      path.join("agentdb", "memory.db"),
+      "campaigns.db",
+    ]);
+    seedDatabase(path.join(memoryRoot, "agentdb", "memory.db"), 3).close();
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 3).close();
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(path.join(memoryRoot, "campaigns.db"))).toBe(2);
+    // On the volume AgentDB writes to, and the link is still the link: a copy
+    // that replaced it would leave AgentDB reading the old file.
+    expect(countRows(path.join(volume, "memory.db"))).toBe(6);
+    expect(lstatSync(path.join(memoryRoot, "agentdb")).isSymbolicLink()).toBe(true);
+  });
+
+  it("restores an attachment spool moved to another volume through its link", async () => {
+    const volume = path.join(root, "bigvol", "spool");
+    mkdirSync(path.join(volume, "store"), { recursive: true });
+    linkDirectory(volume, path.join(memoryRoot, RETAINED_ATTACHMENT_DIR));
+    const payload = Buffer.alloc(2048, 0x41);
+    writeFileSync(path.join(volume, "store", "token-1"), payload, { mode: 0o600 });
+    seedDatabase(path.join(memoryRoot, "campaigns.db"), 2).close();
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).blobs?.map((b) => b.relative)).toEqual([
+      path.join(RETAINED_ATTACHMENT_DIR, "store", "token-1"),
+    ]);
+    rmSync(path.join(volume, "store", "token-1"));
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(readFileSync(path.join(volume, "store", "token-1"))).toEqual(payload);
+    expect(lstatSync(path.join(memoryRoot, RETAINED_ATTACHMENT_DIR)).isSymbolicLink()).toBe(true);
+  });
+
+  it("backs up a database two linked trees reach once, so the restore does not refuse it as named twice", async () => {
+    mkdirSync(path.join(memoryRoot, "agentdb"), { recursive: true });
+    seedDatabase(path.join(memoryRoot, "agentdb", "memory.db"), 6).close();
+    linkDirectory(path.join(memoryRoot, "agentdb"), path.join(memoryRoot, "agents", "a1"));
+    expect(listRuntimeDatabases(memoryRoot).map((p) => path.relative(memoryRoot, p))).toEqual([
+      path.join("agentdb", "memory.db"),
+    ]);
+    await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).databases.map((d) => d.relative)).toEqual([
+      path.join("agentdb", "memory.db"),
+    ]);
+    seedDatabase(path.join(memoryRoot, "agentdb", "memory.db"), 3).close();
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(path.join(memoryRoot, "agentdb", "memory.db"))).toBe(6);
+  });
+
+  it("backs up a root reached under two spellings once", async () => {
+    // MEMORY_DB_PATH pointed at the Strada home through a link: two root
+    // labels, one directory, and the restore judges files by their real path.
+    const alias = path.join(root, "home-alias");
+    linkDirectory(memoryRoot, alias);
+    seedDatabase(path.join(memoryRoot, "hub-owners.db"), 3).close();
+    const install = { memoryRoot, stradaHome: alias, userHome: path.join(root, "absent-home") };
+    await backupRuntimeData({ ...install, destDir, timestamp: "ts" });
+    expect(readBackupManifest(destDir).databases.map((d) => `${d.root}:${d.relative}`)).toEqual([
+      "memory:hub-owners.db",
+    ]);
+    seedDatabase(path.join(memoryRoot, "hub-owners.db"), 2).close();
+
+    await restoreRuntimeData({ backupDir: destDir });
+    expect(countRows(path.join(memoryRoot, "hub-owners.db"))).toBe(3);
+  });
+
+  it("ends a link cycle inside a memory tree, listing each database once", () => {
+    mkdirSync(path.join(memoryRoot, "agentdb"), { recursive: true });
+    seedDatabase(path.join(memoryRoot, "agentdb", "memory.db"), 1).close();
+    linkDirectory(path.join(memoryRoot, "agentdb"), path.join(memoryRoot, "agentdb", "loop"));
+    expect(listRuntimeDatabases(memoryRoot).map((p) => path.relative(memoryRoot, p))).toEqual([
+      path.join("agentdb", "memory.db"),
+    ]);
   });
 });
 

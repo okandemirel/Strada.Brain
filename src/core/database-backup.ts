@@ -322,16 +322,18 @@ export interface RuntimeDatabaseFile {
 /**
  * Every runtime database across every root.
  *
- * Deduplicated by absolute path (the first root that holds a file owns it), so
- * overlapping roots cannot produce two copies of one database.
+ * Deduplicated by real path (the first root that holds a file owns it), so
+ * overlapping roots — or one root reached under two spellings — cannot produce
+ * two copies of one database.
  */
 export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): RuntimeDatabaseFile[] {
   const files: RuntimeDatabaseFile[] = [];
   const seen = new Set<string>();
   for (const root of runtimeDatabaseRoots(opts)) {
     for (const source of listRuntimeDatabases(root.path, root.known, root.directories ?? [])) {
-      if (seen.has(source)) continue;
-      seen.add(source);
+      const identity = fileIdentity(source);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
       files.push({
         source,
         root: root.name,
@@ -356,8 +358,9 @@ export function inventoryRuntimeBlobs(opts: RuntimeDatabaseOptions): RuntimeData
   for (const root of runtimeDatabaseRoots(opts)) {
     for (const dir of RUNTIME_BLOB_DIRECTORIES) {
       for (const source of listSpoolFiles(path.join(root.path, dir))) {
-        if (seen.has(source)) continue;
-        seen.add(source);
+        const identity = fileIdentity(source);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
         files.push({
           source,
           root: root.name,
@@ -380,8 +383,9 @@ export function inventoryRuntimeBlobs(opts: RuntimeDatabaseOptions): RuntimeData
  * {@link copyRuntimeBlob} would read as a corrupt copy and fail the whole backup
  * over. Bytes nobody can ask for are not what a backup is protecting.
  */
-function listSpoolFiles(dir: string): string[] {
+function listSpoolFiles(dir: string, walked: Set<string> = new Set()): string[] {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
+  walked.add(realpathSync(dir));
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
     a.name.localeCompare(b.name),
@@ -389,7 +393,7 @@ function listSpoolFiles(dir: string): string[] {
     if (entry.name === PENDING_ATTACHMENT_DIR) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...listSpoolFiles(full));
+      out.push(...listSpoolFiles(full, walked));
       continue;
     }
     if (entry.isFile()) out.push(full);
@@ -476,8 +480,12 @@ export function listRuntimeDatabases(
     if (!entry.endsWith(".db") || SQLITE_SIDECAR.test(entry)) continue;
     add(entry);
   }
+  // One visited set for every tree of the root: `agents/<id>` linked to
+  // `../agentdb` is one database, and listing it under both names made the
+  // restore refuse the archive for naming one destination twice.
+  const visited = new Set<string>();
   for (const sub of directories) {
-    for (const file of listNestedDatabases(path.join(dir, sub))) add(path.relative(dir, file));
+    for (const file of listNestedDatabases(path.join(dir, sub), visited)) add(path.relative(dir, file));
   }
   return found;
 }
@@ -487,9 +495,11 @@ export function listRuntimeDatabases(
  *
  * Symlinked directories are followed, because the runtime writes through them
  * (an `agentdb` moved to a larger volume is still where AgentDB writes), but
- * each real directory is walked once, so a link cycle ends.
+ * each real directory is walked once, so a link cycle ends. `visited` ends up
+ * holding every real directory walked, which is what a restore may write
+ * through ({@link walkedDirectories}).
  */
-function listNestedDatabases(dir: string, visited: Set<string> = new Set()): string[] {
+function listNestedDatabases(dir: string, visited: Set<string>): string[] {
   let real: string;
   try {
     if (!statSync(dir).isDirectory()) return [];
@@ -509,6 +519,48 @@ function listNestedDatabases(dir: string, visited: Set<string> = new Set()): str
     out.push(...listNestedDatabases(full, visited));
   }
   return out;
+}
+
+/**
+ * The real directories a backup of this root walks into: its database trees and
+ * its attachment spool, links followed exactly as the inventory follows them.
+ *
+ * A restore may place a file inside one of these even when it is outside the
+ * root on disk. Without that, the backup carried an `agentdb` linked to another
+ * volume and the restore refused it as an escape, and that one refusal refused
+ * the whole archive. Taken from the LIVE tree, never from the manifest: a
+ * modified manifest can name any path, but it cannot add a link to the root.
+ */
+function walkedDirectories(rootName: string, rootPath: string): Set<string> {
+  const walked = new Set<string>();
+  // The same trees runtimeDatabaseRoots gives this root's label.
+  const trees = rootName === MEMORY_ROOT_NAME ? MEMORY_DATABASE_DIRECTORIES : [];
+  const walks = [
+    ...trees.map((sub) => () => listNestedDatabases(path.join(rootPath, sub), walked)),
+    ...RUNTIME_BLOB_DIRECTORIES.map((sub) => () => listSpoolFiles(path.join(rootPath, sub), walked)),
+  ];
+  for (const walk of walks) {
+    try {
+      walk();
+    } catch {
+      // A tree that cannot be read only trusts fewer links: an entry that
+      // needed one is still refused by name, instead of the walk refusing all.
+    }
+  }
+  return walked;
+}
+
+/**
+ * One key per file however it is spelled. A restore judges destinations by
+ * their canonical path, so an inventory that deduplicated lexically carried one
+ * file twice and the restore refused the archive for it.
+ */
+function fileIdentity(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return path.resolve(file);
+  }
 }
 
 /** One copied file: the primitive both backup and restore are built from. */
@@ -1071,10 +1123,15 @@ function realPathAsFarAsItExists(target: string): string {
  * DIRECTORY is what is canonicalised — the swap renames into it — so a
  * destination file that is itself a symlink is replaced rather than followed,
  * which is what a restore means.
+ *
+ * `walked` is the one exception: the real directories the backup itself walked
+ * into through a link ({@link walkedDirectories}). The runtime writes there, the
+ * backup read from there, so that is where the restore puts the file back.
  */
 function resolveInsideRoot(
   rootPath: string,
   relative: string,
+  walked: ReadonlySet<string> = new Set(),
 ): { target: string; canonical: string } | { problem: string } {
   const lexical = path.resolve(rootPath, relative);
   const lexicalRel = path.relative(path.resolve(rootPath), lexical);
@@ -1083,12 +1140,15 @@ function resolveInsideRoot(
   }
   const realRoot = realPathAsFarAsItExists(rootPath);
   const realDir = realPathAsFarAsItExists(path.dirname(lexical));
-  const dirRel = path.relative(realRoot, realDir);
-  if (dirRel.startsWith("..") || path.isAbsolute(dirRel)) {
+  const inside = (container: string): boolean => {
+    const rel = path.relative(container, realDir);
+    return !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  if (!inside(realRoot) && ![...walked].some(inside)) {
     return {
       problem:
         `resolves to ${path.join(realDir, path.basename(lexical))}, outside the root ` +
-        `${realRoot} (reached through a symlink)`,
+        `${realRoot} (reached through a symlink the backup does not walk)`,
     };
   }
   // The TARGET stays lexical: it is the path the operator named and the one a
@@ -1592,6 +1652,16 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
   const problems: string[] = [];
   const rootPathFor = (root: string): string | undefined =>
     opts.roots?.[root] ?? manifest.roots[root];
+  const walkedByRoot = new Map<string, Set<string>>();
+  const placeInside = (root: string, rootPath: string, relative: string) => {
+    const key = `${root}\0${rootPath}`;
+    let walked = walkedByRoot.get(key);
+    if (walked === undefined) {
+      walked = walkedDirectories(root, rootPath);
+      walkedByRoot.set(key, walked);
+    }
+    return resolveInsideRoot(rootPath, relative, walked);
+  };
 
   /**
    * The member inside the backup directory, or the reason it is not one (#19).
@@ -1642,7 +1712,7 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
       problems.push(member.problem);
       continue;
     }
-    const placed = resolveInsideRoot(rootPath, entry.relative);
+    const placed = placeInside(entry.root, rootPath, entry.relative);
     if ("problem" in placed) {
       problems.push(`${entry.backup} (for ${entry.relative} in root "${entry.root}") ${placed.problem}`);
       continue;
@@ -1674,7 +1744,7 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
       problems.push(member.problem);
       continue;
     }
-    const placed = resolveInsideRoot(rootPath, entry.relative);
+    const placed = placeInside(entry.root, rootPath, entry.relative);
     if ("problem" in placed) {
       problems.push(`${entry.backup} (for ${entry.relative} in root "${entry.root}") ${placed.problem}`);
       continue;
