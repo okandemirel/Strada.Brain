@@ -34,6 +34,7 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { ReRetrievalConfig, StradaDependencyConfig } from "../../config/config.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
+import type { ToolMetadata } from "../../core/tool-registry-types.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
 import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
 import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
@@ -62,10 +63,57 @@ import {
 // TYPES
 // =============================================================================
 
-/** Tool registry interface -- only the method we need */
+type OrchestratorOptions = ConstructorParameters<typeof Orchestrator>[0];
+
+/** Tool registry interface -- only the methods we need */
 interface ToolRegistryLike {
   getAllTools(): ITool[];
+  /**
+   * What each tool declared at registration. A Strada.MCP adapter carries no
+   * metadata of its own, so without this map its writers fell back to the
+   * name heuristic and most read as read-only.
+   */
+  getMetadataMap(): ReadonlyMap<string, ToolMetadata>;
 }
+
+/**
+ * Root-orchestrator dependencies that are the same for every orchestrator
+ * that runs a chat turn. Every key is required, so bootstrap cannot build the
+ * object without deciding each one; a dependency added here reaches the root
+ * and every per-agent orchestrator at once.
+ */
+type SharedOrchestratorDepKey =
+  | "trajectoryReplayRetriever"
+  | "learningPipeline"
+  | "errorLearningHooks"
+  | "interventionEngine"
+  | "modelIntelligence"
+  | "consensusManager"
+  | "confidenceEstimator"
+  | "runtimeArtifactManager"
+  | "autonomousDefaultEnabled"
+  | "autonomousDefaultHours"
+  | "interactionConfig"
+  | "taskConfig"
+  | "supervisorComplexityThreshold"
+  | "conformanceEnabled"
+  | "conformanceFrameworkPathsOnly"
+  | "loopFingerprintThreshold"
+  | "loopFingerprintWindow"
+  | "loopDensityThreshold"
+  | "loopDensityWindow"
+  | "loopMaxRecoveryEpisodes"
+  | "loopStaleAnalysisThreshold"
+  | "loopHardCapReplan"
+  | "loopHardCapBlock"
+  | "progressAssessmentEnabled"
+  | "onSkillCreated"
+  | "getSkillEntries"
+  | "agentCoreFlagSet"
+  | "capabilityRegistry"
+  | "capabilityAdapters";
+
+export type SharedOrchestratorDeps = { readonly [K in SharedOrchestratorDepKey]: OrchestratorOptions[K] };
 
 /** Configuration for per-agent memory creation */
 export interface MemoryConfig {
@@ -157,6 +205,13 @@ export interface AgentManagerOptions {
    * run ever recorded a decision or execution trace into.
    */
   readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
+  /**
+   * The run dependencies bootstrap gives the root orchestrator, for the
+   * per-agent ones that run every chat turn with multi-agent on. They were
+   * built without them: no TASK_* limits, no learning, intervention or
+   * consensus hooks, and the loop and conformance settings at their defaults.
+   */
+  readonly sharedOrchestratorDeps: SharedOrchestratorDeps;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -270,6 +325,11 @@ export class AgentManager {
 
   setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
     this._unifiedBudgetManager = mgr;
+    // The run's USD cap is seeded from this manager's headroom; an agent
+    // orchestrator without it ran with an Infinity cap past the daily wall.
+    for (const liveAgent of this.agents.values()) {
+      liveAgent.orchestrator.setUnifiedBudgetManager(mgr);
+    }
   }
 
   /**
@@ -758,8 +818,13 @@ export class AgentManager {
     const profileStore = this.opts.userProfileStore ?? adapter.getUserProfileStore() ?? undefined;
 
     const orchestrator = new Orchestrator({
+      ...this.opts.sharedOrchestratorDeps,
       providerManager: this.opts.providerManager,
       tools: this.opts.toolRegistry.getAllTools(),
+      // The live map, as the root gets it: what each tool declared (a Unity
+      // writer is a write, runs serially, is confirmed) and whether the bridge
+      // it needs is up right now.
+      toolMetadataByName: this.opts.toolRegistry.getMetadataMap(),
       channel: this.opts.channel,
       projectPath: this.opts.projectPath,
       readOnly: this.opts.readOnly,
@@ -833,6 +898,9 @@ export class AgentManager {
     }
     if (this.opts.goalStorage) {
       orchestrator.setGoalStorage(this.opts.goalStorage);
+    }
+    if (this._unifiedBudgetManager) {
+      orchestrator.setUnifiedBudgetManager(this._unifiedBudgetManager);
     }
 
     // Inject delegation tools if factory is available (Phase 24)

@@ -162,12 +162,19 @@ describe("production wiring: the run's engine is given the hooks (tripwire)", ()
       bootstrap.indexOf("const orchestrator = new Orchestrator({"),
       bootstrap.indexOf("// Wire FrameworkPromptGenerator"),
     );
+    // The deps object the root shares with the per-agent orchestrators.
+    const shared = bootstrap.slice(
+      bootstrap.indexOf("const sharedOrchestratorDeps: SharedOrchestratorDeps = {"),
+      bootstrap.indexOf("const orchestrator = new Orchestrator({"),
+    );
     expect(construction).not.toBe("");
+    expect(shared).not.toBe("");
+    expect(construction).toContain("...sharedOrchestratorDeps,");
     // Without the pipeline: guidance exposure, run credit settlement, teaching
     // and correction capture are all no-ops on a null.
-    expect(construction).toContain("learningPipeline: learningResult.pipeline");
+    expect(shared).toContain("learningPipeline: learningResult.pipeline");
     // Without the hooks: the per-task recovery engine cannot learn at all.
-    expect(construction).toContain("errorLearningHooks: learningResult.errorLearningHooks");
+    expect(shared).toContain("errorLearningHooks: learningResult.errorLearningHooks");
   });
 
   it("the learning init RETURNS the hooks it built, instead of only an engine nothing runs", () => {

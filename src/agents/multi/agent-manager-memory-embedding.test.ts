@@ -161,7 +161,7 @@ describe("AgentManager per-agent memory embedder", () => {
       budgetTracker,
       eventBus,
       providerManager: {} as never,
-      toolRegistry: { getAllTools: () => [] } as never,
+      toolRegistry: { getAllTools: () => [], getMetadataMap: () => new Map() } as never,
       channel: { sendText: vi.fn(), sendMarkdown: vi.fn() } as never,
       projectPath: "/fake/project",
       readOnly: false,

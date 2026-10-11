@@ -80,7 +80,7 @@ import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
 // Multi-agent type-only imports (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
-import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
+import type { AgentManager as AgentManagerType, SharedOrchestratorDeps } from "../agents/multi/agent-manager.js";
 import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
 // Delegation type-only imports (Plan 24-03: AGENT-03, AGENT-04, AGENT-05)
 import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
@@ -1520,27 +1520,11 @@ async function bootstrapImpl(
       ])
     : undefined;
 
-  // Initialize orchestrator
-  const orchestrator = new Orchestrator({
-    providerManager,
-    tools: toolRegistry.getAllTools(),
-    channel,
-    projectPath: config.unityProjectPath,
-    readOnly: config.security.readOnlyMode,
-    requireConfirmation: config.security.requireEditConfirmation,
-    memoryManager,
-    metrics,
-    ragPipeline,
-    rateLimiter,
-    defaultLanguage: config.language,
-    streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
-    streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
-    streamingEnabled: config.streamingEnabled,
-    stradaDeps,
-    stradaConfig: config.strada,
-    instinctRetriever,
+  // One set of run dependencies for every orchestrator that runs a chat turn:
+  // this one, and (multi-agent on) the per-agent ones that run every chat.
+  // Those were built from a separate list and got none of these.
+  const sharedOrchestratorDeps: SharedOrchestratorDeps = {
     trajectoryReplayRetriever,
-    eventEmitter: learningResult.eventBus,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
     // settlement, teaching and correction capture, and error-recovery learning
@@ -1548,33 +1532,15 @@ async function bootstrapImpl(
     // because nothing in a real run ever reported presence.
     learningPipeline: learningResult.pipeline,
     errorLearningHooks: learningResult.errorLearningHooks,
-    metricsRecorder,
-    goalDecomposer,
-    interruptedGoalTrees,
-    getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
-    crashRecoveryContext: crashContext ?? undefined,
-    reRetrievalConfig: config.reRetrieval,
-    embeddingProvider: cachedEmbeddingProvider,
-    soulLoader,
-    dmPolicy,
-    sessionSummarizer,
-    userProfileStore,
+    interventionEngine: learningResult.interventionEngine,
+    modelIntelligence,
+    consensusManager,
+    confidenceEstimator,
+    runtimeArtifactManager,
     autonomousDefaultEnabled: config.autonomousDefaultEnabled,
     autonomousDefaultHours: config.autonomousDefaultHours,
     interactionConfig: config.interaction,
     taskConfig: config.tasks,
-    taskExecutionStore,
-    runtimeArtifactManager,
-    toolMetadataByName: toolRegistry.getMetadataMap(),
-    vaultRegistry,
-    vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
-    providerRouter,
-    modelIntelligence,
-    consensusManager,
-    confidenceEstimator,
-    interventionEngine: learningResult.interventionEngine,
-    memoryDbPath: config.memory.dbPath,
-    supervisorBrain,
     supervisorComplexityThreshold: config.supervisor.complexityThreshold,
     conformanceEnabled: config.conformanceEnabled,
     conformanceFrameworkPathsOnly: config.conformanceFrameworkPathsOnly,
@@ -1592,6 +1558,47 @@ async function bootstrapImpl(
     agentCoreFlagSet,
     capabilityRegistry,
     capabilityAdapters,
+  };
+
+  // Initialize orchestrator
+  const orchestrator = new Orchestrator({
+    ...sharedOrchestratorDeps,
+    providerManager,
+    tools: toolRegistry.getAllTools(),
+    channel,
+    projectPath: config.unityProjectPath,
+    readOnly: config.security.readOnlyMode,
+    requireConfirmation: config.security.requireEditConfirmation,
+    memoryManager,
+    metrics,
+    ragPipeline,
+    rateLimiter,
+    defaultLanguage: config.language,
+    streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
+    streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
+    streamingEnabled: config.streamingEnabled,
+    stradaDeps,
+    stradaConfig: config.strada,
+    instinctRetriever,
+    eventEmitter: learningResult.eventBus,
+    metricsRecorder,
+    goalDecomposer,
+    interruptedGoalTrees,
+    getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
+    crashRecoveryContext: crashContext ?? undefined,
+    reRetrievalConfig: config.reRetrieval,
+    embeddingProvider: cachedEmbeddingProvider,
+    soulLoader,
+    dmPolicy,
+    sessionSummarizer,
+    userProfileStore,
+    taskExecutionStore,
+    toolMetadataByName: toolRegistry.getMetadataMap(),
+    vaultRegistry,
+    vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
+    providerRouter,
+    memoryDbPath: config.memory.dbPath,
+    supervisorBrain,
   });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
@@ -2034,6 +2041,7 @@ async function bootstrapImpl(
         goalStorage,
         vaultRegistry,
         vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
+        sharedOrchestratorDeps,
       });
       agentManager = multiAgentStage.agentManager;
       agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);

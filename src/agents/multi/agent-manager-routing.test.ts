@@ -132,7 +132,7 @@ describe("AgentManager chat turns reach the shared ProviderRouter (N-2)", () => 
       budgetTracker,
       eventBus,
       providerManager: providerManager as never,
-      toolRegistry: { getAllTools: () => [] },
+      toolRegistry: { getAllTools: () => [], getMetadataMap: () => new Map() },
       channel: channel as never,
       projectPath: join(tmpDir, "project"),
       readOnly: true,

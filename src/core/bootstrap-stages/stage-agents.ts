@@ -74,6 +74,8 @@ export async function initializeMultiAgentDelegationStage(
     goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
     vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
     vaultWriteHookBudgetMs?: number;
+    /** The run dependencies the root orchestrator was built with (see SharedOrchestratorDeps). */
+    sharedOrchestratorDeps: import("../../agents/multi/agent-manager.js").SharedOrchestratorDeps;
   },
   deps: MultiAgentDelegationStageDeps = {},
 ): Promise<MultiAgentDelegationStageResult> {
@@ -154,6 +156,10 @@ export async function initializeMultiAgentDelegationStage(
     // Chat turns run on per-agent orchestrators: without the shared router they
     // never routed, and `/routing info` had nothing to read.
     providerRouter: params.providerRouter as ConstructorParameters<typeof AgentManager>[0]["providerRouter"],
+    // Chat turns run on these orchestrators: the TASK_* limits, the learning,
+    // intervention and consensus hooks, and the loop and conformance settings
+    // the root run has.
+    sharedOrchestratorDeps: params.sharedOrchestratorDeps,
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)
