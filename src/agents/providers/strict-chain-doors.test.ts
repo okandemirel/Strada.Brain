@@ -153,7 +153,7 @@ describe("a strict chain hands out no provider outside it", () => {
  * but the Claude seat lists itself as "claude". The strict gate compared
  * spellings, so PROVIDER_CHAIN=anthropic shut its own only seat out: no vision
  * provider (visual conformance read "not checked" with a false reason), no
- * by-name lookup (the verifier's same-provider fallback skipped review), and
+ * by-name lookup of the seat as "claude", and
  * listRoutable fell back to every credential, the excluded account included.
  */
 describe("a strict chain admits its seat under either Claude spelling", () => {
@@ -203,6 +203,13 @@ describe("a strict chain admits its seat under either Claude spelling", () => {
     expect(info.model).toBe("claude-x");
     expect(info.selectionMode).toBe("strada-hard-pin");
     expect(m.listExecutionCandidates("chat-1").map((c) => c.name)).toEqual(["claude"]);
+  });
+
+  it.each(["strada-preference-bias", "strada-hard-pin"] as const)("a %s row stored under a label keeps its model in the pool", (selectionMode) => {
+    // setPreference canonicalizes, but a row written before it did is read raw.
+    preferenceState.set("chat-1", { providerName: "Anthropic Claude", model: "claude-x", selectionMode });
+    const m = claudeManager(["anthropic"]);
+    expect(m.listExecutionCandidates("chat-1").map((c) => [c.name, c.defaultModel])).toEqual([["claude", "claude-x"]]);
   });
 
   it("a chain built for the other spelling holds the seat once and keeps the requested model", () => {

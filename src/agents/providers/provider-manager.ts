@@ -896,9 +896,12 @@ export class ProviderManager {
   listExecutionCandidates(chatId?: string): ProviderExecutionCandidate[] {
     const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
 
+    // The pool is canonical and folded by seat; a stored row may not be, and a
+    // spelling miss dropped the model the user picked.
+    const preferredSeat = preferred ? providerRecordKey(preferred.providerName) : undefined;
     return this.resolveExecutionPoolNames(chatId).map((name) => {
       const model =
-        preferred?.providerName === name
+        preferred && preferredSeat === providerRecordKey(name)
           ? preferred.model ?? this.getDefaultModelForProvider(name)
           : this.getDefaultModelForProvider(name);
       return this.buildAvailableEntry(name, this.getProviderLabel(name), model);

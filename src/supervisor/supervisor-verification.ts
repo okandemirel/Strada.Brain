@@ -1,7 +1,7 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
-import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
+import { canonicalizeProviderName, providerRecordKey } from "../agents/providers/provider-identity.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type {
   NodeResult,
@@ -149,7 +149,10 @@ function chooseVerificationProvider(
   originalProviderName: string,
   identityKey?: string,
 ): { providerName: string; model: string; provider: IAIProvider } | null {
-  const originalProvider = canonicalizeProviderName(originalProviderName) ?? originalProviderName;
+  // Independence is judged by seat: "anthropic" and "claude" are both
+  // canonical names of the one Claude seat, so a node on one spelling was
+  // "independently" verified by the other.
+  const originalSeat = providerRecordKey(originalProviderName);
   // THE REVIEWER IS WORK TOO. This pool appended everything with a
   // credential, so the ordinary verifier ran on a provider the operator's
   // strict chain excludes (Codex 2026-09-12 P#1).
@@ -161,7 +164,7 @@ function chooseVerificationProvider(
 
   for (const candidate of candidates) {
     const canonicalName = canonicalizeProviderName(candidate.name) ?? candidate.name;
-    if (!canonicalName || canonicalName === originalProvider || seen.has(canonicalName)) {
+    if (!canonicalName || providerRecordKey(canonicalName) === originalSeat || seen.has(canonicalName)) {
       continue;
     }
     seen.add(canonicalName);

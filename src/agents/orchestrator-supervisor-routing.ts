@@ -14,7 +14,7 @@ import {
   buildProviderIntelligence,
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
-import { canonicalizeProviderName } from "./providers/provider-identity.js";
+import { canonicalizeProviderName, providerRecordKey } from "./providers/provider-identity.js";
 import { createCatalogVersion } from "./supervisor/supervisor-types.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
@@ -661,7 +661,11 @@ export function resolveConsensusReviewAssignment(
   currentAssignment: SupervisorAssignment,
   identityKey: string,
 ): SupervisorAssignment | null {
-  if (preferredReviewer.providerName !== currentAssignment.providerName) {
+  // Compared by seat: the executor carries the chain's spelling ("anthropic")
+  // while listRoutable names the same seat "claude", so the Claude seat was
+  // picked to review its own work as the "cross-provider" reviewer.
+  const currentSeat = providerRecordKey(currentAssignment.providerName);
+  if (providerRecordKey(preferredReviewer.providerName) !== currentSeat) {
     return preferredReviewer;
   }
 
@@ -669,7 +673,7 @@ export function resolveConsensusReviewAssignment(
   // credentialed outsider was picked, refused, and the review dropped while a
   // chain sibling could have given it.
   const fallbackReviewName = (ctx.providerManager.listRoutable?.() ?? ctx.providerManager.listAvailable())
-    .find((provider) => provider.name !== currentAssignment.providerName)?.name;
+    .find((provider) => providerRecordKey(provider.name) !== currentSeat)?.name;
   if (!fallbackReviewName) {
     return null;
   }
