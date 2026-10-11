@@ -2,7 +2,7 @@
 // skill directory, because the approval hash covers nothing else.
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { findOutsideImports, isSkillCodeFile, specifierLeavesSkill } from "./skill-import-scan.js";
+import { findOutsideImports, findOutsidePackageTargets, isSkillCodeFile, specifierLeavesSkill } from "./skill-import-scan.js";
 
 const root = join("/proj", "skills", "deploy");
 const entry = join(root, "index.js");
@@ -64,6 +64,76 @@ describe("findOutsideImports", () => {
     expect(scan('import { type T } from "../x.js";')).toEqual(['"../x.js"']);
     // `type` as a default import's local name is a real import.
     expect(scan('import type from "../x.js";')).toEqual(['"../x.js"']);
+    // A comment inside the braces of a multi-line type-only import is still exempt.
+    expect(scan('import type {\n  A, // the tool\n  B,\n} from "../../src/tool.js";')).toEqual([]);
+  });
+
+  // The type-only exemption used to erase from `import type {` to the next
+  // `} from "…"`, wherever the first sat: a comment, a string, a regex or JSX
+  // text swallowed the real loading statement after it.
+  it("never lets text that only looks like a type-only import erase a real loading statement", () => {
+    expect(scan('// import type {\nimport { evil } from "evil-pkg";')).toEqual(['"evil-pkg"']);
+    expect(scan('const s = "import type {";\nimport { evil } from "evil-pkg";')).toEqual(['"evil-pkg"']);
+    expect(scan('/* export type { */\nexport { evil } from "../../../x.js";')).toEqual(['"../../../x.js"']);
+    // `export {} from` still evaluates the module.
+    expect(scan('export {\n// import type {\n} from "../../evil.js";')).toEqual(['"../../evil.js"']);
+    expect(scan('const r = /import type {} from "/; import("../../evil.js"); // "')).toContain('"../../evil.js"');
+    expect(scan('const t = `import type {} from "`; import("../../evil.js"); // "')).toContain('"../../evil.js"');
+    expect(scan('const el = <div>import type {} from "</div>; require("../../evil.js"); //"', join(root, "index.jsx"))).toContain('"../../evil.js"');
+    // A line comment ends at U+2028 as at a newline.
+    expect(scan('import type { a, // \u2028 b } from "./t.js"; import "../../evil.js"; import type { c\n} from "./u.js";')).toEqual(['"../../evil.js"']);
+    // After a `/` the scan cannot tell a regex from a division, so a later type-only import is not exempt.
+    expect(scan('const half = a / 2;\nimport type { T } from "../t.js";')).toEqual(['"../t.js"']);
+  });
+
+  it("refuses a relative path that climbs out of the skill directory, even to come back in", () => {
+    // Node resolves it from the importer's real path: through a symlinked
+    // `<project>/skills` this names a file outside the skill.
+    expect(scan('import "../../skills/deploy/x.js";')).toEqual(['"../../skills/deploy/x.js"']);
+    expect(scan('import "../deploy/x.js";')).toEqual(['"../deploy/x.js"']);
+    expect(scan('import "./lib/../x.js";')).toEqual([]);
+  });
+
+  it("refuses absolute paths, file: URLs and package self-references even when they name the skill itself", () => {
+    expect(scan(`import "${join(root, "x.js")}";`)).toEqual([`"${join(root, "x.js")}"`]);
+    expect(scan('import "file:///proj/skills/deploy/x.js";')).toEqual(['"file:///proj/skills/deploy/x.js"']);
+    expect(scan('import "file:../deploy/x.js";')).toEqual(['"file:../deploy/x.js"']);
+    expect(scan('import "deploy/x.js";')).toEqual(['"deploy/x.js"']);
+    // URL parsing strips tabs and reads `%2e` as a dot; neither is guessed at.
+    expect(scan('import "./.\t./x.js";')).toEqual(['"./.\t./x.js"']);
+    expect(scan('import "./x.js?../../a";')).toEqual(['"./x.js?../../a"']);
+  });
+
+  it("refuses a file CommonJS would run as JavaScript but the scan never reads", () => {
+    expect(scan('require("./payload.txt");')).toEqual(['"./payload.txt"']);
+    expect(scan('require("./types.d.ts");')).toEqual(['"./types.d.ts"']);
+    expect(scan('import "./mod.wasm";')).toEqual(['"./mod.wasm"']);
+    expect(scan('require("./lib"); require("./lib/"); import "./data.json"; require("./addon.node");')).toEqual([]);
+  });
+});
+
+describe("findOutsidePackageTargets", () => {
+  const manifest = join(root, "lib", "package.json");
+  const check = (json: string): string[] => findOutsidePackageTargets(root, manifest, json);
+
+  it("refuses a main that points outside the skill or at a file the scan does not read", () => {
+    expect(check('{"main":"../../../outside/evil.js"}')).toEqual(['main "../../../outside/evil.js"']);
+    expect(check('{"main":"/abs/evil.js"}')).toEqual(['main "/abs/evil.js"']);
+    expect(check('{"main":"payload.txt"}')).toEqual(['main "payload.txt"']);
+    expect(check('{"main":"index.js"}')).toEqual([]);
+    expect(check('{"main":"./dist/index","exports":{".":{"types":"./index.d.ts","default":"./dist/index.js"}}}')).toEqual([]);
+    expect(check('{"name":"x"}')).toEqual([]);
+  });
+
+  it("checks every key spelled main: Node reads the raw key, JSON.parse the unescaped one", () => {
+    expect(check('{"main":"../../../evil.js","m\\u0061in":"index.js"}')).toEqual(['main "../../../evil.js"']);
+    expect(check('{"m\\u0061in":"../../../evil.js","main":"index.js"}')).toEqual(['main "../../../evil.js"']);
+    expect(check('{"main":"index.js","main":"../../../evil.js"}')).toEqual(['main "../../../evil.js"']);
+    expect(check('\uFEFF{"main":"../../../evil.js"}')).toEqual(['main "../../../evil.js"']);
+  });
+
+  it("fails closed on a package.json that does not parse", () => {
+    expect(check('{"main": "index.js",}')).toEqual(["package.json does not parse, so its main cannot be checked"]);
   });
 });
 
@@ -76,6 +146,8 @@ describe("specifierLeavesSkill / isSkillCodeFile", () => {
   it("checks code files only, never declaration files", () => {
     expect(isSkillCodeFile("index.ts")).toBe(true);
     expect(isSkillCodeFile("lib/a.MJS")).toBe(true);
+    // CommonJS runs an extensionless file as JavaScript (`require("./lib")`).
+    expect(isSkillCodeFile("lib/payload")).toBe(true);
     expect(isSkillCodeFile("types.d.ts")).toBe(false);
     expect(isSkillCodeFile("data.json")).toBe(false);
     expect(isSkillCodeFile("SKILL.md")).toBe(false);

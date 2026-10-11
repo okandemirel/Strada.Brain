@@ -296,6 +296,42 @@ describe("installSkillFromRepo", () => {
     );
   });
 
+  // An unreadable skills.json (SEC-15) refuses the enable write. The install
+  // used to throw with the clone left in the managed tier: a retry said
+  // "already installed", and once the file was repaired the missing entry
+  // counted as enabled and the code loaded.
+  const cloneSucceeds = (): void => {
+    execMock.execFileNoThrow.mockResolvedValueOnce({ exitCode: 0, stdout: "git version 2.40.0", stderr: "" });
+    fsMock.stat.mockRejectedValueOnce(new Error("ENOENT"));
+    execMock.execFileNoThrow.mockResolvedValueOnce({ exitCode: 0, stdout: "Cloning into...", stderr: "" });
+    fsMock.stat.mockResolvedValueOnce({ isFile: () => true });
+  };
+  const unreadable = new Error("/mock-home/.strada/skills.json could not be read (invalid JSON: x); repair or remove it first");
+
+  it("reports failure and removes the clone when the skill cannot be enabled", async () => {
+    cloneSucceeds();
+    skillConfigMock.setSkillEnabled.mockRejectedValueOnce(unreadable);
+
+    const result = await installSkillFromRepo("my-skill", "https://github.com/x/y");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("could not be read");
+    expect(result.error).toContain("nothing was installed");
+    expect(fsMock.rm).toHaveBeenCalledWith(managedSkillDir("my-skill"), { recursive: true, force: true });
+  });
+
+  it("says the clone is still there when it cannot be removed after the enable failed", async () => {
+    cloneSucceeds();
+    skillConfigMock.setSkillEnabled.mockRejectedValueOnce(unreadable);
+    fsMock.rm.mockRejectedValueOnce(new Error("EACCES"));
+
+    const result = await installSkillFromRepo("my-skill", "https://github.com/x/y");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(`could not be removed: ${managedSkillDir("my-skill")}`);
+    expect(result.error).not.toContain("nothing was installed");
+  });
+
   // =========================================================================
   // Git clone arguments
   // =========================================================================

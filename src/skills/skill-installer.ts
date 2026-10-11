@@ -112,8 +112,22 @@ export async function installSkillFromRepo(
     pinnedSha = await recordPinnedCommit(targetDir);
   } catch { /* pinning is best-effort; install proceeds */ }
 
-  // Enable by default
-  await setSkillEnabled(name, true);
+  // Enable by default. setSkillEnabled refuses an unreadable skills.json
+  // (SEC-15); a clone left behind by that failure made a retry say "already
+  // installed", and once the file was repaired its missing entry counted as
+  // enabled and the code loaded. A reported failure leaves no clone.
+  try {
+    await setSkillEnabled(name, true);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    const removed = await rm(targetDir, { recursive: true, force: true }).then(() => true, () => false);
+    return {
+      success: false,
+      error: removed
+        ? `Could not enable "${name}": ${reason}. The clone was removed; nothing was installed (${repoUrl}).`
+        : `Could not enable "${name}": ${reason}. The clone could not be removed: ${targetDir}; remove it before retrying.`,
+    };
+  }
 
   return { success: true, targetDir, pinnedSha: pinnedSha ?? undefined };
 }

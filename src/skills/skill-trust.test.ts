@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, access, readdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   DEFAULT_SKILL_SCAN_LIMITS,
   LEGACY_JSON_IMPORT_MARKER,
@@ -687,6 +688,60 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
     });
     await approveWorkspaceSkill(projectRoot, ok);
     expect((await assessWorkspaceSkillTrust(projectRoot, ok, "ok")).trusted).toBe(true);
+  });
+
+  // `require("./lib")` looks local, but CommonJS loads whatever
+  // lib/package.json's "main" names — here a file the hash never covered.
+  it("a package.json main that points outside the skill makes it unapprovable, and a matching record is not honoured", async () => {
+    await mkdir(join(projectRoot, "outside"), { recursive: true });
+    await writeFile(join(projectRoot, "outside", "evil.js"), "module.exports = 1;", "utf-8");
+    const dir = await writeSkill("redirect", {
+      "package.json": '{"type":"commonjs"}',
+      "index.js": 'require("./lib");\nexports.tools = [];',
+      "lib/package.json": '{"main":"../../../outside/evil.js"}',
+    });
+    const scan = (await scanSkillContent(dir))!;
+    expect(scan.outsideImports).toEqual(['lib/package.json: main "../../../outside/evil.js"']);
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/lib\/package\.json: main "\.\.\/\.\.\/\.\.\/outside\/evil\.js"/);
+
+    const store = openSkillTrustStore();
+    try {
+      store.approve(await projectIdentity(projectRoot), "skills/redirect", { sha256: scan.sha256!, fileCount: scan.fileCount, approvedAtIso: "x" });
+    } finally {
+      store.close();
+    }
+    expect((await assessWorkspaceSkillTrust(projectRoot, dir, "redirect")).trusted).toBe(false);
+  });
+
+  it("an extensionless file is read as code: CommonJS runs it when required by name", async () => {
+    const dir = await writeSkill("noext", {
+      "index.js": 'require("./payload");\nexports.tools = [];',
+      payload: 'require("../../outside.js");',
+    });
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/payload: "\.\.\/\.\.\/outside\.js"/);
+  });
+
+  // Node resolves a relative specifier from the importer's REAL path. With
+  // `<project>/skills` a symlink to vendor/pool, "../../skills/deploy/x.js"
+  // names the skill's own file lexically but loads vendor/skills/deploy/x.js.
+  it("a relative import that climbs out and back in is refused when skills/ is a symlinked directory", async () => {
+    const pool = join(projectRoot, "vendor", "pool", "deploy");
+    await mkdir(pool, { recursive: true });
+    await mkdir(join(projectRoot, "vendor", "skills", "deploy"), { recursive: true });
+    await writeFile(join(projectRoot, "vendor", "skills", "deploy", "x.js"), "export const outside = true;", "utf-8");
+    await writeFile(join(pool, "x.js"), "export const inside = true;", "utf-8");
+    await writeFile(join(pool, "index.js"), 'export * from "../../skills/deploy/x.js";\nexport const tools = [];', "utf-8");
+    await symlink(join("vendor", "pool"), join(projectRoot, "skills"));
+    const dir = join(projectRoot, "skills", "deploy");
+
+    // Plain node, as `strada` runs: vitest's own module runner resolves differently.
+    const probe = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", `const m = await import(${JSON.stringify(pathToFileURL(join(dir, "index.js")).href)}); console.log(Object.keys(m).join(","));`],
+      { encoding: "utf-8" },
+    );
+    expect(probe.stdout.trim().split(",")).toContain("outside");
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/index\.js: "\.\.\/\.\.\/skills\/deploy\/x\.js"/);
   });
 });
 

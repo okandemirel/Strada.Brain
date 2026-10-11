@@ -29,8 +29,9 @@
 // For the same reason the module graph must stay inside the directory (SEC-4,
 // rule in skill-import-scan.ts): the hash covers nothing else, so a skill
 // whose code imports a relative path outside it, a package name (resolved
-// through parent node_modules folders), or a computed specifier cannot be
-// approved, and an approval recorded for one is not honoured.
+// through parent node_modules folders), or a computed specifier — or that
+// holds a package.json whose "main" points outside it — cannot be approved,
+// and an approval recorded for one is not honoured.
 //
 // The scan is budgeted (round 7 #11): files are streamed into the hash
 // through one reused 64 KiB buffer (a gigabyte asset never means a gigabyte
@@ -81,7 +82,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
-import { findOutsideImports, isSkillCodeFile } from "./skill-import-scan.js";
+import { findOutsideImports, findOutsidePackageTargets, isSkillCodeFile } from "./skill-import-scan.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -525,8 +526,11 @@ export async function scanSkillContent(
     hash.update(rel);
     hash.update("\0");
     // SEC-4: a code file's text is checked for imports that leave the skill
-    // directory — the same bytes that go into the hash.
-    const checkImports = isSkillCodeFile(rel);
+    // directory, and a package.json for a "main" that does — the same bytes
+    // that go into the hash. Any letter case: on a case-insensitive
+    // filesystem Node's lookup of package.json finds it.
+    const isManifest = basename(rel).toLowerCase() === "package.json";
+    const checkImports = isManifest || isSkillCodeFile(rel);
     const held: Buffer[] = [];
     let fileBytes = 0;
     const handle = await open(full, "r");
@@ -553,7 +557,8 @@ export async function scanSkillContent(
       if (fileBytes > SKILL_IMPORT_CHECK_MAX_FILE_BYTES) {
         outsideImports.push(`${rel}: too large to check its imports (over ${SKILL_IMPORT_CHECK_MAX_FILE_BYTES} bytes)`);
       } else {
-        for (const found of findOutsideImports(skillPath, full, Buffer.concat(held).toString("utf-8"))) {
+        const check = isManifest ? findOutsidePackageTargets : findOutsideImports;
+        for (const found of check(skillPath, full, Buffer.concat(held).toString("utf-8"))) {
           outsideImports.push(`${rel}: ${found}`);
         }
       }
@@ -687,8 +692,9 @@ function symlinkRefusal(symlinks: readonly string[], what: "code" | "content" = 
 function outsideImportRefusal(found: readonly string[]): string {
   const shown = found.length > 8 ? [...found.slice(0, 8), `and ${found.length - 8} more`] : found;
   return (
-    "Workspace skill loads code from outside its directory, which the approval cannot cover " +
-    "(only node: built-ins, and relative imports that stay inside the skill directory with literal specifiers, can be approved; " +
+    "Workspace skill loads code from outside its directory, or from a file the scan does not read, which the approval cannot cover " +
+    "(only node: built-ins, and literal relative imports that never climb out of the skill directory and name a " +
+    'JavaScript/TypeScript, extensionless, .json or .node file, can be approved; a package.json "main" is held to the same rule; ' +
     `vendor or bundle dependencies into the skill): ${shown.join(", ")}`
   );
 }

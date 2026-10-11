@@ -5,11 +5,12 @@
 // ---------------------------------------------------------------------------
 
 import type { Command } from "commander";
-import { join } from "node:path";
-import { stat, rm, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { stat, rm, readFile, realpath } from "node:fs/promises";
 import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
-import { discoverSkills } from "./skill-loader.js";
+import { resolveLaunchCwd } from "../common/runtime-paths.js";
+import { discoverSkills, workspaceSkillsDir } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
 import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-config.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
@@ -34,6 +35,11 @@ export function registerSkillCommands(program: Command): void {
   // approved here; the record lives in ~/.strada/trusted-skills.db, keyed by
   // the project's realpath, never inside the project. A body-only skill that
   // asks for `inject: always` is approved the same way (SEC-12).
+  //
+  // The default project is the directory `strada` was started in, not
+  // process.cwd(): the CLI changes into its config root (~/.strada) before
+  // any command runs, and from there ~/.strada/skills — the managed tier —
+  // reads as a workspace and gets an approval nothing ever consults.
   // =========================================================================
 
   skill
@@ -41,7 +47,7 @@ export function registerSkillCommands(program: Command): void {
     .description("Approve a workspace skill's current code, or its `inject: always` knowledge, for this project (recorded outside the project)")
     .option("--project <dir>", "Project root (default: current directory)")
     .action(async (name: string, opts: { project?: string }) => {
-      const projectRoot = opts.project ?? process.cwd();
+      const projectRoot = opts.project ?? resolveLaunchCwd();
       const found = await findWorkspaceSkill(projectRoot, name);
       if (!found) return;
       try {
@@ -58,7 +64,7 @@ export function registerSkillCommands(program: Command): void {
     .description("Revoke a workspace skill's approval for this project")
     .option("--project <dir>", "Project root (default: current directory)")
     .action(async (name: string, opts: { project?: string }) => {
-      const projectRoot = opts.project ?? process.cwd();
+      const projectRoot = opts.project ?? resolveLaunchCwd();
       const found = await findWorkspaceSkill(projectRoot, name);
       if (!found) return;
       const removed = await revokeWorkspaceSkill(projectRoot, found.path);
@@ -417,6 +423,16 @@ export function registerSkillCommands(program: Command): void {
 
 /** The workspace-tier skill named `name` under `projectRoot`, or null after printing why not. */
 async function findWorkspaceSkill(projectRoot: string, name: string): Promise<{ path: string } | null> {
+  const managedDir = resolveStradaHomeEntry("skills");
+  const canonical = (dir: string): Promise<string> => realpath(dir).catch(() => resolve(dir));
+  if ((await canonical(workspaceSkillsDir(projectRoot))) === (await canonical(managedDir))) {
+    console.error(
+      `${projectRoot} is not a project: its skills/ is the managed skill directory (${managedDir}), whose skills need no approval. ` +
+      "Run this in the project, or pass --project <dir>.",
+    );
+    process.exitCode = 1;
+    return null;
+  }
   const discovered = await discoverSkills(projectRoot);
   const found = discovered.find((s) => s.manifest.name === name);
   if (!found) {
