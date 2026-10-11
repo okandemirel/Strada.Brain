@@ -37,7 +37,7 @@ import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { reloadEnvAfterSetup } from "./core/setup-env-reload.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
-import { describeProxy, installEnvProxy } from "./common/env-proxy.js";
+import { installEnvProxy, reportEnvProxy } from "./common/env-proxy.js";
 import { acquireRuntimeLock } from "./core/runtime-lock.js";
 import {
   getSafeCurrentWorkingDirectory,
@@ -580,22 +580,7 @@ async function startApp(
     sourceCheckout: runtimePaths.sourceCheckout,
     setupWizardPort: wizardPort,
   });
-  if (envProxy.kind === "installed" || envProxy.kind === "unrouted") {
-    // Scheme, host and port only: a proxy URL can carry credentials.
-    const proxyFields = {
-      httpsProxy: envProxy.httpsProxy !== undefined ? describeProxy(envProxy.httpsProxy) : undefined,
-      httpProxy: envProxy.httpProxy !== undefined ? describeProxy(envProxy.httpProxy) : undefined,
-      noProxy: envProxy.noProxy,
-    };
-    if (envProxy.kind === "installed") {
-      logger.info("Outbound HTTP(S) goes through the proxy the environment names", proxyFields);
-    } else {
-      logger.warn("The environment names a proxy, but this Node's fetch does not read the dispatcher; outbound HTTP(S) connects directly (NODE_USE_ENV_PROXY=1 hands it to Node)", {
-        ...proxyFields,
-        node: process.version,
-      });
-    }
-  }
+  reportEnvProxy(envProxy, logger);
 
   if (parseChannelSpec(channelType).includes("web") && !activeWizard) {
     const updater = await createCliAutoUpdater(config.autoUpdate);

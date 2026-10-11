@@ -27,10 +27,15 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { isIPv6 } from "node:net";
 import { EnvHttpProxyAgent, setGlobalDispatcher, type Dispatcher } from "undici";
+import type { LoggerLike } from "../utils/logger.js";
 
-/** Always reached directly, whatever NO_PROXY says. */
-export const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "::1"] as const;
+/**
+ * Always reached directly, whatever NO_PROXY says. IPv6 in brackets: undici
+ * matches the URL's bracketed host, and reads a bare "::1" as host ":" port 1.
+ */
+export const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "[::1]"] as const;
 
 interface EnvProxyRoute {
   readonly httpsProxy?: string;
@@ -45,23 +50,31 @@ export type EnvProxySetup =
   | { readonly kind: "node" }
   | ({ readonly kind: "installed" } & EnvProxyRoute)
   /** A proxy is named, but fetch does not read the dispatcher: it still connects directly. */
-  | ({ readonly kind: "unrouted" } & EnvProxyRoute);
+  | ({ readonly kind: "unrouted" } & EnvProxyRoute)
+  /** A proxy value the installer refused (`reason`, its error code): fetch connects directly. */
+  | ({ readonly kind: "invalid"; readonly reason: string } & EnvProxyRoute);
 
 function value(upper: string | undefined, lower?: string): string | undefined {
   const raw = (upper ?? lower ?? "").trim();
   return raw === "" ? undefined : raw;
 }
 
+/** A bare host:port, as curl and Go read it: a plain-http proxy. */
+function withScheme(proxy: string | undefined): string | undefined {
+  return proxy === undefined || /^[a-z][a-z\d+.-]*:\/\//iu.test(proxy) ? proxy : `http://${proxy}`;
+}
+
 /** What the environment asks for, without changing anything. */
 export function envProxySettings(env: NodeJS.ProcessEnv = process.env): EnvProxySetup {
-  const httpsProxy = value(env["HTTPS_PROXY"], env["https_proxy"]);
-  const httpProxy = value(env["HTTP_PROXY"], env["http_proxy"]);
+  const httpsProxy = withScheme(value(env["HTTPS_PROXY"], env["https_proxy"]));
+  const httpProxy = withScheme(value(env["HTTP_PROXY"], env["http_proxy"]));
   if (httpsProxy === undefined && httpProxy === undefined) return { kind: "none" };
   if (value(env["NODE_USE_ENV_PROXY"]) !== undefined) return { kind: "node" };
   const configured = (value(env["NO_PROXY"], env["no_proxy"]) ?? "")
     .split(",")
     .map((entry) => entry.trim())
-    .filter((entry) => entry !== "");
+    .filter((entry) => entry !== "")
+    .map((entry) => (isIPv6(entry) ? `[${entry}]` : entry));
   const noProxy = [...new Set([...configured, ...LOOPBACK_NO_PROXY])].join(",");
   return {
     kind: "installed",
@@ -100,29 +113,79 @@ export function installEnvProxy(
   const before = fetchDispatcher();
   const viaNode = (http as { setGlobalProxyFromEnv?: SetGlobalProxyFromEnv }).setGlobalProxyFromEnv;
   let reached: boolean;
-  if (install === undefined && typeof viaNode === "function") {
-    // It also points http/https.globalAgent at the proxy; this module routes
-    // fetch only, and the SDKs on those agents keep their own proxy handling.
-    const agents = { http: http.globalAgent, https: https.globalAgent };
-    viaNode({
-      ...(setup.httpsProxy !== undefined ? { HTTPS_PROXY: setup.httpsProxy } : {}),
-      ...(setup.httpProxy !== undefined ? { HTTP_PROXY: setup.httpProxy } : {}),
-      NO_PROXY: setup.noProxy,
-    });
-    http.globalAgent = agents.http;
-    https.globalAgent = agents.https;
-    const after = fetchDispatcher();
-    reached = after !== undefined && after !== before;
-  } else {
-    const dispatcher = new EnvHttpProxyAgent({
-      ...(setup.httpsProxy !== undefined ? { httpsProxy: setup.httpsProxy } : {}),
-      ...(setup.httpProxy !== undefined ? { httpProxy: setup.httpProxy } : {}),
-      noProxy: setup.noProxy,
-    });
-    (install ?? setGlobalDispatcher)(dispatcher);
-    reached = fetchDispatcher() === dispatcher;
+  // This runs at index.ts's top level, so a value an installer refuses (no
+  // valid URL, a scheme it does not speak) used to stop startup. Both refuse
+  // before they install anything: run direct and say why instead.
+  try {
+    if (install === undefined && typeof viaNode === "function") {
+      // It also points http/https.globalAgent at the proxy; this module routes
+      // fetch only, and the SDKs on those agents keep their own proxy handling.
+      const agents = { http: http.globalAgent, https: https.globalAgent };
+      try {
+        viaNode({
+          ...(setup.httpsProxy !== undefined ? { HTTPS_PROXY: setup.httpsProxy } : {}),
+          ...(setup.httpProxy !== undefined ? { HTTP_PROXY: setup.httpProxy } : {}),
+          NO_PROXY: setup.noProxy,
+        });
+      } finally {
+        http.globalAgent = agents.http;
+        https.globalAgent = agents.https;
+      }
+      const after = fetchDispatcher();
+      reached = after !== undefined && after !== before;
+    } else {
+      const dispatcher = new EnvHttpProxyAgent({
+        ...(setup.httpsProxy !== undefined ? { httpsProxy: setup.httpsProxy } : {}),
+        ...(setup.httpProxy !== undefined ? { httpProxy: setup.httpProxy } : {}),
+        noProxy: setup.noProxy,
+      });
+      (install ?? setGlobalDispatcher)(dispatcher);
+      reached = fetchDispatcher() === dispatcher;
+    }
+  } catch (error) {
+    return { ...setup, kind: "invalid", reason: errorCode(error) };
   }
   return reached ? setup : { ...setup, kind: "unrouted" };
+}
+
+/** The error's code, never its message: the installers echo the proxy URL, credentials included. */
+function errorCode(error: unknown): string {
+  if (error !== null && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+    if (error instanceof Error) return error.name;
+  }
+  return "unknown";
+}
+
+type ProxyLogger = Pick<LoggerLike, "info" | "warn">;
+
+/** The startup log line for what installEnvProxy decided; nothing when no proxy is in play. */
+export function reportEnvProxy(setup: EnvProxySetup, logger: ProxyLogger): void {
+  if (setup.kind === "none" || setup.kind === "node") return;
+  // Scheme, host and port only: a proxy URL can carry credentials.
+  const proxyFields = {
+    httpsProxy: setup.httpsProxy !== undefined ? describeProxy(setup.httpsProxy) : undefined,
+    httpProxy: setup.httpProxy !== undefined ? describeProxy(setup.httpProxy) : undefined,
+    noProxy: setup.noProxy,
+  };
+  switch (setup.kind) {
+    case "installed":
+      logger.info("Outbound HTTP(S) goes through the proxy the environment names", proxyFields);
+      return;
+    case "unrouted":
+      logger.warn("The environment names a proxy, but this Node's fetch does not read the dispatcher; outbound HTTP(S) connects directly (NODE_USE_ENV_PROXY=1 hands it to Node)", {
+        ...proxyFields,
+        node: process.version,
+      });
+      return;
+    case "invalid":
+      logger.warn("The environment names a proxy this process cannot use; outbound HTTP(S) connects directly. Set HTTPS_PROXY/HTTP_PROXY to a URL such as http://host:port", {
+        ...proxyFields,
+        reason: setup.reason,
+      });
+      return;
+  }
 }
 
 /** A proxy URL for a log line: scheme, host and port only, never credentials. */

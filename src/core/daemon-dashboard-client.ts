@@ -13,6 +13,7 @@
  * dashboard can be disabled, bound elsewhere, or still starting.
  */
 
+import { Agent, fetch as undiciFetch } from "undici";
 import type { Config } from "../config/config-types.js";
 import { OPERATOR_TOKEN_HEADER, readOperatorCredential } from "./operator-credential.js";
 
@@ -172,8 +173,17 @@ async function send(options: SendOptions): Promise<DashboardReadResult> {
   }
 }
 
+let directAgent: Agent | undefined;
+
+/**
+ * The global fetch follows HTTP(S)_PROXY (env-proxy.ts), and NO_PROXY spares
+ * loopback only: a LAN or hostname BIND_HOST would hand the bearer and
+ * operator tokens to the proxy. The dashboard is always this machine's own
+ * runtime, so these calls take a direct agent of their own; npm undici's
+ * fetch, since an npm Agent handed to the bundled fetch is version-fragile.
+ */
 function fetchOrDefault(fetchImpl: FetchLike | undefined): FetchLike {
-  return fetchImpl ?? ((input, init) => fetch(input, init));
+  return fetchImpl ?? ((input, init) => undiciFetch(input, { ...init, dispatcher: (directAgent ??= new Agent()) }));
 }
 
 /** GET `path` as any dashboard reader: with the bearer when the install has one. */

@@ -4,13 +4,30 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createServer, type Server } from "node:http";
+import http, { createServer, type Server } from "node:http";
+import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installEnvProxy } from "../common/env-proxy.js";
 import { dashboardBaseUrl, resolveDaemonDashboardClient, resolveDaemonOperatorClient } from "./daemon-dashboard-client.js";
 import { publishOperatorCredential } from "./operator-credential.js";
+
+/** The dispatchers fetch reads and the global agents, as installEnvProxy finds them. */
+function saveFetchGlobals(): () => void {
+  void globalThis.Headers; // loads Node's bundled undici, so its key is saved too
+  const slots = globalThis as unknown as Record<symbol, unknown>;
+  const saved = Object.getOwnPropertySymbols(globalThis)
+    .filter((key) => /^undici\.globalDispatcher\.\d+$/u.test(key.description ?? ""))
+    .map((key) => [key, slots[key]] as const);
+  const agents = { http: http.globalAgent, https: https.globalAgent };
+  return () => {
+    for (const [key, dispatcher] of saved) slots[key] = dispatcher;
+    http.globalAgent = agents.http;
+    https.globalAgent = agents.https;
+  };
+}
 
 describe("dashboardBaseUrl", () => {
   it("connects to loopback when the dashboard binds a wildcard address", () => {
@@ -158,6 +175,49 @@ describe("the local operator client (COR-13)", () => {
     expect(seen[0]!.url).toBe("/api/daemon/jobs/j-1");
     expect(seen[0]!.headers["authorization"]).toBe("Bearer bearer-9");
     expect(seen[0]!.headers).not.toHaveProperty("x-strada-operator-token");
+  });
+
+  it("never sends its tokens through the environment's proxy, whatever host the credential names", async () => {
+    const { baseUrl, seen } = await listen();
+    // Any host the loopback no-proxy list does not name (a LAN BIND_HOST, an
+    // IPv6 address); this one still reaches the listener on 127.0.0.1.
+    const lanLike = baseUrl.replace("127.0.0.1", "[::ffff:127.0.0.1]");
+    const proxied: Array<{ url?: string; headers: Record<string, unknown> }> = [];
+    const proxy = createServer((req, res) => {
+      proxied.push({ url: req.url, headers: req.headers });
+      res.end("via-proxy");
+    });
+    proxy.on("connect", (req, socket) => {
+      proxied.push({ url: req.url, headers: req.headers });
+      socket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", () => resolve()));
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+    const restore = saveFetchGlobals();
+    try {
+      expect(installEnvProxy({ HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl }).kind).toBe("installed");
+      const file = join(dir, "k.operator.json");
+      await publishOperatorCredential(file, { baseUrl: lanLike, pid: 1, token: "t".repeat(43) });
+      const resolution = await resolveDaemonOperatorClient(file, config("bearer-9"));
+      if (resolution.kind !== "ok") throw new Error(resolution.message);
+
+      const post = await resolution.client.postJson("/api/daemon/budget/reset", {});
+      const get = await resolution.client.getJson("/api/daemon/jobs/j-1");
+      expect({
+        post: post.kind,
+        get: get.kind,
+        proxied: proxied.map((p) => ({ url: p.url, operatorToken: p.headers["x-strada-operator-token"], bearer: p.headers["authorization"] })),
+        reached: seen.map((s) => s.url),
+      }).toEqual({
+        post: "ok",
+        get: "ok",
+        proxied: [],
+        reached: ["/api/daemon/budget/reset", "/api/daemon/jobs/j-1"],
+      });
+    } finally {
+      restore();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    }
   });
 
   it("names the file and what its absence can mean", async () => {
