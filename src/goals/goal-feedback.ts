@@ -1,5 +1,5 @@
 import type { GoalNode, GoalNodeId, GoalTree } from "./types.js";
-import { calculateProgress } from "./goal-progress.js";
+import { calculateProgress, scaffoldingNodeIds } from "./goal-progress.js";
 
 const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle)\b/iu;
 
@@ -37,17 +37,35 @@ function quoteTask(task: string): string {
   return `"${task}"`;
 }
 
-function getReadyPendingNodes(tree: GoalTree): GoalNode[] {
-  const completed = new Set<GoalNodeId>();
-  for (const [id, node] of tree.nodes) {
-    if (node.status === "completed" || id === tree.rootId) {
-      completed.add(id);
-    }
+/**
+ * Completed nodes, plus the root and every scaffolding parent whose leaves are all completed —
+ * a parent is never dispatched, so its own status stays "pending" for good (agent-core-goals#5).
+ */
+function getCompletedNodeIds(tree: GoalTree, scaffolding: ReadonlySet<GoalNodeId>): Set<GoalNodeId> {
+  const memo = new Map<GoalNodeId, boolean>();
+  const isDone = (id: GoalNodeId): boolean => {
+    const known = memo.get(id);
+    if (known !== undefined) return known;
+    memo.set(id, false); // a malformed cycle is not done
+    const done = scaffolding.has(id)
+      ? getChildren(tree, id).every((child) => isDone(child.id))
+      : tree.nodes.get(id)?.status === "completed";
+    memo.set(id, done);
+    return done;
+  };
+  const completed = new Set<GoalNodeId>([tree.rootId]);
+  for (const [id] of tree.nodes) {
+    if (isDone(id)) completed.add(id);
   }
+  return completed;
+}
+
+function getReadyPendingNodes(tree: GoalTree, scaffolding: ReadonlySet<GoalNodeId>): GoalNode[] {
+  const completed = getCompletedNodeIds(tree, scaffolding);
 
   const ready: GoalNode[] = [];
   for (const [id, node] of tree.nodes) {
-    if (id === tree.rootId || node.status !== "pending") continue;
+    if (id === tree.rootId || scaffolding.has(id) || node.status !== "pending") continue;
     if (node.dependsOn.every((dependency) => completed.has(dependency))) {
       ready.push(node);
     }
@@ -55,17 +73,20 @@ function getReadyPendingNodes(tree: GoalTree): GoalNode[] {
   return ready.sort((left, right) => left.createdAt - right.createdAt);
 }
 
+/** Only leaves are work: a scaffolding parent is never the step being worked on. */
 function getFocusNodes(tree: GoalTree): GoalNode[] {
+  const scaffolding = scaffoldingNodeIds(tree);
+  const isWork = (node: GoalNode): boolean => node.id !== tree.rootId && !scaffolding.has(node.id);
   const executing = [...tree.nodes.values()]
-    .filter((node) => node.id !== tree.rootId && node.status === "executing")
+    .filter((node) => isWork(node) && node.status === "executing")
     .sort((left, right) => left.createdAt - right.createdAt);
   if (executing.length > 0) return executing;
 
-  const ready = getReadyPendingNodes(tree);
+  const ready = getReadyPendingNodes(tree, scaffolding);
   if (ready.length > 0) return ready;
 
   return [...tree.nodes.values()]
-    .filter((node) => node.id !== tree.rootId && node.status === "pending")
+    .filter((node) => isWork(node) && node.status === "pending")
     .sort((left, right) => left.createdAt - right.createdAt);
 }
 

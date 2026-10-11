@@ -2,11 +2,11 @@
  * Goal Progress Tracking
  *
  * Calculates completion percentage for goal trees and renders
- * progress bars. Uses simple child completion ratio (completed / total
- * non-root nodes) per user discretion.
+ * progress bars. Uses the leaf completion ratio (completed / total
+ * work nodes: neither the root nor a scaffolding parent).
  */
 
-import type { GoalTree } from "./types.js";
+import type { GoalNodeId, GoalTree } from "./types.js";
 
 // =============================================================================
 // TYPES
@@ -23,14 +23,29 @@ export interface ProgressInfo {
 // =============================================================================
 
 /**
- * Calculate progress across all non-root nodes in a goal tree.
- * Simple child completion ratio: completed / total non-root nodes.
+ * The nodes whose children carry their work. A scaffolding parent is never dispatched and
+ * nothing marks it done (the same leaf rule as tree-shape.ts countDispatchableGoals), so its
+ * state is its leaves' state, not a step of its own.
+ */
+export function scaffoldingNodeIds(tree: GoalTree): Set<GoalNodeId> {
+  const parents = new Set<GoalNodeId>();
+  for (const [, node] of tree.nodes) {
+    if (node.parentId !== null && tree.nodes.has(node.parentId)) parents.add(node.parentId);
+  }
+  return parents;
+}
+
+/**
+ * Calculate progress across the leaf (work) nodes of a goal tree: completed / total.
+ * The root and scaffolding parents are not steps — counting them held a fully executed
+ * plan at e.g. 3/4 (75%) with the finished parent as "current focus" (agent-core-goals#5).
  */
 export function calculateProgress(tree: GoalTree): ProgressInfo {
+  const scaffolding = scaffoldingNodeIds(tree);
   let completed = 0;
   let total = 0;
   for (const [id, node] of tree.nodes) {
-    if (id === tree.rootId) continue;
+    if (id === tree.rootId || scaffolding.has(id)) continue;
     total++;
     if (node.status === "completed") completed++;
   }
