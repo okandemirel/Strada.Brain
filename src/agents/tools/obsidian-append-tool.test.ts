@@ -95,6 +95,8 @@ function appendUnderHeading(doc: string, target: string[], content: string): str
  * served with `Markdown-Patch-Version: 1` (400 HeaderTargetingRequiresVersion1
  * otherwise); PATCH (1.x) needs Operation, a missing note is 404 and a missing
  * heading 400 PatchFailed; a patch answers 200 with the patched note as text.
+ * The path is split on its raw slashes and each segment decoded, so a segment
+ * that decodes to a slash (Daily%2Fx.md) names no file: 404 for every verb.
  */
 async function fakeLocalRestApi(root: string): Promise<{ apiUrl: string; close: () => Promise<void> }> {
   const server = createServer((req, res) => {
@@ -102,7 +104,8 @@ async function fakeLocalRestApi(root: string): Promise<{ apiUrl: string; close: 
     req.setEncoding('utf8');
     req.on('data', (chunk: string) => { body += chunk; });
     req.on('end', () => {
-      const rel = decodeURIComponent((req.url ?? '').replace(/^\/vault\//, ''));
+      const segments = (req.url ?? '').replace(/^\/vault\//, '').split('/').map(decodeURIComponent);
+      const rel = segments.join('/');
       if (req.method === 'GET' && rel === '') {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end('[]');
         return;
@@ -111,6 +114,10 @@ async function fakeLocalRestApi(root: string): Promise<{ apiUrl: string; close: 
       const headerTarget = req.headers['target-type'] !== undefined || req.headers['target'] !== undefined;
       const fail = (status: number, message: string) =>
         res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify({ message }));
+      if (segments.some((segment) => segment.includes('/'))) {
+        fail(404, 'Not Found');
+        return;
+      }
       if ((req.method === 'POST' || req.method === 'PATCH') && headerTarget) {
         if (req.headers['markdown-patch-version'] !== '1') {
           fail(400, 'HeaderTargetingRequiresVersion1');
@@ -225,6 +232,22 @@ describe('obsidian_append against the Local REST API', () => {
     expect(result.isError, String(result.content)).toBeFalsy();
     expect(result.content).toContain('under "## Log"');
     expect(readFileSync(join(root, 'today.md'), 'utf8')).toBe(
+      '## Log\n- wrote the GDD\n- fixed the spawner\n## Todo\n- ship it\n',
+    );
+  });
+
+  it('appends under the heading of a note below the vault root', async () => {
+    const { root, tool } = await setup();
+    mkdirSync(join(root, 'Daily'));
+    writeFileSync(join(root, 'Daily', '2026-10-11.md'), '## Log\n- wrote the GDD\n## Todo\n- ship it\n');
+
+    const result = await tool.execute(
+      { path: 'Daily/2026-10-11.md', heading: '## Log', content: '- fixed the spawner\n' },
+      context(false),
+    );
+
+    expect(result.isError, String(result.content)).toBeFalsy();
+    expect(readFileSync(join(root, 'Daily', '2026-10-11.md'), 'utf8')).toBe(
       '## Log\n- wrote the GDD\n- fixed the spawner\n## Todo\n- ship it\n',
     );
   });

@@ -71,7 +71,7 @@ describe("ObsidianApiClient write path", () => {
     await client.appendToHeading("Daily/2026-05-30.md", "Log", "- item");
 
     const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://localhost:27124/vault/Daily%2F2026-05-30.md");
+    expect(url).toBe("https://localhost:27124/vault/Daily/2026-05-30.md");
     // 5.x refuses header targets without Markdown-Patch-Version: 1
     // (HeaderTargetingRequiresVersion1); a POST that a plugin does not target
     // lands at the end of the note while the tool says "under the heading".
@@ -106,7 +106,7 @@ describe("ObsidianApiClient write path", () => {
     await client.appendNote("Daily/2026-10-11.md", md);
 
     const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://localhost:27124/vault/Daily%2F2026-10-11.md");
+    expect(url).toBe("https://localhost:27124/vault/Daily/2026-10-11.md");
     // PUT is the API's replace-the-file verb.
     expect(opts.method).toBe("POST");
     expect(opts.body).toBe(md);
@@ -114,6 +114,31 @@ describe("ObsidianApiClient write path", () => {
     expect(headers["Content-Type"]).toBe("text/markdown");
     expect(headers["Target-Type"]).toBeUndefined();
   });
+
+  // 5.x splits the request path on its raw slashes and decodes each segment,
+  // so a note below the root sent as Daily%2Fx.md was one segment no note
+  // has: 404 for every verb. 3.x and 4.x decode the whole path and take both.
+  it.each([
+    ["getNote", (c: ObsidianApiClient, p: string) => c.getNote(p)],
+    ["putNote", (c: ObsidianApiClient, p: string) => c.putNote(p, "x")],
+    ["appendNote", (c: ObsidianApiClient, p: string) => c.appendNote(p, "x")],
+    ["deleteNote", (c: ObsidianApiClient, p: string) => c.deleteNote(p)],
+    ["appendToHeading", (c: ObsidianApiClient, p: string) => c.appendToHeading(p, "Log", "x")],
+  ] as const)("%s sends a note below the vault root with its folders as path segments", async (_name, call) => {
+    await call(client, "Daily/Week 41/Notes #1?.md");
+
+    const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://localhost:27124/vault/Daily/Week%2041/Notes%20%231%3F.md");
+  });
+
+  it.each(["../secrets.md", "Daily/../../x.md", "Daily/./x.md", "."])(
+    "refuses %s instead of letting URL parsing move it out of /vault/",
+    async (path) => {
+      await expect(client.putNote(path, "x")).rejects.toThrow(/dot segment/);
+      await expect(client.getNote(path)).rejects.toThrow(/dot segment/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("still JSON-encodes non-string bodies", async () => {
     mockFetch.mockResolvedValue({

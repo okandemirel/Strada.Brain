@@ -26,6 +26,22 @@ export interface ObsidianSearchResult {
 }
 
 /**
+ * A vault-relative path as the `/vault/{path}` URL carries it: each folder its
+ * own segment. Encoded whole, Daily/x.md became the single segment
+ * Daily%2Fx.md, which 5.x (it splits on raw slashes, then decodes each
+ * segment) resolves to no note, so every verb answered 404 below the root.
+ * A `.` or `..` segment is refused: the URL parser would collapse it and
+ * send the request outside /vault/.
+ */
+function vaultUrlPath(path: string): string {
+  const segments = path.split('/');
+  if (segments.some((segment) => segment === '.' || segment === '..')) {
+    throw new Error(`Obsidian vault path has a dot segment: ${path}`);
+  }
+  return segments.map(encodeURIComponent).join('/');
+}
+
+/**
  * Typed HTTP client for Obsidian Local REST API.
  * Supports: file CRUD, search, active file, periodic notes.
  *
@@ -131,7 +147,7 @@ export class ObsidianApiClient {
 
   /** Read a note by vault-relative path. */
   async getNote(path: string): Promise<string> {
-    const encoded = encodeURIComponent(path);
+    const encoded = vaultUrlPath(path);
     const res = await this.send(`${this.baseUrl}/vault/${encoded}`, {
       headers: { ...this.headers, Accept: 'text/markdown' },
     });
@@ -143,7 +159,7 @@ export class ObsidianApiClient {
 
   /** Write or overwrite a note. */
   async putNote(path: string, content: string): Promise<void> {
-    const encoded = encodeURIComponent(path);
+    const encoded = vaultUrlPath(path);
     await this.request<void>('PUT', `/vault/${encoded}`, content);
   }
 
@@ -152,13 +168,13 @@ export class ObsidianApiClient {
    * API's PUT replaces the whole file, which turned every append into a wipe.
    */
   async appendNote(path: string, content: string): Promise<void> {
-    const encoded = encodeURIComponent(path);
+    const encoded = vaultUrlPath(path);
     await this.request<void>('POST', `/vault/${encoded}`, content);
   }
 
   /** Delete a note. */
   async deleteNote(path: string): Promise<void> {
-    const encoded = encodeURIComponent(path);
+    const encoded = vaultUrlPath(path);
     await this.request<void>('DELETE', `/vault/${encoded}`);
   }
 
@@ -195,7 +211,7 @@ export class ObsidianApiClient {
    * appended to the end of the note.
    */
   async appendToHeading(path: string, heading: string, content: string): Promise<void> {
-    const encoded = encodeURIComponent(path);
+    const encoded = vaultUrlPath(path);
     const target = heading
       .split('::')
       .map((part) => part.trim().replace(/^#+\s*/, ''))
