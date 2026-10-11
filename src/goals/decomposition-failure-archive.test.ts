@@ -22,7 +22,11 @@ describe("archiveDecompositionFailure", () => {
   });
 
   it("returns undefined instead of throwing when the root cannot be created", () => {
-    expect(archiveDecompositionFailure("x", "/dev/null/impossible")).toBeUndefined();
+    // A directory under a regular file cannot be created on any platform;
+    // "/dev/null/impossible" is an ordinary creatable path on Windows (D:\dev\null\...).
+    const blocker = join(fresh(), "a-file");
+    writeFileSync(blocker, "x");
+    expect(archiveDecompositionFailure("x", join(blocker, "impossible"))).toBeUndefined();
   });
 
   it("lives under STRADA_HOME/.strada/analysis, under the temp root while vitest runs, or where the env says", () => {
