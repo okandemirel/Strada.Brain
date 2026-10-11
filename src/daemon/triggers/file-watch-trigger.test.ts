@@ -12,7 +12,7 @@ vi.mock("chokidar", () => ({
 }));
 
 // Must import after mock setup
-import { FileWatchTrigger } from "./file-watch-trigger.js";
+import { FileWatchTrigger, buildIgnoreMatcher } from "./file-watch-trigger.js";
 import { watch } from "chokidar";
 
 describe("FileWatchTrigger", () => {
@@ -60,24 +60,74 @@ describe("FileWatchTrigger", () => {
     );
   });
 
-  it("includes default ignore patterns: node_modules, .git", () => {
+  // chokidar 5 compares a string `ignored` entry by equality, never as a glob,
+  // so these assert what the matcher it is handed decides, not what was passed
+  // (the real-watcher cases live in file-watch-trigger.real-watcher.test.ts).
+  it("ignores node_modules and .git by default", () => {
     new FileWatchTrigger(baseDef);
 
     const callArgs = vi.mocked(watch).mock.calls[0]![1]!;
-    const ignored = callArgs.ignored as string[];
-    expect(ignored).toContain("**/node_modules/**");
-    expect(ignored).toContain("**/.git/**");
+    const ignored = callArgs.ignored as (path: string) => boolean;
+    expect(typeof ignored).toBe("function");
+    expect(ignored(`${baseDef.path}/node_modules`)).toBe(true);
+    expect(ignored(`${baseDef.path}/Plugins/node_modules/pkg/index.js`)).toBe(true);
+    expect(ignored(`${baseDef.path}/.git`)).toBe(true);
+    expect(ignored(`${baseDef.path}/.git/refs/heads/main`)).toBe(true);
+    expect(ignored(`${baseDef.path}/Scripts/Player.cs`)).toBe(false);
+    expect(ignored(baseDef.path)).toBe(false);
   });
 
   it("merges user-provided ignore patterns with defaults", () => {
     new FileWatchTrigger({ ...baseDef, ignore: ["*.meta", "Library/**"] });
 
     const callArgs = vi.mocked(watch).mock.calls[0]![1]!;
-    const ignored = callArgs.ignored as string[];
-    expect(ignored).toContain("*.meta");
-    expect(ignored).toContain("Library/**");
-    expect(ignored).toContain("**/node_modules/**");
-    expect(ignored).toContain("**/.git/**");
+    const ignored = callArgs.ignored as (path: string) => boolean;
+    expect(ignored(`${baseDef.path}/Scripts/Player.cs.meta`)).toBe(true);
+    expect(ignored(`${baseDef.path}/Library`)).toBe(true);
+    expect(ignored(`${baseDef.path}/Library/Cache/a.bin`)).toBe(true);
+    expect(ignored(`${baseDef.path}/node_modules/x.js`)).toBe(true);
+    expect(ignored(`${baseDef.path}/.git/HEAD`)).toBe(true);
+    expect(ignored(`${baseDef.path}/Scripts/Player.cs`)).toBe(false);
+  });
+
+  describe("buildIgnoreMatcher", () => {
+    const root = "/projects/game";
+
+    it("matches a slash-free pattern at any depth and everything under a matched directory", () => {
+      const ignored = buildIgnoreMatcher(root, ["node_modules", ".git", "*.d.ts"]);
+      expect(ignored(`${root}/node_modules`)).toBe(true);
+      expect(ignored(`${root}/a/b/node_modules/pkg/x.js`)).toBe(true);
+      expect(ignored(`${root}/.git/objects/ab/cd`)).toBe(true);
+      expect(ignored(`${root}/src/types.d.ts`)).toBe(true);
+      expect(ignored(`${root}/src/node_modules.ts`)).toBe(false);
+      expect(ignored(`${root}/src/types.ts`)).toBe(false);
+    });
+
+    it("anchors a pattern with a slash at the root", () => {
+      const ignored = buildIgnoreMatcher(root, ["Library/**", "/Temp", "./Logs/", "Assets/Gen"]);
+      expect(ignored(`${root}/Library`)).toBe(true);
+      expect(ignored(`${root}/Temp/x`)).toBe(true);
+      expect(ignored(`${root}/Logs/today.log`)).toBe(true);
+      expect(ignored(`${root}/Assets/Gen/Auto.cs`)).toBe(true);
+      expect(ignored(`${root}/Packages/Library/x.cs`)).toBe(false);
+      expect(ignored(`${root}/Sub/Temp/x`)).toBe(false);
+      expect(ignored(`${root}/Assets/General.cs`)).toBe(false);
+    });
+
+    it("judges paths relative to the root, never the root itself or what lies outside it", () => {
+      const nested = "/Users/me/Library/node_modules/game";
+      const ignored = buildIgnoreMatcher(nested, ["Library", "node_modules"]);
+      expect(ignored(nested)).toBe(false);
+      expect(ignored(`${nested}/Assets/Player.cs`)).toBe(false);
+      expect(ignored(`${nested}/Library/x`)).toBe(true);
+      expect(ignored("/Users/me/Library/other")).toBe(false);
+    });
+
+    it("resolves a relative root and relative event paths against cwd, as chokidar reports them", () => {
+      const ignored = buildIgnoreMatcher("game", ["Library/**"]);
+      expect(ignored("game/Library/a.bin")).toBe(true);
+      expect(ignored("game/Assets/a.cs")).toBe(false);
+    });
   });
 
   it("sets depth: undefined (recursive) when recursive is true or default", () => {

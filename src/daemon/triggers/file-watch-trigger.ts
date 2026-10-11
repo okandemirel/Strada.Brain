@@ -12,7 +12,7 @@
  * Used by: TriggerRegistry, HeartbeatLoop
  */
 
-import { basename } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 import { getLoggerSafe } from "../../utils/logger.js";
 // @ts-ignore -- picomatch is a direct dependency (package.json) but ships no bundled types
@@ -45,6 +45,47 @@ const MAX_PENDING_EVENTS = 200;
 
 /** Default ignore patterns applied to all file watchers */
 const DEFAULT_IGNORE_PATTERNS = ["**/node_modules/**", "**/.git/**"];
+
+/**
+ * The `ignore:` globs as the function chokidar 5 consults.
+ *
+ * Audited 2026-10-11 (daemon#0): the strings went to chokidar as-is, and
+ * chokidar 5 compares a string `ignored` entry to the path by equality, never
+ * as a glob — so .git, node_modules, `*.meta` and `Library/**` were all watched
+ * and every commit or reimport under a watched root fired a daemon task.
+ *
+ * gitignore-shaped: a pattern without a slash names an entry at any depth, one
+ * with a slash is anchored at the watch root, and a path under an ignored
+ * directory is ignored with it. Judged relative to the root, so a root that
+ * itself sits under a directory named in the list is not muted whole.
+ */
+export function buildIgnoreMatcher(
+  root: string,
+  patterns: readonly string[],
+): (filePath: string) => boolean {
+  const anyDepth: Array<(input: string) => boolean> = [];
+  const anchored: Array<(input: string) => boolean> = [];
+  for (const raw of patterns) {
+    const trimmed = raw.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+    const pattern = trimmed.replace(/^\/+/, "");
+    if (!pattern) continue;
+    const isMatch = picomatch(pattern, { dot: true }) as (input: string) => boolean;
+    (trimmed.includes("/") ? anchored : anyDepth).push(isMatch);
+  }
+  const base = resolve(root);
+  return (filePath: string) => {
+    // chokidar reports a relative root's paths relative to cwd, as resolve() reads them.
+    const rel = relative(base, resolve(filePath));
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+    const segments = rel.split(sep);
+    for (let i = 0; i < segments.length; i++) {
+      if (anyDepth.some((m) => m(segments[i]!))) return true;
+      const prefix = segments.slice(0, i + 1).join("/");
+      if (anchored.some((m) => m(prefix))) return true;
+    }
+    return false;
+  };
+}
 
 /** Build a picomatch matcher for glob pattern filtering on basenames. */
 function buildPatternMatcher(pattern: string): (filePath: string) => boolean {
@@ -105,10 +146,10 @@ export class FileWatchTrigger implements ITrigger {
     }
 
     // Merge user-provided ignore patterns with defaults
-    const ignored = [
+    const ignored = buildIgnoreMatcher(def.path, [
       ...(def.ignore ?? []),
       ...DEFAULT_IGNORE_PATTERNS,
-    ];
+    ]);
 
     // Configure chokidar watcher
     const watchOpts: Record<string, unknown> = {
