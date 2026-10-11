@@ -59,18 +59,24 @@ export class TaskManager extends EventEmitter {
   private readonly liveOrchestrators = new Map<TaskId, IOrchestrator>();
   private static readonly MAX_LIVE_ORCHESTRATORS = 500;
 
-  /** When this process began: a task created after it cannot have been interrupted by the restart that began it. */
-  private readonly bootedAt: number;
+  /**
+   * Tasks THIS process submitted before startup recovery ran: live, not
+   * interrupted. Ownership by identity, not by clock — comparing createdAt with
+   * a boot timestamp let a crashed process's row whose createdAt lay ahead of a
+   * clock stepped back (NTP, VM restore) pass as "ours", and nobody owned it
+   * again: recovery skipped it, the reaper skipped it, and it held the
+   * foreground slot "executing" for the life of the process
+   * (tasks-supervisor#5). Recovery reads it once; null afterwards.
+   */
+  private submittedHere: Set<TaskId> | null = new Set<TaskId>();
 
   constructor(
     private readonly storage: TaskStorage,
     private readonly executor: IBackgroundExecutor,
     private readonly goalStorage?: GoalStorage,
-    bootedAt: number = Date.now(),
   ) {
     super();
     this.setMaxListeners(20);
-    this.bootedAt = bootedAt;
   }
 
   setCheckpointStore(store: TaskCheckpointStore): void {
@@ -138,6 +144,7 @@ export class TaskManager extends EventEmitter {
     };
 
     this.storage.save(task);
+    this.submittedHere?.add(task.id);
     if (options?.orchestrator) this.rememberOrchestrator(task.id, options.orchestrator);
     logger.info("Task submitted", { taskId: task.id, chatId, promptLength: prompt.length });
     this.emit("task:created", task);
@@ -894,6 +901,9 @@ export class TaskManager extends EventEmitter {
    */
   recoverOnStartup(): void {
     const logger = getLogger();
+    // The pass runs once; nothing reads the record after it.
+    const submittedHere = this.submittedHere ?? new Set<TaskId>();
+    this.submittedHere = null;
     this.pruneHistory();
     const incomplete = this.storage.loadIncomplete();
 
@@ -907,12 +917,10 @@ export class TaskManager extends EventEmitter {
       // cancelled the old lineage and submitted attempt 2 (8918 chars, delivery
       // gate attached); this pass then paused it as an orphan and the campaign
       // "resumed" it as a replay whose prompt had lost the gate block.
-      if (task.createdAt >= this.bootedAt) {
+      if (submittedHere.has(task.id)) {
         logger.info("Recovery left a task alone — it was submitted by this process", {
           taskId: task.id,
           status: task.status,
-          createdAt: new Date(task.createdAt).toISOString(),
-          bootedAt: new Date(this.bootedAt).toISOString(),
         });
         continue;
       }

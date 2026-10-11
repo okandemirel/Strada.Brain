@@ -444,7 +444,7 @@ describe("TaskManager", () => {
       updateError: vi.fn(),
     } as any;
     const goalStorage = { updateTreeStatus: vi.fn() } as any;
-    const manager = new TaskManager(storage, {} as any, goalStorage, Date.now() + 60_000);
+    const manager = new TaskManager(storage, {} as any, goalStorage);
     const pausedListener = vi.fn();
     manager.on("task:paused", pausedListener);
 
@@ -498,31 +498,53 @@ describe("TaskManager", () => {
     // Measured 2026-09-08 04:18: the campaign submitted attempt 2 sixteen
     // seconds before recovery ran; recovery paused it and the campaign then
     // replayed it with a prompt that had lost the delivery gate block.
-    const bootedAt = 1_000_000;
-    const liveTask = buildTask({
-      id: "task_live" as Task["id"],
-      status: TaskStatus.executing,
-      origin: "user",
-      createdAt: bootedAt + 9_000,
-    });
     const oldTask = buildTask({
       id: "task_old" as Task["id"],
       status: TaskStatus.executing,
       origin: "user",
-      createdAt: bootedAt - 60_000,
+      createdAt: Date.now() - 60_000,
     });
     const storage = {
-      loadIncomplete: vi.fn().mockReturnValue([liveTask, oldTask]),
+      save: vi.fn(),
+      loadIncomplete: vi.fn(),
       updateStatus: vi.fn(),
       updateError: vi.fn(),
     } as any;
-    const manager = new TaskManager(storage, {} as any, undefined, bootedAt);
+    const manager = new TaskManager(storage, { enqueue: vi.fn() } as any);
+    const live = manager.submit("chat-1", "cli", "attempt 2, delivery gate attached");
+    storage.loadIncomplete.mockReturnValue([{ ...live, status: TaskStatus.executing }, oldTask]);
 
     manager.recoverOnStartup();
 
-    expect(storage.updateStatus).not.toHaveBeenCalledWith("task_live", expect.anything());
-    expect(storage.updateError).not.toHaveBeenCalledWith("task_live", expect.anything());
+    expect(storage.updateStatus).not.toHaveBeenCalledWith(live.id, expect.anything());
+    expect(storage.updateError).not.toHaveBeenCalledWith(live.id, expect.anything());
     expect(storage.updateStatus).toHaveBeenCalledWith("task_old", TaskStatus.paused);
+  });
+
+  it("recovers a dead process's task stamped AHEAD of this boot's clock (tasks-supervisor#5)", () => {
+    // A clock is not an order. The previous process stamped the row 10:00:05
+    // and crashed; the clock was then stepped back (NTP, VM restore), so this
+    // boot reads 10:00:00. A createdAt-vs-boot comparison called the row "ours",
+    // and nobody owned it again: recovery skipped it, the reaper skipped it
+    // (not in this process's inflight), and it sat "executing" holding the
+    // foreground slot for the life of the process.
+    const orphan = buildTask({
+      id: "task_orphan" as Task["id"],
+      status: TaskStatus.executing,
+      origin: "user",
+      createdAt: Date.now() + 5 * 60_000,
+    });
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([orphan]),
+      updateStatus: vi.fn(),
+      updateError: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    manager.recoverOnStartup();
+
+    expect(storage.updateError).toHaveBeenCalledWith("task_orphan", expect.stringContaining("system restart"));
+    expect(storage.updateStatus).toHaveBeenCalledWith("task_orphan", TaskStatus.paused);
   });
 
   it("leaves a recovered user task paused, not failed (updateError must not clobber paused)", () => {
@@ -539,7 +561,7 @@ describe("TaskManager", () => {
       updateStatus: vi.fn((_id: Task["id"], s: TaskStatus) => { status = s; }),
       updateError: vi.fn(() => { status = TaskStatus.failed; }),
     } as any;
-    const manager = new TaskManager(storage, {} as any, undefined, Date.now() + 60_000);
+    const manager = new TaskManager(storage, {} as any);
 
     manager.recoverOnStartup();
 
@@ -559,7 +581,7 @@ describe("TaskManager", () => {
       updateStatus: vi.fn(),
       updateError: vi.fn(),
     } as any;
-    const manager = new TaskManager(storage, {} as any, undefined, Date.now() + 60_000);
+    const manager = new TaskManager(storage, {} as any);
 
     manager.recoverOnStartup();
 
@@ -856,13 +878,13 @@ describe("a resumed paused task is retired, so a restart does not replay it (TSK
   it("crash, resume on boot 2, child completes: boot 3 submits nothing", () => {
     withStorage((storage, step) => {
       // Boot 1: the mission is executing when the process dies.
-      const boot1 = new TaskManager(storage, makeExecutor(), undefined, Date.now() - 60_000);
+      const boot1 = new TaskManager(storage, makeExecutor());
       const a = boot1.submit("chat-1", "cli", "ship the feature");
       boot1.updateStatus(a.id, TaskStatus.executing);
 
       // Boot 2: recovery pauses it, the restart re-arm resumes it, the child finishes.
       step();
-      const boot2 = new TaskManager(storage, makeExecutor(), undefined, Date.now());
+      const boot2 = new TaskManager(storage, makeExecutor());
       boot2.recoverOnStartup();
       step();
       expect(boot2.listPausedByRestart().map((t) => t.id)).toEqual([a.id]);
@@ -876,7 +898,7 @@ describe("a resumed paused task is retired, so a restart does not replay it (TSK
       // Boot 3: nothing is paused, nothing is resubmitted.
       step();
       const exec3 = makeExecutor();
-      const boot3 = new TaskManager(storage, exec3, undefined, Date.now());
+      const boot3 = new TaskManager(storage, exec3);
       boot3.recoverOnStartup();
       expect(boot3.listPausedByRestart()).toEqual([]);
       expect(boot3.resumeTask(a.id)).toBeNull();
@@ -887,7 +909,7 @@ describe("a resumed paused task is retired, so a restart does not replay it (TSK
 
   it("heals a paused row an older version left behind after its continuation completed", () => {
     withStorage((storage, step) => {
-      const manager = new TaskManager(storage, makeExecutor(), undefined, Date.now() - 60_000);
+      const manager = new TaskManager(storage, makeExecutor());
       const a = manager.submit("chat-1", "cli", "ship the feature");
       step();
       // What the old resumeTask left: a child that completed, a parent still paused.
@@ -899,7 +921,7 @@ describe("a resumed paused task is retired, so a restart does not replay it (TSK
 
       step();
       const exec = makeExecutor();
-      const nextBoot = new TaskManager(storage, exec, undefined, Date.now());
+      const nextBoot = new TaskManager(storage, exec);
       nextBoot.recoverOnStartup();
       expect(storage.load(a.id)?.status).toBe(TaskStatus.cancelled);
       expect(nextBoot.listPausedByRestart()).toEqual([]);

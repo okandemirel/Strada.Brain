@@ -303,6 +303,12 @@ export class BackgroundExecutor {
    */
   private readonly inflightWorkspacePaths = new Map<string, string>();
   /**
+   * Run id → abort handle for every worker envelope that holds its own lease
+   * (same keys as inflightWorkspacePaths). A supervisor node is not a task, so
+   * `inflight` cannot stop it; this can.
+   */
+  private readonly inflightWorkspaceRuns = new Map<string, AbortController>();
+  /**
    * Integration branches a run of this executor created (they did not exist
    * when the run started) and that have not been merged yet. Only these are
    * ever merged: every other `feature/*` / `milestone/*` is the person's.
@@ -1534,8 +1540,16 @@ export class BackgroundExecutor {
       })
       : undefined);
     const shouldReleaseLease = !params.workspaceLease && Boolean(managedWorkspaceLease);
-    if (shouldReleaseLease && managedWorkspaceLease) {
+    // The reaper's handle on THIS run. A supervisor node's lease is watched
+    // under its run id (`${task.id}:${node.id}`), which no task carries: the
+    // reaper looked it up in `inflight` (keyed by task id), aborted nothing,
+    // and the node flailed on against the vanished directory while the log
+    // said it was reaped (tasks-supervisor#4).
+    const reapControl = shouldReleaseLease && managedWorkspaceLease ? new AbortController() : undefined;
+    const runSignal = reapControl ? AbortSignal.any([params.signal, reapControl.signal]) : params.signal;
+    if (reapControl && managedWorkspaceLease) {
       this.inflightWorkspacePaths.set(String(params.taskRunId), managedWorkspaceLease.path);
+      this.inflightWorkspaceRuns.set(String(params.taskRunId), reapControl);
     }
 
     // What publication lost, if anything. A worker whose bytes never reached
@@ -1553,12 +1567,16 @@ export class BackgroundExecutor {
     try {
       outcome = await this.executeWorkerRun(orchestrator, {
         ...params,
+        signal: runSignal,
         workspaceLease: managedWorkspaceLease,
         workspaceLeaseRetained: !shouldReleaseLease,
       });
     } finally {
       if (shouldReleaseLease && managedWorkspaceLease) {
         this.inflightWorkspacePaths.delete(String(params.taskRunId));
+        if (this.inflightWorkspaceRuns.get(String(params.taskRunId)) === reapControl) {
+          this.inflightWorkspaceRuns.delete(String(params.taskRunId));
+        }
         // Commit BEFORE release. release() deletes the lease directory, so
         // skipping this makes the whole lease write-only: the agent edits a
         // temp copy, verifies it, reports success, and the user's project never
@@ -1672,16 +1690,6 @@ export class BackgroundExecutor {
     taskOrchestrator.setLivenessCallback?.(() =>
       onProgress({ kind: "heartbeat", message: "" } as TaskProgressUpdate),
     );
-    // setLivenessCallback only covers the singleton's own tool path. A wave's
-    // tools run on worker orchestrator instances (agent-manager, delegation)
-    // whose slot is never set; the hub relays their activity by chatId.
-    // Measured 2026-08-29: two campaign tasks reaped at exactly 60min with
-    // zero heartbeats while workers ran tools the whole time.
-    const unsubscribeLiveness = subscribeTaskLiveness(task.chatId, () => {
-      try {
-        this.taskManager?.touch?.(task.id);
-      } catch { /* liveness must never break the run */ }
-    });
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
     /** What this task's publication lost, if anything (Codex 2026-09-11 O#1/O#2). */
     let taskPublicationLoss: string | undefined;
@@ -1696,6 +1704,20 @@ export class BackgroundExecutor {
     if (signal.aborted) {
       return;
     }
+
+    // setLivenessCallback only covers the singleton's own tool path. A wave's
+    // tools run on worker orchestrator instances (agent-manager, delegation)
+    // whose slot is never set; the hub relays their activity by chatId.
+    // Measured 2026-08-29: two campaign tasks reaped at exactly 60min with
+    // zero heartbeats while workers ran tools the whole time. Subscribed only
+    // past the early returns above: the finally below is the one place that
+    // unsubscribes, and a return before it left the listener touching the row
+    // for the life of the process.
+    const unsubscribeLiveness = subscribeTaskLiveness(task.chatId, () => {
+      try {
+        this.taskManager?.touch?.(task.id);
+      } catch { /* liveness must never break the run */ }
+    });
 
     // Update status to executing
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
@@ -1740,20 +1762,32 @@ export class BackgroundExecutor {
     // starts alongside it sees the wallet already committed (D20). Released
     // immediately on cancel and unconditionally in the finally below.
     const reserved = this.reserveRunBudget(task);
-    if (reserved === "refused") {
-      // The wallet cannot carry this run beside what is already in flight: a
-      // budget WAIT, not a verdict about the work. The keep-alive re-arms it
-      // when the window drains, exactly as for a run the wallet stopped
-      // mid-flight (Codex round 8 #1).
-      const waiting = `Task not started: the wallet cannot carry this run beside the work already in flight. ${BUDGET_WAIT_MARKER}`;
-      getLoggerSafe().warn("A task run was refused for want of budget headroom", { taskId: task.id });
-      if (!this.scheduleMissionKeepAlive(task, waiting)) this.taskManager.block(task.id, waiting);
-      return;
-    }
-    const budgetReservationId = reserved;
+    const budgetReservationId = reserved === "refused" ? undefined : reserved;
     const releaseOnCancel = () => this.releaseRunBudget(task);
     if (budgetReservationId) signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
+      if (reserved === "refused") {
+        // The wallet cannot carry this run beside what is already in flight: a
+        // budget WAIT, not a verdict about the work. The keep-alive re-arms it
+        // when the window drains, exactly as for a run the wallet stopped
+        // mid-flight (Codex round 8 #1). It has to be TOLD it is a wait:
+        // admission counts the run's estimate and the agent's or daemon's
+        // sub-limit, the keep-alive's own isGlobalExceeded() counts neither,
+        // so a wallet one reservation short read as an ordinary failure —
+        // "Auto-retry n/10" every refusal, then "Persistently failing after 10
+        // automatic retries" for a mission that never ran (tasks-supervisor#1).
+        // Inside the try, so the finally ends the monitor episode and the
+        // liveness subscription this run already opened.
+        const waiting = `Task not started: the wallet cannot carry this run beside the work already in flight. ${BUDGET_WAIT_MARKER}`;
+        getLoggerSafe().warn("A task run was refused for want of budget headroom", { taskId: task.id });
+        requestFailed = true;
+        // An escalation already wrote the row's outcome; this sentence over it
+        // erased the stop (O#14, the same guard the worker path keeps).
+        if (!this.scheduleMissionKeepAlive(task, waiting, { budgetWait: true }) && !this.keepAliveEscalated) {
+          this.taskManager.block(task.id, waiting);
+        }
+        return;
+      }
       const hasRichInput =
         (task.attachments?.length ?? 0) > 0 ||
         (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
@@ -2340,15 +2374,11 @@ export class BackgroundExecutor {
     if (!manager) return undefined;
     if (typeof manager.reserveIfAffordable !== "function") return "refused";
     try {
-      const own = (task as Task & { estimatedCostUsd?: number }).estimatedCostUsd;
-      const estimate = typeof own === "number" && Number.isFinite(own) && own > 0
-        ? own
-        : manager.getTaskReservationUsd();
       // CHECK AND RESERVE TOGETHER (Codex round 8 #1): a run that the wallet
       // cannot carry does not start. `undefined` from the manager means
       // refused, which the caller turns into the same budget wait a drained
       // window produces.
-      const id = manager.reserveIfAffordable(estimate, this.budgetSourceOf(task), task.agentId);
+      const id = manager.reserveIfAffordable(this.runEstimateUsd(manager, task), this.budgetSourceOf(task), task.agentId);
       if (id === undefined) return "refused";
       this.runReservations.set(String(task.id), id);
       return id;
@@ -2359,6 +2389,29 @@ export class BackgroundExecutor {
       });
       return "refused";
     }
+  }
+
+  /** What a run of this task reserves: its own estimate, else the configured default. */
+  private runEstimateUsd(manager: UnifiedBudgetManager, task: Task): number {
+    const own = (task as Task & { estimatedCostUsd?: number }).estimatedCostUsd;
+    return typeof own === "number" && Number.isFinite(own) && own > 0
+      ? own
+      : manager.getTaskReservationUsd();
+  }
+
+  /**
+   * Is the wallet still closed to this task's next run? Asks what admission
+   * asks — the run's estimate against the global limits AND its agent's or
+   * the daemon's sub-limit — because a re-check that read only the global
+   * total resumed a mission whose start was then refused again, every hour.
+   * Throws when the budget cannot be read; the caller treats that as walled.
+   */
+  private budgetStillWalls(task: Task): boolean {
+    const manager = this._unifiedBudgetManager;
+    if (!manager) return false;
+    if (manager.isGlobalExceeded()) return true;
+    if (typeof manager.canSpend !== "function") return false;
+    return !manager.canSpend(this.runEstimateUsd(manager, task), this.budgetSourceOf(task), task.agentId);
   }
 
   /** Release this run's reservation. Idempotent — the second call finds nothing. */
@@ -2567,8 +2620,19 @@ export class BackgroundExecutor {
     for (const [taskId, workspacePath] of [...this.inflightWorkspacePaths]) {
       if (existsSync(workspacePath)) continue;
       const reason = `workspace directory is gone: ${workspacePath}`;
-      getLoggerSafe().warn("Reaping task whose workspace vanished", { taskId, workspacePath });
       this.inflightWorkspacePaths.delete(taskId);
+      if (!this.inflight.has(taskId)) {
+        // A run that is not a task this process executes — a supervisor
+        // node's own worktree. There is no row to fail (fail() on its run id
+        // emitted task:failed for an id that matches nothing): stop the run
+        // itself, and its supervisor settles the node as failed.
+        const run = this.inflightWorkspaceRuns.get(taskId);
+        this.inflightWorkspaceRuns.delete(taskId);
+        getLoggerSafe().warn("Reaping run whose workspace vanished", { runId: taskId, workspacePath, aborted: Boolean(run) });
+        if (run && !run.signal.aborted) run.abort(new Error(`Reaped: ${reason}.`));
+        continue;
+      }
+      getLoggerSafe().warn("Reaping task whose workspace vanished", { taskId, workspacePath });
       try {
         const controller = this.inflight.get(taskId);
         if (controller && !controller.signal.aborted) {
@@ -2641,6 +2705,9 @@ export class BackgroundExecutor {
    * @param opts.spendAttempt false when the caller is not reporting a mission
    *   FAILURE — a process restart, which must not be charged to the ten-retry
    *   failure budget. See the restart handling below.
+   * @param opts.budgetWait true when the caller has already measured the
+   *   wallet as closed to this run (admission refused it, or a re-check found
+   *   it still walled): parked on the budget window, never retried as a failure.
    */
   /**
    * Set when the last keep-alive call ESCALATED — it wrote "MISSION STOPPED"
@@ -2650,7 +2717,11 @@ export class BackgroundExecutor {
    */
   private keepAliveEscalated = false;
 
-  private scheduleMissionKeepAlive(task: Task, reason: string, opts?: { spendAttempt?: boolean }): boolean {
+  private scheduleMissionKeepAlive(
+    task: Task,
+    reason: string,
+    opts?: { spendAttempt?: boolean; budgetWait?: boolean },
+  ): boolean {
     this.keepAliveEscalated = false;
     if (!this.taskManager || task.origin !== "user") return false;
     const spendAttempt = opts?.spendAttempt !== false;
@@ -2682,9 +2753,9 @@ export class BackgroundExecutor {
     try {
       // Called from inside the run's own settle, before its finally releases:
       // the run's own reservation must not read as "the wallet is full" (D20).
-      budgetExceeded = this._unifiedBudgetManager?.isGlobalExceeded({
+      budgetExceeded = opts?.budgetWait === true || (this._unifiedBudgetManager?.isGlobalExceeded({
         ignoreReservationId: this.runReservations.get(String(task.id)),
-      }) ?? false;
+      }) ?? false);
     } catch (err) {
       getLoggerSafe().warn("Budget could not be read while parking a mission — treating it as exceeded", {
         taskId: task.id,
@@ -2748,7 +2819,7 @@ export class BackgroundExecutor {
             // 2026-09-12 Q#2). An unanswerable probe re-parks instead.
             let walled: boolean;
             try {
-              walled = this._unifiedBudgetManager?.isGlobalExceeded() ?? false;
+              walled = this.budgetStillWalls(task);
             } catch (err) {
               getLoggerSafe().warn("Budget re-arm could not read the budget — parking the mission again", {
                 taskId: task.id,
@@ -2757,7 +2828,10 @@ export class BackgroundExecutor {
               walled = true;
             }
             if (walled) {
-              this.scheduleMissionKeepAlive(task, reason); // still walled — re-checks again
+              // Still walled — re-checks again, as the wait it just measured:
+              // re-asking the global total alone read a sub-limit wall as a
+              // failure to retry (tasks-supervisor#1).
+              this.scheduleMissionKeepAlive(task, reason, { budgetWait: true });
               return;
             }
             getLoggerSafe().info("Budget window drained — resuming stopped mission", { taskId: task.id });

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { hostname } from "node:os";
 import { BackgroundExecutor } from "./background-executor.js";
+import { notifyTaskLiveness } from "../agents/liveness-hub.js";
 import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
 import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
@@ -4189,6 +4190,79 @@ describe("BackgroundExecutor - run budget reservations (plan 2.12 / audit 03.1 /
   });
 });
 
+// tasks-supervisor#1: admission (reserveIfAffordable → canSpend) counts the
+// run's estimate and the agent's sub-limit; the keep-alive's isGlobalExceeded()
+// counts neither. A capped agent one reservation short of its allowance had
+// every start refused while the keep-alive saw an open wallet, so each refusal
+// was an ordinary failure: "Auto-retry n/10", then after ~65 minutes "MISSION
+// STOPPED — Persistently failing after 10 automatic retries" for a mission that
+// never ran. And the refusal returned before the try, so the run's liveness
+// listener and monitor episode were never closed.
+describe("BackgroundExecutor - a start the wallet refused is a budget wait (tasks-supervisor#1)", () => {
+  it("parks on the budget window without spending a failure retry, and closes what the run opened", async () => {
+    vi.useFakeTimers();
+    try {
+      const chatId = "chat-budget-refused";
+      let affordable = false;
+      const unified = {
+        reserveIfAffordable: vi.fn(() => (affordable ? "res_ok" : undefined)),
+        canSpend: vi.fn(() => affordable),
+        release: vi.fn(),
+        recordCost: vi.fn(),
+        getTaskReservationUsd: vi.fn(() => 0.25),
+        // Under the global limit: the wall is the agent's own allowance.
+        isGlobalExceeded: vi.fn(() => false),
+      };
+      const executor = new BackgroundExecutor({ orchestrator: createMockOrchestrator() as any, concurrencyLimit: 1 });
+      executor.setUnifiedBudgetManager(unified as any);
+      const monitorLifecycle = { requestStart: vi.fn(), requestEnd: vi.fn(), joinEpisode: vi.fn(), joinEpisodeEnd: vi.fn() };
+      executor.setMonitorLifecycle(monitorLifecycle as any);
+      const taskManager = {
+        updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+        appendTaskNotice: vi.fn(), retryTask: vi.fn(() => null), touch: vi.fn(),
+        listStuckExecuting: vi.fn(() => []), listTasks: vi.fn(() => []), getStatus: vi.fn(() => null),
+      };
+      executor.setTaskManager(taskManager as any);
+
+      const task = createTestTask(undefined, {
+        id: "task_refused" as any, chatId, origin: "user", agentId: "agent_capped",
+      } as any);
+      executor.enqueue(task, new AbortController().signal, vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(unified.reserveIfAffordable).toHaveBeenCalledWith(0.25, "agent", "agent_capped");
+      const blocks = taskManager.block.mock.calls.map((c) => String(c[1]));
+      // Not charged to the failure budget…
+      expect(blocks.filter((b) => /Auto-retry \d+\/\d+/.test(b))).toEqual([]);
+      // …but parked as the wait it is, in the text the boot re-arm reads.
+      expect(blocks.at(-1)).toContain("Mission parked on the budget window");
+      expect(blocks.at(-1)).toContain("(the budget window re-opens on its own)");
+      // The run never started, and what it opened is closed.
+      expect(monitorLifecycle.requestEnd).toHaveBeenCalledWith(chatId, true);
+      notifyTaskLiveness(chatId);
+      expect(taskManager.touch).not.toHaveBeenCalled();
+
+      // A failure retry fires at 30 s; a budget wait does not.
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(taskManager.retryTask).not.toHaveBeenCalled();
+      // The hourly re-check asks admission's question, not the global total
+      // alone: the agent is still capped, so the mission stays parked.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(taskManager.retryTask).not.toHaveBeenCalled();
+      expect(
+        taskManager.appendTaskNotice.mock.calls.filter((c) => /Persistently failing/.test(String(c[1]))),
+      ).toEqual([]);
+
+      // The allowance drains: the mission goes back in.
+      affordable = true;
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(taskManager.retryTask).toHaveBeenCalledWith("task_refused");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ── Round 10 #4: a narrative carries the conversation it belongs to ──
 //
 // progress:narrative names only a nodeId, and its text is the request reworded
@@ -4296,6 +4370,73 @@ describe("BackgroundExecutor - the settle phase is not part of the run", () => {
     await vi.waitFor(() => { expect(taskManager.complete).toHaveBeenCalledWith(task.id, "task done"); }, { timeout: 3000 });
     expect(release).toHaveBeenCalledTimes(1);
     expect(taskManager.fail).not.toHaveBeenCalled();
+  });
+});
+
+// tasks-supervisor#4: per-node workspaces are the production default whenever
+// a lease manager exists, and each node's lease is watched under its run id
+// `${task.id}:${node.id}`. The reaper looked that key up in `inflight` (keyed
+// by task id), aborted nothing, called fail() on an id no row carries, and
+// forgot the path — the node flailed on against the vanished worktree until
+// its node budget ran out, while the log said it had been reaped.
+describe("BackgroundExecutor - the lost-workspace reaper stops a supervisor node (tasks-supervisor#4)", () => {
+  it("aborts the node whose own worktree vanished, and fails no task by the node's run id", async () => {
+    const leaseDir = mkdtempSync(join(os.tmpdir(), "node-lease-lost-"));
+    let nodeSignal: AbortSignal | undefined;
+    const runWorkerTask = vi.fn((req: { signal: AbortSignal }) => new Promise((resolve) => {
+      nodeSignal = req.signal;
+      // A node working against a deleted directory never ends on its own.
+      req.signal.addEventListener("abort", () => resolve({
+        status: "failed", reason: String((req.signal.reason as Error)?.message ?? req.signal.reason),
+        finalSummary: "", visibleResponse: "", provider: "mock", catalogVersion: "mock:default",
+        assignmentVersion: 0, touchedFiles: [], toolTrace: [], verificationResults: [],
+        reviewFindings: [], artifacts: [],
+      }), { once: true });
+    }));
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: {
+        acquireLease: vi.fn().mockResolvedValue({
+          id: "lease-node", path: leaseDir,
+          commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
+          release: vi.fn().mockResolvedValue(undefined),
+        }),
+      } as any,
+    });
+    const taskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+      appendTaskNotice: vi.fn(), retryTask: vi.fn(),
+      getStatus: vi.fn(() => null), listTasks: vi.fn(() => []), listStuckExecuting: vi.fn(() => []),
+    };
+    executor.setTaskManager(taskManager as any);
+    const supervisorSignal = new AbortController().signal;
+
+    try {
+      const run = executor.runWorkerEnvelope(workerOrchestrator, {
+        mode: "delegated", prompt: "Build the level select screen", signal: supervisorSignal,
+        onProgress: vi.fn(), chatId: "chat-node", taskRunId: "task_x:node_y", channelType: "cli",
+        supervisorMode: "off",
+      });
+      await vi.waitFor(() => expect(runWorkerTask).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+      rmSync(leaseDir, { recursive: true, force: true });
+      (executor as unknown as { reapLostWorkspaces(): void }).reapLostWorkspaces();
+
+      const settled = await Promise.race([
+        run.then(() => "settled"),
+        new Promise((resolve) => setTimeout(() => resolve("still running"), 1_000)),
+      ]);
+      expect(settled).toBe("settled");
+      expect(nodeSignal?.aborted).toBe(true);
+      expect(String((nodeSignal?.reason as Error)?.message)).toContain("workspace directory is gone");
+      // The node is stopped, not its supervisor run, and no terminal is
+      // written for an id that matches no task row.
+      expect(supervisorSignal.aborted).toBe(false);
+      expect(taskManager.fail).not.toHaveBeenCalled();
+    } finally {
+      rmSync(leaseDir, { recursive: true, force: true });
+    }
   });
 });
 
