@@ -530,6 +530,27 @@ describe("ToolRegistry", () => {
       expect(readOnly.has("dotnet_build")).toBe(false);
     });
 
+    it("classifies unity_my_assets_cloud as a write: its 'download' action writes packages to disk", async () => {
+      // 'download' writes whole .unitypackage files into Unity's Asset Store
+      // cache. Registered read-only, it was offered in READ_ONLY_MODE and, in
+      // normal mode, skipped write confirmation and ran in the parallel group.
+      const full = await initialized(false);
+      const meta = full.getMetadata("unity_my_assets_cloud");
+      expect(meta, "unity_my_assets_cloud is registered").toBeDefined();
+      expect(meta!.readOnly).toBe(false);
+      expect(meta!.requiresConfirmation).toBe(true);
+
+      const readOnly = await initialized(true);
+      expect(readOnly.has("unity_my_assets_cloud")).toBe(false);
+      const result = await readOnly.execute(
+        "unity_my_assets_cloud",
+        { action: "download", productId: "123" },
+        readOnlyContext,
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("read-only mode");
+    });
+
     it("does not trust omitted or guessed read-only metadata", async () => {
       const r = new ToolRegistry();
       await r.initialize(configWith(true));

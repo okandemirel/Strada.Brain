@@ -772,10 +772,14 @@ export class ToolRegistry {
       readOnly: false,
     });
 
+    // Not read-only: 'download' writes whole .unitypackage files into Unity's
+    // Asset Store cache, so READ_ONLY_MODE must withhold it and a download
+    // must pass write confirmation like the other asset producers.
     this.register(new MyAssetsCloudTool(), {
       category: ToolCategories.STRADA,
       dangerous: false,
-      readOnly: true,
+      requiresConfirmation: true,
+      readOnly: false,
     });
 
     this.register(new PrerenderFramesTool(), {
