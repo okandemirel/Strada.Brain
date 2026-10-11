@@ -977,11 +977,17 @@ export class DelegationManager {
       // only copy. The one adjudicator background-executor uses decides it.
       // The message keeps the "commit failed" prefix: escalation must not
       // re-run the work at a pricier tier to lose it the same way.
+      // Where the work is now goes BEFORE the loss text: swarm cuts a failed
+      // member's reason to 300 characters, and a trailing location was cut off.
       const publicationLoss = commitOutcome ? judgePublication(commitOutcome).loss : undefined;
       if (publicationLoss !== undefined) {
+        const keptAt = workspaceLease && leaseHoldsOnlyCopy()
+          ? ` (its workspace is kept at ${workspaceLease.path})`
+          : commitOutcome?.conflictsQuarantinedUnder
+            ? ` (its conflicting versions are kept under ${commitOutcome.conflictsQuarantinedUnder})`
+            : "";
         throw new Error(
-          `Delegated workspace commit failed — it did not publish the sub-agent's work: ${publicationLoss}` +
-            (workspaceLease && leaseHoldsOnlyCopy() ? ` (its workspace is kept at ${workspaceLease.path})` : ""),
+          `Delegated workspace commit failed — it did not publish the sub-agent's work${keptAt}: ${publicationLoss}`,
         );
       }
       const commitSummary = commitOutcome
@@ -1098,11 +1104,15 @@ export class DelegationManager {
       await commitWorkspace();
       if (workspaceLease && leaseHoldsOnlyCopy()) {
         // NOT RELEASED, on every path — success, failure, timeout, cancel. The
-        // manager still tracks it, so its shutdown commit retries the
-        // publication, and the boot salvage pass recovers it after a crash.
+        // manager still tracks it: its shutdown commit retries the publication
+        // into the tree it was seeded from while that tree exists. A caller's
+        // lease is often released before then: that commit refuses a tree
+        // that is gone and keeps the workspace again, and the next boot's
+        // salvage pass commits it into the project.
         getLoggerSafe().error("Delegated workspace NOT released — its work has not been published", {
           subAgentId,
           workspace: workspaceLease.path,
+          publishesInto: workspaceLease.sourceRoot,
         });
       } else {
         await workspaceLease?.release().catch(() => {});

@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
@@ -69,6 +69,33 @@ describe("derived lease safety", () => {
     expect(result.conflictsQuarantinedUnder?.startsWith(project)).toBe(true);
     expect(readdirSync(join(project, ".strada", "lease-conflicts")).length).toBeGreaterThan(0);
     await lease.release();
+  });
+
+  it("a lease whose parent is gone refuses to commit rather than re-create it, and shutdown keeps it", async () => {
+    // Measured 2026-10-11: a kept delegation lease outlived its caller's
+    // lease. The shutdown commit's lock re-made the caller's directory with
+    // mkdir -p, the file was "written" into that ghost, and the lease was
+    // released: nothing reached the project, and the log said it committed.
+    const project = tmp("proj-");
+    const leaseRoot = tmp("leases-");
+    writeFileSync(join(project, "Tile.cs"), "tile");
+    const manager = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false });
+    const parent = await manager.acquireLease({ label: "task" });
+    const child = await manager.acquireLease({ label: "delegate", sourceRoot: parent.path, forceTempCopy: true });
+    writeFileSync(join(child.path, "New.cs"), "the delegate's file");
+    // The caller publishes and releases first — the normal end of a task.
+    await parent.commit();
+    await parent.release();
+
+    const result = await child.commit();
+
+    expect(result.written).toEqual([]);
+    expect(result.failed.join("\n")).toMatch(/no longer exists/);
+    expect(existsSync(parent.path), "the released parent was re-created").toBe(false);
+
+    await manager.dispose();
+    expect(existsSync(parent.path)).toBe(false);
+    expect(readFileSync(join(child.path, "New.cs"), "utf8"), "shutdown released the only copy").toBe("the delegate's file");
   });
 });
 

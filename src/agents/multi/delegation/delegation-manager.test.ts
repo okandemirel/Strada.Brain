@@ -18,7 +18,7 @@ import { AgentBudgetTracker } from "../agent-budget-tracker.js";
 import { DaemonStorage } from "../../../daemon/daemon-storage.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
 import { acquireProjectWriteLock } from "../../../common/project-write-lock.js";
 import type {
@@ -1547,8 +1547,33 @@ describe("DelegationManager", () => {
       const lease = leaseManagerWith(commit);
       manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
 
-      await expect(manager.delegate(request())).rejects.toThrow(/did not publish.*Assets\/Scripts\/Board\.cs/);
+      const err = await manager.delegate(request()).catch((e: unknown) => e);
+      expect(String(err)).toMatch(/did not publish.*Assets\/Scripts\/Board\.cs/);
+      // The parent learns where its sub-agent's version went.
+      expect(String(err)).toContain("/test/project/.strada/lease-conflicts/lease-1");
       expect(lease.release).toHaveBeenCalledTimes(1);
+    });
+
+    // swarm reports a failed member as String(reason).slice(0, 300); the
+    // workspace location trailed a loss text that names up to eight files.
+    it("names where the work is kept inside the 300 characters swarm reports", async () => {
+      const commit = vi.fn().mockResolvedValue({
+        written: [],
+        conflicts: [],
+        removed: [],
+        failed: Array.from({ length: 6 }, (_, i) =>
+          `Assets/Scripts/Generated/Gameplay/BoardTileController${i}.cs (EACCES: permission denied)`),
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      });
+      const lease = leaseManagerWith(commit);
+      manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
+
+      const err = await manager.delegate(request()).catch((e: unknown) => e);
+
+      expect(String(err)).toMatch(/did not publish/);
+      expect(String(err).slice(0, 300)).toContain("/tmp/leases/lease-1");
+      expect(lease.release).not.toHaveBeenCalled();
     });
 
     it("a FAILED sub-agent whose commit published nothing keeps its lease too", async () => {
@@ -1674,7 +1699,9 @@ describe("DelegationManager", () => {
       await manager.delegate(delegateFrom(leasedCaller));
 
       expect(leases.acquireLease).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceRoot: "/tmp/leases/task-1", forceTempCopy: true }),
+        // resolve(): the tree is compared and handed on resolved, which on
+        // win32 is "D:\\tmp\\leases\\task-1", not the POSIX literal.
+        expect.objectContaining({ sourceRoot: resolve("/tmp/leases/task-1"), forceTempCopy: true }),
       );
     });
 
@@ -1692,7 +1719,7 @@ describe("DelegationManager", () => {
 
       await manager.delegate(delegateFrom(leasedCaller));
 
-      expect(orchestratorOpts.projectPath).toBe("/tmp/leases/task-1");
+      expect(orchestratorOpts.projectPath).toBe(resolve("/tmp/leases/task-1"));
     });
 
     it("with real leases: the sub-agent sees the caller's edit and publishes into the caller's lease", async () => {
@@ -1727,6 +1754,52 @@ describe("DelegationManager", () => {
         expect(readFileSync(join(task.path, "Assets", "Scripts", "BoardReview.cs"), "utf8")).toBe("// reviewed");
         expect(existsSync(join(project, "Assets", "Scripts", "BoardReview.cs")), "published behind the caller's lease").toBe(false);
         await leases.dispose();
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+        rmSync(leaseRoot, { recursive: true, force: true });
+      }
+    });
+
+    // Measured 2026-10-11: a nested delegate's commit could not take its
+    // caller's lock and the lease was kept, "for the shutdown commit to
+    // retry". The caller then published and released its lease, and at
+    // shutdown that retry re-created the caller's directory, "wrote" into it
+    // and released the delegate's lease. Nothing reached the project.
+    it("a kept nested lease outlives its caller's lease: shutdown keeps it, never publishes into a ghost", async () => {
+      const project = mkdtempSync(join(tmpdir(), "deleg-ghost-project-"));
+      const leaseRoot = mkdtempSync(join(tmpdir(), "deleg-ghost-leases-"));
+      try {
+        mkdirSync(join(project, "Assets", "Scripts"), { recursive: true });
+        writeFileSync(join(project, "Assets", "Scripts", "Tile.cs"), "tile", "utf8");
+        const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false, projectLockTimeoutMs: 300 });
+        const task = await leases.acquireLease({ label: "task" });
+        let workspace = "";
+        orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+          workspace = orchestratorOpts.projectPath as string;
+          writeFileSync(join(workspace, "Assets", "Scripts", "New.cs"), "the delegate's file", "utf8");
+          const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+          await channel.sendText(msg.chatId as string, "created New.cs");
+        });
+        manager = new DelegationManager(buildManagerOpts({ delegationLog, projectPath: project, workspaceLeaseManager: leases }));
+        const callerLock = await acquireProjectWriteLock(task.path, { timeoutMs: 1_000 });
+        try {
+          await expect(manager.delegate(delegateFrom({
+            ...TEST_TOOL_CONTEXT,
+            projectPath: task.path,
+            workingDirectory: task.path,
+            sourceProjectPath: project,
+          }))).rejects.toThrow(/did not publish/);
+        } finally {
+          callerLock.release();
+        }
+        // The normal end of the caller's task.
+        await task.commit();
+        await task.release();
+
+        await leases.dispose();
+
+        expect(existsSync(task.path), "the shutdown commit re-created the released caller lease").toBe(false);
+        expect(readFileSync(join(workspace, "Assets", "Scripts", "New.cs"), "utf8"), "the only copy was released").toBe("the delegate's file");
       } finally {
         rmSync(project, { recursive: true, force: true });
         rmSync(leaseRoot, { recursive: true, force: true });

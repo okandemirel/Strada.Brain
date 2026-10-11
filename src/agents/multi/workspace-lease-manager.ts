@@ -1906,6 +1906,30 @@ export class WorkspaceLeaseManager {
     if (!existsSync(workspacePath)) {
       return { written, conflicts, removed, deleted: [], failed, conflictsQuarantinedUnder, quarantined };
     }
+    // A TREE THAT IS GONE IS NOT A TARGET. A lease seeded from another lease
+    // outlives it when the parent is published and released first, and the
+    // lock below makes `<sourceRoot>/.strada` with mkdir -p: the shutdown
+    // commit re-created the parent as an ownerless directory under the lease
+    // root, "published" into it, reported the files written and released the
+    // lease — nothing reached the project (measured 2026-10-11, a kept
+    // delegation lease whose caller had finished). Refused, the lease is kept
+    // and the boot salvage pass commits it into the project by the usual
+    // rules (measured: the new file landed, an edited one was quarantined).
+    if (!existsSync(sourceRoot)) {
+      getLoggerSafe().error("Lease commit did NOT run — the tree it publishes into no longer exists", {
+        sourceRoot,
+        workspacePath,
+      });
+      return {
+        written: [],
+        conflicts: [],
+        removed: [],
+        deleted: [],
+        failed: [`(the whole commit): the tree this workspace publishes into no longer exists — ${sourceRoot}`],
+        conflictsQuarantinedUnder: null,
+        quarantined: 0,
+      };
+    }
 
     // Bulk write into ANY shared target: serialize against the other bulk
     // writers (the campaign envelope commit, sibling leases), including ones
