@@ -74,6 +74,34 @@ describe("TeamsChannel attachments reach campaign intake or the user is told", (
     });
   });
 
+  it("a Teams file is fetched from its pre-authenticated downloadUrl, not the SharePoint contentUrl beside it", async () => {
+    // A real file.download.info carries both. contentUrl is the SharePoint
+    // location and answers an unauthenticated bot with a sign-in, so taking it
+    // first refused every GDD shared as a Teams file as "could not be downloaded".
+    const data = Buffer.from(GDD_TEXT);
+    const downloadUrl = "https://contoso.sharepoint.com/_layouts/15/download.aspx?UniqueId=f1&tempauth=t";
+    mockDownloadMedia.mockImplementation(async (url: string) =>
+      url === downloadUrl ? { data, mimeType: "text/plain", size: data.length } : null,
+    );
+
+    await receive("build the game in this GDD", [
+      {
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        contentUrl: "https://contoso.sharepoint.com/personal/user/Documents/PacMan_GDD.txt",
+        name: "PacMan_GDD.txt",
+        content: { downloadUrl, uniqueId: "f1", fileType: "txt" },
+      },
+    ]);
+
+    expect(mockDownloadMedia.mock.calls.map((call) => call[0])).toEqual([downloadUrl]);
+    expect(sendActivity).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(detectCampaignIntent(handler.mock.calls[0]![0] as IncomingMessage)).toMatchObject({
+      kind: "gdd-attachment",
+      sourceName: "PacMan_GDD.txt",
+    });
+  });
+
   it("a .docx GDD the validator refuses is reported to the user and the caption is not forwarded", async () => {
     mockDownloadMedia.mockResolvedValue({
       data: Buffer.from("PK\u0003\u0004..."),

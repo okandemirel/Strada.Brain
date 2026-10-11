@@ -654,11 +654,15 @@ export class TeamsChannel implements IChannelAdapter {
   }
 
   private resolveAttachmentUrl(attachment: TeamsAttachmentLike): string | undefined {
-    if (typeof attachment.contentUrl === "string" && attachment.contentUrl.length > 0) {
-      return attachment.contentUrl;
-    }
+    // downloadUrl FIRST. A shared file (file.download.info) carries both, and
+    // contentUrl is its SharePoint location, which needs the user's sign-in;
+    // downloadUrl is the pre-authenticated link Teams issues for the bot. Read
+    // in the other order, every GDD shared as a Teams file failed to download.
     if (typeof attachment.content?.downloadUrl === "string" && attachment.content.downloadUrl.length > 0) {
       return attachment.content.downloadUrl;
+    }
+    if (typeof attachment.contentUrl === "string" && attachment.contentUrl.length > 0) {
+      return attachment.contentUrl;
     }
     return undefined;
   }
