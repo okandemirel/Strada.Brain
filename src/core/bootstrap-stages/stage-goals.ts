@@ -63,14 +63,18 @@ export function initializeGoalContextStage(
   }
 
   let interruptedGoalTrees: GoalTree[] = [];
+  // The crash notice reads an empty list as "0 goal trees were interrupted"; a detection that
+  // never ran or threw took no count, so it is handed over as unmeasured rather than as zero.
+  let goalTreesMeasured = false;
   if (goalStorage) {
     try {
       interruptedGoalTrees = (deps.detectInterruptedTrees ?? detectInterruptedTrees)(goalStorage);
+      goalTreesMeasured = true;
       if (interruptedGoalTrees.length > 0) {
         params.logger.info("Detected interrupted goal trees", { count: interruptedGoalTrees.length });
       }
     } catch (error) {
-      params.logger.debug("Interrupted tree detection failed", {
+      params.logger.warn("Interrupted goal-tree detection failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -81,12 +85,12 @@ export function initializeGoalContextStage(
     crashContext = (deps.buildCrashRecoveryContext ?? buildCrashRecoveryContext)(
       params.identityManager.wasCrash(),
       params.identityManager.getState(),
-      interruptedGoalTrees,
+      goalTreesMeasured ? interruptedGoalTrees : null,
     );
     if (crashContext) {
       params.logger.warn("Unclean shutdown detected", {
         downtimeMs: crashContext.downtimeMs,
-        interruptedTrees: crashContext.interruptedTrees.length,
+        interruptedTrees: crashContext.interruptedTreesMeasured ? crashContext.interruptedTrees.length : "unknown",
         bootCount: crashContext.bootCount,
       });
     }

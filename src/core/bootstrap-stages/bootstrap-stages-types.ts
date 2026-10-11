@@ -311,7 +311,7 @@ export interface GoalContextStageDeps {
   buildCrashRecoveryContext?: (
     wasCrash: boolean,
     identityState: ReturnType<IdentityStateManager["getState"]>,
-    interruptedGoalTrees: GoalTree[],
+    interruptedGoalTrees: GoalTree[] | null,
   ) => CrashRecoveryContext | null;
 }
 

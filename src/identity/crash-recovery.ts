@@ -19,16 +19,19 @@ export interface CrashRecoveryContext {
   lastActivityTs: number;
   bootCount: number;
   interruptedTrees: GoalTree[];
+  /** False when goal-tree detection did not run or threw: the empty list is then not a zero. */
+  interruptedTreesMeasured: boolean;
 }
 
 /**
  * Build crash recovery context from identity state and interrupted trees.
+ * `interruptedTrees` is null when detection did not run or failed.
  * Returns null for clean restarts (wasCrash=false).
  */
 export function buildCrashRecoveryContext(
   wasCrash: boolean,
   identityState: IdentityState,
-  interruptedTrees: GoalTree[],
+  interruptedTrees: GoalTree[] | null,
 ): CrashRecoveryContext | null {
   if (!wasCrash) {
     return null;
@@ -44,7 +47,8 @@ export function buildCrashRecoveryContext(
     downtimeMs,
     lastActivityTs,
     bootCount: identityState.bootCount,
-    interruptedTrees,
+    interruptedTrees: interruptedTrees ?? [],
+    interruptedTreesMeasured: interruptedTrees !== null,
   };
 }
 

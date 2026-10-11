@@ -119,6 +119,7 @@ function makeCrashContext(overrides?: Partial<CrashRecoveryContext>): CrashRecov
     lastActivityTs: Date.now() - 300000,
     bootCount: 5,
     interruptedTrees: [],
+    interruptedTreesMeasured: true,
     ...overrides,
   };
 }
@@ -136,12 +137,27 @@ describe("buildCrashNotificationSection", () => {
     expect(result).toContain("2 goal tree(s)");
   });
 
-  it("with 0 interrupted trees mentions no work was lost", () => {
+  it("with 0 goal trees names what was counted instead of claiming no work was lost", () => {
+    // Only goal trees are counted. A background task that ran without one (supervisor off, or
+    // not decomposed) is failed or paused by the restart, and the notice told the model to
+    // "reassure the user that no work was lost" anyway.
     const ctx = makeCrashContext({ interruptedTrees: [] });
     const result = buildCrashNotificationSection(ctx);
 
-    expect(result).toContain("no work was lost");
+    expect(result).toContain("0 goal tree(s)");
+    expect(result).toContain("goal trees only");
+    expect(result).not.toContain("no work was lost");
+    expect(result).not.toContain("No interrupted tasks were found");
     expect(result).not.toContain("resume or discard");
+  });
+
+  it("when goal-tree detection did not run, reports the count as unknown, not zero", () => {
+    const ctx = makeCrashContext({ interruptedTrees: [], interruptedTreesMeasured: false });
+    const result = buildCrashNotificationSection(ctx);
+
+    expect(result).toContain("unknown");
+    expect(result).not.toContain("0 goal tree(s)");
+    expect(result).not.toContain("no work was lost");
   });
 
   it("with 1 tree includes single-tree guidance", () => {

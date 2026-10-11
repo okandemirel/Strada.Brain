@@ -498,6 +498,7 @@ export function buildIdentitySection(state: IdentityState): string {
 export function buildCrashNotificationSection(context: CrashRecoveryContext): string {
   const lastActivityIso = new Date(context.lastActivityTs).toISOString();
   const treeCount = context.interruptedTrees.length;
+  const measured = context.interruptedTreesMeasured;
 
   const lines: string[] = [
     "\n## Crash Recovery Notice",
@@ -505,7 +506,9 @@ export function buildCrashNotificationSection(context: CrashRecoveryContext): st
     `- **Downtime:** ${formatDowntime(context.downtimeMs)}`,
     `- **Last activity:** ${lastActivityIso}`,
     `- **Boot #:** ${context.bootCount} (recovered from crash)`,
-    `- **Interrupted tasks:** ${treeCount} goal tree(s) were mid-execution`,
+    measured
+      ? `- **Interrupted goal trees:** ${treeCount} goal tree(s) were mid-execution`
+      : "- **Interrupted goal trees:** unknown (goal-tree detection did not run)",
     "",
   ];
 
@@ -517,9 +520,15 @@ export function buildCrashNotificationSection(context: CrashRecoveryContext): st
       "Let the user know they can resume or discard the interrupted tasks.",
     );
   } else {
+    // Only goal trees are counted. A background task run without one, a delegation's
+    // unpublished work and the lease salvage never reach this context, so an empty count
+    // does not show that nothing was lost.
     lines.push(
-      "No interrupted tasks were found. Acknowledge the unexpected shutdown briefly",
-      "and reassure the user that no work was lost.",
+      measured
+        ? "No interrupted goal trees were found; that count covers goal trees only."
+        : "Whether any goal tree was interrupted is unknown: detection did not run.",
+      "A background task or delegation that ran without a goal tree is not counted, and the shutdown",
+      "may have stopped it. Acknowledge the unexpected shutdown briefly, and do not claim that nothing was lost.",
     );
   }
 

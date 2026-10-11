@@ -422,6 +422,33 @@ describe("bootstrap-stages", () => {
     );
   });
 
+  it("hands a failed goal-tree detection to the crash context as unmeasured, not as zero trees", () => {
+    // A throwing detection was logged at debug and left [], so the crash notice read
+    // "0 goal tree(s)" for a count nobody took.
+    const logger = createMockLogger();
+    const buildCrash = vi.fn().mockReturnValue(null);
+    initializeGoalContextStage({
+      config: makeConfig(),
+      logger,
+      provider: { name: "mock-provider" } as any,
+      identityManager: {
+        wasCrash: vi.fn().mockReturnValue(true),
+        getState: vi.fn().mockReturnValue({ bootCount: 3 }),
+      } as any,
+    }, {
+      createGoalStorage: vi.fn().mockReturnValue({ initialize: vi.fn(), pruneOldTrees: vi.fn() }),
+      createGoalDecomposer: vi.fn().mockReturnValue({}),
+      detectInterruptedTrees: vi.fn(() => { throw new Error("database is locked"); }),
+      buildCrashRecoveryContext: buildCrash,
+    });
+
+    expect(buildCrash).toHaveBeenCalledWith(true, { bootCount: 3 }, null);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Interrupted goal-tree detection failed",
+      expect.objectContaining({ error: "database is locked" }),
+    );
+  });
+
   // STREAMING_ENABLED=false reached the model turns only; decomposition kept streaming.
   it("hands STREAMING_ENABLED=false to the goal decomposer it builds", async () => {
     const provider = {

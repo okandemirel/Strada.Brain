@@ -41,6 +41,16 @@ describe("buildCrashRecoveryContext", () => {
     expect(result).not.toBeNull();
     expect(result!.wasCrash).toBe(true);
     expect(result!.interruptedTrees).toHaveLength(0);
+    expect(result!.interruptedTreesMeasured).toBe(true);
+  });
+
+  it("marks the tree count unmeasured when detection did not run, instead of reading it as zero", () => {
+    const state = makeIdentityState({ cleanShutdown: false });
+
+    const result = buildCrashRecoveryContext(true, state, null);
+
+    expect(result!.interruptedTrees).toEqual([]);
+    expect(result!.interruptedTreesMeasured).toBe(false);
   });
 });
 
