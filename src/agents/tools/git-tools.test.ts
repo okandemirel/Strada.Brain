@@ -34,6 +34,9 @@ beforeEach(async () => {
   git('config user.email "test@test.com"');
   git('config user.name "Test"');
   git("config commit.gpgsign false");
+  // Git for Windows defaults core.autocrlf to true, so a worktree checkout
+  // would hand "hello\r\n" back; the tests compare the bytes they wrote.
+  git("config core.autocrlf false");
   await writeFile(join(tempDir, "file.txt"), "hello\n");
   git("add .");
   git('commit -m "initial"');
