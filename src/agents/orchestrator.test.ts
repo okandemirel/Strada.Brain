@@ -11,6 +11,8 @@ import { DMPolicy } from "../security/dm-policy.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
 import { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
+import { ChainDetector } from "../learning/chains/chain-detector.js";
+import type { ToolChainConfig } from "../learning/chains/chain-types.js";
 import type { Trajectory, Instinct } from "../learning/types.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
@@ -9729,15 +9731,17 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     });
     storage.flush();
 
-    // Empty participating set ⇒ no trajectory row at all, no credit. (Proves the populated set, read
-    // BEFORE the clear, is what makes the credit non-empty in the correct ordering above.)
-    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    // Empty participating set ⇒ the run's steps are still recorded, but nothing is credited. (Proves
+    // the populated set, read BEFORE the clear, is what makes the credit non-empty above.)
+    const rows = storage.getTrajectories({ limit: 10 });
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.appliedInstinctIds).toEqual([]);
     const after = storage.getInstinct(planning.id)!;
     expect(after.stats.timesApplied).toBe(0);
     expect(after.confidence).toBe(planning.confidence);
   });
 
-  it("flag-OFF is byte-identical: the in-run recorder is a NO-OP (no trajectory, no credit)", async () => {
+  it("flag-OFF records the run's steps and credits nothing", async () => {
     const planning = makeInstinct("instinct_planning_off", [ctxCond("language", "csharp")]);
     storage.createInstinct(planning);
     const orch = makeOrch(makePipeline(false));
@@ -9756,10 +9760,71 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     });
     storage.flush();
 
-    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    const rows = storage.getTrajectories({ limit: 10 });
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.taskRunId).toBe("taskrun_off");
+    expect(rows[0]!.steps.map((step) => step.toolName)).toEqual(["file_edit"]);
+    expect(rows[0]!.appliedInstinctIds).toEqual([]);
     const after = storage.getInstinct(planning.id)!;
     expect(after.stats.timesApplied).toBe(0);
     expect(after.confidence).toBe(planning.confidence);
+  });
+
+  // learning#4: every production trajectory came from the route-level planner,
+  // which ends before the run and never sees a tool call, and this recorder was
+  // the only writer with the run's steps, gated on a credit flag no config sets.
+  // 727 of 727 live trajectories had zero steps, so chain synthesis, on by
+  // default, never had a sequence to find.
+  it("with the pipeline as bootstrap builds it, a repeated tool sequence becomes a chain candidate", async () => {
+    // initializeLearning passes no trajectoryLevelCredit, so the default applies.
+    const orch = makeOrch(new LearningPipeline(storage, { enabled: true, minConfidenceForCreation: 0.5, batchSize: 5 }));
+    const h = harness(orch);
+    const sequence = ["file_read", "file_edit", "unity_verify_change"];
+    for (let run = 0; run < 3; run++) {
+      const chatId = `chat-chain-${run}`;
+      await h.withTaskExecutionContext({ chatId, taskRunId: `taskrun_chain_${run}` }, async () => {
+        h.recordInRunTrajectoryCredit({
+          chatId,
+          sessionId: chatId,
+          taskDescription: "add a health bar",
+          success: true,
+          stepResults: sequence.map((toolName) => ({ toolName, success: true, summary: "ok", timestamp: Date.now() })),
+        });
+      });
+    }
+    storage.flush();
+
+    // The production defaults (config-schema toolChain*).
+    const detector = new ChainDetector(storage, {
+      enabled: true,
+      minOccurrences: 3,
+      successRateThreshold: 0.8,
+      maxActive: 10,
+      maxAgeDays: 30,
+      llmBudgetPerCycle: 3,
+      minChainLength: 2,
+      maxChainLength: 5,
+      detectionIntervalMs: 300_000,
+    } as ToolChainConfig);
+    const candidates = detector.detect();
+    expect(candidates.map((candidate) => candidate.toolNames)).toEqual([sequence]);
+    expect(candidates[0]!.occurrences).toBe(3);
+  });
+
+  it("a run that took no step leaves no row of its own", async () => {
+    const orch = makeOrch(makePipeline(false));
+    const h = harness(orch);
+    await h.withTaskExecutionContext({ chatId: "chat-empty", taskRunId: "taskrun_empty" }, async () => {
+      h.recordInRunTrajectoryCredit({
+        chatId: "chat-empty",
+        sessionId: "chat-empty",
+        taskDescription: "hello",
+        success: true,
+        stepResults: [],
+      });
+    });
+    storage.flush();
+    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
   });
 
   it("success-only: a FAILED terminal credits nothing even with a populated disjoint set", async () => {
@@ -9781,7 +9846,11 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     });
     storage.flush();
 
-    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    // The failure is recorded (a chain's success rate needs its failures) and credits nothing.
+    const rows = storage.getTrajectories({ limit: 10 });
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.outcome.success).toBe(false);
+    expect(rows[0]!.appliedInstinctIds).toEqual([]);
     const after = storage.getInstinct(planning.id)!;
     expect(after.stats.timesApplied).toBe(0);
     expect(after.confidence).toBe(planning.confidence);

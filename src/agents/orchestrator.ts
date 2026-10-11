@@ -4005,13 +4005,19 @@ export class Orchestrator {
   }
 
   /**
-   * Issue #22 (SIBLING A) — the IN-RUN trajectory-credit trigger (the trigger the groundwork in
-   * b794552 reserved for; default-OFF ⇒ this whole method is gated off ⇒ byte-identical to today).
+   * The run's trajectory, recorded at its terminal with the steps it actually took, plus Issue #22
+   * (SIBLING A) trajectory-level credit when that flag is on.
    *
-   * Fires from BOTH terminal hooks (v1 runAgentLoop finally, v2 persistTerminal) on a SUCCESSFUL
-   * terminal, BEFORE {@link currentSessionInstinctIds}.delete clears the run's participating set.
-   * Hands recordTrajectory the FULL participating set + the run's REAL minted taskRunId + the run's
-   * REAL per-step results; recordTrajectory's existing computeTrajectoryCreditIds takes the DISJOINT
+   * This is the only writer that has the run's steps. The route-level planner records its row before
+   * the run and never sees a tool call, so while this method was gated on the credit flag (default
+   * off, set by no config) every production trajectory had zero steps: chain detection, trajectory
+   * error→fix extraction and chain post-validation, all on by default, never had a sequence to read
+   * (727 of 727 live rows, learning#4). The row is therefore written on every terminal that took a
+   * step, failures included, because a chain's success rate needs them; the credit stays gated.
+   *
+   * Fires from the v2 persistTerminal hook BEFORE {@link currentSessionInstinctIds}.delete clears
+   * the run's participating set. With the flag on and a clean success it hands recordTrajectory the
+   * FULL participating set; recordTrajectory's existing computeTrajectoryCreditIds takes the DISJOINT
    * complement (only the per-turn-skipped planning/strategy instincts) and the existing
    * autoGenerateVerdict reinforces exactly that subset (no double-count).
    *
@@ -4026,8 +4032,8 @@ export class Orchestrator {
    *  - appliedInstinctIds: the run's POPULATED participating set (currentSessionInstinctIds.get) —
    *    the route-level path fires at buffer time before the run and cannot supply it.
    *
-   * Success-only: a benign-cancel / FAILED terminal passes success=false so autoGenerateVerdict
-   * (recordTrajectory: `outcome.success && !hadErrors`) never reinforces a non-successful run.
+   * Credit is success-only: a benign-cancel / FAILED terminal passes success=false, carries no
+   * participating set, and autoGenerateVerdict (`outcome.success && !hadErrors`) skips it.
    */
   private recordInRunTrajectoryCredit(params: {
     chatId: string;
@@ -4038,21 +4044,19 @@ export class Orchestrator {
     stepResults: readonly StepResult[];
   }): void {
     const pipeline = this.learningPipeline;
-    // Gated off by default ⇒ zero extra work ⇒ byte-identical. Also short-circuit non-success: the
-    // disjoint credit is reserved for clean successful runs (mirrors recordTrajectory's verdict gate).
-    if (!pipeline?.isTrajectoryLevelCreditEnabled() || !params.success) {
+    // A run that took no step adds nothing to the route-level row.
+    if (!pipeline || params.stepResults.length === 0) {
       return;
     }
-    // The run's participating instinct set — read here, BEFORE the caller's
-    // currentSessionInstinctIds.delete. Empty ⇒ nothing to credit ⇒ skip (no empty trajectory row).
+    // The disjoint credit is reserved for clean successful runs (mirrors recordTrajectory's verdict
+    // gate). The run's participating instinct set is read here, BEFORE the caller's
+    // currentSessionInstinctIds.delete.
     // audited 2026-09-02: read this RUN's participating set (see instinctScopeKey).
-    const appliedInstinctIds =
-      this.currentSessionInstinctIds.get(
-        instinctScopeKey(params.chatId, this.getTaskExecutionContext()?.taskRunId),
-      ) ?? [];
-    if (appliedInstinctIds.length === 0) {
-      return;
-    }
+    const appliedInstinctIds = pipeline.isTrajectoryLevelCreditEnabled() && params.success
+      ? this.currentSessionInstinctIds.get(
+          instinctScopeKey(params.chatId, this.getTaskExecutionContext()?.taskRunId),
+        ) ?? []
+      : [];
     // Map the run's REAL per-step results to the minimal TrajectoryStep shape the disjoint
     // computation needs (it reads step.toolName; success/error result kept faithful for the row).
     // NOTE: input:{}, durationMs:0 here (and the outcome's durationMs:0/completionRate:1 below) are
@@ -4093,7 +4097,7 @@ export class Orchestrator {
       steps,
       outcome,
       // The FULL participating set; recordTrajectory credits only the disjoint complement.
-      appliedInstinctIds: [...appliedInstinctIds],
+      appliedInstinctIds: appliedInstinctIds.length > 0 ? [...appliedInstinctIds] : undefined,
     });
   }
 

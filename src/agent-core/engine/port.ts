@@ -486,10 +486,10 @@ export function createAgentCorePort(
           deps.sessionManager.getVisibleTranscript(c.session),
           true,
         );
-        // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger. MUST run BEFORE the
-        // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
-        // ⇒ no-op ⇒ byte-identical. Success-only: a benign cancel (`cancelled`) or a non-COMPLETE
-        // terminal passes success=false ⇒ no reinforcement. (#22's sole writer under flag-on — the
+        // The run's step-bearing trajectory, plus Issue #22 (SIBLING A) credit when that flag is on.
+        // MUST run BEFORE the currentSessionInstinctIds.delete below (the participating set is read
+        // inside). A benign cancel (`cancelled`) or a non-COMPLETE terminal passes success=false ⇒
+        // recorded as a failure, no reinforcement. (#22's sole writer under flag-on — the
         // route-level endTask record is suppressed when the flag is on; see endTask's
         // suppressTrajectoryRecord.)
         deps.recordInRunTrajectoryCredit({

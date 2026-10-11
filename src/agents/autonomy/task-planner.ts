@@ -203,8 +203,8 @@ export class TaskPlanner {
    *   instinct set). The route-level callers pass this = isTrajectoryLevelCreditEnabled() so that,
    *   flag-ON, this endTask SKIPS its recordTrajectory emission (no duplicate, low-value, empty-step
    *   route-level row) while preserving every OTHER side effect (isTaskActive teardown; the separate
-   *   attachReplayContext call is unaffected). Flag-OFF / undefined ⇒ records exactly as today
-   *   (byte-identical) ⇒ the route-level path remains the sole writer.
+   *   attachReplayContext call is unaffected). Flag-OFF / undefined ⇒ records exactly as today;
+   *   the in-run trigger then adds the run's own step-bearing row next to this empty-step one.
    */
   endTask(params: {
     success: boolean;
