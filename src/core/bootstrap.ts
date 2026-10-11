@@ -1709,7 +1709,7 @@ async function bootstrapImpl(
     disposables.push("messageRouter", () => messageRouter.dispose());
   }
 
-  let outerCheckpointStore: { close(): void } | undefined;
+  let outerCheckpointStore: import("../tasks/task-checkpoint-store.js").TaskCheckpointStore | undefined;
   // Task checkpoint store — persists in-flight context for budget / provider
   // aborts so we can resume rather than silently drop the user's work.
   // Lives next to tasks.db under the memory db dir.
@@ -2027,6 +2027,7 @@ async function bootstrapImpl(
         vaultRegistry,
         vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
         sharedOrchestratorDeps,
+        taskCheckpointStore: outerCheckpointStore,
       });
       agentManager = multiAgentStage.agentManager;
       agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);

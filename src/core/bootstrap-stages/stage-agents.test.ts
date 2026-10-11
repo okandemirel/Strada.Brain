@@ -236,6 +236,43 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     expect(options.providerRouter).toBe(providerRouter);
   });
 
+  it("hands the task checkpoint store to the agent manager, whose orchestrators run chat tasks", async () => {
+    type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
+    // Only the root orchestrator had the store; a budget- or provider-stopped
+    // chat task on a per-agent orchestrator wrote no checkpoint to resume.
+    const taskCheckpointStore = { save: vi.fn() } as unknown as StageParams["taskCheckpointStore"];
+    const createAgentManager = vi.fn((_options: unknown) => ({
+      setBackgroundTaskSubmitter: vi.fn(), setTaskManager: vi.fn(), setDelegationFactory: vi.fn(),
+    }));
+    await initializeMultiAgentDelegationStage(
+      {
+        config: makeConfig({ agent: { enabled: true, defaultBudgetUsd: 5, maxConcurrent: 3, idleTimeoutMs: 60000, maxMemoryEntries: 1000 } as Config["agent"] }),
+        logger: createMockLogger(),
+        daemonMode: false,
+        daemonStorage: { getDatabase: vi.fn(() => ({})) } as unknown as StageParams["daemonStorage"],
+        daemonContext: {} as unknown as StageParams["daemonContext"],
+        taskManager: { submit: vi.fn(), on: vi.fn() } as unknown as StageParams["taskManager"],
+        orchestrator: { authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() } as unknown as StageParams["orchestrator"],
+        providerManager: { isAvailable: vi.fn(() => false) } as unknown as StageParams["providerManager"],
+        toolRegistry: { getAllTools: vi.fn(() => []) } as unknown as StageParams["toolRegistry"],
+        channel: {} as unknown as StageParams["channel"],
+        metrics: { getSnapshot: vi.fn(() => ({})) } as unknown as StageParams["metrics"],
+        soulLoader: {} as unknown as StageParams["soulLoader"],
+        dmPolicy: {} as unknown as StageParams["dmPolicy"],
+        stradaDeps: { coreInstalled: false } as unknown as StageParams["stradaDeps"],
+        taskCheckpointStore,
+      },
+      {
+        createAgentRegistry: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentBudgetTracker: vi.fn(() => ({ initialize: vi.fn() })),
+        createAgentManager,
+      } as unknown as Parameters<typeof initializeMultiAgentDelegationStage>[1],
+    );
+
+    const options = createAgentManager.mock.calls[0]![0] as { taskCheckpointStore?: unknown };
+    expect(options.taskCheckpointStore).toBe(taskCheckpointStore);
+  });
+
   it("hands STREAMING_ENABLED to the agent and delegation managers (N-3)", async () => {
     type StageParams = Parameters<typeof initializeMultiAgentDelegationStage>[0];
     const createAgentManager = vi.fn((_options: unknown) => ({

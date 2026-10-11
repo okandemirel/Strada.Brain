@@ -62,6 +62,7 @@ vi.mock("../orchestrator.js", () => {
         setWorkspaceBus: vi.fn(),
         setMonitorLifecycle: vi.fn(),
         setUnifiedBudgetManager: vi.fn(),
+        setTaskCheckpointStore: vi.fn(),
       };
     }),
   };
@@ -472,6 +473,37 @@ describe("AgentManager", () => {
         expect(opts?.providerRouter).toBe(sharedRouter);
       } finally {
         await routedManager.shutdown();
+      }
+    });
+
+    it("gives per-agent orchestrators the task checkpoint store, so budget and provider stops can be resumed", async () => {
+      // Chat tasks run on these orchestrators. Without the store their
+      // budget-exceeded and rolling checkpoints were silent no-ops, and /retry
+      // or "devam et" found nothing to resume.
+      const checkpointStore = { save: vi.fn(), loadLatest: vi.fn() } as never;
+      const storedManager = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [], getMetadataMap: () => new Map() } as never,
+        channel: { sendText, sendMarkdown } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        stradaDeps: { installed: false, version: undefined } as never,
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        taskCheckpointStore: checkpointStore,
+      });
+
+      try {
+        await storedManager.routeMessage(makeMsg());
+        const { Orchestrator } = await import("../orchestrator.js");
+        const orchestrator = (Orchestrator as unknown as Mock).mock.results.at(-1)?.value;
+        expect(orchestrator.setTaskCheckpointStore).toHaveBeenCalledWith(checkpointStore);
+      } finally {
+        await storedManager.shutdown();
       }
     });
 

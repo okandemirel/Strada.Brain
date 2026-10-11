@@ -21,6 +21,7 @@ import type { CommandHandler } from "../../tasks/command-handler.js";
 import { buildBatchedPrompt, buildBurstOrQueueNotice } from "../../tasks/message-bursting.js";
 import { getTaskConversationKey } from "../../tasks/types.js";
 import type { TaskManager } from "../../tasks/task-manager.js";
+import type { TaskCheckpointStore } from "../../tasks/task-checkpoint-store.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
@@ -212,6 +213,14 @@ export interface AgentManagerOptions {
    * consensus hooks, and the loop and conformance settings at their defaults.
    */
   readonly sharedOrchestratorDeps: SharedOrchestratorDeps;
+  /**
+   * The process's task checkpoint store, shared with the root Orchestrator.
+   *
+   * Chat tasks run on per-agent orchestrators, and those had no store: their
+   * budget-exceeded and rolling checkpoints were silent no-ops, so /retry and
+   * "devam et" found nothing to resume and the touched-file list was lost.
+   */
+  readonly taskCheckpointStore?: TaskCheckpointStore;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -901,6 +910,9 @@ export class AgentManager {
     }
     if (this._unifiedBudgetManager) {
       orchestrator.setUnifiedBudgetManager(this._unifiedBudgetManager);
+    }
+    if (this.opts.taskCheckpointStore) {
+      orchestrator.setTaskCheckpointStore(this.opts.taskCheckpointStore);
     }
 
     // Inject delegation tools if factory is available (Phase 24)

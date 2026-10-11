@@ -157,7 +157,10 @@ export class MessageRouter {
         });
       }
     }
-    return false;
+    // The multi-agent handler runs only this front, so "devam et" or "retry"
+    // after a budget or provider stop was never probed there and became a
+    // new ordinary task instead of resuming the checkpoint.
+    return this.tryImplicitRecovery(msg);
   }
 
   async route(msg: IncomingMessage): Promise<void> {
@@ -213,26 +216,31 @@ export class MessageRouter {
     // which is covered by the "batches consecutive follow-ups" tests.
     // Race with the resumed PAOR loop is already bounded by the per-session
     // lock in SessionManager and by `resumeInFlight` in Orchestrator.
-    try {
-      const handled = await this.commandHandler.tryHandleImplicitRecovery(
-        chatId,
-        text,
-        msg.userId,
-      );
-      if (handled) {
-        await this.flushPendingChat(getTaskConversationKey(chatId, msg.channelType, msg.conversationId));
-        logger.info("Message classified as implicit recovery intent", { chatId });
-        return;
-      }
-    } catch (err) {
-      // Never let implicit recovery break normal routing — log and fall through.
-      logger.warn("Implicit recovery probe failed; falling back to task submission", {
-        chatId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (await this.tryImplicitRecovery(msg)) {
+      await this.flushPendingChat(getTaskConversationKey(chatId, msg.channelType, msg.conversationId));
+      return;
     }
 
     this.bufferTaskSubmission(msg);
+  }
+
+  /** The implicit-recovery probe; true when it consumed the message. */
+  private async tryImplicitRecovery(msg: IncomingMessage): Promise<boolean> {
+    const logger = getLogger();
+    try {
+      const handled = await this.commandHandler.tryHandleImplicitRecovery(msg.chatId, msg.text, msg.userId);
+      if (handled) {
+        logger.info("Message classified as implicit recovery intent", { chatId: msg.chatId });
+      }
+      return handled;
+    } catch (err) {
+      // Never let implicit recovery break normal routing — log and fall through.
+      logger.warn("Implicit recovery probe failed; falling back to task submission", {
+        chatId: msg.chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   private async sendStartupNotice(chatId: string): Promise<void> {

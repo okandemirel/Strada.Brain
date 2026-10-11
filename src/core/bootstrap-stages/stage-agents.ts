@@ -81,6 +81,8 @@ export async function initializeMultiAgentDelegationStage(
     vaultWriteHookBudgetMs?: number;
     /** The run dependencies the root orchestrator was built with (see SharedOrchestratorDeps). */
     sharedOrchestratorDeps: import("../../agents/multi/agent-manager.js").SharedOrchestratorDeps;
+    /** Where per-agent orchestrators persist budget and provider stops. */
+    taskCheckpointStore?: import("../../tasks/task-checkpoint-store.js").TaskCheckpointStore;
   },
   deps: MultiAgentDelegationStageDeps = {},
 ): Promise<MultiAgentDelegationStageResult> {
@@ -165,6 +167,7 @@ export async function initializeMultiAgentDelegationStage(
     // intervention and consensus hooks, and the loop and conformance settings
     // the root run has.
     sharedOrchestratorDeps: params.sharedOrchestratorDeps,
+    taskCheckpointStore: params.taskCheckpointStore,
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)
