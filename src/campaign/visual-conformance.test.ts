@@ -314,6 +314,14 @@ describe("what a brief is, and what a heading is (Codex 2026-09-11 L#15, L#16)",
     expect(look.found).toBe(false);
   });
 
+  it("a numbered heading that opens with a non-ASCII capital ends the section too", () => {
+    const look = extractLookDescription(
+      "1. Art Direction\nHand-painted watercolour landscapes in soft pastel tones.\n2. Écrans\nLe menu principal affiche un bouton Jouer.",
+    );
+    expect(look.found).toBe(true);
+    expect(look.text).toBe("Hand-painted watercolour landscapes in soft pastel tones.");
+  });
+
   it("a horizontal rule is not substantive prose", () => {
     // "---" under "### Palette and references" counted as a body, so the
     // subheading was promoted into a brief nobody wrote.

@@ -116,6 +116,13 @@ describe("map-reduce planning of a document beyond the window (2026-09-10)", () 
     expect(splitGddSections("# Tiny\nA short game.\n## Rules\nTap.")).toHaveLength(1);
   });
 
+  it("cuts at a numbered heading that opens with a non-ASCII capital", () => {
+    // With A-Z only, "3.2 Çekirdek Kurallar" and "5. Écrans" were body text of
+    // the section before, and the add-only pass saw their rows under its heading.
+    const gdd = ["3.1 Kurallar", "Oyuncu her turda bir taş oynar.", "3.2 Çekirdek Kurallar", "Bir tohum 2 saniyede filizlenmelidir.", "5. Écrans", "Le menu principal affiche le bouton Jouer."].join("\n");
+    expect(splitGddSections(gdd).map((c) => c.heading)).toEqual(["3.1 Kurallar + 3.2 Çekirdek Kurallar + 5. Écrans"]);
+  });
+
   it("briefs every section with the model and plans from the briefs, never from a windowed middle", async () => {
     const gdd = bigGdd();
     expect(gdd.length).toBeGreaterThan(150_000);

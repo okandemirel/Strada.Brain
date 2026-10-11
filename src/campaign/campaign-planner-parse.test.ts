@@ -282,3 +282,24 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(result.milestones.map((m) => m.title)).toEqual(["Real", "AlsoReal"]);
   });
 });
+
+describe("CampaignPlanner.complete — one plain call for the requirement rows' add-only pass (W04)", () => {
+  it("sends the system and user text through the planner's own call path and returns the reply without leaked thinking", async () => {
+    const chat = vi.fn(async (_system: string, _messages: Array<{ content: string }>) => ({
+      text: '<reasoning>let me think</reasoning>{"rows":[]}',
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    }));
+    const provider = { name: "test", capabilities: { streaming: false }, chat };
+    const reply = await new CampaignPlanner(provider as never).complete("SYSTEM TEXT", "USER TEXT");
+    expect(reply).toBe('{"rows":[]}');
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chat.mock.calls[0]![0]).toBe("SYSTEM TEXT");
+    expect(chat.mock.calls[0]![1].at(-1)?.content).toBe("USER TEXT");
+  });
+
+  it("refuses without a provider instead of answering with nothing", async () => {
+    await expect(new CampaignPlanner(undefined).complete("s", "u")).rejects.toThrow(/provider/);
+  });
+});

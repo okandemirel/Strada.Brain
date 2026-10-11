@@ -104,9 +104,10 @@ export function artDirectionText(look: LookDescription | undefined, gddText: str
 /**
  * A numbered section title, in ANY case. Requiring ALL CAPS meant "2. Gameplay"
  * did not end the art section, and the gameplay text below it became the art
- * brief (Codex 2026-09-11 L#15).
+ * brief (Codex 2026-09-11 L#15). Opened by ANY capital: with A-Z only,
+ * "2. Écrans" did not end the art section either.
  */
-const NUMBERED_HEADING_RE = /^\s*\d+[.)]\s+[A-Z][^.!?:;]{2,48}$/;
+const NUMBERED_HEADING_RE = /^\s*\d+[.)]\s+\p{Lu}[^.!?:;]{2,48}$/u;
 
 /** A rule, a divider, a row of dashes: structure, not prose (L#15). */
 const STRUCTURAL_LINE_RE = /^\s*(?:[-*_=~]\s*){3,}$|^\s*\|[\s|:-]*\|\s*$/;

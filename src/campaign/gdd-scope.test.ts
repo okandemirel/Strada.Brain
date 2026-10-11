@@ -3,7 +3,15 @@
  * held against — until 2026-09-10 every game got "2 to 12 milestones".
  */
 import { describe, expect, it } from "vitest";
-import { extractHeadings, measureGddScope, normalizeHeading, uncoveredSections } from "./gdd-scope.js";
+import {
+  extractHeadings,
+  headingClaimedBy,
+  measureGddScope,
+  normalizeHeading,
+  TRIVIAL_HEADING_RE,
+  uncoveredSections,
+  WORK_DEMAND_RE,
+} from "./gdd-scope.js";
 
 const BIG = `# Sky Pigs
 ## Table of Contents
@@ -153,5 +161,40 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
     expect(normalizeHeading("Introduction")).toBe("introduction");
     expect(normalizeHeading("iOS Build")).toBe("ios build");
     expect(normalizeHeading("3.2 Scoring & Combos")).toBe("scoring combos");
+  });
+});
+
+describe("headingClaimedBy — one containment rule for coverage and for row ownership (W04)", () => {
+  it("claims a heading when either side contains the other, normalized; a short claim claims nothing", () => {
+    expect(headingClaimedBy("3.3 Core Rules (R-01 … R-22)", ["Core Rules"])).toBe(true);
+    expect(headingClaimedBy("Core Loop", ["2. Core Loop — merging"])).toBe(true);
+    expect(headingClaimedBy("Performance", ["Audio", "UI"])).toBe(false);
+    expect(headingClaimedBy("UI", ["UI"])).toBe(false);
+    // uncoveredSections is the same rule, negated.
+    const headings = ["2. Core Loop", "6. Audio", "8. Performance"];
+    const claims = ["Core Loop — merging", "audio"];
+    expect(uncoveredSections(headings, claims)).toEqual(headings.filter((h) => !headingClaimedBy(h, claims)));
+  });
+
+  it("exports the apparatus and work-demand rules the row extractor shares", () => {
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.1 Executive Summary"))).toBe(true);
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.4 Design Pillars"))).toBe(false);
+    expect(WORK_DEMAND_RE.test("Build an interactive credits screen.")).toBe(true);
+    expect(WORK_DEMAND_RE.test("This document describes the game.")).toBe(false);
+  });
+});
+
+describe("a numbered heading may open with any capital letter, not only A-Z (W04)", () => {
+  it("reads Turkish, German, French and Spanish section lines from a converted document", () => {
+    expect(extractHeadings([
+      "3.2 Çekirdek Kurallar",
+      "Oyuncu bir tohuma dokunur.",
+      "4. Übersicht der Elemente",
+      "Text.",
+      "5. Écrans",
+      "Texte.",
+      "6. Ámbito del juego",
+      "Texto.",
+    ].join("\n"))).toEqual(["Çekirdek Kurallar", "Übersicht der Elemente", "Écrans", "Ámbito del juego"]);
   });
 });

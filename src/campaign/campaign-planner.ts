@@ -108,7 +108,10 @@ List everything the section specifies that would need building or measuring: sch
 Keep the section's own names and numbers exactly as written. Omit marketing, KPIs and aspiration.
 At most 350 words, plain text, first line = the section heading.`;
 
-const SECTION_LINE_RE = /^\s{0,3}(?:#{1,3}\s+\S|\d{1,2}(?:\.\d{1,2}){0,2}\.?\s+[A-Z][^\n]{2,70}$)/;
+/** Any capital opens a numbered section line, as in gdd-scope: "3.2 Çekirdek Kurallar" and "5. Écrans" are headings. */
+const SECTION_LINE_RE = /^\s{0,3}(?:#{1,3}\s+\S|\d{1,2}(?:\.\d{1,2}){0,2}\.?\s+\p{Lu}[^\n]{2,70}$)/u;
+/** "Bomb: 3x3 blast…" or "Énergie: …": a short definition line, whatever capital opens it. */
+const DEFINITION_LINE_RE = /^\s*\p{Lu}[^:\n]{2,60}:\s+\S/u;
 
 /** The document cut at its headings into chunks of at most `chunkChars`, tiny sections merged, oversize ones split at paragraphs. */
 export function splitGddSections(gddText: string, chunkChars: number = GDD_BRIEF_CHUNK_CHARS, maxChunks: number = GDD_BRIEF_MAX_CHUNKS): Array<{ heading: string; text: string }> {
@@ -181,7 +184,7 @@ export function splitGddSections(gddText: string, chunkChars: number = GDD_BRIEF
 function structuralOutline(text: string, cap = 4_000): string {
   return text
     .split("\n")
-    .filter((line) => /^\s*(#{1,6}\s|\||[-*•]\s|\d{1,3}[.)]\s)/.test(line) || (/^\s*[A-ZĞÜŞİÖÇ][^:\n]{2,60}:\s+\S/.test(line) && line.length <= 160))
+    .filter((line) => /^\s*(#{1,6}\s|\||[-*•]\s|\d{1,3}[.)]\s)/.test(line) || (DEFINITION_LINE_RE.test(line) && line.length <= 160))
     .join("\n")
     .slice(0, cap);
 }
@@ -210,7 +213,7 @@ export function windowGdd(gddText: string, fullThreshold: number = GDD_FULL_CHAR
     .split("\n")
     .filter((line) =>
       /^\s*(#{1,6}\s|\||[-*•]\s|\d{1,3}[.)]\s)/.test(line) ||
-      (/^\s*[A-ZĞÜŞİÖÇ][^:\n]{2,60}:\s+\S/.test(line) && line.length <= 160),
+      (DEFINITION_LINE_RE.test(line) && line.length <= 160),
     )
     .join("\n");
   let outline = structural.slice(0, outlineChars);
@@ -868,6 +871,17 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     return { closed, open, unasked: requirements.slice(asked.length) };
   }
 
+  /**
+   * One plain call for a caller outside the planner — the requirement rows'
+   * add-only pass — through the same call path, so STREAMING_ENABLED governs
+   * it too. The reply's text with leaked thinking removed; a planner with no
+   * provider refuses rather than answering with nothing.
+   */
+  async complete(system: string, user: string): Promise<string> {
+    if (!this.provider) throw new Error("campaign planner has no LLM provider");
+    const response = await this.ask(this.provider, system, user);
+    return stripLeakedReasoning(response.text ?? "").text;
+  }
 }
 
 /** Words that say nothing about WHICH requirement a line is about. */

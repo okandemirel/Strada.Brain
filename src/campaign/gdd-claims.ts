@@ -428,7 +428,7 @@ export function extractActionBudget(gddText: string): number | undefined {
  * ceiling, so this is deliberately not a claim: it only tells the run how long
  * it may keep playing.
  */
-const DURATION_LABEL_RE =
+export const DURATION_LABEL_RE =
   /^(?:median|average|typical|target|max(?:imum)?|expected)?\s*(?:level|session|round|match|run|puzzle|stage)\s*(?:duration|length|time)\b/i;
 const DURATION_VALUE_RE =
   /(\d+(?:\.\d+)?)\s*(?:[-–~]|to)\s*(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b|(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|min(?:ute)?s?)\b/gi;

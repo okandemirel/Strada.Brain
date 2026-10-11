@@ -25,6 +25,14 @@ describe("windowGdd", () => {
     expect(windowed.length).toBeLessThan(doc.length);
   });
 
+  it("keeps a definition line that opens with a non-ASCII capital", () => {
+    // "Énergie: …" is a definition line as much as "Bomb: …"; a class of A-Z
+    // and six Turkish capitals dropped it from the outline.
+    const windowed = windowGdd(bigGdd("Bomb: 3x3 blast, spawns from 4-match\nÉnergie: le joueur gagne 5 points par tap"));
+    expect(windowed).toContain("Bomb: 3x3 blast");
+    expect(windowed).toContain("Énergie: le joueur gagne 5 points par tap");
+  });
+
   it("samples a structure-less middle instead of pretending an outline exists", () => {
     // Converted .docx/.pdf: bare prose lines, no markdown markers at all.
     const doc = bigGdd(

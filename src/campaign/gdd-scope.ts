@@ -47,7 +47,7 @@ export interface GddScope {
  * the Playfield" are work, and only a heading that is ENTIRELY apparatus is
  * dropped.
  */
-const TRIVIAL_HEADING_RE =
+export const TRIVIAL_HEADING_RE =
   /^(?:table of contents|contents|appendix(?:\s+[a-z0-9])?|glossary|references|bibliography|changelog|change log|revision history|version history|document history|index|acknowledg(?:e)?ments|about this document|overview of this document|introduction|executive summary|summary|purpose|purpose of this document|scope|document conventions|conventions|terminology|credits|legal|confidentiality|disclaimer|market position|market position reference titles|reference titles|competitive analysis|prepared by|document control|sign off|approvals?)$/i;
 
 /**
@@ -56,11 +56,11 @@ const TRIVIAL_HEADING_RE =
  * of Pixel Flow" as work, because "design" is a noun far more often than a
  * verb in a design document.
  */
-const WORK_DEMAND_RE =
+export const WORK_DEMAND_RE =
   /(?:^|[.:;!?]\s+|\bmust\s+|\bshall\s+|\bshould\s+|\bwill\s+)(?:build|implement|create|add|wire|bind|author|code|write|render|animate|spawn|show|display|present|play|unlock|award|grant|trigger|ship|support)\b/i;
 
 /** Does the body under this heading ask for work, whatever the heading is called? */
-function sectionAsksForWork(lines: readonly string[], headingIndex: number): boolean {
+export function sectionAsksForWork(lines: readonly string[], headingIndex: number): boolean {
   for (let i = headingIndex + 1; i < lines.length && i <= headingIndex + 12; i++) {
     const line = lines[i] ?? "";
     if (HEADING_RE.test(line) || NUMBERED_HEADING_RE.test(line)) break; // the next section
@@ -70,8 +70,51 @@ function sectionAsksForWork(lines: readonly string[], headingIndex: number): boo
 }
 
 const HEADING_RE = /^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/;
-/** "3. Core Loop", "3.2 Scoring", "III. Art" as plain-text section lines (converted documents). */
-const NUMBERED_HEADING_RE = /^\s{0,3}(?:\d{1,2}(?:\.\d{1,2}){0,2}\.?|[IVX]{1,4}\.)\s+([A-Z][^\n]{2,70})$/;
+/**
+ * "3. Core Loop", "3.2 Scoring", "III. Art" as plain-text section lines
+ * (converted documents). ANY capital opens one: with A-Z only, "3.2 Çekirdek
+ * Kurallar" or "5. Écrans" was body text, and everything under it was read as
+ * part of the section before.
+ */
+const NUMBERED_HEADING_RE = /^\s{0,3}(?:\d{1,2}(?:\.\d{1,2}){0,2}\.?|[IVX]{1,4}\.)\s+(\p{Lu}[^\n]{2,70})$/u;
+const SECTION_NUMBER_RE = /^\s*(\d{1,3}(?:\.\d{1,3})*)\.?(?=\s)/;
+
+export interface HeadingLine {
+  /** The heading as the document spells it, its number removed. */
+  readonly title: string;
+  /** "3.2" for "3.2 Scoring" or "## 3.2 Scoring"; absent for an unnumbered heading. */
+  readonly number?: string;
+  /** Nesting depth: the number's components for a plain numbered line, the hashes for markdown. */
+  readonly level: number;
+  /** Where the title starts in the line. */
+  readonly titleAt: number;
+}
+
+/** The heading on one line, read by the same rules `extractHeadings` uses; undefined for body text. */
+export function parseHeadingLine(line: string): HeadingLine | undefined {
+  const markdown = HEADING_RE.exec(line);
+  if (markdown !== null) {
+    const raw = markdown[2]!;
+    const numbered = SECTION_NUMBER_RE.exec(raw);
+    const title = numbered === null ? raw : raw.slice(numbered[0].length).trim();
+    return {
+      title,
+      ...(numbered === null ? {} : { number: numbered[1]! }),
+      level: markdown[1]!.length,
+      titleAt: line.indexOf(raw) + raw.indexOf(title),
+    };
+  }
+  const plain = NUMBERED_HEADING_RE.exec(line);
+  if (plain === null) return undefined;
+  const title = plain[1]!.trim();
+  const number = SECTION_NUMBER_RE.exec(line)?.[1];
+  return {
+    title,
+    ...(number === undefined ? {} : { number }),
+    level: number === undefined ? 1 : number.split(".").length,
+    titleAt: line.lastIndexOf(title),
+  };
+}
 
 export function normalizeHeading(h: string): string {
   return h
@@ -149,12 +192,19 @@ export function measureGddScope(gddText: string): GddScope {
  * merging"). Short claims (< 4 chars) never match anything.
  */
 export function uncoveredSections(headings: readonly string[], covered: readonly string[]): string[] {
-  const claims = covered.map(normalizeHeading).filter((c) => c.length >= 4);
-  return headings.filter((h) => {
-    const key = normalizeHeading(h);
-    if (key.length < 4) return false;
-    return !claims.some((c) => c === key || c.includes(key) || key.includes(c));
-  });
+  return headings.filter((h) => normalizeHeading(h).length >= 4 && !headingClaimedBy(h, covered));
+}
+
+/**
+ * Does any claim cover this heading? The coverage inventory and requirement
+ * row ownership ask the same question, so they share one answer.
+ */
+export function headingClaimedBy(heading: string, claims: readonly string[]): boolean {
+  const key = normalizeHeading(heading);
+  if (key.length < 4) return false;
+  return claims
+    .map(normalizeHeading)
+    .some((c) => c.length >= 4 && (c === key || c.includes(key) || key.includes(c)));
 }
 
 /**
