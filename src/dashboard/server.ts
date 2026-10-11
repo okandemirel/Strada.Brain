@@ -1195,23 +1195,57 @@ export class DashboardServer {
   private static readonly SENSITIVE_KEY_RE = /key|token|secret|password|credential|auth|uri|dsn/i;
 
   /**
+   * An environment map (mcpServers[].env) is where per-server credentials are
+   * documented to live, under whatever name the server reads, so every value
+   * under it is masked, not only the ones whose name looks secret.
+   */
+  private static readonly ENV_MAP_KEY_RE = /(?:^|\.)env(?:\.|$)/i;
+
+  /**
    * Recursively mask sensitive values in a config snapshot.
    * Matches key names that may contain secrets and redacts their values.
    */
   static maskSensitiveConfig(obj: Record<string, unknown>): Record<string, unknown> {
     const masked: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      if (DashboardServer.SENSITIVE_KEY_RE.test(key)) {
-        const val = String(value ?? "");
-        masked[key] = val.length > 8 ? val.slice(0, 4) + "***" + val.slice(-4) : "***";
-      } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-        masked[key] = DashboardServer.maskSensitiveConfig(value as Record<string, unknown>);
+      if (DashboardServer.ENV_MAP_KEY_RE.test(key)) {
+        masked[key] = DashboardServer.maskEveryValue(value);
+      } else if (DashboardServer.SENSITIVE_KEY_RE.test(key)) {
+        masked[key] = DashboardServer.maskSecret(value);
       } else {
-        // Additionally sanitize string values that look like they contain secrets
-        masked[key] = typeof value === "string" ? sanitizeSecrets(value) : value;
+        masked[key] = DashboardServer.maskConfigValue(value);
       }
     }
     return masked;
+  }
+
+  /**
+   * Arrays are walked like objects: the snapshot's flatten keeps an array
+   * whole, so mcpServers reaches the mask as one array value and its entries
+   * were served unmasked.
+   */
+  private static maskConfigValue(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map((item) => DashboardServer.maskConfigValue(item));
+    if (value !== null && typeof value === "object") {
+      return DashboardServer.maskSensitiveConfig(value as Record<string, unknown>);
+    }
+    // Additionally sanitize string values that look like they contain secrets
+    return typeof value === "string" ? sanitizeSecrets(value) : value;
+  }
+
+  private static maskEveryValue(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map((item) => DashboardServer.maskEveryValue(item));
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [k, DashboardServer.maskEveryValue(v)]),
+      );
+    }
+    return DashboardServer.maskSecret(value);
+  }
+
+  private static maskSecret(value: unknown): string {
+    const val = String(value ?? "");
+    return val.length > 8 ? val.slice(0, 4) + "***" + val.slice(-4) : "***";
   }
 
   // Data-building helpers have been extracted to server-system-routes.ts and

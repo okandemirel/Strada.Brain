@@ -542,6 +542,27 @@ describe("DashboardServer", () => {
     ]));
   });
 
+  it("masks the credentials an MCP server entry carries in its env", async () => {
+    const metrics = new MetricsCollector();
+    const pat = "ghp_" + "a1".repeat(18);
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      configSnapshot: () => ({
+        mcpServers: [{ name: "github", command: "npx", args: [], env: { GITHUB_PERSONAL_ACCESS_TOKEN: pat } }],
+      }),
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/config`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain("github");
+    expect(text).not.toContain(pat);
+  });
+
   it("returns the shared boot report for settings surfaces", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
@@ -1894,5 +1915,33 @@ describe("DashboardServer: a request body cut inside a character (audit dashboar
 
     expect(parsed).toEqual({ name: "kişilik", content });
     expect(res.writeHead).not.toHaveBeenCalled();
+  });
+});
+
+describe("DashboardServer.maskSensitiveConfig", () => {
+  // Built, not literal, so no scanner mistakes the fixture for a live key.
+  const pat = "ghp_" + "a1".repeat(18);
+  const opaque = "opaque-credential-without-a-known-shape";
+
+  it("walks arrays: a credential inside mcpServers[] is masked like a top-level one", () => {
+    const masked = DashboardServer.maskSensitiveConfig({
+      "obsidian.apiKey": "0123456789abcdef",
+      mcpServers: [
+        {
+          name: "github",
+          command: "npx",
+          args: ["-y", "server-github", "--token", pat],
+          env: { GITHUB_PERSONAL_ACCESS_TOKEN: pat, GH_HOST: opaque },
+        },
+      ],
+    });
+    const served = JSON.stringify(masked);
+    expect(served).not.toContain(pat);
+    // An env value is a credential whatever the variable is called.
+    expect(served).not.toContain(opaque);
+    expect(masked["obsidian.apiKey"]).toBe("0123***cdef");
+    const [entry] = masked["mcpServers"] as Array<Record<string, unknown>>;
+    expect(entry).toMatchObject({ name: "github", command: "npx" });
+    expect(Object.keys(entry!["env"] as object)).toEqual(["GITHUB_PERSONAL_ACCESS_TOKEN", "GH_HOST"]);
   });
 });

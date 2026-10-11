@@ -3,6 +3,8 @@
  * Aggregates token usage, tool calls, session stats, and provider health.
  */
 
+import { sanitizeSecretsQuiet } from "../security/secret-patterns.js";
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -115,7 +117,11 @@ export class MetricsCollector {
       this.toolErrorCounts.set(name, (this.toolErrorCounts.get(name) ?? 0) + 1);
       if (errorMessage) {
         const errors = this.recentToolErrors.get(name) ?? [];
-        errors.push({ message: errorMessage, timestamp: Date.now() });
+        // Redacted on the way in: the message is a failed tool's raw output
+        // (a shell failure starts with the command line, URL tokens and all),
+        // and getSnapshot hands it to /api/metrics and the WS metrics push.
+        // Quiet: sanitizeToolResult counts the same output when it reaches the model.
+        errors.push({ message: sanitizeSecretsQuiet(errorMessage), timestamp: Date.now() });
         if (errors.length > MetricsCollector.MAX_RECENT_ERRORS_PER_TOOL) {
           errors.shift();
         }

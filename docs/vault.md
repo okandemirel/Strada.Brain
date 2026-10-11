@@ -395,7 +395,7 @@ Hardening applied during Phase 2 review (commit `5563d48`):
 - **2 MB cap on symbol extraction per file** — bounds memory/CPU per parse.
 - **Edge cache invalidation on `reindexFile`** — prevents stale graph state.
 - **Bounded `findCallers` results** — no unbounded graph walks.
-- **Shared vault path policy** — unsupported extensions, secret-like JSON/config paths, oversized files, symlink escapes, and realpath containment failures are rejected before read/write/index.
+- **Shared vault path policy** — unsupported extensions, secret-like JSON/config paths, oversized files, symlink escapes, and realpath containment failures are rejected before read/write/index. Credential files use path-guard's blocklist (the same one the file tools and the workspace explorer apply), and a read is judged again under the name the disk gives the file, so `.GIT/HEAD` on a case-insensitive filesystem is refused like `.git/HEAD`.
 - **Deletion reconciliation** — startup indexing removes stale rows for files deleted while the watcher was offline.
 - **Write-note freshness** — `vault_write_note` reindexes the written path and regenerates canvas before reporting visibility.
 - **Dashboard minimization** — vault registration and listing responses do not expose absolute `rootPath`.

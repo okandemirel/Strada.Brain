@@ -53,6 +53,28 @@ describe("MetricsCollector", () => {
     expect(snap.toolErrorCounts["file_read"]).toBeUndefined();
   });
 
+  it("keeps a credential in a failed tool's output out of every error reader", () => {
+    const mc = new MetricsCollector();
+    // Built, not literal, so no scanner mistakes the fixture for a live key.
+    const pat = "ghp_" + "a1".repeat(18);
+    const gcp = "AIza" + "b2".repeat(17) + "c";
+    mc.recordToolCall(
+      "shell_exec",
+      5,
+      false,
+      `$ git push https://x-access-token:${pat}@github.com/o/r.git\nfetch https://maps.example/api?key=${gcp}`,
+    );
+
+    // getSnapshot feeds GET /api/metrics and the WS metrics push.
+    const fromSnapshot = JSON.stringify(mc.getSnapshot().recentToolErrors);
+    const fromRecent = JSON.stringify(mc.getRecentToolErrors());
+    for (const served of [fromSnapshot, fromRecent]) {
+      expect(served).not.toContain(pat);
+      expect(served).not.toContain(gcp);
+      expect(served).toContain("[REDACTED_GITHUB_TOKEN]");
+    }
+  });
+
   it("tracks active sessions", () => {
     const mc = new MetricsCollector();
     mc.setActiveSessions(5);

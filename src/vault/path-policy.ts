@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { isSensitivePath } from '../security/path-guard.js';
 import type { VaultFile } from './vault.interface.js';
 
 export const IGNORE_DIRS = new Set([
@@ -51,8 +52,13 @@ export function langForVaultPath(relPath: string): VaultFile['lang'] | undefined
 }
 
 export function isSecretLikeVaultPath(relPath: string): boolean {
-  const name = basename(normalizeVaultRelPath(relPath));
-  return SECRET_BASENAME.test(name) || isSecretLikeJson(name);
+  const normalized = normalizeVaultRelPath(relPath);
+  const name = basename(normalized);
+  // path-guard's blocklist is the one list of credential files (private keys,
+  // .npmrc, keystore.properties, google-services.json, ...). The vault serves
+  // files and indexes them for search, so it refuses the same files the file
+  // tools and the workspace explorer do instead of keeping a shorter list.
+  return SECRET_BASENAME.test(name) || isSecretLikeJson(name) || isSensitivePath(normalized);
 }
 
 export function isPotentiallyIndexableVaultPath(relPath: string): boolean {
@@ -112,7 +118,12 @@ export async function getIndexableFileInfo(
     if (await hasSymlinkAncestor(rootPath, absPath)) {
       return { ok: false, relPath: normalized, reason: 'symlink-ancestor' };
     }
-    await assertRealpathInside(rootPath, absPath);
+    // Judged again under the disk's spelling, as resolveSafeVaultReadPath does:
+    // the write hook reindexes a path as the agent spelled it.
+    const realRelPath = await assertRealpathInside(rootPath, absPath);
+    if (!isPotentiallyIndexableVaultPath(realRelPath)) {
+      return { ok: false, relPath: normalized, reason: 'not indexable' };
+    }
     if (await isLikelyBinaryFile(absPath)) {
       return { ok: false, relPath: normalized, reason: 'binary-content' };
     }
@@ -250,7 +261,14 @@ export async function resolveSafeVaultReadPath(rootPath: string, relPath: string
   if (linkStats.size > MAX_INDEXABLE_FILE_BYTES) {
     throw new Error(`vault path is too large: ${relPath}`);
   }
-  await assertRealpathInside(rootPath, absPath);
+  const realRelPath = await assertRealpathInside(rootPath, absPath);
+  // The checks above read the path as the caller spelled it. On a
+  // case-insensitive filesystem (macOS, Windows) `.GIT/HEAD` opens
+  // `.git/HEAD`, and on Windows an 8.3 short name opens a file under its long
+  // one, so the policy runs again on the name the disk gives the file.
+  if (isIgnoredVaultPath(realRelPath) || isSecretLikeVaultPath(realRelPath)) {
+    throw new Error(`vault path is not allowed: ${relPath}`);
+  }
   return absPath;
 }
 
@@ -351,11 +369,13 @@ function resolveInsideVault(rootPath: string, relPath: string): string {
   return absPath;
 }
 
-async function assertRealpathInside(rootPath: string, path: string): Promise<void> {
+/** Returns `path` relative to the root, both as the filesystem spells them. */
+async function assertRealpathInside(rootPath: string, path: string): Promise<string> {
   const [rootReal, pathReal] = await Promise.all([realpath(rootPath), realpath(path)]);
   if (!isInsideOrEqual(pathReal, rootReal)) {
     throw new Error(`path escapes vault root: ${path}`);
   }
+  return relative(rootReal, pathReal);
 }
 
 function isInsideOrEqual(candidatePath: string, rootPath: string): boolean {

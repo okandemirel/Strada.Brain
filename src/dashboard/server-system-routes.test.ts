@@ -13,6 +13,7 @@ import {
   type MockRes,
 } from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
+import { MetricsCollector } from "./metrics.js";
 import type { GoalTree, GoalNodeId } from "../goals/types.js";
 
 // EXACTLY ONE vi.mock for the logger. A second, partial vi.mock for this same module path used to
@@ -426,6 +427,19 @@ describe("GET /api/metrics", () => {
     const { handled, res } = route("/api/metrics", "GET", ctx);
     expect(handled).toBe(true);
     expect((responseJson(res))["activeSessions"]).toBe(4);
+  });
+
+  it("serves a failed tool's error without the credential it echoed, as /api/tools does", () => {
+    const metrics = new MetricsCollector();
+    const pat = "ghp_" + "a1".repeat(18);
+    metrics.recordToolCall("shell_exec", 5, false, `$ curl -H "Authorization: token ${pat}" https://api.github.com`);
+    const ctx = makeCtx({ metrics, taskManager: undefined });
+
+    const { handled, res } = route("/api/metrics", "GET", ctx);
+    expect(handled).toBe(true);
+    const served = JSON.stringify(responseJson(res));
+    expect(served).toContain("shell_exec");
+    expect(served).not.toContain(pat);
   });
 });
 

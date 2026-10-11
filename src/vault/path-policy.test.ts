@@ -7,6 +7,7 @@ import {
   getIndexableFileInfo,
   isIgnoredVaultPath,
   isLikelyBinaryFile,
+  isPotentiallyIndexableVaultPath,
   isVaultRootAllowed,
   MAX_INDEXABLE_FILE_BYTES,
   prepareSafeVaultWritePath,
@@ -67,6 +68,42 @@ describe('path-policy', () => {
       await expect(resolveSafeVaultReadPath(root, '.env.md')).rejects.toThrow(/not allowed/);
       await expect(resolveSafeVaultReadPath(root, 'secrets.md')).rejects.toThrow(/not allowed/);
       await expect(resolveSafeVaultReadPath(root, 'node_modules/x.md')).rejects.toThrow(/not allowed/);
+    });
+
+    it('rejects the credential files path-guard refuses to the file tools and the explorer', async () => {
+      const root = makeTempDir('strada-path-policy-');
+      const credentials = [
+        '.npmrc',
+        '.netrc',
+        'id_rsa',
+        'server.pem',
+        'google-services.json',
+        'Assets/Plugins/Android/keystore.properties',
+      ];
+      for (const rel of credentials) {
+        mkdirSync(join(root, rel, '..'), { recursive: true });
+        writeFileSync(join(root, rel), 'TOKEN-THAT-MUST-NOT-LEAVE');
+      }
+      for (const rel of credentials) {
+        await expect(resolveSafeVaultReadPath(root, rel), rel).rejects.toThrow(/not allowed/);
+      }
+      // The same list keeps them out of the index, which search would serve.
+      expect(isPotentiallyIndexableVaultPath('Assets/google-services.json')).toBe(false);
+    });
+
+    it('rejects an ignored directory reached through another letter case', async () => {
+      const root = makeTempDir('strada-path-policy-');
+      mkdirSync(join(root, '.git'));
+      writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main');
+      writeFileSync(join(root, '.git', 'config'), '[remote "origin"]\n\turl = https://user:TOKEN@example.com/r.git');
+      // On a case-insensitive filesystem (macOS, Windows) `.GIT/HEAD` opens the
+      // real `.git/HEAD`; on a case-sensitive one it names nothing.
+      const caseInsensitive = existsSync(join(root, '.GIT'));
+      for (const rel of ['.GIT/HEAD', '.Git/config']) {
+        const read = resolveSafeVaultReadPath(root, rel);
+        if (caseInsensitive) await expect(read, rel).rejects.toThrow(/not allowed/);
+        else await expect(read, rel).rejects.toThrow();
+      }
     });
 
     it('rejects files larger than MAX_INDEXABLE_FILE_BYTES', async () => {
@@ -153,6 +190,19 @@ describe('path-policy', () => {
 
       expect(await getIndexableFileInfo(root, 'linkdir/a.md')).toEqual({
         ok: false, relPath: 'linkdir/a.md', reason: 'symlink-ancestor',
+      });
+    });
+
+    it('flags an ignored directory reached through another letter case', async () => {
+      const root = makeTempDir('strada-path-policy-');
+      mkdirSync(join(root, '.git'));
+      writeFileSync(join(root, '.git', 'notes.json'), '{"token":"TOKEN"}');
+      const info = await getIndexableFileInfo(root, '.GIT/notes.json');
+      // Case-insensitive filesystems open .git/notes.json; case-sensitive ones open nothing.
+      expect(info).toEqual({
+        ok: false,
+        relPath: '.GIT/notes.json',
+        reason: existsSync(join(root, '.GIT')) ? 'not indexable' : 'missing',
       });
     });
 

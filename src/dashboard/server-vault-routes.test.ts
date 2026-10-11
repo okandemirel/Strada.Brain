@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerResponse } from "node:http";
@@ -17,7 +18,13 @@ import {
   responseJson,
   type MockRes,
 } from "./test-support/mock-http.js";
-import { createFakeVault, createTempDirTracker } from "../test-helpers.js";
+import {
+  createFakeEmbedding,
+  createFakeVault,
+  createFakeVectorStore,
+  createTempDirTracker,
+} from "../test-helpers.js";
+import { UnityProjectVault } from "../vault/unity-project-vault.js";
 import { VaultRegistry } from "../vault/vault-registry.js";
 import { VaultQueryError } from "../vault/obsidian-vault.js";
 import type { IVault } from "../vault/vault.interface.js";
@@ -268,6 +275,43 @@ describe("handleVaultRoutes — GET /api/vaults/:id/file", () => {
     expect(res.statusCode).toBe(200);
     expect(responseJson(res)).toEqual({ body: "body" });
     expect(vault.readFile).toHaveBeenCalledWith("notes.md");
+  });
+
+  it("refuses the credential files GET /api/workspace/file refuses, through a real vault", async () => {
+    const root = tmp.makeDir();
+    const secret = "TOKEN-THAT-MUST-NOT-LEAVE";
+    for (const rel of [".npmrc", "id_rsa", "google-services.json", "Assets/Plugins/Android/keystore.properties"]) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), secret);
+    }
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, ".git", "HEAD"), secret);
+    writeFileSync(join(root, "Readme.md"), "# readable");
+    const real = new UnityProjectVault({
+      id: "real", rootPath: root, embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    registry.register(real);
+    try {
+      const read = async (rel: string) => {
+        const res = getFile(`/api/vaults/real/file?path=${encodeURIComponent(rel)}`);
+        await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+        return res;
+      };
+      for (const rel of [
+        ".npmrc", "id_rsa", "google-services.json", "Assets/Plugins/Android/keystore.properties",
+        // A case variant of an ignored directory: on macOS/Windows it opens .git/HEAD.
+        ".GIT/HEAD",
+      ]) {
+        const res = await read(rel);
+        expect(res.statusCode, rel).toBe(400);
+        expect(JSON.stringify(responseJson(res)), rel).not.toContain(secret);
+      }
+      const ok = await read("Readme.md");
+      expect(ok.statusCode).toBe(200);
+      expect(responseJson(ok)).toEqual({ body: "# readable" });
+    } finally {
+      await real.dispose();
+    }
   });
 });
 
