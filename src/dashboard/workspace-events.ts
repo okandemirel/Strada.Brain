@@ -157,9 +157,11 @@ export interface WorkspaceEventMap {
   }
 
   // === Canvas events (Phase 4 — typed payloads) ===
+  /** `conversationId`: the run whose tool output the shapes hold; unset, the frame goes to everybody. */
   'canvas:shapes_add': {
     shapes: Array<{ type: string; id: string; props: Record<string, unknown> }>
     layout?: 'auto' | 'grid' | 'tree' | 'flow'
+    conversationId?: string
   }
   'canvas:shapes_update': {
     shapes: Array<{ id: string; props: Record<string, unknown> }>
@@ -179,11 +181,14 @@ export interface WorkspaceEventMap {
   'canvas:save': { sessionId: string }
 
   // === Code events (Phase 5 — typed payloads) ===
+  // `conversationId` on file_open/file_update/terminal_output: the run whose
+  // files, edits and commands they carry; unset, the frame goes to everybody.
   'code:file_open': {
     path: string
     content: string
     language: string
     touchedStatus?: 'modified' | 'new' | 'deleted'
+    conversationId?: string
   }
   'code:file_update': {
     path: string
@@ -191,10 +196,12 @@ export interface WorkspaceEventMap {
     original: string
     modified: string
     language?: string
+    conversationId?: string
   }
   'code:terminal_output': {
     content: string
     command?: string
+    conversationId?: string
   }
   'code:terminal_clear': Record<string, never>
   'code:annotation_add': {

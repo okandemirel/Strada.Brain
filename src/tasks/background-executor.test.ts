@@ -12,6 +12,9 @@ import { TaskStatus } from "./types.js";
 import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
 import { generateGoalNodeId } from "../goals/types.js";
 import type { AgentRunRequest, AgentRunResult, IOStrategy } from "../agent-core/runner/index.js";
+import { WebChannel } from "../channels/web/channel.js";
+import { createWorkspaceBus } from "../dashboard/workspace-bus.js";
+import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
 
 // Shared spies rather than a fresh vi.fn() per call: a log nobody can read is
 // the same as a log nobody writes, and the commit summary below is asserted on.
@@ -4435,6 +4438,126 @@ describe("BackgroundExecutor goal narrative attribution (round 10 #4)", () => {
         "conversationId"
       ],
     ).toBe("parent-scope");
+  });
+});
+
+// The goal board the executor draws on the canvas quotes the request: the
+// summary note is goalTree.taskDescription plus its narrative, each node card
+// is a node's task, and a failure adds the error. Those canvas:agent_draw
+// frames named no scope, so the monitor bridge stamped no origin and every
+// portal identity got another's board, the way the supervisor's own canvas
+// frames did before a49f58bc.
+describe("BackgroundExecutor goal board canvas stays with its portal identity", () => {
+  const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  /** A portal socket whose session_init proves `profileId`; returns what it was sent. */
+  function connectProfile(channel: WebChannel, profileId: string): Array<Record<string, unknown>> {
+    const sent: Array<Record<string, unknown>> = [];
+    const handlers = new Map<string, (payload?: Buffer) => void>();
+    const socket = {
+      readyState: 1,
+      send: (payload: string) => { sent.push(JSON.parse(payload) as Record<string, unknown>); },
+      close: () => { socket.readyState = 3; handlers.get("close")?.(); },
+      terminate: () => { socket.readyState = 3; handlers.get("close")?.(); },
+      ping: () => {},
+      on: (event: string, handler: (payload?: Buffer) => void) => { handlers.set(event, handler); },
+    };
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const identity = (channel as unknown as {
+      identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+    }).identityStore.issue(profileId);
+    handlers.get("message")?.(Buffer.from(JSON.stringify({
+      type: "session_init", profileId: identity.profileId, profileToken: identity.profileToken,
+    })));
+    return sent;
+  }
+
+  function secretGoalTree(): GoalTree {
+    const tree = buildTestGoalTree();
+    tree.taskDescription = "Rotate the secret payment key";
+    const [, first, second] = [...tree.nodes.values()];
+    first!.task = "Revoke the secret key in StoreManager";
+    second!.task = "Ship the secret patch";
+    return tree;
+  }
+
+  async function runWithPortal(
+    mockOrch: ReturnType<typeof createMockOrchestrator>,
+    task: Task,
+    settled: (taskManager: { complete: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }) => void,
+  ) {
+    const channel = new WebChannel();
+    const bus = createWorkspaceBus();
+    const bridge = createMonitorBridge(bus, (message) => channel.broadcastRaw(message));
+    bridge.start();
+    const alice = connectProfile(channel, A);
+    const bob = connectProfile(channel, B);
+    try {
+      const executor = new BackgroundExecutor({
+        orchestrator: mockOrch as any,
+        decomposer: createMockDecomposer() as any,
+        goalStorage: createMockGoalStorage() as any,
+        workspaceBus: bus,
+      });
+      const taskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+      executor.setTaskManager(taskManager as any);
+      executor.enqueue(task, new AbortController().signal, vi.fn());
+      await vi.waitFor(() => settled(taskManager), { timeout: 5000 });
+      await executor.shutdown();
+      return {
+        aliceCanvas: JSON.stringify(alice.filter((m) => m.type === "canvas:agent_draw")),
+        bobCanvas: bob.filter((m) => m.type === "canvas:agent_draw"),
+        bobSees: JSON.stringify(bob),
+      };
+    } finally {
+      bridge.stop();
+      await channel.disconnect();
+    }
+  }
+
+  it("draws the board and its completion for the owner only", async () => {
+    const mockOrch = createMockOrchestrator();
+    const goalTree = secretGoalTree();
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (t: GoalTree) => void }) => {
+      params.onGoalDecomposed?.(goalTree);
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true, partial: false, output: "done", totalNodes: 2, succeeded: 2, failed: 0, skipped: 0,
+          totalCost: 0, totalDuration: 0, nodeResults: [],
+        },
+      };
+    });
+
+    const seen = await runWithPortal(
+      mockOrch,
+      createTestTask(goalTree, { chatId: "chat-alice", conversationId: A }),
+      (tm) => expect(tm.complete).toHaveBeenCalled(),
+    );
+
+    expect(seen.aliceCanvas).toContain("Rotate the secret payment key");
+    expect(seen.aliceCanvas).toContain("Ship the secret patch");
+    expect(seen.aliceCanvas).toContain("Status: completed");
+    expect(seen.bobCanvas).toHaveLength(0);
+    expect(seen.bobSees).not.toContain("secret");
+  });
+
+  it("draws a failed board for the owner only", async () => {
+    const mockOrch = createMockOrchestrator();
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("the secret vault refused the key"));
+    const goalTree = secretGoalTree();
+
+    const seen = await runWithPortal(
+      mockOrch,
+      createTestTask(goalTree, { chatId: "chat-alice", conversationId: A }),
+      (tm) => expect(tm.fail).toHaveBeenCalled(),
+    );
+
+    expect(seen.aliceCanvas).toContain("Blocked: the secret vault refused the key");
+    expect(seen.bobCanvas).toHaveLength(0);
+    expect(seen.bobSees).not.toContain("secret");
   });
 });
 

@@ -728,7 +728,7 @@ export class BackgroundExecutor {
     // with every narrative instead, which is the same scope beginGoalExecution
     // gives monitor:dag_init (monitorScope for a sub-goal joining a parent
     // episode, else the conversation scope).
-    const scope = task.monitorScope?.trim() || this.getConversationScope(task);
+    const scope = this.goalBoardScope(task);
     this.workspaceBus.emit("progress:narrative", {
       ...(nodeId ? { nodeId } : {}),
       ...(scope ? { conversationId: scope } : {}),
@@ -763,6 +763,15 @@ export class BackgroundExecutor {
 
   private getConversationScope(task: Pick<Task, "chatId" | "conversationId">): string {
     return resolveConversationScope(task.chatId, task.conversationId);
+  }
+
+  /**
+   * The scope a goal's board goes out under: the parent episode's for a
+   * sub-goal joining it, else the task's conversation. Its narrative and its
+   * canvas quote the request, so they name this scope too.
+   */
+  private goalBoardScope(task: Task): string {
+    return task.monitorScope?.trim() || this.getConversationScope(task);
   }
 
   /**
@@ -1123,6 +1132,7 @@ export class BackgroundExecutor {
       intent: "goal_execution_board",
       autoSwitch: false,
       layout: "flow",
+      conversationId: this.goalBoardScope(task),
       shapes: [
         this.buildGoalCanvasSummary(task, goalTree),
         ...[...goalTree.nodes.values()]
@@ -1167,6 +1177,7 @@ export class BackgroundExecutor {
       action: "update",
       intent: "goal_execution_board",
       autoSwitch: false,
+      conversationId: this.goalBoardScope(task),
       shapes: [
         this.buildGoalCanvasSummary(task, goalTree, "Status: completed"),
       ],
@@ -1200,6 +1211,7 @@ export class BackgroundExecutor {
       action: "update",
       intent: "goal_execution_board",
       autoSwitch: false,
+      conversationId: this.goalBoardScope(task),
       shapes: [
         this.buildGoalCanvasSummary(task, goalTree, `Blocked: ${sanitizeError(error, 120)}`),
       ],

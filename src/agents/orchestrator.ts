@@ -6286,6 +6286,15 @@ export class Orchestrator {
     // Workspace monitor: agent activity event for dashboard UI
     if (this.workspaceBus) {
       const workspaceBus = this.workspaceBus;
+      // The canvas and code frames below carry this run's tool output, file
+      // contents and commands, so they name the run's conversation scope (the
+      // portal profile for a web chat) and the monitor bridge keeps them with
+      // that identity. Read now: the code frames go out later, from a queue.
+      const runContext = this.getTaskExecutionContext();
+      const conversationId = resolveConversationScope(
+        chatId,
+        runContext?.chatId === chatId ? runContext.conversationId : undefined,
+      );
       workspaceBus.emit("monitor:agent_activity", {
         taskId: undefined,
         action: "tool_execute",
@@ -6326,7 +6335,7 @@ export class Orchestrator {
       }
 
       if (shapes.length > 0) {
-        workspaceBus.emit("canvas:shapes_add", { shapes });
+        workspaceBus.emit("canvas:shapes_add", { shapes, conversationId });
         workspaceBus.emit("workspace:mode_suggest", {
           mode: "canvas",
           reason: `Visual output detected: ${shapes.map((s) => s.type).join(", ")}`,
@@ -6368,6 +6377,7 @@ export class Orchestrator {
           content: (content ?? output).slice(0, 500_000),
           language,
           ...(options?.touchedStatus ? { touchedStatus: options.touchedStatus } : {}),
+          conversationId,
         });
       };
 
@@ -6397,6 +6407,7 @@ export class Orchestrator {
                   original: original.slice(0, 500_000),
                   modified: modified.slice(0, 500_000),
                   language,
+                  conversationId,
                 });
               } catch {
                 const content = typeof toolInput.new_string === "string" ? toolInput.new_string : output.slice(0, 10_000);
@@ -6415,7 +6426,7 @@ export class Orchestrator {
         }
       } else if (tc.name === "shell_exec" || tc.name === "dotnet_build" || tc.name === "dotnet_test") {
         const command = typeof toolInput.command === "string" ? toolInput.command : undefined;
-        workspaceBus.emit("code:terminal_output", { content: output.slice(0, 10_000), command });
+        workspaceBus.emit("code:terminal_output", { content: output.slice(0, 10_000), command, conversationId });
         workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "Shell execution detected" });
       }
     }

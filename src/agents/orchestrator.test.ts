@@ -23,6 +23,8 @@ import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
 import { createInitialState } from "./agent-state.js";
 import { DEFAULT_TASK_CONFIG } from "../config/config.js";
 import { createWorkspaceBus } from "../dashboard/workspace-bus.js";
+import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
+import { WebChannel } from "../channels/web/channel.js";
 import {
   selectAgentRunner,
   toWorkerRunResult,
@@ -6854,6 +6856,126 @@ DONE`,
         path: "missing.cs",
         content: "file_read result",
       });
+    });
+
+    // The tool-result hook puts a run's tool output, file contents, edits and
+    // shell output on the canvas and in the code view. Those frames named no
+    // scope, so the monitor bridge stamped no origin and every portal identity
+    // was handed another's files and commands.
+    it("keeps one portal identity's tool output, files and commands from another", async () => {
+      const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const projectPath = mkdtempSync(join(tmpdir(), "strada-orch-scope-"));
+      writeFileSync(join(projectPath, "Secret.cs"), "// the secret payment key");
+      writeFileSync(join(projectPath, "Edited.cs"), "// the secret edit landed");
+
+      const tool = (name: string, content: string) => ({
+        ...createMockTool(name, true),
+        execute: vi.fn().mockResolvedValue({ content }),
+      });
+      const orchWithBus = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [
+          tool("diagram_tool", "```mermaid\ngraph TD; secret_payment --> secret_key\n```"),
+          tool("file_read", "read ok"),
+          tool("file_write", "write ok"),
+          tool("file_edit", "edit ok"),
+          tool("shell_exec", "the secret build output"),
+        ],
+        channel: mockChannel,
+        projectPath,
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: { emit: vi.fn() },
+      });
+      const bus = createWorkspaceBus();
+      orchWithBus.setWorkspaceBus(bus);
+
+      const channel = new WebChannel();
+      const bridge = createMonitorBridge(bus, (message) => channel.broadcastRaw(message));
+      bridge.start();
+      const connect = (profileId: string): Array<Record<string, unknown>> => {
+        const sent: Array<Record<string, unknown>> = [];
+        const handlers = new Map<string, (payload?: Buffer) => void>();
+        const socket = {
+          readyState: 1,
+          send: (payload: string) => { sent.push(JSON.parse(payload) as Record<string, unknown>); },
+          close: () => { socket.readyState = 3; handlers.get("close")?.(); },
+          terminate: () => { socket.readyState = 3; handlers.get("close")?.(); },
+          ping: () => {},
+          on: (event: string, handler: (payload?: Buffer) => void) => { handlers.set(event, handler); },
+        };
+        (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+        const identity = (channel as unknown as {
+          identityStore: { issue: (id?: string) => { profileId: string; profileToken: string } };
+        }).identityStore.issue(profileId);
+        handlers.get("message")?.(Buffer.from(JSON.stringify({
+          type: "session_init", profileId: identity.profileId, profileToken: identity.profileToken,
+        })));
+        return sent;
+      };
+      const alice = connect(A);
+      const bob = connect(B);
+
+      try {
+        mockProvider.chat
+          .mockResolvedValueOnce({
+            text: "Plan: inspect and patch.",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 5, outputTokens: 5 },
+          })
+          .mockResolvedValueOnce({
+            text: "",
+            toolCalls: [
+              { id: "tc1", name: "diagram_tool", input: {} },
+              { id: "tc2", name: "file_read", input: { path: "Secret.cs" } },
+              { id: "tc3", name: "file_write", input: { path: "New.cs", content: "the secret patch" } },
+              { id: "tc4", name: "file_edit", input: { path: "Edited.cs", old_string: "draft", new_string: "the secret edit landed" } },
+              { id: "tc5", name: "shell_exec", input: { command: "echo secret" } },
+            ],
+            stopReason: "tool_use",
+            usage: { inputTokens: 10, outputTokens: 10 },
+          })
+          .mockResolvedValueOnce({
+            text: "Done.",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 10, outputTokens: 10 },
+          });
+
+        const promise = orchWithBus.handleMessage({
+          channelType: "web",
+          chatId: "chat-alice",
+          userId: A,
+          conversationId: A,
+          text: "Patch the payment flow",
+          timestamp: new Date(),
+        });
+        await vi.advanceTimersByTimeAsync(100);
+        await promise;
+        await orchWithBus.drainWorkspaceCodeEvents();
+
+        const aliceOf = (type: string) => JSON.stringify(alice.filter((m) => m.type === type));
+        expect(aliceOf("canvas:shapes_add")).toContain("secret_payment");
+        expect(aliceOf("code:file_open")).toContain("the secret payment key");
+        expect(aliceOf("code:file_open")).toContain("the secret patch");
+        expect(aliceOf("code:file_update")).toContain("the secret edit landed");
+        expect(aliceOf("code:terminal_output")).toContain("the secret build output");
+
+        for (const type of ["canvas:shapes_add", "code:file_open", "code:file_update", "code:terminal_output"]) {
+          expect(bob.filter((m) => m.type === type), type).toHaveLength(0);
+        }
+        expect(JSON.stringify(bob)).not.toContain("secret");
+      } finally {
+        bridge.stop();
+        await channel.disconnect();
+        rmSync(projectPath, { recursive: true, force: true });
+      }
     });
   });
 
