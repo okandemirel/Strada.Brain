@@ -209,8 +209,13 @@ export interface SearchOptions {
   readonly minScore?: NormalizedScore;
   /** Filter by chunk kinds */
   readonly kinds?: ChunkKind[];
-  /** Filter by file pattern (glob) */
+  /**
+   * Filter by file pattern: a glob over the path relative to filePatternRoot,
+   * with forward slashes; a directory also takes the files under it.
+   */
   readonly filePattern?: string;
+  /** The project root filePattern is relative to (default: process.cwd()). */
+  readonly filePatternRoot?: string;
   /** Filter by language */
   readonly language?: string;
   /** Use reranking */

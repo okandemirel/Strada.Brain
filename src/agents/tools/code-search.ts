@@ -35,7 +35,9 @@ export class CodeSearchTool implements ITool {
       },
       file_pattern: {
         type: "string",
-        description: "Optional: glob pattern to restrict search (e.g., '**/Combat/**')",
+        description:
+          "Optional: glob over project-relative paths to restrict the search, as in grep_search " +
+          "(e.g., '**/Combat/**', 'Assets/Scripts/**/*.cs'); a directory path also takes the files under it",
       },
       limit: {
         type: "number",
@@ -49,7 +51,7 @@ export class CodeSearchTool implements ITool {
 
   async execute(
     input: Record<string, unknown>,
-    _context: ToolContext
+    context: ToolContext
   ): Promise<ToolExecutionResult> {
     const query = String(input["query"] ?? "");
     if (!query) {
@@ -63,24 +65,32 @@ export class CodeSearchTool implements ITool {
     );
 
     const kind = input["kind"] as SearchOptions["kinds"] extends (infer K)[] ? K : never | undefined;
-    const filePattern = typeof input["file_pattern"] === "string" ? input["file_pattern"] : undefined;
+    const rawPattern = input["file_pattern"];
+    const filePattern = typeof rawPattern === "string" && rawPattern.trim() ? rawPattern.trim() : undefined;
 
     const options: SearchOptions = {
       topK: limit,
       ...(kind !== undefined && { kinds: [kind as "class" | "struct" | "method" | "constructor" | "file_header"] }),
-      ...(filePattern !== undefined && { filePattern }),
+      ...(filePattern !== undefined && { filePattern, filePatternRoot: context.projectPath }),
     };
+    // A scoped answer names its scope: "No results found" alone read as an
+    // absence over the whole codebase.
+    const scope = filePattern !== undefined ? ` in files matching '${filePattern}'` : "";
 
     try {
       const results = await this.rag.search(query, options);
 
       if (results.length === 0) {
         return {
-          content: `No results found for: "${query}"`,
+          content: `No results found for: "${query}"${scope}` +
+            (filePattern !== undefined
+              ? " (a glob relative to the project root). Files outside that pattern were NOT searched; " +
+                "retry without file_pattern to search the whole index."
+              : ""),
         };
       }
 
-      const lines: string[] = [`Found ${results.length} result(s) for: "${query}"\n`];
+      const lines: string[] = [`Found ${results.length} result(s) for: "${query}"${scope}\n`];
 
       for (const result of results) {
         const { chunk, finalScore } = result;

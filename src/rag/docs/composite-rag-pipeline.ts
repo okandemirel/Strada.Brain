@@ -149,7 +149,10 @@ export class CompositeRAGPipeline implements IRAGPipeline {
     if (searchDocs) {
       const docTopK = fwOptions?.frameworkOnly ? topK : DEFAULT_DOC_TOP_K;
       const docHits = await this.docPipeline.search(queryEmbedding, docTopK);
-      mergedHits.push(...docHits);
+      // The doc store takes no filePattern; unfiltered, a scoped search handed
+      // back framework docs as if they were hits inside the requested files.
+      const inScope = this.codePipeline.fileScopeFilter(options);
+      mergedHits.push(...(inScope ? docHits.filter((hit) => inScope(hit.chunk.filePath)) : docHits));
     }
 
     if (mergedHits.length === 0) return [];

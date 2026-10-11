@@ -98,11 +98,57 @@ describe("GrepSearchTool", () => {
     expect(result.content).toContain("No matches");
   });
 
-  it("skips files larger than 1MB", async () => {
+  // Audit tools#6: files over the size limit (and files the guard refused or
+  // that failed to read) were dropped before `filesScanned` and named nowhere,
+  // so a GUID living only in a 3MB scene came back "No matches found ... in
+  // the 1 file(s) searched" — an absence claim about a file never opened.
+  it("does not open files larger than 1MB, and says so instead of claiming no matches", async () => {
     vi.mocked(glob).mockResolvedValue(["big.cs"] as any);
     vi.mocked(stat).mockResolvedValue({ size: 2 * 1024 * 1024 } as any);
+    vi.mocked(readFile).mockClear();
     const result = await tool.execute({ pattern: "anything" }, ctx);
-    expect(result.content).toContain("No matches");
+    expect(readFile).not.toHaveBeenCalled();
+    expect(result.content).toMatch(/^No files were searched for pattern: anything/);
+    expect(result.content).toMatch(/1 file\(s\) over the 1MB grep limit were NOT searched: big\.cs/);
+  });
+
+  it("names a skipped oversized scene next to a miss in the files it did search", async () => {
+    vi.mocked(glob).mockResolvedValue(["Assets/Big.unity", "Assets/Small.unity"] as any);
+    vi.mocked(stat).mockImplementation(async (p: any) =>
+      ({ size: String(p).endsWith("Big.unity") ? 3 * 1024 * 1024 : 100 }) as any);
+    vi.mocked(validatePath).mockImplementation(async (_root: string, file: string) =>
+      ({ valid: true, fullPath: `/test/project/${file}` }));
+    vi.mocked(readFile).mockResolvedValue("m_Script: {fileID: 0}");
+    try {
+      const result = await tool.execute({ pattern: "a1b2c3", file_pattern: "**/*.unity" }, ctx);
+      expect(result.content).toContain("No matches found for pattern: a1b2c3 in the 1 file(s) searched.");
+      expect(result.content).toMatch(/1 file\(s\) over the 1MB grep limit were NOT searched: Assets\/Big\.unity/);
+    } finally {
+      vi.mocked(stat).mockReset();
+      vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project" });
+    }
+  });
+
+  it("names files that failed to read or that the path guard refused, next to found matches too", async () => {
+    vi.mocked(glob).mockResolvedValue(["A.cs", "Locked.cs", "Linked.cs"] as any);
+    vi.mocked(validatePath).mockImplementation(async (_root: string, file: string) =>
+      file === "Linked.cs"
+        ? { valid: false, fullPath: "", error: "outside the project directory" }
+        : { valid: true, fullPath: `/test/project/${file}` });
+    vi.mocked(readFile).mockImplementation(async (p: any) => {
+      if (String(p).endsWith("Locked.cs")) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      return "class Hit {}";
+    });
+    try {
+      const result = await tool.execute({ pattern: "class Hit" }, ctx);
+      expect(result.content).toContain("Found 1 match(es)");
+      expect(result.content).toMatch(/1 file\(s\) could not be read and were NOT searched: Locked\.cs/);
+      expect(result.content).toMatch(/1 file\(s\) were NOT searched because the path guard refused them: Linked\.cs/);
+    } finally {
+      vi.mocked(readFile).mockReset();
+      vi.mocked(readFile).mockResolvedValue("");
+      vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project" });
+    }
   });
 
   // Audited 2026-09-02: the match cap stopped the file scan and the result

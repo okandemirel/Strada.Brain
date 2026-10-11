@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import { CodeSearchTool } from "./code-search.js";
 import { createToolContext } from "../../test-helpers.js";
-import type { IRAGPipeline, RAGSearchResult, IndexingStats } from "../../rag/rag.interface.js";
+import type {
+  IRAGPipeline,
+  RAGSearchResult,
+  IndexingStats,
+  IEmbeddingProvider,
+  IVectorStore,
+  VectorSearchHit,
+} from "../../rag/rag.interface.js";
+import { RAGPipeline } from "../../rag/rag-pipeline.js";
 
 function createMockRAG(overrides?: Partial<IRAGPipeline>): IRAGPipeline {
   return {
@@ -122,5 +130,66 @@ describe("CodeSearchTool", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain("code search failed");
+  });
+
+  // Audit tools#4: file_pattern is offered as a glob ('**/Combat/**') but was
+  // matched as a literal substring of a cwd-relative path, so the schema's own
+  // example answered "No results found" about code that exists.
+  describe("file_pattern", () => {
+    const ctx = createToolContext({ projectPath: "/game" });
+
+    function pipelineOver(hits: VectorSearchHit[]): RAGPipeline {
+      const embedder: IEmbeddingProvider = {
+        name: "stub",
+        dimensions: 4,
+        embed: vi.fn(async (texts: string[]) => ({
+          embeddings: texts.map(() => [1, 0, 0, 0]),
+          usage: { totalTokens: 1 },
+        })),
+      };
+      const store = {
+        initialize: vi.fn(),
+        shutdown: vi.fn(),
+        search: vi.fn(async (_v: number[], k: number) => hits.slice(0, k)),
+        count: () => hits.length,
+      } as unknown as IVectorStore;
+      return new RAGPipeline(embedder, store, { useHNSW: false });
+    }
+
+    function hit(id: string, filePath: string, score: number): VectorSearchHit {
+      return { score, chunk: { ...makeResult().chunk, id, filePath, content: `damage ${id}` } } as VectorSearchHit;
+    }
+
+    it("restricts a real search to the files the glob names, relative to the project", async () => {
+      const tool = new CodeSearchTool(pipelineOver([
+        hit("hud", "/game/Assets/Scripts/UI/Hud.cs", 0.9),
+        hit("damage", "/game/Assets/Scripts/Combat/Damage.cs", 0.8),
+      ]));
+
+      const result = await tool.execute({ query: "damage calculation", file_pattern: "**/Combat/**" }, ctx);
+
+      expect(result.content).toContain("Found 1 result(s)");
+      expect(result.content).toContain("/game/Assets/Scripts/Combat/Damage.cs");
+      expect(result.content).not.toContain("Hud.cs");
+      expect(result.content).toContain("'**/Combat/**'");
+    });
+
+    it("passes the project root the glob is relative to", async () => {
+      const rag = createMockRAG();
+      await new CodeSearchTool(rag).execute({ query: "damage", file_pattern: "Assets/**" }, ctx);
+      expect(rag.search).toHaveBeenCalledWith(
+        "damage",
+        expect.objectContaining({ filePattern: "Assets/**", filePatternRoot: "/game" }),
+      );
+    });
+
+    it("a miss names the pattern and says files outside it were not searched", async () => {
+      const tool = new CodeSearchTool(pipelineOver([hit("hud", "/game/Assets/Scripts/UI/Hud.cs", 0.9)]));
+
+      const result = await tool.execute({ query: "damage calculation", file_pattern: "**/Combat/**" }, ctx);
+
+      expect(result.content).toMatch(/^No results found for: "damage calculation" in files matching '\*\*\/Combat\/\*\*'/);
+      expect(result.content).toMatch(/outside that pattern were NOT searched/);
+    });
   });
 });

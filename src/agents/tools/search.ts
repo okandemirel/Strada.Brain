@@ -70,6 +70,13 @@ const SEARCHABLE_EXTENSIONS = new Set([
   ".json", ".xml", ".yaml", ".yml", ".txt", ".md",
   ".asmdef", ".asmref", ".asset", ".prefab", ".unity",
 ]);
+/** How many skipped files a verdict names before it only counts the rest. */
+const MAX_NAMED_SKIPS = 10;
+
+function nameSome(files: readonly string[]): string {
+  const named = files.slice(0, MAX_NAMED_SKIPS).join(", ");
+  return files.length > MAX_NAMED_SKIPS ? `${named} and ${files.length - MAX_NAMED_SKIPS} more` : named;
+}
 
 /**
  * Glob-based file search tool.
@@ -216,6 +223,13 @@ export class GrepSearchTool implements ITool {
       // found" about files it never opened — an absence claim indistinguishable
       // from a genuine miss. Count them and say so.
       let skippedByExtension = 0;
+      // Audit tools#6: files over the size limit, files the path guard refused
+      // and files that failed to read were dropped just as silently, so a GUID
+      // living only in a 3MB scene came back "No matches found ... in the 1
+      // file(s) searched". Name each one in the verdict.
+      const tooLarge: string[] = [];
+      const refused: string[] = [];
+      const unreadable: string[] = [];
 
       for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
         const file = files[fileIndex]!;
@@ -226,17 +240,23 @@ export class GrepSearchTool implements ITool {
 
         // Validate each file path to prevent directory traversal
         const pathCheck = await validatePath(context.projectPath, file);
-        if (!pathCheck.valid) continue;
+        if (!pathCheck.valid) {
+          refused.push(file);
+          continue;
+        }
 
         const fullPath = pathCheck.fullPath;
         let content: string;
         try {
           const fileStat = await stat(fullPath);
-          if (fileStat.size > MAX_GREP_FILE_SIZE) continue;
+          if (fileStat.size > MAX_GREP_FILE_SIZE) {
+            tooLarge.push(file);
+            continue;
+          }
 
           content = await readFile(fullPath, "utf-8");
         } catch {
-          // Skip unreadable files
+          unreadable.push(file);
           continue;
         }
         filesScanned += 1;
@@ -267,20 +287,37 @@ export class GrepSearchTool implements ITool {
         }
       }
 
-      const skippedNote = skippedByExtension > 0
-        ? `${skippedByExtension} of ${files.length} file(s) matching '${filePattern}' were NOT searched: ` +
-          `their extension is outside the searchable set (${[...SEARCHABLE_EXTENSIONS].join(", ")}).`
-        : "";
+      const skippedNotes: string[] = [];
+      if (skippedByExtension > 0) {
+        skippedNotes.push(
+          `${skippedByExtension} of ${files.length} file(s) matching '${filePattern}' were NOT searched: ` +
+          `their extension is outside the searchable set (${[...SEARCHABLE_EXTENSIONS].join(", ")}).`,
+        );
+      }
+      if (tooLarge.length > 0) {
+        skippedNotes.push(
+          `${tooLarge.length} file(s) over the ${MAX_GREP_FILE_SIZE / (1024 * 1024)}MB grep limit were NOT searched: ` +
+          `${nameSome(tooLarge)}.`,
+        );
+      }
+      if (unreadable.length > 0) {
+        skippedNotes.push(`${unreadable.length} file(s) could not be read and were NOT searched: ${nameSome(unreadable)}.`);
+      }
+      if (refused.length > 0) {
+        skippedNotes.push(
+          `${refused.length} file(s) were NOT searched because the path guard refused them: ${nameSome(refused)}.`,
+        );
+      }
 
       if (results.length === 0) {
-        if (filesScanned === 0 && skippedByExtension > 0) {
+        if (filesScanned === 0 && skippedNotes.length > 0) {
           return {
-            content: `No files were searched for pattern: ${pattern} — ${skippedNote}`,
+            content: `No files were searched for pattern: ${pattern} — ${skippedNotes.join(" ")}`,
           };
         }
         return {
           content: `No matches found for pattern: ${pattern} in the ${filesScanned} file(s) searched.` +
-            (skippedNote ? `\n${skippedNote}` : ""),
+            skippedNotes.map((note) => `\n${note}`).join(""),
         };
       }
 
@@ -291,7 +328,7 @@ export class GrepSearchTool implements ITool {
 
       return {
         content: `Found ${results.length} match(es)${capNote}:\n${results.join("\n")}` +
-          (skippedNote ? `\n(${skippedNote})` : ""),
+          skippedNotes.map((note) => `\n(${note})`).join(""),
       };
     } catch {
       return { content: "Error: search failed", isError: true };

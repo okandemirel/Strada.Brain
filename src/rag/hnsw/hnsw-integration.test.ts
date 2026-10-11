@@ -169,12 +169,16 @@ public class MyClass {
       await ragPipeline.indexFile("/test/Models/User.cs", "public class User {}");
       await ragPipeline.indexFile("/test/Controllers/UserController.cs", "public class UserController {}");
 
+      // A glob over the path relative to the project root (audit tools#4):
+      // the old substring filter passed this test only by returning nothing.
       const results = await ragPipeline.search("user", {
         topK: 10,
-        filePattern: "Service",
+        filePattern: "**/Services/**",
+        filePatternRoot: "/test",
+        minScore: 0 as never,
       });
 
-      expect(results.every(r => r.chunk.filePath.includes("Service"))).toBe(true);
+      expect([...new Set(results.map(r => r.chunk.filePath))]).toEqual(["/test/Services/UserService.cs"]);
     });
 
     it("should respect minimum score threshold", async () => {

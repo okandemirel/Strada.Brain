@@ -161,3 +161,38 @@ describe("CompositeRAGPipeline.formatContext", () => {
     expect(formatted.dropped).toEqual([]);
   });
 });
+
+describe("CompositeRAGPipeline.search", () => {
+  /**
+   * Audit tools#4: the doc store takes no filePattern, so a search scoped to
+   * one folder got framework docs back as if they were the hits inside it.
+   */
+  it("keeps framework docs out of a search scoped by filePattern", async () => {
+    const { RAGPipeline } = await import("../rag-pipeline.js");
+    const codeChunk = { ...codeResult("Damage", "class Damage {}", 0.9).chunk, filePath: "/game/Assets/Combat/Damage.cs" as never };
+    const docChunk = { ...docResult("Guide", "damage guide", 0.95).chunk, filePath: "/pkgs/Strada.Core/Docs/Guide.md" as never };
+    const embedder = {
+      name: "stub",
+      dimensions: 4,
+      embed: vi.fn(async (texts: string[]) => ({ embeddings: texts.map(() => [1, 0, 0, 0]), usage: { totalTokens: 1 } })),
+    };
+    const codeStore = {
+      search: vi.fn(async () => [{ id: "Damage", chunk: codeChunk, score: 0.9 }]),
+      count: () => 1,
+    };
+    const codePipeline = new RAGPipeline(embedder as never, codeStore as never, { useHNSW: false });
+    const docPipeline = { search: vi.fn(async () => [{ id: "Guide", chunk: docChunk, score: 0.95 }]) };
+    const composite = new CompositeRAGPipeline(codePipeline, docPipeline as never, embedder as never, []);
+
+    const scoped = await composite.search("damage", {
+      filePattern: "**/Combat/**", filePatternRoot: "/game", minScore: 0 as never,
+    });
+    expect(scoped.map((r) => r.chunk.filePath)).toEqual(["/game/Assets/Combat/Damage.cs"]);
+
+    const unscoped = await composite.search("damage", { minScore: 0 as never });
+    expect(unscoped.map((r) => r.chunk.filePath).sort()).toEqual([
+      "/game/Assets/Combat/Damage.cs",
+      "/pkgs/Strada.Core/Docs/Guide.md",
+    ]);
+  });
+});

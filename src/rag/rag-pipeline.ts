@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { glob } from "glob";
 import type {
@@ -18,6 +18,7 @@ import { isCodeChunk, isRagIndexableFile, RAG_INDEXABLE_EXTENSIONS } from "./rag
 import { createBrand } from "../types/index.js";
 import { chunkCSharpFile } from "./chunker.js";
 import { rerankResults } from "./reranker.js";
+import { createFilePatternFilter } from "./file-pattern.js";
 import { getLogger } from "../utils/logger.js";
 import { FileVectorStore } from "./vector-store.js";
 import { createHNSWVectorStore, isHnswAvailable, type IHNSWVectorStore } from "./hnsw/hnsw-vector-store.js";
@@ -68,6 +69,9 @@ export class RAGPipeline implements IRAGPipeline {
 
   /** filePath → content hash of the last indexed version */
   private fileHashes: Map<string, string> = new Map();
+
+  /** Every project root indexProject has walked; chunk paths sit under these. */
+  private readonly indexedRoots = new Set<string>();
 
   private stats: IndexingStats = {
     totalFiles: 0,
@@ -328,6 +332,7 @@ export class RAGPipeline implements IRAGPipeline {
   async indexProject(projectPath: string): Promise<IndexingStats> {
     const startTime = Date.now();
     const logger = getLogger();
+    this.indexedRoots.add(resolve(projectPath));
 
     // The glob must match what indexFile accepts. It had drifted to twelve
     // extensions while indexFile only ever chunked .cs, so every .ts/.md/.json
@@ -426,11 +431,15 @@ export class RAGPipeline implements IRAGPipeline {
 
     // Determine which store to use for search
     const store = this.hnswStore ?? this.vectorStore;
+    const inScope = this.fileScopeFilter(options);
 
     // Retrieve an oversized candidate set to allow filtering and reranking.
+    // A file filter over the global top-K window answered "no results"
+    // whenever the in-scope code ranked below unrelated files, so a scoped
+    // search ranks the whole store.
     const candidates = await store.search(
       queryVector,
-      topK * candidateMultiplier
+      inScope ? Math.max(store.count(), topK * candidateMultiplier) : topK * candidateMultiplier
     );
 
     // Optional pre-filters.
@@ -438,11 +447,8 @@ export class RAGPipeline implements IRAGPipeline {
       if (options?.kinds && !options.kinds.includes(hit.chunk.kind)) {
         return false;
       }
-      if (options?.filePattern) {
-        const rel = relative(process.cwd(), hit.chunk.filePath);
-        if (!rel.includes(options.filePattern)) {
-          return false;
-        }
+      if (inScope && !inScope(hit.chunk.filePath)) {
+        return false;
       }
       return true;
     });
@@ -459,6 +465,20 @@ export class RAGPipeline implements IRAGPipeline {
 
     // Apply minimum score threshold and slice to topK.
     return reranked.filter((r) => r.finalScore >= minScore).slice(0, topK);
+  }
+
+  /**
+   * The options' filePattern as a predicate over chunk paths, or undefined when
+   * there is none. The glob is tried against the caller's root and every root
+   * this index was built from: a run's tools see its lease, while the chunks
+   * carry the paths of the checkout indexProject walked.
+   */
+  fileScopeFilter(options?: SearchOptions): ((filePath: string) => boolean) | undefined {
+    if (!options?.filePattern) return undefined;
+    return createFilePatternFilter(options.filePattern, [
+      options.filePatternRoot ?? process.cwd(),
+      ...this.indexedRoots,
+    ]);
   }
 
   // ---------------------------------------------------------------------------

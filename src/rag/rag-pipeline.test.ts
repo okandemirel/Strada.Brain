@@ -239,6 +239,86 @@ describe("RAGPipeline", () => {
 
       expect(results.length).toBeLessThanOrEqual(3);
     });
+
+    // Audit tools#4: filePattern is documented (and offered by code_search) as
+    // a glob, but was tested as a literal substring of the path relative to
+    // the daemon's cwd, so the schema's own example '**/Combat/**' dropped
+    // every hit and the tool answered "No results found".
+    describe("filePattern", () => {
+      const ui = (score: number) =>
+        makeSearchHit(score, { id: "ui", filePath: "/proj/Assets/Scripts/UI/Hud.cs", content: "damage text" });
+      const combat = (score: number) =>
+        makeSearchHit(score, { id: "combat", filePath: "/proj/Assets/Scripts/Combat/Damage.cs", content: "damage calc" });
+
+      it("is matched as a glob against the path relative to filePatternRoot", async () => {
+        vi.mocked(vectorStore.search).mockResolvedValue([ui(0.9), combat(0.8)]);
+
+        const byGlob = await pipeline.search("damage", {
+          filePattern: "**/Combat/**", filePatternRoot: "/proj", minScore: 0,
+        } as never);
+        expect(byGlob.map((r) => r.chunk.id)).toEqual(["combat"]);
+
+        const anchored = await pipeline.search("damage", {
+          filePattern: "Assets/**/*.cs", filePatternRoot: "/proj", minScore: 0,
+        } as never);
+        expect(anchored.map((r) => r.chunk.id).sort()).toEqual(["combat", "ui"]);
+
+        // A directory restricts the search to the files under it.
+        const directory = await pipeline.search("damage", {
+          filePattern: "Assets/Scripts/Combat", filePatternRoot: "/proj", minScore: 0,
+        } as never);
+        expect(directory.map((r) => r.chunk.id)).toEqual(["combat"]);
+      });
+
+      it("never matches a file outside the root", async () => {
+        vi.mocked(vectorStore.search).mockResolvedValue([
+          makeSearchHit(0.9, { id: "elsewhere", filePath: "/other/Assets/Combat/Damage.cs", content: "damage" }),
+        ]);
+
+        const results = await pipeline.search("damage", {
+          filePattern: "**/Combat/**", filePatternRoot: "/proj", minScore: 0,
+        } as never);
+        expect(results).toEqual([]);
+      });
+
+      it("searches past the unfiltered top-K window, so an in-scope hit is not lost behind out-of-scope ones", async () => {
+        const outOfScope = Array.from({ length: 30 }, (_, i) =>
+          makeSearchHit(0.9 - i * 0.01, { id: `ui-${i}`, filePath: `/proj/Assets/Scripts/UI/Hud${i}.cs`, content: "damage" }),
+        );
+        const ranked = [...outOfScope, combat(0.5)];
+        vi.mocked(vectorStore.search).mockImplementation(async (_v, k) => ranked.slice(0, k));
+        vi.mocked(vectorStore.count).mockReturnValue(ranked.length);
+
+        const results = await pipeline.search("damage", {
+          topK: 2, filePattern: "**/Combat/**", filePatternRoot: "/proj", minScore: 0,
+        } as never);
+        expect(results.map((r) => r.chunk.id)).toEqual(["combat"]);
+      });
+
+      // A run's tools see its lease, while the index holds the paths of the
+      // checkout indexProject walked: the pattern must match either form.
+      it("also matches against the root the index was built from", async () => {
+        const { mkdtemp, writeFile, mkdir, rm } = await import("node:fs/promises");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+
+        const dir = await mkdtemp(join(tmpdir(), "rag-file-pattern-"));
+        try {
+          await mkdir(join(dir, "Assets", "Combat"), { recursive: true });
+          const file = join(dir, "Assets", "Combat", "Damage.cs");
+          await writeFile(file, "public class Damage {}");
+          mockChunks.push(makeChunk({ id: "damage-1", filePath: file }));
+          await pipeline.indexProject(dir);
+
+          const results = await pipeline.search("Damage", {
+            filePattern: "Assets/Combat/**", filePatternRoot: "/tmp/some-lease-of-it", minScore: 0,
+          } as never);
+          expect(results.map((r) => r.chunk.id)).toEqual(["damage-1"]);
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      });
+    });
   });
 
   // -------------------------------------------------------------------------
