@@ -458,17 +458,25 @@ export function checkBodySha(check: AcceptanceCheckBody): string {
   return sha256(JSON.stringify(parts));
 }
 
+/**
+ * The system's own lines name the framework from the root. The acceptance
+ * assembly references every game runtime assembly, and C# finds a type in an
+ * enclosing namespace (`Strada`, the global one) — or a local the setup
+ * declares — before a using's: a worker's `Assert`/`Is` there would judge the row.
+ */
+const NUNIT = "global::NUnit.Framework";
+
 /** The NUnit constraint for a row's bounds; the numbers come from the GDD, never from a model. */
 function boundsConstraint(bounds: RequirementBounds): string {
-  if (bounds.kind === "exact") return `Is.EqualTo(${csDouble(bounds.value)}).Within(${csDouble(Math.abs(bounds.tolerance))})`;
+  if (bounds.kind === "exact") return `${NUNIT}.Is.EqualTo(${csDouble(bounds.value)}).Within(${csDouble(Math.abs(bounds.tolerance))})`;
   const { lo, hi } = bounds;
   if (lo === undefined && hi === undefined) throw new Error("a range bound needs lo, hi or both");
   if (lo !== undefined && hi !== undefined && lo > hi) throw new Error(`a range bound has lo ${lo} above hi ${hi}`);
-  if (lo !== undefined && hi !== undefined && !bounds.loExclusive && !bounds.hiExclusive) return `Is.InRange(${csDouble(lo)}, ${csDouble(hi)})`;
+  if (lo !== undefined && hi !== undefined && !bounds.loExclusive && !bounds.hiExclusive) return `${NUNIT}.Is.InRange(${csDouble(lo)}, ${csDouble(hi)})`;
   const parts: string[] = [];
   if (lo !== undefined) parts.push(`${bounds.loExclusive ? "GreaterThan" : "GreaterThanOrEqualTo"}(${csDouble(lo)})`);
   if (hi !== undefined) parts.push(`${bounds.hiExclusive ? "LessThan" : "LessThanOrEqualTo"}(${csDouble(hi)})`);
-  return `Is.${parts.join(".And.")}`;
+  return `${NUNIT}.Is.${parts.join(".And.")}`;
 }
 
 export interface AcceptanceTestInput {
@@ -485,6 +493,12 @@ export interface RenderedAcceptanceFile {
   readonly tests: AcceptanceTestRef[];
 }
 
+/**
+ * What the writer's statements may name unqualified. They are emitted inside
+ * the milestone's namespace and from the root, so they are searched before
+ * `Strada` and the global namespace, and a worker's `Strada.NUnit` cannot
+ * stand in for `NUnit`.
+ */
 const FILE_USINGS = [
   "System.Collections",
   "System.Collections.Generic",
@@ -536,15 +550,19 @@ export function renderAcceptanceFile(
     if (i > 0) body.push("");
     body.push(`        // REQ ${row.rid} — ${textLines[0] ?? ""}`.trimEnd());
     for (const line of textLines.slice(1)) body.push(`        //     ${line}`.trimEnd());
-    body.push(`        [UnityTest, Timeout(${ACCEPTANCE_TEST_TIMEOUT_MS})]`);
-    body.push(`        public IEnumerator ${methods[i]}()`);
+    body.push(`        [global::UnityEngine.TestTools.UnityTest, ${NUNIT}.Timeout(${ACCEPTANCE_TEST_TIMEOUT_MS})]`);
+    body.push(`        public global::System.Collections.IEnumerator ${methods[i]}()`);
     body.push("        {");
     body.push(`${inner}yield return Boot();`);
     if (check.setup?.trim()) body.push(...indentPart(check.setup, inner));
     if (systemAssertsRow(row)) {
       const observe = indentPart(check.observe!, "");
-      body.push(`${inner}var observed = (double)(${observe.join(`\n${inner}    `)});`);
-      body.push(`${inner}Assert.That(observed, ${boundsConstraint(row.bounds!)}, ${csString(`${row.rid}: ${row.text}`)});`);
+      // A comment ending the observation would swallow a `);` on its line, and with it every check in the assembly.
+      const last = observe[observe.length - 1] ?? "";
+      const lastCode = scanCSharp(observe.join("\n")).code.split("\n").pop() ?? "";
+      const close = lastCode.trimEnd().length < last.trimEnd().length ? `\n${inner});` : ");";
+      body.push(`${inner}var observed = (double)(${observe.join(`\n${inner}    `)}${close}`);
+      body.push(`${inner}${NUNIT}.Assert.That(observed, ${boundsConstraint(row.bounds!)}, ${csString(`${row.rid}: ${row.text}`)});`);
     } else {
       if (check.act?.trim()) body.push(...indentPart(check.act, inner));
       body.push(...indentPart(check.body!, inner));
@@ -557,11 +575,12 @@ export function renderAcceptanceFile(
       `// Strada acceptance checks for milestone ${commentSafe(JSON.stringify(milestoneId).replace(CS_LINE_BREAKS, " "))}.`,
       "// System-owned: Strada.Brain writes this file from the approved GDD and restores the",
       "// stored bytes before every commit and measurement. Edits are reverted and reported.",
-      ...usings.map((u) => `using ${u};`),
       "",
       `namespace ${namespace}`,
       "{",
-      `    [TestFixture, Category(${csString(ACCEPTANCE_TEST_CATEGORY)})]`,
+      ...usings.map((u) => `    using global::${u};`),
+      "",
+      `    [${NUNIT}.TestFixture, ${NUNIT}.Category(${csString(ACCEPTANCE_TEST_CATEGORY)})]`,
       `    public sealed class ${className} : global::${ACCEPTANCE_TEST_NAMESPACE}.AcceptanceFixture`,
       "    {",
       ...body,
@@ -615,24 +634,27 @@ export const ACCEPTANCE_FIXTURE_SOURCE = stampCSharp(`// Strada acceptance harne
 // commit and measurement. Edits are reverted and reported.
 // It knows no game: it boots build scene 0, reads the game through Strada.Core's contracts,
 // and injects input the way a player's device does.
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using NUnit.Framework;
-using Strada.Core.Bootstrap;
-using Strada.Core.Play;
-using UnityEngine;
-using UnityEngine.SceneManagement;
-#if STRADA_ACCEPTANCE_UGUI
-using UnityEngine.EventSystems;
-#endif
-#if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-using UnityEngine.InputSystem;
-using UnityEngine.InputSystem.LowLevel;
-#endif
+// Usings sit inside the namespace and start at the root: a type a game declares in Strada or
+// the global namespace is then never found before the framework's.
 
 namespace ${ACCEPTANCE_TEST_NAMESPACE}
 {
+    using global::System;
+    using global::System.Collections;
+    using global::System.Collections.Generic;
+    using global::NUnit.Framework;
+    using global::Strada.Core.Bootstrap;
+    using global::Strada.Core.Play;
+    using global::UnityEngine;
+    using global::UnityEngine.SceneManagement;
+#if STRADA_ACCEPTANCE_UGUI
+    using global::UnityEngine.EventSystems;
+#endif
+#if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
+    using global::UnityEngine.InputSystem;
+    using global::UnityEngine.InputSystem.LowLevel;
+#endif
+
     public abstract class AcceptanceFixture
     {
         protected const float BootSeconds = 30f;
@@ -686,7 +708,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
                 else
                 {
                     _projectInputSettingsAsset = current;
-                    _runInputSettings = UnityEngine.Object.Instantiate(current);
+                    _runInputSettings = global::UnityEngine.Object.Instantiate(current);
                     _runInputSettings.hideFlags = HideFlags.HideAndDontSave;
                     InputSystem.settings = _runInputSettings;
                 }
@@ -753,11 +775,11 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         protected IEnumerator StartSessionForSetup(int index)
         {
             var driver = ResolveDriver();
-            Assert.That(driver.StartSession(index), Is.True, "the game refused StartSession(" + index + ")");
+            global::NUnit.Framework.Assert.That(driver.StartSession(index), global::NUnit.Framework.Is.True, "the game refused StartSession(" + index + ")");
             var end = Time.realtimeSinceStartup + SessionStartSeconds;
             while (!driver.IsSessionActive && Time.realtimeSinceStartup < end)
                 yield return null;
-            Assert.That(driver.IsSessionActive, Is.True, "no session was active " + SessionStartSeconds + " s after StartSession(" + index + ")");
+            global::NUnit.Framework.Assert.That(driver.IsSessionActive, global::NUnit.Framework.Is.True, "no session was active " + SessionStartSeconds + " s after StartSession(" + index + ")");
         }
 
         protected T Service<T>() where T : class
@@ -774,7 +796,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         protected bool AnyAudioPlaying()
         {
 #if STRADA_ACCEPTANCE_AUDIO
-            foreach (var source in UnityEngine.Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None))
+            foreach (var source in global::UnityEngine.Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None))
                 if (source != null && source.isPlaying)
                     return true;
 #endif
@@ -786,7 +808,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         {
             var names = new List<string>();
 #if STRADA_ACCEPTANCE_UI_MODULE
-            foreach (var canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+            foreach (var canvas in global::UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
             {
                 if (canvas == null || !canvas.isActiveAndEnabled || !canvas.isRootCanvas)
                     continue;
@@ -801,7 +823,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
             }
 #endif
 #if STRADA_ACCEPTANCE_UIELEMENTS
-            foreach (var document in UnityEngine.Object.FindObjectsByType<UnityEngine.UIElements.UIDocument>(FindObjectsSortMode.None))
+            foreach (var document in global::UnityEngine.Object.FindObjectsByType<global::UnityEngine.UIElements.UIDocument>(FindObjectsSortMode.None))
                 if (document != null && document.isActiveAndEnabled)
                     names.Add(document.gameObject.name);
 #endif
@@ -837,27 +859,27 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         {
             var target = GameObject.Find(name);
             if (target == null)
-                Assert.Fail("TapObject: no active GameObject is named '" + name + "'");
+                global::NUnit.Framework.Assert.Fail("TapObject: no active GameObject is named '" + name + "'");
             return TapObject(target);
         }
 
         protected IEnumerator TapObject(Component target)
         {
             if (target == null)
-                Assert.Fail("TapObject: the target is null or destroyed");
+                global::NUnit.Framework.Assert.Fail("TapObject: the target is null or destroyed");
             return TapObject(target.gameObject);
         }
 
         protected IEnumerator TapObject(GameObject target)
         {
             if (target == null)
-                Assert.Fail("TapObject: the target is null or destroyed");
+                global::NUnit.Framework.Assert.Fail("TapObject: the target is null or destroyed");
             if (!target.activeInHierarchy)
-                Assert.Fail("TapObject: " + target.name + " is not active");
+                global::NUnit.Framework.Assert.Fail("TapObject: " + target.name + " is not active");
             Vector2 point;
             string why;
             if (!ScreenPointOf(target, out point, out why))
-                Assert.Fail("TapObject: " + target.name + " " + why);
+                global::NUnit.Framework.Assert.Fail("TapObject: " + target.name + " " + why);
             return TapScreen(point);
         }
 
@@ -932,7 +954,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
 
         private static void HarnessFault(string code, string detail)
         {
-            Assert.Fail("[${HARNESS_FAULT_TAG}:" + code + "] " + detail);
+            global::NUnit.Framework.Assert.Fail("[${HARNESS_FAULT_TAG}:" + code + "] " + detail);
         }
 
         private static IPlaythroughDriver ResolveDriver()
@@ -1055,9 +1077,9 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
             var touch = pointer as Touchscreen;
             if (touch != null)
             {
-                var phase = stage == PointerStage.Begin ? UnityEngine.InputSystem.TouchPhase.Began
-                    : stage == PointerStage.Move ? UnityEngine.InputSystem.TouchPhase.Moved
-                    : UnityEngine.InputSystem.TouchPhase.Ended;
+                var phase = stage == PointerStage.Begin ? global::UnityEngine.InputSystem.TouchPhase.Began
+                    : stage == PointerStage.Move ? global::UnityEngine.InputSystem.TouchPhase.Moved
+                    : global::UnityEngine.InputSystem.TouchPhase.Ended;
                 InputSystem.QueueStateEvent(touch, new TouchState { touchId = 1, phase = phase, position = position, delta = delta });
                 return;
             }
@@ -1091,7 +1113,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
                 return false;
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
             // Device events reach the UI only through the Input System's own UI module.
-            return !(events.currentInputModule is UnityEngine.InputSystem.UI.InputSystemUIInputModule);
+            return !(events.currentInputModule is global::UnityEngine.InputSystem.UI.InputSystemUIInputModule);
 #else
             return true;
 #endif
@@ -1555,10 +1577,19 @@ function unityRoot(projectRoot: string): string {
   return root;
 }
 
-/** Bytes in the folder that only the system writes: a stamped C# file, or an asmdef it rendered for an older plan. */
-function systemWrote(rel: string, abs: string): boolean {
-  const text = readText(abs);
-  if (text === undefined) return false;
+/** A checkout's line endings are not an edit: Git for Windows (core.autocrlf=true) writes the committed checks back with CRLF. */
+const lf = (text: string): string => text.replace(/\r\n/g, "\n");
+
+/**
+ * Bytes in the folder that only the system writes, whatever their line
+ * endings: the canonical ones, a stamped C# file, or an asmdef it rendered
+ * for an older plan.
+ */
+function systemWrote(rel: string, abs: string, canonical?: string): boolean {
+  const raw = readText(abs);
+  if (raw === undefined) return false;
+  const text = lf(raw);
+  if (canonical !== undefined && text === lf(canonical)) return true;
   return rel === ACCEPTANCE_ASMDEF_PATH ? isRenderedAsmdef(text) : rel.endsWith(".cs") && carriesOwnStamp(text);
 }
 
@@ -1574,7 +1605,7 @@ function syncAcceptance(projectRoot: string, files: ReadonlyMap<string, string>,
   const written: string[] = [];
   const deleted: string[] = [];
   const isMeta = (rel: string): boolean => rel.endsWith(".meta");
-  const isTamper = (rel: string, abs: string): boolean => !isMeta(rel) && !systemWrote(rel, abs);
+  const isTamper = (rel: string, abs: string, canonical?: string): boolean => !isMeta(rel) && !systemWrote(rel, abs, canonical);
 
   const dirAbs = absOf(root, ACCEPTANCE_DIR);
   const dirStat = lstatOf(dirAbs);
@@ -1614,7 +1645,8 @@ function syncAcceptance(projectRoot: string, files: ReadonlyMap<string, string>,
     const bytes = Buffer.from(text, "utf8");
     if (stat?.isFile()) {
       if (readFileSync(abs).equals(bytes)) continue;
-      if (isTamper(rel, abs)) tamper.push(rel);
+      // Still rewritten: the canonical bytes are LF, whatever the checkout made of them.
+      if (isTamper(rel, abs, text)) tamper.push(rel);
     } else if (stat) {
       rmSync(abs, { recursive: true, force: true });
       if (!isMeta(rel)) tamper.push(rel);
@@ -1747,10 +1779,38 @@ const FOREIGN_NAMESPACE_RE = /\bnamespace\s+Strada\s*\.\s*Acceptance\b|\bnamespa
 /** A string that names a test into the namespace: NUnit's TestName/SetName on a fixture in the global namespace. */
 const ACCEPTANCE_NAME_LITERAL_RE = /"\s*Strada\s*\.\s*Acceptance\s*\./g;
 
+/** Identifiers as the compiler reads them: a verbatim `@Strada`, or one spelled with Unicode escapes, is `Strada`. */
+function identifierSpelling(code: string): string {
+  return code
+    .replace(/\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})/g, (escape, four?: string, eight?: string) => {
+      const cp = parseInt(four ?? eight ?? "", 16);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : escape;
+    })
+    .replace(/@(?=[A-Za-z_])/g, "");
+}
+
+/** An asmref that compiles its folder into the acceptance assembly: by name, or by the GUID: of its asmdef. */
+function targetsAcceptanceAssembly(text: string): boolean {
+  const name = ACCEPTANCE_ASSEMBLY_NAME.toLowerCase();
+  const guid = acceptanceGuid(ACCEPTANCE_ASMDEF_PATH);
+  try {
+    const reference = (JSON.parse(text) as { reference?: unknown }).reference;
+    const value = typeof reference === "string" ? reference.trim().toLowerCase() : "";
+    return value === name || value === `guid:${guid}`;
+  } catch {
+    // Unity's reader is not JSON.parse: an asmref it might still read is judged by what it names.
+    const lower = text.toLowerCase();
+    return lower.includes(name) || lower.includes(guid);
+  }
+}
+
 /**
- * C# outside the system's folder that declares the acceptance namespace, or
- * names a test into it. A test there would carry an acceptance test's full
- * name from an assembly the system does not own, and could answer for it.
+ * What outside the system's folder could answer for an acceptance test: C#
+ * that declares the acceptance namespace or names a test into it (a test
+ * carrying an acceptance test's full name from an assembly the system does
+ * not own), and an .asmref that compiles its folder into the acceptance
+ * assembly itself, where its types are found before the framework's. Each hit
+ * is tamper; restore cannot put it right, because the file is the worker's.
  */
 export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
   const root = resolve(projectRoot);
@@ -1760,13 +1820,18 @@ export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
       root,
       top,
       (rel, abs) => {
-        if (!rel.endsWith(".cs")) return;
+        const asmref = rel.endsWith(".asmref");
+        if (!asmref && !rel.endsWith(".cs")) return;
         const text = readText(abs);
         if (text === undefined) return;
+        if (asmref) {
+          if (targetsAcceptanceAssembly(text)) hits.push(rel);
+          return;
+        }
         const code = scanCSharp(text).code;
         // The scan keeps a literal's quotes and blanks comments, so a quote that survives it opens a string.
         const named = [...text.matchAll(ACCEPTANCE_NAME_LITERAL_RE)].some((m) => code[m.index] === '"');
-        if (named || FOREIGN_NAMESPACE_RE.test(withoutDirectives(code))) hits.push(rel);
+        if (named || FOREIGN_NAMESPACE_RE.test(identifierSpelling(withoutDirectives(code)))) hits.push(rel);
       },
       insideAcceptanceDir,
     );
@@ -2207,7 +2272,7 @@ export function harnessApiDoc(injection?: InputInjection): string {
     `    [UnityTest, Timeout(${ACCEPTANCE_TEST_TIMEOUT_MS})] public IEnumerator R<ordinal>_<id>() { yield return Boot(); <setup> <act> <body | the system's assertion> } } }`,
     "A part is C# 9 statements inside a Unity PlayMode iterator method. The file's usings are:",
     `  ${FILE_USINGS.join(", ")}.`,
-    "Fully qualify every game type (Namespace.Type), as the public surface spells it.",
+    "Fully qualify every game type (Namespace.Type), as the public surface spells it; one in no namespace as global::Type.",
     "",
     "Rows with GDD numbers (constant, range): return `observe` only — one C# expression whose value, in the row's unit,",
     "is what the game does (plus an optional `setup`). The system casts it to double and asserts it against the bounds",

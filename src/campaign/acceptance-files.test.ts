@@ -132,22 +132,23 @@ describe("renderAcceptanceFile", () => {
         '// Strada acceptance checks for milestone "m1".',
         "// System-owned: Strada.Brain writes this file from the approved GDD and restores the",
         "// stored bytes before every commit and measurement. Edits are reverted and reported.",
-        "using System.Collections;",
-        "using System.Collections.Generic;",
-        "using System.Linq;",
-        "using NUnit.Framework;",
-        "using UnityEngine;",
-        "using UnityEngine.TestTools;",
-        "using Strada.Core.Play;",
         "",
         "namespace Strada.Acceptance.M1",
         "{",
-        '    [TestFixture, Category("StradaAcceptance")]',
+        "    using global::System.Collections;",
+        "    using global::System.Collections.Generic;",
+        "    using global::System.Linq;",
+        "    using global::NUnit.Framework;",
+        "    using global::UnityEngine;",
+        "    using global::UnityEngine.TestTools;",
+        "    using global::Strada.Core.Play;",
+        "",
+        '    [global::NUnit.Framework.TestFixture, global::NUnit.Framework.Category("StradaAcceptance")]',
         "    public sealed class Acceptance_M1 : global::Strada.Acceptance.AcceptanceFixture",
         "    {",
         "        // REQ req-007-a1b2c3d4e5f6 — The player must reach the exit within 90 seconds.",
-        "        [UnityTest, Timeout(120000)]",
-        "        public IEnumerator R007_a1b2c3()",
+        "        [global::UnityEngine.TestTools.UnityTest, global::NUnit.Framework.Timeout(120000)]",
+        "        public global::System.Collections.IEnumerator R007_a1b2c3()",
         "        {",
         "            yield return Boot();",
         "            yield return StartSessionForSetup(1);",
@@ -175,9 +176,52 @@ describe("renderAcceptanceFile", () => {
     };
     const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check }]);
     expect(source).toContain("            var observed = (double)(Service<Game.Movement.IJumpRules>().CoyoteSeconds * 1.0);");
-    expect(source).toContain('            Assert.That(observed, Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");');
+    expect(source).toContain(
+      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
+    );
     // Exactly one assertion, and it is the system's.
     expect(source.match(/Assert\./g)).toHaveLength(1);
+  });
+
+  it("keeps every using inside the milestone's namespace and spells the system's own lines from the root, so no type outside the folder can answer for them", () => {
+    // The acceptance assembly references every game runtime assembly. A worker's `Assert`/`Is` declared in the global
+    // namespace or in `Strada` is found before a file-level using's type, and would turn the system's assertion into a no-op.
+    const check: AcceptanceCheckBody = {
+      rid: "req-012-0123456789ab",
+      // A local named after NUnit's class must not take the system's assertion over either.
+      setup: "var Is = 3;",
+      observe: "Service<Game.Movement.IJumpRules>().CoyoteSeconds",
+    };
+    const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check }], { usings: ["Game.Movement"] });
+    const lines = source.split("\n");
+    const ns = lines.indexOf("namespace Strada.Acceptance.M2");
+    expect(ns).toBeGreaterThan(0);
+    expect(lines.slice(0, ns).filter((l) => /^\s*using\b/.test(l))).toEqual([]);
+    const usings = lines.filter((l) => /^\s*using\b/.test(l));
+    expect(usings).toContain("    using global::NUnit.Framework;");
+    expect(usings).toContain("    using global::Game.Movement;");
+    // `using NUnit.Framework;` inside the namespace would still resolve `NUnit` through a worker's `Strada.NUnit`.
+    for (const using of usings) expect(using).toMatch(/^ {4}using global::[A-Za-z_][\w.]*;$/);
+    expect(source).toContain(
+      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
+    );
+    expect(source).toContain('    [global::NUnit.Framework.TestFixture, global::NUnit.Framework.Category("StradaAcceptance")]');
+    expect(source).toContain("        [global::UnityEngine.TestTools.UnityTest, global::NUnit.Framework.Timeout(120000)]");
+    expect(source).toContain("        public global::System.Collections.IEnumerator R012_012345()");
+  });
+
+  it("closes the observation on its own line when it ends in a comment, so the comment cannot swallow the closing parenthesis", () => {
+    const commented: AcceptanceCheckBody = { rid: "req-012-0123456789ab", observe: "Service<Game.IJumpRules>().CoyoteSeconds // seconds" };
+    expect(lintAcceptanceBody(constantRow(), commented)).toEqual({ ok: true, problems: [] });
+    const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check: commented }]);
+    expect(source).toContain("            var observed = (double)(Service<Game.IJumpRules>().CoyoteSeconds // seconds\n            );\n");
+    // Read as the compiler reads it: with comments gone, the observation still closes before the system's assertion.
+    const multi: AcceptanceCheckBody = { ...commented, observe: "Service<Game.IJumpRules>()\n    .CoyoteSeconds /* raw */ // seconds" };
+    const code = renderAcceptanceFile("m2", [{ row: constantRow(), check: multi }]).source.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(code).toMatch(/var observed = \(double\)\(Service<Game\.IJumpRules>\(\)\s*\.CoyoteSeconds\s*\);\s*global::NUnit\.Framework\.Assert\.That\(observed,/);
+    // Two slashes inside a string are not a comment: the observation stays on one line.
+    const quoted: AcceptanceCheckBody = { ...commented, observe: 'Service<Game.ILinks>().Count("a//b")' };
+    expect(renderAcceptanceFile("m2", [{ row: constantRow(), check: quoted }]).source).toContain('            var observed = (double)(Service<Game.ILinks>().Count("a//b"));\n');
   });
 
   it("writes exact values with the row's tolerance and one-sided or exclusive bounds as NUnit constraints", () => {
@@ -386,6 +430,22 @@ describe("the harness", () => {
     expect(boot).toContain('HarnessFault("no-scene", "build scene 0 did not finish loading in "');
   });
 
+  it("keeps its usings inside its namespace and spells its own verdicts from the root, so no type outside the folder can answer for them", () => {
+    const lines = ACCEPTANCE_FIXTURE_SOURCE.split("\n");
+    const ns = lines.indexOf("namespace Strada.Acceptance");
+    expect(ns).toBeGreaterThan(0);
+    expect(lines.slice(0, ns).filter((l) => /^\s*using\b/.test(l))).toEqual([]);
+    const usings = lines.filter((l) => /^\s*using\b/.test(l));
+    expect(usings).toContain("    using global::NUnit.Framework;");
+    for (const using of usings) expect(using).toMatch(/^ {4}using global::[A-Za-z_][\w.]*;$/);
+    // Code only: string and comment text may name what it likes.
+    const code = ACCEPTANCE_FIXTURE_SOURCE.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/\/\/.*$/gm, "");
+    expect(code).toMatch(/global::NUnit\.Framework\.Assert\.Fail\(/);
+    expect(code.match(/(?<!global::NUnit\.Framework\.)\b(?:Assert|Is)\s*\./g)).toBeNull();
+    // A namespace the harness spells out itself starts at the root: a worker's `Strada.UnityEngine` cannot take it.
+    expect(code.match(/(?<![\w.:])UnityEngine\s*\./g)).toBeNull();
+  });
+
   it("stamps its own bytes, so the next Brain version's restore knows them for the system's", () => {
     const body = ACCEPTANCE_FIXTURE_SOURCE.slice(ACCEPTANCE_FIXTURE_SOURCE.indexOf("\n") + 1);
     expect(ACCEPTANCE_FIXTURE_SOURCE).toBe(stampedLike(body));
@@ -565,6 +625,30 @@ describe("restoreAcceptance", () => {
     expect(readFileSync(join(root, ACCEPTANCE_ASMDEF_PATH), "utf8")).toBe(harness.asmdef);
   });
 
+  it("does not call a checkout's line endings tamper: CRLF copies of the system's bytes are rewritten, not reported", () => {
+    const { root, source, harness } = setUp();
+    const crlf = (text: string): string => text.replace(/\n/g, "\r\n");
+    // Git for Windows checks text out with CRLF (core.autocrlf=true): the stored check, the harness and the plan.
+    for (const rel of [source.path, ACCEPTANCE_FIXTURE_PATH, ACCEPTANCE_ASMDEF_PATH]) writeFileSync(join(root, rel), crlf(readFileSync(join(root, rel), "utf8")));
+    const current = restoreAcceptance(root, [source], "committed", harness);
+    expect(current.tamper).toEqual([]);
+    expect(current.written).toEqual([ACCEPTANCE_ASMDEF_PATH, ACCEPTANCE_FIXTURE_PATH, source.path].sort());
+    expect(readFileSync(join(root, source.path), "utf8")).toBe(source.source);
+
+    // The system's own older bytes, checked out the same way: an older harness, an older plan, a waived check.
+    writeFileSync(join(root, ACCEPTANCE_FIXTURE_PATH), crlf(stampedLike("// an older harness\nnamespace Strada.Acceptance { public abstract class AcceptanceFixture { } }\n")));
+    writeFileSync(join(root, ACCEPTANCE_ASMDEF_PATH), crlf(renderAcceptanceAsmdef(["Strada.Core", "UnityEngine.TestRunner"])));
+    const waived = storedSource("m9", [{ row: row({ rid: "req-090-999999999999" }), check: { ...goodRuleCheck, rid: "req-090-999999999999" } }]);
+    writeFileSync(join(root, waived.path), crlf(waived.source));
+    const older = restoreAcceptance(root, [source], "committed", harness);
+    expect(older.tamper).toEqual([]);
+    expect(older.deleted).toEqual([waived.path]);
+
+    // An edit is tamper whatever its line endings.
+    writeFileSync(join(root, source.path), crlf(source.source.replace("Is.EqualTo(PlaythroughOutcome.Won)", "Is.Not.Null")));
+    expect(restoreAcceptance(root, [source], "committed", harness).tamper).toEqual([source.path]);
+  });
+
   it("still calls an edit tamper when the editor kept the stamp line, or hand-wrote an asmdef", () => {
     const { root, source, harness } = setUp();
     // The stamp line kept, the assertion weakened under it.
@@ -662,6 +746,30 @@ describe("scanForeignAcceptanceNamespace", () => {
     put(root, "Assets/Tests/Named.cs", '[NUnit.Framework.TestFixture(TestName = "Strada.Acceptance.M1.Acceptance_M1")]\npublic class Named { }');
     put(root, "Assets/Tests/Mention.cs", '// TestName = "Strada.Acceptance.M1" would be wrong\nnamespace Game.Tests { public class Mention { } }');
     expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Tests/Named.cs"]);
+  });
+
+  it("finds an assembly reference that compiles code from outside the folder into the acceptance assembly, by name or by GUID", () => {
+    const root = project();
+    put(root, "Assets/Game/Game.asmdef", asmdef("Game.Runtime"));
+    put(root, "Assets/Game/Extras/Extras.asmref", JSON.stringify({ reference: "Game.Runtime" }));
+    // Code under these lands in Strada.Acceptance itself, where `namespace Strada { static class Assert }` shadows NUnit.
+    put(root, "Assets/Shadow/Assert.cs", "namespace Strada { public static class Assert { } }");
+    put(root, "Assets/Shadow/ByName.asmref", JSON.stringify({ reference: "Strada.Acceptance" }));
+    put(root, "Assets/Shadow/Deep/ByGuid.asmref", JSON.stringify({ reference: `GUID:${acceptanceGuid(ACCEPTANCE_ASMDEF_PATH)}` }));
+    put(root, "Packages/com.game.extra/Runtime/Into.asmref", JSON.stringify({ reference: "Strada.Acceptance" }, null, 2).replace(/\n/g, "\r\n"));
+    // Unity's reader is not JSON.parse: an asmref it might read that names the assembly is reported all the same.
+    put(root, "Assets/Shadow/Loose.asmref", '{ "reference": "Strada.Acceptance", }');
+    expect(scanForeignAcceptanceNamespace(root)).toEqual(
+      ["Assets/Shadow/ByName.asmref", "Assets/Shadow/Deep/ByGuid.asmref", "Assets/Shadow/Loose.asmref", "Packages/com.game.extra/Runtime/Into.asmref"].sort(),
+    );
+  });
+
+  it("reads a namespace as C# does: a verbatim or escaped spelling of Strada.Acceptance is the same namespace", () => {
+    const root = project();
+    put(root, "Assets/Scripts/Verbatim.cs", "namespace @Strada.@Acceptance.M1 { public static class Assert { } }");
+    put(root, "Assets/Scripts/Escaped.cs", "namespace Str\\u0061da.Acceptance.M1 { public static class Is { } }");
+    put(root, "Assets/Scripts/Other.cs", "namespace @Strada.Gameplay { }");
+    expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/Escaped.cs", "Assets/Scripts/Verbatim.cs"]);
   });
 });
 
