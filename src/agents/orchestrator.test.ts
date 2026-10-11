@@ -9775,24 +9775,75 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
   // the only writer with the run's steps, gated on a credit flag no config sets.
   // 727 of 727 live trajectories had zero steps, so chain synthesis, on by
   // default, never had a sequence to find.
+  //
+  // These drive real runs, so the recorder's `success` comes from the port's
+  // persistTerminal. The first fix passed `state.phase === COMPLETE` there, a
+  // phase no production run reaches: every step row was booked a failure, chain
+  // detection still found nothing, and replay warned against tasks that worked.
+  const runUsage = { inputTokens: 10, outputTokens: 20 };
+  /** One tool call per turn, in order, then a clean end_turn answer. */
+  function scriptToolRun(provider: ReturnType<typeof createMockProvider>, toolNames: readonly string[]): void {
+    toolNames.forEach((name, index) => {
+      provider.chat.mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ id: `tc-${index}`, name, input: {} }],
+        stopReason: "tool_use",
+        usage: runUsage,
+      });
+    });
+    provider.chat.mockResolvedValueOnce({ text: "Done.", toolCalls: [], stopReason: "end_turn", usage: runUsage });
+  }
+  const stepRows = (): Trajectory[] =>
+    storage.getTrajectories({ limit: 20 }).filter((row) => row.steps.length > 0);
+  const replayFor = (taskDescription: string, userId: string) =>
+    new TrajectoryReplayRetriever(storage).getInsightsForTask({
+      taskDescription,
+      userId,
+      projectId: "/tmp/test-project",
+    }).insights;
+
+  it("a clean run that took a step is stored as a success, and replay offers it as one", async () => {
+    const provider = createMockProvider();
+    scriptToolRun(provider, ["file_read"]);
+    const orch = makeOrch(makePipeline(false), { provider, tools: [createMockTool("file_read")] });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-port-clean",
+      userId: "user-port",
+      text: "add a health bar to the player",
+      timestamp: new Date(),
+    });
+    storage.flush();
+
+    const rows = stepRows();
+    expect(rows.map((row) => row.steps.map((step) => step.toolName))).toEqual([["file_read"]]);
+    const insights = replayFor("add a health bar to the enemy", "user-port");
+    expect(insights.filter((line) => line.startsWith("Replay warning"))).toEqual([]);
+    expect(insights.some((line) => line.startsWith("Replay success"))).toBe(true);
+    expect(rows[0]!.outcome.success).toBe(true);
+  });
+
   it("with the pipeline as bootstrap builds it, a repeated tool sequence becomes a chain candidate", async () => {
+    const sequence = ["file_read", "code_search", "list_directory"];
+    const provider = createMockProvider();
     // initializeLearning passes no trajectoryLevelCredit, so the default applies.
-    const orch = makeOrch(new LearningPipeline(storage, { enabled: true, minConfidenceForCreation: 0.5, batchSize: 5 }));
-    const h = harness(orch);
-    const sequence = ["file_read", "file_edit", "unity_verify_change"];
+    const orch = makeOrch(new LearningPipeline(storage, { enabled: true, minConfidenceForCreation: 0.5, batchSize: 5 }), {
+      provider,
+      tools: sequence.map((name) => createMockTool(name)),
+    });
     for (let run = 0; run < 3; run++) {
-      const chatId = `chat-chain-${run}`;
-      await h.withTaskExecutionContext({ chatId, taskRunId: `taskrun_chain_${run}` }, async () => {
-        h.recordInRunTrajectoryCredit({
-          chatId,
-          sessionId: chatId,
-          taskDescription: "add a health bar",
-          success: true,
-          stepResults: sequence.map((toolName) => ({ toolName, success: true, summary: "ok", timestamp: Date.now() })),
-        });
+      scriptToolRun(provider, sequence);
+      await orch.handleMessage({
+        channelType: "cli",
+        chatId: `chat-chain-${run}`,
+        userId: "user-port",
+        text: "add a health bar",
+        timestamp: new Date(),
       });
     }
     storage.flush();
+    expect(stepRows().map((row) => row.steps.map((step) => step.toolName))).toEqual([sequence, sequence, sequence]);
 
     // The production defaults (config-schema toolChain*).
     const detector = new ChainDetector(storage, {
@@ -9811,17 +9862,64 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
     expect(candidates[0]!.occurrences).toBe(3);
   });
 
+  it("a run the user cancelled leaves no step row, so replay has no failure to warn about", async () => {
+    const provider = createMockProvider();
+    scriptToolRun(provider, ["file_read", "code_search"]);
+    const controller = new AbortController();
+    const cancellingRead = createMockTool("file_read");
+    cancellingRead.execute.mockImplementation(async () => {
+      controller.abort();
+      return { content: "file_read result" };
+    });
+    const orch = makeOrch(makePipeline(false), {
+      provider,
+      tools: [cancellingRead, createMockTool("code_search")],
+    });
+
+    await runBackgroundTask(orch, "add a health bar to the player", {
+      signal: controller.signal,
+      onProgress: vi.fn(),
+      chatId: "chat-port-cancel",
+      userId: "user-port",
+      taskRunId: "taskrun_port_cancel",
+    });
+    storage.flush();
+
+    expect(cancellingRead.execute).toHaveBeenCalledTimes(1);
+    expect(stepRows()).toEqual([]);
+    expect(replayFor("add a health bar to the enemy", "user-port")).toEqual([]);
+  });
+
+  it("a learning write that throws does not skip the rest of the run's teardown", async () => {
+    const provider = createMockProvider();
+    scriptToolRun(provider, ["file_read"]);
+    const pipeline = makePipeline(false);
+    vi.spyOn(pipeline, "recordTrajectory").mockImplementation(() => {
+      throw new Error("LearningStorage not initialized");
+    });
+    const settle = vi.spyOn(pipeline, "clearRunInstinctCredits");
+    const orch = makeOrch(pipeline, { provider, tools: [createMockTool("file_read")] });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-port-throw",
+      userId: "user-port",
+      text: "add a health bar to the player",
+      timestamp: new Date(),
+    });
+
+    expect(pipeline.recordTrajectory).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledWith("chat-port-throw", { success: true }, expect.any(String));
+  });
+
   it("a run that took no step leaves no row of its own", async () => {
     const orch = makeOrch(makePipeline(false));
-    const h = harness(orch);
-    await h.withTaskExecutionContext({ chatId: "chat-empty", taskRunId: "taskrun_empty" }, async () => {
-      h.recordInRunTrajectoryCredit({
-        chatId: "chat-empty",
-        sessionId: "chat-empty",
-        taskDescription: "hello",
-        success: true,
-        stepResults: [],
-      });
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-empty",
+      userId: "user-port",
+      text: "hello",
+      timestamp: new Date(),
     });
     storage.flush();
     expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
@@ -9840,7 +9938,7 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
         chatId,
         sessionId: chatId,
         taskDescription: "edit",
-        success: false, // benign-cancel / FAILED terminal
+        success: false, // a FAILED terminal
         stepResults: realStepResults as any,
       });
     });

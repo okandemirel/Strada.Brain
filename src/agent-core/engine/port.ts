@@ -461,12 +461,13 @@ export function createAgentCorePort(
           /^(?:hard-timeout|budget-exhausted|provider-stall|verdict-stop):|^(?:task-inactivity|max-tokens-runaway)$/.test(
             terminalReason,
           );
+        // The run's outcome, read from the spine's typed terminal. AgentState.phase never reaches
+        // COMPLETE in production, so it cannot answer this; one value feeds the metric, the
+        // recorded trajectory and the instinct-credit settle so they cannot disagree about a run.
+        const runSucceeded = !(cancelled || failedVerdict || stoppedShortByArbiter);
         try {
         engine.recordMetricEnd(c.metricId, {
-          agentPhase:
-            cancelled || failedVerdict || stoppedShortByArbiter
-              ? AgentPhase.FAILED
-              : AgentPhase.COMPLETE,
+          agentPhase: runSucceeded ? AgentPhase.COMPLETE : AgentPhase.FAILED,
           iterations: state.iteration,
           toolCallCount: state.stepResults.length,
           hitMaxIterations: terminatedByIterationBudget,
@@ -488,17 +489,28 @@ export function createAgentCorePort(
         );
         // The run's step-bearing trajectory, plus Issue #22 (SIBLING A) credit when that flag is on.
         // MUST run BEFORE the currentSessionInstinctIds.delete below (the participating set is read
-        // inside). A benign cancel (`cancelled`) or a non-COMPLETE terminal passes success=false ⇒
-        // recorded as a failure, no reinforcement. (#22's sole writer under flag-on — the
-        // route-level endTask record is suppressed when the flag is on; see endTask's
-        // suppressTrajectoryRecord.)
-        deps.recordInRunTrajectoryCredit({
-          chatId: c.chatId,
-          sessionId: c.chatId,
-          taskDescription: state.taskDescription,
-          success: !cancelled && state.phase === AgentPhase.COMPLETE,
-          stepResults: state.stepResults,
-        });
+        // inside). A failed, blocked or cut-short run is recorded as a failure with no reinforcement.
+        // A benign cancel (a user /cancel, a winddown, a sibling that already won) is not recorded:
+        // the run never reached an outcome of its own, and booked as a failure it became a replay
+        // "avoid repeating" warning for a task that never failed. (#22's sole writer under flag-on —
+        // the route-level endTask record is suppressed when the flag is on; see endTask's
+        // suppressTrajectoryRecord.) A learning write that throws must not skip the teardown below.
+        if (!cancelled) {
+          try {
+            deps.recordInRunTrajectoryCredit({
+              chatId: c.chatId,
+              sessionId: c.chatId,
+              taskDescription: state.taskDescription,
+              success: runSucceeded,
+              stepResults: state.stepResults,
+            });
+          } catch (error) {
+            getLoggerSafe().warn("In-run trajectory record failed", {
+              chatId: c.chatId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         // audited 2026-09-02: the tree decomposed by THIS run (goalsDecomposed
         // is the once-per-run guard above) gets the run's real terminal status;
         // a benign cancel settles failed, as the metric above does. Trees a
@@ -532,7 +544,7 @@ export function createAgentCorePort(
         // above uses), not the whole chat — siblings settle their own.
         deps.clearRunInstinctCredits(
           c.chatId,
-          { success: !(cancelled || failedVerdict || stoppedShortByArbiter) },
+          { success: runSucceeded },
           deps.getTaskExecutionContext()?.taskRunId,
         );
         } finally {

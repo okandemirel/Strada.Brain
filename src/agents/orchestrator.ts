@@ -4032,8 +4032,9 @@ export class Orchestrator {
    *  - appliedInstinctIds: the run's POPULATED participating set (currentSessionInstinctIds.get) —
    *    the route-level path fires at buffer time before the run and cannot supply it.
    *
-   * Credit is success-only: a benign-cancel / FAILED terminal passes success=false, carries no
-   * participating set, and autoGenerateVerdict (`outcome.success && !hadErrors`) skips it.
+   * Credit is success-only: a failed or cut-short terminal passes success=false, carries no
+   * participating set, and autoGenerateVerdict (`outcome.success && !hadErrors`) skips it. A benign
+   * cancel never reaches this method (persistTerminal records nothing for it).
    */
   private recordInRunTrajectoryCredit(params: {
     chatId: string;
