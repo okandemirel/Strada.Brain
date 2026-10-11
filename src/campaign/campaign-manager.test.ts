@@ -4148,6 +4148,32 @@ describe("CampaignManager", () => {
     expect(storage.hasActiveForChat("chat-unreadable")).toBe(false);
   });
 
+  it("a shared GDD whose text cannot be read gets told so, and the docs/ GDD is not built in its place (channel-attachments review)", async () => {
+    // The PDF arrived with its bytes, but its text is a hex string the
+    // extractor does not read: intake answered gdd-from-docs and the
+    // campaign built docs/Game_GDD.md — another game.
+    mkdirSync(join(projectRoot, "docs"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Other\n\nA document nobody shared.\n" + "y".repeat(400));
+    const before = tasks.submitted.length;
+    const pdf = Buffer.from(
+      `%PDF-1.4\n4 0 obj\n<< /Length 60 >>\nstream\nBT /F1 12 Tf <${Buffer.from("PacMan: eat every pellet in the maze.").toString("hex")}> Tj ET\nendstream\nendobj\n%%EOF\n`,
+      "latin1",
+    );
+    const msg = {
+      channelType: "cli", chatId: "chat-hex-pdf", userId: "u1",
+      text: "build the game in this GDD",
+      attachments: [{ type: "document", name: "PacMan_GDD.pdf", data: pdf }],
+      timestamp: new Date(),
+    } as unknown as IncomingMessage;
+    expect(await manager.tryHandleIncoming(msg)).toBe(true);
+    const said = messages.filter((m) => m.chatId === "chat-hex-pdf").map((m) => m.text).join("\n");
+    expect(said).toContain("PacMan_GDD.pdf");
+    expect(said).toContain("no text could be read");
+    expect(said).not.toContain("Building from");
+    expect(tasks.submitted.length).toBe(before);
+    expect(storage.hasActiveForChat("chat-hex-pdf")).toBe(false);
+  });
+
   it("asks the requirements it has NOT judged yet (Codex 2026-09-12 AD#16)", async () => {
     // Reproduced by Codex in a project with no git history: the resolver
     // judges at most 30 requirements per call and a closure with no revision

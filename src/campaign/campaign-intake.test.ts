@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { deflateSync } from "node:zlib";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 
@@ -120,5 +121,72 @@ describe("what the message actually pointed at (Codex 2026-09-12 AD#6)", () => {
     expect(detectCampaignIntent(msg("GDD'deki oyunu yap"))).toEqual({ kind: "gdd-from-docs" });
     // A marker with nothing behind it is a reference, not a design.
     expect(detectCampaignIntent(msg("Build this game. GDD: see above."))).toEqual({ kind: "gdd-from-docs" });
+  });
+});
+
+/**
+ * A document that ARRIVED but whose text could not be read fell through to the
+ * text rules: "build the game in this GDD" with the user's own PDF returned
+ * `{kind: "gdd-from-docs"}` and the campaign built whatever design sat in
+ * docs/ — a different game, with no word to the user (channel-attachments
+ * review). The common shape is a Chrome / Google Docs export, whose text is
+ * hex strings the extractor does not read; a scanned PDF, a few characters of
+ * text, or a .csv end the same way.
+ */
+describe("a document that arrived but could not be read (channel-attachments review)", () => {
+  const PROSE =
+    "PacMan GDD. The player steers a yellow circle through a maze, eating pellets " +
+    "while four ghosts chase it. Eating a power pellet turns the ghosts blue for eight " +
+    "seconds so they can be eaten for points. Clearing every pellet advances the level.";
+
+  /** A one-page PDF whose content stream shows `shown` (FlateDecode, as exporters write it). */
+  function pdf(shown: string): Buffer {
+    const content = deflateSync(Buffer.from(`BT /F1 12 Tf 72 712 Td ${shown} Tj ET`, "latin1"));
+    return Buffer.concat([
+      Buffer.from(`%PDF-1.4\n4 0 obj\n<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`, "latin1"),
+      content,
+      Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1"),
+    ]);
+  }
+  const hexPdf = pdf(`<${Buffer.from(PROSE, "latin1").toString("hex")}>`);
+  const literalPdf = pdf(`(${PROSE})`);
+  const doc = (name: string, data: Buffer): NonNullable<IncomingMessage["attachments"]>[number] => ({ type: "document", name, data });
+
+  it("the same prose as literal strings IS the GDD (the control)", () => {
+    expect(detectCampaignIntent(msg("build the game in this GDD", [doc("PacMan_GDD.pdf", literalPdf)]))).toMatchObject({
+      kind: "gdd-attachment",
+      sourceName: "PacMan_GDD.pdf",
+    });
+  });
+
+  it("as hex strings it is reported unreadable, never built from docs/ in its place", () => {
+    const intent = detectCampaignIntent(msg("build the game in this GDD", [doc("PacMan_GDD.pdf", hexPdf)]));
+    expect(intent).toMatchObject({ kind: "gdd-unreadable", sourceName: "PacMan_GDD.pdf" });
+    expect((intent as { reason: string }).reason).toMatch(/no text/);
+  });
+
+  it("names how little it read, and a format it does not read a design from", () => {
+    const short = detectCampaignIntent(msg("GDD'deki oyunu yap", [doc("Oyun_GDD.txt", Buffer.from("TODO: write the design"))]));
+    expect(short).toMatchObject({ kind: "gdd-unreadable", sourceName: "Oyun_GDD.txt" });
+    expect((short as { reason: string }).reason).toContain("22 characters");
+
+    const csv = detectCampaignIntent(msg("Build the game in the GDD", [{ type: "file", name: "tuning.csv", data: Buffer.from(PROSE) }]));
+    expect(csv).toMatchObject({ kind: "gdd-unreadable", sourceName: "tuning.csv" });
+  });
+
+  it("a named path or an idea in the caption does not replace the document that arrived", () => {
+    expect(
+      detectCampaignIntent(msg("Build the game from the GDD at docs/Space_GDD.md", [doc("PacMan_GDD.pdf", hexPdf)])),
+    ).toMatchObject({ kind: "gdd-unreadable" });
+    expect(detectCampaignIntent(msg(LONG_IDEA, [doc("domuzlar.pdf", hexPdf)]))).toMatchObject({ kind: "gdd-unreadable" });
+  });
+
+  it("is no campaign at all where the message never asked for one", () => {
+    expect(detectCampaignIntent(msg("şu dosyaya bir bak", [doc("scan.pdf", hexPdf)]))).toBeUndefined();
+    expect(detectCampaignIntent(msg("", [doc("scan.pdf", hexPdf)]))).toBeUndefined();
+    // An image beside an idea is not a document the idea replaced.
+    expect(
+      detectCampaignIntent(msg(LONG_IDEA, [{ type: "image", name: "mood.png", data: Buffer.from("89504e47", "hex") }])),
+    ).toEqual({ kind: "idea", ideaText: LONG_IDEA });
   });
 });

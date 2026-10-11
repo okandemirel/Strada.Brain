@@ -1256,6 +1256,14 @@ export class CampaignManager {
         await this.tell(campaign, `Building from \`${campaign.gddPath}\` — planning the milestone ladder, then the build starts.`);
         return true;
       }
+      case "gdd-unreadable": {
+        await this.tell(
+          { chatId: msg.chatId },
+          `I received \`${intent.sourceName}\`, but ${intent.reason}. I am not starting a build from it, ` +
+            "nor from another design in its place — paste the design into the message, or send it as a TXT file or a PDF with selectable text.",
+        );
+        return true;
+      }
     }
   }
 

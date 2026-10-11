@@ -22,7 +22,9 @@ import { extractDocumentText } from "../agents/tools/document-text.js";
 export type CampaignIntent =
   | { kind: "idea"; ideaText: string }
   | { kind: "gdd-attachment"; gddText: string; sourceName: string }
-  | { kind: "gdd-from-docs"; path?: string };
+  | { kind: "gdd-from-docs"; path?: string }
+  /** A document arrived with the request but no design could be read from it. */
+  | { kind: "gdd-unreadable"; sourceName: string; reason: string };
 
 /** End-to-end build intent. Narrow verbs of whole-game creation, TR + EN. */
 const BUILD_INTENT_RE =
@@ -54,6 +56,18 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
     }
   }
 
+  // A DOCUMENT THAT ARRIVED BUT COULD NOT BE READ IS NOT A REASON TO BUILD
+  // ANOTHER DESIGN. Every rule below qualifies the document above too, so one
+  // still attached here is one step 1 could not read — and "build the game in
+  // this GDD" with the user's own PDF (hex-string text, a scan, a .csv) went on
+  // to build whatever sat in docs/ (channel-attachments review).
+  const intent = intentFromText(text);
+  const unread = intent ? unreadDocumentIn(msg) : undefined;
+  return unread ?? intent;
+}
+
+/** Steps 2 and 3: what the message's own text asks for. */
+function intentFromText(text: string): CampaignIntent | undefined {
   // 2. "Build the game in the GDD" — the design already lives in the repo.
   // BEFORE the idea-length minimum: that minimum exists because an IDEA has
   // to be long enough to design from, and this instruction is not an idea —
@@ -82,6 +96,23 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
     return { kind: "idea", ideaText: text };
   }
 
+  return undefined;
+}
+
+/** The first document the message carried bytes for, and why no design came out of it. */
+function unreadDocumentIn(msg: IncomingMessage): Extract<CampaignIntent, { kind: "gdd-unreadable" }> | undefined {
+  for (const attachment of msg.attachments ?? []) {
+    if ((attachment.type !== "document" && attachment.type !== "file") || !attachment.data) continue;
+    if (!isExtractableDocument(attachment)) {
+      return { kind: "gdd-unreadable", sourceName: attachment.name, reason: "it is not a format a design is read from (PDF, TXT, Markdown, Word, ODT or RTF)" };
+    }
+    const readable = extractDocumentText(attachment.name, attachment.data)?.trim().length ?? 0;
+    return {
+      kind: "gdd-unreadable",
+      sourceName: attachment.name,
+      reason: readable === 0 ? "no text could be read from it" : `only ${readable} characters of text could be read from it`,
+    };
+  }
   return undefined;
 }
 
