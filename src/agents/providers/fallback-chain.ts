@@ -187,8 +187,29 @@ function isNonRetryableRequestError(error: unknown): boolean {
  */
 function isCredentialRejection(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
+  // OpenCode/Zen answers a model it does not serve with a 401 `ModelError`. The
+  // key is fine: benching it took the seat from every chat and every model for
+  // 8h, persisted across restarts, and the log said to rotate a working key.
+  if (MODEL_UNSUPPORTED_RE.test(msg) || CODEX_MODEL_UNSUPPORTED_RE.test(msg)) return false;
+  // The response's own status decides when the error names one; a 400 whose
+  // body cites `messages[401]` is not a refused key.
+  const status = httpStatusOf(error, msg);
+  if (status !== undefined) return status === 401 || (status === 403 && !QUOTA_LIMIT_RE.test(msg));
   if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
   return /\b40[13]\b/.test(msg);
+}
+
+/**
+ * The HTTP status an error reports, when it says so: an SDK's numeric `status`,
+ * or the leading marker the adapters write ("<name> API error 401: …",
+ * "(HTTP 401)", or an SDK message that starts with the status).
+ */
+function httpStatusOf(error: unknown, msg: string): number | undefined {
+  const status = error !== null && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+  if (typeof status === "number") return status;
+  const m = /\bAPI error (\d{3})\b|\bHTTP (\d{3})\b|^(\d{3})\b/.exec(msg);
+  const code = m?.[1] ?? m?.[2] ?? m?.[3];
+  return code === undefined ? undefined : Number(code);
 }
 
 /**
@@ -568,6 +589,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
       const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
       health[method](provider.name, errorMsg);
+    } else if (MODEL_UNSUPPORTED_RE.test(errorMsg)) {
+      // A model this gateway does not serve says nothing about the seat. Health
+      // is keyed by seat, so one chat's model pick would otherwise walk the seat
+      // down the ladder for every chat on its default model.
     } else {
       health.recordFailure(provider.name, errorMsg);
     }

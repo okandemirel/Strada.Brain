@@ -218,3 +218,83 @@ describe("a 400 that is about this provider, not the request", () => {
     expect(good.chat).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * providers#1: a 401/403 token is not always about the key. OpenCode/Zen
+ * answers a model it does not serve with `401 ModelError`, and a 400 body can
+ * cite `messages[401]`. Both used to earn the 8h credential bench — persisted,
+ * so a restart kept it — taking the seat from every chat and every model, while
+ * the log told the operator to rotate a key that works.
+ */
+describe("a 401 that is not about the credential", () => {
+  const MODEL_ERROR =
+    'OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model stale-model-xyz is not supported"}}';
+
+  function sdk401(name: string) {
+    return {
+      name,
+      capabilities: {
+        maxTokens: 100, streaming: false, toolCalling: false, vision: false,
+        systemPrompt: true, contextWindow: 1000,
+      },
+      chat: vi.fn(() => Promise.reject(new Anthropic.AuthenticationError(
+        401,
+        { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } },
+        undefined,
+        new Headers(),
+      ))),
+    } as unknown as IAIProvider;
+  }
+
+  it("does not bench the seat when the gateway rejects the model, not the key", async () => {
+    const oc = provider("opencode", MODEL_ERROR);
+    const good = provider("openai", "ok");
+    const chain = new FallbackChainProvider([oc.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+
+    // One chat's model pick must not take the seat from every other chat.
+    expect(oc.chat).toHaveBeenCalledTimes(2);
+    const health = ProviderHealthRegistry.getInstance();
+    expect(health.isAvailable("opencode")).toBe(true);
+    expect(health.getEntry("opencode")?.cooldownUntil ?? 0).toBe(0);
+    expect(mockLogger.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("credential rejected"),
+      expect.anything(),
+    );
+  });
+
+  it("does not bench a seat whose 400 body merely cites a 401", async () => {
+    const kimi = provider(
+      "kimi",
+      'Kimi API error 400: {"error":{"message":"Invalid request: messages[401].content must be a string","type":"invalid_request_error"}}',
+    );
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([kimi.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("kimi")).toBe(true);
+    expect(mockLogger.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("credential rejected"),
+      expect.anything(),
+    );
+  });
+
+  it("still benches an SDK 401 that carries its status as a number", async () => {
+    const good = provider("openai", "ok");
+    const chain = new FallbackChainProvider([sdk401("claude"), good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("claude")).toBe(false);
+  });
+
+  it("still benches a 401 in a message that names no status marker", async () => {
+    const bad = provider("Revoked", "Unauthorized (401): token expired");
+    const good = provider("Healthy", "ok");
+    const chain = new FallbackChainProvider([bad.provider, good.provider], { attemptTimeoutMs: 5_000 });
+
+    await expect(ask(chain)).resolves.toMatchObject({ text: "ok" });
+    expect(ProviderHealthRegistry.getInstance().isAvailable("Revoked")).toBe(false);
+  });
+});
