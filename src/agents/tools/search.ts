@@ -38,6 +38,9 @@ export async function globInsideProject(pattern: string, projectPath: string): P
     cwd: projectPath,
     nodir: true,
     maxDepth: 20,
+    // globPatternProblem refuses every extglob; one it missed is then read
+    // literally rather than compiled into an exponentially backtracking RegExp.
+    noext: true,
     ignore: { ignored: outside, childrenIgnored: outside },
   });
   return matches.filter((match) => !isOutsideRoot(root, match)).map((match) => toReportedPath(match));

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import { glob } from "glob";
+import { escape as globEscape, glob, unescape as globUnescape } from "glob";
+import { escape as minimatchEscape, unescape as minimatchUnescape } from "minimatch";
 import { createFilePatternFilter, filePatternProblem, globPatternProblem, MAX_FILE_PATTERN_LENGTH } from "./file-pattern.js";
 
 const ROOT = "/proj";
@@ -198,6 +199,15 @@ describe("globPatternProblem", () => {
     expect(globPatternProblem("**/.{config,hidden}/*.json")).toBeUndefined();
     expect(globPatternProblem("Assets/{Scripts,Shaders}/**/*.{cs,shader}")).toBeUndefined();
     expect(globPatternProblem("**/Wave{1..3}.cs")).toBeUndefined();
+  });
+
+  // The guard reads patterns with minimatch's braceExpand and unescape and
+  // trusts that glob compiles them with the same code; a lockfile that nested
+  // another minimatch under glob would desynchronise the two silently.
+  it("reads patterns with the minimatch glob compiles them with", () => {
+    const desync = "glob resolves another minimatch than the one file-pattern.ts imports";
+    expect(globEscape, desync).toBe(minimatchEscape);
+    expect(globUnescape, desync).toBe(minimatchUnescape);
   });
 
   it("bounds the length of the alternatives glob compiles, not file-pattern's", () => {

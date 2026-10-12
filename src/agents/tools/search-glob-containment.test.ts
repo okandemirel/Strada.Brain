@@ -80,6 +80,13 @@ describe("glob patterns stay inside the project root", () => {
     },
   );
 
+  // An extglob the guard missed is read literally, not compiled into a
+  // RegExp: '+(Player).cs' names that file, not 'Player.cs'.
+  it("glob reads an extglob literally", async () => {
+    writeFileSync(join(root, "Assets", "+(Player).cs"), "class Literal {}\n");
+    expect(await globInsideProject("Assets/+(Player).cs", root)).toEqual(["Assets/+(Player).cs"]);
+  });
+
   it("braces that stay inside the project still work", async () => {
     const result = await new GlobSearchTool().execute({ pattern: "Assets/*.{cs,shader}" }, ctx);
     expect(result.content).toContain("Found 2 file(s)");
