@@ -23,10 +23,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, win32 } from "node:path";
 import os from "node:os";
-import { globSync } from "glob";
+import { globSync, type GlobOptions } from "glob";
 import { STRADA_AGENT_PREAMBLE, STRADA_STATIC_FRAMEWORK_KNOWLEDGE } from "./strada-knowledge.js";
 import { STRADA_API } from "./strada-api-reference.js";
 import { STRADA_SEEDS } from "../../learning/seeds/strada-core-seeds.js";
@@ -133,8 +133,17 @@ const KEYWORDS = new Set(
 );
 const simpleName = (type: string): string => type.trim().replace(/<.*$/su, "").replace(/\?$/u, "").split(".").pop()!.trim();
 
+/**
+ * Core's C# files, relative to the checkout and written with "/" on every
+ * host: the checks below compare them with "Runtime/" and "Tests/". `walk`
+ * lets a test hand glob another platform's filesystem.
+ */
+function listCoreFiles(root: string, walk: Pick<GlobOptions, "platform" | "fs"> = {}): string[] {
+  return globSync(CORE_PACKAGE_CONFIG.fileGlob, { cwd: root, ignore: CORE_PACKAGE_CONFIG.ignoreGlobs, posix: true, ...walk });
+}
+
 function readCoreSurface(root: string): CoreSurface {
-  const files = globSync(CORE_PACKAGE_CONFIG.fileGlob, { cwd: root, ignore: CORE_PACKAGE_CONFIG.ignoreGlobs });
+  const files = listCoreFiles(root);
   const surface: CoreSurface = {
     files,
     namespaces: new Set(),
@@ -422,24 +431,55 @@ describe("Brain's Strada.Core knowledge names only APIs Strada.Core has", () => 
   });
 });
 
-describe("the Core extractor reads Core's API only", () => {
-  it("skips the root Tests/ and Tools/ trees and keeps an Editor/Tools folder", async () => {
-    const root = mkdtempSync(join(os.tmpdir(), "core-extract-"));
-    const write = (path: string, source: string) => {
+/** A throwaway directory holding `files`, removed after `use`. */
+async function withTree(files: Record<string, string>, use: (root: string) => unknown): Promise<void> {
+  const root = mkdtempSync(join(os.tmpdir(), "core-tree-"));
+  try {
+    for (const [path, source] of Object.entries(files)) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       writeFileSync(join(root, path), source);
-    };
-    try {
-      write("Runtime/Bus/Relay.cs", "namespace Strada.Core.Bus { public sealed class Relay { } }");
-      write("Editor/Tools/LayoutTool.cs", "namespace Strada.Core.Editor { public class LayoutTool { } }");
-      write("Tests/Runtime/RelayTests.cs", "namespace Strada.Core.Tests { public class RelayTests { } }");
-      write("Tools/bench~/Fixtures.cs", "namespace Bench { public sealed class T1 { } public sealed class ForeignContainer { } }");
+    }
+    await use(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
+/** Core's API beside its test suites and its root build tooling. */
+const API_AND_TOOLING = {
+  "Runtime/Bus/Relay.cs": "namespace Strada.Core.Bus { public sealed class Relay { } }",
+  "Editor/Tools/LayoutTool.cs": "namespace Strada.Core.Editor { public class LayoutTool { } }",
+  "Tests/Runtime/RelayTests.cs": "namespace Strada.Core.Tests { public class RelayTests { } }",
+  "Tools/bench~/Fixtures.cs": "namespace Bench { public sealed class T1 { } public sealed class ForeignContainer { } }",
+};
+
+describe("the Core checkout's file list", () => {
+  // windows-test clones Core and sets STRADA_CORE_PATH, so the checks above
+  // run there too, and glob answers with the host's separator: every
+  // "Runtime/" and "Tests/" test would judge `Runtime\…` paths.
+  it("is written with / on Windows too, where glob answers with \\", async () => {
+    await withTree(API_AND_TOOLING, (root) => {
+      // A win32 walk whose C:\core is this directory.
+      const drive = "C:\\core";
+      const onDisk = (p: string): string => join(root, ...win32.relative(drive, p).split(win32.sep));
+      const fs = {
+        lstatSync: (p: string) => lstatSync(onDisk(p)),
+        readdirSync: (p: string, options: { withFileTypes: true }) => readdirSync(onDisk(p), options),
+        readlinkSync: (p: string) => readlinkSync(onDisk(p)),
+        realpathSync: (p: string) => p,
+      };
+
+      expect(listCoreFiles(drive, { platform: "win32", fs }).sort()).toEqual(["Editor/Tools/LayoutTool.cs", "Runtime/Bus/Relay.cs"]);
+    });
+  });
+});
+
+describe("the Core extractor reads Core's API only", () => {
+  it("skips the root Tests/ and Tools/ trees and keeps an Editor/Tools folder", async () => {
+    await withTree(API_AND_TOOLING, async (root) => {
       const snapshot = await new CSharpFrameworkExtractor(root, CORE_PACKAGE_CONFIG).extract();
 
       expect(snapshot.classes.map((c) => c.name).sort()).toEqual(["LayoutTool", "Relay"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
