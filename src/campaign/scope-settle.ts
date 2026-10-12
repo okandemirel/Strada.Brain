@@ -138,6 +138,35 @@ export function infrastructureOnly(
   return rest === undefined || !RED_TERMINALS.has(rest);
 }
 
+/**
+ * How a run ended once W01's rule is applied, on every path the settle reads
+ * it: the `error` keys the machinery threw (`infrastructureErrors`, or the
+ * executor's lost-publication stamp) measured nothing about the work, so when
+ * every `error` is the machinery's and an outage or a red key sits beside
+ * them, those keys speak — a quota stop behind a bridge throw takes the
+ * outage path. With nothing else beside them the run stays unmeasurable.
+ * The count of thrown errors is made explicit, so the judge can tell an
+ * `error` the worker's own run raised, which is red. A run decoded from
+ * legacy stamps carries no such count and is left as it is.
+ */
+export function workerIntegrity<T extends RunIntegrity & { readonly infrastructureErrors?: number }>(
+  integrity: T | undefined,
+  settledText: string | null | undefined,
+): T | undefined {
+  if (integrity === undefined || integrity.source !== "spine") return integrity;
+  const keys = (Array.isArray(integrity.terminalKeys) ? integrity.terminalKeys : []).filter(isTerminalKey);
+  const errors = keys.filter((k) => k === "error").length;
+  const thrown = publicationLost(settledText) ? errors : Math.max(0, Math.min(errors, integrity.infrastructureErrors ?? 0));
+  if (errors > 0 && thrown === errors) {
+    const rest = keys.filter((k) => k !== "error");
+    const beside = worstTerminal(rest);
+    if (beside !== undefined && (RED_TERMINALS.has(beside) || OUTAGE_TERMINALS.has(beside))) {
+      return { ...integrity, terminalKeys: rest, worst: beside, infrastructureErrors: 0 };
+    }
+  }
+  return { ...integrity, infrastructureErrors: thrown };
+}
+
 /** The run stopped on the provider: the worst key it carried is an outage, so no red key of the worker's own is there. */
 export function endedOnOutage(integrity: RunIntegrity | undefined): boolean {
   if (!integrity) return false;

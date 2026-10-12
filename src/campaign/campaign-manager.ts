@@ -161,6 +161,7 @@ import {
   scopeDeliveryProofs,
   timeBoxSplit,
   withoutScopeBlock,
+  workerIntegrity,
   writerFaultClass,
   type ScopeDeliveryProofs,
 } from "./scope-settle.js";
@@ -5338,7 +5339,9 @@ export class CampaignManager {
     const keyedOutage = this.scopeGateMode === "on" && endedOnOutage(this.tipIntegrity(milestone));
     if (this.scopeGateMode === "on" && !outageCaused && !shutdownCaused) {
       if (keyedOutage) outageCaused = true;
-      else if (this.endedOnMachinery(milestone, output) && (milestone.scopeResubmits ?? 0) < MAX_SCOPE_RESUBMITS) {
+      // Spent only when the resubmit below follows: at the attempt limit
+      // nothing is resubmitted, and the next budget keeps its one.
+      else if (canRetry && this.endedOnMachinery(milestone, output) && (milestone.scopeResubmits ?? 0) < MAX_SCOPE_RESUBMITS) {
         milestone.scopeResubmits = (milestone.scopeResubmits ?? 0) + 1;
         outageCaused = true;
       }
@@ -5790,16 +5793,24 @@ export class CampaignManager {
     });
   }
 
-  /** How the milestone's latest run ended: the key it carried, else the system's own stamps in its result. */
+  /**
+   * How the milestone's latest run ended: the key it carried, else the
+   * system's own stamps in its result — with W01's rule applied on every path
+   * that reads it, the completed one included: the machinery's own throws
+   * measured nothing, so an outage beside them is an outage, and an `error`
+   * the worker's run raised is counted as the worker's.
+   */
   private tipIntegrity(milestone: CampaignMilestone): TaskRunIntegrity | undefined {
     if (!milestone.taskId) return undefined;
     try {
       const tip = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId) as
-        | { result?: string | null; verification?: { runIntegrity?: unknown } | null }
+        | { result?: string | null; error?: string | null; verification?: { runIntegrity?: unknown } | null }
         | null
         | undefined;
       if (!tip) return undefined;
-      return parseRunIntegrity(tip.verification?.runIntegrity) ?? legacyRunIntegrity(tip.result ?? undefined, systemStampsIn);
+      const carried = parseRunIntegrity(tip.verification?.runIntegrity);
+      if (carried === undefined) return legacyRunIntegrity(tip.result ?? undefined, systemStampsIn);
+      return workerIntegrity(carried, [tip.result, tip.error].filter((t): t is string => typeof t === "string").join("\n"));
     } catch {
       return undefined;
     }

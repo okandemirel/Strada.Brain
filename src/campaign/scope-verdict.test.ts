@@ -354,6 +354,20 @@ describe("judgeMilestone — the run's terminal key, and scope proven by indepen
     }
   });
 
+  it("an `error` the settle counted as the worker's own is red; one counted as the machinery's, or not counted at all, is not (W01)", () => {
+    const sameModel = [source(["r1", "r2"], "same-model")];
+    const keys: TerminalKey[] = ["error", "done"];
+    const of = (infrastructureErrors?: number) =>
+      judgeMilestone(input({ sources: sameModel, integrity: integrity("error", { terminalKeys: keys, ...(infrastructureErrors === undefined ? {} : { infrastructureErrors }) } as Partial<RunIntegrity>) }));
+    const worker = notGreen(of(0));
+    expect(worker.state).toBe("red");
+    expect(worker.reasons.find((r) => r.code === "terminal")?.detail).toMatch(/worker's own run failed/);
+    expect(notGreen(of(1)).state).toBe("unmeasurable");
+    expect(notGreen(of(undefined)).state).toBe("unmeasurable");
+    // Scope proven by independent checks still is not blocked by it.
+    expect(greenOf(judgeMilestone(input({ integrity: integrity("error", { terminalKeys: keys, infrastructureErrors: 0 } as Partial<RunIntegrity>) }))).basis).toBe("proven");
+  });
+
   it("table: every key with a failing owned row is red — the key never softens a failing row", () => {
     for (const key of TERMINAL_KEYS) {
       const j = notGreen(judgeMilestone(input({ integrity: integrity(key), results: { r1: result("fail"), r2: result("pass") } })));

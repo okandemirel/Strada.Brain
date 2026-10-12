@@ -296,7 +296,18 @@ const integrity = (key: TerminalKey, models: string[] = [WORKER_MODEL]): RunInte
 
 let edits = 0;
 /** The worker's sprint: a real code change in the tree, then the task settles completed. */
-function completeSprint(h: Harness, opts: { key?: TerminalKey; verification?: Record<string, unknown>; result?: string; status?: "completed" | "failed"; error?: string } = {}): string {
+function completeSprint(
+  h: Harness,
+  opts: {
+    key?: TerminalKey;
+    /** The whole integrity the run carried, when one key does not say it. */
+    integrity?: RunIntegrity & { infrastructureErrors?: number };
+    verification?: Record<string, unknown>;
+    result?: string;
+    status?: "completed" | "failed";
+    error?: string;
+  } = {},
+): string {
   const campaign = h.storage.listActive()[0]!;
   const milestone = campaign.milestones[campaign.currentMilestone]!;
   const taskId = milestone.taskId!;
@@ -307,7 +318,7 @@ function completeSprint(h: Harness, opts: { key?: TerminalKey; verification?: Re
   task.updatedAt = Date.now();
   task.result = opts.result ?? "Sprint done: the ferry stops at lit piers.";
   if (opts.error !== undefined) task.error = opts.error;
-  task.verification = { testsGreen: undefined, detail: "no test run observed", ...opts.verification, runIntegrity: integrity(opts.key ?? "done") };
+  task.verification = { testsGreen: undefined, detail: "no test run observed", ...opts.verification, runIntegrity: opts.integrity ?? integrity(opts.key ?? "done") };
   if (task.status === "failed") h.taskManager.emit("task:failed", taskId, opts.error ?? task.result);
   else h.taskManager.emit("task:completed", taskId, task.result);
   return taskId;
@@ -537,6 +548,51 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     await vi.waitFor(() => expect(h.submitted).toHaveLength(3), { timeout: 20_000 });
     m1 = h.storage.get(campaign.id)!.milestones[0]!;
     expect(m1.attempts).toBe(2);
+  }, 60_000);
+
+  it("the uncharged resubmit is spent only when a resubmit follows: a lost publication at the attempt limit leaves it for the next budget", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    completeSprint(h, { status: "failed", error: "ran out of steps", result: "ran out of steps", key: "max_steps_reached" });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    expect(h.storage.get(campaign.id)!.milestones[0]!.attempts).toBe(2);
+    const lost = "PUBLICATION FAILED: the workspace commit threw before the work reached the project (disk full). The workspace is kept for salvage.";
+    completeSprint(h, { status: "failed", error: lost, key: "error", result: lost });
+    // No attempt is left, so nothing is resubmitted: the milestone goes down the exhausted path.
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.state).toBe("failed"), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(h.submitted).toHaveLength(2);
+    expect(m1.scopeResubmits ?? 0).toBe(0);
+  }, 60_000);
+
+  it("W01's rule on a completed run: an outage under the machinery's own error takes the outage path", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    // One node's bridge threw (the machinery's), another stopped on the provider's quota.
+    completeSprint(h, {
+      integrity: { terminalKeys: ["error", "provider_quota"], worst: "error", source: "spine", workerModels: [WORKER_MODEL], infrastructureErrors: 1 },
+    });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.scopeVerdict).toBeUndefined(); // the outage path, never the judge
+    expect(m1.scopeResubmits ?? 0).toBe(0);
+    expect(m1.attempts).toBe(1);
+  }, 60_000);
+
+  it("W01's rule on a completed run: an error the worker's own run raised is red, not an uncharged resubmit", async () => {
+    // Rows the worker's own model wrote, so no independent check proves the scope past the error.
+    const h = build("on", { acceptanceAuthor: fakeAuthor({ writer: { provider: "worker", model: WORKER_MODEL, independence: "same-model" } }).author });
+    const campaign = await start(h);
+    // A node of the worker's run failed with no reason recorded: no infrastructure error is counted.
+    completeSprint(h, {
+      integrity: { terminalKeys: ["error", "done"], worst: "error", source: "spine", workerModels: [WORKER_MODEL] },
+    });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    const terminal = m1.scopeVerdict?.reasons.find((r) => r.code === "terminal");
+    expect(terminal?.reasonClass).toBe("red");
+    expect(m1.scopeBounces).toBe(1);
+    expect(m1.scopeResubmits ?? 0).toBe(0);
   }, 60_000);
 
   it("a tampered check is red, and the stored bytes are put back", async () => {

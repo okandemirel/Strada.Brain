@@ -31,7 +31,10 @@
  * resubmitted forever, is bounded where the unmeasurable state is acted on
  * (one uncharged resubmit, then park), not by charging the worker for a
  * crash. A worker's own red key in another node still wins: `worstTerminal`
- * ranks every other red key above `error`.
+ * ranks every other red key above `error`. And when the settle counted the
+ * machinery's throws (`infrastructureErrors`, W01), an `error` beyond that
+ * count is a node of the worker's own run that failed with no recorded
+ * reason: red.
  *
  * A completion gate that is `not-armed` does not apply to the sprint, so it
  * cannot fail it; a gate with no recorded outcome did not pass.
@@ -175,6 +178,18 @@ function runEnding(integrity: RunIntegrity | undefined): TerminalKey | undefined
   if (!integrity) return undefined;
   const keys = [integrity.worst, ...(Array.isArray(integrity.terminalKeys) ? integrity.terminalKeys : [])].filter(isTerminalKey);
   return worstTerminal(keys);
+}
+
+/**
+ * `error` keys the run's own integrity does not count as the machinery's.
+ * Only a count the settle made explicit says so: without one, every `error`
+ * is read as a throw around the run, as it always was.
+ */
+function errorsOfTheWork(integrity: GreenInput["integrity"] | undefined): number {
+  const thrown = integrity?.infrastructureErrors;
+  if (typeof thrown !== "number" || !Number.isInteger(thrown) || thrown < 0) return 0;
+  const errors = (Array.isArray(integrity?.terminalKeys) ? integrity.terminalKeys : []).filter((k) => k === "error").length;
+  return Math.max(0, errors - thrown);
 }
 
 function runRefusal(input: GreenInput): string | undefined {
@@ -330,8 +345,11 @@ export function judgeMilestone(input: GreenInput): Judgement {
     if (key === undefined) {
       push({ reasonClass: "unmeasurable", code: "terminal", detail: "how the run ended was not recorded, so it is not a clean finish" });
     } else {
+      const workerError = key === "error" && errorsOfTheWork(input.integrity) > 0;
       const why =
-        key === "error"
+        workerError
+          ? "a node of the worker's own run failed with no reason recorded, and the machinery did not throw it"
+          : key === "error"
           ? "the runtime threw; that measures nothing about the work"
           : OUTAGE_TERMINALS.has(key)
             ? "the provider stopped it; that is not charged to the work"
@@ -339,7 +357,7 @@ export function judgeMilestone(input: GreenInput): Judgement {
               ? "it was interrupted, not finished"
               : "the run did not finish its work";
       push({
-        reasonClass: terminalReasonClass(key) ?? "unmeasurable",
+        reasonClass: workerError ? "red" : terminalReasonClass(key) ?? "unmeasurable",
         code: "terminal",
         detail: `the run ended "${key}" (${why}), and ${own.length === 0 ? "the milestone owns no GDD rows that could prove its scope" : "no independent check proved the milestone's scope"}`,
         terminal: key,

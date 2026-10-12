@@ -555,7 +555,13 @@ export interface GreenInput {
   readonly run?: AcceptanceRunResult;
   /** Who wrote each check: `scopeProven` needs a different model on every OWN test. */
   readonly sources: readonly AcceptanceSource[];
-  readonly integrity: RunIntegrity;
+  /**
+   * How the run ended. `infrastructureErrors`, when the settle counted it, is
+   * how many `error` keys the machinery threw; an `error` beyond that count
+   * is the worker's own run failing, which is red (W01). Absent, every
+   * `error` is read as the machinery's.
+   */
+  readonly integrity: RunIntegrity & { readonly infrastructureErrors?: number };
   readonly gates: Readonly<Record<CompletionGate, GateOutcome>>;
   /** The worker's result reads as a terminal failure; consulted only for a milestone that owns no rows. */
   readonly proseFailure: boolean;

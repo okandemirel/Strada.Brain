@@ -23,6 +23,7 @@ import {
   scopeDeliveryProofs,
   timeBoxSplit,
   withoutScopeBlock,
+  workerIntegrity,
   writerFaultClass,
   type WorkerRunRecord,
 } from "./scope-settle.js";
@@ -151,6 +152,27 @@ describe("how the run ended", () => {
     expect(endedOnOutage(integrity(["provider_abort", "done"]))).toBe(true);
     expect(endedOnOutage(integrity(["provider_quota", "task_stuck"]))).toBe(false);
     expect(endedOnOutage(undefined)).toBe(false);
+  });
+
+  it("workerIntegrity applies W01's rule: the machinery's errors give way to what sits beside them, and the count is made explicit", () => {
+    // An outage behind a bridge throw is an outage.
+    const outage = workerIntegrity(integrity(["error", "provider_quota"], 1), "");
+    expect(outage?.worst).toBe("provider_quota");
+    expect(outage?.terminalKeys).toEqual(["provider_quota"]);
+    expect(endedOnOutage(outage)).toBe(true);
+    expect(endedOnOutage(integrity(["error", "provider_quota"], 1))).toBe(false);
+    // A red key beside it speaks too; nothing beside it stays the machinery's error.
+    expect(workerIntegrity(integrity(["error", "task_stuck"], 1), "")?.worst).toBe("task_stuck");
+    expect(workerIntegrity(integrity(["error", "done"], 1), "")).toMatchObject({ worst: "error", infrastructureErrors: 1 });
+    // An error nobody counted as thrown is the worker's: kept, with the count saying so.
+    expect(workerIntegrity(integrity(["error", "provider_quota"]), "")).toMatchObject({ worst: "error", infrastructureErrors: 0 });
+    // The executor's lost-publication stamp counts every error as thrown.
+    const stamp = "PUBLICATION FAILED: the workspace commit threw.";
+    expect(workerIntegrity(integrity(["error", "provider_abort"]), stamp)?.worst).toBe("provider_abort");
+    // Legacy stamps carry no count and are left alone.
+    const legacy = { ...integrity(["error"]), source: "legacy-stamp" as const };
+    expect(workerIntegrity(legacy, "")).toBe(legacy);
+    expect(workerIntegrity(undefined, "")).toBeUndefined();
   });
 });
 
