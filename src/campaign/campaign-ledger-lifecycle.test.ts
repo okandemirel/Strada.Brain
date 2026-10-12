@@ -498,6 +498,60 @@ describe("an in-flight campaign gets its ledger once, at the next revive (W11)",
     expect(told).toContain("not judged on them");
   });
 
+  it("the revived sprint is submitted before the chat is told, so a send that never returns leaves no saved revive without its task", async () => {
+    const told: string[] = [];
+    // The channel takes the revive's message and never answers; everything else is delivered.
+    const messenger = async (_chatId: string, text: string): Promise<void> => {
+      told.push(text);
+      if (text.startsWith("Reviving the campaign")) await new Promise<never>(() => {});
+    };
+    const { manager, storage, root, submitted } = build("shadow", { messenger });
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    storage.save(seed);
+
+    void manager.reviveByCommand(ctx.chatId);
+    await vi.waitFor(() => expect(told.some((m) => m.startsWith("Reviving the campaign"))).toBe(true), { timeout: 5_000 });
+
+    expect(submitted).toHaveLength(1);
+    const during = storage.get(seed.id)!;
+    expect(during.state).toBe("executing");
+    expect(during.milestones[1]).toMatchObject({ status: "running", taskId: "task_1", attempts: 1 });
+  });
+
+  it("a revive the submit parks for an outage asks no model and never says the sprint runs after saying it paused", async () => {
+    const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+    const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
+    const registry = ProviderHealthRegistry.getInstance();
+    registry.clearProviderState("claude");
+    setLiveChainMemberNames(["claude"]);
+    try {
+      const { manager, storage, root, complete, messages, submitted } = build("on");
+      writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+      const seed = inFlightCampaign(root, QUEUED);
+      storage.save(seed);
+      registry.recordOverloaded("claude", "quota wall");
+
+      expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+
+      const parked = storage.get(seed.id)!;
+      expect(parked.state).toBe("failed");
+      expect(parked.autoReviveAt).toBeGreaterThan(Date.now());
+      expect(submitted).toHaveLength(0);
+      // The rows are read without a model; the pass is owed to the revive that runs a sprint.
+      expect(parked.requirements).toBeDefined();
+      expect(parked.requirements!.modelPassRevision).toBeUndefined();
+      expect(complete).not.toHaveBeenCalled();
+      expect(messages.some((m) => m.includes("add-only pass"))).toBe(false);
+      const paused = messages.findIndex((m) => m.includes("Campaign paused before starting"));
+      expect(paused).toBeGreaterThanOrEqual(0);
+      expect(messages.slice(paused + 1).some((m) => m.includes("fresh attempt budget"))).toBe(false);
+    } finally {
+      setLiveChainMemberNames([]);
+      registry.clearProviderState("claude");
+    }
+  });
+
   it("off: the revive is today's — no ledger, no model call, no counter touched", async () => {
     const { manager, storage, root, complete } = build("off");
     writeFileSync(join(root, "docs", "GDD.md"), APPROVED);

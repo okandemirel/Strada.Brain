@@ -2028,12 +2028,20 @@ export class CampaignManager {
     // store's.
     const ledger = this.ensureLedgerRead(campaign);
     if (ledger.changed) this.persist(campaign);
-    await this.tell(
-      campaign,
-      `Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.` +
-        (ledger.note ? `\n\n${ledger.note}` : ""),
-    );
+    // TOLD AFTER THE SUBMIT: the messenger has no deadline, so a send awaited
+    // here held a saved `executing` campaign with no task for as long as the
+    // channel took. A submit that parked (an outage) or refused (a stop) has
+    // said so itself; announcing the revive after that would contradict it.
     this.submitCurrentMilestone(campaign);
+    // Read through the ladder: the submit changed the status this function narrowed to "pending".
+    const running = campaign.milestones[campaign.currentMilestone]?.status === "running";
+    const lines = [
+      ...(running
+        ? [`Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.`]
+        : []),
+      ...(ledger.note ? [ledger.note] : []),
+    ];
+    if (lines.length > 0) await this.tell(campaign, lines.join("\n\n"));
     await this.completeLedgerPassAfterSubmit(campaign.id);
   }
 
