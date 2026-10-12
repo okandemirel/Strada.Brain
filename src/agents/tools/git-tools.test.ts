@@ -809,6 +809,27 @@ describe("git_commit in a workspace lease", () => {
     expect(inLease("status", "--porcelain")).toBe("?? .strada-lease-owner.json");
   });
 
+  // git refuses an add whose :(exclude) names an ignored file that exists
+  // ("The following paths are ignored by one of your .gitignore files",
+  // exit 1). The owner file is always there, so a project that ignores the
+  // lease's bookkeeping refused every commit that touched its top level.
+  it.each([
+    ["the lease's files", ".strada-lease-*.json\n"],
+    ["everything Strada leaves", ".strada*\n"],
+  ])("commits '.', '*' and a top-level file when the project ignores %s", async (_what, ignore) => {
+    await writeFile(join(lease.path, ".gitignore"), ignore);
+    inLease("add", ".gitignore");
+    inLease("commit", "-q", "-m", "ignore the lease's files");
+    for (const [name, files] of [["Player.cs", ["."]], ["Enemy.cs", ["*"]], ["Boss.cs", ["Boss.cs"]]] as const) {
+      await writeFile(join(lease.path, name), "class C {}\n");
+      const result = await new GitCommitTool().execute({ message: `add ${name}`, files: [...files] }, leaseCtx);
+      expect(result.content, name).not.toMatch(/ignored/i);
+      expect(result.isError, name).toBeUndefined();
+      expect(inLease("show", "--name-only", "--format=", "HEAD")).toBe(name);
+    }
+    expect(inLease("status", "--porcelain", "--ignored")).toBe("!! .strada-lease-owner.json");
+  });
+
   it("still refuses a file of that name anywhere but the lease's top level", async () => {
     await mkdir(join(lease.path, "Assets"));
     await writeFile(join(lease.path, "Assets", ".strada-lease-owner.json"), "{}\n");

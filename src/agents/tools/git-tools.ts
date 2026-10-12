@@ -379,7 +379,20 @@ export class GitCommitTool implements ITool {
           isError: true,
         };
       }
-      const addResult = await runGit(["add", "--", ...pathspec], context.projectPath);
+      // git refuses an add whose :(exclude) names an ignored file that exists
+      // ("The following paths are ignored…", exit 1), and the owner file always
+      // does: a project ignoring `.strada*` refused every commit that touched a
+      // lease's top level. `add` never stages an ignored file, so only the
+      // sidecars it would pick up are excluded; the listings above never refuse.
+      const ignored = await runGit(["check-ignore", "--no-index", "--", ...LEASE_SIDECAR_FILES], root.path);
+      const ignoredSidecars = ignored.exitCode === 0 ? ignored.stdout.split("\n").map((line) => line.trim()) : [];
+      const addSpec = [
+        ...staged,
+        ...LEASE_SIDECAR_FILES
+          .filter((name) => !ignoredSidecars.includes(name))
+          .map((name) => `:(top,exclude,literal)${name}`),
+      ];
+      const addResult = await runGit(["add", "--", ...addSpec], context.projectPath);
       if (addResult.exitCode !== 0) {
         return { content: `Error staging files: ${addResult.stderr}`, isError: true };
       }
