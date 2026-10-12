@@ -98,20 +98,20 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
     // named contents and glossaries but not the sections every design document
     // opens with.
     const gdd = [
-      "1. INTRODUCTION",
-      "1.1 Executive Summary",
-      "1.2 Purpose of This Document",
-      "1.3 Scope",
-      "1.4 Competitive Analysis",
-      "1.5 Reference Titles",
-      "2. THE GAME AT A GLANCE",
-      "3. CORE RULES",
-      "9. LAUNCH PLAN",
+      "1. Introduction",
+      "1.1 About This Document",
+      "1.2 Summary",
+      "1.3 Terminology",
+      "1.4 Glossary",
+      "1.5 Competitive Analysis",
+      "2. HOW A ROUND PLAYS",
+      "3. RULES OF THE TIDE",
+      "8. RELEASE STEPS",
     ].join("\n");
 
     const headings = extractHeadings(gdd);
 
-    expect(headings).toEqual(["THE GAME AT A GLANCE", "CORE RULES", "LAUNCH PLAN"].map((h) => expect.stringContaining(h)));
+    expect(headings).toEqual(["HOW A ROUND PLAYS", "RULES OF THE TIDE", "RELEASE STEPS"].map((h) => expect.stringContaining(h)));
   });
 
   it("keeps a section whose name only LOOKS like apparatus but names work", () => {

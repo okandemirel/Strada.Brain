@@ -24,27 +24,27 @@ afterEach(() => {
 
 /** A real GDD's shape (invented text): a flattened table row, its label alone on one line. */
 const REAL_GDD = [
-  "TABLE OF CONTENTS",
-  "1. INTRODUCTION",
-  "1.1 Executive Summary",
-  "Field",
-  "Value",
-  "Genre",
-  "Relaxed puzzle — “lantern matching” sub-genre",
+  "CONTENTS",
+  "1. OVERVIEW",
+  "1.1 The Pitch",
+  "Item",
+  "Detail",
+  "Style",
+  "Calm river crossing — “raft ferrying” sub-genre",
   "Core mechanic",
-  "Tap a shrine to pull the nearest lantern of its colour onto the pond, where it lights every matching neighbour until its wicks are spent. Light the whole lake without filling the 4-slot dock.",
-  "Session length",
-  "Levels of 2–3 minutes",
+  "Drag a raft across the river to carry each traveller to the dock of their colour before the tide turns. Clear the shore without stranding more than three travellers.",
+  "Round length",
+  "Rounds of 1–2 minutes",
   "",
-  "12. PRODUCTION",
-  "Core loop fun-test: 15 graybox ponds, input latency within budget, testers replay them unprompted",
+  "11. MAKING IT",
+  "Core loop fun-test: 8 graybox rivers, input latency within budget, testers replay them unprompted",
 ].join("\n");
 
 describe("core-loop extraction", () => {
   it("takes the labelled field's value, not a heading and not a look-alike line", () => {
     const loop = extractCoreLoop(REAL_GDD);
-    expect(loop).toContain("Tap a shrine to pull the nearest lantern");
-    expect(loop).toContain("without filling the 4-slot dock");
+    expect(loop).toContain("Drag a raft across the river");
+    expect(loop).toContain("without stranding more than three travellers");
     // "Core loop fun-test: ..." is a different field; matching it would put a
     // production checklist in the play instructions.
     expect(loop).not.toContain("graybox");

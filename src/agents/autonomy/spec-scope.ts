@@ -74,7 +74,7 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  * A schedule table that lost its pipes.
  *
  * Documents converted out of Google Docs, Notion or PDF arrive as one cell per
- * LINE: a header block ("Unlock", "Element", "One-line pitch", "Side") and
+ * LINE: a header block ("Unlock", "Element", "Summary", "Lane") and
  * then rows of that many lines. The pipe-table reader found nothing in the
  * real vehicle document, so its whole element schedule — every blocker and
  * special mechanic the game is made of — read as ZERO scheduled elements, and

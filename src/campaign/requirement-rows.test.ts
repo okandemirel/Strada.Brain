@@ -43,10 +43,10 @@ const ENGLISH = [
   "The basket holds at most 12 fruit.",
   "Each round lasts 60–90 s.",
   "",
-  "### 2.1 Timing Constants",
-  "Config key",
-  "Default",
-  "Description",
+  "### 2.1 Tuning Values",
+  "Setting",
+  "Value",
+  "Notes",
   "garden.grow_time",
   "30 s",
   "Seconds a plant needs to ripen",
@@ -143,14 +143,14 @@ describe("extractRequirementRows — an invented English GDD", () => {
 
     const grow = byText(rows, "garden.grow_time");
     expect(grow.kind).toBe("constant");
-    expect(grow.section).toBe("Timing Constants");
+    expect(grow.section).toBe("Tuning Values");
     expect(grow.sectionNumber).toBe("2.1");
-    expect(grow.sectionPath).toEqual(["Core Rules", "Timing Constants"]);
+    expect(grow.sectionPath).toEqual(["Core Rules", "Tuning Values"]);
     expect(grow.bounds).toEqual({ kind: "exact", value: 30, tolerance: 0.5, unit: "s" });
     expect(byText(rows, "garden.spawn_rate").bounds).toEqual({ kind: "exact", value: 2, tolerance: 0.5, unit: "/s" });
 
     // The header cells of a flattened table are not rows.
-    expect(rows.some((r) => r.text.startsWith("Config key"))).toBe(false);
+    expect(rows.some((r) => r.text.startsWith("Setting"))).toBe(false);
   });
 
   it("turns a session-length range into ONE claim row and a frame-rate figure into a claim", () => {
@@ -367,11 +367,11 @@ const FLATTENED = [
   "# Tide Pool — Game Design Document",
   "",
   "1. OVERVIEW",
-  "1.4 Design Pillars",
-  "Every feature decision is checked against these pillars.",
+  "1.2 Guiding Principles",
+  "The design keeps to these principles throughout.",
   "#",
-  "Pillar",
-  "What it means in practice",
+  "Principle",
+  "In short",
   "P1",
   "One gesture",
   "The only input is a swipe; no button ever blocks the board.",
@@ -384,7 +384,7 @@ const FLATTENED = [
   "",
   "3. CORE GAMEPLAY",
   "3.3 Core Rules (Q-01 … Q-10)",
-  "Each numbered rule below is binding for implementation.",
+  "The rules below hold in every level.",
   "#",
   "Rule",
   "Q-01",
@@ -431,15 +431,15 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
     // Three cells to a row: the label, a name, what it means.
     const p1 = byLabel(rows, "P1");
     expect(p1.text).toBe("P1 One gesture The only input is a swipe; no button ever blocks the board.");
-    expect(p1.section).toBe("Design Pillars");
-    expect(p1.sectionNumber).toBe("1.4");
+    expect(p1.section).toBe("Guiding Principles");
+    expect(p1.sectionNumber).toBe("1.2");
 
     // The one quantity of a labelled rule is its bounds, and the sentence is not read a second time.
     expect(byLabel(rows, "Q-02").bounds).toEqual({ kind: "range", hi: 0.3, unit: "s" });
     expect(rows.filter((r) => r.text.includes("must fall within 0.3 s"))).toHaveLength(1);
 
     // The header row is no row.
-    expect(rows.some((r) => /^(?:#|Pillar|What it means|Rule\b|Booster|Event)/.test(r.text))).toBe(false);
+    expect(rows.some((r) => /^(?:#|Principle|In short|Rule\b|Booster|Event)/.test(r.text))).toBe(false);
   });
 
   it("finds the label's column from a header wider than the row: the cell before the label is the row's", () => {
