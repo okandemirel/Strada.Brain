@@ -645,6 +645,95 @@ describe("the play rung's fix waits in the same queue", () => {
     for (const notice of playFixNotices) expect(notice).toContain("attempt 1/3");
     expect(guardian.snapshot()).toMatchObject({ fixTaskId: "task_fix1", playFixAttempts: 1, escalated: false });
   });
+
+  /**
+   * Review of the withdrawal fix (daemon-guardian-3): the tests above only
+   * prove a play fix that never ran is not counted. A withdrawal that forgot
+   * every play attempt (count = 0), or one that took a play attempt back when
+   * it withdrew a queued COMPILE fix, passed them all — and either one lets a
+   * play repair that really ran three times go on without ever escalating.
+   */
+  const playRungGuardian = () => {
+    const opts: { active: boolean; status: unknown } = { active: false, status: { status: TaskStatus.pending } };
+    const { manager, submitted, cancelled } = makeTaskManager(opts);
+    const messages: string[] = [];
+    const tree = { compiles: true };
+    const clock = { t: 1_000_000 };
+    const guardian = new RealTreeGuardian({
+      taskManager: manager as unknown as TaskManager,
+      verify: vi.fn(async () =>
+        tree.compiles
+          ? { ok: true, ran: true, detail: "compile succeeded" }
+          : { ok: false, ran: true, detail: "Headless compile failed with 2 error(s)" },
+      ),
+      play: vi.fn(async () => ({ ok: false, ran: true, detail: "session 1 never ended after 60 actions" })),
+      projectRoot: "/p",
+      messenger: async (_c, m) => { messages.push(m); },
+      now: () => clock.t,
+    });
+    /** The fix in the slot leaves the queue, runs, and ends; the tick after it verifies again. */
+    const fixRunsAndEnds = async () => {
+      opts.status = { status: TaskStatus.executing };
+      clock.t += 15 * 60_000;
+      await guardian.tick();                           // seen running: waited for
+      opts.status = { status: TaskStatus.completed };
+      clock.t += 15 * 60_000;
+      await guardian.tick();                           // ended: verified again
+    };
+    /** A write-back check during a sprint: the fix in the slot stays queued. */
+    const writeBackWhileQueued = async () => {
+      opts.status = { status: TaskStatus.pending };
+      clock.t += 20 * 60_000;
+      await guardian.tick({ ignoreForeground: true });
+    };
+    const playFixNotices = () =>
+      messages.filter((m) => m.includes("cannot be played — I'm fixing it")).map((m) => /attempt \d\/\d/.exec(m)?.[0]);
+    const playEscalations = () => messages.filter((m) => m.includes("cannot be played after"));
+    return { guardian, tree, submitted, cancelled, fixRunsAndEnds, writeBackWhileQueued, playFixNotices, playEscalations };
+  };
+
+  it("a play fix that ran still counts after the next one is withdrawn: the third real attempt escalates", async () => {
+    const g = playRungGuardian();
+
+    await g.guardian.tick();                           // compiles, cannot be played: play fix 1
+    await g.fixRunsAndEnds();                          // it ran and the game still cannot be played: play fix 2
+    expect(g.guardian.snapshot().playFixAttempts).toBe(2);
+
+    g.tree.compiles = false;                           // a sprint write-back breaks the build
+    await g.writeBackWhileQueued();                    // play fix 2 never ran: withdrawn for a compile fix
+    expect(g.cancelled).toHaveLength(1);
+    expect(g.guardian.snapshot()).toMatchObject({ playFixAttempts: 1, fixAttempts: 1 });
+
+    g.tree.compiles = true;                            // another heals it
+    await g.writeBackWhileQueued();                    // the compile fix is withdrawn, the game played again
+    expect(g.cancelled).toHaveLength(2);
+    expect(g.guardian.snapshot().playFixAttempts).toBe(2);
+
+    await g.fixRunsAndEnds();                          // the second real attempt: play fix 3
+    expect(g.playEscalations()).toEqual([]);
+    await g.fixRunsAndEnds();                          // the third real attempt: escalate, submit nothing
+    expect(g.playFixNotices()).toEqual(["attempt 1/3", "attempt 2/3", "attempt 2/3", "attempt 3/3"]);
+    expect(g.playEscalations()).toHaveLength(1);
+    expect(g.playEscalations()[0]).toContain("after 3 autonomous fix attempts");
+    expect(g.submitted).toHaveLength(5);
+  });
+
+  it("a play fix whose write-back broke the build still counts once the compile fix is withdrawn", async () => {
+    const g = playRungGuardian();
+
+    await g.guardian.tick();                           // compiles, cannot be played: play fix 1
+    g.tree.compiles = false;                           // its write-back breaks the build
+    await g.fixRunsAndEnds();                          // it ran: a compile fix is submitted
+    expect(g.submitted).toHaveLength(2);
+    expect(g.submitted[1]!.prompt).toContain("does not compile");
+    expect(g.guardian.snapshot()).toMatchObject({ playFixAttempts: 1, fixAttempts: 1 });
+
+    g.tree.compiles = true;                            // a sprint write-back heals it
+    await g.writeBackWhileQueued();                    // the compile fix never ran: withdrawn
+    expect(g.cancelled).toHaveLength(1);
+    expect(g.guardian.snapshot()).toMatchObject({ playFixAttempts: 2, fixAttempts: 0 });
+    expect(g.playFixNotices()).toEqual(["attempt 1/3", "attempt 2/3"]);
+  });
 });
 
 describe("the fix task is told the errors, not the whole verdict", () => {
