@@ -1489,8 +1489,10 @@ export function isPlannedMilestone(id: string): boolean {
  *     ends, and the most specific reference decides;
  *   • a row nobody claims is QUEUED — failing closed.
  *
- * Rows already owned, excluded or waived are left as they are. The input is
- * not mutated.
+ * Rows already owned or excluded are left as they are. A waived row keeps its
+ * status and waiver, and is given an owner only when it has none (a replan or
+ * a move released it): the owner is what judges the row again if an
+ * amendment lifts the waiver. The input is not mutated.
  */
 export function assignOwners(
   rows: readonly RequirementRow[],
@@ -1505,7 +1507,11 @@ export function assignOwners(
   const excluded: string[] = [];
 
   const owned = rows.map((row): RequirementRow => {
-    if (row.status === "waived") return row;
+    if (row.status === "waived") {
+      // A person's decision: no plan exclusion applies, and the row joins no milestone's count.
+      const owner = row.owner === undefined ? ownerOf(row, planned, finalId) : undefined;
+      return owner === undefined ? row : { ...row, owner: owner.milestoneId, ownership: [...row.ownership, { ...owner, atMs: options.atMs }] };
+    }
     if (row.status === "excluded") {
       excluded.push(row.rid);
       return row;

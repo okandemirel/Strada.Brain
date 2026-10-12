@@ -165,6 +165,49 @@ describe("reownLedger", () => {
     expect(lifted).toMatchObject({ owner: "m1", status: "open" });
     expect(lifted.excludedBecause).toBeUndefined();
   });
+
+  it("a waived row keeps its waiver and an owner: the sprint that plans its section under the new ladder", () => {
+    const ledger = ledgerOf();
+    const tk1 = byLabel(ledger.rows, "TK-1");
+    tk1.status = "waived";
+    tk1.waiver = { userId: "owner", atMs: 5, reason: "deferred" };
+    expect(tk1.owner).toBe("m1");
+
+    const same = reownLedger(ledger, LADDER, { atMs: 4_000 });
+    expect(byLabel(same.rows, "TK-1")).toMatchObject({ status: "waived", owner: "m1", waiver: { reason: "deferred" } });
+
+    const swapped = reownLedger(ledger, [{ id: "m1", coveredSections: ["Extras"] }, { id: "m2", coveredSections: ["Rules"] }], { atMs: 4_000 });
+    const waived = byLabel(swapped.rows, "TK-1");
+    expect(waived).toMatchObject({ status: "waived", owner: "m2", waiver: { reason: "deferred" } });
+    expect(waived.ownership.map((o) => o.milestoneId)).toEqual(["m1", "m2"]);
+
+    // A waiver an amendment later lifts is then judged by the sprint that plans the row, not by a stale id.
+    const amended = DOC.replace("TK-1: The keeper must refill the lamp before the tide turns.", "TK-1: The keeper must refill the lamp twice before the tide turns.");
+    const reread = rereadLedger({ ...ledger, rows: swapped.rows }, amended, { gddSha256: "e".repeat(64), gddRevision: 2 }, [
+      { id: "m1", coveredSections: ["Extras"] },
+      { id: "m2", coveredSections: ["Rules"] },
+    ], { atMs: 5_000 });
+    expect(byLabel(reread.ledger.rows, "TK-1")).toMatchObject({ status: "open", owner: "m2" });
+  });
+});
+
+describe("rereadLedger and a waived row that moved", () => {
+  it("a waived row reworded into another section keeps its waiver and is owned by whoever plans that section", () => {
+    const ledger = ledgerOf();
+    const tk1 = byLabel(ledger.rows, "TK-1");
+    tk1.status = "waived";
+    tk1.waiver = { userId: "owner", atMs: 5, reason: "deferred" };
+    const moved = DOC.replace("TK-1: The keeper must refill the lamp before the tide turns.\n", "").replace(
+      "## 3. Extras\n",
+      "## 3. Extras\nTK-1: the keeper must refill the lamp, before the tide turns\n",
+    );
+
+    const result = rereadLedger(ledger, moved, { gddSha256: "f".repeat(64), gddRevision: 2 }, LADDER, { atMs: 2_000 });
+
+    const row = byLabel(result.ledger.rows, "TK-1");
+    expect(row.section).toContain("Extras");
+    expect(row).toMatchObject({ status: "waived", waiver: { reason: "deferred" }, owner: "m2" });
+  });
 });
 
 describe("completeLedgerByModel", () => {
