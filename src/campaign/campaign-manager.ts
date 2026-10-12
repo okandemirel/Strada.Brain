@@ -2000,8 +2000,13 @@ export class CampaignManager {
     // EVERY REVIVE — typed, `/campaign revive` and the self-revival — meets
     // here, so a campaign from before the scope gate gets its rows on the
     // first one (W11). After the save: the campaign is active again, so a
-    // second revive sent during the model pass is refused, not doubled.
-    const ledger = await this.ensureLedger(campaign);
+    // second revive is refused, not doubled. ONLY THE DETERMINISTIC READ
+    // before the submit: a restart while the model pass was asked found this
+    // save and the old lineage's tip, judged that tip as the fresh budget's
+    // first attempt, or carried out a person's earlier stop over the revive
+    // they had just asked for. The model pass runs once the sprint is the
+    // store's.
+    const ledger = this.ensureLedgerRead(campaign);
     if (ledger.changed) this.persist(campaign);
     await this.tell(
       campaign,
@@ -2009,6 +2014,7 @@ export class CampaignManager {
         (ledger.note ? `\n\n${ledger.note}` : ""),
     );
     this.submitCurrentMilestone(campaign);
+    await this.completeLedgerPassAfterSubmit(campaign.id);
   }
 
   /**
@@ -6741,31 +6747,103 @@ export class CampaignManager {
       const pass = await this.completeLedgerPass(campaign);
       changed = read.changed || pass.changed;
       // Told after the model pass, so the counts include what it added.
-      const ledger = campaign.requirements;
-      if (read.built && ledger !== undefined) {
-        notes.push(describeLedgerRead(ledger, campaign.milestones));
-        if (read.built.legacy.length > 0) {
-          notes.push(`Went green before the scope gate and keep their status (basis: legacy): ${read.built.legacy.join(", ")}.`);
-        }
-        if (read.built.adopted > 0) {
-          notes.push(`${read.built.adopted} row(s) are requirements the coverage queue already held; their repair budgets carry over.`);
-        }
-      }
-      if (read.amendment && ledger !== undefined) notes.push(describeAmendment({ ...read.amendment, ledger }));
+      notes.push(...this.ledgerReadNotes(campaign, read));
       if (pass.note) notes.push(pass.note);
-      if (this.scopeGateMode === "on" && campaign.requirements !== undefined && campaign.scopeGateSince === undefined) {
-        campaign.scopeGateSince = Date.now();
-        campaign.deliveryRevives = undefined;
-        campaign.deliveryProofsSignature = undefined;
-        changed = true;
-      }
+      changed = this.startScopeGate(campaign) || changed;
     } catch (err) {
-      getLoggerSafe().warn("The requirement ledger could not be built", {
-        id: campaign.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      this.ledgerFailed(campaign, err);
     }
     return { changed, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
+  }
+
+  /**
+   * `ensureLedger` without the model pass, and so without an await: what may
+   * run between a save and the submit it precedes. The pass follows the
+   * submit (`completeLedgerPassAfterSubmit`).
+   */
+  private ensureLedgerRead(campaign: Campaign): { changed: boolean; note?: string } {
+    if (this.scopeGateMode === "off") return { changed: false };
+    const notes: string[] = [];
+    let changed = false;
+    try {
+      const read = this.readLedger(campaign);
+      notes.push(...this.ledgerReadNotes(campaign, read));
+      changed = this.startScopeGate(campaign) || read.changed;
+    } catch (err) {
+      this.ledgerFailed(campaign, err);
+    }
+    return { changed, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
+  }
+
+  /**
+   * The add-only pass a revive owes, run once its sprint is submitted. It is
+   * applied to the campaign as the store holds it when the model answers, and
+   * only while the stored ledger is still the one the pass read: a settle, a
+   * waiver or an amendment meanwhile leaves the pass owed, never undone.
+   */
+  private async completeLedgerPassAfterSubmit(campaignId: string): Promise<void> {
+    if (this.scopeGateMode === "off" || !this.storage.isOpen()) return;
+    const held = this.storage.get(campaignId);
+    const read = held?.requirements;
+    // A sprint the submit parked (an outage) or refused (a stop) is not running: the pass waits for the next revive.
+    if (held === undefined || read === undefined || held.state !== "executing") return;
+    let pass: Awaited<ReturnType<CampaignManager["completeLedgerPass"]>>;
+    try {
+      pass = await this.completeLedgerPass(held);
+    } catch (err) {
+      this.ledgerFailed(held, err);
+      return;
+    }
+    if (pass.changed && held.requirements !== undefined) {
+      if (!this.storage.isOpen()) return;
+      const now = this.storage.get(campaignId);
+      if (now === undefined || JSON.stringify(now.requirements) !== JSON.stringify(read)) {
+        getLoggerSafe().info("The requirement ledger changed while the add-only pass ran; the pass stays owed", { id: campaignId });
+        return;
+      }
+      now.requirements = held.requirements;
+      syncRequirementIds(now.milestones, held.requirements.rows);
+      if (!this.persist(now)) return;
+    }
+    const lines = [
+      ...(pass.added ? [`📋 The add-only pass over the GDD added ${pass.added} row(s), each quoting it verbatim.`] : []),
+      ...(pass.note ? [pass.note] : []),
+    ];
+    if (lines.length > 0) await this.tell(held, lines.join("\n"));
+  }
+
+  /** What the chat is told about a read of the ledger: the build, or the amendment. */
+  private ledgerReadNotes(campaign: Campaign, read: ReturnType<CampaignManager["readLedger"]>): string[] {
+    const ledger = campaign.requirements;
+    if (ledger === undefined) return [];
+    const notes: string[] = [];
+    if (read.built) {
+      notes.push(describeLedgerRead(ledger, campaign.milestones));
+      if (read.built.legacy.length > 0) {
+        notes.push(`Went green before the scope gate and keep their status (basis: legacy): ${read.built.legacy.join(", ")}.`);
+      }
+      if (read.built.adopted > 0) {
+        notes.push(`${read.built.adopted} row(s) are requirements the coverage queue already held; their repair budgets carry over.`);
+      }
+    }
+    if (read.amendment) notes.push(describeAmendment({ ...read.amendment, ledger }));
+    return notes;
+  }
+
+  /** The first time the gate DECIDES (on) with a ledger: stamp it and start the delivery counters again, once. */
+  private startScopeGate(campaign: Campaign): boolean {
+    if (this.scopeGateMode !== "on" || campaign.requirements === undefined || campaign.scopeGateSince !== undefined) return false;
+    campaign.scopeGateSince = Date.now();
+    campaign.deliveryRevives = undefined;
+    campaign.deliveryProofsSignature = undefined;
+    return true;
+  }
+
+  private ledgerFailed(campaign: Campaign, err: unknown): void {
+    getLoggerSafe().warn("The requirement ledger could not be built", {
+      id: campaign.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   private ledgerOptions(campaign: Campaign): LedgerReadOptions {
@@ -6845,7 +6923,7 @@ export class CampaignManager {
   }
 
   /** The add-only model pass this ledger's revision still owes; a pass whose every call failed stays owed. */
-  private async completeLedgerPass(campaign: Campaign): Promise<{ changed: boolean; note?: string }> {
+  private async completeLedgerPass(campaign: Campaign): Promise<{ changed: boolean; note?: string; added?: number }> {
     const ledger = campaign.requirements;
     const text = campaign.gddText;
     const planner = this.planner as Partial<Pick<CampaignPlanner, "complete">>;
@@ -6871,6 +6949,7 @@ export class CampaignManager {
     syncRequirementIds(campaign.milestones, pass.ledger.rows);
     return {
       changed: true,
+      added: pass.added,
       ...(pass.failedCalls > 0
         ? { note: `The add-only pass read the GDD with ${pass.failedCalls} of ${pass.calls} call(s) failing; those sections were read by code alone.` }
         : {}),

@@ -76,6 +76,7 @@ interface FakeTask {
   id: string;
   status: string;
   createdAt: number;
+  cancelReason?: string;
 }
 
 const managers: CampaignManager[] = [];
@@ -85,7 +86,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {}) {
+function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {}, ask: () => Promise<string> = async () => MODEL_REPLY) {
   const dir = mkdtempSync(join(tmpdir(), "strada-ledger-life-"));
   dirs.push(dir);
   const root = join(dir, "project");
@@ -95,7 +96,7 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {})
   const submitted: string[] = [];
   const taskManager = Object.assign(new EventEmitter(), {
     submit: (_chatId: string, _channel: string, prompt: string) => {
-      const task = { id: `task_${tasks.size + 1}`, status: "executing", createdAt: Date.now() };
+      const task = { id: `task_${submitted.length + 1}`, status: "executing", createdAt: Date.now() };
       tasks.set(task.id, task);
       submitted.push(prompt);
       return task;
@@ -108,18 +109,21 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {})
     listTasks: () => [],
     listLiveInLineage: () => [],
     lineageHasDeliberateStop: () => false,
-    cancel: (id: string) => {
+    // A settled task stays as it settled, with the reason it was stopped for.
+    cancel: (id: string, opts?: { reason?: string }) => {
       const task = tasks.get(id);
-      if (task) task.status = "cancelled";
+      if (!task || task.status === "cancelled" || task.status === "completed" || task.status === "failed") return;
+      task.status = "cancelled";
+      task.cancelReason = opts?.reason;
     },
   });
-  const complete = vi.fn(async () => MODEL_REPLY);
+  const complete = vi.fn(ask);
   const planner = {
     planMilestones: vi.fn().mockResolvedValue(LADDER),
     complete,
   } as unknown as CampaignPlanner;
   const messages: string[] = [];
-  const manager = new CampaignManager({
+  const options: CampaignManagerOptions = {
     storage,
     planner,
     taskManager: taskManager as unknown as TaskManager,
@@ -131,9 +135,17 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {})
     retryAdoptionGraceMs: 10,
     completedSettleDelayMs: 0,
     ...extra,
-  });
+  };
+  const manager = new CampaignManager(options);
   managers.push(manager);
-  return { manager, storage, root, complete, messages, submitted };
+  /** The process starting again over the same store and tasks: the boot resume, nothing else. */
+  const restart = async (): Promise<CampaignManager> => {
+    const next = new CampaignManager(options);
+    managers.push(next);
+    await next.resumeActive();
+    return next;
+  };
+  return { manager, storage, root, complete, messages, submitted, tasks, restart };
 }
 
 const ctx = { chatId: "chat-1", channelType: "cli", userId: "owner-1" };
@@ -285,6 +297,10 @@ describe("an in-flight campaign gets its ledger once, at the next revive (W11)",
     expect(complete.mock.calls.length).toBeGreaterThan(0);
     expect(complete.mock.calls.length).toBeLessThanOrEqual(chunksOf(APPROVED));
     expect(messages.some((m) => /row\(s\) read from the approved GDD/.test(m))).toBe(true);
+    // The add-only pass ran after the submit, and what it added is the stored campaign's.
+    expect(ledger.modelPassRevision).toBe(1);
+    expect(ledger.llmAdded).toBe(1);
+    expect(messages.some((m) => m.includes("add-only pass over the GDD added 1 row(s)"))).toBe(true);
 
     // ONCE: a later settle neither rebuilds, nor asks the model again, nor resets the counters.
     const calls = complete.mock.calls.length;
@@ -315,6 +331,94 @@ describe("an in-flight campaign gets its ledger once, at the next revive (W11)",
     expect(campaign.deliveryProofsSignature).toBe("old-proofs");
     expect(campaign.scopeGateSince).toBeUndefined();
     expect(campaign.pendingCoverageGaps).toEqual(before.pendingCoverageGaps);
+  });
+
+  /** A model that has been asked and has not answered: the process can stop while it waits. */
+  function unanswered(): () => Promise<string> {
+    return () => new Promise<string>(() => {});
+  }
+
+  it("the revived sprint is submitted before the model is asked, so a restart during the add-only pass charges no attempt", async () => {
+    const { manager, storage, root, complete, messages, submitted, tasks, restart } = build("shadow", {}, unanswered());
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.milestones[1]!.taskId = "task_old";
+    tasks.set("task_old", { id: "task_old", status: "failed", createdAt: Date.now() - 60_000 });
+    storage.save(seed);
+
+    void manager.reviveByCommand(ctx.chatId);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled(), { timeout: 10_000 });
+
+    // While the model is asked, the store already holds the revived sprint's task, and the chat was told.
+    const during = storage.get(seed.id)!;
+    expect.soft(during.state).toBe("executing");
+    expect.soft(submitted).toHaveLength(1);
+    expect.soft(during.milestones[1]!.taskId).toBe("task_1");
+    expect.soft(during.milestones[1]!.attempts).toBe(1);
+    expect.soft(during.requirements).toBeDefined();
+    expect.soft(messages.some((m) => m.startsWith("Reviving the campaign"))).toBe(true);
+
+    // The process stops here and starts again: the live sprint is adopted, nothing is judged or charged.
+    await restart();
+    const after = storage.get(seed.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[1]!.taskId).toBe("task_1");
+    expect(after.milestones[1]!.attempts).toBe(1);
+    expect(submitted).toHaveLength(1);
+    // The old lineage's failure was the previous budget's: it is not judged as the revived sprint's first attempt.
+    expect(after.milestones[1]!.prompt).toBe("build m2, capture a frame");
+  });
+
+  it("a restart during the add-only pass does not undo a person's revive of a campaign they had stopped", async () => {
+    const { manager, storage, root, complete, messages, tasks, restart } = build("shadow", {}, unanswered());
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.milestones[1]!.taskId = "task_old";
+    seed.lastError = "NOT DELIVERED — Sprint m2 was cancelled";
+    seed.deliveryReported = true;
+    tasks.set("task_old", { id: "task_old", status: "cancelled", createdAt: Date.now() - 60_000, cancelReason: "user" });
+    storage.save(seed);
+
+    void manager.tryHandleRevive(ctx.chatId, "kampanya devam", ctx.userId);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled(), { timeout: 10_000 });
+
+    await restart();
+    const after = storage.get(seed.id)!;
+    expect(after.state).toBe("executing");
+    expect(after.milestones[1]!.status).toBe("running");
+    expect(after.milestones[1]!.taskId).toBe("task_1");
+    expect(messages.some((m) => m.includes("was cancelled, so the campaign stops here"))).toBe(false);
+  });
+
+  it("a result recorded while the add-only pass runs is kept: the pass stays owed instead of saving over it", async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const { manager, storage, root, complete, messages } = build("shadow", {}, async () => {
+      await answered;
+      return MODEL_REPLY;
+    });
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    storage.save(seed);
+
+    const revived = manager.reviveByCommand(ctx.chatId);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled(), { timeout: 10_000 });
+    // A settle records LD-1's result while the model is asked.
+    const settled = storage.get(seed.id)!;
+    const ld1 = byLabel(settled.requirements!.rows, "LD-1");
+    ld1.status = "passing";
+    ld1.last = { revision: "rev-b", atMs: 7, outcome: "pass", detail: "passed" };
+    expect(persist(manager, settled)).toBe(true);
+    answer();
+    expect(await revived).toBe(true);
+
+    const after = storage.get(seed.id)!;
+    expect(byLabel(after.requirements!.rows, "LD-1")).toMatchObject({ status: "passing", last: { revision: "rev-b" } });
+    expect(after.requirements!.modelPassRevision).toBeUndefined();
+    expect(after.requirements!.rows.some((r) => r.source === "llm-added")).toBe(false);
+    expect(messages.some((m) => m.includes("add-only pass over the GDD added"))).toBe(false);
   });
 
   it("off: the revive is today's — no ledger, no model call, no counter touched", async () => {
