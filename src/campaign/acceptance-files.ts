@@ -2,7 +2,7 @@
  * The system's acceptance files (GDD-drift plan W05): the C# a Unity project
  * carries so a milestone's own GDD rows are judged by checks the system owns.
  *
- * In campaign 18d4t six of six milestones went green on prose. The checks
+ * In the measured campaign six of six milestones went green on prose. The checks
  * that replace it are only worth anything if nothing a worker writes can make
  * them pass, so everything that decides a check's verdict is the system's:
  *
@@ -12,7 +12,7 @@
  *   the writer supplies only the observation;
  * - which bodies may run at all — `lintAcceptanceBody` refuses a body that
  *   cannot fail (Assert.Pass, catch, #if, an assertion on reflection or on
- *   literals: the shape of 18d4t's P1 guardrail) before a single run;
+ *   literals: the shape of the measured campaign's P1 guardrail) before a single run;
  * - the harness the bodies call, which knows no game — `ACCEPTANCE_FIXTURE_SOURCE`;
  * - what every name in a check means: the system's code and the writer's
  *   spell each type from the root (global::) and import none, so neither a
@@ -2158,7 +2158,7 @@ function balanced(code: string): boolean {
 /**
  * Whether a writer's check may run. It refuses what cannot fail or what does
  * not test the game: forbidden constructs, an assertion on reflection or
- * literals alone (18d4t's P1 guardrail asserted
+ * literals alone (the measured campaign's P1 guardrail asserted
  * `typeof(IX).GetMethods().Length == 1`), a harness coroutine that is never
  * yielded, a part that escapes its method, an input row that does not act
  * through the harness, a numeric row that writes its own assertion.

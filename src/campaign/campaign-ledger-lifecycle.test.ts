@@ -3,7 +3,7 @@
  * the APPROVED text, built once for a campaign that was already running when
  * the scope gate arrived, and read again when a person amends the GDD.
  *
- * In campaign 18d4t nothing turned a GDD rule into a row the system owned, so
+ * In the measured campaign nothing turned a GDD rule into a row the system owned, so
  * nothing could hold a milestone to one. W04 can read the rows; until a
  * campaign holds them, no gate has anything to judge.
  *

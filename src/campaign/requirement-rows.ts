@@ -2,7 +2,7 @@
  * Requirement rows: the approved GDD read into the rows a milestone is judged
  * on, and each row given to the milestone that owns it (GDD-drift plan W04, M3).
  *
- * In campaign 18d4t no GDD rule was ever a row the system owned: R-07 was
+ * In the measured campaign no GDD rule was ever a row the system owned: R-07 was
  * "closed" by a worker's prose, the §3.9 constants were never held against
  * anything, and nobody noticed that §3.3 promised R-01…R-22 and defined
  * fifteen. Everything here is code, not a model:
@@ -1464,7 +1464,7 @@ function exclusionNames(item: string, heading: string): boolean {
 /**
  * A rung of the planned ladder, by the line campaign-manager's partial
  * delivery draws: the system appends coverage sprints (mcovN) and a final
- * proof (mfinal-N) after it. On 18d4t's stored ladder the last milestone was
+ * proof (mfinal-N) after it. On the measured campaign's stored ladder the last milestone was
  * mcov1, a failed coverage sprint, and every claim went to it.
  */
 export function isPlannedMilestone(id: string): boolean {
@@ -1485,7 +1485,7 @@ export function isPlannedMilestone(id: string): boolean {
  *     decides; the earliest milestone breaks a tie);
  *   • a milestone planned before `coveredSections` existed claims by the `§N.N`
  *     references in its prompt: a reference covers its subsections, a range
- *     ("§3.3–§3.11", as 18d4t's prompts wrote them) every section between its
+ *     ("§3.3–§3.11", as the measured campaign's prompts wrote them) every section between its
  *     ends, and the most specific reference decides;
  *   • a row nobody claims is QUEUED — failing closed.
  *
