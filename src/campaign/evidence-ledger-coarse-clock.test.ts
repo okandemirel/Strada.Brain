@@ -26,6 +26,8 @@ const fsClock = vi.hoisted(() => {
     mtimeNs: undefined as bigint | undefined,
     ctimeNs: undefined as bigint | undefined,
     reads: 0,
+    /** Called with each stream the async digest opens. */
+    onStream: undefined as ((at: string, stream: import("node:fs").ReadStream) => void) | undefined,
     pin<T>(st: T): T {
       if (clock.mtimeNs !== undefined && clock.ctimeNs !== undefined && typeof (st as { mtimeNs?: unknown })?.mtimeNs === "bigint") {
         Object.assign(st as object, { mtimeNs: clock.mtimeNs, ctimeNs: clock.ctimeNs });
@@ -45,7 +47,9 @@ vi.mock("node:fs", async (importOriginal) => {
   }) as typeof actual.openSync;
   const createReadStream = ((...args: Parameters<typeof actual.createReadStream>) => {
     fsClock.reads++;
-    return actual.createReadStream(...args);
+    const stream = actual.createReadStream(...args);
+    fsClock.onStream?.(String(args[0]), stream);
+    return stream;
   }) as typeof actual.createReadStream;
   return { ...actual, statSync, openSync, createReadStream };
 });
@@ -75,6 +79,7 @@ describe("artifactDigest on a filesystem whose clock ticks coarsely", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    fsClock.onStream = undefined;
     stampAll(undefined);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -146,5 +151,30 @@ describe("artifactDigest on a filesystem whose clock ticks coarsely", () => {
     fsClock.ctimeNs = nowNs();
     expect(artifactDigest(apk)).not.toBe(first);
     expect(fsClock.reads).toBe(2);
+  });
+
+  it("a digest stopped as its last read finished is neither answered nor remembered, and an unstopped one still is", async () => {
+    // Settled stamps: a digest read to its end here is remembered (CMP-11).
+    stampAll(nowNs() - 3600n * SECOND_NS);
+    const apk = android();
+    expect(await artifactDigestAsync(apk, AbortSignal.abort())).toBeUndefined();
+    expect(fsClock.reads).toBe(0);
+    // The .obb is read last. A shutdown that comes once its bytes are all in
+    // still stopped the digest: what it produced is not answered as real.
+    const stop = new AbortController();
+    fsClock.onStream = (at, stream) => {
+      if (at.endsWith(".obb")) stream.once("end", () => stop.abort());
+    };
+    expect(await artifactDigestAsync(apk, stop.signal)).toBeUndefined();
+    fsClock.onStream = undefined;
+    // …nor remembered: the next digest reads both files again.
+    fsClock.reads = 0;
+    const read = await artifactDigestAsync(apk, new AbortController().signal);
+    expect(read).toMatch(HEX);
+    expect(fsClock.reads).toBe(2);
+    // A signal that never fired leaves the digest as it always was, remembered.
+    expect(await artifactDigestAsync(apk)).toBe(read);
+    expect(fsClock.reads).toBe(2);
+    expect(artifactDigest(apk)).toBe(read);
   });
 });

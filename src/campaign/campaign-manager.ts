@@ -1223,10 +1223,17 @@ export class CampaignManager {
    * Resolves once the probes a settle chain left running in the project have
    * exited (see `probe`); the chain itself is not waited for — it can be
    * awaiting a compile or an LLM audit for minutes.
+   *
+   * An artifact digest is stopped, not waited out: it streams a whole build,
+   * gigabytes, and this runs inside the daemon's forced-exit window ahead of
+   * failing the in-flight tasks. A git probe is waited for — its timeout
+   * bounds it, and killing it on Windows can orphan the git.exe that keeps
+   * the project busy.
    */
   dispose(): Promise<void> {
     if (!this.disposed) {
       this.disposed = true;
+      this.stopReads.abort();
       for (const [event, listener] of this.taskEventListeners.splice(0)) this.taskManager.off(event, listener);
       this.eventsAttached = false;
       this.closeProjectStores();
@@ -1244,6 +1251,9 @@ export class CampaignManager {
    * daemon's shutdown went on with the same processes still in the project.
    */
   private readonly runningProbes = new Set<Promise<unknown>>();
+
+  /** Aborted by dispose(): an artifact digest still reading stops at the read in flight. */
+  private readonly stopReads = new AbortController();
 
   /** Start a probe dispose() waits for; once disposed, none starts and the promise rejects. */
   private probe<T>(start: () => Promise<T>): Promise<T> {
@@ -5695,7 +5705,7 @@ export class CampaignManager {
 
   /** An artifact's digest, read as a probe; a disposed manager reads nothing, which is "no digest". */
   private digestArtifact(path: string | undefined): Promise<string | undefined> {
-    return this.probe(() => artifactDigestAsync(path)).catch(() => undefined);
+    return this.probe(() => artifactDigestAsync(path, this.stopReads.signal)).catch(() => undefined);
   }
 
   /** Is there a `.git` anywhere at or above the project? */

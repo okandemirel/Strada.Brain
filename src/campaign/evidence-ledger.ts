@@ -259,22 +259,32 @@ export function artifactDigest(path: string | undefined): string | undefined {
  * stalled for the whole read. This walks and streams asynchronously; the
  * bytes hashed and their order are exactly `artifactDigest`'s, so the two
  * agree with each other and with the producer.
+ *
+ * `signal` STOPS THE READ. Nothing else can: a shutdown that waited for a
+ * cold digest of a whole build spent its forced-exit window on one read. An
+ * aborted digest stops at the read in flight, closes its file and answers
+ * "no digest" (also when its last read had just come in, so a stopped digest
+ * has one answer), and is never remembered: a hash of part of a build must
+ * never pass as the build's.
  */
-export async function artifactDigestAsync(path: string | undefined): Promise<string | undefined> {
+export async function artifactDigestAsync(path: string | undefined, signal?: AbortSignal): Promise<string | undefined> {
   if (path === undefined || path === "") return undefined;
   try {
+    signal?.throwIfAborted();
     const startedNs = wallClockNs();
-    const files = await artifactFilesAsync(path);
+    const files = await artifactFilesAsync(path, signal);
+    signal?.throwIfAborted();
     const signature = digestSignature(files);
     const cached = digestCache.get(path);
     if (cached !== undefined && cached.signature === signature) return cached.digest;
     const hash = digestHeader(path);
     for (const file of files) {
       hash.update(`${file.rel}:${file.size}\n`);
-      for await (const piece of createReadStream(file.at, { highWaterMark: DIGEST_CHUNK_BYTES })) {
+      for await (const piece of createReadStream(file.at, { highWaterMark: DIGEST_CHUNK_BYTES, ...(signal === undefined ? {} : { signal }) })) {
         hash.update(piece as Buffer);
       }
     }
+    signal?.throwIfAborted();
     return rememberDigest(path, files, signature, hash.digest("hex"), startedNs);
   } catch {
     return undefined;
@@ -400,7 +410,7 @@ function artifactFiles(path: string): DigestFile[] {
 }
 
 /** `artifactFiles`, walked without blocking; the same files in the same order. */
-async function artifactFilesAsync(path: string): Promise<DigestFile[]> {
+async function artifactFilesAsync(path: string, signal: AbortSignal | undefined): Promise<DigestFile[]> {
   const out: DigestFile[] = [];
   const manifest = artifactManifest(path);
   if (manifest !== undefined) {
@@ -409,6 +419,8 @@ async function artifactFilesAsync(path: string): Promise<DigestFile[]> {
     return out;
   }
   const walk = async (at: string, rel: string): Promise<void> => {
+    // A player layout is thousands of files; a stopped digest walks no further.
+    signal?.throwIfAborted();
     const st = await stat(at, { bigint: true });
     if (st.isDirectory()) {
       for (const entry of (await readdir(at)).sort()) await walk(join(at, entry), `${rel}/${entry}`);
