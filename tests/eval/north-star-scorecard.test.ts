@@ -846,6 +846,26 @@ describe("north-star scorecard: the measured state", () => {
     ]);
   });
 
+  it("does not read framework copies installed under Assets as the game's code", () => {
+    const { home, project, upstream } = todayHome();
+    // strada-deps.ts can install Strada.MCP at Assets/Strada.MCP; a Modules copy can sit under Assets too.
+    script(
+      project,
+      "Assets/Strada.Modules/Runtime/Screen/ScreenService.cs",
+      "using Strada.Core.Patterns;\nnamespace Strada.Modules.Screen { public sealed class ScreenService : Service { } }\n",
+    );
+    script(project, "Assets/ThirdParty/Strada.MCP/Runtime/Bridge.cs", "namespace Strada.Mcp { public sealed class OrchardService { } }\n");
+    write(project, { "Assets/Strada.Modules/Audio/click.wav": "RIFF", "Assets/Strada.Modules/Audio/click.wav.meta": `fileFormatVersion: 2\nguid: ${guid()}\n` });
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    expect(rung(card, 7).checks).toEqual([
+      { ok: true, text: "Strada.Modules is installed in the project" },
+      { ok: false, text: "0 of 7 game files reference Strada.Modules" },
+    ]);
+    expect(rung(card, 6).measured).toMatchObject({ gameFiles: 7, duplicateTypeNames: 1, services: 3 });
+    // The framework's own sound is not a clip the game left unreferenced.
+    expect(criterion(card, "I").checks.find((c) => /audio clip/.test(c.text))).toEqual({ ok: false, text: "no audio clip in Assets" });
+  });
+
   it("finds notes a run wrote into a framework copy, and only with upstream to compare", () => {
     const { home, project, upstream } = todayHome();
     const withUpstream = criterion(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, "K");

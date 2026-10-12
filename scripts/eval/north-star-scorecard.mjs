@@ -481,6 +481,13 @@ function frameworkKind(name) {
   return m ? (m[1] ?? m[2]).toLowerCase() : null;
 }
 
+/**
+ * Whether a path under Assets sits in a framework copy (Assets/Strada.MCP, as
+ * strada-deps.ts can install it, or a Modules copy): the framework's files are
+ * not the game's, and its own Strada.Modules references must not pass rung 7.
+ */
+const inFrameworkCopy = (assetsRel) => assetsRel.split(sep).slice(0, -1).some((d) => frameworkKind(d) !== null);
+
 function walkFiles(root, skip = SKIP_DIRS) {
   const out = [];
   const stack = [root];
@@ -616,6 +623,7 @@ export function scanGameCode(assets) {
   const autoRegistered = new Set();
   for (const file of files) {
     const rel = relative(assets, file);
+    if (inFrameworkCopy(rel)) continue;
     const dirs = rel.split(sep).slice(0, -1);
     const raw = readText(file);
     if (raw === null) continue;
@@ -813,7 +821,8 @@ function packagesState(project) {
 
 function audioState(assets) {
   const files = walkFiles(assets);
-  const clips = files.filter((f) => AUDIO_EXT.test(f));
+  // The game's clips; a framework copy's own sounds are not its to reference.
+  const clips = files.filter((f) => AUDIO_EXT.test(f) && !inFrameworkCopy(relative(assets, f)));
   const referenced = new Set();
   for (const f of files.filter((p) => YAML_EXT.test(p))) {
     for (const m of (readText(f) ?? "").matchAll(/guid:\s*([0-9a-f]{32})/g)) referenced.add(m[1]);
