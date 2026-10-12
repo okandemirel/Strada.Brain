@@ -4382,7 +4382,7 @@ export class CampaignManager {
       // publication landing between two reads produced a verdict set no
       // revision of the game ever had (Codex 2026-09-12 R#16). The revision is
       // captured before the first read and checked after the last.
-      const revisionBefore = this.projectRevision();
+      let revisionBefore = this.projectRevision();
       const compile = await this.measureCompile(campaign, milestone);
       milestone.compileVerdict = compile;
       const compileBroken = (compile.ran && !compile.ok) || compile.refused !== undefined;
@@ -4438,6 +4438,12 @@ export class CampaignManager {
           const applied = await this.applyScopeVerdict(campaign, milestone, scopeVerdict, { isLast, output });
           if (applied === "settled") return;
         }
+        // THE SYSTEM'S OWN CHECKS ARE NOT THE TREE MOVING. A check repaired
+        // above is committed before it is measured again, inside the window
+        // the proofs are read in, and the gate read that commit as a
+        // publication landing mid-read: a spurious bounce, or NOT DELIVERED
+        // for a reason nobody caused.
+        if (isLast) revisionBefore = this.pastAcceptanceCommits(revisionBefore);
       }
       // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
@@ -6063,6 +6069,36 @@ export class CampaignManager {
       });
     } finally {
       lock.release();
+    }
+  }
+
+  /**
+   * The revision the delivery proofs are read against, past the scope gate's
+   * own commits: HEAD when every commit since `since` descends from it and
+   * touched nothing but the acceptance folder — the compile never builds test
+   * assemblies, so no other proof reads those bytes — and `since` otherwise,
+   * so any other commit, a rewritten history or an unreadable repository is
+   * still the tree moving.
+   */
+  private pastAcceptanceCommits(since: string): string {
+    const now = this.projectRevision();
+    if (!proofsSpanTwoRevisions(since, now)) return since;
+    const git = (args: string[]): string =>
+      execFileSync("git", ["-C", this.projectRoot, ...args], { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      git(["merge-base", "--is-ancestor", since, now]);
+      // Paths come from the repository's top; the project may sit below it.
+      const prefix = git(["rev-parse", "--show-prefix"]).trim();
+      const paths = git(["diff", "--no-renames", "--name-only", since, now]).split("\n").map((p) => p.trim()).filter((p) => p !== "");
+      const folder = ACCEPTANCE_DIR.toLowerCase();
+      const inFolder = (p: string): boolean => {
+        const rel = p.toLowerCase();
+        return rel === `${folder}.meta` || rel.startsWith(`${folder}/`);
+      };
+      const onlyChecks = paths.length > 0 && paths.every((p) => p.startsWith(prefix) && inFolder(p.slice(prefix.length)));
+      return onlyChecks ? now : since;
+    } catch {
+      return since;
     }
   }
 

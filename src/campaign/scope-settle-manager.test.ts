@@ -764,6 +764,63 @@ describe("the final milestone (scope gate on, W09)", () => {
     expect(c.lastError).toMatch(/NOT DELIVERED|delivery proofs still missing/);
   }, 60_000);
 
+  it("a check the system repairs at the final milestone is its own commit, and the gate does not read it as the tree moving under its proofs", async () => {
+    const author = fakeAuthor();
+    const h = build("on", {
+      ladder: ONE_RUNG,
+      acceptanceAuthor: author.author,
+      failing: (label) => label === "EF-1" && (author.author.regenerate as ReturnType<typeof vi.fn>).mock.calls.length === 0,
+      message: () => "[strada-acceptance:no-service] IFerryDock is not registered",
+    });
+    const campaign = await start(h);
+    atTheGate(h, campaign.id);
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.state).toBe("failed"), { timeout: 30_000 });
+    const c = h.storage.get(campaign.id)!;
+    const m1 = c.milestones[0]!;
+    // The repair landed between the gate's first read and its last.
+    expect(author.author.regenerate).toHaveBeenCalledTimes(1);
+    expect(gitIn(h.root, "log", "--format=%s").match(/campaign: acceptance checks for m1 \(system-owned\)/g)).toHaveLength(2);
+    expect(m1.scopeVerdict?.green).toBe(true);
+    const proofs = (m1.deliveryProofsMissing ?? []).join(" | ");
+    expect(proofs).not.toMatch(/the project changed while its proofs were being read/);
+    expect(proofs).not.toMatch(/GDD requirement\(s\) no sprint closed/);
+    expect(m1.deliveryFailureKinds ?? []).not.toContain("treeMoved");
+    const head = gitIn(h.root, "rev-parse", "HEAD").trim();
+    for (const row of c.requirements!.rows.filter((r) => r.owner === "m1")) expect(row.last?.revision).toBe(head);
+  }, 60_000);
+
+  it("…while a publication that lands in the same window is still the tree moving under the proofs", async () => {
+    const author = fakeAuthor();
+    let root = "";
+    let published = false;
+    const h = build("on", {
+      ladder: ONE_RUNG,
+      acceptanceAuthor: author.author,
+      failing: (label) => label === "EF-1" && (author.author.regenerate as ReturnType<typeof vi.fn>).mock.calls.length === 0,
+      message: () => "[strada-acceptance:no-service] IFerryDock is not registered",
+      // A worker's lease publishes into the project while the compile is read.
+      verifyCompile: async () => {
+        if (!published && root !== "") {
+          published = true;
+          writeFileSync(join(root, "Assets", "Game", "Late.cs"), "public class Late {}\n");
+          gitIn(root, "add", "-A", "--", "Assets/Game");
+          gitIn(root, "commit", "-qm", "worker: late publication");
+        }
+        return { ok: true, ran: true, errors: 0, detail: "compiles" };
+      },
+    });
+    root = h.root;
+    const campaign = await start(h);
+    atTheGate(h, campaign.id);
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.state).toBe("failed"), { timeout: 30_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(published).toBe(true);
+    expect(author.author.regenerate).toHaveBeenCalledTimes(1);
+    expect((m1.deliveryProofsMissing ?? []).join(" | ")).toMatch(/the project changed while its proofs were being read/);
+  }, 60_000);
+
   it("a project without git binds results to its content fingerprint — the revision closure reads there — so passing rows close", async () => {
     const h = build("on", { ladder: ONE_RUNG, git: false });
     const campaign = await start(h);
