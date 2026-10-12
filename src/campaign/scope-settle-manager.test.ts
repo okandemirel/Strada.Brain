@@ -614,6 +614,39 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     expect(m1.scopeVerdict?.reasons.find((r) => r.code === "row-unbound")?.reasonClass).toBe("red");
     expect(m1.scopeBounces).toBe(1);
   }, 60_000);
+
+  it("a regression stays a regression after the run that found it, also on a row a parked milestone owns", async () => {
+    let failing: (label: string) => boolean = (label) => label === "EF-2";
+    const h = build("on", { failing: (label) => failing(label) });
+    const campaign = await start(h);
+    // m1 parks on EF-2; EF-1 and EF-3 passed, and m1 is not a proven green.
+    for (let settle = 0; settle < 3; settle++) {
+      completeSprint(h);
+      await vi.waitFor(() => expect(h.submitted).toHaveLength(settle + 2), { timeout: 20_000 });
+    }
+    let now = h.storage.get(campaign.id)!;
+    expect(now.milestones[0]!.parked).toBeDefined();
+    expect(now.currentMilestone).toBe(1);
+    // m2's work breaks EF-1, which had passed.
+    failing = (label) => label === "EF-2" || label === "EF-1";
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(5), { timeout: 20_000 });
+    now = h.storage.get(campaign.id)!;
+    let m2 = now.milestones[1]!;
+    const regressed = byLabel(now, "EF-1").rid;
+    expect(m2.scopeVerdict?.reasons.some((r) => r.code === "regression" && r.rid === regressed)).toBe(true);
+    // The queued row that never passed is not m2's to answer for.
+    expect(m2.scopeVerdict?.reasons.some((r) => r.rid === byLabel(now, "EF-2").rid)).toBe(false);
+    // Still broken on the next settle: still a regression, not a green that forgot it.
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(6), { timeout: 20_000 });
+    now = h.storage.get(campaign.id)!;
+    m2 = now.milestones[1]!;
+    expect(now.currentMilestone).toBe(1);
+    expect(m2.status).not.toBe("green");
+    expect(m2.scopeVerdict?.reasons.some((r) => r.code === "regression" && r.rid === regressed)).toBe(true);
+    expect(m2.scopeBounces).toBe(2);
+  }, 90_000);
 });
 
 describe("the system repairs its own checks, never charged (W09)", () => {

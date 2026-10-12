@@ -213,6 +213,12 @@ export interface RowResult {
    * regenerated, rebound, or a sibling rendered into it — answers for itself.
    */
   checkSha?: string;
+  /**
+   * The body sha of the check this row last passed with, carried while that
+   * check stays its current one: a fail with it is a regression on every
+   * later settle, not only on the run that found it.
+   */
+  passedWith?: string;
 }
 
 export interface RequirementRow {

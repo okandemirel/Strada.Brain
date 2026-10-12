@@ -5765,21 +5765,22 @@ export class CampaignManager {
 
   /**
    * Rows that passed before and must still pass: owned by another milestone,
-   * with a check, and either passing now or owned by a milestone the gate
-   * judged green — a regression stays a regression after the run that found it.
+   * with a check, and either passing now, failing the check they passed with,
+   * or owned by a milestone the gate judged green — a regression stays a
+   * regression after the run that found it, whoever owns the row (a parked
+   * milestone, a legacy green). A check fault is for a person, not a later
+   * milestone, unless its owner was proven.
    */
   private regressionRowsFor(campaign: Campaign, ownIds: ReadonlySet<string>): RequirementRow[] {
     const ledger = this.scopeLedger(campaign);
     if (ledger === undefined) return [];
     const provenGreen = new Set(campaign.milestones.filter((m) => m.scopeVerdict?.green === true && m.status === "green").map((m) => m.id));
-    return ledger.rows.filter(
-      (row) =>
-        !ownIds.has(row.rid) &&
-        rowDecides(row) &&
-        TEST_ROW_KINDS.has(row.kind) &&
-        currentTestRef(row) !== undefined &&
-        (row.status === "passing" || (row.owner !== undefined && provenGreen.has(row.owner))),
-    );
+    return ledger.rows.filter((row) => {
+      const current = currentTestRef(row);
+      if (ownIds.has(row.rid) || !rowDecides(row) || !TEST_ROW_KINDS.has(row.kind) || current === undefined) return false;
+      const regressed = row.status !== "check-fault" && row.last?.passedWith !== undefined && row.last.passedWith === current.bodySha;
+      return row.status === "passing" || regressed || (row.owner !== undefined && provenGreen.has(row.owner));
+    });
   }
 
   /** How the milestone's latest run ended: the key it carried, else the system's own stamps in its result. */
@@ -6247,7 +6248,7 @@ export class CampaignManager {
       if (attributed === undefined) continue;
       // A check that ran compiled from these bytes; one that compiled before
       // from them keeps that. A run that never reached it says nothing.
-      const ran =attributed.compiledBefore === undefined && (attributed.outcome === "pass" || attributed.outcome === "fail" || attributed.outcome === "flaky");
+      const ran = attributed.compiledBefore === undefined && (attributed.outcome === "pass" || attributed.outcome === "fail" || attributed.outcome === "flaky");
       const checkSha = ran || compiledBefore.has(testName) ? bytesOf.get(testName) : undefined;
       let outcome = attributed.outcome;
       let detail = attributed.detail;
@@ -6265,6 +6266,9 @@ export class CampaignManager {
           detail = `input cannot be injected into this project, so the check could not act: ${detail}`;
         }
       }
+      // What it passed with, until its check is replaced: the regression set reads it.
+      const body = currentTestRef(row)?.bodySha;
+      const passedWith = outcome === "pass" ? body : row.last?.passedWith !== undefined && row.last.passedWith === body ? body : undefined;
       results[row.rid] = {
         revision,
         ...(measured?.run.runId === undefined ? {} : { runId: measured.run.runId }),
@@ -6273,6 +6277,7 @@ export class CampaignManager {
         detail,
         ...(attributed.compiledBefore === undefined ? {} : { compiledBefore: attributed.compiledBefore }),
         ...(checkSha === undefined ? {} : { checkSha }),
+        ...(passedWith === undefined ? {} : { passedWith }),
       };
     }
     // Asked once: a row the previous verdict already named as unobservable is the game's now.
