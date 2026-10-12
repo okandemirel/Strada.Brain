@@ -8,7 +8,7 @@ import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { execFileSync } from "node:child_process";
+import { ChildProcess, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EvidenceLedger, artifactDigest } from "./evidence-ledger.js";
 import { DELIVERY_PIECE_ORDER, DeliveryPackageStore, assembleDeliveryPackage } from "./delivery-package.js";
@@ -398,13 +398,16 @@ describe("CampaignManager", () => {
     manager.attachEvents();
   });
 
-  afterEach(() => {
-    for (const m of liveManagers.splice(0)) m.dispose();
+  afterEach(async () => {
+    // Awaited: a settle chain can still have a git probe standing in the
+    // project, and Windows will not remove a directory a running process is
+    // in (EBUSY rmdir on windows-test). rmSync's maxRetries is no remedy for
+    // that: Node 22's rimraf retries an rmdir only after ENOTEMPTY, and the
+    // EBUSY came on the first one.
+    for (const m of liveManagers.splice(0)) await m.dispose();
     storage.close();
-    // Windows refuses to remove a directory a just-exiting child (git) still has as its cwd:
-    // EBUSY on windows-test. Let rmSync retry rather than fail the test that happened to be last.
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    rmSync(dir, { recursive: true, force: true });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
   });
 
   /**
@@ -2817,6 +2820,54 @@ describe("CampaignManager", () => {
     // Second completion stands either way (one bounce per milestone).
     settleMilestone("sprint A done again");
     await waitFor(() => expect(storage.get(campaign.id)!.milestones[0]!.status).toBe("green"));
+  });
+
+  // windows-test, 2026-10-12: the test above failed its teardown with EBUSY
+  // rmdir <project>. A milestone persists its green and then measures the
+  // compile under a ticket, whose git probes (`git -C <project>`, `cwd:
+  // <project>`) were still running when dispose() returned — and the chain
+  // started more after it. Windows will not remove a directory a running
+  // process stands in; POSIX will, so the proxy is the process table.
+  it("dispose() resolves once the git probes a settle left running in the project have exited, and none starts after it", async () => {
+    const git = (...args: string[]) => execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "baseline");
+    const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    writeFileSync(join(projectRoot, "Board.cs"), "class Board {}\n"); // the sprint did work
+
+    type SpawnOptions = { args?: string[]; cwd?: string };
+    const proto = ChildProcess.prototype as unknown as { spawn: (this: ChildProcess, options: SpawnOptions) => unknown };
+    const realSpawn = proto.spawn;
+    const children: ChildProcess[] = [];
+    let probing!: () => void;
+    const firstProbe = new Promise<void>((resolve) => { probing = resolve; });
+    proto.spawn = function (this: ChildProcess, options: SpawnOptions) {
+      const result = realSpawn.call(this, options);
+      if (options.cwd === projectRoot || options.args?.includes(projectRoot)) {
+        children.push(this);
+        probing();
+      }
+      return result;
+    };
+    const running = () => children.filter((c) => c.exitCode === null && c.signalCode === null).map((c) => c.spawnargs.join(" "));
+    try {
+      settleMilestone("sprint A done");
+      // Resumes while the settle chain awaits that child: it cannot have been reaped yet.
+      await firstProbe;
+      expect(running()).not.toHaveLength(0);
+      await manager.dispose();
+      expect(running()).toEqual([]);
+      const startedBeforeDispose = children.length;
+      // The chain runs on to its end; nothing it does may start a process in the project.
+      await (manager as unknown as { settleChains: Map<string, Promise<void>> }).settleChains.get(campaign.id);
+      expect(children.slice(startedBeforeDispose).map((c) => c.spawnargs.join(" "))).toEqual([]);
+    } finally {
+      proto.spawn = realSpawn;
+    }
   });
 
   it("time-box forces scope narrowing when a sprint spins past its budget", async () => {

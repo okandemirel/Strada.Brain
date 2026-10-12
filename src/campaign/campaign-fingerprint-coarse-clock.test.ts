@@ -77,10 +77,10 @@ describe("the project fingerprint on a filesystem whose clock ticks coarsely", (
     fsClock.refuse = undefined;
     vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     stampAll(undefined);
-    for (const m of managers.splice(0)) m.dispose();
+    for (const m of managers.splice(0)) await m.dispose();
     rmSync(project, { recursive: true, force: true });
     rmSync(state, { recursive: true, force: true });
   });

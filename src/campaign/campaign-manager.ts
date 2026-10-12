@@ -1210,14 +1210,42 @@ export class CampaignManager {
    * submitted a new milestone into a task manager that was closing (COR-9) —
    * then close the campaign stores. Follow-ups scheduled for later find a
    * disposed manager and do nothing.
+   *
+   * Resolves once the probes a settle chain left running in the project have
+   * exited (see `probe`); the chain itself is not waited for — it can be
+   * awaiting a compile or an LLM audit for minutes.
    */
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    for (const [event, listener] of this.taskEventListeners.splice(0)) this.taskManager.off(event, listener);
-    this.eventsAttached = false;
-    this.closeProjectStores();
-    this.storage.close();
+  dispose(): Promise<void> {
+    if (!this.disposed) {
+      this.disposed = true;
+      for (const [event, listener] of this.taskEventListeners.splice(0)) this.taskManager.off(event, listener);
+      this.eventsAttached = false;
+      this.closeProjectStores();
+      this.storage.close();
+    }
+    return Promise.allSettled([...this.runningProbes]).then(() => undefined);
+  }
+
+  /**
+   * The git children and artifact reads this manager has running in the
+   * project. A settle chain awaits them across dispose(), and on Windows a
+   * process standing in the project (`git -C`, `cwd:`) keeps the directory
+   * from being removed or replaced: the test teardown after a green milestone
+   * failed with EBUSY rmdir <project> (windows-test, 2026-10-12), and a
+   * daemon's shutdown went on with the same processes still in the project.
+   */
+  private readonly runningProbes = new Set<Promise<unknown>>();
+
+  /** Start a probe dispose() waits for; once disposed, none starts and the promise rejects. */
+  private probe<T>(start: () => Promise<T>): Promise<T> {
+    if (this.disposed) return Promise.reject(new Error("the campaign manager is disposed"));
+    const running = start();
+    this.runningProbes.add(running);
+    const settle = (): void => {
+      this.runningProbes.delete(running);
+    };
+    running.then(settle, settle);
+    return running;
   }
 
   /**
@@ -5624,7 +5652,7 @@ export class CampaignManager {
    */
   private async projectRevisionAsync(): Promise<string> {
     try {
-      const { stdout } = await execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 });
+      const { stdout } = await this.probe(() => execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 }));
       return stdout.trim();
     } catch {
       return "";
@@ -5633,7 +5661,7 @@ export class CampaignManager {
 
   private async projectIsDirtyAsync(): Promise<boolean> {
     try {
-      const { stdout } = await execFileAsync("git", [...DIRTY_STATUS_ARGS], { cwd: this.projectRoot, encoding: "utf8", timeout: 20_000 });
+      const { stdout } = await this.probe(() => execFileAsync("git", [...DIRTY_STATUS_ARGS], { cwd: this.projectRoot, encoding: "utf8", timeout: 20_000 }));
       return stdout.trim() !== "";
     } catch {
       return true;
@@ -5643,11 +5671,16 @@ export class CampaignManager {
   private async projectRepoStateAsync(): Promise<"revision" | "none" | "unknown"> {
     if ((await this.projectRevisionAsync()) !== "") return "revision";
     try {
-      const { stdout } = await execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000 });
+      const { stdout } = await this.probe(() => execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000 }));
       return stdout.trim() === "true" ? "unknown" : "none";
     } catch {
       return this.gitAboveProject() ? "unknown" : "none";
     }
+  }
+
+  /** An artifact's digest, read as a probe; a disposed manager reads nothing, which is "no digest". */
+  private digestArtifact(path: string | undefined): Promise<string | undefined> {
+    return this.probe(() => artifactDigestAsync(path)).catch(() => undefined);
   }
 
   /** Is there a `.git` anywhere at or above the project? */
@@ -8993,7 +9026,7 @@ export class CampaignManager {
     const repoBefore = await this.projectRepoStateAsync();
     const dirtyBefore = repoBefore === "none" ? false : await this.projectIsDirtyAsync();
     const revisionBefore = await this.projectRevisionAsync();
-    const artifactBefore = await artifactDigestAsync(binding.artifactPath);
+    const artifactBefore = await this.digestArtifact(binding.artifactPath);
     const ticket: EvidenceTicket = {
       issuedAt: Date.now(),
       ...(binding.requestedSessions === undefined ? {} : { requestedSessions: binding.requestedSessions }),
@@ -9034,7 +9067,7 @@ export class CampaignManager {
       const repoNow = await this.projectRepoStateAsync();
       const revisionNow = await this.projectRevisionAsync();
       const dirtyNow = repoNow === "none" ? false : await this.projectIsDirtyAsync();
-      const artifactNow = binding.artifactPath === undefined ? undefined : await artifactDigestAsync(binding.artifactPath);
+      const artifactNow = binding.artifactPath === undefined ? undefined : await this.digestArtifact(binding.artifactPath);
       // WHAT THIS CALLER ACTUALLY OBSERVED, and nothing more. The transport
       // observation used to carry `exitCode: 0` on the strength of the
       // callback having returned — an exit code nobody here measured, which

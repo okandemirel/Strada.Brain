@@ -263,8 +263,9 @@ export interface ShutdownOptions {
   /**
    * Campaign manager — disposed BEFORE in-flight tasks are failed: it would
    * react to those shutdown failures by submitting a new milestone (COR-9).
+   * Its promise resolves once the git probes it left in the project exit.
    */
-  campaignManager?: { dispose(): void };
+  campaignManager?: { dispose(): void | Promise<void> };
   /** Provider health registry — persisted on shutdown to survive restarts. */
   providerHealthRegistry?: ProviderHealthRegistry;
   /** Path to persist provider health registry state across restarts. */

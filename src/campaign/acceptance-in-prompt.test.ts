@@ -58,8 +58,8 @@ class FakeTasks extends EventEmitter {
 
 const managers: CampaignManager[] = [];
 const dirs: string[] = [];
-afterEach(() => {
-  for (const manager of managers.splice(0)) manager.dispose();
+afterEach(async () => {
+  for (const manager of managers.splice(0)) await manager.dispose();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
