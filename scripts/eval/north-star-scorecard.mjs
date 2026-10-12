@@ -1682,9 +1682,35 @@ function taskFacts(tasksSrc) {
 
 // ─── the whole card ─────────────────────────────────────────────────────────
 
-export function defaultPaths(env = process.env, home = homedir()) {
-  const stradaHome = env.STRADA_HOME?.trim() ? resolve(env.STRADA_HOME.trim()) : join(home, ".strada");
-  return { home: stradaHome, memoryDir: env.MEMORY_DB_PATH?.trim() ? resolve(env.MEMORY_DB_PATH.trim()) : join(stradaHome, ".strada-memory") };
+/** What STRADA_SOURCE_CHECKOUT says (runtime-paths.ts reads it three-state), or undefined when it says nothing. */
+function explicitSourceCheckout(env) {
+  const raw = env.STRADA_SOURCE_CHECKOUT?.trim().toLowerCase();
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+  return undefined;
+}
+
+/**
+ * Where the runtime keeps its log and databases, decided the way
+ * resolveRuntimePaths (src/common/runtime-paths.ts) decides its config root: a
+ * source checkout keeps them in the checkout itself, an installed copy in
+ * STRADA_HOME or ~/.strada. MEMORY_DB_PATH and LOG_FILE are resolved against
+ * that root, as the runtime does once it has moved there. Values set only in
+ * that root's .env are not read; --memory-dir and --log name them.
+ */
+export function defaultPaths(env = process.env, homeDir = homedir(), installRoot = env.STRADA_INSTALL_ROOT ?? repoRoot, platform = process.platform) {
+  const sourceCheckout = explicitSourceCheckout(env) ?? existsSync(join(installRoot, ".git"));
+  let home;
+  if (sourceCheckout) home = installRoot;
+  else if (env.STRADA_HOME?.trim()) home = resolve(env.STRADA_LAUNCH_CWD?.trim() || process.cwd(), env.STRADA_HOME.trim());
+  else if (platform === "win32") home = join(env.LOCALAPPDATA || join(homeDir, "AppData", "Local"), "Strada");
+  else home = join(homeDir, ".strada");
+  return {
+    home,
+    memoryDir: resolve(home, env.MEMORY_DB_PATH?.trim() || ".strada-memory"),
+    log: resolve(home, env.LOG_FILE?.trim() || "strada-brain.log"),
+    sourceCheckout,
+  };
 }
 
 /**
@@ -1692,13 +1718,13 @@ export function defaultPaths(env = process.env, home = homedir()) {
  * and an absent source turns the rungs that need it into "not measured".
  */
 export function scoreNorthStar(opts = {}) {
-  const defaults = defaultPaths(opts.env, opts.homeDir);
+  const defaults = defaultPaths(opts.env, opts.homeDir, opts.installRoot);
   const home = opts.home ? resolve(opts.home) : defaults.home;
   const memoryDir = opts.memoryDir ? resolve(opts.memoryDir) : opts.home ? join(home, ".strada-memory") : defaults.memoryDir;
   const campaignsSrc = openReadOnly("campaigns.db", opts.campaignsDb ?? join(memoryDir, "campaigns.db"));
   const tasksSrc = openReadOnly("tasks.db", opts.tasksDb ?? join(memoryDir, "tasks.db"));
   const learningSrc = openReadOnly("learning.db", opts.learningDb ?? join(memoryDir, "learning.db"));
-  const logPath = resolve(opts.log ?? join(home, "strada-brain.log"));
+  const logPath = resolve(opts.log ?? (opts.home ? join(home, "strada-brain.log") : defaults.log));
   try {
     let store = null;
     if (campaignsSrc.db) {
@@ -1841,8 +1867,10 @@ export function formatReport(card) {
 const HELP = `north-star-scorecard.mjs — the ten north-star rungs and the proof-run criteria (roadmap WP-0.2)
 
   --project <dir>         Unity project to scan (rungs 6-7, criteria E-G, I)
-  --home <dir>            Strada home (default $STRADA_HOME or ~/.strada)
+  --home <dir>            where the runtime keeps its log and databases (default: as resolveRuntimePaths
+                          decides it: this checkout when it is a source checkout, else $STRADA_HOME or ~/.strada)
   --memory-dir <dir>      directory holding the databases (default $MEMORY_DB_PATH or <home>/.strada-memory)
+                          values set only in the home's .env are not read: pass them here or with --log
   --campaigns-db <path>   campaigns.db, overriding --memory-dir (likewise --tasks-db, --learning-db)
   --vault <index.db>      a vault index to read (repeatable; <project>/.strada/vault/index.db and
                           framework vaults under <project>/Packages are found by themselves)

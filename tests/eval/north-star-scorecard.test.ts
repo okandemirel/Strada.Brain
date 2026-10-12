@@ -19,10 +19,12 @@ import Database from "better-sqlite3";
 import {
   EXIT,
   VERDICT,
+  defaultPaths,
   formatReport,
   scoreNorthStar,
   stripCSharp,
 } from "../../scripts/eval/north-star-scorecard.mjs";
+import { resolveRuntimePaths } from "../../src/common/runtime-paths.js";
 import { CampaignStorage } from "../../src/campaign/campaign-storage.js";
 import type { Campaign, CampaignMilestone } from "../../src/campaign/types.js";
 import { TaskStorage } from "../../src/tasks/task-storage.js";
@@ -250,7 +252,6 @@ function row(rid: string, kind: string, owner: string | null, fields: Record<str
     status: "passing",
     checks: [],
     gddRevision: 1,
-    construct: "SystemBase",
     ...fields,
   };
 }
@@ -301,11 +302,23 @@ interface ProofOptions {
   ownerMessageDuringRun?: boolean;
   /** The session that minted the lesson (instincts.origin_session_id); production writes none. */
   lessonOrigin?: string;
+  /**
+   * The records rungs 4, 8 and 9 need and no production code writes yet: a
+   * framework construct on each ledger row, the play-through's input route, and
+   * the lesson's origin session. Without this the fixture is what production writes.
+   */
+  futureRecords?: boolean;
 }
 
 /** Databases of a campaign that did everything the north star asks. */
 function seedProof(memory: string, opts: ProofOptions = {}): void {
-  const play = { found: true, ok: true, sessions: [{ index: 0, outcome: "Won" }, { index: 1, outcome: "Lost" }], inputRoute: "input" };
+  const play = {
+    found: true,
+    ok: true,
+    sessions: [{ index: 0, outcome: "Won" }, { index: 1, outcome: "Lost" }],
+    ...(opts.futureRecords ? { inputRoute: "input" } : {}),
+  };
+  const construct = opts.futureRecords ? { construct: "SystemBase" } : {};
   const storage = new CampaignStorage(join(memory, "campaigns.db"));
   try {
     storage.save(
@@ -327,8 +340,8 @@ function seedProof(memory: string, opts: ProofOptions = {}): void {
           }),
         ],
         requirements: ledger([
-          row("R1", "input", "m1"),
-          row("R2", "rule", "m2"),
+          row("R1", "input", "m1", construct),
+          row("R2", "rule", "m2", construct),
           row("A1", "aspiration", null, { status: "excluded" }),
           row("S9", "screen", null, { status: "excluded", excludedBecause: "deferred past the MVP" }),
         ]) as Campaign["requirements"],
@@ -378,7 +391,7 @@ function seedProof(memory: string, opts: ProofOptions = {}): void {
       updatedAt: now - 2 * HOUR,
       sourceTrajectoryIds: [],
       tags: ["milestone:m1"],
-      ...(opts.lessonOrigin ? { originSessionId: opts.lessonOrigin } : {}),
+      ...(opts.lessonOrigin || opts.futureRecords ? { originSessionId: opts.lessonOrigin ?? "run-1" } : {}),
     } as unknown as Instinct);
     learning.recordInstinctExposure({ instinctId: "ins-1", sessionId: "run-2", taskRunId: "t-m2", shownAt: now - HOUR });
   } finally {
@@ -523,8 +536,28 @@ describe("north-star scorecard: a run that did everything", () => {
     return { home, memory, project, upstream };
   }
 
-  it("passes all ten rungs, each on a measured number", () => {
-    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+  it("scores what production records: rung 4 fails for want of a construct map, rungs 8 and 9 are not measured, the rest pass", () => {
+    const { home, project, upstream } = proofHome();
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    expect(card.rungs.map((r) => r.verdict)).toEqual([
+      VERDICT.PASS,
+      VERDICT.PASS,
+      VERDICT.PASS,
+      VERDICT.FAIL,
+      VERDICT.PASS,
+      VERDICT.PASS,
+      VERDICT.PASS,
+      VERDICT.NOT_MEASURED,
+      VERDICT.NOT_MEASURED,
+      VERDICT.PASS,
+    ]);
+    expect(rung(card, 4).checks[0]!.text).toBe(`${PROOF_ID}: 0 of 2 in-scope rows name a construct, 2 an owner`);
+    expect(rung(card, 8).cause).toBe("no play-through record states its input route, so play driven through the game's own Act cannot be told from real input");
+    expect(rung(card, 9).cause).toMatch(/^lesson provenance not recorded: 1 of 1 exposures/);
+  });
+
+  it("passes all ten rungs, each on a measured number, once the records production does not write yet are there", () => {
+    const { home, project, upstream } = proofHome({ futureRecords: true });
     const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(card.rungs.map((r) => [r.id, r.verdict, r.cause])).toEqual(
       Array.from({ length: 10 }, (_, i) => [i + 1, VERDICT.PASS, null]),
@@ -547,7 +580,8 @@ describe("north-star scorecard: a run that did everything", () => {
     expect(verdicts).toEqual({
       A: VERDICT.NOT_MEASURED,
       B: VERDICT.NOT_MEASURED,
-      C: VERDICT.PASS,
+      // Rows are owned, but no store maps a row to a framework construct.
+      C: VERDICT.FAIL,
       D: VERDICT.NOT_MEASURED,
       E: VERDICT.NOT_MEASURED,
       F: VERDICT.NOT_MEASURED,
@@ -559,6 +593,7 @@ describe("north-star scorecard: a run that did everything", () => {
       K: VERDICT.PASS,
       L: VERDICT.NOT_MEASURED,
     });
+    expect(criterion(card, "C").checks.map((c) => c.ok)).toEqual([true, false, true]);
     expect(criterion(card, "A").cause).toBe(
       "LLM calls per campaign are in no database this scorecard reads; restarts during gate work and their re-measurement are not recorded",
     );
@@ -589,11 +624,11 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("prints JSON from the command line", () => {
-    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, project, upstream } = proofHome();
     const res = spawnSync(process.execPath, [CLI, "--home", home, "--project", project, "--upstream", upstream, "--brain-root", brainRoot, "--json"], { encoding: "utf8", cwd: REPO_ROOT });
     expect(res.status, res.stderr).toBe(EXIT.MEASURED);
     const card = JSON.parse(res.stdout) as Card;
-    expect(card.score.rungs).toEqual({ pass: 10, fail: 0, notMeasured: 0 });
+    expect(card.score.rungs).toEqual({ pass: 7, fail: 1, notMeasured: 2 });
     expect(card.criteria.map((c) => c.id).join("")).toBe("ABCDEFGHIJKL");
   });
 
@@ -633,7 +668,7 @@ describe("north-star scorecard: a run that did everything", () => {
   }
 
   it("scopes rung 5 to campaigns under the scope gate when no --campaign is given, as rungs 2, 3 and 10 are", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     // Greens from before the gate existed: no scope_gate_since, judged in shadow at most.
     addCampaigns(
       memory,
@@ -655,7 +690,7 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("still fails rung 5 on a green the gate never proved in a campaign under the gate, and counts only legacy greens out", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     addCampaigns(memory, [
       campaign({
         id: "campaign_gated_bypass",
@@ -671,7 +706,7 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("counts the greens of a campaign created after the gate first decided that never ran under it", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     // The proof run's gate decided at T0; this one started later with the gate off.
     addCampaigns(memory, [campaign({ id: "campaign_gate_off", createdAt: T0 + 5 * HOUR, milestones: [milestone("m1")] })]);
     const r5 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 5);
@@ -691,7 +726,7 @@ describe("north-star scorecard: a run that did everything", () => {
   }
 
   it("makes owner messages and task facts not measured, not a crash, when tasks.db lacks the columns they read", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     replaceDb(
       join(memory, "tasks.db"),
       `CREATE TABLE tasks (id TEXT PRIMARY KEY, chat_id TEXT, campaign_id TEXT, status TEXT, created_at INTEGER);
@@ -705,7 +740,7 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("makes rung 9's later-run check not measured when instincts has no provenance column", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     const learning = join(memory, "learning.db");
     replaceDb(
       learning,
@@ -722,7 +757,7 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("makes the campaign rungs not measured when campaigns.db holds a judgements table of another shape", () => {
-    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, memory, project, upstream } = proofHome();
     const db = new Database(join(memory, "campaigns.db"));
     try {
       db.exec("DROP TABLE campaign_judgements; CREATE TABLE campaign_judgements (seq INTEGER PRIMARY KEY, campaign_id TEXT, milestone_id TEXT);");
@@ -736,7 +771,7 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("makes a vault index of another shape not measured, not a crash", () => {
-    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const { home, project, upstream } = proofHome();
     replaceDb(join(project, ".strada", "vault", "index.db"), "CREATE TABLE vault_files (id INTEGER PRIMARY KEY);");
     const k = criterion(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, "K");
     expect(k.verdict).toBe(VERDICT.NOT_MEASURED);
@@ -968,6 +1003,52 @@ describe("north-star scorecard: what it cannot read", () => {
     db.close();
     const card = scoreNorthStar({ home: join(work, "nohome"), learningDb: path }) as Card;
     expect(rung(card, 9).checks[0]).toEqual({ ok: true, text: "0 of 0 retrievals returned anything; 40 older retrievals rolled up with 3 insights returned in total" });
+  });
+});
+
+describe("defaultPaths", () => {
+  const homeDir = "/invented-user";
+  /** A Brain install root: a source checkout when it holds .git, as resolveRuntimePaths probes. */
+  function installRoot(name: string, checkout: boolean): string {
+    const dir = join(work, name);
+    mkdirSync(checkout ? join(dir, ".git") : dir, { recursive: true });
+    return dir;
+  }
+
+  it("finds the log and the databases where the runtime keeps them: in a source checkout, the checkout itself", () => {
+    const checkout = installRoot("checkout", true);
+    expect(defaultPaths({}, homeDir, checkout, "darwin")).toEqual({
+      home: checkout,
+      memoryDir: join(checkout, ".strada-memory"),
+      log: join(checkout, "strada-brain.log"),
+      sourceCheckout: true,
+    });
+  });
+
+  it("agrees with resolveRuntimePaths on the config root", () => {
+    const checkout = installRoot("checkout", true);
+    const installed = installRoot("installed", false);
+    const cases: Array<[NodeJS.ProcessEnv, string, NodeJS.Platform]> = [
+      [{}, checkout, "darwin"],
+      [{ STRADA_HOME: join(work, "elsewhere") }, checkout, "linux"],
+      [{ STRADA_SOURCE_CHECKOUT: "false", STRADA_HOME: join(work, "elsewhere") }, checkout, "linux"],
+      [{ STRADA_SOURCE_CHECKOUT: "false" }, checkout, "linux"],
+      [{}, installed, "linux"],
+      [{ STRADA_HOME: join(work, "elsewhere") }, installed, "darwin"],
+      [{ STRADA_SOURCE_CHECKOUT: "true" }, installed, "linux"],
+      [{ LOCALAPPDATA: join(work, "appdata") }, installed, "win32"],
+    ];
+    for (const [env, root, platform] of cases) {
+      const runtime = resolveRuntimePaths({ env, homeDir, installRoot: root, platform, cwd: work });
+      expect(defaultPaths(env, homeDir, root, platform).home, JSON.stringify(env)).toBe(runtime.configRoot);
+    }
+  });
+
+  it("resolves MEMORY_DB_PATH and LOG_FILE against that root, as the runtime does after it moves there", () => {
+    const checkout = installRoot("checkout", true);
+    const paths = defaultPaths({ MEMORY_DB_PATH: "state/memory", LOG_FILE: "logs/brain.log" }, homeDir, checkout, "linux");
+    expect(paths.memoryDir).toBe(join(checkout, "state", "memory"));
+    expect(paths.log).toBe(join(checkout, "logs", "brain.log"));
   });
 });
 
