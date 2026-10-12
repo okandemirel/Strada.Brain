@@ -216,6 +216,45 @@ describe("reownLedger", () => {
     expect(lifted.owner).toBeUndefined();
     expect(byLabel(reread.ledger.rows, "TK-8")).toMatchObject({ status: "excluded" });
   });
+
+  it("the amendment's counts add up to the rows it read, and no waiver is said to need a person for a row the plan excludes", async () => {
+    const watch = DOC.replace(
+      "## 3. Extras",
+      "### 2.1 Night Watch\nTK-7: The keeper must light the fog lamp at dusk.\nTK-8: The fog lamp must stay lit for 40 seconds.\n\n## 3. Extras",
+    );
+    const quote = "The lighthouse keeper lives on a rock between two harbours at the edge of the map.";
+    const modelRow = async () => JSON.stringify({ rows: [{ requirement: "the keeper lives on a rock between two harbours", quote }] });
+    const first = await completeLedgerByModel(ledgerOf(watch), watch, modelRow, LADDER, options);
+    for (const label of ["TK-2", "TK-7"]) {
+      const row = byLabel(first.ledger.rows, label);
+      row.status = "waived";
+      row.waiver = { userId: "owner", atMs: 5, reason: "deferred" };
+    }
+    const replan = { atMs: 4_000, excluded: ["Night Watch: after launch"] };
+    const replanned = reownLedger(first.ledger, LADDER, replan);
+    // One of each: cosmetic (TK-1), a changed ask the plan builds (TK-2), a changed ask it excludes (TK-7), retired (TK-3), new.
+    const amended = watch
+      .replace("TK-1: The keeper must refill the lamp before the tide turns.", "TK-1: the keeper MUST refill the lamp, before the tide turns")
+      .replace("TK-2: A full lamp must burn for 90 seconds.", "TK-2: A full lamp must burn for 120 seconds.")
+      .replace("TK-3: At most 3 ships may wait at the rock.\n", "TK-4: A ship must signal twice before it docks.\n")
+      .replace("TK-7: The keeper must light the fog lamp at dusk.", "TK-7: The keeper must light the fog lamp an hour before dusk.");
+
+    const result = rereadLedger(replanned, amended, { gddSha256: "8".repeat(64), gddRevision: 2 }, LADDER, { ...replan, atMs: 5_000 });
+
+    expect(byLabel(result.ledger.rows, "TK-7").status).toBe("excluded");
+    expect(result.reopened.map((r) => r.label)).toEqual(["TK-2"]);
+    expect(result.retired.map((r) => r.label)).toEqual(["TK-3"]);
+    // TK-2 is judged again, so a person decides its waiver again; nothing will judge TK-7.
+    expect.soft(result.waiversDropped.map((r) => r.label)).toEqual(["TK-2"]);
+    const told = describeAmendment(result);
+    expect.soft(told).not.toContain("TK-7");
+    // Every row the ledger now holds sits in one bucket of the headline.
+    const counted = result.unchanged + result.cosmetic + result.reopened.length + result.changedExcluded + result.added + result.kept;
+    expect.soft(counted).toBe(result.ledger.rows.length);
+    expect(result).toMatchObject({ cosmetic: 1, changedExcluded: 1, added: 1, kept: 1 });
+    expect(told).toContain("1 changed but still excluded by the plan");
+    expect(told).toContain("1 added earlier by the model or a review, still quoted");
+  });
 });
 
 describe("rereadLedger and a waived row that moved", () => {

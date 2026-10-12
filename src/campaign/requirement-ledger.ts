@@ -163,9 +163,13 @@ export interface LedgerAmendment {
   readonly renamed: ReadonlyMap<string, string>;
   /** Reworded with a changed ask — a number, a clause: open again, its test superseded. */
   readonly reopened: RequirementRow[];
+  /** Reworded with a changed ask under a heading the plan excludes: still out of judgement, so not reopened. */
+  readonly changedExcluded: number;
   /** Reopened rows a person had waived: the waiver was for the old ask. */
   readonly waiversDropped: RequirementRow[];
   readonly added: number;
+  /** Rows no code reads (model, audit or review added) whose quote the amended document still holds. */
+  readonly kept: number;
   /** Rows the amended document no longer has. */
   readonly retired: RequirementRow[];
 }
@@ -254,7 +258,8 @@ export function rereadLedger(
   const before = new Map(previous.rows.map((r) => [r.rid, r]));
   const claimed = new Set<string>();
   const reopened: RequirementRow[] = [];
-  const waiversDropped: RequirementRow[] = [];
+  // The reopened row's id → the waived row it replaces.
+  const waiverLost = new Map<string, RequirementRow>();
   const renamed = new Map<string, string>();
   let unchanged = 0;
   let cosmetic = 0;
@@ -281,7 +286,7 @@ export function rereadLedger(
     }
     const open = reopenedFrom(row, predecessor, options.atMs);
     reopened.push(open);
-    if (predecessor.status === "waived") waiversDropped.push(predecessor);
+    if (predecessor.status === "waived") waiverLost.set(open.rid, predecessor);
     return open;
   });
 
@@ -298,6 +303,7 @@ export function rereadLedger(
   const owned = ownRows([...rows, ...kept], milestones, options);
   // Reopened as the ownership pass left them: a changed row the plan still excludes stays out of judgement, not open again.
   const changedAsk = new Set(reopened.map((r) => r.rid));
+  const stillExcluded = new Set(owned.filter((r) => changedAsk.has(r.rid) && r.status === "excluded").map((r) => r.rid));
   return {
     ledger: {
       version: 1,
@@ -313,9 +319,12 @@ export function rereadLedger(
     unchanged,
     cosmetic,
     renamed,
-    reopened: owned.filter((r) => changedAsk.has(r.rid) && r.status !== "excluded"),
-    waiversDropped,
+    reopened: owned.filter((r) => changedAsk.has(r.rid) && !stillExcluded.has(r.rid)),
+    changedExcluded: stillExcluded.size,
+    // A person decides again only where the new ask is judged.
+    waiversDropped: [...waiverLost].filter(([rid]) => !stillExcluded.has(rid)).map(([, waived]) => waived),
     added,
+    kept: kept.length,
     retired,
   };
 }
@@ -383,10 +392,15 @@ export function describeAmendment(amendment: LedgerAmendment): string {
   const { ledger, reopened, retired, waiversDropped } = amendment;
   const named = (rows: readonly RequirementRow[]): string =>
     rows.slice(0, 6).map(rowRef).join(", ") + (rows.length > 6 ? `, …and ${rows.length - 6} more` : "");
+  // Every row the ledger now holds is in one of these counts, so they add up to what was read.
   const lines = [
     `📋 GDD rows re-read from the amended document (${ledger.gddSha256.slice(0, 8)}, revision ${ledger.gddRevision}): ` +
       `${amendment.unchanged} unchanged, ${amendment.cosmetic} reworded cosmetically (result and test kept), ` +
-      `${reopened.length} reopened because what they ask changed, ${amendment.added} new, ${retired.length} retired.`,
+      `${reopened.length} reopened because what they ask changed, ` +
+      (amendment.changedExcluded > 0 ? `${amendment.changedExcluded} changed but still excluded by the plan, ` : "") +
+      `${amendment.added} new, ` +
+      (amendment.kept > 0 ? `${amendment.kept} added earlier by the model or a review, still quoted, ` : "") +
+      `${retired.length} retired.`,
   ];
   if (reopened.length > 0) lines.push(`Reopened, their checks superseded: ${named(reopened)}.`);
   if (waiversDropped.length > 0) {

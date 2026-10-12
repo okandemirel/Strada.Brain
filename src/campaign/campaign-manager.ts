@@ -6985,7 +6985,9 @@ export class CampaignManager {
       unchanged: amendment.unchanged,
       cosmetic: amendment.cosmetic,
       reopened: amendment.reopened.map((r) => r.rid),
+      changedExcluded: amendment.changedExcluded,
       added: amendment.added,
+      kept: amendment.kept,
       retired: amendment.retired.map((r) => r.rid),
     });
     return { changed: true, amendment };
