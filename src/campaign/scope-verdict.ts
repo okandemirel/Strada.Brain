@@ -103,8 +103,12 @@ function rowName(row: RequirementRow): string {
   return `${row.label ?? row.rid} (${where}, line ${row.line}): "${clip(row.text, 160)}"`;
 }
 
-/** A model name without its provider prefix, without case. */
-function modelId(name: string): string {
+/**
+ * A model name without its provider prefix, without case. The test writer
+ * picks its model by the same reading, so "a different model" means the same
+ * thing when it is chosen and when it is judged.
+ */
+export function modelId(name: string): string {
   const trimmed = name.trim().toLowerCase();
   return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 }

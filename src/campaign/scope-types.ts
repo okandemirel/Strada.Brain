@@ -385,6 +385,14 @@ export interface AcceptanceWriteContext {
   readonly harnessDoc: string;
   /** Public type and member signatures of the project, never bodies. */
   readonly surfaceDigest: string;
+  /**
+   * The most model calls this request may spend — the caller's remaining
+   * per-milestone budget. The writer never exceeds it, nor its own cap; a row
+   * it could not afford comes back faulted as "budget".
+   */
+  readonly maxCalls?: number;
+  /** The ledger rows a file's tests check: repairCompile lints each repaired check against its row's kind and bounds. */
+  readonly rows?: readonly RequirementRow[];
 }
 
 /** A test body as the writer returns it; the system wraps it (namespace, name, attributes, timeout). */
@@ -403,11 +411,42 @@ export interface AcceptanceUnbound {
   readonly missingObservable: string;
 }
 
+/**
+ * Why the writer returned no usable check for a row. None is the worker's
+ * doing, so none is charged to the sprint.
+ *
+ * no-writer:   no healthy model could write at all
+ * call-failed: the model call threw (an outage, not a fault of the check)
+ * unparseable: the reply was not the strict JSON object, after the regeneration
+ * missing:     the reply named the row neither in checks nor in unbound, after the regeneration
+ * lint:        its check still broke a lint rule after the regeneration (`problems` say which)
+ * budget:      the call budget ran out before the row was written
+ * no-row:      a file's test names a row the caller did not pass
+ */
+export type AcceptanceWriteFaultCause = "no-writer" | "call-failed" | "unparseable" | "missing" | "lint" | "budget" | "no-row";
+
+export interface AcceptanceWriteFault {
+  readonly rid: string;
+  readonly cause: AcceptanceWriteFaultCause;
+  readonly problems: readonly string[];
+}
+
 export interface AcceptanceWriteResult {
+  /** Every one passed `lintAcceptanceBody` against its row. */
   readonly checks: readonly AcceptanceCheckBody[];
   readonly unbound: readonly AcceptanceUnbound[];
-  /** The model that answered, and whether it worked on the milestone. */
-  readonly writer: AcceptanceWriter;
+  /** Rows that got neither a check nor an unbound answer. */
+  readonly faulted: readonly AcceptanceWriteFault[];
+  /**
+   * The model that answered, and whether it worked on the milestone; when
+   * several calls answered, the least independent of them. Absent when no
+   * model answered (none was healthy, or no call could be afforded).
+   */
+  readonly writer?: AcceptanceWriter;
+  /** Model calls this request spent, for the caller's per-milestone budget. */
+  readonly calls: number;
+  /** One sentence for the report when the writer is not independent of the workers, or nobody could write. */
+  readonly disclosure?: string;
 }
 
 /**
