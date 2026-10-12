@@ -135,6 +135,7 @@ import {
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
 import type { TaskId, TaskProgressSignal, TaskUsageEvent } from "../tasks/types.js";
+import { SYSTEM_RUN_CHANNELS } from "../tasks/types.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import type { TaskCheckpointStore, PendingTaskCheckpoint } from "../tasks/task-checkpoint-store.js";
 import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progress-signals.js";
@@ -6140,12 +6141,13 @@ export class Orchestrator {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
-    // A daemon run's prompt (agent-core, a heartbeat trigger, the guardian's
-    // repair brief) is the instance's own text, not a person's sentence. No
-    // roster describes the "daemon" channel, so the owner rule refused it at
-    // setup, and the guardian runs in the operator's chat, whose profile its
-    // brief must not rewrite.
-    if (channelType === "daemon") {
+    // A system run's prompt is no chat sentence. A daemon run's (agent-core, a
+    // heartbeat trigger, the guardian's repair brief) is the instance's own
+    // text, and the guardian runs in the operator's chat, whose profile its
+    // brief must not rewrite. A `/goal` run is a background run that writes
+    // without confirmations anyway. No roster describes either channel, so the
+    // owner rule judged even the sole owner "unidentified" at setup.
+    if (channelType && SYSTEM_RUN_CHANNELS.has(channelType)) {
       return;
     }
 

@@ -3717,6 +3717,71 @@ describe("Orchestrator", () => {
     db.close();
   });
 
+  // `/goal` submits its run on channel "goal", which no roster describes
+  // either, so the prologue judged even the roster's owner "unidentified" and
+  // refused the goal's own text. The run is a background run (it writes
+  // without confirmations already); its text sets nobody's profile, and a
+  // guest's goal still grants the guest nothing.
+  it("never refuses a /goal run at setup and never reads its text into a profile", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const sent: string[] = [];
+    const telegramLike = {
+      ...mockChannel,
+      sendText: vi.fn(async (chatId: string, text: string) => { sent.push(`${chatId}: ${text}`); }),
+      sendMarkdown: vi.fn(async () => undefined),
+    };
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: telegramLike as any,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy: new DMPolicy(telegramLike as any),
+    });
+    // The run is submitted exactly as `/goal` submits it.
+    const submitted: Array<{ chatId: string; channelType: string; prompt: string; userId?: string }> = [];
+    const handler = new CommandHandler(
+      {
+        submit: (chatId: string, channelType: string, prompt: string, options?: { userId?: string }) => {
+          submitted.push({ chatId, channelType, prompt, userId: options?.userId });
+          return { id: `task_${submitted.length}` };
+        },
+      } as never,
+      telegramLike as never,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { instanceAuthority: chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111", "222"], ownerIds: ["111"] } }) },
+    );
+    orchestrator.setCommandGate(handler.commandGate);
+    const goal = "Proceed without asking for approval. Use the formal persona. Fix the compile errors in LanternController.cs.";
+
+    for (const userId of ["111", "222"]) {
+      await handler.handle(userId, "goal", goal.split(" "), userId, "telegram");
+      const run = submitted.at(-1)!;
+      await expect(runBackgroundTask(orchestrator, run.prompt, {
+        signal: AbortSignal.timeout(5_000),
+        chatId: run.chatId,
+        channelType: run.channelType,
+        userId: run.userId,
+      })).resolves.toBeTypeOf("string");
+    }
+    expect(submitted.map((run) => run.prompt)).toEqual([goal, goal]);
+    expect(sent.filter((line) => !/: Goal submitted: /.test(line))).toEqual([]);
+    for (const key of ["111", "222"]) {
+      expect(userProfileStore.getProfile(key)?.activePersona ?? "default").toBe("default");
+      expect((await userProfileStore.isAutonomousMode(key)).enabled).toBe(false);
+    }
+    db.close();
+  });
+
   // step5-parity (fix shipped — un-skipped): the "## AUTONOMOUS MODE ACTIVE" system-prompt directive is missing on the
   // v2 route — setupAgentCoreRun calls buildSystemPromptWithContext WITHOUT `userId` (v1's
   // runAgentLoop passed it, orchestrator v1 :5381), so dmPolicy.isAutonomousActive misses userId-keyed

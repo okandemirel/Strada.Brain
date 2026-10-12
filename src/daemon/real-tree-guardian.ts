@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { getLoggerSafe } from "../utils/logger.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
-import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
+import { ACTIVE_STATUSES, DAEMON_RUN_CHANNEL, TaskStatus } from "../tasks/types.js";
 
 /**
  * Headless compile verdict for the real project root. `ran: false` means the
@@ -571,7 +571,7 @@ export class RealTreeGuardian {
       });
       const task = this.taskManager.submit(
         this.chatId,
-        "daemon",
+        DAEMON_RUN_CHANNEL,
         FIX_TASK_PROMPT(verdict.detail, this.projectRoot),
         {
           origin: "daemon",
@@ -696,7 +696,7 @@ export class RealTreeGuardian {
     });
     const task = this.taskManager.submit(
       this.chatId,
-      "daemon",
+      DAEMON_RUN_CHANNEL,
       PLAY_FIX_TASK_PROMPT(verdict.detail, this.projectRoot),
       { origin: "daemon", triggerName: "real-tree-guardian", workspacePolicy: "none", supervisorMode: "off" },
     );

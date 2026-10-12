@@ -32,7 +32,7 @@ import type { DaemonConfig, DaemonStatusSnapshot, ITrigger, TriggerStateStore, T
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
-import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
+import { ACTIVE_STATUSES, DAEMON_RUN_CHANNEL, TaskStatus } from "../tasks/types.js";
 import { MS_PER_DAY } from "../learning/types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
@@ -903,7 +903,7 @@ export class HeartbeatLoop {
     try {
       task = this.taskManager.submit(
         "daemon",
-        "daemon",
+        DAEMON_RUN_CHANNEL,
         trigger.metadata.description,
         { origin: "daemon", triggerName: name },
       );

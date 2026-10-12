@@ -7,7 +7,7 @@
 
 import type { IChannelSender } from "../channels/channel-core.interface.js";
 import type { TaskCommand, Task, TaskId } from "./types.js";
-import { TaskStatus, ACTIVE_STATUSES } from "./types.js";
+import { TaskStatus, ACTIVE_STATUSES, GOAL_RUN_CHANNEL } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
@@ -660,7 +660,7 @@ export class CommandHandler {
 
     // Default: submit as a goal task
     const prompt = args.join(" ").slice(0, 2000);
-    await this.taskManager.submit(chatId, "goal", prompt, {
+    await this.taskManager.submit(chatId, GOAL_RUN_CHANNEL, prompt, {
       userId: this.getIdentityKey(chatId, userId),
     });
     await this.channel.sendText(chatId, `Goal submitted: ${prompt.slice(0, 80)}`);

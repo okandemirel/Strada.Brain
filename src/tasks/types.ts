@@ -24,6 +24,17 @@ export function getTaskConversationKey(chatId: string, channelType: string, conv
   return JSON.stringify([channelType, conversationId?.trim() || chatId]);
 }
 
+/** The channel of the daemon's own runs: agent-core, heartbeat triggers, the guardian's repairs. */
+export const DAEMON_RUN_CHANNEL = "daemon";
+/** The channel `/goal` submits its background goal on. */
+export const GOAL_RUN_CHANNEL = "goal";
+/**
+ * The channels a run carries when no chat channel delivered its prompt. No
+ * roster describes them, so the owner rule can judge nobody there: a run on
+ * one reads its prompt into no profile.
+ */
+export const SYSTEM_RUN_CHANNELS: ReadonlySet<string> = new Set([DAEMON_RUN_CHANNEL, GOAL_RUN_CHANNEL]);
+
 // ─── Task State Machine ─────────────────────────────────────────────────────────
 
 export enum TaskStatus {

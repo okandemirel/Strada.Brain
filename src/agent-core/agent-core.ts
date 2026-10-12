@@ -11,6 +11,7 @@ import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
+import { DAEMON_RUN_CHANNEL } from "../tasks/types.js";
 import { getLogger } from "../utils/logger.js";
 import { allProvidersCoolingDownMs } from "../agents/providers/provider-outage.js";
 import { ObservationEngine } from "./observation-engine.js";
@@ -56,7 +57,7 @@ export class AgentCore {
    * connects (web) or refused (Telegram). Human-visible output goes to {@link operatorChatId}.
    */
   static readonly AGENT_CHAT_ID = "agent-core";
-  static readonly AGENT_CHANNEL_TYPE = "daemon";
+  static readonly AGENT_CHANNEL_TYPE = DAEMON_RUN_CHANNEL;
 
   private tickInFlight = false;
   private lastReasoningMs = Date.now(); // Init to now to prevent immediate LLM call on restart
