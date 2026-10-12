@@ -408,13 +408,17 @@ const BYPASS_RULES: ReadonlyArray<{
     // they were null — every frame. The boot check's own wiring report said all
     // three WERE registered, so the fallback was never needed; it was masking a
     // question nobody had asked. A green suite over a workaround is still green.
+    // Upstream SystemRunner does not inject systems, though: it hands one only
+    // EntityManager and EventBus, so the advice says when [Inject] is filled.
     what: "service-locator lookups beside [Inject]",
     mine: /GameBootstrapper\.Services\s*\??\.\s*TryGet|GameBootstrapper\.Services\s*\??\.\s*Get\b/gu,
     theirs: /$^/u,
     instead:
-      "the container that already holds them — Strada.Core injects every registered system in " +
-      "SystemRunner.Initialize, and unity_playmode_verify now prints one [StradaWiring] line per " +
-      "system saying whether each dependency is registered. Read that before adding a fallback",
+      "the container that already holds them — a controller or service takes them as constructor " +
+      "parameters. A system gets only EntityManager and EventBus from SystemRunner unless its type is " +
+      "registered in the container, and newer Core fills its [Inject] fields only when that registration " +
+      "is builder.RegisterService<T>(). unity_playmode_verify prints one [StradaWiring] line per system " +
+      "saying whether each dependency is registered. Read that before adding a fallback",
     floor: 2,
   },
   {

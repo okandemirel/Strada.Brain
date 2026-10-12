@@ -36,6 +36,8 @@ import { CSharpFrameworkExtractor } from "../../intelligence/framework/framework
 import { StradaCoreExtractor } from "../../intelligence/strada-core-extractor.js";
 import { validateDrift } from "../../intelligence/strada-drift-validator.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
+import { assessFrameworkBypass } from "../autonomy/scene-wiring.js";
+import { SystemCreateTool } from "../tools/strada/system-create.js";
 
 const CORE_PATH_FROM_ENV = process.env["STRADA_CORE_PATH"]?.trim() || undefined;
 const CORE_ROOT =
@@ -71,6 +73,11 @@ interface CoreSurface {
   generatedNamespaces: Set<string>;
   /** The folders of Core's module layout, relative to the module: `Scripts/Systems`. */
   moduleFolders: Set<string>;
+  /**
+   * The IModuleBuilder registrations that ask the container to run member
+   * injection (`[Inject]`) after construction; none on a Core that never runs it.
+   */
+  memberInjecting: Set<string>;
 }
 
 /**
@@ -164,6 +171,7 @@ function readCoreSurface(root: string): CoreSurface {
     external: new Set(),
     generatedNamespaces: new Set(),
     moduleFolders: new Set(),
+    memberInjecting: new Set(),
   };
   const words = new Set<string>();
   const typeRe = new RegExp(
@@ -224,6 +232,18 @@ function readCoreSurface(root: string): CoreSurface {
         type.members.add(mm[2]!);
       }
       for (const nested of body.matchAll(/\b(?:class|struct|interface|enum|record)\s+(\w+)/g)) type.members.add(nested[1]!);
+
+      // A registration runs [Inject] when its body asks the container to
+      // (`RegisterWithMemberInjection`); RegisterModel forwarding to Register does not.
+      if (!type.bases.has("IModuleBuilder")) continue;
+      for (const mm of body.matchAll(/\b(Register\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{;=]*(\{|=>)/g)) {
+        const start = open + 1 + mm.index! + mm[0].length - mm[2]!.length;
+        if (depth[start] !== inner) continue;
+        const block = mm[2] === "{";
+        let end = start + mm[2]!.length;
+        while (end < code.length && !(block ? code[end] === "}" && depth[end] === inner + 1 : code[end] === ";" && depth[end] === inner)) end++;
+        if (/\bRegisterWithMemberInjection\b/u.test(code.slice(start, end))) surface.memberInjecting.add(mm[1]!);
+      }
     }
     for (const m of code.matchAll(delegateRe)) {
       if (!surface.types.has(m[1]!)) surface.types.set(m[1]!, { members: new Set(), bases: new Set() });
@@ -417,6 +437,24 @@ function sectionClaims(source: string, block: string, prose: boolean): Array<{ c
 const recommended = (description: string): string => description.split(/,?\s+(?:not|instead of)\s+/u)[0]!;
 
 /**
+ * A text that says when Core runs `[Inject]` must name the registrations that
+ * run it, and no other; on a Core that never runs it, it must say that only
+ * newer Core does. "Types registered through IModuleBuilder" named none, and
+ * Register, RegisterModel, RegisterFactory and RegisterInstance only construct.
+ */
+function injectProblems(core: CoreSurface, where: string, text: string): string[] {
+  const say = (what: string): string[] => [`${where}: ${what}  ← ${JSON.stringify(text.trim().slice(0, 160))}`];
+  if (core.memberInjecting.size === 0) {
+    return /\bnewer Core\b/u.test(text) ? [] : say("this Core never runs [Inject], and the text does not say only newer Core does");
+  }
+  const runs = [...core.memberInjecting].sort().join(", ");
+  const named = new Set([...text.matchAll(/\b(Register\w+)/gu)].map((m) => m[1]!));
+  if (named.size === 0) return say(`names no registration; Core runs [Inject] only for ${runs}`);
+  const wrong = [...named].filter((name) => !core.memberInjecting.has(name));
+  return wrong.length > 0 ? say(`${wrong.join(", ")} never run [Inject]; Core runs it only for ${runs}`) : [];
+}
+
+/**
  * "a controller per flow, a signal and its handler per action, …": each piece
  * of work must be something Core lets a module register (`RegisterController`,
  * `RegisterSignalHandler`) or a type it provides (`Controller`, `SystemBase`).
@@ -485,6 +523,26 @@ describe("Brain's Strada.Core knowledge names only APIs Strada.Core has", () => 
       return problemsIn(core!, { where: `seed ${seed.pattern}`, text, code: false }, ownersIn(core!, [text]));
     });
     expect(problems, `names Strada.Core does not have:\n${problems.join("\n")}`).toEqual([]);
+  });
+
+  it.skipIf(!CORE_ROOT)(`what Brain says about when [Inject] runs${SKIPPED}`, () => {
+    const lines = (where: string, block: string) =>
+      block.split("\n").filter((line) => line.includes("[Inject]")).map((line) => [where, line] as const);
+    const locatorAdvice = assessFrameworkBypass("/p", {
+      listFiles: () => ["/p/Assets/A.cs"],
+      readFile: () => "GameBootstrapper.Services?.TryGet(out _a);\nGameBootstrapper.Services?.TryGet(out _b);",
+      exists: () => true,
+    }).find((finding) => finding.what.includes("service-locator"))?.instead;
+    const texts = [
+      ...lines("STRADA_AGENT_PREAMBLE", STRADA_AGENT_PREAMBLE),
+      ...lines("STRADA_STATIC_FRAMEWORK_KNOWLEDGE", STRADA_STATIC_FRAMEWORK_KNOWLEDGE),
+      ["strada_create_system inject_services", new SystemCreateTool().inputSchema.properties.inject_services.description] as const,
+      ["the service-locator advice", locatorAdvice ?? ""] as const,
+    ];
+
+    expect(texts.length).toBeGreaterThanOrEqual(4);
+    const problems = texts.flatMap(([where, text]) => injectProblems(core!, where, text));
+    expect(problems, `says [Inject] runs where Strada.Core does not run it:\n${problems.join("\n")}`).toEqual([]);
   });
 
   it.skipIf(!CORE_ROOT)(`the way the deps context and the FILE TOO LONG gate divide work${SKIPPED}`, () => {
@@ -560,6 +618,29 @@ const SMALL_CORE = {
     "}",
   ].join("\n"),
   "Runtime/ECS/Systems/SystemBase.cs": "namespace Strada.Core.ECS.Systems { public abstract class SystemBase { } }",
+  "Runtime/Modules/ModuleBuilder.cs": [
+    "namespace Strada.Core.Modules {",
+    "  public interface IModuleBuilder { }",
+    "  public sealed class ModuleBuilder : IModuleBuilder {",
+    "    public IModuleBuilder Register<TInterface, TImplementation>(Lifetime lifetime) where TImplementation : class { return this; }",
+    "    public IModuleBuilder RegisterModel<TInterface, TImplementation>() { return Register<TInterface, TImplementation>(Lifetime.Singleton); }",
+    "    public IModuleBuilder RegisterController<T>() where T : class",
+    "    {",
+    "      _builder.RegisterWithMemberInjection(typeof(T), typeof(T), Lifetime.Singleton);",
+    "      return this;",
+    "    }",
+    "  }",
+    "}",
+  ].join("\n"),
+};
+
+/** The same Core before it ran member injection at all. */
+const SMALL_CORE_WITHOUT_INJECTION = {
+  ...SMALL_CORE,
+  "Runtime/Modules/ModuleBuilder.cs": SMALL_CORE["Runtime/Modules/ModuleBuilder.cs"].replace(
+    "_builder.RegisterWithMemberInjection(typeof(T), typeof(T), Lifetime.Singleton);",
+    "_builder.Register(typeof(T), typeof(T), Lifetime.Singleton);",
+  ),
 };
 
 /** What the checks report for a prompt block read against `core`. */
@@ -630,6 +711,31 @@ describe("what the checks read in a prompt block", () => {
       // neither text was read by any check.
       expect(workDivisionProblems(core, "a command per action, a system for per-frame work")).toEqual([
         expect.stringContaining("Strada.Core has no Command type and no RegisterCommand"),
+      ]);
+    });
+  });
+
+  it("holds what a text says about [Inject] to the registrations whose body runs it", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      const core = readCoreSurface(root);
+
+      expect([...core.memberInjecting]).toEqual(["RegisterController"]);
+      expect(injectProblems(core, "t", "`[Inject]` runs only in newer Core builds, for `RegisterController<T>()`")).toEqual([]);
+      // What the prompt said: every IModuleBuilder registration, which names none.
+      expect(injectProblems(core, "t", "`[Inject]` runs only in newer Core builds, for types registered through `IModuleBuilder`")).toEqual([
+        expect.stringContaining("names no registration; Core runs [Inject] only for RegisterController"),
+      ]);
+      expect(injectProblems(core, "t", "`[Inject]` runs for `RegisterController<T>()` and `RegisterModel<TInterface, TImpl>()`")).toEqual([
+        expect.stringContaining("RegisterModel never run [Inject]"),
+      ]);
+    });
+    await withTree(SMALL_CORE_WITHOUT_INJECTION, (root) => {
+      const core = readCoreSurface(root);
+
+      expect([...core.memberInjecting]).toEqual([]);
+      expect(injectProblems(core, "t", "`[Inject]` runs only in newer Core builds, for `RegisterController<T>()`")).toEqual([]);
+      expect(injectProblems(core, "t", "`[Inject]` runs for `RegisterController<T>()`")).toEqual([
+        expect.stringContaining("this Core never runs [Inject]"),
       ]);
     });
   });

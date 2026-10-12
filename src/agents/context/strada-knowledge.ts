@@ -42,7 +42,7 @@ PROCESS RULE — ask before sinking hours: when an implementation fork has two o
 - Controllers end with 'Controller' suffix
 - Mediators end with 'Mediator' suffix
 - Assembly definitions (.asmdef) per module folder
-- Services take their dependencies as constructor parameters, which the container resolves. \`[Inject]\` member injection runs only in newer Core builds, and only for types registered through \`IModuleBuilder\`: prefer the constructor
+- Controllers and services take their dependencies as constructor parameters, which the container resolves. \`[Inject]\` member injection runs only in newer Core builds, and only for types registered with \`builder.RegisterController<T>()\` or \`builder.RegisterService<TInterface, TImpl>()\`: prefer the constructor
 - Systems are marked with \`[StradaSystem]\` and ordered with \`[ExecutionOrder(int)]\` (both in \`Strada.Core.Modules\`)
 
 ### Module Decomposition
@@ -193,7 +193,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - Lifetimes: \`Lifetime.Singleton\`, \`Lifetime.Transient\`, \`Lifetime.Scoped\`
 - Resolve<T>() uses TypeId<T> for O(1) lookup
 - Constructor injection is the default: the container resolves constructor parameters
-- \`[Inject]\` (\`using Strada.Core.DI.Attributes;\`) marks fields, properties and methods for member injection; only newer Core builds run it, for types registered through \`IModuleBuilder\`
+- \`[Inject]\` (\`using Strada.Core.DI.Attributes;\`) marks fields, properties and methods for member injection; only newer Core builds run it, and only for types registered with \`builder.RegisterController<T>()\` or \`builder.RegisterService<TInterface, TImpl>()\`: the other registrations only call the constructor
 - \`IModuleBuilder\` wraps ContainerBuilder for module-scoped registration
 - Registration: \`builder.RegisterService<TInterface, TImpl>()\`, \`builder.RegisterController<T>()\`, \`builder.RegisterModel<TInterface, TImpl>()\`, \`builder.RegisterInstance<T>(instance)\`, \`builder.Register<TInterface, TImpl>(Lifetime.Transient)\`
 - Lock-free singleton resolution (published with \`Interlocked.CompareExchange\`)
@@ -211,6 +211,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - Additional attributes: \`[UpdatePhase(UpdatePhase.FixedUpdate)]\`, \`[RunBefore(typeof(T))]\`, \`[RunAfter(typeof(T))]\`, \`[RequiresSystem(typeof(T))]\`
 - Update phases (\`UpdatePhase\`): \`Initialization\`, \`Update\` (gameplay), \`LateUpdate\` (post-processing), \`FixedUpdate\` (physics)
 - \`SystemRunner\`: Executes systems in order, manages lifecycle
+- Systems get \`EntityManager\` and \`EventBus\` from \`SystemRunner\`, not through \`[Inject]\`: it creates a system with its parameterless constructor unless the system's type is registered in the container, and newer Core fills a system's \`[Inject]\` members only when that registration is \`builder.RegisterService<T>()\`. A system that needs a service asks it over the \`EventBus\`
 - Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based, up to 8 components)
 - Filtered iteration: \`Query().Filter<T1>().Also<T2>().None<T3>().ForEach(...)\`. \`Query()\` returns a \`QueryBuilder\`; \`Filter<T>()\` starts a \`FilteredQueryBuilder\` (up to 3 components) where \`Also<T>()\` requires another component and \`None<T>()\` excludes one; \`Query().Select<T1, T2>()\` returns an \`EntityQuery<T1, T2>\`
 - \`IJobComponent\`: Burst-compatible per-entity job interface

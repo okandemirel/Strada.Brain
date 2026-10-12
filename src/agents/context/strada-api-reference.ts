@@ -240,7 +240,8 @@ export const STRADA_API = {
   // ── DI API ──────────────────────────────────────────────────────────
   diApi: {
     // Constructor parameters are resolved everywhere; [Inject] members only by
-    // newer Core builds, for types registered through IModuleBuilder.
+    // newer Core builds, and only for RegisterController<T>() and
+    // RegisterService<…>() registrations (the others only construct).
     constructorInjection: "constructor parameters, resolved by the container",
     fieldInjection: "[Inject] private readonly T _field;",
     registration: {

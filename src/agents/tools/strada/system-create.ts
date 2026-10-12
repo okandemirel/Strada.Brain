@@ -43,7 +43,10 @@ export class SystemCreateTool implements ITool {
       inject_services: {
         type: "array",
         items: { type: "string" },
-        description: "Services to inject via [Inject] attribute. Note: field injection in systems is non-standard; prefer constructor injection in services.",
+        description:
+          "Services to inject via [Inject] fields. SystemRunner gives a system only EntityManager and EventBus: " +
+          "newer Core fills these fields only when the system's type is registered with builder.RegisterService<T>(), " +
+          "and otherwise they stay null. Prefer asking the service over the EventBus.",
       },
       system_order: {
         type: "number",
