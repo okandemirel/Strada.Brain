@@ -45,7 +45,7 @@ function toolRegistry() {
 /** Boots the task runtime stage with the campaign section given (or none) and returns what it built. */
 async function boot(
   campaign: Config["campaign"] | undefined,
-  options: { readonly registry?: ReturnType<typeof toolRegistry> } = {},
+  options: { readonly registry?: ReturnType<typeof toolRegistry>; readonly streamingEnabled?: boolean } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "stage-scope-wiring-"));
   const providers = providerManager();
@@ -54,7 +54,7 @@ async function boot(
     memory: { enabled: true, dbPath: join(root, "memory") },
     tasks: { concurrencyLimit: 1, messageBurstWindowMs: 0, messageBurstMaxMessages: 1 },
     autoUpdate: { enabled: false },
-    streamingEnabled: true,
+    streamingEnabled: options.streamingEnabled ?? true,
     autonomousDefaultEnabled: false,
     autonomousDefaultHours: 1,
     interaction: {},
@@ -136,6 +136,8 @@ describe("production construction wires the scope gate (GDD-drift W15)", () => {
   it("the gate reads the mode it was configured with, on as well as shadow", async () => {
     const { manager } = await boot({ scopeGate: "on", maxRequirementRows: 400 }, { registry: toolRegistry() });
     expect(manager.scopeGateWiring().mode).toBe("on");
+    // A second value, so a row cap pinned to a constant at the site fails too.
+    expect(internals(manager).maxRequirementRows).toBe(400);
     // No writer configured is auto, not no writer.
     expect(manager.scopeGateWiring().writer).toBe("auto (the first healthy model that did not work on the milestone)");
   });
@@ -152,6 +154,15 @@ describe("production construction wires the scope gate (GDD-drift W15)", () => {
     expect(providers.listExecutionCandidates).toHaveBeenCalled();
     expect(providers.getProviderByName).toHaveBeenCalledWith("invented-writer", "quill-1");
     expect(picked?.writer).toEqual({ provider: "invented-writer", model: "quill-1", independence: "different-model" });
+  });
+
+  it("the writer streams only when the daemon does: STREAMING_ENABLED=false reaches it as false", async () => {
+    // The boot above streams, so a site that hardcoded `streaming: true` passed
+    // it; the value has to follow the config in both directions.
+    const { manager } = await boot({ scopeGate: "shadow", maxRequirementRows: 400 }, { registry: toolRegistry(), streamingEnabled: false });
+    const author = internals(manager).acceptanceAuthor;
+    expect(author).toBeInstanceOf(AcceptanceAuthor);
+    expect((author as unknown as { streaming?: boolean }).streaming).toBe(false);
   });
 
   it("the acceptance run is W08's filtered unity_playmode_verify call through the daemon's tool registry", async () => {
