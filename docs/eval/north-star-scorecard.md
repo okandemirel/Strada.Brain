@@ -49,7 +49,7 @@ A mechanism with no store at all is a **fail**, not `not measured`. Assumption r
 | 6 | project `Assets/` (game code: excludes Tests, Editor, Strada.Generated, Plugins, StradaAcceptance) | ModuleConfig subclasses exist, no type name is declared in two modules, no empty `OnUpdate`, every `Service` subclass is registered, no `FindObject*`, and no `new *Service(` |
 | 7 | the project's `Packages/` and game code | Strada.Modules is installed and referenced |
 | 8 | milestone build, run and play-through verdicts, plus `unity_build_player` / `unity_run_player` observations | a player was built and run, a play-through was ok, Won and Lost were both observed, and the input route was real input |
-| 9 | `retrieval_metrics` (and its rollup), `instinct_exposure_log` | a retrieval returned something, and a lesson reached a later run than the one that learned it |
+| 9 | `retrieval_metrics` (and its rollup), `instinct_exposure_log`, `instincts.origin_session_id` | a retrieval returned something, and a lesson reached a later run than the one that learned it. Only a recorded origin session can show that. No production code writes one yet, so an exposure of a lesson with no origin makes the check `not measured: lesson provenance not recorded`, never a pass. |
 | 10 | campaigns, judgements and `tasks.db` | a campaign was delivered with every milestone gate-proven, with 0 owner messages in its chat during the run |
 
 How the rung 6 terms are defined:

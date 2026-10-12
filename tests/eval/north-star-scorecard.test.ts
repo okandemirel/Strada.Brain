@@ -28,6 +28,7 @@ import type { Campaign, CampaignMilestone } from "../../src/campaign/types.js";
 import { TaskStorage } from "../../src/tasks/task-storage.js";
 import { TaskStatus, type Task, type TaskId } from "../../src/tasks/types.js";
 import { LearningStorage } from "../../src/learning/storage/learning-storage.js";
+import type { Instinct } from "../../src/learning/types.js";
 import { MetricsStorage } from "../../src/metrics/metrics-storage.js";
 import { SqliteVaultStore } from "../../src/vault/sqlite-vault-store.js";
 
@@ -296,8 +297,14 @@ const PROOF_ID = "campaign_1800000000000_beacn";
 const RUN = { admitted: true, revision: "rev-b", expected: ["Lit_lane_saves_ship"], total: 1, failedNames: [], unattributed: 0, flaky: [], acceptanceCompileErrors: [], tamper: [], failures: [] };
 const WRITER = { provider: "second-provider", model: "model-b", independence: "different-model" };
 
+interface ProofOptions {
+  ownerMessageDuringRun?: boolean;
+  /** The session that minted the lesson (instincts.origin_session_id); production writes none. */
+  lessonOrigin?: string;
+}
+
 /** Databases of a campaign that did everything the north star asks. */
-function seedProof(memory: string, opts: { ownerMessageDuringRun?: boolean } = {}): void {
+function seedProof(memory: string, opts: ProofOptions = {}): void {
   const play = { found: true, ok: true, sessions: [{ index: 0, outcome: "Won" }, { index: 1, outcome: "Lost" }], inputRoute: "input" };
   const storage = new CampaignStorage(join(memory, "campaigns.db"));
   try {
@@ -351,20 +358,37 @@ function seedProof(memory: string, opts: { ownerMessageDuringRun?: boolean } = {
     tasks.close();
   }
   const learningPath = join(memory, "learning.db");
+  const now = Date.now();
   const learning = new LearningStorage(learningPath);
   learning.initialize();
-  learning.close();
+  try {
+    // Written the way learning-pipeline.ts mints a lesson: no origin session,
+    // because no production code sets one. A test that needs it says so.
+    learning.createInstinct({
+      id: "ins-1",
+      name: "cart lane lesson",
+      type: "workflow_pattern",
+      status: "active",
+      confidence: 0.8,
+      triggerPattern: "cart lane",
+      action: "register the lane service",
+      contextConditions: [],
+      stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+      createdAt: now - 2 * HOUR,
+      updatedAt: now - 2 * HOUR,
+      sourceTrajectoryIds: [],
+      tags: ["milestone:m1"],
+      ...(opts.lessonOrigin ? { originSessionId: opts.lessonOrigin } : {}),
+    } as unknown as Instinct);
+    learning.recordInstinctExposure({ instinctId: "ins-1", sessionId: "run-2", taskRunId: "t-m2", shownAt: now - HOUR });
+  } finally {
+    learning.close();
+  }
   const metrics = new MetricsStorage(learningPath);
   metrics.initialize();
   metrics.close();
   const db = new Database(learningPath);
   try {
-    const now = Date.now();
-    db.prepare(
-      `INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at, tags, origin_session_id)
-       VALUES ('ins-1', 'cart lane lesson', 'workflow_pattern', 'active', 0.8, 'cart lane', 'register the lane service', '[]', '{}', ?, ?, '["milestone:m1"]', 'run-1')`,
-    ).run(now - 2 * HOUR, now - 2 * HOUR);
-    db.prepare("INSERT INTO instinct_exposure_log (instinct_id, session_id, task_run_id, shown_at) VALUES ('ins-1', 'run-2', 't-m2', ?)").run(now - HOUR);
     db.prepare("INSERT INTO retrieval_metrics (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES ('r1', 3, 9, 1, 2, ?)").run(now - HOUR);
     const obs = db.prepare("INSERT INTO observations (id, type, session_id, tool_name, success, timestamp) VALUES (?, 'success', 'run-2', ?, 1, ?)");
     obs.run("o1", "unity_build_player", now - HOUR);
@@ -479,7 +503,7 @@ afterEach(() => {
 });
 
 describe("north-star scorecard: a run that did everything", () => {
-  function proofHome(opts: { ownerMessageDuringRun?: boolean } = {}) {
+  function proofHome(opts: ProofOptions = {}) {
     const home = join(work, "home");
     const memory = join(home, ".strada-memory");
     mkdirSync(memory, { recursive: true });
@@ -500,7 +524,7 @@ describe("north-star scorecard: a run that did everything", () => {
   }
 
   it("passes all ten rungs, each on a measured number", () => {
-    const { home, project, upstream } = proofHome();
+    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
     const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(card.rungs.map((r) => [r.id, r.verdict, r.cause])).toEqual(
       Array.from({ length: 10 }, (_, i) => [i + 1, VERDICT.PASS, null]),
@@ -565,12 +589,28 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 
   it("prints JSON from the command line", () => {
-    const { home, project, upstream } = proofHome();
+    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
     const res = spawnSync(process.execPath, [CLI, "--home", home, "--project", project, "--upstream", upstream, "--brain-root", brainRoot, "--json"], { encoding: "utf8", cwd: REPO_ROOT });
     expect(res.status, res.stderr).toBe(EXIT.MEASURED);
     const card = JSON.parse(res.stdout) as Card;
     expect(card.score.rungs).toEqual({ pass: 10, fail: 0, notMeasured: 0 });
     expect(card.criteria.map((c) => c.id).join("")).toBe("ABCDEFGHIJKL");
+  });
+
+  it("does not pass rung 9 on a lesson that records no origin session, which is how production writes every lesson", () => {
+    const { home, project, upstream } = proofHome();
+    const r9 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 9);
+    expect(r9.verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(r9.cause).toBe(
+      "lesson provenance not recorded: 1 of 1 exposures show an instinct with no origin session, so a later run cannot be told from the run that learned it",
+    );
+  });
+
+  it("fails rung 9 when the only exposure went to the run that learned the lesson", () => {
+    const { home, project, upstream } = proofHome({ lessonOrigin: "run-2" });
+    const r9 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 9);
+    expect(r9.verdict).toBe(VERDICT.FAIL);
+    expect(r9.checks[1]).toEqual({ ok: false, text: "0 of 1 exposures showed a lesson to a later run than the one that learned it" });
   });
 
   it("refuses an unknown --campaign", () => {

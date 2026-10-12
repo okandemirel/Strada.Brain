@@ -331,15 +331,23 @@ function readLearning(src) {
     : { n: 0, insights: 0 };
   out.exposures = has("instinct_exposure_log") ? countOf(db, "SELECT count(*) FROM instinct_exposure_log") : 0;
   // A lesson changes a LATER run: the instinct existed before it was shown,
-  // and the run it was shown to is not the one that minted it.
-  out.laterExposures =
-    out.tables.instinct_exposure_log && has("instincts")
-      ? countOf(
-          db,
-          `SELECT count(*) FROM instinct_exposure_log e JOIN instincts i ON i.id = e.instinct_id
-             WHERE i.created_at < e.shown_at AND (i.origin_session_id IS NULL OR i.origin_session_id <> e.session_id)`,
-        )
-      : 0;
+  // and the run it was shown to is not the one that minted it. Only a recorded
+  // origin can say that; an exposure whose lesson has none (no production code
+  // writes origin_session_id) is counted apart, never as a later run.
+  out.laterExposures = 0;
+  out.unprovenancedExposures = 0;
+  if (out.tables.instinct_exposure_log && has("instincts")) {
+    out.laterExposures = countOf(
+      db,
+      `SELECT count(*) FROM instinct_exposure_log e JOIN instincts i ON i.id = e.instinct_id
+         WHERE i.created_at < e.shown_at AND i.origin_session_id IS NOT NULL AND i.origin_session_id <> e.session_id`,
+    );
+    out.unprovenancedExposures = countOf(
+      db,
+      `SELECT count(*) FROM instinct_exposure_log e LEFT JOIN instincts i ON i.id = e.instinct_id
+         WHERE i.id IS NULL OR i.origin_session_id IS NULL`,
+    );
+  }
   out.credits = has("instinct_credit_log") ? countOf(db, "SELECT count(*) FROM instinct_credit_log") : 0;
   out.instincts = has("instincts") ? countOf(db, "SELECT count(*) FROM instincts") : 0;
   out.milestoneLessons = out.tables.instincts
@@ -1214,15 +1222,31 @@ function rung9(ctx) {
   const l = ctx.learning;
   const returned = l.retrievals.anything + l.rollup.insights;
   const absent = (t) => (l.tables[t] ? "" : ` (no ${t} table)`);
+  const later = `${l.laterExposures} of ${l.exposures} exposures showed a lesson to a later run than the one that learned it`;
   const checks = [
     returned > 0 ? pass(retrievalLine(l)) : fail(`${retrievalLine(l)}${absent("retrieval_metrics")}`),
     l.laterExposures > 0
-      ? pass(`${l.laterExposures} of ${l.exposures} exposures showed a lesson to a later run than the one that learned it`)
-      : fail(`${l.laterExposures} of ${l.exposures} exposures showed a lesson to a later run${absent("instinct_exposure_log")}`),
+      ? pass(later)
+      : l.exposures === 0
+        ? fail(`${later}${absent("instinct_exposure_log")}`)
+        : l.unprovenancedExposures > 0
+          ? unmeasured(
+              `lesson provenance not recorded: ${l.unprovenancedExposures} of ${l.exposures} exposures show an instinct with no origin session, so a later run cannot be told from the run that learned it`,
+            )
+          : fail(later),
   ];
   return item(9, title, checks, {
     notes: [`${l.credits} credits recorded; ${l.instincts} instincts stored`],
-    measured: { retrievals: l.retrievals.n, retrievalsReturningAnything: l.retrievals.anything, rolledUpRetrievals: l.rollup.n, rolledUpInsights: l.rollup.insights, exposures: l.exposures, laterExposures: l.laterExposures, credits: l.credits },
+    measured: {
+      retrievals: l.retrievals.n,
+      retrievalsReturningAnything: l.retrievals.anything,
+      rolledUpRetrievals: l.rollup.n,
+      rolledUpInsights: l.rollup.insights,
+      exposures: l.exposures,
+      laterExposures: l.laterExposures,
+      exposuresWithoutProvenance: l.unprovenancedExposures,
+      credits: l.credits,
+    },
   });
 }
 
