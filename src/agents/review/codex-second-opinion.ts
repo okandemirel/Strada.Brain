@@ -228,17 +228,37 @@ function reviewGddLines(gddPath: string | undefined, gddText: string | undefined
 
 /**
  * The most of the GDD rows and their system-written checks the review prompt
- * carries (GDD-drift W13), counted in UTF-8 bytes: Linux caps ONE argument at
- * 128 KiB, and a GDD in a non-Latin script is three bytes a character.
+ * carries (GDD-drift W13), counted in UTF-8 bytes on every platform: a GDD in
+ * a non-Latin script is three bytes a character. The whole argument has its
+ * own cap per OS below, and the rows give way to it too.
  */
 export const REVIEW_ROWS_MAX_CHARS = 60_000;
 
 /**
  * The whole prompt on Windows, where it is one argument of a command line
- * capped at 32,767 characters; the rest of the line is the executable and its
- * options. The rows and checks give way to it, never the question.
+ * capped at 32,767 UTF-16 characters, counted as libuv writes it there: every
+ * `"` escaped as `\"`, the backslashes before one doubled. The rest of the
+ * line is the executable and its options. The rows and checks give way to it,
+ * never the question.
  */
 export const WINDOWS_REVIEW_PROMPT_MAX_CHARS = 30_000;
+
+/**
+ * The whole prompt elsewhere, in UTF-8 bytes: Linux caps ONE argument at
+ * 128 KiB (131,072 with its NUL), and the head alone — a GDD quote in a
+ * non-Latin script, the measurements, the ladder — can take half of it.
+ */
+export const POSIX_REVIEW_PROMPT_MAX_BYTES = 120_000;
+
+/** A prompt line's share of the argument on Linux: its UTF-8 bytes and the newline. */
+const utf8LineSize = (line: string): number => Buffer.byteLength(line, "utf8") + 1;
+
+/** A prompt line's share of the argument on a Windows command line: each `"` and the backslashes before it are escaped. */
+function windowsLineSize(line: string): number {
+  let size = line.length + 1;
+  for (const m of line.matchAll(/(\\*)"/g)) size += m[1]!.length + 1;
+  return size;
+}
 
 /** A GDD row the build system holds the game to, as the review prompt lists it. */
 export interface ReviewRow {
@@ -272,24 +292,30 @@ const flat = (text: string, max: number): string => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
+/** The most the rows section may take, in the unit `size` counts a line in. */
+interface SectionCap {
+  readonly max: number;
+  readonly size: (line: string) => number;
+}
+
 /**
- * The rows and the checks, within `budget` UTF-8 bytes (never fewer than the
- * characters, so a character cap holds too): rows that have a test first,
+ * The rows and the checks, within every cap: rows that have a test first,
  * then the test files, then the rows with none yet — so the checks a finding
  * can call weak travel before the list that only stops a reviewer
  * re-reporting a known row. What does not fit is counted, never cut mid-file.
  */
-function reviewRowLines(rows: readonly ReviewRow[], checks: readonly ReviewCheckFile[], budget: number): string[] {
+function reviewRowLines(rows: readonly ReviewRow[], checks: readonly ReviewCheckFile[], caps: readonly SectionCap[]): string[] {
   const out: string[] = [];
-  // Room for the closing "not shown" count, which is written past the budget.
-  const room = budget - 120;
-  let used = 0;
+  const used = caps.map(() => 0);
   let rowsLeft = 0;
   let filesLeft = 0;
   const fits = (lines: readonly string[]): boolean => {
-    const size = lines.reduce((n, l) => n + Buffer.byteLength(l, "utf8") + 1, 0);
-    if (used + size > room) return false;
-    used += size;
+    const sizes = caps.map((cap) => lines.reduce((n, l) => n + cap.size(l), 0));
+    // 120 is room for the closing "not shown" count, which is written past the caps.
+    if (sizes.some((size, i) => used[i]! + size > caps[i]!.max - 120)) return false;
+    sizes.forEach((size, i) => {
+      used[i]! += size;
+    });
     out.push(...lines);
     return true;
   };
@@ -353,10 +379,16 @@ export function deliveryReviewPrompt(params: {
       "Empty arrays when there is nothing. These findings can reopen a row or add one; they never close one.",
   ];
   const intro = ["", "The GDD rows the build system holds this game to, and the acceptance checks it wrote for them:"];
-  const fixed = [...head, ...intro, ...shape, ...findings, ...close].join("\n").length + 1;
-  const platform = params.platform ?? process.platform;
-  const budget = Math.min(REVIEW_ROWS_MAX_CHARS, platform === "win32" ? Math.max(0, WINDOWS_REVIEW_PROMPT_MAX_CHARS - fixed) : Infinity);
-  return [...head, ...intro, ...reviewRowLines(params.rows, params.checks ?? [], budget), ...shape, ...findings, ...close].join("\n");
+  // The rows get what the rest of the ONE argument leaves, counted in the
+  // unit its OS caps it in; the 2 is the quotes around it, or its NUL.
+  const windows = (params.platform ?? process.platform) === "win32";
+  const argSize = windows ? windowsLineSize : utf8LineSize;
+  const fixed = [...head, ...intro, ...shape, ...findings, ...close].reduce((n, l) => n + argSize(l), 2);
+  const caps: SectionCap[] = [
+    { max: REVIEW_ROWS_MAX_CHARS, size: utf8LineSize },
+    { max: Math.max(0, (windows ? WINDOWS_REVIEW_PROMPT_MAX_CHARS : POSIX_REVIEW_PROMPT_MAX_BYTES) - fixed), size: argSize },
+  ];
+  return [...head, ...intro, ...reviewRowLines(params.rows, params.checks ?? [], caps), ...shape, ...findings, ...close].join("\n");
 }
 
 function renderReviewGate(gate: ReviewGateSummary): string[] {

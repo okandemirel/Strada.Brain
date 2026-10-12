@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, resolveCodexCommand, REVIEW_ROWS_MAX_CHARS, WINDOWS_REVIEW_PROMPT_MAX_CHARS, type CodexSpawn } from "./codex-second-opinion.js";
+import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, resolveCodexCommand, POSIX_REVIEW_PROMPT_MAX_BYTES, REVIEW_ROWS_MAX_CHARS, WINDOWS_REVIEW_PROMPT_MAX_CHARS, type CodexSpawn } from "./codex-second-opinion.js";
 
 describe("codex second opinion", () => {
   it("passes model, effort, read-only sandbox and the project dir, and keeps the answer after the footer", async () => {
@@ -175,6 +175,69 @@ describe("codex second opinion", () => {
       expect(p).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
       expect(p).toContain('{"weakChecks"');
       expect(p).toContain("not shown: the prompt's size cap");
+    });
+
+    describe("the whole argument, in the unit its OS caps it in", () => {
+      const INTRO = "The GDD rows the build system holds this game to, and the acceptance checks it wrote for them:\n";
+      const rowsSection = (p: string): string => p.slice(p.indexOf(INTRO) + INTRO.length, p.indexOf("\n\nInspect the project"));
+      // Invented rules in a script of three UTF-8 bytes a character.
+      const wide = Array.from({ length: 600 }, (_, i) => ({ rid: `req-${i}-dd`, where: "§4", text: `規則${i}：${"風の柱は凧を持ち上げる。".repeat(18)}` }));
+
+      it("the rows section stays within REVIEW_ROWS_MAX_CHARS UTF-8 bytes when the rows are multi-byte", () => {
+        const p = deliveryReviewPrompt({ ...base, rows: wide, checks: [], platform: "linux" });
+        const section = rowsSection(p);
+        expect(section).toContain("req-0-dd");
+        expect(section).toMatch(/not shown: the prompt's size cap\)$/);
+        expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(REVIEW_ROWS_MAX_CHARS);
+      });
+
+      it("on Linux the head counts too: a long non-Latin GDD and ladder leave the rows less room, never past one argument's 128 KiB", () => {
+        const gddText = `# 凧の郵便\n\n${"上昇気流の中で凧は一秒ごとに一メートル昇る。".repeat(800)}`;
+        const ladder = Array.from({ length: 150 }, (_, i) => `m${i} 第${i}スプリント — ${"配達の屋根と切手の色".repeat(6)}: green`);
+        const measurements = Array.from({ length: 60 }, (_, i) => `計測${i}: ${"描画されたオブジェクトはない".repeat(6)}`);
+        const p = deliveryReviewPrompt({ gddPath: undefined, gddText, measurements, ladder, rows: wide, checks, platform: "linux" });
+        // MAX_ARG_STRLEN: 32 pages, the terminating NUL included.
+        expect(Buffer.byteLength(p, "utf8") + 1).toBeLessThanOrEqual(128 * 1024);
+        expect(Buffer.byteLength(p, "utf8")).toBeLessThanOrEqual(POSIX_REVIEW_PROMPT_MAX_BYTES);
+        expect(p).toContain("req-0-dd");
+        expect(p).toContain('{"weakChecks"');
+      });
+
+      /** An argument as libuv writes it onto a Windows command line (quote_cmd_arg). */
+      function windowsQuoted(arg: string): string {
+        if (arg === "") return '""';
+        if (!/[ \t"]/.test(arg)) return arg;
+        if (!/["\\]/.test(arg)) return `"${arg}"`;
+        let out = '"';
+        let slashes = 0;
+        for (const ch of arg) {
+          if (ch === "\\") {
+            slashes += 1;
+            continue;
+          }
+          out += ch === '"' ? `${"\\".repeat(slashes * 2 + 1)}"` : `${"\\".repeat(slashes)}${ch}`;
+          slashes = 0;
+        }
+        return `${out}${"\\".repeat(slashes * 2)}"`;
+      }
+
+      it("on Windows the quotes count as libuv escapes them: the command line stays within 32,767 characters", async () => {
+        // Rows and checks dense with quotes, each written onto the command line as \".
+        const quoted = Array.from({ length: 600 }, (_, i) => ({ rid: `req-${i}-ee`, where: "§5", text: `Rule ${i}: ${'say "go" or "stop" '.repeat(12)}` }));
+        const csharp = [{ path: "Assets/StradaAcceptance/Acceptance_M2.cs", source: Array.from({ length: 200 }, (_, i) => `Assert.That(Find("Kite${i}"), Is.EqualTo("C:\\\\kites\\\\"));`).join("\n") }];
+        const prompt = deliveryReviewPrompt({ ...base, rows: quoted, checks: csharp, platform: "win32" });
+        expect(windowsQuoted(prompt).length).toBeLessThanOrEqual(WINDOWS_REVIEW_PROMPT_MAX_CHARS);
+        expect(prompt).toContain("not shown: the prompt's size cap");
+        expect(prompt).toContain('{"weakChecks"');
+        // The whole line, as the npm shim's script runs it with Node.
+        let args: string[] = [];
+        await runCodexSecondOpinion({ projectRoot: "C:\\Users\\builder\\Projects\\Kite Post Game", prompt }, async (a) => {
+          args = a;
+          return { code: 0, stdout: "VERDICT: DELIVERABLE\n", stderr: "", timedOut: false };
+        });
+        const line = ["C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\builder\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js", ...args].map(windowsQuoted).join(" ");
+        expect(line.length + 1).toBeLessThanOrEqual(32_767);
+      });
     });
 
     it("the report shows what the findings changed beside the verbatim answer", () => {
