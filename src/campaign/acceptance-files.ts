@@ -1999,12 +1999,41 @@ const TYPE_LIKE_DECLARATION_RE = /\b(?:class|struct|interface|enum|record)\s+(?:
 /** A delegate's name is the one before its parameters (and type parameters); the words before it are its return type. */
 const TYPE_LIKE_DELEGATE_RE = /\bdelegate\b[^;{}]*?\b(?:var|dynamic|nint|nuint)\s*(?:<[^;{}()]*>)?\s*\(/;
 
+/** A namespace's header as C# spells it: any identifier letters, and space allowed around each dot. */
+const NAMESPACE_HEADER_RE = /\bnamespace\s+[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]+(?:\s*\.\s*[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]+)*\s*$/u;
+
+/**
+ * Whether a brace sits inside an #if group. Which branch compiles decides what
+ * it opens or closes (`#if UNITY_EDITOR class Kiln : Editor {` / `#else class
+ * Kiln : MonoBehaviour {`), so no walk over the text can say what is nested.
+ */
+function bracesUnderConditional(code: string): boolean {
+  let depth = 0;
+  for (const line of code.split("\n")) {
+    const directive = /^[ \t]*#[ \t]*(if|elif|else|endif)\b/.exec(line);
+    if (directive) {
+      if (directive[1] === "if") depth++;
+      else if (directive[1] === "endif") depth = Math.max(0, depth - 1);
+    } else if (depth > 0 && !/^[ \t]*#/.test(line) && /[{}]/.test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Whether the code declares such a type directly in a namespace or the global
  * one. A nested type is in scope only inside the type around it, and a check
  * is never inside a worker's type, so it cannot answer a check's `var`.
+ *
+ * FAILS CLOSED: when the nesting is not known (braces inside an #if group) or
+ * the braces do not balance, a declaration anywhere in the file counts, as it
+ * did before the walk. Skipping it instead let one extra frame hide every
+ * namespace-level `struct nint` after it.
  */
-function declaresTypeLikeName(code: string): boolean {
+function declaresTypeLikeName(code: string, nestingKnown: boolean): boolean {
+  const anywhere = (): boolean => TYPE_LIKE_DECLARATION_RE.test(code) || TYPE_LIKE_DELEGATE_RE.test(code);
+  if (!nestingKnown) return anywhere();
   // Per open brace: whether it opened a namespace's body.
   const opened: boolean[] = [];
   let segment = "";
@@ -2015,11 +2044,11 @@ function declaresTypeLikeName(code: string): boolean {
     }
     const inNamespace = opened.every((namespace) => namespace);
     if (inNamespace && c !== "}" && (TYPE_LIKE_DECLARATION_RE.test(segment) || TYPE_LIKE_DELEGATE_RE.test(segment))) return true;
-    if (c === "{") opened.push(inNamespace && /\bnamespace\s+[\w.]+\s*$/.test(segment));
-    else if (c === "}") opened.pop();
+    if (c === "{") opened.push(inNamespace && NAMESPACE_HEADER_RE.test(segment));
+    else if (c === "}" && opened.pop() === undefined) return anywhere();
     segment = "";
   }
-  return false;
+  return opened.length === 0 ? false : anywhere();
 }
 
 /**
@@ -2082,7 +2111,7 @@ export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
         // The scan keeps a literal's quotes and blanks comments, so a quote that survives it opens a string.
         const named = [...text.matchAll(ACCEPTANCE_NAME_LITERAL_RE)].some((m) => code[m.index] === '"');
         const spelled = identifierSpelling(withoutDirectives(code));
-        if (named || FOREIGN_NAMESPACE_RE.test(spelled) || declaresTypeLikeName(spelled)) hits.push(rel);
+        if (named || FOREIGN_NAMESPACE_RE.test(spelled) || declaresTypeLikeName(spelled, !bracesUnderConditional(code))) hits.push(rel);
       },
       insideAcceptanceDir,
     );

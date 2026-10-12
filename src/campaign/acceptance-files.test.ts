@@ -913,6 +913,49 @@ describe("scanForeignAcceptanceNamespace reads names as the compiler does", () =
     put(root, "Assets/Scripts/AfterNested.cs", "namespace Strada { public class Kiln { class Ember { } } public class var { } }");
     expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/AfterNested.cs", "Assets/Scripts/FileScopedTop.cs", "Assets/Scripts/NamedVar.cs"]);
   });
+
+  it("does not let an #if branch's braces hide a later type so named: braces the compiler may not see fall back to the whole file", () => {
+    const root = project();
+    // The editor/player split: two headers open one body, so a walk over both branches is one brace too deep after it.
+    put(
+      root,
+      "Assets/Scripts/EditorSplit.cs",
+      [
+        "#if UNITY_EDITOR",
+        "public class Kiln : UnityEditor.Editor {",
+        "#else",
+        "public class Kiln : UnityEngine.MonoBehaviour {",
+        "#endif",
+        "  void Fire() { }",
+        "}",
+        "public struct nint { }",
+      ].join("\n"),
+    );
+    // Balanced as text, yet with NEVER undefined the compiler reads `var` at Strada level.
+    put(
+      root,
+      "Assets/Scripts/Balanced.cs",
+      ["namespace Strada {", "#if NEVER", "  class Hide {", "#endif", "  public class var { }", "#if NEVER", "  }", "#endif", "}"].join("\n"),
+    );
+    // A stray closer: the walk cannot say what is nested, so the whole file is read.
+    put(root, "Assets/Scripts/Stray.cs", "namespace Game { class A { } } } class B { class dynamic { } }");
+    // A namespace the compiler reads as one, though spelled with spaces round its dot or letters past ASCII.
+    put(root, "Assets/Scripts/Spaced.cs", "namespace Strada . Kilns { class Shelf { } public class var { } }");
+    put(root, "Assets/Scripts/Letters.cs", "namespace Fırın { public struct nint { } }");
+    // Directives with no brace inside a branch leave the walk exact: a nested type stays nested.
+    put(
+      root,
+      "Assets/Scripts/QuietBranch.cs",
+      ["namespace Game {", "  public class Kiln {", "#if UNITY_EDITOR", "    int heat;", "#endif", "    class var { }", "  }", "}"].join("\n"),
+    );
+    expect(scanForeignAcceptanceNamespace(root)).toEqual([
+      "Assets/Scripts/Balanced.cs",
+      "Assets/Scripts/EditorSplit.cs",
+      "Assets/Scripts/Letters.cs",
+      "Assets/Scripts/Spaced.cs",
+      "Assets/Scripts/Stray.cs",
+    ]);
+  });
 });
 
 // =============================================================================
