@@ -1015,12 +1015,18 @@ async function bootstrapImpl(
       const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
       const runtimeVaultFactory = {
         watchDebounceMs: config.vault?.debounceMs ?? 800,
-        async create(spec: { id: string; rootPath: string; kind: "unity" | "generic" }) {
+        async create(spec: {
+          id: string;
+          rootPath: string;
+          kind: "unity" | "generic";
+          includePath?: (relPath: string) => boolean;
+        }) {
           return new UnityProjectVault({
             id: spec.id,
             rootPath: spec.rootPath,
             embedding: vaultEmbedding,
             vectorStore: createVaultVectorStore(),
+            includePath: spec.includePath,
           });
         },
       };
@@ -1177,6 +1183,8 @@ async function bootstrapImpl(
               id,
               rootPath: target.rootPath,
               kind: "generic",
+              // The framework, not the notes runs left in its folder (WP-1.2).
+              includePath: target.includePath,
             });
             indexInBackground(
               vaultRegistry,
@@ -1188,6 +1196,8 @@ async function bootstrapImpl(
             logger.info("[vault] registered framework vault", {
               id: vault.id,
               name: target.name,
+              state: target.state,
+              scoped: target.includePath !== undefined,
               rootPath: target.rootPath,
             });
           }

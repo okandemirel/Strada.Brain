@@ -1,9 +1,13 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { frameworkVaultTargets } from "./framework-vault-targets.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
+import { UnityProjectVault } from "./unity-project-vault.js";
+import { createFakeEmbedding, createFakeVectorStore } from "../test-helpers.js";
 
 const deps = (over: Partial<StradaDepsStatus> = {}): StradaDepsStatus =>
   ({
@@ -82,6 +86,16 @@ describe("which codebases get indexed", () => {
     expect(block).toContain("existsSync(target.rootPath)");
   });
 
+  it("hands each target's scope to the vault it builds", () => {
+    // A scope the vault never receives indexes the whole package again.
+    const source = readFileSync("src/core/bootstrap.ts", "utf8");
+    const at = source.indexOf("frameworkVaultTargets(");
+    const block = source.slice(at, at + 1500);
+    expect(block).toContain("includePath: target.includePath");
+    const factory = source.slice(source.indexOf("const runtimeVaultFactory = {"), source.indexOf("vaultRegistry.setFactory("));
+    expect(factory).toMatch(/new UnityProjectVault\(\{[\s\S]*includePath: spec\.includePath/);
+  });
+
   it("does not take this system's root from the working directory", () => {
     // Startup chdirs the process to the Strada home, so cwd is ~/.strada.
     // Measured 2026-08-22: the vault registered as "Strada.Brain" built a 30MB
@@ -92,5 +106,104 @@ describe("which codebases get indexed", () => {
 
     expect(call).not.toContain("frameworkVaultTargets(stradaDeps, process.cwd())");
     expect(call).toContain("installRoot");
+  });
+});
+
+/**
+ * WP-1.2: Strada.Modules got no vault unless the project had it installed, so
+ * `vault_search "IScreenService ScreenBody"` found nothing while a checkout sat
+ * beside the install. And a framework vault indexed its whole package folder:
+ * in a measured replay 49% of the injected vault blocks were notes runs had
+ * written into the vendored framework folders, not the framework.
+ */
+describe("framework vaults index the framework, available or installed (WP-1.2)", () => {
+  const checkout = (path: string) => ({ path, source: "sibling-checkout" as const, version: "1.0.0", commit: "abc1234" });
+
+  it("registers Strada.Modules from its checkout when the project does not have it", () => {
+    const targets = frameworkVaultTargets(
+      deps({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout("/work/Strada.Modules") }),
+      "/repos/Strada.Brain",
+    );
+
+    expect(targets.find((t) => t.name === "Strada.Modules")).toMatchObject({
+      rootPath: "/work/Strada.Modules",
+      state: "available",
+    });
+  });
+
+  it("prefers the copy the project compiles against over the checkout", () => {
+    const targets = frameworkVaultTargets(
+      deps({ coreCheckout: checkout("/work/Strada.Core"), modulesCheckout: checkout("/work/Strada.Modules") }),
+      "/repos/Strada.Brain",
+    );
+
+    expect(targets.find((t) => t.name === "Strada.Core")).toMatchObject({ rootPath: "/repos/Strada.Core", state: "installed" });
+    expect(targets.find((t) => t.name === "Strada.Modules")).toMatchObject({ rootPath: "/repos/Strada.Modules", state: "installed" });
+  });
+
+  it("scopes a framework vault to Runtime/, Editor/, Documentation~/ and READMEs", () => {
+    const targets = frameworkVaultTargets(deps(), "/repos/Strada.Brain");
+    const core = targets.find((t) => t.name === "Strada.Core")!;
+    const modules = targets.find((t) => t.name === "Strada.Modules")!;
+    const mcp = targets.find((t) => t.name === "Strada.MCP")!;
+
+    for (const kept of ["Runtime/ECS/Query/QueryBuilder.cs", "Editor/Headless/SceneSpec.cs", "Documentation~/DI.md", "README.md"]) {
+      expect(core.includePath?.(kept), kept).toBe(true);
+    }
+    for (const dropped of [
+      "docs/sprint-report.md",
+      "analysis/frame-budget.md",
+      "notes/run-42.md",
+      "plans/m3.md",
+      "reports/delivery.md",
+      "SecurityReports/scan.md",
+      "dist/index.js",
+      "Tests/Runtime/QueryTests.cs",
+      "Runtime/notes/scratch.md",
+      "CHANGELOG.md",
+    ]) {
+      expect(core.includePath?.(dropped), dropped).toBe(false);
+    }
+    // A module package keeps its modules one level down.
+    expect(modules.includePath?.("ScreenModule/Runtime/Services/IScreenService.cs")).toBe(true);
+    expect(modules.includePath?.("ScreenModule/README.md")).toBe(true);
+    // Strada.MCP's framework is its TypeScript source as much as its Unity package.
+    expect(mcp.includePath?.("src/tools/scene/scene-build.ts")).toBe(true);
+    expect(mcp.includePath?.("unity-package/com.strada.mcp/Editor/Bridge.cs")).toBe(true);
+    expect(mcp.includePath?.("notes/campaign.md")).toBe(false);
+    expect(mcp.includePath?.("dist/index.js")).toBe(false);
+    // This system's own vault is not a framework package: no scope.
+    expect(targets.find((t) => t.name === "Strada.Brain")?.includePath).toBeUndefined();
+  });
+
+  it("a scoped vault indexes only what its scope keeps, at init and on a later write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-framework-vault-"));
+    try {
+      mkdirSync(join(root, "Runtime"), { recursive: true });
+      mkdirSync(join(root, "docs"), { recursive: true });
+      writeFileSync(join(root, "Runtime", "Service.cs"), "namespace Fw { public class Service {} }\n");
+      writeFileSync(join(root, "docs", "leak.md"), "# a run's sprint notes\n");
+      writeFileSync(join(root, "README.md"), "# Framework\n");
+      const target = frameworkVaultTargets(deps({ corePath: root }), undefined).find((t) => t.name === "Strada.Core")!;
+      const vault = new UnityProjectVault({
+        id: "generic:fwtest",
+        rootPath: root,
+        embedding: createFakeEmbedding(),
+        vectorStore: createFakeVectorStore({ semantic: false }),
+        includePath: target.includePath,
+      });
+      try {
+        await vault.init();
+        expect(vault.listFiles().map((f) => f.path).sort()).toEqual(["README.md", "Runtime/Service.cs"]);
+
+        writeFileSync(join(root, "docs", "later.md"), "# another note\n");
+        expect(await vault.reindexFile("docs/later.md")).toBe(false);
+        expect(vault.listFiles().map((f) => f.path)).not.toContain("docs/later.md");
+      } finally {
+        await vault.dispose();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -11,6 +11,7 @@ import { isUnderUnreadable, scanIndexableFiles, type IndexableFileScan } from '.
 import {
   getIndexableFileInfo,
   isPathGoneError,
+  normalizeVaultRelPath,
   prepareSafeVaultWritePath,
   resolveSafeVaultReadPath,
 } from './path-policy.js';
@@ -32,6 +33,11 @@ export interface UnityVaultDeps {
   rootPath: string;
   embedding: EmbeddingProvider;
   vectorStore: VectorStore;
+  /**
+   * Which vault-relative paths this vault indexes; every other path is left
+   * out of a walk and dropped on a later reindex. Unset indexes the whole root.
+   */
+  includePath?: (relPath: string) => boolean;
 }
 
 // Minimal interface for the watcher — avoids hard import of not-yet-existing watcher.ts.
@@ -91,6 +97,7 @@ export class UnityProjectVault implements IVault {
    */
   private lastEmbedWarnAtMs = 0;
   private static readonly EMBED_WARN_WINDOW_MS = 60_000;
+  private readonly includePath: ((relPath: string) => boolean) | undefined;
 
   constructor(deps: UnityVaultDeps) {
     this.id = deps.id;
@@ -100,6 +107,7 @@ export class UnityProjectVault implements IVault {
     mkdirSync(join(deps.rootPath, '.strada/vault'), { recursive: true });
     this.store = new SqliteVaultStore(this.dbPath);
     this.adapter = new EmbeddingAdapter(deps.embedding, deps.vectorStore);
+    this.includePath = deps.includePath;
   }
 
   async init(): Promise<void> {
@@ -371,6 +379,11 @@ export class UnityProjectVault implements IVault {
    * stranded them for the life of the store).
    */
   protected async reindexFileInternal(relPath: string): Promise<boolean> {
+    // The watcher, the write-hook and file reads reach this too, not only the
+    // walk: a path outside the scope is never indexed by any of them.
+    if (this.includePath && !this.includePath(normalizeVaultRelPath(relPath))) {
+      return this.deleteIndexedFileInternal(normalizeVaultRelPath(relPath));
+    }
     const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
     if (!fileInfo.ok) {
       return this.deleteIndexedFileInternal(fileInfo.relPath);
@@ -636,7 +649,9 @@ export class UnityProjectVault implements IVault {
 
   /** The walk an index pass prunes against, with what it could not read named. */
   private async scanFiles(): Promise<IndexableFileScan> {
-    const scan = await scanIndexableFiles(this.rootPath);
+    const walked = await scanIndexableFiles(this.rootPath);
+    const include = this.includePath;
+    const scan = include ? { ...walked, files: walked.files.filter((f) => include(f.path)) } : walked;
     if (scan.unreadable.length) {
       getLoggerSafe().warn(`[vault ${this.id}] index walk could not read ${scan.unreadable.length} path(s); their indexed files are kept, not pruned`, {
         unreadable: scan.unreadable.slice(0, 10),
