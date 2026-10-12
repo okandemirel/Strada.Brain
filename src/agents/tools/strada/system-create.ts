@@ -186,8 +186,8 @@ export class SystemCreateTool implements ITool {
 
     // With nothing to query, the only body there was to write was a TODO over
     // a commented-out ForEach (over `return dependency;` for a job system): a
-    // system ticked every frame for nothing, which a measured game carried
-    // eleven times. What makes it a system is asked for instead.
+    // system ticked every frame for nothing, the empty-stub pattern runs left
+    // behind. What makes it a system is asked for instead.
     if (queryComponents.length === 0) {
       return {
         content:

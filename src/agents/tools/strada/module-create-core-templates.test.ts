@@ -7,7 +7,7 @@
  * PatternManager, so it was never initialized or ticked — a service interface
  * that did not extend IService, and, by default, a starter system whose OnUpdate
  * held only a TODO and a commented-out ForEach. A game built that way carried
- * eleven systems with nothing in OnUpdate, each ticked every frame.
+ * systems with nothing in OnUpdate, each ticked every frame.
  *
  * Core declares what a module's files contain in ModuleSourceTemplates.cs. These
  * tests install the real file (a copy, kept honest by module-templates.test.ts)

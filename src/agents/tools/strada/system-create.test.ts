@@ -202,8 +202,8 @@ describe("SystemCreateTool", () => {
 
   // Without components to query, the only body there was to write was a TODO
   // and a commented-out ForEach (or, for a job system, a TODO and `return
-  // dependency;`): a system ticked every frame for nothing, the stub a measured
-  // game carried eleven times.
+  // dependency;`): a system ticked every frame for nothing, the empty stub
+  // generated games carried.
   for (const base_class of ["SystemBase", "JobSystemBase"]) {
     it(`refuses a ${base_class} with no query_components, says what is needed, and writes nothing`, async () => {
       for (const query of [undefined, []]) {
