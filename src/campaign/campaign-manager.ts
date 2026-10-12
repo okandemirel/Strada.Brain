@@ -108,6 +108,18 @@ import { rowBlocks } from "./scope-report.js";
 import { closesByLedger } from "./scope-verdict.js";
 import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
 import { acceptancePromptFor } from "./acceptance-prompt.js";
+import {
+  buildLedger,
+  completeLedgerByModel,
+  describeAmendment,
+  describeLedgerRead,
+  modelPassOwed,
+  reownLedger,
+  rereadLedger,
+  syncRequirementIds,
+  type LedgerAmendment,
+  type LedgerReadOptions,
+} from "./requirement-ledger.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
 export type CampaignMessenger = (chatId: string, markdown: string) => Promise<void>;
@@ -263,6 +275,8 @@ export interface CampaignManagerOptions {
   runAcceptanceSuite?: AcceptanceSuiteRunner;
   /** Whether the scope gate is off (default: today's behaviour), shadow (recorded only) or on. */
   scopeGateMode?: ScopeGateMode;
+  /** CAMPAIGN_MAX_REQUIREMENT_ROWS: rows past it are counted as not checked, never dropped silently. */
+  maxRequirementRows?: number;
 }
 
 /**
@@ -1119,6 +1133,7 @@ export class CampaignManager {
   private readonly acceptanceAuthor: AcceptanceAuthorLike | null;
   private readonly runAcceptanceSuite?: AcceptanceSuiteRunner;
   private readonly scopeGateMode: ScopeGateMode;
+  private readonly maxRequirementRows?: number;
   private eventsAttached = false;
 
   constructor(options: CampaignManagerOptions) {
@@ -1148,6 +1163,7 @@ export class CampaignManager {
     this.acceptanceAuthor = options.acceptanceAuthor ?? null;
     this.runAcceptanceSuite = options.runAcceptanceSuite;
     this.scopeGateMode = options.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
+    this.maxRequirementRows = options.maxRequirementRows;
   }
 
   /**
@@ -1377,7 +1393,8 @@ export class CampaignManager {
       await this.tell({ chatId }, "Only the person who started this campaign can amend its GDD.");
       return true;
     }
-    const hash = this.amendGdd(campaign.id);
+    const amended = this.amendApprovedGdd(campaign.id);
+    const hash = amended?.hash;
     // A stopped campaign runs the amended document only when someone revives it.
     const stopped = active === undefined && campaign.autoReviveAt === undefined;
     await this.tell(
@@ -1387,7 +1404,8 @@ export class CampaignManager {
         : hash === undefined
         ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`
         : `GDD amendment acknowledged: the document on disk (${hash.slice(0, 8)}) is now the approved one; the next delivery is judged against it.` +
-          (stopped ? " Reply **kampanya devam** to run it." : ""),
+          (stopped ? " Reply **kampanya devam** to run it." : "") +
+          (amended?.note ? `\n${amended.note}` : ""),
     );
     return true;
   }
@@ -1951,9 +1969,16 @@ export class CampaignManager {
     campaign.lastError = undefined;
     campaign.autoReviveAt = undefined;
     this.persist(campaign);
+    // EVERY REVIVE — typed, `/campaign revive` and the self-revival — meets
+    // here, so a campaign from before the scope gate gets its rows on the
+    // first one (W11). After the save: the campaign is active again, so a
+    // second revive sent during the model pass is refused, not doubled.
+    const ledger = await this.ensureLedger(campaign);
+    if (ledger.changed) this.persist(campaign);
     await this.tell(
       campaign,
-      `Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.`,
+      `Reviving the campaign at **${milestone.title}** (sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length}) with a fresh attempt budget.` +
+        (ledger.note ? `\n\n${ledger.note}` : ""),
     );
     this.submitCurrentMilestone(campaign);
   }
@@ -2599,7 +2624,18 @@ export class CampaignManager {
         });
       }
       campaign.currentMilestone = 0;
+      // A replanned ladder reuses m1…mN for different sprints: its rows are owned again.
+      if (this.scopeGateMode !== "off" && campaign.requirements !== undefined) {
+        campaign.requirements = reownLedger(campaign.requirements, campaign.milestones, this.ledgerOptions(campaign));
+        syncRequirementIds(campaign.milestones, campaign.requirements.rows);
+      }
       this.persist(campaign);
+      // THE GDD'S ROWS, owned by the ladder just planned (GDD-drift plan
+      // W11). After the ladder is saved, so a restart during the model pass
+      // resumes this ladder instead of planning a second one; the rows are
+      // then built at the next settle or revive.
+      const ledger = await this.ensureLedger(campaign);
+      if (ledger.changed) this.persist(campaign);
 
       const coverage = campaign.planCoverage;
       const coverageLine = coverage
@@ -2612,7 +2648,7 @@ export class CampaignManager {
         campaign,
         `Milestone ladder ready (${campaign.milestones.length} sprints):\n${campaign.milestones
           .map((m) => `• ${m.title}${m.coveredSections?.length ? ` — ${m.coveredSections.slice(0, 4).join(", ")}${m.coveredSections.length > 4 ? ", …" : ""}` : ""}`)
-          .join("\n")}${styleSummary}${coverageLine}\n\nSprint 1 starts now.`,
+          .join("\n")}${styleSummary}${coverageLine}${ledger.note ? `\n\n${ledger.note}` : ""}\n\nSprint 1 starts now.`,
       );
       this.submitCurrentMilestone(campaign);
     } catch (err) {
@@ -6621,6 +6657,11 @@ export class CampaignManager {
    * when the file cannot be read.
    */
   amendGdd(campaignId: string): string | undefined {
+    return this.amendApprovedGdd(campaignId)?.hash;
+  }
+
+  /** `amendGdd`, and what the amendment did to the requirement rows, for the chat. */
+  private amendApprovedGdd(campaignId: string): { hash: string; note?: string } | undefined {
     const campaign = this.storage.get(campaignId);
     if (campaign === undefined || campaign.gddPath === undefined) return undefined;
     // An amendment re-approves an APPROVED document; a draft still in
@@ -6631,8 +6672,186 @@ export class CampaignManager {
     campaign.gddSha256 = sha256Of(onDisk);
     campaign.gddText = onDisk;
     campaign.gddRevision = (campaign.gddRevision ?? 0) + 1;
+    // THE ROWS FOLLOW THE DOCUMENT in the same save (W11): a changed number
+    // reopens its row here, not whenever a settle next looks. A campaign
+    // with no ledger yet gets one, from this text, at its next settle.
+    const rows = campaign.requirements !== undefined ? this.readLedger(campaign) : undefined;
     this.persist(campaign);
-    return campaign.gddSha256;
+    return { hash: campaign.gddSha256, ...(rows?.amendment ? { note: describeAmendment(rows.amendment) } : {}) };
+  }
+
+  /**
+   * The campaign's requirement ledger, read from the APPROVED `gddText` and
+   * kept in step with it (GDD-drift plan W11). Runs lazily — at plan time,
+   * at a revive and at a settle — and never at boot. With the scope gate off
+   * it does nothing at all.
+   *
+   *   • no ledger: read the rows, give them owners (`coveredSections`, else
+   *     the prompt's `§` references), adopt the identities the coverage queue
+   *     already holds, and mark milestones that went green before the gate as
+   *     `legacy` — they keep their status;
+   *   • a ledger behind the approved text: read it again as an amendment;
+   *   • the add-only model pass, once per revision;
+   *   • the first time the gate DECIDES (on): stamp `scopeGateSince` and start
+   *     the delivery counters again, once, because the failure kinds they
+   *     compare change under the gate. Shadow decides nothing, so it touches
+   *     nothing a decision reads.
+   *
+   * The caller saves the campaign when `changed`; `note` is for the chat.
+   */
+  private async ensureLedger(campaign: Campaign): Promise<{ changed: boolean; note?: string }> {
+    if (this.scopeGateMode === "off") return { changed: false };
+    const notes: string[] = [];
+    let changed = false;
+    try {
+      const read = this.readLedger(campaign);
+      const pass = await this.completeLedgerPass(campaign);
+      changed = read.changed || pass.changed;
+      // Told after the model pass, so the counts include what it added.
+      const ledger = campaign.requirements;
+      if (read.built && ledger !== undefined) {
+        notes.push(describeLedgerRead(ledger, campaign.milestones));
+        if (read.built.legacy.length > 0) {
+          notes.push(`Went green before the scope gate and keep their status (basis: legacy): ${read.built.legacy.join(", ")}.`);
+        }
+        if (read.built.adopted > 0) {
+          notes.push(`${read.built.adopted} row(s) are requirements the coverage queue already held; their repair budgets carry over.`);
+        }
+      }
+      if (read.amendment && ledger !== undefined) notes.push(describeAmendment({ ...read.amendment, ledger }));
+      if (pass.note) notes.push(pass.note);
+      if (this.scopeGateMode === "on" && campaign.requirements !== undefined && campaign.scopeGateSince === undefined) {
+        campaign.scopeGateSince = Date.now();
+        campaign.deliveryRevives = undefined;
+        campaign.deliveryProofsSignature = undefined;
+        changed = true;
+      }
+    } catch (err) {
+      getLoggerSafe().warn("The requirement ledger could not be built", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return { changed, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
+  }
+
+  private ledgerOptions(campaign: Campaign): LedgerReadOptions {
+    return {
+      atMs: Date.now(),
+      ...(this.maxRequirementRows === undefined ? {} : { maxRows: this.maxRequirementRows }),
+      excluded: campaign.planCoverage?.excluded ?? [],
+    };
+  }
+
+  /** The deterministic half of `ensureLedger`: build the ledger, or bring it to the approved text. No model call. */
+  private readLedger(campaign: Campaign): {
+    changed: boolean;
+    built?: { adopted: number; legacy: string[] };
+    amendment?: LedgerAmendment;
+  } {
+    if (this.scopeGateMode === "off") return { changed: false };
+    // AN UNREADABLE LEDGER IS NOT AN ABSENT ONE: building over it would
+    // forget a person's waivers and every recorded result. It stays
+    // disclosed as unreadable until a person decides.
+    if (campaign.requirements === undefined && campaign.requirementsUnreadable === true) {
+      getLoggerSafe().warn("The requirement ledger is unreadable — not rebuilt over it", { id: campaign.id });
+      return { changed: false };
+    }
+    // THE APPROVED TEXT ONLY. The copy on disk is what workers edit; a
+    // campaign that holds no approved text gets no rows rather than rows
+    // from a document nobody approved.
+    const text = campaign.gddText;
+    if (text === undefined || text.trim() === "" || campaign.milestones.length === 0) return { changed: false };
+    let changed = false;
+    if (campaign.gddSha256 === undefined) {
+      campaign.gddSha256 = sha256Of(text);
+      changed = true;
+    }
+    if (campaign.gddRevision === undefined) {
+      campaign.gddRevision = 1;
+      changed = true;
+    }
+    const options = this.ledgerOptions(campaign);
+    const ledger = campaign.requirements;
+    if (ledger === undefined) {
+      const built = buildLedger(campaign, campaign.milestones, { ...options, inFlight: this.inFlightRequirements(campaign) });
+      if (built === undefined) return { changed };
+      campaign.requirements = built.ledger;
+      syncRequirementIds(campaign.milestones, built.ledger.rows);
+      const legacy = campaign.milestones.filter((m) => m.status === "green" && m.judgementBasis === undefined);
+      for (const milestone of legacy) milestone.judgementBasis = "legacy";
+      getLoggerSafe().info("Requirement ledger built from the approved GDD", {
+        id: campaign.id,
+        rows: built.ledger.rows.length,
+        adoptedIdentities: built.adopted,
+        legacyGreens: legacy.map((m) => m.id),
+        revision: built.ledger.gddRevision,
+      });
+      return { changed: true, built: { adopted: built.adopted, legacy: legacy.map((m) => m.id) } };
+    }
+    if (ledger.gddSha256 === campaign.gddSha256 && ledger.gddRevision === campaign.gddRevision) return { changed };
+    const amendment = rereadLedger(
+      ledger,
+      text,
+      { gddSha256: campaign.gddSha256, gddRevision: campaign.gddRevision },
+      campaign.milestones,
+      options,
+    );
+    campaign.requirements = amendment.ledger;
+    syncRequirementIds(campaign.milestones, amendment.ledger.rows);
+    getLoggerSafe().info("Requirement ledger re-read from the amended GDD", {
+      id: campaign.id,
+      revision: amendment.ledger.gddRevision,
+      unchanged: amendment.unchanged,
+      cosmetic: amendment.cosmetic,
+      reopened: amendment.reopened.map((r) => r.rid),
+      added: amendment.added,
+      retired: amendment.retired.map((r) => r.rid),
+    });
+    return { changed: true, amendment };
+  }
+
+  /** The add-only model pass this ledger's revision still owes; a pass whose every call failed stays owed. */
+  private async completeLedgerPass(campaign: Campaign): Promise<{ changed: boolean; note?: string }> {
+    const ledger = campaign.requirements;
+    const text = campaign.gddText;
+    const planner = this.planner as Partial<Pick<CampaignPlanner, "complete">>;
+    if (ledger === undefined || text === undefined || !modelPassOwed(ledger) || typeof planner.complete !== "function") {
+      return { changed: false };
+    }
+    // Only the text the ledger was read from: rows a model quotes must be in THAT document.
+    if (ledger.gddSha256 !== sha256Of(text)) return { changed: false };
+    const pass = await completeLedgerByModel(
+      ledger,
+      text,
+      (system, user) => planner.complete!.call(this.planner, system, user),
+      campaign.milestones,
+      this.ledgerOptions(campaign),
+    );
+    if (!pass.ran) {
+      getLoggerSafe().warn("Every call of the add-only pass over the GDD failed; it stays owed", { id: campaign.id, calls: pass.calls });
+      return { changed: false, note: `The add-only pass over the GDD could not run (${pass.calls} call(s) failed); it runs again at the next settle or revive.` };
+    }
+    // The ledger moved while the model was asked (an amendment on this copy): the pass stays owed.
+    if (campaign.requirements !== ledger) return { changed: false };
+    campaign.requirements = pass.ledger;
+    syncRequirementIds(campaign.milestones, pass.ledger.rows);
+    return {
+      changed: true,
+      ...(pass.failedCalls > 0
+        ? { note: `The add-only pass read the GDD with ${pass.failedCalls} of ${pass.calls} call(s) failing; those sections were read by code alone.` }
+        : {}),
+    };
+  }
+
+  /** Requirements the campaign already names: the coverage queue and what its repair sprints were appended to close. */
+  private inFlightRequirements(campaign: Campaign): string[] {
+    const sprints = campaign.milestones
+      .filter((m) => m.id.startsWith("mcov"))
+      .map((m) => coverageRequirementOf(m))
+      .filter((r) => r.identified)
+      .map((r) => r.text);
+    return [...(campaign.pendingCoverageGaps ?? []), ...sprints];
   }
 
   private measureGddClaims(
@@ -8911,6 +9130,13 @@ export class CampaignManager {
       campaign.gddSha256 = before.gddSha256;
       campaign.gddRevision = before.gddRevision;
       campaign.gddPath = before.gddPath;
+      // …AND THE ROWS READ FROM IT. The amendment re-read the ledger; this
+      // copy's rows came from the older text, and saving them would bind the
+      // newer document to rows it no longer has (a changed number closed).
+      if (before.requirements !== undefined && before.requirements.gddRevision > (campaign.requirements?.gddRevision ?? 0)) {
+        campaign.requirements = before.requirements;
+        syncRequirementIds(campaign.milestones, before.requirements.rows);
+      }
     }
     if (before !== undefined && (before.stopGeneration ?? 0) > (campaign.stopGeneration ?? 0)) {
       getLoggerSafe().warn("Refused a campaign save from an earlier generation", {

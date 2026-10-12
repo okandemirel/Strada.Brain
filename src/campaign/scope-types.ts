@@ -267,6 +267,12 @@ export interface RequirementLedger {
   numberingGaps: NumberingGap[];
   /** Rows the add-only LLM pass contributed (each quotes the GDD verbatim). */
   llmAdded: number;
+  /**
+   * The GDD revision the add-only pass last read. Behind `gddRevision` (an
+   * amendment re-read the rows, or every call failed) means the pass is still
+   * owed, and the next settle or revive runs it.
+   */
+  modelPassRevision?: number;
 }
 
 // =============================================================================

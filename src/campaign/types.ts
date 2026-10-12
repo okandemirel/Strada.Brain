@@ -515,7 +515,11 @@ export interface Campaign {
    * fault persists only as that row status, so set the row, not just this list.
    */
   checkFaults?: string[];
-  /** When this campaign first ran under the scope gate (epoch ms). */
+  /**
+   * When the scope gate first DECIDED for this campaign (mode on, epoch ms):
+   * the delivery counters started again then, once. Shadow records verdicts
+   * and decides nothing, so it does not stamp this.
+   */
   scopeGateSince?: number;
   /**
    * Which sessions have been PLAYED TO AN OUTCOME, accumulated across runs,

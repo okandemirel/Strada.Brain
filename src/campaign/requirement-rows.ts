@@ -1383,6 +1383,9 @@ export async function proposeRowsAddOnly(
 // OWNERSHIP
 // =============================================================================
 
+/** How a row the plan excluded says so; a replanned ladder lifts exactly these (requirement-ledger.ts). */
+export const PLAN_EXCLUSION_PREFIX = "excluded by the plan: ";
+
 /** What ownership reads from a milestone. */
 export interface OwnerCandidate {
   readonly id: string;
@@ -1464,7 +1467,7 @@ function exclusionNames(item: string, heading: string): boolean {
  * proof (mfinal-N) after it. On 18d4t's stored ladder the last milestone was
  * mcov1, a failed coverage sprint, and every claim went to it.
  */
-function isPlannedMilestone(id: string): boolean {
+export function isPlannedMilestone(id: string): boolean {
   return !id.startsWith("mcov") && !id.startsWith("mfinal");
 }
 
@@ -1515,7 +1518,7 @@ export function assignOwners(
     const exclusion = row.kind === "claim" ? undefined : exclusions.find((e) => headings.some((h) => exclusionNames(e.head, h)));
     if (exclusion !== undefined) {
       excluded.push(row.rid);
-      return { ...row, status: "excluded", excludedBecause: `excluded by the plan: ${exclusion.item}` };
+      return { ...row, status: "excluded", excludedBecause: `${PLAN_EXCLUSION_PREFIX}${exclusion.item}` };
     }
     const owner = ownerOf(row, planned, finalId);
     if (owner === undefined) {
