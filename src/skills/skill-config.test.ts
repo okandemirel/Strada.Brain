@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-config.js";
 import type { SkillConfig } from "./types.js";
 
@@ -198,7 +198,8 @@ describe("where skills.json lives", () => {
 
     const target = join("/srv/strada", "skills.json");
     expect(fsMock.readFile.mock.calls.map((call) => call[0])).toEqual([target]);
-    expect(fsMock.mkdir).toHaveBeenCalledWith("/srv/strada", { recursive: true });
+    // The directory the product derives from the joined path: backslashes on Windows.
+    expect(fsMock.mkdir).toHaveBeenCalledWith(dirname(target), { recursive: true });
     expect(fsMock.rename).toHaveBeenCalledWith(expect.any(String), target);
   });
 

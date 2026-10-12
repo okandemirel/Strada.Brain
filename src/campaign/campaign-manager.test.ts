@@ -401,8 +401,10 @@ describe("CampaignManager", () => {
   afterEach(() => {
     for (const m of liveManagers.splice(0)) m.dispose();
     storage.close();
-    rmSync(dir, { recursive: true, force: true });
-    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
+    // Windows refuses to remove a directory a just-exiting child (git) still has as its cwd:
+    // EBUSY on windows-test. Let rmSync retry rather than fail the test that happened to be last.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   /**
