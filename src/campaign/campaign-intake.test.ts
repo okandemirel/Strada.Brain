@@ -404,7 +404,7 @@ describe("a named document is the design only when the build is aimed at it", ()
     "Rewrite docs/save-notes.md from scratch",
     "Make the game follow docs/ui.md",
     "Make the game harder, the way docs/Quillmoor_GDD.md describes the late levels",
-    "Develop the game further as docs/roadmap.md says, starting with the harbor levels",
+    "Develop the game further as docs/roadmap.md says, starting with the cavern chapter",
     "docs/notes.md dosyasını sıfırdan yaz",
     "docs/geri-bildirim.md'deki notlara göre oyunu geliştir",
   ])("%s → no campaign (no whole-game build is aimed at the document)", (text) => {
