@@ -3,6 +3,7 @@ import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { canonicalizeProviderName, providerRecordKey } from "../agents/providers/provider-identity.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
+import { recordBareProviderOutcome } from "../agents/orchestrator-runtime-utils.js";
 import type {
   NodeResult,
   SupervisorContext,
@@ -219,7 +220,11 @@ export function createSupervisorNodeVerifier(
       // still catches the obvious, and the verdict carries the caveat.
       const own = canonicalizeProviderName(node.provider) ?? node.provider;
       if (own && ProviderHealthRegistry.getInstance().isAvailable(own)) {
-        const provider = providerManager.getPrimaryProviderByName?.(own) ?? providerManager.getProviderByName(own);
+        // Bare, as above: a chain built without the seat it could not create
+        // answered under this seat's name.
+        const provider = providerManager.getPrimaryProviderByName
+          ? providerManager.getPrimaryProviderByName(own)
+          : providerManager.getProviderByName(own);
         if (provider) {
           reviewer = { providerName: `${own} (same provider — no independent verifier was healthy)`, model: "", provider };
           independent = false;
@@ -252,9 +257,13 @@ export function createSupervisorNodeVerifier(
         undefined,
         { streaming: options.streamingEnabled },
       );
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { response });
       const parsed = parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
       return independent ? parsed : { ...parsed, independent: false };
     } catch (error) {
+      // The health gate above sees only what is recorded, and nothing records
+      // a bare verifier: a dead seat was sent every node of the task.
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { error });
       return {
         verdict: "skipped",
         unanswered: "threw",

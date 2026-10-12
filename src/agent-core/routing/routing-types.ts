@@ -191,6 +191,12 @@ export interface ConsensusResult {
    * with whatever was spent before the failure.
    */
   readonly usages?: ReadonlyArray<ConsensusUsageEntry>;
+  /**
+   * Set when no verdict came back: the reviewer's call threw or timed out.
+   * `agreed` stays false so nothing is approved, but this is not a
+   * disagreement, and a caller must not present it as a reviewer's objection.
+   */
+  readonly unanswered?: { readonly error: string };
 }
 
 export interface ConsensusUsageEntry {

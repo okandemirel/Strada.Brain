@@ -685,36 +685,37 @@ export function resolveConsensusReviewAssignment(
   // What may route, not every credential: under a strict chain the first
   // credentialed outsider was picked, refused, and the review dropped while a
   // chain sibling could have given it.
-  const fallbackReviewName = (ctx.providerManager.listRoutable?.() ?? ctx.providerManager.listAvailable())
-    .find((provider) => providerRecordKey(provider.name) !== currentSeat && health.isAvailable(provider.name))?.name;
-  if (!fallbackReviewName) {
-    return null;
-  }
-
-  const fallbackReviewProviderName =
-    canonicalizeProviderName(fallbackReviewName) ?? fallbackReviewName.trim().toLowerCase();
-  const fallbackReviewModelId = resolveProviderModelId(ctx, fallbackReviewName, identityKey);
-  const fallbackReviewProvider =
-    ctx.providerManager.getPrimaryProviderByName?.(fallbackReviewProviderName, fallbackReviewModelId);
-  // ORC-20: the alternate reviewer could not be built, so "cross-provider"
-  // review would be the current provider checking itself under another name.
-  if (!fallbackReviewProvider) {
-    return null;
-  }
-  return buildStaticSupervisorAssignment(
-    "reviewer",
-    fallbackReviewProviderName,
-    fallbackReviewModelId,
-    fallbackReviewProvider,
-    "selected an alternate reviewer to keep consensus verification cross-provider",
-    undefined,
-    buildCatalogAssignmentMetadata(
-      ctx,
+  for (const candidate of ctx.providerManager.listRoutable?.() ?? ctx.providerManager.listAvailable()) {
+    if (providerRecordKey(candidate.name) === currentSeat || !health.isAvailable(candidate.name)) {
+      continue;
+    }
+    const fallbackReviewProviderName =
+      canonicalizeProviderName(candidate.name) ?? candidate.name.trim().toLowerCase();
+    const fallbackReviewModelId = resolveProviderModelId(ctx, candidate.name, identityKey);
+    const fallbackReviewProvider =
+      ctx.providerManager.getPrimaryProviderByName?.(fallbackReviewProviderName, fallbackReviewModelId);
+    // ORC-20: a seat that cannot be built is no reviewer, and the next one is
+    // tried; nothing else stands in for it, or "cross-provider" review would
+    // be the current provider checking itself under another name.
+    if (!fallbackReviewProvider) {
+      continue;
+    }
+    return buildStaticSupervisorAssignment(
+      "reviewer",
       fallbackReviewProviderName,
       fallbackReviewModelId,
-      identityKey,
-    ),
-  );
+      fallbackReviewProvider,
+      "selected an alternate reviewer to keep consensus verification cross-provider",
+      undefined,
+      buildCatalogAssignmentMetadata(
+        ctx,
+        fallbackReviewProviderName,
+        fallbackReviewModelId,
+        identityKey,
+      ),
+    );
+  }
+  return null;
 }
 
 export function recordProviderUsage(

@@ -10,6 +10,8 @@
 
 import type { IAIProvider, ProviderResponse, ResponseSchema } from "../../agents/providers/provider.interface.js";
 import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy, ConsensusUsageEntry } from "./routing-types.js";
+import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
+import { recordBareProviderOutcome } from "../../agents/orchestrator-runtime-utils.js";
 import { getLogger } from "../../utils/logger.js";
 
 export interface ConsensusConfig {
@@ -251,15 +253,16 @@ export class ConsensusManager {
       } catch { /* non-fatal */ }
       return result;
     } catch (error) {
-      this.logger.error("Consensus verification failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Fail closed: a broken review path must not silently approve.
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error("Consensus verification failed", { error: message });
+      // Fail closed: a broken review path must not silently approve. Nor is
+      // it a reviewer's objection: nobody reviewed anything.
       return {
         agreed: false,
         strategy,
         originalProvider: params.originalProvider,
         reasoning: "Consensus failed — manual review required",
+        unanswered: { error: message },
         ...(spent.length > 0 ? { usages: [...spent] } : {}),
       };
     }
@@ -438,8 +441,12 @@ export class ConsensusManager {
       if (spent && usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
         spent.push({ provider: provider.name ?? undefined, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
       }
+      // The reviewer is built bare: unrecorded, a dead seat stayed "available"
+      // and was called again on every critical step.
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { error: err });
       throw err;
     }
+    recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { response });
     // WHAT THIS CALL SPENT, attributed to who served it, the superseded
     // attempt's tokens included (Codex 2026-09-17 #1, #2).
     if (spent) {

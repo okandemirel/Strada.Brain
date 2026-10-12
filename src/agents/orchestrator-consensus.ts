@@ -9,6 +9,7 @@ import type {
   PhaseOutcomeStatus,
 } from "../agent-core/routing/routing-types.js";
 import type { SupervisorAssignment } from "./orchestrator-supervisor-routing.js";
+import { redactSensitiveText } from "./orchestrator-text-utils.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 export interface ConsensusVerificationParams {
@@ -55,6 +56,9 @@ export interface ConsensusVerificationParams {
  * 2. If warranted, calls `consensusManager.verify`.
  * 3. Records execution trace and phase outcome via provided callbacks.
  * 4. Logs a warning on disagreement.
+ *
+ * Returns undefined when no review took place: skipped, no reviewer, or a
+ * reviewer that never answered.
  *
  * Non-fatal: any error inside is caught and silently swallowed by the caller.
  */
@@ -108,12 +112,18 @@ export async function runConsensusVerification(
 
   // Each reviewer call, billed to who SERVED it (a chain may have fallen
   // over from the free model to a paid one); the assignment names only the
-  // fallback identity.
+  // fallback identity. A bare reviewer stamps no servedBy, so its entry
+  // carries the provider's display label ("OpenAI", "OpenCode #2 (Zen)"),
+  // which the cost table and the flat-fee marks do not know: an unstamped
+  // call is booked to the seat the assignment names.
   for (const entry of consensusResult.usages ?? []) {
     if (!onUsage) break;
     const model = entry.model ?? reviewAssignment.modelId;
+    const servedBy = entry.provider === undefined || entry.provider === reviewAssignment.provider.name
+      ? reviewAssignment.providerName
+      : entry.provider;
     onUsage({
-      provider: entry.provider ?? reviewAssignment.providerName,
+      provider: servedBy,
       ...(model === undefined ? {} : { model }),
       inputTokens: entry.inputTokens,
       outputTokens: entry.outputTokens,
@@ -131,6 +141,24 @@ export async function runConsensusVerification(
     task: taskClass,
     reason: reviewAssignment.reason,
   });
+
+  // The reviewer never answered: its phase failed, and there is no verdict
+  // for the caller to act on. Returned as agreed:false, every critical step
+  // while the seat was down was handed a "second model ... disagreed"
+  // objection that no model had made.
+  if (consensusResult.unanswered) {
+    recordPhaseOutcome({
+      chatId,
+      identityKey,
+      assignment: reviewAssignment,
+      phase: "consensus-review" as ExecutionPhase,
+      source: "consensus-review" as ExecutionTraceSource,
+      status: "failed" as PhaseOutcomeStatus,
+      task: taskClass,
+      reason: `Consensus reviewer did not answer: ${redactSensitiveText(consensusResult.unanswered.error)}`.slice(0, 500),
+    });
+    return undefined;
+  }
 
   recordPhaseOutcome({
     chatId,

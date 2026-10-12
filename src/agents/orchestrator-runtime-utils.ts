@@ -383,6 +383,32 @@ function isCredentialRefusal(error: unknown, errorMsg: string): boolean {
 }
 
 /**
+ * Health for a provider called BARE, outside any chain. FallbackChainProvider
+ * records each member it calls; a bare provider records nothing, so a reviewer
+ * seat that failed at call time stayed available to the health gate that
+ * picks it, and every later review called it again. A chain is left to record
+ * itself. Bookkeeping never fails the call it describes.
+ */
+export function recordBareProviderOutcome(
+  registry: Parameters<typeof recordProviderHealthFailure>[0] & { recordSuccess(name: string): void },
+  provider: { readonly name: string },
+  outcome: { readonly response: ProviderResponse } | { readonly error: unknown },
+): void {
+  if ("providerCount" in provider) return;
+  try {
+    if ("error" in outcome) {
+      const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+      recordProviderHealthFailure(registry, provider.name, message, { isSingleProvider: true, error: outcome.error });
+    } else if (!isEmptyProviderResponse(outcome.response)) {
+      // As the chain judges it: an empty answer heals nothing.
+      registry.recordSuccess(provider.name);
+    }
+  } catch {
+    /* advisory: the call's own result stands */
+  }
+}
+
+/**
  * Evaluate a consecutive provider failure and return the action the loop should take.
  * Shared by both background and interactive loops to avoid divergence.
  */

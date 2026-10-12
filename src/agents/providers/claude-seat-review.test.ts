@@ -35,6 +35,7 @@ function makeProvider(name: string): IAIProvider {
 vi.mock("./provider-registry.js", () => ({
   PROVIDER_PRESETS: {
     openai: { baseUrl: "https://example.test/openai", defaultModel: "gpt-5.4", label: "OpenAI" },
+    deepseek: { baseUrl: "https://example.test/deepseek", defaultModel: "deepseek-x", label: "DeepSeek" },
   },
   buildProviderChain: buildProviderChainMock,
   createProvider: createProviderMock,
@@ -66,6 +67,7 @@ import { runConsensusVerification } from "../orchestrator-consensus.js";
 import { ConsensusManager } from "../../agent-core/routing/consensus-manager.js";
 import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
 import type { NodeResult } from "../../supervisor/supervisor-types.js";
+import type { TaskUsageEvent } from "../../tasks/types.js";
 
 // Production credentials carry the seat under both keys (collectProviderCredentials).
 const CREDENTIALS = {
@@ -74,10 +76,10 @@ const CREDENTIALS = {
   openai: { apiKey: "openai-key" },
 };
 
-function manager(chain: string[], strict: boolean): ProviderManager {
+function manager(chain: string[], strict: boolean, credentials: Record<string, { apiKey: string }> = CREDENTIALS): ProviderManager {
   return new ProviderManager(
     makeProvider(`chain(${chain.join("->")})`),
-    CREDENTIALS,
+    credentials,
     undefined,
     "/tmp/claude-seat-review-test",
     chain,
@@ -118,19 +120,26 @@ beforeEach(() => {
 
 /**
  * Seats that answer the way the real registry builds them: every call is
- * logged in `served`, a seat down at call time throws, one down at build time
- * cannot be created, and a chain falls over member by member as
- * FallbackChainProvider does after skipping the members it could not create.
+ * logged in `served`, a seat down at call time throws (`callError`, a 503 by
+ * default), one down at build time cannot be created, a bare seat may carry
+ * its display label as createProvider gives it, and a chain falls over member
+ * by member as FallbackChainProvider does after skipping the members it could
+ * not create.
  */
-function liveSeats(down: { atCall?: string[]; atBuild?: string[] }): { served: string[] } {
+function liveSeats(down: {
+  atCall?: string[];
+  atBuild?: string[];
+  callError?: (name: string) => Error;
+  labels?: Record<string, string>;
+}): { served: string[] } {
   const served: string[] = [];
   const seat = (name: string): IAIProvider => {
     if (down.atBuild?.includes(name)) throw new Error(`${name}: no usable credential`);
     return {
-      ...makeProvider(name),
+      ...makeProvider(down.labels?.[name] ?? name),
       chat: vi.fn(async (): Promise<ProviderResponse> => {
         served.push(name);
-        if (down.atCall?.includes(name)) throw new Error(`${name}: 503 service unavailable`);
+        if (down.atCall?.includes(name)) throw down.callError?.(name) ?? new Error(`${name}: 503 service unavailable`);
         return {
           text: '{"verdict":"approve","approved":true,"reasoning":"looks right"}',
           toolCalls: [],
@@ -169,6 +178,7 @@ function liveSeats(down: { atCall?: string[]; atBuild?: string[] }): { served: s
 
 async function consensusOn(executor: SupervisorAssignment, reviewer: SupervisorAssignment | null) {
   const outcomes: Array<{ providerName: string; status: string }> = [];
+  const usages: TaskUsageEvent[] = [];
   const verdict = await runConsensusVerification({
     consensusManager: new ConsensusManager({ mode: "always", reviewTimeoutMs: 0 }),
     availableProviderCount: 2,
@@ -180,9 +190,10 @@ async function consensusOn(executor: SupervisorAssignment, reviewer: SupervisorA
     reviewAssignment: reviewer,
     identityKey: "chat:web:1",
     recordExecutionTrace: () => {},
+    onUsage: (usage) => usages.push(usage),
     recordPhaseOutcome: (p) => outcomes.push({ providerName: p.assignment.providerName, status: p.status }),
   });
-  return { verdict, outcomes };
+  return { verdict, outcomes, usages };
 }
 
 const seatsOf = (served: string[]) => served.map((name) => providerRecordKey(name));
@@ -237,8 +248,9 @@ describe("a consensus review recorded as openai is never answered by the executo
     const { verdict, outcomes } = await consensusOn(executor, reviewer);
 
     expect(seatsOf(served)).not.toContain(providerRecordKey(executor.providerName));
-    expect(verdict?.agreed).toBe(false);
-    expect(outcomes).toEqual([{ providerName: "openai", status: "continued" }]);
+    // Nothing reviewed: no verdict to act on, and the reviewer's phase failed.
+    expect(verdict).toBeUndefined();
+    expect(outcomes).toEqual([{ providerName: "openai", status: "failed" }]);
   });
 
   it("the strategy's reviewer on another seat: the chain resolveSupervisorAssignment built is not what reviews", async () => {
@@ -257,7 +269,7 @@ describe("a consensus review recorded as openai is never answered by the executo
     const { verdict } = await consensusOn(executor, reviewer);
 
     expect(seatsOf(served)).not.toContain(providerRecordKey(executor.providerName));
-    expect(verdict?.agreed).toBe(false);
+    expect(verdict).toBeUndefined();
   });
 
   it("a healthy openai reviews on its own and its approval stands", async () => {
@@ -287,6 +299,104 @@ describe("a consensus review recorded as openai is never answered by the executo
     const executor = executorOf(m);
 
     expect(resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1")).toBeNull();
+  });
+
+  it("a seat that cannot be built does not end the search while another seat can review", () => {
+    liveSeats({ atBuild: ["openai"] });
+    const m = manager(["anthropic", "openai", "deepseek"], true, { ...CREDENTIALS, deepseek: { apiKey: "deepseek-key" } });
+    const executor = executorOf(m);
+
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+    expect(reviewer?.providerName).toBe("deepseek");
+    expect(reviewer?.provider.name).toBe("deepseek");
+  });
+});
+
+/**
+ * A bare reviewer has no chain to record its health: FallbackChainProvider
+ * benches the members it calls, a provider called on its own benches nothing.
+ * The health gate in resolveConsensusReviewAssignment then only ever saw
+ * benches some chain had recorded, so a reviewer seat with a dead key was
+ * called on every critical step, and each failed call came back as
+ * agreed:false, which tool-turn injects as "[CONSENSUS REVIEWER OBJECTION]
+ * A second model reviewed the last critical step and disagreed".
+ */
+describe("a bare reviewer that fails at call time", () => {
+  it.each([
+    ["overloaded (503)", (name: string) => new Error(`${name}: 503 service unavailable`)],
+    ["a refused key (401)", (name: string) => Object.assign(new Error(`${name} API error 401: invalid key`), { status: 401 })],
+  ])("%s: its own failure benches it, so the next critical steps do not call it again", async (_label, callError) => {
+    // Bare seats carry their display label, as createProvider names them.
+    const { served } = liveSeats({ atCall: ["openai"], callError, labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const ctx = { providerManager: m } as any;
+
+    const reviewers: Array<string | undefined> = [];
+    for (let check = 0; check < 3; check += 1) {
+      const reviewer = resolveConsensusReviewAssignment(ctx, executor, executor, "chat:web:1");
+      reviewers.push(reviewer?.providerName);
+      await consensusOn(executor, reviewer);
+    }
+
+    expect(served).toEqual(["openai"]);
+    expect(reviewers).toEqual(["openai", undefined, undefined]);
+    expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
+  });
+
+  it("its outage is reported as no review, not as a second model's objection", async () => {
+    liveSeats({ atCall: ["openai"] });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+
+    const { verdict, outcomes } = await consensusOn(executor, reviewer);
+
+    expect(verdict).toBeUndefined();
+    expect(outcomes).toEqual([{ providerName: "openai", status: "failed" }]);
+  });
+
+  it("a reviewer that answers is healthy again: an old blip does not count toward a bench", async () => {
+    liveSeats({ labels: { openai: "OpenAI" } });
+    ProviderHealthRegistry.getInstance().recordFailure("openai", "a blip");
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    const { verdict } = await consensusOn(executor, resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1"));
+
+    expect(verdict?.agreed).toBe(true);
+    expect(ProviderHealthRegistry.getInstance().getEntry("openai")?.consecutiveFailures).toBe(0);
+  });
+});
+
+describe("the reviewer's spend is booked to the seat that served it", () => {
+  it("a bare reviewer named by its display label is booked under its canonical seat, which the cost table knows", async () => {
+    liveSeats({ labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+    expect(reviewer?.provider.name).toBe("OpenAI");
+
+    const { usages } = await consensusOn(executor, reviewer);
+
+    expect(usages).toEqual([expect.objectContaining({ provider: "openai", inputTokens: 10, outputTokens: 5 })]);
+  });
+
+  it("a chain's servedBy stamp still names the member that answered (guard)", async () => {
+    liveSeats({ atCall: ["openai"], labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const chained: SupervisorAssignment = {
+      role: "reviewer",
+      providerName: "openai",
+      provider: m.getProviderByName("openai")!,
+      reason: "a chain, as getProviderByName builds it",
+    };
+
+    const { usages } = await consensusOn(executor, chained);
+
+    // The chain fell over to the member it names "anthropic"; that stamp is the booking.
+    expect(usages.map((u) => u.provider)).toEqual(["anthropic"]);
   });
 });
 
@@ -321,6 +431,28 @@ describe("the node verifier never calls the worker's own seat independent", () =
     expect(verdict.verifierProvider).not.toBe("openai");
     expect(verdict.independent).toBe(false);
     expect(seatsOf(served)).toEqual(["claude"]);
+  });
+
+  it("the worker's own seat that cannot be built bare does not review under its name", async () => {
+    const { served } = liveSeats({ atBuild: ["claude"] });
+    ProviderHealthRegistry.getInstance().recordCredentialRejected("openai", "401 invalid key");
+    const verify = createSupervisorNodeVerifier(manager(["anthropic", "openai"], true));
+    const verdict = await verify(node("claude"), { chatId: "chat:web:1" } as any);
+
+    expect(served).toEqual([]);
+    expect(verdict).toMatchObject({ verdict: "skipped", unanswered: "no-healthy-verifier" });
+  });
+
+  it("a verifier that fails at call time is benched, so the next node is not sent to it", async () => {
+    const { served } = liveSeats({ atCall: ["openai"], labels: { openai: "OpenAI" } });
+    const verify = createSupervisorNodeVerifier(manager(["anthropic", "openai"], true));
+
+    const first = await verify(node("claude"), { chatId: "chat:web:1" } as any);
+    await verify(node("claude"), { chatId: "chat:web:1" } as any);
+
+    expect(first).toMatchObject({ verdict: "skipped", unanswered: "threw", verifierProvider: "openai" });
+    expect(served.filter((name) => name === "openai")).toEqual(["openai"]);
+    expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
   });
 
   it("an openai node on the same chain is verified by the Claude seat", async () => {
