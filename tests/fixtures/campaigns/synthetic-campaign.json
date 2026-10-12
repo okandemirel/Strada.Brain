@@ -1,0 +1,809 @@
+{
+  "kind": "strada-campaign-replay-fixture",
+  "version": 1,
+  "exporter": "scripts/eval/export-campaign-fixture.mjs",
+  "stampMatcher": {
+    "keys": [
+      "task_stuck",
+      "max_steps_reached",
+      "token_budget_exceeded",
+      "provider_quota",
+      "provider_abort"
+    ],
+    "locales": [
+      "en",
+      "tr",
+      "ja",
+      "ko",
+      "zh",
+      "de",
+      "es",
+      "fr"
+    ],
+    "countPieces": {
+      "minChars": 40,
+      "minCjkChars": 15
+    },
+    "selectPieces": {
+      "minChars": 20,
+      "minCjkChars": 8
+    }
+  },
+  "redaction": {
+    "gddText": "omitted",
+    "prompts": "omitted; § references and sha256 kept",
+    "tipResults": "stamp and marker lines, each with one non-blank line of context; stamps counted over the whole result",
+    "requirementRows": "not exported: rows need the requirement extractor (plan W04)",
+    "omittedCampaignFields": [
+      "chatId",
+      "channelType",
+      "userId",
+      "conversationId",
+      "projectRoot",
+      "ideaText",
+      "gddText"
+    ],
+    "secretsFound": 0,
+    "projectPaths": 1,
+    "homePaths": 1,
+    "emails": 0,
+    "gddPassages": 2
+  },
+  "campaign": {
+    "id": "campaign_1700000000000_a1b2c",
+    "state": "done",
+    "gddPath": "docs/GDD.md",
+    "draftAttempts": 0,
+    "currentMilestone": 7,
+    "createdAt": 1700000000000,
+    "updatedAt": 1700396000000,
+    "lastError": "Coverage completion 1 — close the GDD gaps blocked after 2 attempts: The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.",
+    "coverageAuditNote": "coverage audit could not run: coverage audit returned malformed JSON",
+    "deliveryReported": true,
+    "projectName": "SyntheticPuzzle"
+  },
+  "gdd": {
+    "path": "docs/GDD.md",
+    "chars": 1706,
+    "sha256": "7fb9667a8334433aa58e9e11c75b6cabc424a95142fbca0233e4a4742df8739b",
+    "storedSha256": null,
+    "revision": null
+  },
+  "milestones": [
+    {
+      "id": "m1",
+      "title": "Sprint 1 — engine foundations and an empty board shell",
+      "status": "green",
+      "attempts": 1,
+      "taskId": "task_0000a001",
+      "resultExcerpt": "ntly verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
+      "reconcileDeferred": false,
+      "sectionRefs": [
+        "§2.5",
+        "§3.1–§3.2",
+        "§15",
+        "§16"
+      ],
+      "promptChars": 60,
+      "promptSha256": "2e0090d3d49ba2b6ed1a086b37a511aaa917eb3f2fcad754c167327870e0d7ce",
+      "tip": {
+        "id": "task_0000a001",
+        "status": "completed",
+        "createdAt": 1700036000000,
+        "completedAt": 1700043200000,
+        "resultChars": 1439,
+        "resultSha256": "4e02211d24240f211d8b00151080f41095c2c060aacf92ab2f125e343bc06a55",
+        "stamps": {
+          "task_stuck": 3
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 8,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 10,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 12,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 13,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 15,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 17,
+            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+          },
+          {
+            "line": 19,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 20,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m2",
+      "title": "Sprint 2 — core rules and the drift loop",
+      "status": "green",
+      "attempts": 1,
+      "taskId": "task_0000a002",
+      "resultExcerpt": "ress note 46: the worker kept describing the drift beat instead of changing it\nprogress note 47: the worker kept describing the drift beat instead of changing it\nprogress note 48: the worker kept describing the drift beat instead of changing it\nprogress note 49: the worker kept describing the drift beat instead of changing it\nprogress note 50: the worker kept describing the drift beat instead of changing it\nprogress note 51: the worker kept describing the drift beat instead of ch\n... (truncated)",
+      "reconcileDeferred": false,
+      "sectionRefs": [
+        "§3.3–§3.11",
+        "§12"
+      ],
+      "promptChars": 53,
+      "promptSha256": "354a094821dca838850f3cc01a9515864fd102c54bba70b055515f8ec44a454d",
+      "tip": {
+        "id": "task_0000a002",
+        "status": "completed",
+        "createdAt": 1700072000000,
+        "completedAt": 1700079200000,
+        "resultChars": 8208,
+        "resultSha256": "10b25be6ef5325f90c73a2864c3c985f999b751137dd20b1cbabf79a16464253",
+        "resultCutInStorage": true,
+        "stamps": {
+          "task_stuck": 6
+        },
+        "evidenceLines": [
+          {
+            "line": 7,
+            "text": "}"
+          },
+          {
+            "line": 9,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 11,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 13,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 14,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 20,
+            "text": "}"
+          },
+          {
+            "line": 22,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 24,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 26,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 27,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 33,
+            "text": "}"
+          },
+          {
+            "line": 35,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 37,
+            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+          },
+          {
+            "line": 39,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 40,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 46,
+            "text": "}"
+          },
+          {
+            "line": 48,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 50,
+            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+          },
+          {
+            "line": 52,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 53,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 59,
+            "text": "}"
+          },
+          {
+            "line": 61,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 63,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 65,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 66,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 72,
+            "text": "}"
+          },
+          {
+            "line": 74,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 76,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 78,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 79,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 132,
+            "text": "progress note 51: the worker kept describing the drift beat instead of ch"
+          },
+          {
+            "line": 133,
+            "text": "... (truncated)"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m3",
+      "title": "Sprint 3 — obstacles and power-ups",
+      "status": "green",
+      "attempts": 2,
+      "taskId": "task_0000a003",
+      "resultExcerpt": "Let me take the workspace path the system redirected me to and run the build from there:\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** no file under Assets/ changed in this attempt.",
+      "reconcileDeferred": false,
+      "visualEvidenceBounced": true,
+      "noWorkBounced": false,
+      "sectionRefs": [
+        "§4",
+        "§5"
+      ],
+      "promptChars": 20,
+      "promptSha256": "877768773ad40fc0ed42ed300f4e597c48c6e4bbbf656b06ddde333f8d68c97d",
+      "tip": {
+        "id": "task_0000a013",
+        "status": "completed",
+        "createdAt": 1700111600000,
+        "completedAt": 1700115200000,
+        "resultChars": 344,
+        "resultSha256": "e0c209068df4275a5748d5847b5322438225d82e29b5728ceb106b9210f2d515",
+        "stamps": {},
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "Let me take the workspace path the system redirected me to and run the build from there:"
+          },
+          {
+            "line": 3,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 4,
+            "text": "- <reasoning>"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m4",
+      "title": "Sprint 4 — level data, the solver and launch content",
+      "status": "green",
+      "attempts": 1,
+      "taskId": "task_0000a004",
+      "resultExcerpt": "hange to Assets/Scripts/Levels/LevelCatalog.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the catalog loader was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
+      "visualEvidenceBounced": true,
+      "sectionRefs": [
+        "§6",
+        "§3.5",
+        "§16.1–§16.2"
+      ],
+      "promptChars": 35,
+      "promptSha256": "601cc84dfb16ed0eda10d5204682e946d447bfeb05ff49a428882bf239dd3967",
+      "tip": {
+        "id": "task_0000a004",
+        "status": "completed",
+        "createdAt": 1700144000000,
+        "completedAt": 1700151200000,
+        "resultChars": 658,
+        "resultSha256": "1db0b7eed710a2a226ca364b9af8646fc6f21271840a4ccfc3939b53b82b0776",
+        "stamps": {
+          "task_stuck": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Make a targeted code change to Assets/Scripts/Levels/LevelCatalog.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- <reasoning>"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m5",
+      "title": "Sprint 5 — screens, onboarding and progression",
+      "status": "green",
+      "attempts": 1,
+      "taskId": "task_0000a005",
+      "resultExcerpt": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.",
+      "visualEvidenceBounced": true,
+      "sectionRefs": [
+        "§7",
+        "§8.1–§8.4",
+        "§12"
+      ],
+      "promptChars": 32,
+      "promptSha256": "0740411e98a8d7f3debe6fc61c71fc6ae248ed11fcbeadc85a15fc3a2db31148",
+      "tip": {
+        "id": "task_0000a005",
+        "status": "completed",
+        "createdAt": 1700180000000,
+        "completedAt": 1700187200000,
+        "resultChars": 318,
+        "resultSha256": "cbfd762ef307d0aaafc7460b8cb929ebb31562905972d8f530afd90f16f65cf3",
+        "stamps": {
+          "task_stuck": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 4,
+            "text": "- <reasoning>"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m6",
+      "title": "Sprint 6 — cloud saves and weekly events",
+      "status": "green",
+      "attempts": 2,
+      "taskId": "task_0000a006",
+      "resultExcerpt": "RIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.\n\nUnable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider.\n\n**Retry once the provider answers again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.",
+      "visualEvidenceBounced": true,
+      "noWorkBounced": false,
+      "timeBoxEscalations": 2,
+      "startedAtMs": 1700216000000,
+      "reconcileDeferredSince": 1700208800000,
+      "sectionRefs": [
+        "§8.5–§8.9",
+        "§15.3–§15.8"
+      ],
+      "promptChars": 36,
+      "promptSha256": "d49ac5c9aa657b0675fec42125403b08967d8eeb975adfa4030c4e88b49f22fa",
+      "tip": {
+        "id": "task_0000a006",
+        "status": "completed",
+        "createdAt": 1700216000000,
+        "completedAt": 1700223200000,
+        "resultChars": 4587,
+        "resultSha256": "962706ad59a1a3a6bc82744dc97585c329f177829981e454a16cbe11e6818f65",
+        "stamps": {
+          "task_stuck": 10,
+          "provider_abort": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 8,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 10,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 12,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 13,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 15,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 17,
+            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+          },
+          {
+            "line": 19,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 20,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 22,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 24,
+            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+          },
+          {
+            "line": 26,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 27,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 29,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 31,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 33,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 34,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 36,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 38,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 40,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 41,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 43,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 45,
+            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+          },
+          {
+            "line": 47,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 48,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 50,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 52,
+            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+          },
+          {
+            "line": 54,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 55,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 57,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 59,
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 61,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 62,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 64,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 66,
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+          },
+          {
+            "line": 68,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 69,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          },
+          {
+            "line": 71,
+            "text": "Unable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider."
+          },
+          {
+            "line": 73,
+            "text": "**Retry once the provider answers again.**"
+          },
+          {
+            "line": 75,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 76,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m7",
+      "title": "Sprint 7 — integration and delivery",
+      "status": "green",
+      "attempts": 2,
+      "taskId": "task_0000a007",
+      "resultExcerpt": " bootstrapper and the input adapter in the saved scene\",\n  \"note 60\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 61\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 62\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 63\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 64\": \"keep the camera, the bootstrapper and the input a\n... (truncated)",
+      "visualEvidenceBounced": false,
+      "noWorkBounced": false,
+      "timeBoxEscalations": 0,
+      "deliveryVerificationBounced": false,
+      "deliveryVerificationBounces": 2,
+      "visualEvidence": "observed",
+      "startedAtMs": 1700288000000,
+      "commitNote": "Committed 212 file(s) as `1a2b3c4`.",
+      "testVerdict": "PlayMode verification passed: 41 of 42 tests ran clean.",
+      "structureRefused": true,
+      "structureFindings": [
+        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Main.unity and the prefabs it places.",
+        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Main.unity",
+        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Board/BoardShell.cs, Assets/Scripts/LanternSpawner.cs, +1 more",
+        "GDD says: …<GDD passage omitted>…"
+      ],
+      "visualConformance": "**Does it look like the GDD?**\n- Partly: the board and its lanterns read, but the painted lake backdrop is missing.\n- Judged from `<project>/Recordings/verification-final/frame_00119.png` by openai.",
+      "sectionRefs": [
+        "§2.5",
+        "§15",
+        "§16"
+      ],
+      "promptChars": 42,
+      "promptSha256": "194ae4dddc998795e6beba0e2da3636f35a47e5bf1795ac0e430a96a8368836d",
+      "tip": {
+        "id": "task_0000a007",
+        "status": "completed",
+        "createdAt": 1700252000000,
+        "completedAt": 1700259200000,
+        "resultChars": 8208,
+        "resultSha256": "895d47f27896813071476545398fb803f09d0f743701c06a9cc914ff862e677a",
+        "resultCutInStorage": true,
+        "stamps": {
+          "task_stuck": 1,
+          "provider_abort": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 7,
+            "text": "}"
+          },
+          {
+            "line": 9,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 10,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified (log: ~/Library/Logs/Unity/Editor.log)"
+          },
+          {
+            "line": 12,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 14,
+            "text": "**Stop reflecting and inspect the latest unity_verify_change failure, then make one targeted edit.**"
+          },
+          {
+            "line": 16,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 17,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 23,
+            "text": "}"
+          },
+          {
+            "line": 25,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 26,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 28,
+            "text": "Bu görev tamamlanamadı — yapay zeka sağlayıcısı yanıt vermiyor. Lütfen daha sonra tekrar deneyin veya farklı bir sağlayıcı kullanın."
+          },
+          {
+            "line": 30,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 31,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 121,
+            "text": "  \"note 64\": \"keep the camera, the bootstrapper and the input a"
+          },
+          {
+            "line": 122,
+            "text": "... (truncated)"
+          }
+        ],
+        "verification": {
+          "testsGreen": true,
+          "detail": "PlayMode verification passed: 41 of 42 tests ran clean."
+        }
+      }
+    },
+    {
+      "id": "mcov1",
+      "title": "Coverage completion 1 — close the GDD gaps",
+      "status": "failed",
+      "attempts": 2,
+      "startedAtMs": 1700360000000,
+      "taskId": "task_0000a008",
+      "visualEvidenceBounced": false,
+      "noWorkBounced": false,
+      "deliveryVerificationBounced": false,
+      "deliveryVerificationBounces": 0,
+      "sceneHygieneBounces": 0,
+      "timeBoxEscalations": 0,
+      "placeholderArtAtStart": {
+        "sprites": 120,
+        "placeholders": 97
+      },
+      "structureRefused": false,
+      "structureFindings": [
+        "Shipped scenes PLACE 9 renderer components (2 mesh, 7 sprite).",
+        "GDD says: …<GDD passage omitted>…"
+      ],
+      "artBounced": false,
+      "prosOnlyBounced": false,
+      "resultExcerpt": "Cancelled: the coverage pass stalled twice without changing a file, so the campaign stopped it before a third try.",
+      "commitNote": "Committed 37 file(s) as `5d6e7f8`.",
+      "visualEvidence": "observed",
+      "compileVerdict": {
+        "ok": true,
+        "ran": true,
+        "errors": 0,
+        "detail": "Runtime assemblies compile; test assemblies are not built by this check."
+      },
+      "sectionRefs": [],
+      "promptChars": 41,
+      "promptSha256": "b5be64760202211531b8ca07e40ccadc9cba524341a177888782617c39da6ec6",
+      "tip": {
+        "id": "task_0000a008",
+        "status": "cancelled",
+        "createdAt": 1700288000000,
+        "completedAt": 1700295200000,
+        "resultChars": 114,
+        "resultSha256": "a3c23ecccc099bbd3ac18e73c8490254aea7ff6d162b88a4c9f2190bcd893b23",
+        "stamps": {},
+        "evidenceLines": [],
+        "verification": null
+      }
+    }
+  ]
+}

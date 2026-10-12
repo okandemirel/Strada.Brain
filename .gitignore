@@ -56,3 +56,8 @@ benchmarks/corpus/unity-synth-v1-*/
 # The auto-updater's own lock; untracked it was stashed on every update cycle
 .strada-update.lock
 .scratch/
+
+# Fixtures that must never be published: a real campaign export, the names of
+# the private product a run was measured on, its design documents. Tests that
+# read them are skipped without them (src/tests/helpers/local-fixtures.ts).
+tests/fixtures/local/

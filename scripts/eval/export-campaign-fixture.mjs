@@ -4,7 +4,7 @@
  * (GDD-drift plan W16a).
  *
  * The scope gate's replay tests judge a finished campaign again from what its
- * databases hold. In campaign 18d4t six milestones went green while their
+ * databases hold. In a measured campaign six milestones went green while their
  * lineage tips carried the system's own "task_stuck" stamp, and m4's stamp sat
  * only in the tip: the 500-character excerpt the campaign kept never showed
  * it. So the fixture keeps, per milestone, the stored record (status,
@@ -37,8 +37,12 @@
  *   node scripts/eval/export-campaign-fixture.mjs --campaign <id> --campaigns-db <path> --tasks-db <path>
  *   ... [--include-gdd-text]
  *
- * The committed 18d4t export is tests/fixtures/campaigns/campaign-18d4t.json
- * (under tests/, because the build ships every tracked .json under src/).
+ * The committed fixture, tests/fixtures/campaigns/synthetic-campaign.json, is
+ * this export of an invented campaign (tests/fixtures/campaigns/synthetic-campaign.ts)
+ * — under tests/, because the build ships every tracked .json under src/. A
+ * real campaign's export is never committed, however redacted: it describes a
+ * private product. Kept as tests/fixtures/local/campaign-export.json
+ * (gitignored), the replay tests run against it too.
  *
  * Exit codes: 0 written · 1 a secret or personal path survived redaction (nothing
  * written) · 2 bad invocation, unreadable database or unknown campaign.
@@ -263,7 +267,7 @@ const spellingsOf = (path) =>
   [path, ...(path ? [safeRealpath(path)] : [])].filter((p, i, all) => p && p.length > 1 && all.indexOf(p) === i);
 
 // The runtime also writes the project root home-relative ("Judged from
-// `~/Documents/…/<game>/Recordings/…`" in 18d4t's m7), where neither the
+// `~/Documents/…/<game>/Recordings/…`" in a measured campaign's m7), where neither the
 // absolute spelling nor the home rule sees it: the owner's folders survived.
 function projectSpellingsOf(projectRoot, home) {
   const spellings = spellingsOf(projectRoot);
@@ -437,7 +441,7 @@ function tipOf(tasksDb, taskId, countPieces, selectPieces) {
     ...(row.cancel_reason ? { cancelReason: row.cancel_reason } : {}),
     resultChars: result.length,
     resultSha256: sha256(result),
-    // tasks.db holds results cut at 8192 characters (18d4t's m2 and m7): a
+    // tasks.db holds results cut at 8192 characters (a measured m2 and m7): a
     // stamp past the cut was never stored, so these counts are a lower bound.
     ...(result.endsWith(STORED_CUT_MARK) ? { resultCutInStorage: true } : {}),
     stamps: countStamps(result, countPieces),

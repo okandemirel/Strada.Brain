@@ -6,7 +6,7 @@
  * the campaign's owner only; `/campaign rejudge` replays the judge without
  * changing anything.
  *
- * In campaign 18d4t six of six milestones went green on prose, and the report
+ * In a measured campaign six of six milestones went green on prose, and the report
  * a person read said so in no line at all.
  */
 
@@ -32,9 +32,13 @@ import type {
   ScopeVerdictRecord,
 } from "./scope-types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import { localFixturePath, missingLocalFixture } from "../tests/helpers/local-fixtures.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const FIXTURE_18D4T = join(REPO_ROOT, "tests", "fixtures", "campaigns", "campaign-18d4t.json");
+/** An invented campaign with a measured one's shape (tests/fixtures/campaigns/synthetic-campaign.ts). */
+const SYNTHETIC_FIXTURE = join(REPO_ROOT, "tests", "fixtures", "campaigns", "synthetic-campaign.json");
+/** A real campaign's export, never committed. */
+const LOCAL_EXPORT = localFixturePath("campaign-export.json");
 const GDD_SHA = "a".repeat(64);
 const REV = "0123456789abcdef0123456789abcdef01234567";
 
@@ -479,7 +483,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   });
 });
 
-// ─── /campaign rejudge on campaign 18d4t ────────────────────────────────────
+// ─── /campaign rejudge on an exported campaign ──────────────────────────────
 
 interface FixtureMilestone extends Record<string, unknown> {
   id: string;
@@ -493,67 +497,93 @@ interface FixtureMilestone extends Record<string, unknown> {
     createdAt: number;
     completedAt: number;
     verification: unknown;
+    stamps: Record<string, number>;
     evidenceLines: Array<{ line: number; text: string }>;
-  };
+  } | null;
 }
 
-/** The exported 18d4t record as a stored campaign, and its lineage tips as the task manager holds them. */
-function load18d4t(root: string): { campaign: Campaign; tasks: Map<string, FakeTask> } {
-  const fixture = JSON.parse(readFileSync(FIXTURE_18D4T, "utf8")) as {
+/** An exported campaign record as a stored campaign, and its lineage tips as the task manager holds them. */
+function loadExport(path: string, root: string): { campaign: Campaign; tasks: Map<string, FakeTask>; milestones: FixtureMilestone[] } {
+  const fixture = JSON.parse(readFileSync(path, "utf8")) as {
     campaign: Record<string, unknown> & { id: string; state: Campaign["state"]; currentMilestone: number; createdAt: number; updatedAt: number };
     milestones: FixtureMilestone[];
   };
   const tasks = new Map<string, FakeTask>();
   const milestones = fixture.milestones.map((m) => {
     const { tip, sectionRefs: _refs, promptChars: _chars, promptSha256: _sha, ...fields } = m;
-    tasks.set(m.taskId, {
-      id: tip.id,
-      status: tip.status,
-      result: tip.evidenceLines.map((l) => l.text).join("\n"),
-      ...(tip.verification ? { verification: tip.verification } : {}),
-      title: m.title,
-      createdAt: tip.createdAt,
-      updatedAt: tip.completedAt,
-      progress: [],
-    });
+    if (tip && !("missing" in tip)) {
+      tasks.set(m.taskId, {
+        id: tip.id,
+        status: tip.status,
+        result: tip.evidenceLines.map((l) => l.text).join("\n"),
+        ...(tip.verification ? { verification: tip.verification } : {}),
+        title: m.title,
+        createdAt: tip.createdAt,
+        updatedAt: tip.completedAt,
+        progress: [],
+      });
+    }
     return { ...fields, prompt: "(omitted from the fixture)" } as unknown as CampaignMilestone;
   });
   const { projectName: _name, ...campaignFields } = fixture.campaign;
   return {
     campaign: {
       ...(campaignFields as unknown as Campaign),
-      chatId: "chat-18d4t",
+      chatId: "chat-export",
       channelType: "cli",
       userId: "u1",
       projectRoot: root,
       milestones,
     },
     tasks,
+    milestones: fixture.milestones,
+  };
+}
+
+/** Replay an export with /campaign rejudge; the stored record before and after, and the report. */
+function rejudgeExport(path: string) {
+  const tasks = new Map<string, FakeTask>();
+  const { manager, storage, root } = build({ tasks });
+  const loaded = loadExport(path, root);
+  for (const [id, task] of loaded.tasks) tasks.set(id, task);
+  storage.save(loaded.campaign);
+  const before = JSON.stringify(storage.get(loaded.campaign.id));
+  const text = manager.rejudgeByCommand("another-chat", loaded.campaign.id) ?? "";
+  return {
+    text,
+    lineOf: (id: string) => text.split("\n").find((l) => l.startsWith(`• ${id} `)) ?? "",
+    before,
+    after: JSON.stringify(storage.get(loaded.campaign.id)),
+    judgements: storage.listJudgements(loaded.campaign.id),
+    milestones: loaded.milestones,
   };
 }
 
 describe("/campaign rejudge replays the judge and changes nothing (W14)", () => {
-  it("on 18d4t, none of the stored greens stands — m1–m6 each NOT green — and the record is untouched", () => {
-    const tasks = new Map<string, FakeTask>();
-    const { manager, storage, root } = build({ tasks });
-    const { campaign, tasks: tips } = load18d4t(root);
-    for (const [id, task] of tips) tasks.set(id, task);
-    storage.save(campaign);
-    const before = JSON.stringify(storage.get(campaign.id));
-
-    const text = manager.rejudgeByCommand("another-chat", campaign.id) ?? "";
-    expect(text).toContain("0 of 7 stored greens would be green");
+  it("on a campaign that went green on prose, none of the stored greens stands, and the record is untouched", () => {
+    const replay = rejudgeExport(SYNTHETIC_FIXTURE);
+    expect(replay.text).toContain("0 of 7 stored greens would be green");
     for (const id of ["m1", "m2", "m3", "m4", "m5", "m6"]) {
-      const line = text.split("\n").find((l) => l.startsWith(`• ${id} `)) ?? "";
-      expect(line, id).toContain("stored green → NOT green");
+      expect(replay.lineOf(id), id).toContain("stored green → NOT green");
     }
-    const m1 = text.split("\n").find((l) => l.startsWith("• m1 ")) ?? "";
+    const m1 = replay.lineOf("m1");
     expect(m1).toContain('"task_stuck"');
     expect(m1).toContain("rebuilt from the record");
 
-    expect(JSON.stringify(storage.get(campaign.id))).toBe(before);
-    expect(storage.listJudgements(campaign.id)).toEqual([]);
+    expect(replay.after).toBe(replay.before);
+    expect(replay.judgements).toEqual([]);
   });
+
+  it.skipIf(!LOCAL_EXPORT)(
+    `on a real export kept locally, a green whose tip carries a stuck stamp does not stand, and nothing changes${LOCAL_EXPORT ? "" : ` (${missingLocalFixture("campaign-export.json", "an export-campaign-fixture.mjs export of a real campaign")})`}`,
+    () => {
+      const replay = rejudgeExport(LOCAL_EXPORT!);
+      const stuckGreens = replay.milestones.filter((m) => m.status === "green" && (m.tip?.stamps?.["task_stuck"] ?? 0) > 0);
+      for (const m of stuckGreens) expect(replay.lineOf(m.id), m.id).toContain("stored green → NOT green");
+      expect(replay.after).toBe(replay.before);
+      expect(replay.judgements).toEqual([]);
+    },
+  );
 
   it("replays a stored verdict from its stored input and says whether the replay agrees", () => {
     const { manager, storage, root } = build();

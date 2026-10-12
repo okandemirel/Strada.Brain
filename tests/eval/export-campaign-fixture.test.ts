@@ -3,8 +3,8 @@
  *
  * The replay tests judge a finished campaign again from what its databases
  * hold, so the fixture has to carry every system stamp the milestone tips
- * hold — not only the 500-character excerpt the campaign kept (18d4t's m4
- * stamp is visible only in its tip) — while carrying nothing that must not be
+ * hold — not only the 500-character excerpt the campaign kept (a measured
+ * campaign's m4 stamp was visible only in its tip) — while carrying nothing that must not be
  * committed: identities, home paths, keys, and the approved GDD's own text.
  * The live databases are read and never written.
  */
@@ -30,13 +30,20 @@ import { TaskStorage } from "../../src/tasks/task-storage.js";
 import { TaskStatus, type Task, type TaskId } from "../../src/tasks/types.js";
 import type { Campaign, CampaignMilestone } from "../../src/campaign/types.js";
 import { getResilienceMessage } from "../../src/agents/resilience-messages.js";
+import { localFixturePath, missingLocalFixture } from "../../src/tests/helpers/local-fixtures.js";
+import {
+  SYNTHETIC_CAMPAIGN_ID,
+  SYNTHETIC_GDD,
+  SYNTHETIC_HOME,
+  seedSyntheticCampaign,
+} from "../fixtures/campaigns/synthetic-campaign.js";
 
 // fileURLToPath, not `.pathname`: on Windows that is "/D:/..." and resolves to "D:\D:\...".
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = join(REPO_ROOT, "scripts", "eval", "export-campaign-fixture.mjs");
 // Under tests/, not src/: the build copies every tracked .json under src/ into
 // the published package.
-const FIXTURE_18D4T = join(REPO_ROOT, "tests", "fixtures", "campaigns", "campaign-18d4t.json");
+const SYNTHETIC_FIXTURE = join(REPO_ROOT, "tests", "fixtures", "campaigns", "synthetic-campaign.json");
 
 const STUCK = getResilienceMessage("task_stuck", "en");
 const STUCK_TR = getResilienceMessage("task_stuck", "tr");
@@ -46,7 +53,7 @@ const FLAGS = "[VERIFIER FLAGS — unresolved; this node was NOT positively veri
 const FAKE_KEY = `sk-proj-${"A1b2C3d4".repeat(4)}`;
 const FAKE_HOME = "/Users/alice";
 const GDD_TEXT =
-  "# Sentinel GDD\n\nArt questions: art@example.org\n\n## 3.3 Core Rules\nR-01 GDD-BODY-SENTINEL the shooter must fire at the lowest cube.\n";
+  "# Sentinel GDD\n\nArt questions: art@example.org\n\n## 3.3 Core Rules\nR-01 GDD-BODY-SENTINEL a lantern drifts one cell per beat.\n";
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
@@ -68,10 +75,10 @@ function task(id: string, createdAt: number, fields: Partial<Task> = {}): Task {
 
 /** m1's newest retry: two back-to-back stamps, a cut one, a Turkish one and an outage stamp. */
 const M1_TIP_RESULT = [
-  // A result that starts mid-stamp, the way 18d4t's m1 excerpt does.
+  // A result that starts mid-stamp, the way a measured m1 excerpt did.
   STUCK.slice(STUCK.indexOf("fter multiple")),
   "",
-  "**Stop reflecting and edit Assets/Scripts/PlayfieldBuilder.cs.**",
+  "**Stop reflecting and edit Assets/Scripts/BoardBuilder.cs.**",
   "",
   FLAGS,
   `- verification_skipped: the reviewer quoted ${FAKE_KEY} from ${FAKE_HOME}/Games/.env`,
@@ -93,7 +100,7 @@ const M1_TIP_RESULT = [
 
 /**
  * m2's tip: one stamp at the top, then more worker prose than the excerpt
- * keeps, stored cut by the sanitizer the way 18d4t's m2 and m7 tips are.
+ * keeps, stored cut by the sanitizer the way a measured campaign's m2 and m7 tips were.
  */
 const M2_FILLER = Array.from({ length: 30 }, (_, i) => `filler line ${i} — the worker kept talking about the board`);
 const M2_TIP_RESULT = `${[STUCK, "", "**Make a targeted change to LevelData.cs.**", "", ...M2_FILLER].join("\n")}\n... (truncated)`;
@@ -130,7 +137,7 @@ function seedCampaign(path: string): void {
           taskId: "task_m2",
           visualEvidenceBounced: true,
           resultExcerpt: M2_TIP_RESULT.slice(-500),
-          // The runtime writes the project root home-relative; 18d4t's m7 does.
+          // The runtime writes the project root home-relative; a measured m7 did.
           visualConformance: "Judged from `~/Games/SentinelGame/Recordings/frame_00119.png` by openai.",
         }),
         milestone({ id: "m3", prompt: "Implement §4 and §5: boosters.", taskId: "task_never_written" }),
@@ -231,7 +238,7 @@ describe("export-campaign-fixture", () => {
     expect(fixture.milestones[0].tip.resultSha256).toBe(sha256(M1_TIP_RESULT));
   });
 
-  it("keeps a stamp the 500-character excerpt lost (18d4t's m4), and drops the prose around it", async () => {
+  it("keeps a stamp the 500-character excerpt lost (as a measured m4's was), and drops the prose around it", async () => {
     const fixture = await exportSynthetic();
     const m2 = fixture.milestones[1];
     expect(m2.resultExcerpt).not.toContain("I got stuck");
@@ -374,52 +381,84 @@ describe("export-campaign-fixture", () => {
 });
 
 /**
- * The committed fixture of campaign 18d4t, exported once from the live
- * databases. These are the counts the M2/M3 plan measured there; the replay
- * tests read this file, so it has to keep saying them.
+ * The committed replay fixture: what the exporter writes for the invented
+ * campaign of tests/fixtures/campaigns/synthetic-campaign.ts. It carries the
+ * shape a measured campaign showed — the replay tests read this file, so it
+ * has to keep saying it.
  */
-describe("the committed 18d4t fixture", () => {
-  const fixture = JSON.parse(readFileSync(FIXTURE_18D4T, "utf8"));
-  const byId = (id: string) => fixture.milestones.find((m: { id: string }) => m.id === id);
+describe("the committed synthetic fixture", () => {
+  // Read when a test asks, after the first one has had its chance to rewrite it (`-u`).
+  let read: { milestones: Array<{ id: string } & Record<string, any>> } & Record<string, any>;
+  const fixtureOf = () => (read ??= JSON.parse(readFileSync(SYNTHETIC_FIXTURE, "utf8")));
+  const byId = (id: string) => fixtureOf().milestones.find((m) => m.id === id)!;
 
-  it("holds the stamps the plan measured on each milestone's tip", () => {
-    expect(fixture.campaign.id).toBe("campaign_1787904962170_18d4t");
+  it("is the exporter's output for the synthetic campaign, byte for byte", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "campaign-fixture-synthetic-"));
+    try {
+      const campaignsDb = join(dir, "campaigns.db");
+      const tasksDb = join(dir, "tasks.db");
+      seedSyntheticCampaign(campaignsDb, tasksDb);
+      const exported = await exportCampaignFixture({
+        campaignsDbPath: campaignsDb,
+        tasksDbPath: tasksDb,
+        campaignId: SYNTHETIC_CAMPAIGN_ID,
+        home: SYNTHETIC_HOME,
+      });
+      // The CLI's own serialisation, so `--out` of the seeded databases writes this file.
+      await expect(`${JSON.stringify(exported, null, 2)}\n`).toMatchFileSnapshot(SYNTHETIC_FIXTURE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the stamps each milestone's tip carries", () => {
+    expect(fixtureOf().campaign.id).toBe(SYNTHETIC_CAMPAIGN_ID);
     expect(byId("m1").tip.stamps).toEqual({ task_stuck: 3 });
     expect(byId("m2").tip.stamps).toEqual({ task_stuck: 6 });
     expect(byId("m3").tip.stamps).toEqual({});
     expect(byId("m4").tip.stamps).toEqual({ task_stuck: 1 });
     expect(byId("m5").tip.stamps).toEqual({ task_stuck: 1 });
     expect(byId("m6").tip.stamps).toEqual({ task_stuck: 10, provider_abort: 1 });
+    expect(byId("m7").tip.stamps).toEqual({ task_stuck: 1, provider_abort: 1 });
     // m4's stamp is in its tip only: the stored excerpt never showed it.
     expect(byId("m4").resultExcerpt).not.toContain("I got stuck");
-    for (const id of ["m1", "m2", "m3", "m4", "m5", "m6"]) expect(byId(id).status, id).toBe("green");
+    for (const id of ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]) expect(byId(id).status, id).toBe("green");
+    expect(byId("mcov1").status).toBe("failed");
+    expect(byId("mcov1").tip.status).toBe("cancelled");
     expect(byId("m6").timeBoxEscalations).toBe(2);
     expect(byId("m2").sectionRefs).toContain("§3.3–§3.11");
+    // m3's newest task is a retry, not the task the milestone recorded.
+    expect(byId("m3").tip.id).not.toBe(byId("m3").taskId);
     // m2's six are what tasks.db kept: its result, like m7's, was stored cut.
     expect(byId("m2").tip.resultCutInStorage).toBe(true);
     expect(byId("m7").tip.resultCutInStorage).toBe(true);
-    // No tip carries verification_json (the plan's fact 1); the field says so instead of being absent.
+    // Only m7's tip carries verification_json; the others say so instead of being absent.
     for (const id of ["m1", "m2", "m3", "m4", "m5", "m6"]) expect(byId(id).tip.verification, id).toBeNull();
+    expect(byId("m7").tip.verification).toMatchObject({ testsGreen: true });
   });
 
   it("decodes to the same stamps from its kept lines alone", async () => {
     const { getResilienceMessage: messages } = await loadProductionModules();
     const pieces = stampPiecesOf(messages);
-    for (const m of fixture.milestones) {
+    for (const m of fixtureOf().milestones) {
       const reduced = m.tip.evidenceLines.map((l: { text: string }) => l.text).join("\n");
       expect(countStamps(reduced, pieces), m.id).toEqual(m.tip.stamps);
     }
   });
 
-  it("is committed without the GDD's text, prompts, identities or keys", async () => {
+  it("is committed without the GDD's text or its quoted passages, prompts, identities or keys", async () => {
+    const fixture = fixtureOf();
     expect(fixture.gdd.text).toBeUndefined();
-    expect(fixture.gdd.chars).toBeGreaterThan(70_000);
+    expect(fixture.gdd.chars).toBe(SYNTHETIC_GDD.length);
     expect(fixture.redaction.gddText).toBe("omitted");
+    // m7 and mcov1 each quote the GDD in a structure finding.
+    expect(fixture.redaction.gddPassages).toBe(2);
+    expect(JSON.stringify(fixture)).toContain("GDD says: …<GDD passage omitted>…");
     // The plan's rows need W04's extractor; the fixture says they are absent rather than look complete.
     expect(fixture.redaction.requirementRows).toMatch(/not exported/);
     for (const m of fixture.milestones) expect(m).not.toHaveProperty("prompt");
     const json = JSON.stringify(fixture);
-    expect(json).not.toMatch(/\/Users\/|\/home\/|cli-user|cli-local/);
+    expect(json).not.toMatch(/\/Users\/|\/home\/|chat-synthetic|user-synthetic/);
     // m7's visual verdict names the project home-relative; only <project> may remain.
     expect(json).not.toMatch(new RegExp(`~/[^"\\s]*${fixture.campaign.projectName}`));
     expect(json).toContain("`<project>/Recordings/");
@@ -427,3 +466,37 @@ describe("the committed 18d4t fixture", () => {
     expect(scanFixture(fixture, { applySecretPatterns, DEFAULT_SECRET_PATTERNS })).toEqual([]);
   });
 });
+
+/**
+ * A real campaign's export, kept only on the machine that measured it: the
+ * exporter's promises — stamps that survive the reduction, nothing that may
+ * not be published — have to hold on real data too, not only on data written
+ * to fit them.
+ */
+const LOCAL_EXPORT = localFixturePath("campaign-export.json");
+describe.skipIf(!LOCAL_EXPORT)(
+  `a real campaign export kept locally${LOCAL_EXPORT ? "" : ` (${missingLocalFixture("campaign-export.json", "an export-campaign-fixture.mjs export of a real campaign")})`}`,
+  () => {
+    const fixture = LOCAL_EXPORT ? JSON.parse(readFileSync(LOCAL_EXPORT, "utf8")) : undefined;
+
+    it("decodes to the same stamps from its kept lines alone", async () => {
+      const { getResilienceMessage: messages } = await loadProductionModules();
+      const pieces = stampPiecesOf(messages);
+      for (const m of fixture.milestones) {
+        if (m.tip === null || m.tip.missing) continue;
+        const reduced = m.tip.evidenceLines.map((l: { text: string }) => l.text).join("\n");
+        expect(countStamps(reduced, pieces), m.id).toEqual(m.tip.stamps);
+      }
+    });
+
+    it("carries no prompt, identity, home path or key", async () => {
+      if (fixture.redaction.gddText === "omitted") expect(fixture.gdd?.text).toBeUndefined();
+      for (const m of fixture.milestones) expect(m).not.toHaveProperty("prompt");
+      // An included GDD is the approved bytes, never scrubbed (--include-gdd-text); the rest is evidence.
+      const evidence = { ...fixture, gdd: fixture.gdd ? { ...fixture.gdd, text: undefined } : null };
+      expect(JSON.stringify(evidence)).not.toMatch(/\/Users\/|\/home\//);
+      const { applySecretPatterns, DEFAULT_SECRET_PATTERNS } = await loadProductionModules();
+      expect(scanFixture(evidence, { applySecretPatterns, DEFAULT_SECRET_PATTERNS })).toEqual([]);
+    });
+  },
+);
