@@ -96,6 +96,18 @@ describe("a red verdict that fails only on acceptance checks (the verdicts produ
     expect(proseFailsOnlyOnAcceptance(prose("PlayMode verification FAILED: 2 of 9 tests failed (unfiltered — the whole PlayMode suite)."), record({ failed: 2 }))).toBe(false);
   });
 
+  it("a red line with no counts is tied to no record, so no record of an acceptance-only run waives it", () => {
+    for (const line of [
+      "EditMode tests all passed, but the game threw while running. A passing assertion does not mean nothing broke.",
+      "PlayMode verification FAILED: the scene did not load",
+      "PlayMode verification FAILED: no test executed, because the project does not compile — the test assembly was never built. Fix these first:",
+    ]) {
+      const verdict = prose(line);
+      expect(verdict.testsGreen, line).toBe(false);
+      expect(proseFailsOnlyOnAcceptance(verdict, record()), line).toBe(false);
+    }
+  });
+
   it("a line that names its tests decides by them; a name of any other test fails the sprint whatever the record says", () => {
     expect(proseFailsOnlyOnAcceptance(prose(`PlayMode verification FAILED: 2 of 2 tests failed (filter: ${A1};${A2})`), undefined)).toBe(true);
     const mixed = prose(`PlayMode verification FAILED: 2 of 2 tests failed (filter: ${A1};Ferry.Tests.Dock.Opens)`);

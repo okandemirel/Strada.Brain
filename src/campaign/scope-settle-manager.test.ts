@@ -533,6 +533,23 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     expect(m1.status).toBe("green");
   }, 60_000);
 
+  it("a red line that states no counts is not the record's run: an acceptance-only record from earlier in the attempt does not waive 'the game threw'", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    // The worker's PlayMode run failed only on an acceptance check; its last observation was an EditMode run that threw.
+    workerRecord(h, { total: 9, passed: 8, failed: 1, failedNames: ["Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa"] });
+    const verdict = deriveTestVerdict([
+      { toolName: "unity_editmode_test", content: "EditMode tests all passed, but the game threw while running. A passing assertion does not mean nothing broke." },
+    ]);
+    expect(verdict.testsGreen).toBe(false);
+    completeSprint(h, { verification: { ...verdict } });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.prompt).toMatch(/Tests were RED at completion: EditMode tests all passed, but the game threw/);
+    expect(m1.attempts).toBe(2);
+    expect(m1.scopeVerdict).toBeUndefined();
+  }, 60_000);
+
   it("a record red only on acceptance names fails the sprint as before when it is red for another reason too, or is another run", async () => {
     const h = build("on", { maxMilestoneAttempts: 3 });
     const campaign = await start(h);

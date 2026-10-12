@@ -84,8 +84,9 @@ const PROSE_COUNTS_RE = /(\d+) of (\d+) tests? failed/i;
  * whole-suite line ("1 of 9 tests failed (unfiltered — …)") names none. So
  * when it names nothing, or names only acceptance tests and leaves some out,
  * this attempt's fresh run record decides — one with its own stamp, red only
- * on acceptance tests, and of the same run: counts on the red line are its
- * counts. A name of any other test in the prose fails the sprint as before.
+ * on acceptance tests, and of the same run: the red line states counts, and
+ * they are its counts. A name of any other test in the prose fails the sprint
+ * as before.
  */
 export function proseFailsOnlyOnAcceptance(
   prose: { readonly detail?: string; readonly failedTests?: readonly string[]; readonly failedTestsOmitted?: number } | undefined,
@@ -96,8 +97,12 @@ export function proseFailsOnlyOnAcceptance(
   if (named.some((name) => !isAcceptanceTestName(name))) return false;
   if (named.length > 0 && omitted === 0) return failsOnlyOnAcceptance(named, 0);
   if (!recordFailsOnlyOnAcceptance(record) || record?.stampMissing === true) return false;
+  // THE COUNTS ARE THE ONLY TIE between the line and the record. A red line
+  // with none — "the game threw", "the scene did not load", "nothing
+  // compiled" — is red for a reason no failed name answers, and an
+  // acceptance-only record from an earlier run in the attempt waived it.
   const counts = PROSE_COUNTS_RE.exec(prose?.detail ?? "");
-  return counts === null || (Number(counts[1]) === record?.failed && Number(counts[2]) === record.total);
+  return counts !== null && Number(counts[1]) === record?.failed && Number(counts[2]) === record.total;
 }
 
 // =============================================================================
