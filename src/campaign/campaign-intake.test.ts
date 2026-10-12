@@ -408,3 +408,46 @@ describe("a named document is the design only when the build is aimed at it", ()
     expect(detectCampaignIntent(msg("GDD'li dosya docs/quillmoor.txt, bu oyunu yap"))).toEqual({ kind: "gdd-from-docs", path: "docs/quillmoor.txt" });
   });
 });
+
+/**
+ * The Turkish word boundary dropped the polite forms that had matched only
+ * through the ASCII `\b` accident ("oyun yazın", "oyunu yapıver", "yazar
+ * mısınız"), so those ideas became ordinary tasks. And a GDD reference that
+ * allowed an uppercase letter after it read "GDDR6" and "GDDLint" as "the
+ * GDD": an idea that mentioned either was thrown away for whatever design
+ * docs/ held, with no approval gate.
+ */
+describe("the build verbs and the GDD reference, word by word", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+  const IDEA = "fener bekçisi her gece bir sokağı aydınlatır, sis aydınlanan sokaklardan çekilir.";
+
+  it.each([
+    `Bana şöyle bir oyun yazın: ${IDEA}`,
+    `Bana şöyle bir oyun yazınız: ${IDEA}`,
+    `Şu oyunu yapıver: ${IDEA}`,
+    `Şu oyunu yapıverin: ${IDEA}`,
+    `Şu oyunu yazar mısınız? ${IDEA}`,
+    `Şu oyunu geliştirin: ${IDEA}`,
+    `Şu oyunu kodlayın: ${IDEA}`,
+    `Şu oyunu inşa edin: ${IDEA}`,
+  ])("%s → the idea (a polite build verb)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it("a polite verb aimed at a named design builds from it", () => {
+    expect(detectCampaignIntent(msg("docs/Quillmoor_GDD.md'deki oyunu kodlayın"))).toEqual({ kind: "gdd-from-docs", path: "docs/Quillmoor_GDD.md" });
+  });
+
+  it.each([
+    "Build the game using the GDDR6 memory profile",
+    "Build the game and run GDDLint on every scene before it ships",
+  ])("%s → the idea, not the repository's GDD", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it("a plural, or a Turkish suffix, is still the GDD", () => {
+    expect(detectCampaignIntent(msg("Build the game in the GDDs"))).toEqual({ kind: "gdd-from-docs" });
+    expect(detectCampaignIntent(msg("GDD'deki oyunu yapın"))).toEqual({ kind: "gdd-from-docs" });
+  });
+});

@@ -33,11 +33,21 @@ export type CampaignIntent =
  * Bounded by letters of BOTH languages: `\b` is ASCII, so it found a word end
  * before every Turkish letter — "oyun yazılımı" (the game's software), "oyunu
  * yapılandır" (configure the game) and "oyun yapısı" (its structure) were
- * "make the game". The polite imperative "yapın" was matched only by that
- * accident, and is named instead.
+ * "make the game". The polite forms — "yapın", "yapıver", "yazın", "yazar
+ * mısınız" — were matched only by that accident, and are named instead, with
+ * "geliştirin", "kodlayın" and "inşa edin" beside them.
  */
-const BUILD_INTENT_RE =
-  /(?<![\wçğıöşüÇĞİÖŞÜ])(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|oyunu?n?u?\s+(yap(ın(ız)?)?|yazar\s+mısın|geliştir|inşa\s+et|kodla)|oyun\s+(yap|geliştir|yaz|kodla))(?![\wçğıöşüÇĞİÖŞÜ])/i;
+const TR_MAKE = String.raw`yap(?:ın(?:ız)?|ıver(?:in)?)?`;
+const TR_WRITE = String.raw`yaz(?:ın(?:ız)?|ıver(?:in)?)?`;
+const TR_WOULD_YOU_WRITE = String.raw`yazar\s+mısın(?:ız)?`;
+const TR_DEVELOP = String.raw`geliştir(?:in(?:iz)?)?`;
+const TR_CONSTRUCT = String.raw`inşa\s+(?:et|edin(?:iz)?)`;
+const TR_CODE = String.raw`kodla(?:yın(?:ız)?)?`;
+const BUILD_INTENT_RE = new RegExp(
+  String.raw`(?<![\wçğıöşüÇĞİÖŞÜ])(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|` +
+    String.raw`oyunu?n?u?\s+(${TR_MAKE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})|oyun\s+(${TR_MAKE}|${TR_DEVELOP}|${TR_WRITE}|${TR_CODE}))(?![\wçğıöşüÇĞİÖŞÜ])`,
+  "i",
+);
 
 /**
  * A reference to a GDD (in docs/, or "the GDD" generally), INSIDE A NAME TOO:
@@ -45,9 +55,10 @@ const BUILD_INTENT_RE =
  * the first ('_' is a word character), so "Build this game: docs/Foo_GDD.md"
  * was not a reference at all. …BUT AS A WORD OF ITS OWN: the letters inside
  * another word ("Rigddon") are none, or an idea that mentions such a word is
- * thrown away for whatever design docs/ holds.
+ * thrown away for whatever design docs/ holds. Nor is a word that only begins
+ * with it: "GDDR6" and "GDDLint" were "the GDD".
  */
-const GDD_ACRONYM_RE = /(?:(?<![\p{L}\p{N}])(?:gdd|Gdd|GDD)|(?<=\p{Ll})(?:Gdd|GDD))s?(?![\p{Ll}])/u;
+const GDD_ACRONYM_RE = /(?:(?<![\p{L}\p{N}])(?:gdd|Gdd|GDD)|(?<=\p{Ll})(?:Gdd|GDD))s?(?![\p{L}])/u;
 const GDD_SPELLED_RE = /(?<![\p{L}\p{N}])game[\s_-]*design[\s_-]*doc(?:ument)?s?(?![\p{L}])/iu;
 
 function refersToGdd(text: string): boolean {
@@ -258,7 +269,7 @@ function withoutDocuments(text: string, named: readonly NamedDocument[]): string
 
 /** How a build runs — never, on its own, a request for one. */
 const BUILD_ADVERB = String.raw`(?:baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan)`;
-const TR_BUILD_VERB = String.raw`(?:yap(?:ın(?:ız)?)?|yaz(?:ar\s+mısın)?|geliştir|inşa\s+et|kodla)`;
+const TR_BUILD_VERB = `(?:${TR_MAKE}|${TR_WRITE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})`;
 const BUILD_GAME_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|develop|make)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])`;
 const BUILD_GDD_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|implement)\s+(?:the|this|my|our)\s+(?:GDD|game\s+design\s+doc(?:ument)?)(?![\p{L}\p{N}_'’])`;
 const BUILD_GDD_TR = String.raw`(?<![\p{L}\p{N}_])GDD['’]y[iı](?:\s+${BUILD_ADVERB})?\s+(?:uygula|hayata\s+geçir|kodla)(?![\p{L}\p{N}_])`;
