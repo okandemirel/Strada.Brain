@@ -119,3 +119,53 @@ describe("dependency install prompt (ORC-19)", () => {
     expect(deps.installStradaDep).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * WP-1.2: the prompt named Strada.MCP and Strada.Modules folders outside the
+ * project, which file_read refuses. Through the orchestrator's own prompt
+ * build: the project it confines reads to and the framework vaults it has
+ * reach the dependency section.
+ */
+describe("the dependency section of the prompt (WP-1.2)", () => {
+  it("points at the framework vaults for sources outside the project, never at their folders", async () => {
+    const { VaultRegistry } = await import("../vault/vault-registry.js");
+    const registry = new VaultRegistry();
+    const fake = (id: string, rootPath: string) =>
+      ({ id, kind: "unity-project", rootPath, dispose: async () => undefined }) as never;
+    registry.register(fake("generic:aaaa1111", "/work/Strada.MCP"), "Strada.MCP");
+    registry.register(fake("generic:bbbb2222", "/work/Strada.Modules"), "Strada.Modules");
+    const orch = new Orchestrator({
+      providerManager: {
+        getProvider: () => createMockProvider(),
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as never,
+      tools: [],
+      channel: createMockChannel() as never,
+      projectPath: "/tmp/deps-setup-test",
+      readOnly: false,
+      requireConfirmation: false,
+      vaultRegistry: registry,
+      stradaDeps: {
+        ...MISSING,
+        coreInstalled: true,
+        corePath: "/tmp/deps-setup-test/Packages/Submodules/Strada.Core",
+        modulesCheckout: { path: "/work/Strada.Modules", source: "sibling-checkout", version: "1.0.0", commit: "abc1234" },
+        mcpInstalled: true,
+        mcpPath: "/work/Strada.MCP",
+        mcpVersion: "1.0.0",
+        mcpSource: "sibling-checkout",
+      },
+    });
+
+    const prompt = (orch as unknown as { systemPrompt: string }).systemPrompt;
+
+    expect(prompt).not.toContain("/work/Strada.MCP/src/tools");
+    expect(prompt).not.toContain("may be read for reference");
+    expect(prompt).toContain('`vault_search` with vaultId "Strada.MCP"');
+    expect(prompt).toContain('`vault_search` with vaultId "Strada.Modules"');
+    // The vendored Core is inside the project: its folder is still named (guard).
+    expect(prompt).toContain("Strada.Core authoritative source root: /tmp/deps-setup-test/Packages/Submodules/Strada.Core");
+    expect(prompt).not.toContain("Packages/Submodules/Strada.Core is outside this project");
+  });
+});

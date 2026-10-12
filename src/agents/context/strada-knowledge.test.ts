@@ -276,6 +276,53 @@ describe("buildDepsContext", () => {
     expect(result).toContain("/tools/Strada.MCP/src/tools");
   });
 
+  /**
+   * Since the trust gate falls back to a checkout beside the install,
+   * mcpPath can lie outside the project, and the "Primary paths to inspect"
+   * then named folders file_read refuses. The project's own copy (the one
+   * the gate passed over for loading) can still be read; failing that, the
+   * vault built from the checkout.
+   */
+  describe("where the Strada.MCP source can be read", () => {
+    const project = "/work/SampleGame";
+    const sibling = "/work/Strada.MCP";
+
+    it("lists the project's own copy when the loaded one is outside the project", () => {
+      const result = buildDepsContext(
+        makeDepsStatus({
+          mcpPath: sibling,
+          mcpSource: "sibling-checkout",
+          mcpRefused: { path: `${project}/Packages/Submodules/Strada.MCP`, reason: "inside the project" },
+        }),
+        { projectPath: project, vaultNamed: () => true },
+      );
+
+      expect(result).toContain(`${project}/Packages/Submodules/Strada.MCP/src/tools`);
+      expect(result).not.toContain(`${sibling}/src/tools`);
+    });
+
+    it("points at the vault, never at the outside folders, when the project has no copy", () => {
+      const status = makeDepsStatus({ mcpPath: sibling, mcpSource: "sibling-checkout" });
+      const withVault = buildDepsContext(status, { projectPath: project, vaultNamed: (n) => n === "Strada.MCP" });
+      const withoutVault = buildDepsContext(status, { projectPath: project, vaultNamed: () => false });
+
+      for (const result of [withVault, withoutVault]) {
+        expect(result).not.toContain(`${sibling}/src/tools`);
+        expect(result).not.toContain("Primary paths to inspect");
+        expect(result).toMatch(/outside this project, where file_read cannot open it/);
+      }
+      expect(withVault).toContain('`vault_search` with vaultId "Strada.MCP"');
+      expect(withoutVault).not.toContain("vault_search");
+    });
+
+    it("still lists the paths of a copy inside the project (guard)", () => {
+      const inside = `${project}/Packages/Submodules/Strada.MCP`;
+      const result = buildDepsContext(makeDepsStatus({ mcpPath: inside }), { projectPath: project });
+
+      expect(result).toContain(`Primary paths to inspect when needed: ${inside}/README.md`);
+    });
+  });
+
   it("does not mention Strada.MCP authority when it is not installed", () => {
     const result = buildDepsContext(makeDepsStatus({
       mcpInstalled: false,
@@ -337,6 +384,25 @@ describe("buildDepsContext", () => {
         expect(result).toMatch(/say (so )?in your result/);
         expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
       }
+    });
+
+    /**
+     * The checkout is outside the project, and file_read refuses a path
+     * there. "Its source there may be read for reference" sent workers to a
+     * read that fails; the vault built from the checkout is what reaches it.
+     */
+    it("sends a worker to the vault for the checkout's source, not to a path file_read refuses", () => {
+      const status = makeDepsStatus({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout });
+
+      const withVault = buildDepsContext(status, { projectPath: "/work/SampleGame", vaultNamed: (n) => n === "Strada.Modules" });
+      const withoutVault = buildDepsContext(status, { projectPath: "/work/SampleGame", vaultNamed: () => false });
+
+      for (const result of [withVault, withoutVault]) {
+        expect(result).not.toContain("may be read for reference");
+        expect(result).toMatch(/outside this project, where file_read cannot open it/);
+      }
+      expect(withVault).toContain('`vault_search` with vaultId "Strada.Modules"');
+      expect(withoutVault).not.toContain("vault_search");
     });
 
     it("says nothing of the kind when it is installed (guard)", () => {

@@ -71,7 +71,8 @@ export class VaultSearchTool {
         type: 'string',
         description:
           "Restrict to a single vault id (e.g. 'self' for Strada's own source). " +
-          "Omit — or pass 'project' — to search this project's vault. A bare id without its kind prefix is accepted.",
+          "Omit — or pass 'project' — to search this project's vault. A bare id without its kind prefix is accepted, " +
+          "and so is a framework vault's name ('Strada.Core', 'Strada.Modules', 'Strada.MCP').",
       },
       topK: {
         type: 'number',

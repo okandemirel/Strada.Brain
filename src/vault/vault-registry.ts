@@ -185,7 +185,13 @@ export class VaultRegistry {
     // match missed, and the indexed 84 MB project vault answered nothing. An
     // id that is unambiguous without its prefix is not a wrong id.
     const bySuffix = all.filter((v) => v.id.endsWith(`:${requested}`));
-    return bySuffix.length === 1 ? bySuffix[0] : undefined;
+    if (bySuffix.length === 1) return bySuffix[0];
+
+    // The name it was registered under: a framework vault's id is the hash
+    // of its root, and the prompt names it "Strada.Modules" (WP-1.2).
+    const wanted = requested.toLowerCase();
+    const byName = all.filter((v) => this.names.get(v.id)?.toLowerCase() === wanted);
+    return byName.length === 1 ? byName[0] : undefined;
   }
 
   /** Registered ids, for an error that can be acted on rather than guessed at. */

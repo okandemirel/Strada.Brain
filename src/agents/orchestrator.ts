@@ -2006,6 +2006,17 @@ export class Orchestrator {
     }
   }
 
+  /** Whether a vault is registered under this name (a framework vault's, e.g. "Strada.Modules"). */
+  private hasVaultNamed(name: string): boolean {
+    try {
+      const registry = this.vaultRegistry;
+      return registry?.list().some((v) => registry.getName(v.id) === name) ?? false;
+    } catch {
+      // A registry that cannot be read is not one to send the agent to.
+      return false;
+    }
+  }
+
   /** What the vault hint depends on: the project's vault and its init status. */
   private currentVaultHintState(): string {
     if (!this.vaultRegistry || !this.sourceProjectPath) return "off";
@@ -2042,7 +2053,10 @@ export class Orchestrator {
     this.systemPrompt =
       knowledgeBase +
       buildProjectContext(this.projectPath) +
-      buildDepsContext(this.stradaDeps) +
+      buildDepsContext(this.stradaDeps, {
+        projectPath: this.sourceProjectPath,
+        vaultNamed: (name) => this.hasVaultNamed(name),
+      }) +
       buildCapabilityManifest() +
       buildToolUsageHints(this.describeVaultAvailability()) +
       (this.readOnly ? getReadOnlySystemPrompt() : "") +

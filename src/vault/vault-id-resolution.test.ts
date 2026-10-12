@@ -59,6 +59,21 @@ describe('resolving the vault a caller meant', () => {
     expect(registry.resolve('knowledge')).toBeUndefined();
   });
 
+  // The prompt sends a worker to a framework's source by the vault's name
+  // ("Strada.Modules"); its id is generic:<hash of the root>, which no prompt
+  // can know ahead of the boot that registered it.
+  it('accepts the name a vault was registered under, when only one vault has it', () => {
+    const registry = new VaultRegistry();
+    registry.register(vault('generic:1a2b3c4d', 'unity-project'), 'Strada.Modules');
+    registry.register(vault('generic:5e6f7a8b', 'unity-project'), 'Strada.Core');
+
+    expect(registry.resolve('Strada.Modules')?.id).toBe('generic:1a2b3c4d');
+    expect(registry.resolve('strada.core')?.id).toBe('generic:5e6f7a8b');
+
+    registry.register(vault('generic:9c0d1e2f', 'unity-project'), 'Strada.Core');
+    expect(registry.resolve('Strada.Core')).toBeUndefined();
+  });
+
   it('still misses when nothing resembles the request', () => {
     const registry = new VaultRegistry();
     registry.register(vault('self:strada-brain', 'self'));

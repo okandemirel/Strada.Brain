@@ -448,6 +448,8 @@ export function buildToolUsageHints(vault?: VaultAvailability | boolean): string
   );
 }
 
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
@@ -816,11 +818,48 @@ function normalizeProjectWorldFingerprint(text: string): string {
     .slice(0, 220);
 }
 
+export interface DepsContextOptions {
+  /**
+   * The project file_read is confined to. A source path outside it is not
+   * offered as one to read; without it every path is listed as found.
+   */
+  readonly projectPath?: string;
+  /** Whether a vault is registered under this name; vault_search takes the name as its vaultId. */
+  readonly vaultNamed?: (name: string) => boolean;
+}
+
+/** Whether file_read can open `path`: inside the project by its spelled or real form. */
+function readableInProject(path: string, projectPath: string | undefined): boolean {
+  if (!projectPath) return true;
+  const real = (p: string): string => {
+    try {
+      return realpathSync.native(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  return [[resolve(projectPath), resolve(path)], [real(projectPath), real(path)]].some(([root, child]) => {
+    const rel = relative(root!, child!);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+}
+
+/**
+ * Where a package's source outside the project can be reached: file_read
+ * refuses a path there, and the framework vault built from it is the way in.
+ */
+function outsideSourceNote(label: string, path: string, options: DepsContextOptions): string {
+  const vault = options.vaultNamed?.(label)
+    ? ` Look its API up by calling \`vault_search\` with vaultId "${label}".`
+    : "";
+  return `Its source at ${path} is outside this project, where file_read cannot open it.${vault}`;
+}
+
 /**
  * Build a context section describing which Strada packages are available.
  * Prevents the LLM from hallucinating APIs that aren't installed.
  */
-export function buildDepsContext(status?: StradaDepsStatus): string {
+export function buildDepsContext(status?: StradaDepsStatus, options: DepsContextOptions = {}): string {
   if (!status) return "";
   const lines: string[] = ["\n## Strada Package Status"];
   lines.push(
@@ -847,7 +886,10 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
     // followed one left a manifest line pointing at nothing.
     lines.push(
       status.modulesCheckout
-        ? `\nNote: ${describeFrameworkCheckout("modules", status.modulesCheckout)}. Its source there may be read for reference.`
+        ? `\nNote: ${describeFrameworkCheckout("modules", status.modulesCheckout)}. ` +
+            (readableInProject(status.modulesCheckout.path, options.projectPath)
+              ? "Its source there may be read for reference."
+              : outsideSourceNote("Strada.Modules", status.modulesCheckout.path, options))
         : "\nNote: Strada.Modules is not installed in this project.",
       "Project code cannot call its APIs until it is installed, and installing it is not a step of this task: " +
         "Strada's dependency installer adds the package and its Packages/manifest.json line together, when the " +
@@ -860,18 +902,35 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
   lines.push("\n## Framework Source Authority");
   if (status.coreInstalled && status.corePath) {
     lines.push(`- Strada.Core authoritative source root: ${status.corePath}`);
+    if (!readableInProject(status.corePath, options.projectPath)) {
+      lines.push(`- ${outsideSourceNote("Strada.Core", status.corePath, options)}`);
+    }
     lines.push("- For framework APIs and conventions, prefer the installed Strada.Core source and docs over memory.");
   }
   if (status.mcpInstalled) {
+    // Since the trust gate falls back to a checkout beside the install, the
+    // loaded copy can be outside the project; the project's own copy, passed
+    // over for loading, is still one file_read opens.
+    const mcpSourcePath = status.mcpPath && readableInProject(status.mcpPath, options.projectPath)
+      ? status.mcpPath
+      : status.mcpRefused?.path && readableInProject(status.mcpRefused.path, options.projectPath)
+        ? status.mcpRefused.path
+        : null;
+    const primaryPaths = (root: string): string =>
+      `Primary paths to inspect when needed: ${joinPath(root, "README.md")}, ${joinPath(root, "src/tools")}, ${joinPath(root, "src/resources")}, ${joinPath(root, "src/prompts")}, ${joinPath(root, "src/bridge")}.`;
     lines.push(
       `\n### Strada.MCP`,
       `Strada.MCP is installed${status.mcpVersion ? ` (v${status.mcpVersion})` : ""}${status.mcpPath ? ` at ${status.mcpPath}` : ""}.`,
       `Treat Strada.MCP as a first-class knowledge source inside the Strada toolchain, not as an external afterthought.`,
       `Its installed source/docs are authoritative for MCP tool behavior, bridge contracts, prompts, and resources.`,
       `Only MCP action tools that are executable in the current Brain runtime belong to the live worker tool surface. Bridge/runtime-limited MCP capabilities may still be authoritative docs/resources without being executable in this turn.`,
-      status.mcpPath
-        ? `Primary paths to inspect when needed: ${joinPath(status.mcpPath, "README.md")}, ${joinPath(status.mcpPath, "src/tools")}, ${joinPath(status.mcpPath, "src/resources")}, ${joinPath(status.mcpPath, "src/prompts")}, ${joinPath(status.mcpPath, "src/bridge")}.`
-        : "Inspect the installed Strada.MCP package root, especially README.md, src/tools, src/resources, src/prompts, and src/bridge.",
+      !status.mcpPath
+        ? "Inspect the installed Strada.MCP package root, especially README.md, src/tools, src/resources, src/prompts, and src/bridge."
+        : mcpSourcePath === status.mcpPath
+          ? primaryPaths(status.mcpPath)
+          : mcpSourcePath
+            ? `The loaded copy is outside this project, where file_read cannot open it; the project's own copy at ${mcpSourcePath} can be read (it may be at another commit). ${primaryPaths(mcpSourcePath)}`
+            : outsideSourceNote("Strada.MCP", status.mcpPath, options),
     );
     lines.push(
       `\n### Unity Compile Verification (CRITICAL)`,
