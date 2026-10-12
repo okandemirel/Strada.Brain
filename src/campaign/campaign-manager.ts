@@ -114,6 +114,7 @@ import {
   completeLedgerByModel,
   describeAmendment,
   describeLedgerRead,
+  MODEL_PASS_RETRY,
   modelPassOwed,
   reownLedger,
   rereadLedger,
@@ -6799,7 +6800,13 @@ export class CampaignManager {
     let changed = false;
     try {
       const read = this.readLedger(campaign);
-      const pass = await this.completeLedgerPass(campaign);
+      let pass: Awaited<ReturnType<CampaignManager["completeLedgerPass"]>>;
+      try {
+        pass = await this.completeLedgerPass(campaign);
+      } catch (err) {
+        // The rows were read: only the pass over them failed, and it stays owed.
+        pass = { changed: false, note: this.ledgerFailed(campaign, err, "pass") };
+      }
       changed = read.changed || pass.changed;
       // Told after the model pass, so the counts include what it added.
       notes.push(...this.ledgerReadNotes(campaign, read));
@@ -6846,7 +6853,7 @@ export class CampaignManager {
     try {
       pass = await this.completeLedgerPass(held);
     } catch (err) {
-      await this.tell(held, this.ledgerFailed(held, err));
+      await this.tell(held, this.ledgerFailed(held, err, "pass"));
       return;
     }
     let waiting: string | undefined;
@@ -6915,11 +6922,22 @@ export class CampaignManager {
     return true;
   }
 
-  /** Logged, and the sentence the chat is told: a ledger that silently failed reads as a campaign with no GDD rows to judge. */
-  private ledgerFailed(campaign: Campaign, err: unknown): string {
+  /**
+   * Logged, and the sentence the chat is told: a ledger that silently failed
+   * reads as a campaign with no GDD rows to judge. It names what failed — the
+   * read, or the add-only pass over rows already read — and promises only the
+   * retry that runs: a revive reads the rows and, once its sprint is
+   * submitted, asks the model.
+   */
+  private ledgerFailed(campaign: Campaign, err: unknown, what: "read" | "pass" = "read"): string {
     const error = err instanceof Error ? err.message : String(err);
+    const said = error.replace(/\s+/g, " ").slice(0, 200);
+    if (what === "pass") {
+      getLoggerSafe().warn("The add-only pass over the GDD failed; it stays owed", { id: campaign.id, error });
+      return `📋 The add-only pass over the GDD could not run (${said}); the rows already read stand, and the pass stays owed: ${MODEL_PASS_RETRY}.`;
+    }
     getLoggerSafe().warn("The requirement ledger could not be built", { id: campaign.id, error });
-    return `📋 The GDD rows could not be read (${error.replace(/\s+/g, " ").slice(0, 200)}); they stay as they were, and the next settle or revive reads them again.`;
+    return `📋 The GDD rows could not be read (${said}); they stay as they were, and the next revive reads them again.`;
   }
 
   private ledgerOptions(campaign: Campaign): LedgerReadOptions {
@@ -7020,7 +7038,7 @@ export class CampaignManager {
     );
     if (!pass.ran) {
       getLoggerSafe().warn("Every call of the add-only pass over the GDD failed; it stays owed", { id: campaign.id, calls: pass.calls });
-      return { changed: false, note: `The add-only pass over the GDD could not run (${pass.calls} call(s) failed); it runs again at the next settle or revive.` };
+      return { changed: false, note: `The add-only pass over the GDD could not run (${pass.calls} call(s) failed); it stays owed: ${MODEL_PASS_RETRY}.` };
     }
     // The ledger moved while the model was asked (an amendment on this copy): the pass stays owed.
     if (campaign.requirements !== ledger) return { changed: false };

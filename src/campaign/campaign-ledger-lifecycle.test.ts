@@ -769,6 +769,9 @@ describe("what the ledger's life must never do (W11)", () => {
     await vi.waitFor(() => expect(planned.submitted).toHaveLength(1), { timeout: 10_000 });
     const announcement = planned.messages.find((m) => m.includes("Milestone ladder ready")) ?? "";
     expect(announcement).toMatch(/GDD rows could not be read.*invented reader fault/);
+    // Only a retry that happens is promised: no settle reads the rows.
+    expect(announcement).toContain("the next revive reads them again");
+    expect(announcement).not.toContain("settle");
 
     const revived = build("shadow");
     writeFileSync(join(revived.root, "docs", "GDD.md"), APPROVED);
@@ -777,15 +780,69 @@ describe("what the ledger's life must never do (W11)", () => {
     expect(await revived.manager.reviveByCommand(ctx.chatId)).toBe(true);
     const revive = revived.messages.find((m) => m.startsWith("Reviving the campaign")) ?? "";
     expect(revive).toMatch(/GDD rows could not be read.*invented reader fault/);
+    expect(revive).not.toContain("settle");
+  });
 
-    // …and the add-only pass that follows the revive's submit.
+  it("an add-only pass that fails after a revive's submit is named as what failed, and the revive it promises does run it", async () => {
+    const fault = () => {
+      throw new Error("invented pass fault");
+    };
     const passed = build("shadow");
     writeFileSync(join(passed.root, "docs", "GDD.md"), APPROVED);
-    passed.storage.save(inFlightCampaign(passed.root, QUEUED));
-    vi.spyOn(passed.manager as unknown as { completeLedgerPass(c: Campaign): unknown }, "completeLedgerPass").mockImplementation(async () => fault());
+    const seed = inFlightCampaign(passed.root, QUEUED);
+    passed.storage.save(seed);
+    const pass = vi
+      .spyOn(passed.manager as unknown as { completeLedgerPass(c: Campaign): unknown }, "completeLedgerPass")
+      .mockImplementation(async () => fault());
     expect(await passed.manager.reviveByCommand(ctx.chatId)).toBe(true);
     expect(passed.submitted).toHaveLength(1);
-    expect(passed.messages.some((m) => /GDD rows could not be read.*invented reader fault/.test(m))).toBe(true);
+    const failed = passed.messages.find((m) => m.includes("invented pass fault")) ?? "";
+    // The rows were read; the pass over them is what failed.
+    expect(failed).toMatch(/add-only pass over the GDD could not run.*invented pass fault/);
+    expect(failed).not.toContain("could not be read");
+    expect(failed).toContain("the next revive that starts a sprint asks the model again");
+    expect(failed).not.toContain("settle");
+    expect(passed.storage.get(seed.id)!.requirements!.rows.length).toBeGreaterThan(0);
+
+    // The promise holds: the next revive runs the pass.
+    pass.mockRestore();
+    const stopped = passed.storage.get(seed.id)!;
+    stopped.state = "failed";
+    passed.storage.save(stopped);
+    expect(await passed.manager.reviveByCommand(ctx.chatId)).toBe(true);
+    expect(passed.complete).toHaveBeenCalled();
+    expect(passed.storage.get(seed.id)!.requirements!.modelPassRevision).toBe(1);
+
+    // At plan time too: the rows read are announced, and the pass is named as what failed.
+    const planned = build("shadow");
+    vi.spyOn(planned.manager as unknown as { completeLedgerPass(c: Campaign): unknown }, "completeLedgerPass").mockImplementation(async () => fault());
+    const started = planned.manager.startFromGdd(ctx, APPROVED, "docs/GDD.md");
+    await vi.waitFor(() => expect(planned.submitted).toHaveLength(1), { timeout: 10_000 });
+    const announcement = planned.messages.find((m) => m.includes("Milestone ladder ready")) ?? "";
+    expect(announcement).toMatch(/row\(s\) read from the approved GDD/);
+    expect(announcement).toMatch(/add-only pass over the GDD could not run.*invented pass fault/);
+    expect(announcement).not.toContain("could not be read");
+    expect(planned.storage.get(started.id)!.requirements!.modelPassRevision).toBeUndefined();
+  });
+
+  it("a pass whose every call failed, and an amendment, promise the model only at a revive", async () => {
+    const { manager, storage, root, messages } = build("shadow", {}, async () => {
+      throw new Error("invented model outage");
+    });
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    storage.save(seed);
+    expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+    const owed = messages.find((m) => m.includes("could not run")) ?? "";
+    expect(owed).toMatch(/add-only pass over the GDD could not run \(\d+ call\(s\) failed\)/);
+    expect(owed).toContain("the next revive that starts a sprint asks the model again");
+    expect(owed).not.toContain("settle");
+
+    writeFileSync(join(root, "docs", "GDD.md"), AMENDED);
+    expect(await manager.tryHandleAmendment(ctx.chatId, "amend gdd", ctx.userId)).toBe(true);
+    const amended = messages.find((m) => m.startsWith("GDD amendment acknowledged")) ?? "";
+    expect(amended).toContain("The add-only pass is owed for the amended document: the next revive that starts a sprint asks the model again.");
+    expect(amended).not.toContain("settle");
   });
 
   it("the add-only pass asks about no text but the one the ledger was read from", async () => {

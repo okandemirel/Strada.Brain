@@ -329,6 +329,13 @@ export function rereadLedger(
   };
 }
 
+/**
+ * When an owed add-only pass runs, as the chat is told it: after a revive's
+ * submit (and at a replan). Nothing on the settle path asks the model, so no
+ * sentence may promise that it does.
+ */
+export const MODEL_PASS_RETRY = "the next revive that starts a sprint asks the model again";
+
 /** Whether the add-only pass is still owed for the revision this ledger was read from. */
 export function modelPassOwed(ledger: RequirementLedger): boolean {
   return (ledger.modelPassRevision ?? 0) < ledger.gddRevision;
@@ -407,6 +414,6 @@ export function describeAmendment(amendment: LedgerAmendment): string {
     lines.push(`A waiver no longer applies — the GDD changed what these ask, so a person decides again: ${named(waiversDropped)}.`);
   }
   if (retired.length > 0) lines.push(`No longer in the GDD: ${named(retired)}.`);
-  if (modelPassOwed(ledger)) lines.push("The add-only pass reads the amended document at the next settle or revive.");
+  if (modelPassOwed(ledger)) lines.push(`The add-only pass is owed for the amended document: ${MODEL_PASS_RETRY}.`);
   return lines.join("\n");
 }
