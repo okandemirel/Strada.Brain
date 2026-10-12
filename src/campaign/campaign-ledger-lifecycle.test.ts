@@ -20,6 +20,7 @@ import { CampaignManager, repairsForRequirement, type CampaignManagerOptions } f
 import { splitGddSections, type CampaignPlanner } from "./campaign-planner.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { decodeIdentities, decodeRequirement, encodeRequirement } from "./requirement-identity.js";
+import { buildLedger } from "./requirement-ledger.js";
 import type { RequirementRow, ScopeGateMode } from "./scope-types.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
@@ -542,5 +543,82 @@ describe("a GDD amendment reads the ledger again (W11)", () => {
     writeFileSync(join(root, "docs", "GDD.md"), AMENDED);
     expect(off.amendGdd(id)).toBe(sha256(AMENDED));
     expect(storage.get(id)!.requirements).toEqual(rowsBefore);
+  });
+});
+
+describe("what the ledger's life must never do (W11)", () => {
+  type RawDb = { prepare(sql: string): { run(...args: unknown[]): unknown; get(...args: unknown[]): unknown } };
+  const rawDb = (storage: CampaignStorage): RawDb => (storage as unknown as { db: RawDb }).db;
+
+  it("an unreadable stored ledger is not built over at a revive: its bytes stay, and no model is asked", async () => {
+    const { manager, storage, root, complete } = build("on");
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    storage.save(seed);
+    const damaged = '{"version":1,"rows":[{"rid":';
+    rawDb(storage).prepare("UPDATE campaigns SET requirements_json = ? WHERE id = ?").run(damaged, seed.id);
+    expect(storage.get(seed.id)!.requirementsUnreadable).toBe(true);
+
+    expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+
+    const campaign = storage.get(seed.id)!;
+    expect(campaign.state).toBe("executing");
+    expect(campaign.requirements).toBeUndefined();
+    expect(campaign.requirementsUnreadable).toBe(true);
+    const stored = rawDb(storage).prepare("SELECT requirements_json AS r FROM campaigns WHERE id = ?").get(seed.id) as { r: string };
+    expect(stored.r).toBe(damaged);
+    expect(campaign.milestones.every((m) => m.requirementIds === undefined)).toBe(true);
+    // The gate does not start on rows it does not have.
+    expect(campaign.scopeGateSince).toBeUndefined();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("a replanned ladder owns the stored rows again and lifts the old plan's exclusions", async () => {
+    const { manager, storage, root, submitted } = build("shadow");
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const gdd = { gddText: APPROVED, gddSha256: sha256(APPROVED), gddRevision: 1 };
+    // The old ladder planned the rules second and left the screens out.
+    const old = buildLedger(gdd, [{ id: "m1", coveredSections: ["Overview"] }, { id: "m2", coveredSections: ["Core Rules"] }], {
+      atMs: 1_000,
+      excluded: ["Screens: after launch"],
+    })!.ledger;
+    const harbour = (rows: readonly RequirementRow[]): RequirementRow => rows.find((r) => r.text.startsWith("The harbour menu must show"))!;
+    expect(byLabel(old.rows, "LD-1").owner).toBe("m2");
+    expect(harbour(old.rows).status).toBe("excluded");
+    const seed = inFlightCampaign(root, QUEUED);
+    storage.save({ ...seed, ...gdd, milestones: [], currentMilestone: 0, requirements: old });
+
+    expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+    await vi.waitFor(() => expect(submitted).toHaveLength(1), { timeout: 10_000 });
+
+    const campaign = storage.get(seed.id)!;
+    const rows = campaign.requirements!.rows;
+    expect(byLabel(rows, "LD-1").owner).toBe("m1");
+    expect(byLabel(rows, "LD-1").ownership.map((o) => o.milestoneId)).toEqual(["m2", "m1"]);
+    expect(harbour(rows)).toMatchObject({ status: "open", owner: "m2" });
+    expect(harbour(rows).excludedBecause).toBeUndefined();
+    expect(campaign.milestones[0]!.requirementIds).toEqual(rows.filter((r) => r.owner === "m1").map((r) => r.rid));
+  });
+
+  it("the add-only pass asks about no text but the one the ledger was read from", async () => {
+    const { manager, storage, root, complete } = build("shadow");
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.state = "executing";
+    seed.gddSha256 = sha256(APPROVED);
+    seed.gddRevision = 1;
+    storage.save(seed);
+    const held = storage.get(seed.id)!;
+    // The rows are read and the model pass is still owed for revision 1…
+    held.requirements = buildLedger(held, [{ id: "m1", coveredSections: ["Core Rules"] }, { id: "m2", coveredSections: ["Screens"] }], { atMs: 1_000 })!.ledger;
+    // …but the text the campaign now carries is not the one those rows (and the approved hash) came from.
+    held.gddText = AMENDED;
+
+    const result = await ensureLedger(manager, held);
+
+    expect(result.changed).toBe(false);
+    expect(complete).not.toHaveBeenCalled();
+    expect(held.requirements!.modelPassRevision).toBeUndefined();
+    expect(held.requirements!.rows.some((r) => r.source === "llm-added")).toBe(false);
   });
 });
