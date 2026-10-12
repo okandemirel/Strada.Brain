@@ -1,54 +1,224 @@
 /**
- * Strada.Brain is universal: a test vehicle's names may not sit in system
- * code — defaults, schema examples, prompts, fixtures a run reads, refusal
- * wording. Comments recording a measurement are history and are ignored;
- * this scans CODE lines (comments and JSDoc stripped) outside tests.
+ * Strada.Brain is universal and public; the products it is measured on are
+ * not. Nothing of a test vehicle belongs in this repository — not in system
+ * code (defaults, schema examples, prompts, refusal wording), and since
+ * 2026-10-12 not in a comment recording a measurement, a test, a fixture, a
+ * doc or a note either: those are published too.
  * Measured 2026-09-10: the prerender tool described itself as the
  * casual-game chibi pipeline with a pink default and a user's own prefab
- * path as the example. The rule was written; nothing enforced it.
+ * path as the example. The rule was written; nothing enforced it. Measured
+ * 2026-10-12: with only system code checked, over 400 lines of tests, comments
+ * and docs named the vehicle, and one fixture was a real campaign's export.
+ *
+ * The names are not written here, because a list of them would itself be
+ * the trace. The built-in list holds digests of the vehicle's own
+ * identifiers, so the rule holds on every checkout and in CI. A checkout
+ * adds what it may not publish even as a digest in the gitignored
+ * tests/fixtures/local/ (see src/tests/helpers/local-fixtures.ts):
+ *   - vehicle-terms.txt: one case-insensitive regular expression per line
+ *     (`#` starts a comment) — the vehicle's ordinary words, which a digest
+ *     would leave to a dictionary, and the next vehicle's names;
+ *   - confidential-documents.txt: one absolute path per line — design
+ *     documents whose wording no tracked file may quote.
  */
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { localFixturePath, missingLocalFixture, REPO_ROOT } from "./tests/helpers/local-fixtures.js";
 
-/** Names of the test vehicle and its assets. Extend when a new vehicle is used. */
-const VEHICLE_NAMES = /\b(?:pixel ?flow|pigs?|piglets?|conveyors?|frozen ?pig|pig ?body|stage ?block|music_farm|boar_cub(?:_ip)?|pig_real|neon ?city)\b/i;
-/** Files whose whole purpose is the vehicle's own knowledge and are configured, not defaulted. */
-const ALLOWED = new Set<string>([]);
+/**
+ * [length, rolling hash, sha256] of each identifier's lowercase letters and
+ * digits. A file matches when a run of its letters and digits — everything
+ * else dropped, so camel case, spaces, dashes and underscores between the
+ * parts all match — is one of them.
+ */
+const VEHICLE_DIGESTS: ReadonlyArray<readonly [number, number, string]> = [
+  [9, 1422222344, "31d06d90c70d7e7215efe52cd9913d937ff1adda0a944422cbd725b6ac2e1cb2"],
+  [5, 1673210365, "02464f7a8f9f52dabc26906d93f62b0017ecab04eaca2fc6bb8b20afed5ae05a"],
+  [13, 3850315725, "7f5edd585b8f9840b58dfbd25d3ea27b793ac97746ca31dde76f9ef0971adbf8"],
+  [21, 1292840653, "4edef12e5a6eaf759885338644c1975103c0323191ff45f3ddfd02717feb392a"],
+  [9, 3863861512, "dd4c4b403a7d4d8444802dca2986d1dac8079563776a858750cd1b4cb5652b81"],
+  [16, 4269027509, "396c31926ad3d08da18841a0e7177e95fbd85f0fb3cf2096d8713409a3f966d7"],
+  [8, 984327875, "3352c6e65e4d7e16620983238909243348cf2a655b0fbe5aad27afda6bcf9fcf"],
+];
+const ROLL_BASE = 131;
+/** A quoted passage is this long, as the owner's shingle scan measures it. */
+const SHINGLE = 36;
 
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:\\])\/\/.*$/gm, "$1")
-    // Python comments inside an embedded script (assets-local/local-model-runner.ts)
-    // record measurements too; a TS line never starts with "# ".
-    .replace(/^\s*# .*$/gm, "");
-}
+const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
-function walk(dir: string, out: string[]): void {
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) {
-      if (name === "tests" || name === "node_modules") continue;
-      walk(full, out);
-    } else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name)) out.push(full);
+/**
+ * Every file git would publish from this checkout: tracked, and new ones not
+ * ignored. Regular files only: a submodule is its own repository, and a
+ * symlink (a worktree's node_modules) points outside this one.
+ */
+function publishableFiles(): string[] | undefined {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return [...new Set(out.split("\0").filter(Boolean))].filter((f) => {
+      try {
+        return lstatSync(join(REPO_ROOT, f)).isFile();
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return undefined;
   }
 }
 
-describe("universality: no test-vehicle names in system code", () => {
-  it("finds none outside comments and tests", () => {
-    const root = join(process.cwd(), "src");
-    const files: string[] = [];
-    walk(root, files);
-    const hits: string[] = [];
-    for (const file of files) {
-      const rel = relative(root, file);
-      if (ALLOWED.has(rel)) continue;
-      const code = stripComments(readFileSync(file, "utf8"));
-      code.split("\n").forEach((line, i) => {
-        if (VEHICLE_NAMES.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`);
-      });
+function readText(file: string): string | undefined {
+  const text = readFileSync(join(REPO_ROOT, file), "utf8");
+  return text.includes("\0") ? undefined : text;
+}
+
+function lineAt(text: string, offset: number): number {
+  let line = 1;
+  for (let i = text.indexOf("\n"); i !== -1 && i < offset; i = text.indexOf("\n", i + 1)) line++;
+  return line;
+}
+
+/**
+ * The text as the char codes a matcher reads, each with the offset it came
+ * from: "alnum" keeps lowercase letters and digits only; "prose" lowercases
+ * and collapses each whitespace run to one space, the way the owner's
+ * shingle scan reads a document.
+ */
+function project(text: string, mode: "alnum" | "prose"): { codes: Uint16Array; origin: Int32Array } {
+  const codes = new Uint16Array(text.length);
+  const origin = new Int32Array(text.length);
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    let c = text.charCodeAt(i);
+    if (c >= 65 && c <= 90) c += 32;
+    if (mode === "alnum") {
+      if (!((c >= 97 && c <= 122) || (c >= 48 && c <= 57))) continue;
+    } else if (c === 32 || (c >= 9 && c <= 13) || c === 0xa0) {
+      if (n > 0 && codes[n - 1] === 32) continue;
+      c = 32;
     }
-    expect(hits, `test-vehicle names in system code:\n${hits.join("\n")}`).toEqual([]);
+    codes[n] = c;
+    origin[n] = i;
+    n++;
+  }
+  return { codes: codes.subarray(0, n), origin: origin.subarray(0, n) };
+}
+
+/**
+ * Rolling hashes to look for, behind a 2^24-bit filter: tens of millions of
+ * windows are checked per run, and a Set lookup for each one was most of a
+ * run's eight seconds.
+ */
+class RollSet {
+  private readonly bits = new Uint32Array(1 << 19);
+  private readonly set = new Set<number>();
+  add(h: number): void {
+    this.set.add(h);
+    const b = h >>> 8;
+    this.bits[b >>> 5] = (this.bits[b >>> 5] ?? 0) | (1 << (b & 31));
+  }
+  has(h: number): boolean {
+    const b = h >>> 8;
+    return ((this.bits[b >>> 5] ?? 0) & (1 << (b & 31))) !== 0 && this.set.has(h);
+  }
+}
+
+/** Start offsets (into `codes`) of every window of `length` whose rolling hash is in `hashes`. */
+function rollingHits(codes: Uint16Array, length: number, hashes: RollSet): number[] {
+  let top = 1;
+  for (let i = 1; i < length; i++) top = Math.imul(top, ROLL_BASE) >>> 0;
+  const hits: number[] = [];
+  let h = 0;
+  for (let i = 0; i < codes.length; i++) {
+    if (i >= length) h = (h - Math.imul(codes[i - length]!, top)) >>> 0;
+    h = (Math.imul(h, ROLL_BASE) + codes[i]!) >>> 0;
+    if (i >= length - 1 && hashes.has(h)) hits.push(i - length + 1);
+  }
+  return hits;
+}
+
+const rollOf = (codes: Uint16Array): number => codes.reduce((h, c) => (Math.imul(h, ROLL_BASE) + c) >>> 0, 0);
+
+function localTerms(): RegExp | undefined {
+  const path = localFixturePath("vehicle-terms.txt");
+  if (!path) return undefined;
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("#"));
+  return lines.length > 0 ? new RegExp(lines.map((l) => `(?:${l})`).join("|"), "i") : undefined;
+}
+
+describe("universality: nothing of a test vehicle in the repository", () => {
+  const files = publishableFiles();
+
+  it.skipIf(files === undefined)("no publishable file names the vehicle, in code, comments, tests, fixtures or docs", () => {
+    const byLength = new Map<number, RollSet>();
+    for (const [length, roll] of VEHICLE_DIGESTS) {
+      if (!byLength.has(length)) byLength.set(length, new RollSet());
+      byLength.get(length)!.add(roll);
+    }
+    const digests = new Set(VEHICLE_DIGESTS.map(([, , digest]) => digest));
+    const terms = localTerms();
+    const hits = new Set<string>();
+    for (const file of files!) {
+      const text = readText(file);
+      if (text === undefined) continue;
+      const { codes, origin } = project(text, "alnum");
+      for (const [length, rolls] of byLength) {
+        for (const start of rollingHits(codes, length, rolls)) {
+          const run = String.fromCharCode(...codes.subarray(start, start + length));
+          if (digests.has(sha256(run))) hits.add(`${file}:${lineAt(text, origin[start]!)}`);
+        }
+      }
+      if (terms) {
+        text.split("\n").forEach((line, i) => {
+          if (terms.test(line)) hits.add(`${file}:${i + 1} (local term)`);
+        });
+      }
+    }
+    expect([...hits], `test-vehicle names in publishable files:\n${[...hits].join("\n")}`).toEqual([]);
+  });
+
+  const docsList = localFixturePath("confidential-documents.txt");
+  const why = docsList ? "" : ` (${missingLocalFixture("confidential-documents.txt", "the design documents to compare against")})`;
+  it.skipIf(files === undefined || !docsList)(`no publishable file quotes a confidential design document${why}`, () => {
+    const windows = new Set<string>();
+    const rolls = new RollSet();
+    const paths = readFileSync(docsList!, "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    for (const path of paths) {
+      expect(existsSync(path), `listed confidential document ${path} is not there`).toBe(true);
+      const { codes } = project(readFileSync(path, "utf8"), "prose");
+      for (let i = 0; i + SHINGLE <= codes.length; i++) {
+        const slice = codes.subarray(i, i + SHINGLE);
+        const window = String.fromCharCode(...slice);
+        // A lone path or identifier is shared vocabulary, not a quoted passage.
+        if (window.trim().split(" ").length < 3) continue;
+        windows.add(window);
+        rolls.add(rollOf(slice));
+      }
+    }
+    const hits = new Set<string>();
+    for (const file of files!) {
+      const text = readText(file);
+      if (text === undefined) continue;
+      const { codes, origin } = project(text, "prose");
+      for (const start of rollingHits(codes, SHINGLE, rolls)) {
+        if (windows.has(String.fromCharCode(...codes.subarray(start, start + SHINGLE)))) {
+          hits.add(`${file}:${lineAt(text, origin[start]!)}`);
+        }
+      }
+    }
+    // Locations only: the passage itself stays out of the test's output.
+    expect([...hits], `passages of a confidential document in publishable files:\n${[...hits].join("\n")}`).toEqual([]);
   });
 });
