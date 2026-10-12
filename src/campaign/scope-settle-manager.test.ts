@@ -22,6 +22,7 @@ import { CampaignManager, UNMEASURABLE_PROOF_RE, type CampaignManagerOptions } f
 import type { CampaignPlanner } from "./campaign-planner.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { decodeRequirement } from "./requirement-identity.js";
+import { applyReviewFindings } from "./review-findings.js";
 import {
   ACCEPTANCE_DIR,
   type AcceptanceAuthorLike,
@@ -970,6 +971,167 @@ describe("the final milestone (scope gate on, W09)", () => {
     expect(proofs).toMatch(/1 GDD row\(s\) not passing on [0-9a-f]{8}: EF-2/);
     expect(m1.deliveryFailureKinds).toContain("scopeRowsFailing");
     expect(c.lastError).toMatch(/NOT DELIVERED|delivery proofs still missing/);
+  }, 60_000);
+});
+
+describe("a check the independent review called weak (scope gate on, W09 + W13)", () => {
+  const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
+  const reviewText = (weakChecks: Array<{ rid: string; why: string }>): string =>
+    ["VERDICT: NOT DELIVERABLE", "BLOCKERS: 1. a weak check", JSON.stringify({ weakChecks, missing: [] })].join("\n");
+
+  /** The delivery decision was taken this round: delivered, or held with the final sprint's resumption armed. */
+  const settledRound = (h: Harness, id: string): boolean => {
+    const c = h.storage.get(id)!;
+    return c.state === "done" || (c.state === "failed" && c.autoReviveAt !== undefined);
+  };
+
+  /** Every delivery proof but the scope gate's own stands: the suite, the play-through, the build, the player and the GDD on disk. */
+  const deliveryProofsStand = (h: Harness): void => {
+    Object.assign(h.manager as unknown as Record<string, unknown>, {
+      measureDeliverySuite: async () => ({
+        run: {
+          found: true,
+          total: 4,
+          passed: 4,
+          failed: 0,
+          skipped: 0,
+          green: true,
+          unfiltered: true,
+          failedNames: [],
+          measuredAt: new Date().toISOString(),
+          detail: "PlayMode verification passed: 4 of 4 tests passed (unfiltered — the whole PlayMode suite)",
+        },
+      }),
+      measurePlaythrough: () => ({ found: true, ok: true, reasons: [], actions: 12, frames: { count: 5, flat: 0, maxMotionShare: 0.3 } }),
+      measureBuild: async () => ({ ran: true, ok: true, target: "StandaloneOSX", artifactPath: join(h.root, "Builds", "Ferry.app"), sizeBytes: 1_000_000, durationMs: 1_000, scenes: 1 }),
+      measurePlayerRun: async () => ({ found: true, ok: true, reasons: [] }),
+      measureGddClaims: () => ({ lines: [] }),
+      gddDriftOf: () => undefined,
+      measureDeliveryStructure: () => ({ lines: [] }),
+    });
+  };
+
+  it("holds delivery naming the row, is asked once a round, and the next settle replaces the check once — its writer told why — and delivers", async () => {
+    const author = fakeAuthor();
+    const why = "it asserts that a view exists, not that a rider boards only from a lit pier";
+    const prompts: string[] = [];
+    let weakRid = "";
+    const h = build("on", {
+      ladder: ONE_RUNG,
+      acceptanceAuthor: author.author,
+      deliveryResumeDelayMs: 50,
+      independentReviewer: async ({ prompt }) => {
+        prompts.push(prompt);
+        return { ok: true, model: "reviewer-model", text: reviewText(prompts.length === 1 ? [{ rid: weakRid, why }] : []), ms: 1 };
+      },
+    });
+    deliveryProofsStand(h);
+    const campaign = await start(h);
+    weakRid = byLabel(h.storage.get(campaign.id)!, "EF-2").rid;
+    completeSprint(h);
+    // Round one: every other proof stands, the review reopens EF-2, and delivery is held on it.
+    await vi.waitFor(() => expect(settledRound(h, campaign.id)).toBe(true), { timeout: 30_000 });
+    let c = h.storage.get(campaign.id)!;
+    let m1 = c.milestones[0]!;
+    expect(c.state).toBe("failed");
+    expect(prompts).toHaveLength(1);
+    const proofs = (m1.deliveryProofsMissing ?? []).join(" | ");
+    expect(proofs).toMatch(/the independent review reopened 1 GDD row\(s\) whose check it found weak \(EF-2 \(§2\)\)/);
+    expect(m1.deliveryFailureKinds).toContain("reviewReopened");
+    expect(c.lastError).toContain("EF-2");
+    const retired = byLabel(c, "EF-2").checks.find((x) => x.kind === "test" && x.weak !== undefined);
+    expect(retired?.kind === "test" ? retired.supersededAtMs : undefined).toBeDefined();
+    // The final milestone carries the row, so no coverage sprint is queued for it.
+    expect(c.pendingCoverageGaps ?? []).toEqual([]);
+
+    // Round two: the campaign resumes the final sprint by itself; its settle writes the one replacement.
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.state).toBe("done"), { timeout: 30_000 });
+    c = h.storage.get(campaign.id)!;
+    m1 = c.milestones[0]!;
+    expect(author.author.regenerate).toHaveBeenCalledTimes(1);
+    const [row, problems] = (author.author.regenerate as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(row.label).toBe("EF-2");
+    expect(problems).toEqual([why]);
+    expect(author.write).toHaveBeenCalledTimes(1);
+    const file = h.storage.listAcceptance(campaign.id).find((f) => f.milestoneId === "m1")!;
+    const tests = file.tests.filter((t) => t.rid === weakRid);
+    expect(tests).toHaveLength(1);
+    expect(tests[0]!.check?.body).toMatch(/repaired/);
+    expect(byLabel(c, "EF-2").last?.outcome).toBe("pass");
+    expect(m1.scopeVerdict?.green).toBe(true);
+    expect(prompts).toHaveLength(2);
+  }, 90_000);
+
+  it("a weak check on a row an earlier milestone owns is queued for a coverage sprint", async () => {
+    const prompts: string[] = [];
+    let weakRid = "";
+    const h = build("on", {
+      independentReviewer: async ({ prompt }) => {
+        prompts.push(prompt);
+        return { ok: true, model: "reviewer-model", text: reviewText([{ rid: weakRid, why: "it asserts a literal" }]), ms: 1 };
+      },
+    });
+    deliveryProofsStand(h);
+    const campaign = await start(h);
+    weakRid = byLabel(h.storage.get(campaign.id)!, "EF-2").rid;
+    for (let sprint = 0; sprint < 3; sprint++) {
+      completeSprint(h);
+      if (sprint < 2) await vi.waitFor(() => expect(h.submitted).toHaveLength(sprint + 2), { timeout: 20_000 });
+    }
+    await vi.waitFor(() => expect(settledRound(h, campaign.id)).toBe(true), { timeout: 30_000 });
+    const c = h.storage.get(campaign.id)!;
+    expect(c.state).toBe("failed");
+    expect(prompts).toHaveLength(1);
+    expect((c.milestones.at(-1)!.deliveryProofsMissing ?? []).join(" | ")).toMatch(/reopened 1 GDD row\(s\) whose check it found weak \(EF-2/);
+    const queued = (c.pendingCoverageGaps ?? []).map((g) => decodeRequirement(g).identity?.id);
+    expect(queued).toEqual([weakRid]);
+  }, 90_000);
+
+  it("the settle writes the replacement with the reviewer's reason, and a retired test leaves its file even when no replacement is written yet", async () => {
+    const author = fakeAuthor();
+    const regenerated: Array<{ label: string | undefined; problems: readonly string[] }> = [];
+    author.author.regenerate = vi.fn(async (row: RequirementRow, problems: readonly string[]): Promise<AcceptanceWriteResult> => {
+      regenerated.push({ label: row.label, problems });
+      return row.label === "EF-2"
+        ? { checks: [], unbound: [{ rid: row.rid, missingObservable: "the pier a rider boards from" }], faulted: [], writer: WRITER, calls: 1 }
+        : { checks: [{ rid: row.rid, body: `global::NUnit.Framework.Assert.That(PlaythroughView != null, "${row.label} replaced");` }], unbound: [], faulted: [], writer: WRITER, calls: 1 };
+    });
+    let settles = 0;
+    const h = build("on", { acceptanceAuthor: author.author, failing: (label) => label === "EF-1" && settles === 1 });
+    const campaign = await start(h);
+    settles = 1;
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    // The review's shape, applied by its own function: EF-2 and EF-3 retired as weak.
+    const stored = h.storage.get(campaign.id)!;
+    const ef2 = byLabel(stored, "EF-2");
+    const ef3 = byLabel(stored, "EF-3");
+    const oldName = (r: RequirementRow): string => (r.checks.find((x) => x.kind === "test") as { testName: string }).testName;
+    stored.requirements = applyReviewFindings(
+      stored.requirements!,
+      { found: true, weakChecks: [{ rid: ef2.rid, why: "EF-2 asserts a literal" }, { rid: ef3.rid, why: "EF-3 asserts a literal" }], missing: [], unreadable: [] },
+      { gddText: stored.gddText, atMs: Date.now() },
+    ).ledger;
+    h.storage.save(stored);
+    expect(h.storage.listAcceptance(campaign.id)[0]!.source).toContain(oldName(ef2).split(".").at(-1)!);
+
+    settles = 2;
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(3), { timeout: 20_000 });
+    expect(regenerated).toEqual([
+      { label: "EF-2", problems: ["EF-2 asserts a literal"] },
+      { label: "EF-3", problems: ["EF-3 asserts a literal"] },
+    ]);
+    expect(author.write).toHaveBeenCalledTimes(1);
+    const file = h.storage.listAcceptance(campaign.id).find((f) => f.milestoneId === "m1")!;
+    const now = h.storage.get(campaign.id)!;
+    expect(file.tests.map((t) => t.rid).sort()).toEqual([byLabel(now, "EF-1").rid, ef3.rid].sort());
+    expect(file.source).not.toContain(oldName(ef2).split(".").at(-1)!);
+    expect(file.source).toContain("EF-3 replaced");
+    // EF-2 has no check now, and the worker is asked once to expose what its writer could not observe.
+    expect(now.milestones[0]!.scopeVerdict?.reasons.find((r) => r.rid === ef2.rid)?.code).toBe("row-unbound");
   }, 60_000);
 });
 

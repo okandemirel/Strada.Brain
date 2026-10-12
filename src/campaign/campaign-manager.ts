@@ -5077,10 +5077,9 @@ export class CampaignManager {
         let reviewReopened = 0;
         if (scopeDecides && milestone.structureRefused !== true && !compileBroken && noEntryScene === undefined && missingProofs.length === 0) {
           reviewedThisRound = true;
-          reviewReopened = await this.reviewAsGate(campaign);
-          if (reviewReopened > 0) {
-            missingProofs.push(`the independent review reopened or added ${reviewReopened} GDD row(s) that no check has passed yet`);
-          }
+          const review = await this.reviewAsGate(campaign, milestone);
+          reviewReopened = review.changed;
+          if (review.proof !== undefined) missingProofs.push(review.proof);
         }
         if (milestone.structureRefused === true || compileBroken || noEntryScene !== undefined || missingProofs.length > 0) {
           campaign.state = "failed";
@@ -5909,28 +5908,48 @@ export class CampaignManager {
       for (const row of needing) faults.set(row.rid, { reasonClass: "unmeasurable", detail: "no acceptance test writer is configured, so no system check could be written" });
       return { faults, unbound };
     }
-    let written: AcceptanceWriteResult;
-    try {
-      written = await author.write(needing, acceptanceWriteContext(this.projectRoot, milestone.id, needing, this.milestoneWorkerModels(milestone)));
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      for (const row of needing) faults.set(row.rid, { reasonClass: "unmeasurable", detail: `the acceptance test writer failed: ${why.slice(0, 200)}` });
-      return { faults, unbound };
-    }
-    for (const fault of written.faulted) {
-      faults.set(fault.rid, {
-        reasonClass: writerFaultClass(fault.cause),
-        detail: `its system check could not be written (${fault.cause})${fault.problems.length > 0 ? `: ${fault.problems.slice(0, 3).join("; ")}` : ""}`.slice(0, 400),
-      });
-    }
-    for (const item of written.unbound) unbound.set(item.rid, item.missingObservable);
-    const answered = new Set([...written.checks.map((c) => c.rid), ...written.unbound.map((u) => u.rid), ...faults.keys()]);
+    // A CHECK THE INDEPENDENT REVIEW CALLED WEAK (W13) is replaced by its
+    // writer, told the reviewer's reason as the problem the new check must
+    // not have; a row's retired test is replaced once, since the replacement
+    // is then its current check. Every other row is written as new.
+    const workers = this.milestoneWorkerModels(milestone);
+    const weakWhy = new Map<string, string>();
     for (const row of needing) {
-      if (!answered.has(row.rid)) faults.set(row.rid, { reasonClass: "check-fault", detail: "the test writer returned nothing for this row" });
+      const newest = [...row.checks].reverse().find((c) => c.kind === "test");
+      if (newest?.kind === "test" && newest.supersededAtMs !== undefined && newest.weak !== undefined) weakWhy.set(row.rid, newest.weak);
     }
-    await this.storeChecks(campaign, milestone, new Map(needing.map((r) => [r.rid, r] as const)), written, faults);
-    if (written.disclosure) {
-      getLoggerSafe().warn("Acceptance checks written without an independent writer", { id: campaign.id, milestone: milestone.id, disclosure: written.disclosure });
+    const asks: Array<{ rows: RequirementRow[]; call: () => Promise<AcceptanceWriteResult> }> = [];
+    const fresh = needing.filter((row) => !weakWhy.has(row.rid));
+    if (fresh.length > 0) {
+      asks.push({ rows: fresh, call: () => author.write(fresh, acceptanceWriteContext(this.projectRoot, milestone.id, fresh, workers)) });
+    }
+    for (const row of needing.filter((r) => weakWhy.has(r.rid))) {
+      asks.push({ rows: [row], call: () => author.regenerate(row, [weakWhy.get(row.rid)!], acceptanceWriteContext(this.projectRoot, milestone.id, [row], workers)) });
+    }
+    for (const ask of asks) {
+      let written: AcceptanceWriteResult;
+      try {
+        written = await ask.call();
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        for (const row of ask.rows) faults.set(row.rid, { reasonClass: "unmeasurable", detail: `the acceptance test writer failed: ${why.slice(0, 200)}` });
+        continue;
+      }
+      for (const fault of written.faulted) {
+        faults.set(fault.rid, {
+          reasonClass: writerFaultClass(fault.cause),
+          detail: `its system check could not be written (${fault.cause})${fault.problems.length > 0 ? `: ${fault.problems.slice(0, 3).join("; ")}` : ""}`.slice(0, 400),
+        });
+      }
+      for (const item of written.unbound) unbound.set(item.rid, item.missingObservable);
+      const answered = new Set([...written.checks.map((c) => c.rid), ...written.unbound.map((u) => u.rid), ...faults.keys()]);
+      for (const row of ask.rows) {
+        if (!answered.has(row.rid)) faults.set(row.rid, { reasonClass: "check-fault", detail: "the test writer returned nothing for this row" });
+      }
+      await this.storeChecks(campaign, milestone, new Map(ask.rows.map((r) => [r.rid, r] as const)), written, faults);
+      if (written.disclosure) {
+        getLoggerSafe().warn("Acceptance checks written without an independent writer", { id: campaign.id, milestone: milestone.id, disclosure: written.disclosure });
+      }
     }
     return { faults, unbound };
   }
@@ -5978,6 +5997,12 @@ export class CampaignManager {
       for (const test of existing?.tests ?? []) {
         const row = ledger.rows.find((r) => r.rid === test.rid);
         if (row === undefined || test.check === undefined || !rowDecides(row)) continue;
+        // A TEST THE ROW RETIRED is not carried into the new bytes: a check
+        // the independent review called weak, or one an amended number
+        // superseded, would otherwise be rendered back with every sibling's
+        // rewrite and sit in the project as if it were the row's check.
+        const current = currentTestRef(row);
+        if (current === undefined || current.testName !== test.testName || current.bodySha !== test.bodySha) continue;
         inputs.set(test.rid, { row, check: test.check, ...(test.writer ? { writer: test.writer } : {}) });
       }
       for (const check of checks) {
@@ -6585,19 +6610,10 @@ export class CampaignManager {
     const ledger = campaign.requirements;
     const faultIds = new Set(reasons.filter((r) => r.reasonClass === "check-fault" && r.rid !== undefined).map((r) => r.rid!));
     const queued = [...new Set(reasons.filter((r) => r.rid !== undefined && !faultIds.has(r.rid)).map((r) => r.rid!))];
-    if (ledger !== undefined) {
-      if (faultIds.size > 0) {
-        campaign.requirements = { ...ledger, rows: ledger.rows.map((r) => (faultIds.has(r.rid) ? { ...r, status: "check-fault" as const } : r)) };
-      }
-      const byRid = new Map(ledger.rows.map((r) => [r.rid, r] as const));
-      const encoded = queued.map((rid) => byRid.get(rid)?.encoded).filter((e): e is string => e !== undefined);
-      // Through the legacy wordings the queue already holds, so a row it
-      // already names keeps its key and its repair budget.
-      const named = restoreLegacyWordings(campaign, encoded);
-      const held = new Set((campaign.pendingCoverageGaps ?? []).map(gapKey));
-      const fresh = unscheduledGaps(named.filter((n) => !held.has(gapKey(n))), campaign.milestones);
-      if (fresh.length > 0) campaign.pendingCoverageGaps = [...(campaign.pendingCoverageGaps ?? []), ...fresh];
+    if (ledger !== undefined && faultIds.size > 0) {
+      campaign.requirements = { ...ledger, rows: ledger.rows.map((r) => (faultIds.has(r.rid) ? { ...r, status: "check-fault" as const } : r)) };
     }
+    this.queueRows(campaign, queued);
     milestone.status = "failed";
     milestone.attempts = Math.max(milestone.attempts, this.maxMilestoneAttempts);
     milestone.parked = { atMs: Date.now(), reasons: reasons.slice(0, 30).map((r) => ({ ...r })), queued };
@@ -6687,13 +6703,49 @@ export class CampaignManager {
   }
 
   /**
-   * The review's answer as a gate: how many rows its findings reopened or
-   * added. A review that returns no count (the reviewer that only writes the
-   * report) reopened none, and a reviewer that cannot run never blocks.
+   * The independent review as a gate (GDD-drift W13, on): asked before the
+   * delivery decision, it reopens rows whose check it found weak (the check
+   * retired) and adds GDD rules no row held. No check has passed those rows,
+   * so they hold delivery as one missing proof that names them; the ones
+   * this milestone does not carry are queued, so a coverage sprint writes
+   * their checks — a weak one replaced once by its writer, told why. A
+   * review that did not run changed nothing and blocks nothing.
    */
-  private async reviewAsGate(campaign: Campaign): Promise<number> {
-    const reviewed: unknown = await this.gatherIndependentReview(campaign);
-    return typeof reviewed === "number" && Number.isFinite(reviewed) && reviewed > 0 ? Math.floor(reviewed) : 0;
+  private async reviewAsGate(campaign: Campaign, milestone: CampaignMilestone): Promise<{ changed: number; proof?: string }> {
+    const outcome = await this.gatherIndependentReview(campaign);
+    if (outcome.changed <= 0) return { changed: 0 };
+    const byRid = new Map((campaign.requirements?.rows ?? []).map((r) => [r.rid, r] as const));
+    const named = (rids: readonly string[]): string => {
+      const refs = rids.map((rid) => {
+        const row = byRid.get(rid);
+        return row === undefined ? rid : rowRef(row);
+      });
+      return `${refs.slice(0, 4).join(", ")}${refs.length > 4 ? `, +${refs.length - 4} more` : ""}`;
+    };
+    const carried = new Set(this.scopeRowsOf(campaign, milestone).map((r) => r.rid));
+    this.queueRows(campaign, [...outcome.reopened, ...outcome.added].filter((rid) => !carried.has(rid)));
+    this.persist(campaign);
+    const parts = [
+      ...(outcome.reopened.length > 0 ? [`reopened ${outcome.reopened.length} GDD row(s) whose check it found weak (${named(outcome.reopened)})`] : []),
+      ...(outcome.added.length > 0 ? [`added ${outcome.added.length} GDD row(s) the GDD states and no row held (${named(outcome.added)})`] : []),
+    ];
+    return { changed: outcome.changed, proof: `the independent review ${parts.join(" and ")}; no check has passed them yet`.slice(0, 300) };
+  }
+
+  /**
+   * Rows queued for later sprints through the coverage queue, under the
+   * wordings the queue already holds, so a row it already names keeps its key
+   * and its repair budget.
+   */
+  private queueRows(campaign: Campaign, rids: readonly string[]): void {
+    const ledger = campaign.requirements;
+    if (ledger === undefined || rids.length === 0) return;
+    const byRid = new Map(ledger.rows.map((r) => [r.rid, r] as const));
+    const encoded = rids.map((rid) => byRid.get(rid)?.encoded).filter((e): e is string => e !== undefined);
+    const named = restoreLegacyWordings(campaign, encoded);
+    const held = new Set((campaign.pendingCoverageGaps ?? []).map(gapKey));
+    const fresh = unscheduledGaps(named.filter((n) => !held.has(gapKey(n))), campaign.milestones);
+    if (fresh.length > 0) campaign.pendingCoverageGaps = [...(campaign.pendingCoverageGaps ?? []), ...fresh];
   }
 
   /** What the scope gate still holds against delivery at the final milestone. */

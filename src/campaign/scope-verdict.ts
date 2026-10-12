@@ -129,11 +129,23 @@ interface WrittenTest {
   readonly writer: AcceptanceWriter;
 }
 
-function testsFor(rid: string, sources: readonly AcceptanceSource[]): WrittenTest[] {
+/**
+ * A stored test the row has retired: it names those bytes only as superseded
+ * (an amended number, a check the independent review called weak). Its file
+ * can still hold it until the file is rendered again, and it is not the
+ * row's check: it must never pass the row, prove its scope or stand in for
+ * a check the row does not have.
+ */
+function retiredBy(row: RequirementRow, test: { readonly testName: string; readonly bodySha: string }): boolean {
+  const named = row.checks.filter((c) => c.kind === "test" && c.testName === test.testName && c.bodySha === test.bodySha);
+  return named.length > 0 && named.every((c) => c.kind === "test" && c.supersededAtMs !== undefined);
+}
+
+function testsFor(row: RequirementRow, sources: readonly AcceptanceSource[]): WrittenTest[] {
   const out: WrittenTest[] = [];
   for (const file of sources) {
     for (const test of file.tests) {
-      if (test.rid === rid) out.push({ testName: test.testName, writer: test.writer ?? file.writer });
+      if (test.rid === row.rid && !retiredBy(row, test)) out.push({ testName: test.testName, writer: test.writer ?? file.writer });
     }
   }
   return out;
@@ -150,7 +162,7 @@ function currentTestName(row: RequirementRow): string | undefined {
 function hasCheck(row: RequirementRow, sources: readonly AcceptanceSource[]): boolean {
   return (
     row.checks.some((c) => c.kind !== "test" || c.supersededAtMs === undefined) ||
-    testsFor(row.rid, sources).length > 0
+    testsFor(row, sources).length > 0
   );
 }
 
@@ -162,7 +174,7 @@ function hasCheck(row: RequirementRow, sources: readonly AcceptanceSource[]): bo
  * claim) proves its result but not scope; the exemption is for written checks.
  */
 function independentlyChecked(row: RequirementRow, sources: readonly AcceptanceSource[], workers: ReadonlySet<string>): boolean {
-  const tests = testsFor(row.rid, sources);
+  const tests = testsFor(row, sources);
   return (
     tests.length > 0 &&
     tests.every((t) => t.writer.independence === "different-model" && !workers.has(modelId(t.writer.model)))
@@ -284,7 +296,7 @@ export function judgeMilestone(input: GreenInput): Judgement {
   }
 
   const judgeRow = (row: RequirementRow, regressed: boolean): boolean => {
-    const tests = testsFor(row.rid, input.sources);
+    const tests = testsFor(row, input.sources);
     const named = tests[0]?.testName ?? currentTestName(row);
     const at = { rid: row.rid, ...(named === undefined ? {} : { testName: named }) };
     const result: RowResult | undefined = input.results[row.rid];

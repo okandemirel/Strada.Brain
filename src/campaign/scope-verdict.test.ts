@@ -368,6 +368,33 @@ describe("judgeMilestone — the run's terminal key, and scope proven by indepen
     expect(greenOf(judgeMilestone(input({ integrity: integrity("error", { terminalKeys: keys, infrastructureErrors: 0 } as Partial<RunIntegrity>) }))).basis).toBe("proven");
   });
 
+  it("a test the row retired (superseded, weak) still in its file is not the row's check: no stand-in, no proof of scope (W13)", () => {
+    const weak = row("r1", {
+      checks: [{ kind: "test", testName: testName("r1"), path: FILE, bodySha: "body-r1", supersededAtMs: 5, weak: "it asserts a literal" }],
+    });
+    // The file was not rendered again yet: the retired test is still in it.
+    const j = notGreen(judgeMilestone(input({ own: [weak, row("r2")], results: { r2: result("pass") } })));
+    const reason = j.reasons.find((r) => r.rid === "r1");
+    expect(reason?.code).toBe("row-no-check");
+    expect(reason?.reasonClass).toBe("check-fault");
+    // A replacement with other bytes under the same name is the row's check again.
+    const replaced = row("r1", {
+      checks: [
+        { kind: "test", testName: testName("r1"), path: FILE, bodySha: "body-old", supersededAtMs: 5, weak: "it asserts a literal" },
+        { kind: "test", testName: testName("r1"), path: FILE, bodySha: "body-r1" },
+      ],
+    });
+    expect(greenOf(judgeMilestone(input({ own: [replaced, row("r2")] }))).basis).toBe("proven");
+    // Nor is it counted when the writers are weighed: a retired test the worker's model wrote, left in
+    // another file, does not take independence from the current check.
+    const both = [
+      source(["r1", "r2"]),
+      { ...source([], "same-model", "worker-model"), path: OTHER_FILE, tests: [{ rid: "r1", testName: testName("r1"), bodySha: "body-old" }] },
+    ];
+    const judged = greenOf(judgeMilestone(input({ own: [replaced, row("r2")], sources: both })));
+    expect(judged.caveats.join(" ")).not.toMatch(/independent/);
+  });
+
   it("table: every key with a failing owned row is red — the key never softens a failing row", () => {
     for (const key of TERMINAL_KEYS) {
       const j = notGreen(judgeMilestone(input({ integrity: integrity(key), results: { r1: result("fail"), r2: result("pass") } })));
