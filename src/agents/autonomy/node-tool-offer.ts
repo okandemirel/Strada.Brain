@@ -19,7 +19,11 @@
  */
 export const NODE_SCOPE_MARKER = "## Scope of this node";
 
-/** Tools every node may need regardless of what its task names. */
+/**
+ * Tools every node may need regardless of what its task names. The Strada
+ * create tools are here because a node's text names what to build, not the
+ * generator that builds it; withheld, the node hand-writes the module.
+ */
 export const NODE_CORE_TOOLS: ReadonlySet<string> = new Set([
   "file_read", "file_write", "file_edit", "file_delete", "file_rename", "list_directory",
   "glob_search", "grep_search", "code_search_rag", "vault_search",
@@ -30,6 +34,8 @@ export const NODE_CORE_TOOLS: ReadonlySet<string> = new Set([
   "unity_delivery_measure", "unity_playmode_verify", "unity_playthrough",
   "unity_scene_analyze", "unity_prefab_analyze",
   "project_health",
+  "strada_create_module", "strada_create_system", "strada_create_component", "strada_create_mediator",
+  "strada_create_service", "strada_create_controller", "strada_create_model",
 ]);
 
 export interface NodeToolOffer<T> {

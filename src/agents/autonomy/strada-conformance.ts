@@ -221,17 +221,10 @@ import {
   type SceneWiringIo,
 } from "./scene-wiring.js";
 import { cachedReadFile, forEachFileText, snapshotTree, type TreeSnapshot } from "./project-walk.js";
-import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePaths } from "./constants.js";
+import { COMPILABLE_EXT, MUTATION_TOOLS, STRADA_GENERATOR_TOOLS, extractFilePaths } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
 import { STRADA_WORK_DIVISION } from "../context/strada-work-division.js";
-
-const STRADA_GENERATOR_TOOLS: ReadonlySet<string> = new Set([
-  "strada_create_module",
-  "strada_create_component",
-  "strada_create_mediator",
-  "strada_create_system",
-]);
 
 const AUTHORITATIVE_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   "file_read",

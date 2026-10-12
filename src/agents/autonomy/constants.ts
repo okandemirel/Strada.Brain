@@ -11,6 +11,19 @@
 // Re-export from common/constants for backward compatibility
 export { WRITE_OPERATIONS } from "../../common/constants.js";
 
+/**
+ * Every Strada code generator the agent can be offered: Brain's built-ins and
+ * the ones only Strada.MCP provides. One list, because three copies named only
+ * the built-in four: a module made through strada_create_service recorded no
+ * module root for the conformance rules and read as "reading" to the stall check.
+ */
+export const STRADA_GENERATOR_TOOLS: ReadonlySet<string> = new Set([
+  "strada_create_module", "strada_create_component",
+  "strada_create_mediator", "strada_create_system",
+  "strada_create_service", "strada_create_controller", "strada_create_model",
+  "strada_scaffold_feature",
+]);
+
 /** Tools that mutate source files (subset of WRITE_OPERATIONS). */
 export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   "file_write", "file_edit", "file_delete", "file_rename",
@@ -22,8 +35,7 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   // one; it was missing, so the build gate never armed (audited 2026-09-24).
   "file_delete_directory",
   "shell_exec",
-  "strada_create_module", "strada_create_component",
-  "strada_create_mediator", "strada_create_system",
+  ...STRADA_GENERATOR_TOOLS,
   // The deterministic writers of 2026-09-07: each changes the project.
   "unity_bind_sprite", "unity_place_prefab",
   "unity_generate_sprite", "unity_generate_mesh", "unity_generate_audio",

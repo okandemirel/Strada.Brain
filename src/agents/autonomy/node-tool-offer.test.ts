@@ -19,10 +19,11 @@ describe("a plan node is offered the tools its task names, their families, and t
     expect(offer.narrowed).toBe(true);
     expect(offer.named).toEqual(["unity_delivery_measure", "unity_generate_sprite", "unity_verify_change"]);
     const names = offer.offered.map((t) => t.name);
-    for (const n of ["unity_generate_sprite", "unity_generate_mesh", "unity_generate_audio", "unity_delivery_measure", "unity_verify_change", "file_read", "git_commit", "grep_search"]) {
+    // strada_create_module is core: a node names what to build, not the generator.
+    for (const n of ["unity_generate_sprite", "unity_generate_mesh", "unity_generate_audio", "unity_delivery_measure", "unity_verify_change", "file_read", "git_commit", "grep_search", "strada_create_module"]) {
       expect(names, n).toContain(n);
     }
-    for (const n of ["unity_animation_play", "unity_navmesh_bake", "unity_my_assets_cloud", "strada_create_module", "code_quality", "unity_scene_build"]) {
+    for (const n of ["unity_animation_play", "unity_navmesh_bake", "unity_my_assets_cloud", "strada_scaffold_feature", "code_quality", "unity_scene_build"]) {
       expect(names, n).not.toContain(n);
     }
     expect(offer.withheld).toBeGreaterThan(5);
