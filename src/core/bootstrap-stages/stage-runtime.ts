@@ -423,6 +423,14 @@ export async function initializeTaskRuntimeStage(
     // A Config built without the campaign section (older fixtures) is the
     // gate's default, off — not a TypeError that takes the campaign layer down.
     const scope = params.config.campaign as Config["campaign"] | undefined;
+    // …but said: loadConfig always builds the section, so its absence is a
+    // config path that lost it, and a gate turned off by that is not one the
+    // user turned off.
+    if (scope === undefined) {
+      params.logger.warn("Config has no campaign section: the scope gate is off whatever CAMPAIGN_SCOPE_GATE says", {
+        missing: "campaign",
+      });
+    }
     campaignManager = new CampaignManager({
       storage: campaignStorage,
       planner: new CampaignPlanner(params.providerManager.getProvider(""), {

@@ -105,7 +105,7 @@ async function boot(
   // stage; a wiring test that let that pass would be testing nothing.
   expect(logger.warn).not.toHaveBeenCalledWith("Campaign layer disabled", expect.anything());
   expect(result.campaignManager).toBeDefined();
-  return { manager: result.campaignManager!, providers, root, config };
+  return { manager: result.campaignManager!, providers, root, config, logger };
 }
 
 /** The manager's private dependencies, read the way only a wiring test should. */
@@ -193,8 +193,20 @@ describe("production construction wires the scope gate (GDD-drift W15)", () => {
     expect(registry.execute).not.toHaveBeenCalled();
   });
 
-  it("a config with no campaign section keeps the campaign layer, with the gate off", async () => {
-    const { manager } = await boot(undefined, { registry: toolRegistry() });
+  it("a config with no campaign section keeps the campaign layer, with the gate off, and says so", async () => {
+    const { manager, logger } = await boot(undefined, { registry: toolRegistry() });
     expect(manager.scopeGateWiring().mode).toBe("off");
+    // Off because the section is missing is not off because it was asked for:
+    // the log names the gap, or a config path that lost the section would
+    // switch the gate off without a trace.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/no campaign section.*scope gate is off/i),
+      expect.objectContaining({ missing: "campaign" }),
+    );
+  });
+
+  it("a config with the campaign section raises no missing-section warning", async () => {
+    const { logger } = await boot({ scopeGate: "off", maxRequirementRows: 400 }, { registry: toolRegistry() });
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/no campaign section/i), expect.anything());
   });
 });
