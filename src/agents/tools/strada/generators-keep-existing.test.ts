@@ -230,7 +230,7 @@ describe("the single-file generators on a path that exists", () => {
       tool: "strada_create_system",
       run: (root, path) =>
         new SystemCreateTool().execute(
-          { name: "BoardSystem", path, namespace: "Game.Modules.Board" },
+          { name: "BoardSystem", path, namespace: "Game.Modules.Board", query_components: ["Cell"] },
           { projectPath: root, workingDirectory: root, readOnly: false },
         ),
     },

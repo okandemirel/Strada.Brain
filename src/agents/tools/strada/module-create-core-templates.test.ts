@@ -162,6 +162,16 @@ describe("a Strada.Core without module templates", () => {
     expect(existsSync(join(root, MODULE, "Scripts", "Systems", "HarborSystem.cs"))).toBe(false);
     expect(result.content).toMatch(/declares no module templates/);
   });
+
+  it("a system asked for is Core's shape, with no TODO or commented-out ForEach", async () => {
+    const root = project(false);
+    const result = await run(root, { include_system: true });
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    const system = read(root, "Scripts/Systems/HarborSystem.cs");
+    expect(system).toContain("public class HarborSystem : SystemBase");
+    expect(system).toContain("protected override void OnUpdate(float deltaTime)");
+    expect(system).not.toMatch(/TODO|\/\/\s*ForEach/);
+  });
 });
 
 describe("module templates this reader cannot follow", () => {

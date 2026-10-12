@@ -1,5 +1,5 @@
 import { SystemCreateTool } from "./system-create.js";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "../tool.interface.js";
@@ -42,6 +42,7 @@ describe("SystemCreateTool", () => {
         name: "MovementSystem",
         path: "Assets/Systems/MovementSystem.cs",
         namespace: "Game.Systems",
+        query_components: ["Position"],
       },
       ctx
     );
@@ -70,6 +71,7 @@ describe("SystemCreateTool", () => {
         path: "Assets/Systems/PhysicsJob.cs",
         namespace: "Game.Physics",
         base_class: "JobSystemBase",
+        query_components: ["Velocity"],
       },
       ctx
     );
@@ -162,6 +164,7 @@ describe("SystemCreateTool", () => {
         name: "SpawnSystem",
         path: "Assets/Systems/SpawnSystem.cs",
         namespace: "Game.Spawning",
+        query_components: ["SpawnPoint"],
         inject_services: ["ICombatService", "IConfigService"],
       },
       ctx
@@ -185,6 +188,7 @@ describe("SystemCreateTool", () => {
         name: "LateSystem",
         path: "Assets/Systems/LateSystem.cs",
         namespace: "Game",
+        query_components: ["Lifetime"],
         system_order: 100,
       },
       ctx
@@ -194,6 +198,47 @@ describe("SystemCreateTool", () => {
     const filePath = join(tempDir, "Assets/Systems/LateSystem.cs");
     const code = readFileSync(filePath, "utf-8");
     expect(code).toContain("[ExecutionOrder(100)]");
+  });
+
+  // Without components to query, the only body there was to write was a TODO
+  // and a commented-out ForEach (or, for a job system, a TODO and `return
+  // dependency;`): a system ticked every frame for nothing, the stub a measured
+  // game carried eleven times.
+  for (const base_class of ["SystemBase", "JobSystemBase"]) {
+    it(`refuses a ${base_class} with no query_components, says what is needed, and writes nothing`, async () => {
+      for (const query of [undefined, []]) {
+        const result = await tool.execute(
+          {
+            name: "Idle",
+            path: "Assets/Systems/IdleSystem.cs",
+            namespace: "Game.Systems",
+            base_class,
+            ...(query === undefined ? {} : { query_components: query }),
+          },
+          ctx
+        );
+
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain("query_components");
+        expect(result.content).toContain("strada_create_component");
+        expect(existsSync(join(tempDir, "Assets/Systems/IdleSystem.cs"))).toBe(false);
+      }
+    });
+  }
+
+  it("writes no TODO and no commented-out code into a system it makes", async () => {
+    const result = await tool.execute(
+      {
+        name: "DamageSystem",
+        path: "Assets/Systems/DamageSystem.cs",
+        namespace: "Game.Combat",
+        query_components: ["Health"],
+      },
+      ctx
+    );
+    expect(result.isError).toBeUndefined();
+    const code = readFileSync(join(tempDir, "Assets/Systems/DamageSystem.cs"), "utf-8");
+    expect(code).not.toMatch(/\/\/\s*ForEach/);
   });
 
   it("returns error for invalid system name", async () => {

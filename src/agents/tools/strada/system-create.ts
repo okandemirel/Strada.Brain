@@ -9,6 +9,7 @@ export class SystemCreateTool implements ITool {
   readonly description =
     "Create a new ECS System for Strada.Core. Systems process entities with specific component queries. " +
     "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystem (generic Burst with 1-4 component type args). " +
+    "Needs the components the system queries (query_components). " +
     "Refuses a path that already exists: it never overwrites a file.";
 
   readonly inputSchema = {
@@ -38,7 +39,8 @@ export class SystemCreateTool implements ITool {
       query_components: {
         type: "array",
         items: { type: "string" },
-        description: "Component types this system queries (e.g., ['Health', 'Position'])",
+        description:
+          "Component types this system queries (e.g., ['Health', 'Position']); at least one. Make missing ones with strada_create_component first.",
       },
       inject_services: {
         type: "array",
@@ -73,7 +75,7 @@ export class SystemCreateTool implements ITool {
         description: "Systems this one depends on (e.g., ['InputSystem'])",
       },
     },
-    required: ["name", "path", "namespace"],
+    required: ["name", "path", "namespace", "query_components"],
   };
 
   async execute(
@@ -180,6 +182,21 @@ export class SystemCreateTool implements ITool {
       if (!isValidCSharpIdentifier(sys)) {
         return { content: `Error: invalid system name in requires_system '${sys}'`, isError: true };
       }
+    }
+
+    // With nothing to query, the only body there was to write was a TODO over
+    // a commented-out ForEach (over `return dependency;` for a job system): a
+    // system ticked every frame for nothing, which a measured game carried
+    // eleven times. What makes it a system is asked for instead.
+    if (queryComponents.length === 0) {
+      return {
+        content:
+          `Error: query_components is required. A system processes the entities that carry its components; ` +
+          `without them the only body to write is an empty update ticked every frame. Name the components ` +
+          `${name} reads or writes (e.g. ['Health', 'Position']), making missing ones with strada_create_component ` +
+          `first. Per-frame work that touches no entity belongs in a TickableController or a service, not a system.`,
+        isError: true,
+      };
     }
 
     // Validate path. Missing parents are accepted: the write lays down its own
@@ -324,24 +341,15 @@ function generateSystemCode(opts: SystemCodeOptions): string {
     });
   }
 
-  // Query body using ForEach pattern
-  let queryBody: string;
-  if (queryComponents.length > 0) {
-    const typeArgs = queryComponents.join(", ");
-    const lambdaParams = queryComponents
-      .map((c) => `ref ${c} ${c.charAt(0).toLowerCase() + c.slice(1)}`)
-      .join(", ");
-    queryBody = `            ForEach<${typeArgs}>((int entity, ${lambdaParams}) =>
+  // Query body using ForEach pattern (execute() refuses a system with no components)
+  const typeArgs = queryComponents.join(", ");
+  const lambdaParams = queryComponents
+    .map((c) => `ref ${c} ${c.charAt(0).toLowerCase() + c.slice(1)}`)
+    .join(", ");
+  const queryBody = `            ForEach<${typeArgs}>((int entity, ${lambdaParams}) =>
             {
                 // TODO: Process entity
             });`;
-  } else {
-    queryBody = `            // TODO: Implement system logic
-            // ForEach<ComponentA, ComponentB>((int entity, ref ComponentA a, ref ComponentB b) =>
-            // {
-            //     // Process entity
-            // });`;
-  }
 
   return `${usings.join("\n")}
 
@@ -422,12 +430,11 @@ interface JobSystemCodeOptions {
 }
 
 function generateJobSystemCode(opts: JobSystemCodeOptions): string {
+  // execute() refuses a job system with no components, so there is always a job to schedule.
   const { name, namespace, usings, attributes, fields, queryComponents } = opts;
-  const hasGeneratedJob = queryComponents.length > 0;
   const jobName = `${name}Job`;
   const typeArgs = queryComponents.join(", ");
-  const jobStruct = hasGeneratedJob
-    ? `
+  const jobStruct = `
     [BurstCompile]
     public struct ${jobName} : IJobComponent<${typeArgs}>
     {
@@ -438,18 +445,14 @@ function generateJobSystemCode(opts: JobSystemCodeOptions): string {
             // TODO: Process components
         }
     }
-`
-    : "";
+`;
 
-  const scheduleCall = hasGeneratedJob
-    ? `            return ScheduleParallel<${jobName}, ${typeArgs}>(
+  const scheduleCall = `            return ScheduleParallel<${jobName}, ${typeArgs}>(
                 new ${jobName}
                 {
                     DeltaTime = deltaTime,
                 },
-                dependency: dependency);`
-    : `            // TODO: Schedule one or more jobs.
-            return dependency;`;
+                dependency: dependency);`;
 
   return `${usings.join("\n")}
 

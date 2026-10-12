@@ -67,6 +67,7 @@ describe("an optional input the model fills with its zero value is absent", () =
       namespace: "Game.Modules.Tide",
       base_class: "",
       burst_component_count: null,
+      query_components: ["Current"],
     });
 
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
@@ -106,7 +107,7 @@ const generators: Array<{ kind: string; tool: () => ITool; input: (path: string)
   {
     kind: "system",
     tool: () => new SystemCreateTool(),
-    input: (path) => ({ name: "Orbit", path, namespace: "Game.Modules.Orbit" }),
+    input: (path) => ({ name: "Orbit", path, namespace: "Game.Modules.Orbit", query_components: ["Radius"] }),
   },
   {
     kind: "component",

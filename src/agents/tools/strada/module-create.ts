@@ -747,6 +747,9 @@ ${configLines.join("\n")}
 `;
 }
 
+// Core's own System template has the same empty update. The TODO over a
+// commented-out ForEach this used to carry was left unfilled module after
+// module; strada_create_system makes a system that queries something.
 function generateSystem(name: string, namespace: string): string {
   return `using ${STRADA_API.namespaces.ecs};
 using ${STRADA_API.namespaces.systems};
@@ -762,11 +765,6 @@ namespace ${namespace}
 
         protected override void OnUpdate(float deltaTime)
         {
-            // TODO: Implement system logic
-            // ForEach<ComponentA, ComponentB>((int entity, ref ComponentA a, ref ComponentB b) =>
-            // {
-            //     // Process entity
-            // });
         }
 
         protected override void OnDispose() { }
