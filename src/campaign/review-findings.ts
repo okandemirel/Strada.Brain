@@ -13,9 +13,10 @@
  *
  *   • a weak check on a known row with a current system test marks that test
  *     weak and retires it, so the writer replaces it once with the reviewer's
- *     reason (`weak`) as the problem, and reopens the row: open, its last
+ *     reason (`weak`) as the problem. A passing row reopens: open, its last
  *     result dropped, so only the new test passing on a measured revision
- *     closes it again (`closesByLedger`);
+ *     closes it again (`closesByLedger`). Any other row keeps its status and
+ *     its last result: none of them rested on the weak check's pass;
  *   • a missing item whose quote is in the APPROVED GDD verbatim becomes a new
  *     row, source `review-added`, queued with no owner.
  *
@@ -172,8 +173,8 @@ function rowIndexOf(rows: readonly RequirementRow[], named: string): number | un
 
 /**
  * Apply a review's findings to the ledger. Only two changes are possible —
- * a weak check reopens its row, a verbatim quote adds a queued row — and
- * neither can close anything. A second weak call on a row in the same review
+ * a weak check retires its test (and reopens its row when it was passing), a
+ * verbatim quote adds a queued row — and neither can close anything. A second weak call on a row in the same review
  * finds its test already retired, so a row is regenerated at most once per
  * review. A missing item is read only against the text the ledger was read
  * from; with an amendment not yet re-read, it is disclosed instead.
@@ -205,12 +206,12 @@ export function applyReviewFindings(
       continue;
     }
     const why = clip(finding.why, 300) || "the independent review gave no reason";
+    const checks = row.checks.map((c) => (c.kind === "test" && c.supersededAtMs === undefined ? { ...c, weak: why, supersededAtMs: options.atMs } : c));
+    // Only a pass rests on the check called weak. A failing row keeps its
+    // failure message, a check-fault row the person who decides it, an
+    // unmeasured row its own path; resetting them to open would reclassify.
     const { last: _measuredWithIt, ...rest } = row;
-    const open: RequirementRow = {
-      ...rest,
-      status: "open",
-      checks: row.checks.map((c) => (c.kind === "test" && c.supersededAtMs === undefined ? { ...c, weak: why, supersededAtMs: options.atMs } : c)),
-    };
+    const open: RequirementRow = row.status === "passing" ? { ...rest, status: "open", checks } : { ...row, checks };
     rows[at] = open;
     reopened.push(open);
   }
@@ -248,7 +249,8 @@ export function reviewGateRecord(applied: ReviewApplication, mode: "shadow" | "o
     reopened: applied.reopened.map((row) => {
       // The newest: a test an earlier review retired may still be listed before it.
       const weak = [...row.checks].reverse().find((c) => c.kind === "test" && c.weak !== undefined);
-      return `${rowRef(row)}${weak?.kind === "test" ? ` — ${clip(weak.weak ?? "", 160)}` : ""}`;
+      const kept = row.status === "open" ? "" : ` (stays ${row.status})`;
+      return `${rowRef(row)}${kept}${weak?.kind === "test" ? ` — ${clip(weak.weak ?? "", 160)}` : ""}`;
     }),
     added: applied.added.map((row) => `${rowRef(row)} — "${clip(row.text, 160)}"`),
     disclosed: [...applied.disclosed],

@@ -224,8 +224,34 @@ describe("applyReviewFindings", () => {
     expect(none.ledger).toBe(failing);
     expect(none.disclosed).toEqual(["the review ended with no findings object, so it reopened and added nothing"]);
     const weak = apply(failing, findings({ weakChecks: [{ rid: "req-1-k1", why: "x" }] }));
-    expect(weak.ledger.rows[0]!.status).toBe("open");
+    expect(weak.ledger.rows[0]!.status).toBe("failing");
     expect(closesByLedger(weak.ledger.rows[0]!, REV)).toBe(false);
+  });
+
+  it("only a pass rests on the weak check: a failing, check-fault or unmeasured row keeps its status and its last result, and only its test is retired", () => {
+    const fail = { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 1 metre but was 0" } as const;
+    const fault = { revision: REV, atMs: 5, outcome: "check-fault", detail: "the test could not find the kite" } as const;
+    const unrun = { revision: REV, atMs: 5, outcome: "unmeasured", detail: "no editor could run it" } as const;
+    const rows = [
+      row("req-1-k1", "KP-01", KP1, { status: "failing", last: fail }),
+      row("req-2-k2", "KP-02", KP2, { status: "check-fault", last: fault }),
+      row("req-3-k3", undefined, "The wind indicator must show the current gust direction", { status: "unmeasured", last: unrun }),
+    ];
+    const applied = apply(ledger(rows), findings({ weakChecks: rows.map((r) => ({ rid: r.rid, why: "asserts true" })) }));
+    for (const [i, before] of rows.entries()) {
+      const after = applied.ledger.rows[i]!;
+      // The person's decision (check-fault), the unmeasurable path and the failure message all survive the review.
+      expect(after.status).toBe(before.status);
+      expect(after.last).toEqual(before.last);
+      expect(after.checks).toEqual([{ ...before.checks[0], weak: "asserts true", supersededAtMs: AT }]);
+      expect(closesByLedger(after, REV)).toBe(false);
+    }
+    expect(applied.reopened.map((r) => r.rid)).toEqual(rows.map((r) => r.rid));
+    expect(reviewGateRecord(applied, "on").reopened).toEqual([
+      "KP-01 (§3) (stays failing) — asserts true",
+      "KP-02 (§3) (stays check-fault) — asserts true",
+      expect.stringMatching(/\(stays unmeasured\) — asserts true$/),
+    ]);
   });
 });
 
