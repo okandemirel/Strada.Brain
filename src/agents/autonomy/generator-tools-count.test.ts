@@ -13,6 +13,7 @@
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { StradaConformanceGuard } from "./strada-conformance.js";
+import { SelfVerification } from "./self-verification.js";
 import { MUTATION_TOOLS, STRADA_GENERATOR_TOOLS, stallClassOf } from "./constants.js";
 import { NODE_CORE_TOOLS, NODE_SCOPE_MARKER, selectNodeTools } from "./node-tool-offer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -78,6 +79,87 @@ describe("one list of generators, shared", () => {
       expect(MUTATION_TOOLS.has(tool), tool).toBe(true);
       expect(stallClassOf(tool, { readOnly: false }), tool).toBe("progress");
     }
+  });
+});
+
+describe("what a generator wrote arms the compile gate", () => {
+  // strada_create_module takes a module folder and MCP's generators an output
+  // folder as `path`, so the input names no file. Read from the input, the
+  // compile gate saw nothing after them — and MCP's controller and scaffold
+  // output is exactly what does not compile against Core.
+  const SERVICE_FILE = "Assets/Modules/HarborModule/Scripts/Services/HarborService.cs";
+  const ok = (content: string, metadata?: Record<string, unknown>) => ({
+    toolCallId: "tc",
+    content,
+    isError: false,
+    ...(metadata ? { metadata } : {}),
+  });
+
+  it("an MCP generator: the files its result names", () => {
+    for (const tool of MCP_GENERATORS) {
+      const verifier = new SelfVerification();
+      verifier.track(
+        tool,
+        { name: "HarborService", namespace: "Game.Modules.Harbor", path: "Assets/Modules/HarborModule/Scripts/Services" },
+        ok(`Created ${tool} output at ${SERVICE_FILE}`, { filesAffected: [SERVICE_FILE] }),
+      );
+      expect(verifier.needsVerification(), tool).toBe(true);
+      expect(verifier.getState().pendingFiles.has(SERVICE_FILE), tool).toBe(true);
+    }
+  });
+
+  it("strada_create_module: the files it created, not the ones it kept", () => {
+    const made = new SelfVerification();
+    made.track(
+      "strada_create_module",
+      { name: "Harbor" },
+      ok(`Module 'Harbor' created successfully!\n\nCreated files:\n  ${SERVICE_FILE}`, {
+        createdFiles: [SERVICE_FILE],
+        keptFiles: [],
+      }),
+    );
+    expect(made.needsVerification()).toBe(true);
+
+    const kept = new SelfVerification();
+    kept.track(
+      "strada_create_module",
+      { name: "Harbor" },
+      ok(`Module 'Harbor' already exists\n\nKept (already existed, left unchanged):\n  ${SERVICE_FILE}`, {
+        createdFiles: [],
+        keptFiles: [SERVICE_FILE],
+      }),
+    );
+    expect(kept.needsVerification()).toBe(false);
+  });
+
+  it("inside a batch, where only the text of each result survives", () => {
+    const verifier = new SelfVerification();
+    verifier.track(
+      "batch_execute",
+      { operations: [{ tool: "strada_create_controller", input: { name: "HarborController", path: "Assets/Modules/HarborModule/Scripts/Controllers" } }] },
+      ok(
+        JSON.stringify({
+          results: [
+            {
+              tool: "strada_create_controller",
+              success: true,
+              content: "Created controller HarborController at Assets/Modules/HarborModule/Scripts/Controllers/HarborController.cs",
+            },
+          ],
+        }),
+      ),
+    );
+    expect(verifier.needsVerification()).toBe(true);
+  });
+
+  it("a generator that refused wrote nothing", () => {
+    const verifier = new SelfVerification();
+    verifier.track(
+      "strada_create_service",
+      { name: "HarborService", path: "Assets/Modules/HarborModule/Scripts/Services" },
+      { toolCallId: "tc", content: `Error: ${SERVICE_FILE} already exists`, isError: true },
+    );
+    expect(verifier.needsVerification()).toBe(false);
   });
 });
 

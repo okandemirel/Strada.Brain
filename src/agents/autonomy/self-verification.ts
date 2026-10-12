@@ -12,8 +12,16 @@
 
 import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
-import { MUTATION_TOOLS, COMPILABLE_EXT, NON_MEASURING_VERIFY_TOOLS, extractFilePaths, isVerificationToolName } from "./constants.js";
-import { expandExecutedToolCalls } from "./executed-tools.js";
+import {
+  MUTATION_TOOLS,
+  COMPILABLE_EXT,
+  NON_MEASURING_VERIFY_TOOLS,
+  STRADA_GENERATOR_TOOLS,
+  extractFilePaths,
+  generatorWrittenFiles,
+  isVerificationToolName,
+} from "./constants.js";
+import { expandExecutedToolCalls, type ExecutedToolCall } from "./executed-tools.js";
 import { lexShell, type ShellOperator } from "../../security/shell-lexer.js";
 import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
 
@@ -331,7 +339,9 @@ export class SelfVerification {
     for (const executedTool of expandExecutedToolCalls(toolName, input, result)) {
       // Track mutations — O(1) set add + extension check
       if (MUTATION_TOOLS.has(executedTool.toolName)) {
-        for (const file of mutatedFiles(executedTool.toolName, executedTool.input)) {
+        // Only a call that was not expanded out of a batch carries its own metadata.
+        const metadata = executedTool.toolName === toolName ? result.metadata : undefined;
+        for (const file of mutatedFiles(executedTool, metadata)) {
           this.pendingFiles.add(file);
           this.touchedFiles.add(file);
           if (affectsCompilation(executedTool.toolName, file)) {
@@ -779,9 +789,14 @@ const SHELL_WRITERS = new Set(["mv", "cp", "rm", "touch", "tee", "sed", "perl", 
  * The files a mutation touched. For shell_exec, the compilable files a
  * writing command names (`sed -i … Player.cs`, `mv A.cs B.cs`, `> X.cs`):
  * the command has no path field, so a shell edit of a script left the build
- * gate unarmed (audited 2026-09-24). A read (`cat X.cs`) names none.
+ * gate unarmed (audited 2026-09-24). A read (`cat X.cs`) names none. For a
+ * Strada generator, also the files its result says it wrote.
  */
-function mutatedFiles(toolName: string, input: Record<string, unknown>): string[] {
+function mutatedFiles(call: ExecutedToolCall, metadata?: Readonly<Record<string, unknown>>): string[] {
+  const { toolName, input } = call;
+  if (STRADA_GENERATOR_TOOLS.has(toolName)) {
+    return [...new Set([...extractFilePaths(input), ...generatorWrittenFiles(call, metadata)])];
+  }
   if (toolName !== "shell_exec") return extractFilePaths(input);
   const command = typeof input["command"] === "string" ? input["command"] : "";
   const read = lexShell(command);

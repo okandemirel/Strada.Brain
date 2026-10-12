@@ -97,6 +97,30 @@ export function extractFilePaths(input: Record<string, unknown>): string[] {
   return paths.filter((p): p is string => typeof p === "string" && p !== "");
 }
 
+/**
+ * The compilable files a Strada generator reports writing.
+ *
+ * strada_create_module takes a module folder and MCP's generators an output
+ * folder as `path`, so the input names no file: read from it, the compile gate
+ * never saw what they wrote. The result does name them — metadata.createdFiles
+ * (strada_create_module: made, not kept) or metadata.filesAffected (MCP) — and
+ * inside a batch, where only each result's text survives, the text does. A
+ * refusal's text names files it did not write, so it is not read.
+ */
+export function generatorWrittenFiles(
+  call: { readonly output: string; readonly isError: boolean },
+  metadata?: Readonly<Record<string, unknown>>,
+): string[] {
+  const listed = [metadata?.["createdFiles"], metadata?.["filesAffected"]].filter(Array.isArray);
+  const named =
+    listed.length > 0
+      ? listed.flat().filter((f): f is string => typeof f === "string")
+      : call.isError
+        ? []
+        : call.output.split(/[\s,;'"`()]+/u).map((word) => word.replace(/[.:]+$/u, ""));
+  return [...new Set(named.filter((f) => COMPILABLE_EXT.has(f.slice(f.lastIndexOf(".")))))];
+}
+
 export function isVerificationToolName(toolName: string): boolean {
   return VERIFY_TOOLS.has(toolName) || VERIFY_TOOL_NAME_RE.test(toolName);
 }
