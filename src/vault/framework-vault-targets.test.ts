@@ -159,7 +159,6 @@ describe("framework vaults index the framework, available or installed (WP-1.2)"
       "SecurityReports/scan.md",
       "dist/index.js",
       "Tests/Runtime/QueryTests.cs",
-      "Runtime/notes/scratch.md",
       "CHANGELOG.md",
     ]) {
       expect(core.includePath?.(dropped), dropped).toBe(false);
@@ -174,6 +173,36 @@ describe("framework vaults index the framework, available or installed (WP-1.2)"
     expect(mcp.includePath?.("dist/index.js")).toBe(false);
     // This system's own vault is not a framework package: no scope.
     expect(targets.find((t) => t.name === "Strada.Brain")?.includePath).toBeUndefined();
+  });
+
+  it("leaves out the run-note folders at the package root only, not a source folder of the same name", () => {
+    // Measured on a real Strada.MCP checkout: the any-depth rule dropped all ten
+    // sources under src/tools/analysis/ (code-quality.ts, rag-index.ts, ...).
+    // Runs left their notes at the package root; a framework folder deeper down
+    // that shares one of those names is the framework.
+    const targets = frameworkVaultTargets(deps(), "/repos/Strada.Brain");
+    const core = targets.find((t) => t.name === "Strada.Core")!;
+    const modules = targets.find((t) => t.name === "Strada.Modules")!;
+    const mcp = targets.find((t) => t.name === "Strada.MCP")!;
+
+    for (const kept of ["src/tools/analysis/code-quality.ts", "src/tools/analysis/rag-index.ts", "src/reports/summary.ts", "src/docs/index.ts"]) {
+      expect(mcp.includePath?.(kept), kept).toBe(true);
+    }
+    for (const kept of ["Runtime/Reports/ReportService.cs", "Runtime/Analysis/FrameStats.cs", "Editor/Plans/PlanWindow.cs", "Documentation~/notes/DI.md"]) {
+      expect(core.includePath?.(kept), kept).toBe(true);
+    }
+    expect(modules.includePath?.("ScreenModule/Runtime/Docs/ScreenDocs.cs")).toBe(true);
+    // At the root they are still the notes runs left behind.
+    for (const dropped of ["analysis/frame-budget.md", "docs/plans/m3.md", "notes/Runtime/x.cs", "reports/Editor/y.md", "plans/README.md"]) {
+      expect(core.includePath?.(dropped), dropped).toBe(false);
+      expect(mcp.includePath?.(dropped), dropped).toBe(false);
+    }
+    // Test assemblies are not the framework at any depth: a module keeps its
+    // tests beside its Runtime/ (ScreenModule/Tests), as the Unity package
+    // inside Strada.MCP does, and a test double ranks beside the real API.
+    expect(modules.includePath?.("ScreenModule/Tests/Runtime/FakeScreenService.cs")).toBe(false);
+    expect(mcp.includePath?.("unity-package/com.strada.mcp/Tests/Editor/BridgeTests.cs")).toBe(false);
+    expect(mcp.includePath?.("src/tests/helpers.ts")).toBe(false);
   });
 
   it("a scoped vault indexes only what its scope keeps, at init and on a later write", async () => {

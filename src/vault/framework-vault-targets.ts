@@ -16,13 +16,20 @@ export interface FrameworkVaultTarget {
 /** Where a Unity package keeps what it is: its code, editor code, docs. */
 const FRAMEWORK_SOURCE_DIRS = ["runtime", "editor", "documentation~"] as const;
 /**
- * Never the framework, wherever they sit: build output, scan reports, the
- * package's own tests (Tests/Runtime is not its runtime), and the folders
- * runs wrote their own notes into inside the vendored copies.
+ * Never the framework at the package root: build output, scan reports, and
+ * the folders runs wrote their own notes into inside the vendored copies.
+ * Only there: the same words name real source folders further down
+ * (Strada.MCP's src/tools/analysis/ holds ten of its tools).
  */
-const FRAMEWORK_EXCLUDED_DIRS = new Set([
-  "dist", "securityreports", "tests", "notes", "docs", "analysis", "plans", "reports",
+const FRAMEWORK_EXCLUDED_ROOT_DIRS = new Set([
+  "dist", "securityreports", "notes", "docs", "analysis", "plans", "reports",
 ]);
+/**
+ * Test assemblies, at any depth: a module keeps them beside its Runtime/
+ * (ScreenModule/Tests) as a Unity package does, and Tests/Runtime is not the
+ * package's runtime. A test double would rank beside the API it fakes.
+ */
+const FRAMEWORK_TEST_DIRS = new Set(["tests"]);
 
 /**
  * The scope of a framework vault, judged per path segment so a module
@@ -36,7 +43,8 @@ export function frameworkVaultScope(extraSourceDirs: readonly string[] = []): (r
     const file = segments.pop()?.toLowerCase();
     if (!file) return false;
     const dirs = segments.map((s) => s.toLowerCase());
-    if (dirs.some((d) => FRAMEWORK_EXCLUDED_DIRS.has(d))) return false;
+    if (dirs.length > 0 && FRAMEWORK_EXCLUDED_ROOT_DIRS.has(dirs[0]!)) return false;
+    if (dirs.some((d) => FRAMEWORK_TEST_DIRS.has(d))) return false;
     return file === "readme.md" || dirs.some((d) => sources.has(d));
   };
 }
