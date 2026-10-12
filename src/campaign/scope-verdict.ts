@@ -49,21 +49,29 @@ import {
   type RunIntegrity,
   type TerminalKey,
 } from "../agents/autonomy/terminal-key.js";
-import type {
-  AcceptanceRunResult,
-  AcceptanceSource,
-  AcceptanceWriter,
-  CompletionGate,
-  GreenInput,
-  GreenReason,
-  Judgement,
-  ReasonClass,
-  RequirementRow,
-  RowOutcome,
-  RowResult,
+import {
+  ACCEPTANCE_DIR,
+  type AcceptanceRunResult,
+  type AcceptanceSource,
+  type AcceptanceWriter,
+  type CompletionGate,
+  type GreenInput,
+  type GreenReason,
+  type Judgement,
+  type ReasonClass,
+  type RequirementRow,
+  type RowOutcome,
+  type RowResult,
 } from "./scope-types.js";
 
 const CLASS_RANK: Record<ReasonClass, number> = { red: 2, "check-fault": 1, unmeasurable: 0 };
+
+/** A project-relative path the restore writes: the folder, anything under it, or its .meta. */
+function insideAcceptanceDir(path: string): boolean {
+  const rel = normalPath(path);
+  const dir = ACCEPTANCE_DIR.toLowerCase();
+  return rel === dir || rel === `${dir}.meta` || rel.startsWith(`${dir}/`);
+}
 
 const COMPLETION_GATES: readonly CompletionGate[] = ["visualEvidence", "noWork", "art", "prosOnly"];
 
@@ -200,12 +208,28 @@ export function judgeMilestone(input: GreenInput): Judgement {
     });
   }
 
+  // Two different findings share the code. A system file was put back, so
+  // the worker is told to leave the folder alone; a worker's own file outside
+  // it can answer for a check, and nothing restores that — the worker has to
+  // remove it. Telling it its file "was restored" sent it looking for nothing.
   const tampered = [...new Set([...input.tamper, ...(input.run?.tamper ?? [])])];
-  if (tampered.length > 0) {
+  const restored = tampered.filter(insideAcceptanceDir);
+  const foreign = tampered.filter((path) => !insideAcceptanceDir(path));
+  if (restored.length > 0) {
     push({
       reasonClass: "red",
       code: "tamper",
-      detail: `system-owned acceptance file(s) were changed outside the system and restored: ${tampered.join(", ")}`,
+      detail: `system-owned acceptance file(s) under ${ACCEPTANCE_DIR} were changed outside the system and restored to the system's bytes: ${restored.join(", ")}`,
+    });
+  }
+  if (foreign.length > 0) {
+    push({
+      reasonClass: "red",
+      code: "tamper",
+      detail:
+        `worker file(s) outside ${ACCEPTANCE_DIR} could answer for a system check (they declare or name into the acceptance ` +
+        `namespace, declare a type a check's local would bind to, or compile into the acceptance assembly); they were left ` +
+        `in place and count against the milestone until they are removed: ${foreign.join(", ")}`,
     });
   }
 
@@ -250,7 +274,13 @@ export function judgeMilestone(input: GreenInput): Judgement {
     const at = { rid: row.rid, ...(named === undefined ? {} : { testName: named }) };
     const result: RowResult | undefined = input.results[row.rid];
     if (result === undefined || result.revision !== input.revision) {
-      if (!hasCheck(row, input.sources)) {
+      const unbound = input.unbound?.[row.rid];
+      if (unbound !== undefined) {
+        // The detail is the bare observable: the worker's prompt prints it
+        // after "expose:", and the bounce asks for exactly that. Asked once
+        // without charge; a row still unobservable after that is the game's.
+        push({ reasonClass: unbound.told ? "red" : "unmeasurable", code: "row-unbound", detail: clip(unbound.missingObservable, 300), ...at });
+      } else if (!hasCheck(row, input.sources)) {
         push({ reasonClass: "check-fault", code: "row-no-check", detail: `${rowName(row)} has no system check yet`, ...at });
       } else if (runAdmitted) {
         const stale = result === undefined ? "" : ` (its last result is from ${result.revision})`;
@@ -390,7 +420,14 @@ function normalPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "").trim().toLowerCase();
 }
 
-function samePath(a: string, b: string): boolean {
+/**
+ * Two spellings of one acceptance file: separators, a leading "./" and case
+ * aside, or one an absolute path that ends in the other (the editor reports
+ * either). Exported so whatever matches a compile error to a file — the
+ * writer's compile repair as well as `attributeRun` — reads the same errors
+ * as belonging to the same file.
+ */
+export function samePath(a: string, b: string): boolean {
   const x = normalPath(a);
   const y = normalPath(b);
   return x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);

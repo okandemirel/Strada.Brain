@@ -368,6 +368,13 @@ export interface CampaignMilestone {
   timeBoxSplitFrom?: string;
   /** Writer calls spent repairing this milestone's acceptance checks. */
   writerRepairs?: WriterRepairs;
+  /**
+   * Uncharged resubmits the scope gate spent on a measurement the machine
+   * could not take (no runner, a run it did not admit, a crash of the
+   * runtime). One, then the milestone parks: an uncharged retry with no
+   * bound is how a sprint is resubmitted for ever.
+   */
+  scopeResubmits?: number;
 }
 
 export interface Campaign {

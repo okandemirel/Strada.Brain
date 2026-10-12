@@ -52,7 +52,7 @@ export function rowBlocks(row: RequirementRow): boolean {
 }
 
 /** The kinds a system-written acceptance test decides; claims are measured at delivery, the rest never block. */
-const TEST_ROW_KINDS: ReadonlySet<RequirementKind> = new Set(["rule", "constant", "range", "input", "flow", "screen"]);
+export const TEST_ROW_KINDS: ReadonlySet<RequirementKind> = new Set(["rule", "constant", "range", "input", "flow", "screen"]);
 
 /** The rows a milestone owns now (`RequirementRow.owner`), in ledger order. */
 export function ownedRows(ledger: RequirementLedger | undefined, milestoneId: string): RequirementRow[] {

@@ -32,7 +32,7 @@ import { streamOrChatText, type IAIProvider, type ProviderResponse } from "../ag
 import { getLoggerSafe } from "../utils/logger.js";
 import { detectInputInjection, harnessApiDoc, lintAcceptanceBody, publicSurfaceDigest, systemAssertsRow } from "./acceptance-files.js";
 import { requirementTokens } from "./campaign-planner.js";
-import { modelId } from "./scope-verdict.js";
+import { modelId, samePath } from "./scope-verdict.js";
 import type {
   AcceptanceAuthorLike,
   AcceptanceCheckBody,
@@ -433,13 +433,16 @@ export class AcceptanceAuthor implements AcceptanceAuthorLike {
     errors: readonly AcceptanceCompileError[],
     ctx: AcceptanceWriteContext,
   ): Promise<AcceptanceWriteResult> {
-    const posix = (path: string): string => path.replace(/\\/g, "/");
     const lines = file.source.split("\n");
     const methods = file.tests.map((test) => ({ test, ...methodLines(lines, test.testName) }));
     const placed = new Map<string, AcceptanceCompileError[]>();
     const unplaced: AcceptanceCompileError[] = [];
     for (const error of errors) {
-      if (posix(error.path) !== posix(file.path)) continue;
+      // The judge's own reading of which file an error is in (attributeRun):
+      // the editor reports an absolute path, or one in another case, and an
+      // exact match left such an error unrepaired while the judge charged it
+      // to this file as a check fault.
+      if (!samePath(error.path, file.path)) continue;
       const at = error.line === undefined ? -1 : error.line - 1;
       const hit = methods.find((m) => m.start >= 0 && at >= m.start && at <= m.end);
       if (hit) placed.set(hit.test.rid, [...(placed.get(hit.test.rid) ?? []), error]);

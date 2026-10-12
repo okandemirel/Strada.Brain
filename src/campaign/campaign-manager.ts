@@ -92,7 +92,27 @@ import type { Campaign, CampaignMilestone,
 } from "./types.js";
 import { buildCampaignStatus, type CampaignStatusSnapshot } from "./campaign-status.js";
 import { generateCampaignId } from "./types.js";
-import { DEFAULT_SCOPE_GATE_MODE, type AcceptanceAuthorLike, type AcceptanceSource, type AcceptanceSuiteRunner, type ScopeGateMode } from "./scope-types.js";
+import {
+  ACCEPTANCE_DIR,
+  DEFAULT_SCOPE_GATE_MODE,
+  type AcceptanceAuthorLike,
+  type AcceptanceCheckBody,
+  type AcceptanceSource,
+  type AcceptanceSuiteRunner,
+  type AcceptanceTestRef,
+  type AcceptanceWriteContext,
+  type AcceptanceWriteResult,
+  type AcceptanceWriter,
+  type CompletionGate,
+  type GateOutcome,
+  type GreenInput,
+  type GreenReason,
+  type Judgement,
+  type ReasonClass,
+  type RowResult,
+  type ScopeGateMode,
+  type WriterRepairs,
+} from "./scope-types.js";
 import {
   applyWaiver,
   campaignScopeBlock,
@@ -102,12 +122,46 @@ import {
   milestoneScopeReport,
   rejudgeCampaign,
   rowRef,
+  TEST_ROW_KINDS,
 } from "./scope-report.js";
 import type { RequirementLedger, RequirementRow } from "./scope-types.js";
 import { rowBlocks } from "./scope-report.js";
-import { closesByLedger } from "./scope-verdict.js";
+import { closesByLedger, judgeMilestone, legacyRunIntegrity, rowDecides, samePath, type ExpectedAcceptanceTest } from "./scope-verdict.js";
 import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
-import { acceptancePromptFor, promptedRequirementIds, rowsAwaitingPrompt } from "./acceptance-prompt.js";
+import type { RunIntegrity } from "../agents/autonomy/terminal-key.js";
+import { parseRunIntegrity, type TaskRunIntegrity } from "../tasks/test-verdict.js";
+import { acceptancePromptFor, promptedRequirementIds, rowsAwaitingPrompt, rowsJudgedFor } from "./acceptance-prompt.js";
+import { acceptanceWriteContext } from "./acceptance-author.js";
+import {
+  acceptanceFilePath,
+  harnessFaultOf,
+  materialize,
+  planAcceptanceAssembly,
+  removeEphemeral,
+  renderAcceptanceFile,
+  restoreAcceptance,
+} from "./acceptance-files.js";
+import {
+  acceptanceDisagreesWithReceipt,
+  measureAcceptance,
+  type AcceptanceBatch,
+  type AcceptanceGateDeps,
+  type AcceptanceMeasurement,
+} from "./acceptance-gate.js";
+import {
+  MAX_SCOPE_RESUBMITS,
+  endedOnOutage,
+  failsOnlyOnAcceptance,
+  infrastructureOnly,
+  nextScopeAction,
+  parseWorkerLines,
+  scopeBounceText,
+  scopeDeliveryProofs,
+  timeBoxSplit,
+  withoutScopeBlock,
+  writerFaultClass,
+  type ScopeDeliveryProofs,
+} from "./scope-settle.js";
 import {
   buildLedger,
   carryPromptedIds,
@@ -509,7 +563,10 @@ export function proofsSpanTwoRevisions(before: string, after: string): boolean {
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|unity_playmode_verify is not registered|the built player was never played to a verdict)/i;
+  // The scope gate's two (GDD-drift W09): a system check its writer could not
+  // make work after its repair budget is for a person, and a final acceptance
+  // run the system could not admit is missing tooling, not a broken game.
+  /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|unity_playmode_verify is not registered|the built player was never played to a verdict|system-written acceptance checks could not be made to work|the acceptance run was not admitted)/i;
 /**
  * Does this round's shortfall include a proof absent TOOLING explains? ANY
  * such proof counts: requiring all of them meant one game-shaped proof beside
@@ -521,6 +578,42 @@ export function hasUnmeasurableProof(missingProofs: readonly string[]): boolean 
 
 /** Self-revivals spent on a proof this machine cannot produce before asking a person. */
 const MAX_UNMEASURABLE_REVIVES = 2;
+
+/** Writer calls one milestone may spend repairing, rebinding or rewriting its system checks (GDD-drift W09). */
+const MAX_CHECK_REPAIRS_PER_MILESTONE = 2;
+/** Worker disputes one milestone may send to its checks' writer. */
+const MAX_DISPUTES_PER_MILESTONE = 3;
+
+/** Why a row has no usable system check this settle; never charged to the worker. */
+interface ScopeFault {
+  readonly reasonClass: ReasonClass;
+  readonly detail: string;
+}
+
+/** What writing a milestone's checks left: rows with no check, and rows the writer could not observe. */
+interface ScopeChecks {
+  readonly faults: ReadonlyMap<string, ScopeFault>;
+  /** Row id → what would make it observable, in the writer's words. */
+  readonly unbound: ReadonlyMap<string, string>;
+}
+
+/** One scope measurement and its verdict. */
+interface ScopeMeasurement {
+  readonly judgement: Judgement;
+  readonly input: GreenInput;
+  /** The revision results were bound to (`treeForClosure().forClosure`). */
+  readonly revision: string;
+  /** Failure messages by test name, for the bounce. */
+  readonly failures: ReadonlyMap<string, string>;
+}
+
+/** A row's current system test, if it has one. */
+function currentTestRef(row: RequirementRow): Extract<RequirementRow["checks"][number], { kind: "test" }> | undefined {
+  for (const check of row.checks) {
+    if (check.kind === "test" && check.supersededAtMs === undefined) return check;
+  }
+  return undefined;
+}
 /**
  * Self-revivals spent on an ORDINARY implementation failure: a sprint that ran
  * out of attempts with healthy providers and a real blocker ("Compile error
@@ -581,6 +674,12 @@ export function deliveryFailureKinds(flags: {
   queuedGaps: boolean;
   /** A platform the document asked for that no successful build named (L#10). */
   targetUnbuilt: boolean;
+  /** Scope gate (on): GDD rows still failing the system's checks at delivery. */
+  scopeRowsFailing?: boolean;
+  /** Scope gate (on): rows whose system check could not be made to work. */
+  scopeChecksFaulted?: boolean;
+  /** Scope gate (on): the final acceptance run was not admitted. */
+  scopeUnmeasured?: boolean;
 }): string[] {
   return Object.entries(flags)
     .filter(([, on]) => on === true)
@@ -3758,6 +3857,29 @@ export class CampaignManager {
         this.submitCurrentMilestone(campaign);
         return true;
       }
+      // A MILESTONE THAT OWNS GDD ROWS PARKS (scope gate on): its open rows are
+      // queued for later sprints and the ladder moves on, instead of the whole
+      // campaign stopping on one sprint that could not finish in time. The
+      // last milestone has no ladder to move on to, and keeps the stop below:
+      // its report names what is missing, and it revives.
+      const lastRung = campaign.currentMilestone >= campaign.milestones.length - 1;
+      const timeBoxRows = this.scopeDecides(campaign) && !lastRung ? this.scopeRowsOf(campaign, milestone) : [];
+      if (timeBoxRows.length > 0) {
+        milestone.timeBoxEscalations = 0;
+        milestone.startedAtMs = undefined;
+        const open = timeBoxRows.filter((r) => r.last?.outcome !== "pass");
+        const recorded = milestone.scopeVerdict?.green === false ? milestone.scopeVerdict.reasons : [];
+        const reasons: GreenReason[] = recorded.length > 0
+          ? recorded
+          : open.map((row) => ({
+              reasonClass: "red" as const,
+              code: "row-failing" as const,
+              detail: `${row.label ?? row.rid} is still open after ${hours}h past two time-box narrowings and ${milestone.attempts} attempts`,
+              rid: row.rid,
+            }));
+        await this.parkMilestone(campaign, milestone, reasons, `it overran its time box ${hours}h after two narrowings`);
+        return true;
+      }
       campaign.state = "failed";
       campaign.lastError = `${milestone.title} overran its time box after two narrowings and ${milestone.attempts} attempts`;
       // The same bounded recovery every other exhausted milestone gets: this
@@ -3788,11 +3910,23 @@ export class CampaignManager {
     // elapsed, escalation 1/2)" back to back — the first from before a revive
     // reset the budget, both read by the sprint as live instructions.
     milestone.prompt = stripTimeBoxDirectives(milestone.prompt);
-    milestone.prompt +=
-      `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
-      "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
-      "implement it end-to-end (code + bound visual + passing test), commit it, and report precisely what " +
-      "remains for a follow-up sprint. A smaller delivered increment beats another broad attempt.";
+    // THE REMAINDER IS COMPUTED, NOT REPORTED (scope gate on, the milestone
+    // owns GDD rows). "Report precisely what remains" asked the worker to
+    // decide what it had not done, and a measured milestone was time-boxed
+    // twice with no remainder anyone computed. Half of its open rows stay, in
+    // GDD order; the rest move to a sprint split off from it.
+    const split = this.scopeDecides(campaign) ? this.splitTimeBox(campaign, milestone, escalations + 1) : undefined;
+    milestone.prompt += split !== undefined
+      ? `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
+        "without landing green. NARROW THE SCOPE NOW: these GDD rows stay with this sprint — implement each end-to-end " +
+        "(code + bound visual + its acceptance check passing) and commit:\n" +
+        split.kept.map((row) => `- ${row.label ?? row.rid}: "${row.text.replace(/\s+/g, " ").trim().slice(0, 300)}"`).join("\n") +
+        (split.moved.length > 0 ? `\nThe other ${split.moved.length} open row(s) moved to **${split.into}**, which runs next; leave them.` : "") +
+        "\nA smaller delivered increment beats another broad attempt."
+      : `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
+        "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
+        "implement it end-to-end (code + bound visual + passing test), commit it, and report precisely what " +
+        "remains for a follow-up sprint. A smaller delivered increment beats another broad attempt.";
     this.persist(campaign);
     getLoggerSafe().warn("Milestone time-box exceeded — forcing scope narrowing", {
       id: campaign.id,
@@ -3870,14 +4004,30 @@ export class CampaignManager {
     // lineage task's last observed test run was RED, "completed" is not
     // green whatever the report's prose says. Audited 2026-08-29: the
     // campaign judged green from wording alone.
+    // THE LEDGER BEFORE THE VERDICT (GDD-drift W09). Built lazily — here, at
+    // the settle, and never at boot — and with it the add-only model pass a
+    // revive leaves owed. Off mode reads nothing.
+    if (this.scopeGateMode !== "off") {
+      const ledger = await this.ensureLedger(campaign);
+      if (ledger.changed) this.persist(campaign);
+    }
+    // THE SCOPE GATE DECIDES only when it is on and the campaign holds a
+    // readable ledger. Off, shadow, and a campaign the gate cannot read take
+    // every decision below exactly as before.
+    const scopeDecides = this.scopeDecides(campaign);
     if (status === TaskStatus.completed) {
       try {
         const latest = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
           : null;
-        const verdict = (latest as { verification?: { testsGreen?: boolean; detail: string } } | null)
-          ?.verification;
-        if (verdict?.testsGreen === false) {
+        const verdict = (latest as {
+          verification?: { testsGreen?: boolean; detail: string; failedTests?: readonly string[]; failedTestsOmitted?: number };
+        } | null)?.verification;
+        // A RUN RED ONLY ON THE SYSTEM'S OWN CHECKS is the scope gate's to
+        // judge: it measures those checks itself, on the committed tree. A
+        // mixed list, or one that left names out, is red as before.
+        const onlyAcceptance = scopeDecides && failsOnlyOnAcceptance(verdict?.failedTests, verdict?.failedTestsOmitted ?? 0);
+        if (verdict?.testsGreen === false && !onlyAcceptance) {
           getLoggerSafe().warn("Milestone completion rejected: last test run was red", {
             id: campaign.id,
             milestone: milestone.id,
@@ -3890,12 +4040,14 @@ export class CampaignManager {
         // verdict beside a fresh RED run record advanced a non-final sprint
         // (Codex 2026-09-11 B#14).
         const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
+        const runOnlyAcceptance =
+          scopeDecides && run.found && failsOnlyOnAcceptance(run.failedNames, (run.failed ?? 0) - (run.failedNames?.length ?? 0));
         // THE READER'S OWN VERDICT, not one of the counters it printed. This
         // asked only whether `failed > 0`, so a record the reader calls red
         // for any other reason — the runner's own "Failed" result, a runtime
         // exception, counts that do not add up, a suite that mostly never ran
         // — advanced the sprint as green (Codex 2026-09-12 V).
-        if (status === TaskStatus.completed && run.found && run.green === false) {
+        if (status === TaskStatus.completed && run.found && run.green === false && !runOnlyAcceptance) {
           getLoggerSafe().warn("Milestone completion rejected: the NUnit run record is red", {
             id: campaign.id,
             milestone: milestone.id,
@@ -3919,7 +4071,21 @@ export class CampaignManager {
       }
     }
 
-    if (status === TaskStatus.completed && isTerminalFailureReport(output)) {
+    // HOW THE RUN ENDED, AS DATA. With the gate deciding, the carried key
+    // replaces the prose: a stuck run is judged with its rows below (red
+    // unless independent checks proved its scope), and only a provider stop
+    // turns the settle into a failure here, for the outage path to resubmit
+    // uncharged. The prose stays a red input for a milestone that owns no
+    // rows. Everywhere else, today's line stands.
+    if (status === TaskStatus.completed && scopeDecides) {
+      if (endedOnOutage(this.tipIntegrity(milestone))) {
+        getLoggerSafe().warn("Milestone run ended on a provider outage — taking the outage path", {
+          id: campaign.id,
+          milestone: milestone.id,
+        });
+        status = TaskStatus.failed;
+      }
+    } else if (status === TaskStatus.completed && isTerminalFailureReport(output)) {
       getLoggerSafe().warn("Milestone task completed with a terminal failure report — treating as failed", {
         id: campaign.id,
         milestone: milestone.id,
@@ -3964,6 +4130,10 @@ export class CampaignManager {
       // (now preserved on lease-salvage/* branches, but still not on main).
       // That is how a campaign once ended with 282 dirty files and a corrupted
       // next-sprint seed. The envelope commits.
+      // THE SYSTEM'S CHECKS GO BACK FIRST (scope gate on): the envelope then
+      // commits the stored bytes, and the measurement below reads a clean
+      // tree. What differed is tamper, judged with the rows.
+      const scopeTamper = scopeDecides ? this.restoreCommittedAcceptance(campaign) : [];
       const commitNote = await this.commitMilestoneWork(campaign, milestone);
       // NO-WORK GATE: green with a clean tree AND no commits since the sprint
       // began is a sprint that changed nothing — audited 2026-08-29: the green
@@ -4024,7 +4194,10 @@ export class CampaignManager {
         this.submitCurrentMilestone(campaign, { countAttempt: false });
         return;
       }
-      milestone.status = "green";
+      // With the gate deciding, green is the verdict's to write (after the
+      // play-through below); the milestone stays running until then, and the
+      // rest of this record is kept as before.
+      if (!scopeDecides) milestone.status = "green";
       milestone.resultExcerpt = output.slice(-500);
       // THE GAP, OUT OF THE FULL OUTPUT. The excerpt keeps the last 500
       // characters, so a gap reported before a long report simply vanished
@@ -4047,6 +4220,15 @@ export class CampaignManager {
             ? "none-gate-spent"
             : "none-gate-not-demanded";
       } catch { /* evidence capture is best-effort */ }
+      // THE SCOPE GATE'S INPUTS FROM HERE (shadow and on, with a ledger): the
+      // four gates as this attempt left them — one whose bounce was spent and
+      // that still fails is recorded as failing, where it used to fall through
+      // to green — and the system's checks of the milestone's rows, written
+      // now when a row has none. Both land before the revision the proofs
+      // below are read on is taken, so the checks' own commit is not "the
+      // tree moved".
+      const scopeGates = this.scopeLedger(campaign) !== undefined ? this.completionGateOutcomes(milestone, commitNote, artGate) : undefined;
+      const scopeChecks = scopeGates !== undefined ? await this.ensureAcceptance(campaign, milestone) : undefined;
       try {
         const tip = milestone.taskId
           ? this.taskManager.findLatestLineageTask(milestone.taskId as TaskId)
@@ -4217,6 +4399,24 @@ export class CampaignManager {
       const playthrough = this.measurePlaythrough(milestone);
       milestone.playthroughVerdict = playthrough;
       const playthroughMissing = isLast && (playthrough === undefined || !playthrough.found || playthrough.ok !== true);
+      // THE SCOPE VERDICT (GDD-drift W09): the milestone's own GDD rows and
+      // every row that passed before, run in one admitted acceptance run on
+      // the committed revision, judged with how the run ended. Shadow records
+      // the verdict and decides nothing; on, it decides green here.
+      let scopeVerdict: ScopeMeasurement | undefined;
+      if (scopeGates !== undefined) {
+        scopeVerdict = await this.measureScope(campaign, milestone, {
+          gates: scopeGates,
+          compile,
+          tamper: scopeTamper,
+          checks: scopeChecks,
+          output,
+        });
+        if (scopeDecides && scopeVerdict !== undefined) {
+          const applied = await this.applyScopeVerdict(campaign, milestone, scopeVerdict, { isLast, output });
+          if (applied === "settled") return;
+        }
+      }
       // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
       // 2026-09-10. Each is now answered from the play-through's timing or
@@ -4298,6 +4498,7 @@ export class CampaignManager {
       // What is missing, in words — for the bounce, the NOT DELIVERED report
       // and the stored milestone. Empty when everything stands.
       const missingProofs: string[] = [];
+      const scopeProofs = isLast && scopeDecides ? this.scopeDeliveryProofsOf(campaign, scopeVerdict) : undefined;
       if (isLast) {
         if (treeMovedMidGate) {
           missingProofs.push(
@@ -4377,6 +4578,12 @@ export class CampaignManager {
             + "until a fresh audit re-establishes them",
           );
         }
+        // THE SCOPE GATE'S OWN PROOFS (on): this milestone's rows when it was
+        // parked and fell through to here, every row whose system check could
+        // not be made to work, and a final run the system could not admit.
+        // Pushed after the bounce flags: a parked milestone's budget is spent,
+        // so these end the round as NOT DELIVERED rather than bounce again.
+        if (scopeProofs !== undefined) for (const proof of scopeProofs.proofs) missingProofs.push(proof);
         if (claims?.refusal) missingProofs.push(claims.refusal.slice(0, 220));
         for (const perTarget of perTargetClaims) missingProofs.push(perTarget.slice(0, 220));
         milestone.deliveryProofsMissing = missingProofs;
@@ -4416,6 +4623,9 @@ export class CampaignManager {
           // platform was the only failure and the kinds list came back empty,
           // so the budget fell back to prose (Codex 2026-09-11 L#10).
           targetUnbuilt: unbuiltTargets.length > 0,
+          scopeRowsFailing: scopeProofs?.rowsFailing === true,
+          scopeChecksFaulted: scopeProofs?.checksFaulted === true,
+          scopeUnmeasured: scopeProofs?.unmeasured === true,
         });
       }
       if (isLast && deliveryProofMissing && deliveryBouncesSpent < this.maxMilestoneAttempts) {
@@ -4747,12 +4957,14 @@ export class CampaignManager {
         ];
         if (scheduled.length > 0) {
           const remediationCount = scheduled.length;
-          milestone.status = "green";
+          // With the gate deciding, only its green verdict got here as green: a
+          // parked milestone stays failed while its rows are repaired.
+          milestone.status = scopeDecides && milestone.parked !== undefined ? "failed" : "green";
           this.scheduleBeforeFinal(campaign, scheduled);
           this.persist(campaign);
           await this.tell(
             campaign,
-            `✅ ${milestone.title} — green.${commitNote}\n⚠️ ${remediationCount} gap${remediationCount === 1 ? "" : "s"} between the GDD and what is delivered — appending ` +
+            `${milestone.status === "green" ? `✅ ${milestone.title} — green.` : `⏸️ ${milestone.title} — PARKED: its GDD rows did not pass.`}${commitNote}\n⚠️ ${remediationCount} gap${remediationCount === 1 ? "" : "s"} between the GDD and what is delivered — appending ` +
               `${scheduled.map((m) => `**${m.title}**`).join(", ")} before delivery.`,
           );
           const id = campaign.id;
@@ -4820,6 +5032,20 @@ export class CampaignManager {
         // look check, this one is mechanical: no enabled scene, or none whose
         // file can be read and holds anything.
         const noEntryScene = milestone.sceneHygieneUnresolved;
+        // THE REVIEW IS A GATE (scope gate on): asked before the decision, and
+        // only while nothing else holds delivery, so a row it reopens or adds
+        // goes down the same budget path as every other missing proof. A
+        // reviewer that cannot run never blocks. Asked once per round: the
+        // after-the-fact calls below are skipped when it ran here.
+        let reviewedThisRound = false;
+        let reviewReopened = 0;
+        if (scopeDecides && milestone.structureRefused !== true && !compileBroken && noEntryScene === undefined && missingProofs.length === 0) {
+          reviewedThisRound = true;
+          reviewReopened = await this.reviewAsGate(campaign);
+          if (reviewReopened > 0) {
+            missingProofs.push(`the independent review reopened or added ${reviewReopened} GDD row(s) that no check has passed yet`);
+          }
+        }
         if (milestone.structureRefused === true || compileBroken || noEntryScene !== undefined || missingProofs.length > 0) {
           campaign.state = "failed";
           campaign.lastError = compileBroken
@@ -4848,7 +5074,7 @@ export class CampaignManager {
             campaign.deliveryReported = false;
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
-            await this.gatherIndependentReview(campaign);
+            if (!reviewedThisRound) await this.gatherIndependentReview(campaign);
             // …and only a LOST notice: a report that landed was sent again,
             // in full, after the next restart (audit 2026-10-11, campaign#3).
             if (await this.tell(
@@ -4897,6 +5123,7 @@ export class CampaignManager {
               // campaign repeating it would have charged the budget under
               // whatever else was missing (Codex 2026-09-12 U).
               ...(unclosedAtGate.length > 0 ? ["unclosedGaps"] : []),
+              ...(reviewReopened > 0 ? ["reviewReopened"] : []),
             ]),
           ].sort();
           milestone.deliveryFailureKinds = kinds;
@@ -4923,7 +5150,7 @@ export class CampaignManager {
             campaign.deliveryReported = false;
             this.persist(campaign);
             this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
-            await this.gatherIndependentReview(campaign);
+            if (!reviewedThisRound) await this.gatherIndependentReview(campaign);
             if (await this.tell(
               campaign,
               `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
@@ -4940,7 +5167,7 @@ export class CampaignManager {
           campaign.autoReviveAt = Date.now() + resumeMs;
           this.persist(campaign);
           this.cancelLiveLineages(campaign, "campaign stopped short of delivery", { recoverable: true });
-          await this.gatherIndependentReview(campaign);
+          if (!reviewedThisRound) await this.gatherIndependentReview(campaign);
           await this.tell(
             campaign,
             `${this.buildDeliveryReport(campaign)}${commitNote}\n\n` +
@@ -4991,7 +5218,7 @@ export class CampaignManager {
           return;
         }
         this.cancelLiveLineages(campaign, "campaign delivered");
-        await this.gatherIndependentReview(campaign);
+        if (!reviewedThisRound) await this.gatherIndependentReview(campaign);
         // …AND THE REVIEWER'S AWAIT IS ANOTHER WINDOW. A person can revive the
         // campaign while the independent opinion is being gathered: the row
         // moves to a new generation, and this handler still announced the old
@@ -5062,12 +5289,25 @@ export class CampaignManager {
     // `blocked:provider_unavailable`, and that branch charged it (measured
     // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
     // accounts were on quota walls).
-    const outageCaused = isOutageCausedSettle(
+    let outageCaused = isOutageCausedSettle(
       output,
       allProvidersCoolingDownMs(),
       msSinceNewestProviderFailure(),
       providerFailuresSince(milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0),
     );
+    // HOW THE RUN ENDED, AS DATA (scope gate on): a run whose carried key is
+    // the provider's is an outage whatever its output says; a run that ended
+    // only on the machinery — the node bridge threw, or the lease commit was
+    // lost and the work never reached the project — measured nothing about
+    // the work, and gets one uncharged resubmit before the budget applies.
+    const keyedOutage = this.scopeGateMode === "on" && endedOnOutage(this.tipIntegrity(milestone));
+    if (this.scopeGateMode === "on" && !outageCaused && !shutdownCaused) {
+      if (keyedOutage) outageCaused = true;
+      else if (this.endedOnMachinery(milestone, output) && (milestone.scopeResubmits ?? 0) < MAX_SCOPE_RESUBMITS) {
+        milestone.scopeResubmits = (milestone.scopeResubmits ?? 0) + 1;
+        outageCaused = true;
+      }
+    }
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing: the executor aborts in-flight runs with "shutting down" and the
     // work done so far is kept. Charging it ended a campaign on a routine
@@ -5190,6 +5430,7 @@ export class CampaignManager {
         msSinceNewestProviderFailure(),
         providerFailuresSince(milestone.attemptStartedAtMs ?? milestone.startedAtMs ?? 0),
       )
+      || keyedOutage
     ) {
       const delayMs = Math.max(outageWaitMs, 60_000) + 60_000;
       campaign.autoReviveAt = Date.now() + delayMs;
@@ -5218,7 +5459,9 @@ export class CampaignManager {
       // sprint (Codex 2026-09-11 C#1).
       status !== TaskStatus.cancelled &&
       plannedMilestones.length > 0 &&
-      plannedMilestones.every((m) => m.status === "green")
+      // A PARKED milestone is settled (scope gate on): its rows are queued, and
+      // delivery stays held by them, not by the milestone's status.
+      plannedMilestones.every((m) => m.status === "green" || (this.scopeGateMode === "on" && m.parked !== undefined))
     ) {
       // The remediation may have changed the game since the last sprint's
       // proofs — and it was never played, built or measured itself. Ending
@@ -5457,6 +5700,913 @@ export class CampaignManager {
       campaign.deliveryReported = true;
       this.persist(campaign);
     }
+  }
+
+  // ===========================================================================
+  // THE SCOPE GATE'S SETTLE PATH (GDD-drift plan W09)
+  // ===========================================================================
+
+  /** The ledger the scope gate reads: the gate not off, and the ledger readable (an unreadable one is not an empty one). */
+  private scopeLedger(campaign: Campaign): RequirementLedger | undefined {
+    if (this.scopeGateMode === "off" || campaign.requirementsUnreadable === true) return undefined;
+    return campaign.requirements;
+  }
+
+  /** Whether the verdict decides this campaign's greens: the gate on, with a readable ledger. */
+  private scopeDecides(campaign: Campaign): boolean {
+    return this.scopeGateMode === "on" && this.scopeLedger(campaign) !== undefined;
+  }
+
+  /**
+   * The rows a milestone is judged on and its checks are written for: the rows
+   * it owns or lists, and for a coverage sprint the rows it carries — decided
+   * by a test, and not taken out of judgement. GDD numbers measured at
+   * delivery (claims) are the delivery gate's.
+   */
+  private scopeRowsOf(campaign: Campaign, milestone: CampaignMilestone): RequirementRow[] {
+    const ledger = this.scopeLedger(campaign);
+    if (ledger === undefined) return [];
+    const rows = [...rowsJudgedFor(ledger, milestone), ...(milestone.id.startsWith("mcov") ? rowsCarriedBy(ledger, milestone) : [])];
+    const seen = new Set<string>();
+    return rows.filter((row) => {
+      if (seen.has(row.rid) || !rowDecides(row) || !TEST_ROW_KINDS.has(row.kind)) return false;
+      seen.add(row.rid);
+      return true;
+    });
+  }
+
+  /**
+   * Rows that passed before and must still pass: owned by another milestone,
+   * with a check, and either passing now or owned by a milestone the gate
+   * judged green — a regression stays a regression after the run that found it.
+   */
+  private regressionRowsFor(campaign: Campaign, ownIds: ReadonlySet<string>): RequirementRow[] {
+    const ledger = this.scopeLedger(campaign);
+    if (ledger === undefined) return [];
+    const provenGreen = new Set(campaign.milestones.filter((m) => m.scopeVerdict?.green === true && m.status === "green").map((m) => m.id));
+    return ledger.rows.filter(
+      (row) =>
+        !ownIds.has(row.rid) &&
+        rowDecides(row) &&
+        TEST_ROW_KINDS.has(row.kind) &&
+        currentTestRef(row) !== undefined &&
+        (row.status === "passing" || (row.owner !== undefined && provenGreen.has(row.owner))),
+    );
+  }
+
+  /** How the milestone's latest run ended: the key it carried, else the system's own stamps in its result. */
+  private tipIntegrity(milestone: CampaignMilestone): TaskRunIntegrity | undefined {
+    if (!milestone.taskId) return undefined;
+    try {
+      const tip = this.taskManager.findLatestLineageTask(milestone.taskId as TaskId) as
+        | { result?: string | null; verification?: { runIntegrity?: unknown } | null }
+        | null
+        | undefined;
+      if (!tip) return undefined;
+      return parseRunIntegrity(tip.verification?.runIntegrity) ?? legacyRunIntegrity(tip.result ?? undefined, systemStampsIn);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The run ended on the machinery alone: the runtime threw around it, or its work never reached the project. */
+  private endedOnMachinery(milestone: CampaignMilestone, output: string): boolean {
+    let integrity: TaskRunIntegrity | undefined;
+    try {
+      const tip = milestone.taskId
+        ? (this.taskManager.findLatestLineageTask(milestone.taskId as TaskId) as { verification?: { runIntegrity?: unknown } | null } | null)
+        : null;
+      integrity = parseRunIntegrity(tip?.verification?.runIntegrity);
+    } catch {
+      integrity = undefined;
+    }
+    return infrastructureOnly(integrity, output);
+  }
+
+  /**
+   * Every model that worked on the milestone, across its lineages: a check's
+   * writer is independent only of all of them, not just the latest run's.
+   */
+  private milestoneWorkerModels(milestone: CampaignMilestone): string[] {
+    const models = new Set<string>();
+    for (const root of new Set([...(milestone.taskIds ?? []), ...(milestone.taskId ? [milestone.taskId] : [])])) {
+      try {
+        const tip = this.taskManager.findLatestLineageTask(root as TaskId) as { verification?: { runIntegrity?: unknown } | null } | null;
+        for (const model of parseRunIntegrity(tip?.verification?.runIntegrity)?.workerModels ?? []) {
+          if (model.trim() !== "") models.add(model);
+        }
+      } catch {
+        // An unreadable lineage names no model; the writer then cannot claim independence of it either.
+      }
+    }
+    return [...models];
+  }
+
+  /**
+   * The four completion gates as this attempt left them. Reached only past
+   * their bounces, so a gate that still fails here had its one bounce spent.
+   */
+  private completionGateOutcomes(milestone: CampaignMilestone, commitNote: string, artGate: string | undefined): Record<CompletionGate, GateOutcome> {
+    const gates: Partial<Record<CompletionGate, GateOutcome>> = {};
+    if (milestone.visualEvidence === "observed") gates.visualEvidence = "pass";
+    else if (milestone.visualEvidence === "none-gate-not-demanded") gates.visualEvidence = "not-armed";
+    else if (milestone.visualEvidence === "none-gate-spent") gates.visualEvidence = "fail";
+    gates.noWork = commitNote !== "" || this.repoChangedSince(milestone) ? "pass" : "fail";
+    gates.art = artGate === undefined ? "pass" : "fail";
+    gates.prosOnly = this.changedOnlyProse(milestone) ? "fail" : "pass";
+    // A capture scan that threw records nothing, which the judge reads as not passed.
+    return gates as Record<CompletionGate, GateOutcome>;
+  }
+
+  /** The stored test that is a row's current check, when its file holds it. */
+  private storedTestOf(row: RequirementRow, sources: readonly AcceptanceSource[]): { test: AcceptanceTestRef; file: AcceptanceSource } | undefined {
+    const current = currentTestRef(row);
+    if (current === undefined) return undefined;
+    const file = sources.find((s) => s.path === current.path);
+    const test = file?.tests.find((t) => t.rid === row.rid && t.testName === current.testName);
+    return file && test ? { test, file } : undefined;
+  }
+
+  /**
+   * The system's checks of a milestone's rows, written where a row has none
+   * (GDD-drift W09 step 5). The writer sees the rows' own words, the harness
+   * and the public surface — never the workers' code, tests or reports — and
+   * is a model that did not work on the milestone when one is healthy. On,
+   * the files are committed as the system's own commit; in shadow nothing is
+   * written into the project until the run takes them in and out again.
+   */
+  private async ensureAcceptance(campaign: Campaign, milestone: CampaignMilestone): Promise<ScopeChecks> {
+    const checks = await this.writeMissingChecks(campaign, milestone);
+    // ON, THE PROJECT HOLDS EXACTLY THE STORED CHECKS, COMMITTED — also when
+    // nothing new was written: checks stored while the gate ran in shadow
+    // were never committed, and a measurement of committed checks would read
+    // their absence as tamper.
+    if (this.scopeGateMode === "on" && this.scopeRowsOf(campaign, milestone).length > 0) await this.commitAcceptance(campaign, milestone);
+    return checks;
+  }
+
+  private async writeMissingChecks(campaign: Campaign, milestone: CampaignMilestone): Promise<ScopeChecks> {
+    const faults = new Map<string, ScopeFault>();
+    const unbound = new Map<string, string>();
+    const rows = this.scopeRowsOf(campaign, milestone);
+    if (rows.length === 0) return { faults, unbound };
+    const stored = this.acceptanceSourcesOf(campaign);
+    if (stored.error !== undefined) {
+      for (const row of rows) faults.set(row.rid, { reasonClass: "unmeasurable", detail: `the stored acceptance checks could not be read: ${stored.error}` });
+      return { faults, unbound };
+    }
+    const needing = rows.filter((row) => this.storedTestOf(row, stored.sources)?.test.check === undefined);
+    if (needing.length === 0) return { faults, unbound };
+    const author = this.acceptanceAuthor;
+    if (author === null) {
+      for (const row of needing) faults.set(row.rid, { reasonClass: "unmeasurable", detail: "no acceptance test writer is configured, so no system check could be written" });
+      return { faults, unbound };
+    }
+    let written: AcceptanceWriteResult;
+    try {
+      written = await author.write(needing, acceptanceWriteContext(this.projectRoot, milestone.id, needing, this.milestoneWorkerModels(milestone)));
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      for (const row of needing) faults.set(row.rid, { reasonClass: "unmeasurable", detail: `the acceptance test writer failed: ${why.slice(0, 200)}` });
+      return { faults, unbound };
+    }
+    for (const fault of written.faulted) {
+      faults.set(fault.rid, {
+        reasonClass: writerFaultClass(fault.cause),
+        detail: `its system check could not be written (${fault.cause})${fault.problems.length > 0 ? `: ${fault.problems.slice(0, 3).join("; ")}` : ""}`.slice(0, 400),
+      });
+    }
+    for (const item of written.unbound) unbound.set(item.rid, item.missingObservable);
+    const answered = new Set([...written.checks.map((c) => c.rid), ...written.unbound.map((u) => u.rid), ...faults.keys()]);
+    for (const row of needing) {
+      if (!answered.has(row.rid)) faults.set(row.rid, { reasonClass: "check-fault", detail: "the test writer returned nothing for this row" });
+    }
+    await this.storeChecks(campaign, milestone, new Map(needing.map((r) => [r.rid, r] as const)), written, faults);
+    if (written.disclosure) {
+      getLoggerSafe().warn("Acceptance checks written without an independent writer", { id: campaign.id, milestone: milestone.id, disclosure: written.disclosure });
+    }
+    return { faults, unbound };
+  }
+
+  /**
+   * Render every file a write touched again — each holds all of its
+   * milestone's checks, so the checks already in it are carried from their
+   * stored bodies — store it, point the rows at their new tests, and in on
+   * mode write the folder and commit it. Returns whether anything changed.
+   */
+  private async storeChecks(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    rowsById: ReadonlyMap<string, RequirementRow>,
+    written: AcceptanceWriteResult,
+    faults: Map<string, ScopeFault>,
+  ): Promise<boolean> {
+    const ledger = campaign.requirements;
+    if (ledger === undefined || written.checks.length === 0) return false;
+    let stored: AcceptanceSource[];
+    try {
+      stored = this.storage.listAcceptance(campaign.id);
+    } catch (err) {
+      for (const check of written.checks) faults.set(check.rid, { reasonClass: "unmeasurable", detail: `the stored acceptance checks could not be read: ${err instanceof Error ? err.message : String(err)}` });
+      return false;
+    }
+    const groups = new Map<string, AcceptanceCheckBody[]>();
+    for (const check of written.checks) {
+      const row = rowsById.get(check.rid);
+      if (row === undefined) continue;
+      const owner = row.owner ?? milestone.id;
+      groups.set(owner, [...(groups.get(owner) ?? []), check]);
+    }
+    const atMs = Date.now();
+    const newRefs = new Map<string, Extract<RequirementRow["checks"][number], { kind: "test" }>>();
+    for (const [owner, checks] of groups) {
+      const path = acceptanceFilePath(owner);
+      const existing = stored.find((s) => s.path === path);
+      const fileWriter = existing?.writer ?? written.writer;
+      if (fileWriter === undefined) {
+        for (const check of checks) faults.set(check.rid, { reasonClass: "check-fault", detail: "the test writer's answer names no model, so its check cannot be recorded" });
+        continue;
+      }
+      const inputs = new Map<string, { row: RequirementRow; check: AcceptanceCheckBody; writer?: AcceptanceWriter }>();
+      for (const test of existing?.tests ?? []) {
+        const row = ledger.rows.find((r) => r.rid === test.rid);
+        if (row === undefined || test.check === undefined || !rowDecides(row)) continue;
+        inputs.set(test.rid, { row, check: test.check, ...(test.writer ? { writer: test.writer } : {}) });
+      }
+      for (const check of checks) {
+        inputs.set(check.rid, { row: rowsById.get(check.rid)!, check, ...(written.writer ? { writer: written.writer } : {}) });
+      }
+      let rendered: ReturnType<typeof renderAcceptanceFile>;
+      try {
+        rendered = renderAcceptanceFile(owner, [...inputs.values()].map(({ row, check }) => ({ row, check })));
+      } catch (err) {
+        for (const check of checks) {
+          faults.set(check.rid, { reasonClass: "check-fault", detail: `its check could not be rendered: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}` });
+        }
+        continue;
+      }
+      const sameWriter = (a: AcceptanceWriter | undefined): boolean =>
+        a === undefined || (a.provider === fileWriter.provider && a.model === fileWriter.model && a.independence === fileWriter.independence);
+      const tests: AcceptanceTestRef[] = rendered.tests.map((t) => {
+        const input = inputs.get(t.rid)!;
+        return { ...t, check: input.check, ...(sameWriter(input.writer) ? {} : { writer: input.writer }) };
+      });
+      const source: AcceptanceSource = {
+        milestoneId: owner,
+        path: rendered.path,
+        sha256: rendered.sha256,
+        source: rendered.source,
+        writer: fileWriter,
+        revisions: (existing?.revisions ?? 0) + 1,
+        tests,
+      };
+      try {
+        this.storage.putAcceptance(campaign.id, source, atMs);
+      } catch (err) {
+        for (const check of checks) faults.set(check.rid, { reasonClass: "check-fault", detail: `its check could not be stored: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}` });
+        continue;
+      }
+      for (const check of checks) {
+        const test = tests.find((t) => t.rid === check.rid);
+        if (test) newRefs.set(check.rid, { kind: "test", testName: test.testName, path: rendered.path, bodySha: test.bodySha });
+      }
+      const owning = campaign.milestones.find((m) => m.id === owner);
+      if (owning !== undefined) owning.acceptanceFile = rendered.path;
+    }
+    if (newRefs.size === 0) return false;
+    campaign.requirements = {
+      ...ledger,
+      rows: ledger.rows.map((row) => {
+        const ref = newRefs.get(row.rid);
+        if (ref === undefined) return row;
+        const kept = row.checks.map((c) =>
+          c.kind === "test" && c.supersededAtMs === undefined && (c.testName !== ref.testName || c.path !== ref.path || c.bodySha !== ref.bodySha)
+            ? { ...c, supersededAtMs: atMs }
+            : c,
+        );
+        const has = kept.some((c) => c.kind === "test" && c.supersededAtMs === undefined && c.bodySha === ref.bodySha && c.testName === ref.testName);
+        return { ...row, checks: has ? kept : [...kept, ref] };
+      }),
+    };
+    this.persist(campaign);
+    return true;
+  }
+
+  /**
+   * On: the folder holds exactly the stored checks and the harness, committed
+   * as `campaign: acceptance checks for <id> (system-owned)` — a subject the
+   * lease's system-owned rule already reads as the system's. Only the folder
+   * is committed, and never between the measurement and the gate.
+   */
+  private async commitAcceptance(campaign: Campaign, milestone: CampaignMilestone): Promise<void> {
+    const git = (args: string[], timeoutMs = 120_000): string =>
+      execFileSync("git", ["-C", this.projectRoot, ...args], { encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+    let sources: AcceptanceSource[];
+    try {
+      sources = this.storage.listAcceptance(campaign.id);
+    } catch (err) {
+      getLoggerSafe().warn("Acceptance checks not committed — the stored checks could not be read", { id: campaign.id, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
+    const lock = await acquireProjectWriteLock(this.projectRoot, { timeoutMs: this.projectLockTimeoutMs });
+    if (!lock.acquired) {
+      getLoggerSafe().warn("Acceptance checks not committed — the project write lock could not be taken", { id: campaign.id, milestone: milestone.id });
+      return;
+    }
+    try {
+      materialize(this.projectRoot, sources, "committed");
+      try {
+        git(["rev-parse", "--is-inside-work-tree"], 10_000);
+      } catch {
+        return;
+      }
+      const paths = [ACCEPTANCE_DIR, `${ACCEPTANCE_DIR}.meta`];
+      git(["add", "-A", "--", ...paths]);
+      if (git(["diff", "--cached", "--name-only", "--", ...paths], 60_000).trim() === "") return;
+      git([
+        "commit",
+        "-m",
+        `campaign: acceptance checks for ${milestone.id} (system-owned)`,
+        "-m",
+        `Campaign ${campaign.id}. The system's own checks of the milestone's GDD rows, written from the approved GDD; restored from the stored bytes before every commit and measurement.`,
+        "--",
+        ...paths,
+      ]);
+    } catch (err) {
+      getLoggerSafe().warn("Acceptance checks could not be committed", {
+        id: campaign.id,
+        milestone: milestone.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * On, before the envelope commit: the stored checks over whatever the folder
+   * holds, so the commit and the measurement both see the system's bytes. What
+   * differed — and any worker file outside the folder that could answer for a
+   * check — is returned as tamper. Nothing is written for a campaign that has
+   * no committed checks yet: that first write is the checks' own commit.
+   */
+  private restoreCommittedAcceptance(campaign: Campaign): string[] {
+    const stored = this.acceptanceSourcesOf(campaign);
+    if (stored.error !== undefined || stored.sources.length === 0) return [];
+    // Checks stored while the gate ran in shadow were never committed: their
+    // absence is not tamper. The checks' own commit writes them.
+    let committed: boolean;
+    try {
+      committed = execFileSync("git", ["-C", this.projectRoot, "ls-files", "--", ACCEPTANCE_DIR], { encoding: "utf8", timeout: 20_000 }).trim() !== "";
+    } catch {
+      committed = existsSync(join(this.projectRoot, ...ACCEPTANCE_DIR.split("/")));
+    }
+    if (!committed) return [];
+    try {
+      return restoreAcceptance(this.projectRoot, stored.sources, "committed").tamper;
+    } catch (err) {
+      getLoggerSafe().warn("The acceptance checks could not be restored before the milestone commit", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  /** One filtered acceptance batch under a ticket this campaign issued, read back and bound to that run. */
+  private async acceptanceBatch(campaign: Campaign, milestone: CampaignMilestone, testFilter: string): Promise<AcceptanceBatch> {
+    const runner = this.runAcceptanceSuite;
+    if (runner === undefined) throw new Error("no acceptance runner is configured");
+    const since = Date.now();
+    let decision: EvidenceDecision | undefined;
+    let ticketRunId: string | undefined;
+    let content: string | undefined;
+    await this.underTicket(
+      campaign,
+      milestone,
+      { kind: "playmode-suite", medium: "editor" },
+      async (runId) => {
+        ticketRunId = runId;
+        const out = await runner(this.projectRoot, runId, { testFilter });
+        content = out?.content ?? out?.detail;
+        return { value: undefined, ...(out?.receipt === undefined ? {} : { receipt: out.receipt }) };
+      },
+      (d) => {
+        decision = d;
+      },
+    );
+    const record = readPlaymodeRun(this.projectRoot, since - 1000, ticketRunId);
+    const refusedProof = this.refusedProof(decision, "acceptance run");
+    const bound =
+      refusedProof !== undefined
+        ? refusedProof
+        : decision?.admitted === true
+          ? acceptanceDisagreesWithReceipt(decision.record.payload, record, testFilter)
+          : record.found && record.runId !== ticketRunId
+            ? "the acceptance record does not carry the run id the campaign issued for this run"
+            : undefined;
+    return {
+      ...(ticketRunId === undefined ? {} : { runId: ticketRunId }),
+      record,
+      ...(content === undefined ? {} : { content }),
+      ...(bound === undefined ? {} : { refused: { kind: "foreign-record" as const, detail: bound } }),
+    };
+  }
+
+  /**
+   * Measure and judge (GDD-drift W09 step 6): the milestone's rows and the
+   * rows that passed before, in one acceptance run on the committed revision,
+   * results bound to `treeForClosure().forClosure` — the revision the delivery
+   * gate's closure reads — and the judge's input stored whole with its
+   * verdict. A check the system got wrong is repaired once by its writer and
+   * measured again in the same settle.
+   */
+  private async measureScope(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    ctx: {
+      gates: Record<CompletionGate, GateOutcome>;
+      compile: CompileVerdict;
+      tamper: readonly string[];
+      checks: ScopeChecks | undefined;
+      output: string;
+      repaired?: boolean;
+    },
+  ): Promise<ScopeMeasurement> {
+    const own = this.scopeRowsOf(campaign, milestone);
+    const ownIds = new Set(own.map((r) => r.rid));
+    const regression = this.regressionRowsFor(campaign, ownIds);
+    const stored = this.acceptanceSourcesOf(campaign);
+    const faults = ctx.checks?.faults ?? new Map<string, ScopeFault>();
+    const expected: ExpectedAcceptanceTest[] = [];
+    const testOf = new Map<string, string>();
+    const compiledBefore = new Set<string>();
+    for (const row of [...own, ...regression]) {
+      if (faults.has(row.rid)) continue;
+      const found = this.storedTestOf(row, stored.sources);
+      if (found === undefined) continue;
+      expected.push({ testName: found.test.testName, path: found.file.path });
+      testOf.set(row.rid, found.test.testName);
+      const last = row.last?.outcome;
+      if (row.last?.compiledBefore === true || last === "pass" || last === "fail" || last === "flaky") compiledBefore.add(found.test.testName);
+    }
+    let measured: AcceptanceMeasurement | undefined;
+    if (expected.length > 0) {
+      measured = stored.error !== undefined
+        ? undefined
+        : await measureAcceptance(this.acceptanceGateDeps(campaign, milestone), {
+            sources: stored.sources,
+            expected,
+            mode: this.scopeGateMode === "on" ? "committed" : "ephemeral",
+            compiledBefore,
+          });
+    }
+    const revision = measured?.run.revision || this.treeForClosure().forClosure;
+    const atMs = Date.now();
+    const failures = new Map((measured?.run.failures ?? []).map((f) => [f.name.trim(), f.message] as const));
+    const results: Record<string, RowResult> = {};
+    for (const row of [...own, ...regression]) {
+      const fault = faults.get(row.rid);
+      if (fault !== undefined) {
+        results[row.rid] = { revision, atMs, outcome: fault.reasonClass === "check-fault" ? "check-fault" : "unmeasured", detail: fault.detail };
+        continue;
+      }
+      const testName = testOf.get(row.rid);
+      if (testName === undefined) continue;
+      if (stored.error !== undefined) {
+        results[row.rid] = { revision, atMs, outcome: "unmeasured", detail: `the stored acceptance checks could not be read: ${stored.error}` };
+        continue;
+      }
+      const attributed = measured?.tests[testName];
+      if (attributed === undefined) continue;
+      let outcome = attributed.outcome;
+      let detail = attributed.detail;
+      // THE HARNESS SAYS WHOSE FAULT IT IS: a check that bound to a service
+      // the game does not register is the check's; input the project cannot
+      // receive is unmeasured here. A scene, a boot or a driver that is not
+      // there is the game's, and stays a fail.
+      if (outcome === "fail") {
+        const harness = harnessFaultOf(failures.get(testName) ?? detail);
+        if (harness === "no-service") {
+          outcome = "check-fault";
+          detail = `its check bound to something the game does not register: ${detail}`;
+        } else if (harness === "no-input-route") {
+          outcome = "unmeasured";
+          detail = `input cannot be injected into this project, so the check could not act: ${detail}`;
+        }
+      }
+      results[row.rid] = {
+        revision,
+        ...(measured?.run.runId === undefined ? {} : { runId: measured.run.runId }),
+        atMs,
+        outcome,
+        detail,
+        ...(attributed.compiledBefore === undefined ? {} : { compiledBefore: attributed.compiledBefore }),
+      };
+    }
+    // Asked once: a row the previous verdict already named as unobservable is the game's now.
+    const asked = new Set((milestone.scopeVerdict?.reasons ?? []).filter((r) => r.code === "row-unbound" && r.rid !== undefined).map((r) => r.rid!));
+    const unbound: Record<string, { missingObservable: string; told: boolean }> = {};
+    for (const [rid, missingObservable] of ctx.checks?.unbound ?? []) {
+      if (ownIds.has(rid)) unbound[rid] = { missingObservable, told: asked.has(rid) };
+    }
+    const relevant = new Set([...own, ...regression].map((r) => r.rid));
+    const integrity = this.tipIntegrity(milestone);
+    const input: GreenInput = {
+      milestoneId: milestone.id,
+      mode: this.scopeGateMode,
+      revision,
+      compile: {
+        ran: ctx.compile.ran,
+        ok: ctx.compile.ran && ctx.compile.ok && ctx.compile.refused === undefined,
+        ...(ctx.compile.refused ?? ctx.compile.detail ? { detail: ctx.compile.refused ?? ctx.compile.detail } : {}),
+      },
+      tamper: [...ctx.tamper],
+      own,
+      regression,
+      results,
+      ...(measured === undefined ? {} : { run: measured.run }),
+      // Who wrote each check, not its bytes: the judge reads writers, and the
+      // stored verdict stays small enough to keep one per settle.
+      sources: stored.sources.filter((s) => s.tests.some((t) => relevant.has(t.rid))).map((s) => ({ ...s, source: "" })),
+      integrity: integrity as RunIntegrity,
+      gates: ctx.gates,
+      proseFailure: isTerminalFailureReport(ctx.output, { systemStamps: true }),
+      ...(Object.keys(unbound).length > 0 ? { unbound } : {}),
+    };
+    const judgement = judgeMilestone(input);
+    if (!judgement.green && ctx.repaired !== true) {
+      const rewrote = await this.repairChecks(campaign, milestone, judgement, input, measured, failures, ctx.output);
+      if (rewrote) return this.measureScope(campaign, milestone, { ...ctx, repaired: true });
+    }
+    this.recordScopeVerdict(campaign, milestone, input, judgement, measured?.run.runId);
+    return { judgement, input, revision, failures };
+  }
+
+  /** The acceptance run's collaborators, bound to this project and this campaign's tickets. */
+  private acceptanceGateDeps(campaign: Campaign, milestone: CampaignMilestone): AcceptanceGateDeps {
+    return {
+      projectRoot: this.projectRoot,
+      ...(this.runAcceptanceSuite === undefined ? {} : { runBatch: (filter: string) => this.acceptanceBatch(campaign, milestone, filter) }),
+      revision: () => this.treeForClosure().forClosure,
+      restore: (sources, mode) => restoreAcceptance(this.projectRoot, sources, mode),
+      removeEphemeral: () => {
+        removeEphemeral(this.projectRoot);
+      },
+      assemblyRefusal: () => planAcceptanceAssembly(this.projectRoot).refusal,
+      lock: async () => {
+        const { acquireProjectWriteLock } = await import("../common/project-write-lock.js");
+        return acquireProjectWriteLock(this.projectRoot, { timeoutMs: this.projectLockTimeoutMs });
+      },
+    };
+  }
+
+  /** The verdict, kept: each measured row's last result, the milestone's record, and the judge's whole input. */
+  private recordScopeVerdict(campaign: Campaign, milestone: CampaignMilestone, input: GreenInput, judgement: Judgement, runId: string | undefined): void {
+    const ledger = campaign.requirements;
+    if (ledger !== undefined) {
+      campaign.requirements = {
+        ...ledger,
+        rows: ledger.rows.map((row) => {
+          const result = input.results[row.rid];
+          if (result === undefined || !rowDecides(row)) return row;
+          const status: RequirementRow["status"] =
+            result.outcome === "pass" ? "passing" : result.outcome === "fail" ? "failing" : result.outcome === "flaky" || result.outcome === "check-fault" ? "check-fault" : "unmeasured";
+          return { ...row, last: result, status };
+        }),
+      };
+    }
+    const atMs = Date.now();
+    milestone.scopeVerdict = {
+      green: judgement.green,
+      ...(judgement.green ? { basis: judgement.basis, caveats: [...judgement.caveats] } : { state: judgement.state }),
+      revision: input.revision,
+      ...(runId === undefined ? {} : { runId }),
+      reasons: judgement.green ? [] : [...judgement.reasons],
+      atMs,
+      mode: this.scopeGateMode,
+    };
+    try {
+      this.storage.appendJudgement({ campaignId: campaign.id, attemptKey: attemptRunId(milestone), atMs, input, judgement });
+    } catch (err) {
+      getLoggerSafe().warn("The scope verdict could not be appended to the judgement log", {
+        id: campaign.id,
+        milestone: milestone.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.persist(campaign);
+    getLoggerSafe().info("Scope gate verdict", {
+      id: campaign.id,
+      milestone: milestone.id,
+      mode: this.scopeGateMode,
+      green: judgement.green,
+      state: judgement.green ? undefined : judgement.state,
+      revision: input.revision.slice(0, 12),
+      reasons: judgement.green ? 0 : judgement.reasons.length,
+    });
+  }
+
+  /**
+   * The system's checks repaired by their writer, never charged to the worker
+   * (GDD-drift W09): a file that never compiled is repaired, a check that
+   * compiled before and broke on a refactor is rebound once to the public
+   * surface as it is now, a check that bound to the wrong thing or passed only
+   * on its re-run is written again, and a check the worker disputed is
+   * revised. Budgets per milestone: two compile repairs or rebinds, three
+   * dispute revisions, one per row in a settle. Returns whether any check
+   * was rewritten, so the caller measures again.
+   */
+  private async repairChecks(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    judgement: Extract<Judgement, { green: false }>,
+    input: GreenInput,
+    measured: AcceptanceMeasurement | undefined,
+    failures: ReadonlyMap<string, string>,
+    output: string,
+  ): Promise<boolean> {
+    const author = this.acceptanceAuthor;
+    const ledger = this.scopeLedger(campaign);
+    if (author === null || ledger === undefined) return false;
+    const stored = this.acceptanceSourcesOf(campaign);
+    if (stored.error !== undefined) return false;
+    const repairs: WriterRepairs = { compile: 0, rebinds: 0, disputes: 0, ...milestone.writerRepairs };
+    const rows = new Map([...input.own, ...input.regression].map((r) => [r.rid, r] as const));
+    const workers = this.milestoneWorkerModels(milestone);
+    const context = (forRows: readonly RequirementRow[]): AcceptanceWriteContext => acceptanceWriteContext(this.projectRoot, milestone.id, forRows, workers);
+    const canRepair = (): boolean => repairs.compile + repairs.rebinds < MAX_CHECK_REPAIRS_PER_MILESTONE;
+    const done = new Set<string>();
+    const answers: AcceptanceWriteResult[] = [];
+    const ask = async (call: () => Promise<AcceptanceWriteResult>): Promise<void> => {
+      try {
+        answers.push(await call());
+      } catch (err) {
+        getLoggerSafe().warn("An acceptance check repair call failed", { id: campaign.id, milestone: milestone.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    };
+    const bodyOf = (row: RequirementRow): string | undefined => {
+      const check = this.storedTestOf(row, stored.sources)?.test.check;
+      if (check === undefined) return undefined;
+      return [check.setup, check.act, check.observe, check.body].filter((p): p is string => typeof p === "string" && p.trim() !== "").join("\n");
+    };
+
+    // A FILE THAT NEVER COMPILED: the writer's own error, repaired against the compiler's words.
+    for (const file of stored.sources) {
+      const errors = (measured?.run.acceptanceCompileErrors ?? []).filter((e) => samePath(e.path, file.path));
+      if (errors.length === 0 || !canRepair()) continue;
+      const faulted = file.tests.filter((t) => input.results[t.rid]?.outcome === "check-fault" && input.results[t.rid]?.compiledBefore === false);
+      if (faulted.length === 0) continue;
+      const fileRows = file.tests.map((t) => ledger.rows.find((r) => r.rid === t.rid)).filter((r): r is RequirementRow => r !== undefined);
+      repairs.compile += 1;
+      for (const t of faulted) done.add(t.rid);
+      await ask(() => author.repairCompile(file, errors, { ...context(fileRows), rows: fileRows }));
+    }
+    for (const reason of judgement.reasons) {
+      const row = reason.rid !== undefined ? rows.get(reason.rid) : undefined;
+      if (row === undefined || done.has(row.rid)) continue;
+      const result = input.results[row.rid];
+      const body = bodyOf(row);
+      if (result === undefined || body === undefined) continue;
+      // A CHECK A REFACTOR BROKE gets one rebind to the surface as it is now before it counts red.
+      if (result.outcome === "fail" && result.compiledBefore === true && canRepair()) {
+        done.add(row.rid);
+        repairs.rebinds += 1;
+        const ctx = context([row]);
+        await ask(() => author.rebind(row, body, ctx.surfaceDigest, ctx));
+        continue;
+      }
+      // A CHECK AT FAULT — bound to the wrong thing, or passing only on its re-run — is written again.
+      if ((result.outcome === "check-fault" || result.outcome === "flaky") && result.compiledBefore === undefined && canRepair()) {
+        done.add(row.rid);
+        repairs.rebinds += 1;
+        await ask(() => author.regenerate(row, [result.detail], context([row])));
+      }
+    }
+    // A DISPUTED CHECK: the worker's claim goes to the check's writer, labelled as a claim. It never passes a row.
+    for (const dispute of parseWorkerLines(output).disputes) {
+      if (repairs.disputes >= MAX_DISPUTES_PER_MILESTONE) break;
+      const row = [...rows.values()].find((r) => r.rid === dispute.target || r.label === dispute.target || this.storedTestOf(r, stored.sources)?.test.testName === dispute.target);
+      if (row === undefined || done.has(row.rid)) continue;
+      const result = input.results[row.rid];
+      const body = bodyOf(row);
+      if (result?.outcome !== "fail" || body === undefined) continue;
+      done.add(row.rid);
+      repairs.disputes += 1;
+      const testName = this.storedTestOf(row, stored.sources)?.test.testName;
+      await ask(() => author.revise(row, body, dispute.reason, (testName ? failures.get(testName) : undefined) ?? result.detail, context([row])));
+    }
+    if (done.size === 0) return false;
+    milestone.writerRepairs = repairs;
+    let rewrote = false;
+    const ignored = new Map<string, ScopeFault>();
+    for (const answer of answers) {
+      if (await this.storeChecks(campaign, milestone, rows, answer, ignored)) rewrote = true;
+    }
+    // Committed before the measurement that follows, never after it.
+    if (rewrote && this.scopeGateMode === "on") await this.commitAcceptance(campaign, milestone);
+    this.persist(campaign);
+    getLoggerSafe().info("Acceptance checks repaired by their writer", {
+      id: campaign.id,
+      milestone: milestone.id,
+      rows: done.size,
+      rewrote,
+      repairs,
+    });
+    return rewrote;
+  }
+
+  /**
+   * What the gate does with a verdict when it decides (on). Green writes the
+   * milestone green; red bounces with the failing rows named (the first
+   * bounce free) and parks when its bounces are spent; a measurement the
+   * machine could not take is resubmitted once without charge, then parks;
+   * an outage takes the outage path. "continue" means the settle goes on.
+   */
+  private async applyScopeVerdict(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    scope: ScopeMeasurement,
+    opts: { isLast: boolean; output: string },
+  ): Promise<"settled" | "continue"> {
+    const judgement = scope.judgement;
+    if (judgement.green) {
+      milestone.status = "green";
+      milestone.judgementBasis = "typed";
+      milestone.parked = undefined;
+      milestone.scopeResubmits = undefined;
+      this.persist(campaign);
+      return "continue";
+    }
+    const action = nextScopeAction(judgement, {
+      bounces: milestone.scopeBounces ?? 0,
+      maxBounces: this.maxMilestoneAttempts,
+      resubmits: milestone.scopeResubmits ?? 0,
+    });
+    getLoggerSafe().warn("Scope gate: milestone not green", {
+      id: campaign.id,
+      milestone: milestone.id,
+      state: judgement.state,
+      action: action.kind,
+      reasons: judgement.reasons.slice(0, 5).map((r) => `${r.code}${r.rid ? ` ${r.rid}` : ""}`),
+    });
+    switch (action.kind) {
+      case "bounce":
+      case "resubmit-uncharged": {
+        if (action.kind === "bounce") milestone.scopeBounces = (milestone.scopeBounces ?? 0) + 1;
+        else if (action.why === "unmeasurable") milestone.scopeResubmits = (milestone.scopeResubmits ?? 0) + 1;
+        // THE LATEST MEASUREMENT, replaced on every bounce like the compile marker.
+        milestone.prompt = `${withoutScopeBlock(milestone.prompt)}${scopeBounceText(judgement, scope.revision, scope.failures)}`;
+        this.persist(campaign);
+        this.submitCurrentMilestone(campaign, { countAttempt: action.kind === "bounce" ? action.countAttempt : false });
+        return "settled";
+      }
+      case "outage":
+        await this.onMilestoneOutcome(campaign, milestone, TaskStatus.failed, opts.output, { countAttempt: true });
+        return "settled";
+      case "park":
+        await this.parkMilestone(campaign, milestone, judgement.reasons, "its GDD rows did not pass the system's checks within its budget", opts.isLast);
+        return opts.isLast ? "continue" : "settled";
+      default:
+        return "continue";
+    }
+  }
+
+  /**
+   * A milestone whose budget ran out (GDD-drift W09 step 13): `failed` with a
+   * park record and its attempts spent, so the ladder's own walk skips it;
+   * its open rows queued for later sprints, and rows whose system check could
+   * not be made to work left for a person. The ladder moves on; the last
+   * milestone has nowhere to move, so its settle goes on to the delivery
+   * gate, which names the rows. A red acceptance check never stops the
+   * campaign.
+   */
+  private async parkMilestone(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    reasons: readonly GreenReason[],
+    why: string,
+    fallThrough = false,
+  ): Promise<void> {
+    const ledger = campaign.requirements;
+    const faultIds = new Set(reasons.filter((r) => r.reasonClass === "check-fault" && r.rid !== undefined).map((r) => r.rid!));
+    const queued = [...new Set(reasons.filter((r) => r.rid !== undefined && !faultIds.has(r.rid)).map((r) => r.rid!))];
+    if (ledger !== undefined) {
+      if (faultIds.size > 0) {
+        campaign.requirements = { ...ledger, rows: ledger.rows.map((r) => (faultIds.has(r.rid) ? { ...r, status: "check-fault" as const } : r)) };
+      }
+      const byRid = new Map(ledger.rows.map((r) => [r.rid, r] as const));
+      const encoded = queued.map((rid) => byRid.get(rid)?.encoded).filter((e): e is string => e !== undefined);
+      // Through the legacy wordings the queue already holds, so a row it
+      // already names keeps its key and its repair budget.
+      const named = restoreLegacyWordings(campaign, encoded);
+      const held = new Set((campaign.pendingCoverageGaps ?? []).map(gapKey));
+      const fresh = unscheduledGaps(named.filter((n) => !held.has(gapKey(n))), campaign.milestones);
+      if (fresh.length > 0) campaign.pendingCoverageGaps = [...(campaign.pendingCoverageGaps ?? []), ...fresh];
+    }
+    milestone.status = "failed";
+    milestone.attempts = Math.max(milestone.attempts, this.maxMilestoneAttempts);
+    milestone.parked = { atMs: Date.now(), reasons: reasons.slice(0, 30).map((r) => ({ ...r })), queued };
+    // A revive gives the milestone a fresh budget, and its scope budget with it.
+    milestone.scopeBounces = 0;
+    milestone.scopeResubmits = 0;
+    getLoggerSafe().warn("Milestone parked by the scope gate", {
+      id: campaign.id,
+      milestone: milestone.id,
+      why,
+      queued: queued.length,
+      checkFaults: faultIds.size,
+    });
+    if (fallThrough) {
+      this.persist(campaign);
+      return;
+    }
+    campaign.currentMilestone += 1;
+    this.persist(campaign);
+    await this.tell(
+      campaign,
+      `⏸️ **${milestone.title}** — PARKED: ${why}. ${queued.length} GDD row(s) queued for later sprints` +
+        `${faultIds.size > 0 ? `, ${faultIds.size} row(s) whose system check could not be made to work are left for a person` : ""}. ` +
+        `Sprint ${campaign.currentMilestone + 1}/${campaign.milestones.length} starts now.`,
+    );
+    this.resubmitSoon(campaign.id);
+  }
+
+  /**
+   * A milestone over its time box keeps half of its open rows, in GDD order,
+   * and the rest move to a sprint split off from it, inserted right after it
+   * (GDD-drift W09 step 12). Undefined when the milestone owns no open row.
+   */
+  private splitTimeBox(
+    campaign: Campaign,
+    milestone: CampaignMilestone,
+    escalation: number,
+  ): { kept: RequirementRow[]; moved: RequirementRow[]; into: string } | undefined {
+    const ledger = campaign.requirements;
+    const owned = this.scopeRowsOf(campaign, milestone).filter((r) => r.owner === milestone.id);
+    if (ledger === undefined || owned.length === 0) return undefined;
+    const { kept, moved } = timeBoxSplit(owned);
+    if (kept.length === 0) return undefined;
+    if (moved.length === 0) return { kept, moved, into: "" };
+    let id = `${milestone.id}-tb${escalation}`;
+    for (let n = 2; campaign.milestones.some((m) => m.id === id); n++) id = `${milestone.id}-tb${escalation}-${n}`;
+    const atMs = Date.now();
+    const movedIds = new Set(moved.map((r) => r.rid));
+    campaign.requirements = {
+      ...ledger,
+      rows: ledger.rows.map((row) =>
+        movedIds.has(row.rid)
+          ? { ...row, owner: id, ownership: [...row.ownership, { milestoneId: id, reason: "time-box-split" as const, detail: milestone.id, atMs }] }
+          : row,
+      ),
+    };
+    const title = `${milestone.title} — time-box split ${escalation}`;
+    const split: CampaignMilestone = {
+      id,
+      title,
+      prompt:
+        `TIME-BOX SPLIT: these GDD rows moved here from **${milestone.title}** when its time box ran out. ` +
+        "Implement each end-to-end (code + bound visual + its acceptance check passing), capture a frame of the running game, and commit:\n" +
+        moved.map((row) => `- ${row.label ?? row.rid}: "${row.text.replace(/\s+/g, " ").trim().slice(0, 300)}"`).join("\n") +
+        `\n\nThe sprint it was split from was asked:\n${stripTimeBoxDirectives(withoutScopeBlock(milestone.prompt))}`,
+      status: "pending",
+      attempts: 0,
+      timeBoxSplitFrom: milestone.id,
+      requirementIds: moved.map((r) => r.rid),
+      ...(milestone.visualGateArmed === undefined ? {} : { visualGateArmed: milestone.visualGateArmed }),
+    };
+    campaign.milestones.splice(campaign.currentMilestone + 1, 0, split);
+    milestone.requirementIds = (milestone.requirementIds ?? []).filter((rid) => !movedIds.has(rid));
+    getLoggerSafe().info("Time box split the milestone's open GDD rows", {
+      id: campaign.id,
+      milestone: milestone.id,
+      into: id,
+      kept: kept.length,
+      moved: moved.length,
+    });
+    return { kept, moved, into: title };
+  }
+
+  /**
+   * The review's answer as a gate: how many rows its findings reopened or
+   * added. A review that returns no count (the reviewer that only writes the
+   * report) reopened none, and a reviewer that cannot run never blocks.
+   */
+  private async reviewAsGate(campaign: Campaign): Promise<number> {
+    const reviewed: unknown = await this.gatherIndependentReview(campaign);
+    return typeof reviewed === "number" && Number.isFinite(reviewed) && reviewed > 0 ? Math.floor(reviewed) : 0;
+  }
+
+  /** What the scope gate still holds against delivery at the final milestone. */
+  private scopeDeliveryProofsOf(campaign: Campaign, measured: ScopeMeasurement | undefined): ScopeDeliveryProofs {
+    const rows = this.scopeLedger(campaign)?.rows ?? [];
+    return scopeDeliveryProofs({
+      verdict: measured?.judgement,
+      revision: measured?.revision ?? "",
+      rows,
+      checkFaultRows: rows.filter((r) => r.status === "check-fault" && rowDecides(r)),
+    });
   }
 
   // ===========================================================================

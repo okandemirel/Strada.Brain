@@ -294,6 +294,13 @@ export interface AcceptanceTestRef {
   bodySha: string;
   /** Set when this test was written by another call than the file's (a regeneration, a rebind). */
   writer?: AcceptanceWriter;
+  /**
+   * The writer's parts as it returned them, before the system wrapped them.
+   * A file holds every check of its milestone, so writing one new check
+   * renders the file again from all of them; without these the checks
+   * already in it could not be carried into the new bytes.
+   */
+  check?: AcceptanceCheckBody;
 }
 
 /** One acceptance file; the canonical bytes live in campaigns.db and are restored before every measurement. */
@@ -539,6 +546,12 @@ export interface GreenInput {
   readonly gates: Readonly<Record<CompletionGate, GateOutcome>>;
   /** The worker's result reads as a terminal failure; consulted only for a milestone that owns no rows. */
   readonly proseFailure: boolean;
+  /**
+   * OWN rows the test writer could not observe through the public surface,
+   * with what would make them observable. `told`: an earlier verdict already
+   * asked the worker to expose it, so a row still unbound now is red.
+   */
+  readonly unbound?: Readonly<Record<string, { readonly missingObservable: string; readonly told: boolean }>>;
 }
 
 export type Judgement =
