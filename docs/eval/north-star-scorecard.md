@@ -35,6 +35,8 @@ Each rung is a list of checks. A check comes out true, false, or not measured.
 
 So a missing source never becomes a pass, and an unreadable source never hides a failure that the other sources already show.
 
+A table of another shape, such as an older schema without a column the scorecard reads, counts as a source that could not be read. Only the part that reads it becomes `not measured: <path> could not be read: <error>`, and every other rung is still scored.
+
 A mechanism with no store at all is a **fail**, not `not measured`. Assumption records, for example, have no store today. The rung asks whether the system records the thing, and it does not.
 
 ## What each rung reads

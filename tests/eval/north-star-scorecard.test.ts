@@ -679,6 +679,70 @@ describe("north-star scorecard: a run that did everything", () => {
     expect(r5.checks[0]!.text).toMatch(/^2 of 3 green milestones in 2 campaigns since the scope gate first decided/);
   });
 
+  /** Replaces one database of the proof home with a table of an older, invented shape. */
+  function replaceDb(path: string, sql: string): void {
+    for (const p of [path, `${path}-wal`, `${path}-shm`]) rmSync(p, { force: true });
+    const db = new Database(path);
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
+  }
+
+  it("makes owner messages and task facts not measured, not a crash, when tasks.db lacks the columns they read", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    replaceDb(
+      join(memory, "tasks.db"),
+      `CREATE TABLE tasks (id TEXT PRIMARY KEY, chat_id TEXT, campaign_id TEXT, status TEXT, created_at INTEGER);
+       INSERT INTO tasks VALUES ('t-m1', 'chat-invented', '${PROOF_ID}', 'completed', ${T0 + HOUR});`,
+    );
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card & { facts: { tasks: { cause?: string } } };
+    expect(rung(card, 10).verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(rung(card, 10).cause).toMatch(/^owner messages: .*tasks\.db could not be read: no such column: parent_id$/);
+    expect(card.facts.tasks.cause).toMatch(/tasks\.db could not be read: no such column: origin$/);
+    expect(rung(card, 2).verdict).toBe(VERDICT.PASS);
+  });
+
+  it("makes rung 9's later-run check not measured when instincts has no provenance column", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const learning = join(memory, "learning.db");
+    replaceDb(
+      learning,
+      `CREATE TABLE instincts (id TEXT PRIMARY KEY, created_at INTEGER, tags TEXT);
+       CREATE TABLE instinct_exposure_log (instinct_id TEXT, session_id TEXT, task_run_id TEXT, shown_at INTEGER);
+       CREATE TABLE observations (id TEXT PRIMARY KEY, tool_name TEXT, success INTEGER, timestamp INTEGER);
+       INSERT INTO instincts VALUES ('ins-1', ${T0}, '[]');
+       INSERT INTO instinct_exposure_log VALUES ('ins-1', 'run-2', 't-m2', ${T0 + HOUR});
+       INSERT INTO observations VALUES ('o1', 'unity_build_player', 1, ${T0});`,
+    );
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    expect(rung(card, 9).checks[1]).toEqual({ ok: null, text: "lesson provenance not recorded: instincts has no origin_session_id column" });
+    expect(rung(card, 8).checks[0]!.text).toMatch(/^unity_build_player: 1 calls \(1 succeeded\)/);
+  });
+
+  it("makes the campaign rungs not measured when campaigns.db holds a judgements table of another shape", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    const db = new Database(join(memory, "campaigns.db"));
+    try {
+      db.exec("DROP TABLE campaign_judgements; CREATE TABLE campaign_judgements (seq INTEGER PRIMARY KEY, campaign_id TEXT, milestone_id TEXT);");
+    } finally {
+      db.close();
+    }
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    expect(rung(card, 5).verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(rung(card, 5).cause).toMatch(/^campaigns\.db not read: .*campaigns\.db could not be read: no such column: at$/);
+    expect(rung(card, 6).verdict).toBe(VERDICT.PASS);
+  });
+
+  it("makes a vault index of another shape not measured, not a crash", () => {
+    const { home, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    replaceDb(join(project, ".strada", "vault", "index.db"), "CREATE TABLE vault_files (id INTEGER PRIMARY KEY);");
+    const k = criterion(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, "K");
+    expect(k.verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(k.cause).toMatch(/index\.db could not be read: no such column: path$/);
+  });
+
   it("refuses an unknown --campaign", () => {
     const { home } = proofHome();
     const res = spawnSync(process.execPath, [CLI, "--home", home, "--campaign", "campaign_none"], { encoding: "utf8", cwd: REPO_ROOT });

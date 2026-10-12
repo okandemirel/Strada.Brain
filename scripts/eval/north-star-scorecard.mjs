@@ -194,6 +194,10 @@ function countOf(db, sql, ...params) {
   return Number(Object.values(row ?? {})[0] ?? 0);
 }
 
+// A table of another shape (an older schema, a column renamed) is a source
+// that could not be read: its reader reports this, and the rest still score.
+const unreadable = (src, err) => `${src.path} could not be read: ${message(err)}`;
+
 // ─── campaigns.db ───────────────────────────────────────────────────────────
 
 const OUT_OF_SCOPE_STATUSES = new Set(["excluded", "waived"]);
@@ -297,20 +301,26 @@ function ownerMessages(tasksSrc, campaign, endMs) {
   if (!columnsOf(db, "tasks").has("campaign_id")) {
     return unmeasured("owner messages: tasks.db has no campaign_id column, so the campaign's own tasks cannot be told from the owner's");
   }
-  const linked = countOf(db, "SELECT count(*) FROM tasks WHERE campaign_id = ?", campaign.id);
-  if (linked === 0) {
-    // Sprint tasks written before tasks carried their campaign look exactly
-    // like messages the owner typed; counting them would invent interventions.
-    return unmeasured(`owner messages: no task in tasks.db is linked to ${campaign.id}, so its sprint tasks cannot be told from the owner's messages`);
+  let linked;
+  let owner;
+  try {
+    linked = countOf(db, "SELECT count(*) FROM tasks WHERE campaign_id = ?", campaign.id);
+    if (linked === 0) {
+      // Sprint tasks written before tasks carried their campaign look exactly
+      // like messages the owner typed; counting them would invent interventions.
+      return unmeasured(`owner messages: no task in tasks.db is linked to ${campaign.id}, so its sprint tasks cannot be told from the owner's messages`);
+    }
+    owner = countOf(
+      db,
+      `SELECT count(*) FROM tasks WHERE chat_id = ? AND parent_id IS NULL AND campaign_id IS NULL
+         AND COALESCE(origin, 'user') = 'user' AND created_at > ? AND created_at <= ?`,
+      campaign.chatId,
+      campaign.createdAt,
+      endMs,
+    );
+  } catch (err) {
+    return unmeasured(`owner messages: ${unreadable(tasksSrc, err)}`);
   }
-  const owner = countOf(
-    db,
-    `SELECT count(*) FROM tasks WHERE chat_id = ? AND parent_id IS NULL AND campaign_id IS NULL
-       AND COALESCE(origin, 'user') = 'user' AND created_at > ? AND created_at <= ?`,
-    campaign.chatId,
-    campaign.createdAt,
-    endMs,
-  );
   const text = `${plural(owner, "owner message")} in the campaign's chat between its start and ${isoOf(endMs)} (${linked} tasks linked to it)`;
   return owner === 0 ? pass(text) : fail(text);
 }
@@ -319,17 +329,37 @@ function ownerMessages(tasksSrc, campaign, endMs) {
 
 function readLearning(src) {
   const db = src.db;
-  const out = { tables: {} };
+  const out = { tables: {}, causes: {} };
   const has = (t) => (out.tables[t] = hasTable(db, t));
+  // Each part is read on its own, so a table of another shape makes that part
+  // not measured and leaves the others standing.
+  const part = (name, read, fallback) => {
+    try {
+      return read();
+    } catch (err) {
+      out.causes[name] ??= unreadable(src, err);
+      return fallback;
+    }
+  };
   // Raw rows older than the retention period are folded into a per-day rollup
   // and deleted (metrics-storage.ts FND-23), so both are read.
-  out.retrievals = has("retrieval_metrics")
-    ? db.prepare("SELECT count(*) AS n, COALESCE(sum(insights_returned > 0), 0) AS anything, min(recorded_at) AS first, max(recorded_at) AS last FROM retrieval_metrics").get()
-    : { n: 0, anything: 0, first: null, last: null };
-  out.rollup = has("retrieval_metrics_rollup")
-    ? db.prepare("SELECT COALESCE(sum(retrievals), 0) AS n, COALESCE(sum(insights_returned_sum), 0) AS insights FROM retrieval_metrics_rollup").get()
-    : { n: 0, insights: 0 };
-  out.exposures = has("instinct_exposure_log") ? countOf(db, "SELECT count(*) FROM instinct_exposure_log") : 0;
+  out.retrievals = part(
+    "retrievals",
+    () =>
+      has("retrieval_metrics")
+        ? db.prepare("SELECT count(*) AS n, COALESCE(sum(insights_returned > 0), 0) AS anything, min(recorded_at) AS first, max(recorded_at) AS last FROM retrieval_metrics").get()
+        : { n: 0, anything: 0, first: null, last: null },
+    { n: 0, anything: 0, first: null, last: null },
+  );
+  out.rollup = part(
+    "retrievals",
+    () =>
+      has("retrieval_metrics_rollup")
+        ? db.prepare("SELECT COALESCE(sum(retrievals), 0) AS n, COALESCE(sum(insights_returned_sum), 0) AS insights FROM retrieval_metrics_rollup").get()
+        : { n: 0, insights: 0 },
+    { n: 0, insights: 0 },
+  );
+  out.exposures = part("exposures", () => (has("instinct_exposure_log") ? countOf(db, "SELECT count(*) FROM instinct_exposure_log") : 0), 0);
   // A lesson changes a LATER run: the instinct existed before it was shown,
   // and the run it was shown to is not the one that minted it. Only a recorded
   // origin can say that; an exposure whose lesson has none (no production code
@@ -337,34 +367,46 @@ function readLearning(src) {
   out.laterExposures = 0;
   out.unprovenancedExposures = 0;
   if (out.tables.instinct_exposure_log && has("instincts")) {
-    out.laterExposures = countOf(
-      db,
-      `SELECT count(*) FROM instinct_exposure_log e JOIN instincts i ON i.id = e.instinct_id
-         WHERE i.created_at < e.shown_at AND i.origin_session_id IS NOT NULL AND i.origin_session_id <> e.session_id`,
-    );
-    out.unprovenancedExposures = countOf(
-      db,
-      `SELECT count(*) FROM instinct_exposure_log e LEFT JOIN instincts i ON i.id = e.instinct_id
-         WHERE i.id IS NULL OR i.origin_session_id IS NULL`,
-    );
+    if (!columnsOf(db, "instincts").has("origin_session_id")) {
+      out.causes.provenance = "lesson provenance not recorded: instincts has no origin_session_id column";
+    } else {
+      part("provenance", () => {
+        out.laterExposures = countOf(
+          db,
+          `SELECT count(*) FROM instinct_exposure_log e JOIN instincts i ON i.id = e.instinct_id
+             WHERE i.created_at < e.shown_at AND i.origin_session_id IS NOT NULL AND i.origin_session_id <> e.session_id`,
+        );
+        out.unprovenancedExposures = countOf(
+          db,
+          `SELECT count(*) FROM instinct_exposure_log e LEFT JOIN instincts i ON i.id = e.instinct_id
+             WHERE i.id IS NULL OR i.origin_session_id IS NULL`,
+        );
+      });
+    }
   }
-  out.credits = has("instinct_credit_log") ? countOf(db, "SELECT count(*) FROM instinct_credit_log") : 0;
-  out.instincts = has("instincts") ? countOf(db, "SELECT count(*) FROM instincts") : 0;
-  out.milestoneLessons = out.tables.instincts
-    ? countOf(db, "SELECT count(*) FROM instincts WHERE tags LIKE '%milestone%' OR tags LIKE '%campaign%'")
-    : 0;
+  out.credits = part("lessons", () => (has("instinct_credit_log") ? countOf(db, "SELECT count(*) FROM instinct_credit_log") : 0), 0);
+  out.instincts = part("lessons", () => (has("instincts") ? countOf(db, "SELECT count(*) FROM instincts") : 0), 0);
+  out.milestoneLessons = part(
+    "lessons",
+    () => (out.tables.instincts ? countOf(db, "SELECT count(*) FROM instincts WHERE tags LIKE '%milestone%' OR tags LIKE '%campaign%'") : 0),
+    0,
+  );
   out.tools = {};
   out.toolWindow = { first: null, last: null };
   if (has("observations")) {
-    for (const r of db
-      .prepare(
-        `SELECT tool_name, count(*) AS calls, COALESCE(sum(success = 1), 0) AS ok FROM observations
-           WHERE tool_name IN ('unity_build_player', 'unity_run_player', 'unity_playthrough') GROUP BY tool_name`,
-      )
-      .all()) {
-      out.tools[r.tool_name] = { calls: Number(r.calls), ok: Number(r.ok) };
-    }
-    out.toolWindow = db.prepare("SELECT min(timestamp) AS first, max(timestamp) AS last, count(*) AS n FROM observations").get();
+    part("tools", () => {
+      const tools = {};
+      for (const r of db
+        .prepare(
+          `SELECT tool_name, count(*) AS calls, COALESCE(sum(success = 1), 0) AS ok FROM observations
+             WHERE tool_name IN ('unity_build_player', 'unity_run_player', 'unity_playthrough') GROUP BY tool_name`,
+        )
+        .all()) {
+        tools[r.tool_name] = { calls: Number(r.calls), ok: Number(r.ok) };
+      }
+      out.toolWindow = db.prepare("SELECT min(timestamp) AS first, max(timestamp) AS last, count(*) AS n FROM observations").get();
+      out.tools = tools;
+    });
   }
   return out;
 }
@@ -925,6 +967,8 @@ function readVault(path, upstream) {
     const embeddings = hasTable(src.db, "vault_embeddings") ? countOf(src.db, "SELECT count(*) FROM vault_embeddings") : 0;
     const mode = hasTable(src.db, "vault_meta") ? (src.db.prepare("SELECT value FROM vault_meta WHERE key = 'embedding_mode'").get()?.value ?? null) : null;
     return { path: src.path, root, files: classes.size, counts, classes, embeddings, mode };
+  } catch (err) {
+    return { path: src.path, cause: unreadable(src, err) };
   } finally {
     src.db.close();
   }
@@ -1203,11 +1247,12 @@ function toolLine(learning, tool) {
 function rung8(ctx) {
   const title = RUNG_TITLES[7];
   const haveCampaigns = Boolean(ctx.campaignsSrc.db);
-  const haveLearning = Boolean(ctx.learning);
-  if (!haveCampaigns && !haveLearning) return blocked(8, title, `${campaignsCause(ctx)}; learning.db not read: ${ctx.learningSrc.cause}`);
+  const learningCause = ctx.learning ? ctx.learning.causes.tools : ctx.learningSrc.cause;
+  const haveLearning = !learningCause;
+  if (!haveCampaigns && !haveLearning) return blocked(8, title, `${campaignsCause(ctx)}; learning.db not read: ${learningCause}`);
   const ev = haveCampaigns ? playEvidence(ctx.store.campaigns) : null;
-  const tools = ctx.learning?.tools ?? {};
-  const window = ctx.learning?.toolWindow;
+  const tools = haveLearning ? ctx.learning.tools : {};
+  const window = haveLearning ? ctx.learning.toolWindow : null;
   const where = haveLearning ? ` [learning.db observations ${isoOf(window?.first)} → ${isoOf(window?.last)}]` : "";
   const either = (fromDb, fromCampaign, text) => (fromDb || fromCampaign ? pass(text) : fail(text));
   const checks = [
@@ -1262,16 +1307,24 @@ function rung9(ctx) {
   const absent = (t) => (l.tables[t] ? "" : ` (no ${t} table)`);
   const later = `${l.laterExposures} of ${l.exposures} exposures showed a lesson to a later run than the one that learned it`;
   const checks = [
-    returned > 0 ? pass(retrievalLine(l)) : fail(`${retrievalLine(l)}${absent("retrieval_metrics")}`),
+    returned > 0
+      ? pass(retrievalLine(l))
+      : l.causes.retrievals
+        ? unmeasured(`retrievals: ${l.causes.retrievals}`)
+        : fail(`${retrievalLine(l)}${absent("retrieval_metrics")}`),
     l.laterExposures > 0
       ? pass(later)
-      : l.exposures === 0
-        ? fail(`${later}${absent("instinct_exposure_log")}`)
-        : l.unprovenancedExposures > 0
-          ? unmeasured(
-              `lesson provenance not recorded: ${l.unprovenancedExposures} of ${l.exposures} exposures show an instinct with no origin session, so a later run cannot be told from the run that learned it`,
-            )
-          : fail(later),
+      : l.causes.exposures
+        ? unmeasured(`exposures: ${l.causes.exposures}`)
+        : l.exposures === 0
+          ? fail(`${later}${absent("instinct_exposure_log")}`)
+          : l.causes.provenance
+            ? unmeasured(l.causes.provenance)
+            : l.unprovenancedExposures > 0
+              ? unmeasured(
+                  `lesson provenance not recorded: ${l.unprovenancedExposures} of ${l.exposures} exposures show an instinct with no origin session, so a later run cannot be told from the run that learned it`,
+                )
+              : fail(later),
   ];
   return item(9, title, checks, {
     notes: [`${l.credits} credits recorded; ${l.instincts} instincts stored`],
@@ -1530,10 +1583,11 @@ function criterionJ(ctx) {
   if (!ctx.learning) return blocked("J", CRITERION_TITLES.J, `learning.db not read: ${ctx.learningSrc.cause}`);
   const l = ctx.learning;
   const returned = l.retrievals.anything + l.rollup.insights;
+  const either = (ok, cause, text) => (ok ? pass(text) : cause ? unmeasured(cause) : fail(text));
   return item("J", CRITERION_TITLES.J, [
-    l.milestoneLessons > 0 ? pass(`${l.milestoneLessons} instincts carry a milestone or campaign tag`) : fail("0 instincts carry a milestone or campaign tag"),
-    l.exposures > 0 ? pass(`${l.exposures} exposure_log rows`) : fail("0 exposure_log rows"),
-    returned > 0 ? pass(retrievalLine(l)) : fail(retrievalLine(l)),
+    either(l.milestoneLessons > 0, l.causes.lessons, `${l.milestoneLessons} instincts carry a milestone or campaign tag`),
+    either(l.exposures > 0, l.causes.exposures, `${l.exposures} exposure_log rows`),
+    either(returned > 0, l.causes.retrievals, retrievalLine(l)),
   ]);
 }
 
@@ -1614,12 +1668,16 @@ function taskFacts(tasksSrc) {
   const db = tasksSrc.db;
   if (!hasTable(db, "tasks")) return { cause: `${tasksSrc.path} has no tasks table` };
   const where = "COALESCE(origin, 'user') = 'user'";
-  const byStatus = {};
-  for (const r of db.prepare(`SELECT status, count(*) AS n FROM tasks WHERE ${where} GROUP BY status`).all()) byStatus[r.status] = Number(r.n);
-  const span = db.prepare("SELECT min(created_at) AS first, max(created_at) AS last, count(*) AS n FROM tasks").get();
-  const lastCompleted = db.prepare(`SELECT max(COALESCE(completed_at, updated_at)) AS at FROM tasks WHERE ${where} AND status = 'completed'`).get().at;
-  const user = Object.values(byStatus).reduce((a, b) => a + b, 0);
-  return { tasks: Number(span.n), userTasks: user, byStatus, first: span.first, last: span.last, lastCompletedUserTask: lastCompleted ?? null };
+  try {
+    const byStatus = {};
+    for (const r of db.prepare(`SELECT status, count(*) AS n FROM tasks WHERE ${where} GROUP BY status`).all()) byStatus[r.status] = Number(r.n);
+    const span = db.prepare("SELECT min(created_at) AS first, max(created_at) AS last, count(*) AS n FROM tasks").get();
+    const lastCompleted = db.prepare(`SELECT max(COALESCE(completed_at, updated_at)) AS at FROM tasks WHERE ${where} AND status = 'completed'`).get().at;
+    const user = Object.values(byStatus).reduce((a, b) => a + b, 0);
+    return { tasks: Number(span.n), userTasks: user, byStatus, first: span.first, last: span.last, lastCompletedUserTask: lastCompleted ?? null };
+  } catch (err) {
+    return { cause: unreadable(tasksSrc, err) };
+  }
 }
 
 // ─── the whole card ─────────────────────────────────────────────────────────
@@ -1644,7 +1702,11 @@ export function scoreNorthStar(opts = {}) {
   try {
     let store = null;
     if (campaignsSrc.db) {
-      store = readCampaignStore(campaignsSrc, opts.campaign ?? null);
+      try {
+        store = readCampaignStore(campaignsSrc, opts.campaign ?? null);
+      } catch (err) {
+        store = { cause: unreadable(campaignsSrc, err) };
+      }
       if (store.cause) {
         campaignsSrc.cause = store.cause;
         campaignsSrc.db.close();
