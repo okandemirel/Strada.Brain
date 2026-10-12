@@ -42,7 +42,8 @@ const create = async (input: Record<string, unknown> = {}) => {
 
 describe("a generated module's folder layout", () => {
   it("keeps code under Scripts/", async () => {
-    const { base } = await create();
+    // A system is opt-in (an empty one is ticked every frame for nothing).
+    const { base } = await create({ include_system: true });
     for (const folder of ["Interfaces", "Services", "Systems", "Components"]) {
       expect(existsSync(join(base, "Scripts", folder)), `Scripts/${folder} missing`).toBe(true);
     }
@@ -161,7 +162,7 @@ describe("a framework whose layout lives in ModuleLayout.cs", () => {
   };
 
   it("creates the module", async () => {
-    const { base, result } = await createIn();
+    const { base, result } = await createIn({ include_system: true });
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
     for (const folder of ["Interfaces", "Services", "Systems", "Components"]) {
       expect(existsSync(join(base, "Scripts", folder)), `Scripts/${folder} missing`).toBe(true);

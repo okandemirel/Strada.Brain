@@ -154,7 +154,8 @@ describe("ModuleCreateTool", () => {
   });
 
   it("creates correct directory structure", async () => {
-    await tool.execute({ name: "Combat" }, ctx);
+    // A system is opt-in (an empty one is ticked every frame for nothing).
+    await tool.execute({ name: "Combat", include_system: true }, ctx);
     const dirs = entries("dirs");
     expect(dirs).toContain("Scripts/Systems");
     expect(dirs).toContain("Scripts/Services");

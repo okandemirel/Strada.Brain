@@ -10,6 +10,7 @@ import {
   CORE_INSTALL_PATH,
   INCOMPLETE_CHECKOUT_HINT,
 } from "./module-folders.js";
+import { readModuleTemplates, TEMPLATE_DECLARATION_FILE, type ModuleSourceTemplates } from "./module-templates.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
@@ -17,7 +18,7 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions), so they always match what the Unity generator produces. " +
+    "Generates: ModuleConfig, asmdef, a service interface and service, and the module folder structure the framework declares — Scripts/{Interfaces,Services} plus Tests/Runtime and Tests/Editor; the include_* flags add the rest. Folders come from Strada.Core\u0027s module layout (ModuleLayout.cs, or DirectoryStructureConfig.cs in older versions) and file contents from its module templates (ModuleSourceTemplates.cs, where the installed Core has them: the ModuleConfig registers what was generated and hands services and controllers to the PatternManager), so they match what the Unity generator produces. " +
     "Safe on a module folder that already holds code: files already there are kept as they are, never overwritten, and only the missing ones are created. " +
     "A type the module already declares anywhere is not generated again, and when either half of the I<Name>Service/<Name>Service pair exists neither half is generated or registered; the result lists what was kept and what is left to register.";
 
@@ -40,7 +41,8 @@ export class ModuleCreateTool implements ITool {
       },
       include_system: {
         type: "boolean",
-        description: "Include a starter system. Default: true",
+        description:
+          "Include a starter <Name>System (SystemBase). Default: false — an empty system is ticked every frame and does nothing; ask for one when the module has per-entity logic to put in it.",
       },
       include_service: {
         type: "boolean",
@@ -48,11 +50,12 @@ export class ModuleCreateTool implements ITool {
       },
       include_controller: {
         type: "boolean",
-        description: "Include a starter controller. Default: false",
+        description:
+          "Include a <Name>Controller (TickableController) that the ModuleConfig registers and hands to the PatternManager. Default: false",
       },
       include_events: {
         type: "boolean",
-        description: "Include an Events/ folder. Default: false",
+        description: "Include an Events/ folder, and <Name>Events.cs where Strada.Core\u0027s module templates declare it. Default: false",
       },
       include_signals: {
         type: "boolean",
@@ -61,15 +64,16 @@ export class ModuleCreateTool implements ITool {
       },
       include_model: {
         type: "boolean",
-        description: "Include a Models/ folder. Default: false",
+        description: "Include a Models/ folder, and <Name>Model.cs where Strada.Core\u0027s module templates declare it. Default: false",
       },
       include_view: {
         type: "boolean",
-        description: "Include a Views/ folder. Default: false",
+        description: "Include a Views/ folder, and <Name>View.cs where Strada.Core\u0027s module templates declare it. Default: false",
       },
       include_data: {
         type: "boolean",
-        description: "Include a Data/ folder. Default: false",
+        description:
+          "Include the Data/ folders, and CD_<Name> (a ConfigData asset type) with its <Name>Config value object where Strada.Core\u0027s module templates declare them. Default: false",
       },
       include_commands: {
         type: "boolean",
@@ -111,7 +115,9 @@ export class ModuleCreateTool implements ITool {
     // "" is a field the model filled, not a path or namespace it chose.
     const modulePath = String(input["path"] || `Assets/Modules/${name}Module`);
     const namespace = String(input["namespace"] || `Game.Modules.${name}`);
-    const includeSystem = input["include_system"] !== false;
+    // Off unless asked for, as in Core's own generator: on by default, every
+    // module got a system whose OnUpdate held a TODO, and they stayed that way.
+    const includeSystem = input["include_system"] === true;
     const includeService = input["include_service"] !== false;
 
     if (!name || !isValidCSharpIdentifier(name) || name[0] !== name[0]!.toUpperCase()) {
@@ -187,6 +193,22 @@ export class ModuleCreateTool implements ITool {
       }
       const { layout } = lookup;
       const declared = layout.folders;
+
+      // File contents are Strada.Core's too (module-templates.ts). A Core from
+      // before its templates keeps Brain's own: these call a PatternManager its
+      // bootstrapper does not provide. Templates it has but this cannot read
+      // refuse, like a layout it cannot read.
+      const templateLookup = readModuleTemplates(context.projectPath, CORE_INSTALL_PATH);
+      if (templateLookup.status === "unreadable") {
+        return {
+          content:
+            `Error: Strada.Core is installed at ${CORE_INSTALL_PATH} and declares its module templates, but they ` +
+            `could not be read (${templateLookup.reason}). No module was created — files written from a guess are ` +
+            `how a module ends up in a shape the framework never agreed to.`,
+          isError: true,
+        };
+      }
+      const templates = templateLookup.status === "declared" ? templateLookup.templates : null;
 
       const includeController = input["include_controller"] === true;
       const includeEvents = input["include_events"] === true;
@@ -379,41 +401,74 @@ export class ModuleCreateTool implements ITool {
         }
       }
 
-      // 2. Optional System
-      if (includeSystem) {
-        const declared = declarationOf(existing, `${name}System`);
-        if (declared) keep(declared);
-        else await place(`Scripts/Systems/${name}System.cs`, generateSystem(name, namespace));
-      }
-
-      // 3. Optional Service — the interface and its implementation are one
-      // unit. Strada.Core constrains RegisterService<TInterface, TImplementation>
-      // with `where TImplementation : class, TInterface`, so a stub half next to
-      // a hand-written half either declares a type twice or fails that
-      // constraint: the module stops compiling. With either half there, neither
-      // is generated and the author's pair is left to the author.
       let serviceCreated = false;
+      let controllerCreated = false;
       const keptServiceHalves: string[] = [];
-      if (includeService) {
-        for (const type of [`I${name}Service`, `${name}Service`]) {
-          const declared = declarationOf(existing, type);
-          if (declared && !keptServiceHalves.includes(declared)) keptServiceHalves.push(declared);
-        }
-        keptServiceHalves.forEach(keep);
-        if (keptServiceHalves.length === 0) {
-          const interfaceCreated = await place(`Scripts/Services/I${name}Service.cs`, generateServiceInterface(name, namespace));
-          const implCreated = await place(`Scripts/Services/${name}Service.cs`, generateServiceImpl(name, namespace));
-          serviceCreated = interfaceCreated && implCreated;
-        }
-      }
-
-      // 4. ModuleConfig — one per module, wherever in it the author put it: a
-      // second <Name>ModuleConfig class is a duplicate definition. It registers
-      // the service pair only when this call made both halves; registering a
-      // pair it did not make is a compile error waiting on someone else's code.
       const existingConfig = existing.files.find((f) => /ModuleConfig\.cs$/i.test(f)) ?? null;
-      if (existingConfig) keep(existingConfig);
-      else await place(`Scripts/${name}ModuleConfig.cs`, generateModuleConfig(name, namespace, serviceCreated));
+      if (templates) {
+        // Core's RuntimeTests/EditorTests stay off: they are Assert.Pass()
+        // placeholders, and a passing placeholder reads as a tested module to
+        // every gate that counts tests. The test assemblies above are made.
+        const made = await placeCoreTemplates(templates, {
+          name,
+          namespace,
+          selection: {
+            ServiceInterface: includeService,
+            Service: includeService,
+            Controller: includeController,
+            Model: includeModel,
+            View: includeView,
+            EcsSystem: includeSystem,
+            ConfigData: includeData,
+            ValueObject: includeData,
+            Events: includeEvents,
+            Signals: includeSignals,
+          },
+          configKept: existingConfig !== null,
+          existing,
+          layout,
+          place,
+          keep,
+          notes: placementNotes,
+        });
+        serviceCreated = made.serviceCreated;
+        controllerCreated = made.controllerCreated;
+        keptServiceHalves.push(...made.keptServiceHalves);
+        if (existingConfig) keep(existingConfig);
+      } else {
+        // 2. Optional System
+        if (includeSystem) {
+          const declared = declarationOf(existing, `${name}System`);
+          if (declared) keep(declared);
+          else await place(`Scripts/Systems/${name}System.cs`, generateSystem(name, namespace));
+        }
+
+        // 3. Optional Service — the interface and its implementation are one
+        // unit. Strada.Core constrains RegisterService<TInterface, TImplementation>
+        // with `where TImplementation : class, TInterface`, so a stub half next to
+        // a hand-written half either declares a type twice or fails that
+        // constraint: the module stops compiling. With either half there, neither
+        // is generated and the author's pair is left to the author.
+        if (includeService) {
+          for (const type of [`I${name}Service`, `${name}Service`]) {
+            const declared = declarationOf(existing, type);
+            if (declared && !keptServiceHalves.includes(declared)) keptServiceHalves.push(declared);
+          }
+          keptServiceHalves.forEach(keep);
+          if (keptServiceHalves.length === 0) {
+            const interfaceCreated = await place(`Scripts/Services/I${name}Service.cs`, generateServiceInterface(name, namespace));
+            const implCreated = await place(`Scripts/Services/${name}Service.cs`, generateServiceImpl(name, namespace));
+            serviceCreated = interfaceCreated && implCreated;
+          }
+        }
+
+        // 4. ModuleConfig — one per module, wherever in it the author put it: a
+        // second <Name>ModuleConfig class is a duplicate definition. It registers
+        // the service pair only when this call made both halves; registering a
+        // pair it did not make is a compile error waiting on someone else's code.
+        if (existingConfig) keep(existingConfig);
+        else await place(`Scripts/${name}ModuleConfig.cs`, generateModuleConfig(name, namespace, serviceCreated));
+      }
 
       const headline =
         keptFiles.length === 0
@@ -429,8 +484,28 @@ export class ModuleCreateTool implements ITool {
         ...(keptFiles.length > 0
           ? ["", "Kept (already existed, left unchanged):", ...keptFiles.map((f) => `  ${f}`)]
           : []),
-        ...(existingConfig && serviceCreated
-          ? ["", `The kept ${existingConfig} was not changed: register I${name}Service there yourself.`]
+        ...(existingConfig && (serviceCreated || controllerCreated)
+          ? [
+              "",
+              `The kept ${existingConfig} was not changed: register what this call made there yourself — ` +
+                [
+                  ...(serviceCreated
+                    ? [
+                        `builder.RegisterService<I${name}Service, ${name}Service>() in Configure` +
+                          (templates ? `, and patterns.RegisterService(services.Get<I${name}Service>()) in Initialize` : ""),
+                      ]
+                    : []),
+                  ...(controllerCreated
+                    ? [
+                        `builder.RegisterController<${name}Controller>() in Configure, and ` +
+                          `patterns.RegisterController(services.Get<${name}Controller>()) in Initialize`,
+                      ]
+                    : []),
+                ].join("; ") +
+                (templates
+                  ? " (patterns = services.Get<PatternManager>(): the PatternManager initializes, ticks and disposes them)."
+                  : "."),
+            ]
           : []),
         ...(keptServiceHalves.length > 0
           ? [
@@ -438,7 +513,10 @@ export class ModuleCreateTool implements ITool {
               `Service: ${keptServiceHalves.map((f) => `${modulePath}/${f}`).join(", ")} already declare(s) part of the I${name}Service/${name}Service ` +
                 `pair, so neither half was generated — a stub beside a hand-written half would not compile against it. ` +
                 `The pair was not registered by this call: once ${name}Service implements I${name}Service, make sure ` +
-                `the module config's Configure calls builder.RegisterService<I${name}Service, ${name}Service>().`,
+                `the module config's Configure calls builder.RegisterService<I${name}Service, ${name}Service>()` +
+                (templates
+                  ? ` and its Initialize hands it to the PatternManager: patterns.RegisterService(services.Get<I${name}Service>()).`
+                  : "."),
             ]
           : []),
         "",
@@ -450,16 +528,21 @@ export class ModuleCreateTool implements ITool {
         ...createdDirs.map((rel) => `  ${rel}/`),
         ...(placementNotes.length > 0 ? ["", "Requested components:", ...placementNotes] : []),
         "",
+        templates
+          ? `File contents: Strada.Core's module templates (${TEMPLATE_DECLARATION_FILE}).`
+          : "File contents: Brain's own templates — the installed Strada.Core declares no module templates " +
+            `(no ${basename(TEMPLATE_DECLARATION_FILE)}).`,
+        "",
         `Next steps:`,
         `  1. Create a ${name}ModuleConfig ScriptableObject asset in Unity`,
         `  2. Add it to GameBootstrapper's module list`,
-        `  3. Put ECS components in Scripts/Components/`,
+        // Only folders that exist: without a system there is no Scripts/Components.
         includeSystem
-          ? `  4. Implement system logic in Scripts/Systems/${name}System.cs`
-          : `  4. Add systems under Scripts/Systems/ when you need them`,
+          ? `  3. Put ECS components in Scripts/Components/ and implement Scripts/Systems/${name}System.cs`
+          : `  3. Add ECS components and systems (strada_create_component, strada_create_system) when the module has per-entity logic`,
       ].join("\n");
 
-      return { content: result, metadata: { createdFiles, keptFiles } };
+      return { content: result, metadata: { createdFiles, keptFiles, templates: templates ? "core" : "builtin" } };
     } catch {
       return { content: "Error: could not create module", isError: true };
     }
@@ -517,6 +600,88 @@ function declarationOf(module: ModuleSources, type: string): string | null {
 function folderOf(rel: string): string {
   const slash = rel.lastIndexOf("/");
   return slash < 0 ? "" : rel.slice(0, slash);
+}
+
+/** The type a generated source declares: its first class, interface, struct, record or enum. */
+function declaredType(source: string): string | null {
+  return /\b(?:class|interface|struct|record|enum)\s+(\w+)/.exec(source.replace(/\/\/.*$/gm, ""))?.[1] ?? null;
+}
+
+// Template files that refer to each other: a service names its interface, CD_<Name>
+// its <Name>Config. A stub half beside a hand-written half declares a type twice
+// or breaks the reference, so with either half there neither is generated.
+const TEMPLATE_UNITS: readonly (readonly string[])[] = [
+  ["ServiceInterface", "Service"],
+  ["ConfigData", "ValueObject"],
+];
+
+interface CoreTemplatePlacement {
+  name: string;
+  namespace: string;
+  /** ModuleTemplateOptions by field name, ModuleConfig aside. */
+  selection: Record<string, boolean>;
+  /** A ModuleConfig is already in the module: it is kept, and none is written. */
+  configKept: boolean;
+  existing: ModuleSources;
+  layout: Parameters<typeof folderForComponent>[0];
+  place: (rel: string, content: string) => Promise<boolean>;
+  keep: (rel: string) => void;
+  notes: string[];
+}
+
+/**
+ * Write the files Core's templates give a selection, keeping every type the
+ * module already declares, and then the ModuleConfig — rendered for what this
+ * call actually made, so it registers nothing it did not write.
+ */
+async function placeCoreTemplates(
+  templates: ModuleSourceTemplates,
+  p: CoreTemplatePlacement,
+): Promise<{ serviceCreated: boolean; controllerCreated: boolean; keptServiceHalves: string[] }> {
+  const selection = { ...p.selection };
+  const keptServiceHalves: string[] = [];
+  for (const file of templates.render(p.name, p.namespace, selection)) {
+    if (file.component === "ModuleConfig") continue;
+    const declared = declarationOf(p.existing, declaredType(file.source) ?? file.fileName.replace(/\.cs$/i, ""));
+    if (!declared) continue;
+    p.keep(declared);
+    if ((file.component === "ServiceInterface" || file.component === "Service") && !keptServiceHalves.includes(declared)) {
+      keptServiceHalves.push(declared);
+    }
+    for (const component of TEMPLATE_UNITS.find((u) => u.includes(file.component)) ?? [file.component]) {
+      selection[component] = false;
+    }
+  }
+
+  const created = new Set<string>();
+  for (const file of templates.render(p.name, p.namespace, selection)) {
+    if (file.component === "ModuleConfig") continue;
+    const folder = folderForComponent(p.layout, file.component);
+    if (folder === null) {
+      p.notes.push(`  ${file.fileName}: not generated — the installed layout declares no folder for ${file.component}`);
+      continue;
+    }
+    if (await p.place(`${folder}/${file.fileName}`, file.source)) created.add(file.component);
+  }
+
+  const serviceCreated = created.has("Service") && created.has("ServiceInterface");
+  const controllerCreated = created.has("Controller");
+  if (!p.configKept) {
+    const config = templates
+      .render(p.name, p.namespace, {
+        ModuleConfig: true,
+        ServiceInterface: serviceCreated,
+        Service: serviceCreated,
+        Controller: controllerCreated,
+      })
+      .find((f) => f.component === "ModuleConfig");
+    if (config) {
+      const folder =
+        folderForComponent(p.layout, "ModuleConfig") ?? p.layout.folders.find((f) => f.mandatory)?.path ?? "Scripts";
+      await p.place(`${folder}/${config.fileName}`, config.source);
+    }
+  }
+  return { serviceCreated, controllerCreated, keptServiceHalves };
 }
 
 function generateModuleConfig(

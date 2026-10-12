@@ -11,6 +11,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { CORE_TEMPLATES_SOURCE } from "./core-templates-fixture.js";
 
 // Deliberately not imported from module-folders.js: a suite that mocks that
 // module would otherwise import it back through this file and deadlock.
@@ -18,6 +19,7 @@ const CORE_ROOT = "Packages/Submodules/Strada.Core";
 const CONFIG_DIR = `${CORE_ROOT}/Editor/ModuleGenerator/Config`;
 const DECLARATION_RELATIVE_PATH = `${CONFIG_DIR}/DirectoryStructureConfig.cs`;
 const LAYOUT_RELATIVE_PATH = `${CONFIG_DIR}/ModuleLayout.cs`;
+const TEMPLATES_RELATIVE_PATH = `${CORE_ROOT}/Editor/ModuleGenerator/Templates/ModuleSourceTemplates.cs`;
 
 /**
  * The folder list as Strada.Core declared it before the list moved into
@@ -209,12 +211,22 @@ export function installCoreDeclaration(projectPath: string): void {
 }
 
 /**
- * Install the current layout as a Strada.Core checkout carries it: ModuleLayout.cs
- * and a DirectoryStructureConfig.cs that only refers to it. `withLayout: false`
- * leaves ModuleLayout.cs out — a framework that is plainly there but whose
- * layout cannot be read.
+ * Install the current layout as a Strada.Core checkout carries it: ModuleLayout.cs,
+ * a DirectoryStructureConfig.cs that only refers to it, and the module templates
+ * (ModuleSourceTemplates.cs) that came with it. `withLayout: false` leaves
+ * ModuleLayout.cs out — a framework that is plainly there but whose layout
+ * cannot be read; `withTemplates: false` is a Core from before the templates.
  */
-export function installCoreLayout(projectPath: string, { withLayout = true } = {}): void {
+export function installCoreLayout(
+  projectPath: string,
+  { withLayout = true, withTemplates = true }: { withLayout?: boolean; withTemplates?: boolean } = {},
+): void {
   install(projectPath, DECLARATION_RELATIVE_PATH, CORE_LAYOUT_CONFIG_SOURCE);
   if (withLayout) install(projectPath, LAYOUT_RELATIVE_PATH, CORE_LAYOUT_SOURCE);
+  if (withTemplates) installCoreTemplates(projectPath);
+}
+
+/** Install ModuleSourceTemplates.cs, or `source` in its place. */
+export function installCoreTemplates(projectPath: string, source: string = CORE_TEMPLATES_SOURCE): void {
+  install(projectPath, TEMPLATES_RELATIVE_PATH, source);
 }

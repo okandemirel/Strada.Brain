@@ -47,7 +47,10 @@ describe("strada_create_module in a module that already holds code", () => {
     put(root, `${MODULE}/Scripts/Systems/BoardSystem.cs`, "class BoardSystem { void Swap() {} }");
     put(root, `${MODULE}/Scripts/Services/BoardService.cs`, "class BoardService { int Score; }");
 
-    const result = await new ModuleCreateTool().execute({ name: "BoardModule" }, { projectPath: root } as never);
+    const result = await new ModuleCreateTool().execute(
+      { name: "BoardModule", include_system: true },
+      { projectPath: root } as never,
+    );
 
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
     expect(read(root, `${MODULE}/Scripts/Systems/BoardSystem.cs`)).toContain("Swap()");
@@ -122,7 +125,7 @@ describe("strada_create_module in a module that already holds code", () => {
       "namespace Game.Modules.Board { public sealed class BoardSystem : SystemBase { } }",
     );
 
-    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
+    const result = await new ModuleCreateTool().execute({ name: "Board", include_system: true }, { projectPath: root } as never);
 
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
     expect(existsSync(join(root, MODULE, "Scripts", "Systems", "BoardSystem.cs"))).toBe(false);
