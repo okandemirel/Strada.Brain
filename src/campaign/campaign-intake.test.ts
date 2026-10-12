@@ -236,12 +236,41 @@ describe("a message that names the design document by its path", () => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
   });
 
+  /**
+   * A GDD named with no extension, in a format the path pattern did not know,
+   * or by a link was a bare "the GDD": discovery then built docs/Game_GDD.md,
+   * another document. The name is the document the message meant; the
+   * manager finds it or says it could not.
+   */
   it.each([
-    "Quillmoor_GDD'deki oyunu yap",
-    "Build the game in QuillmoorGDD",
-    "Build the game in the quillmoor_game_design_document",
-  ])("%s → the repository's design (the reference is inside a name)", (text) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+    ["Quillmoor_GDD'deki oyunu yap", "Quillmoor_GDD"],
+    ["Build the game in QuillmoorGDD", "QuillmoorGDD"],
+    ["Build the game in the quillmoor_game_design_document", "quillmoor_game_design_document"],
+    ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD"],
+    ["Build the game in docs/Quillmoor_GDD.", "docs/Quillmoor_GDD"],
+    ["Build the game in docs/design/GDD", "docs/design/GDD"],
+    ["Build this game: docs/Quillmoor_GDD.pptx", "docs/Quillmoor_GDD.pptx"],
+    ["Build this game: design/quillmoor-deck.pptx", "design/quillmoor-deck.pptx"],
+    ["Build this game: docs/Quillmoor_GDD.html", "docs/Quillmoor_GDD.html"],
+    ["Build this game: https://example.com/files/Quillmoor_GDD.md", "https://example.com/files/Quillmoor_GDD.md"],
+    ["Bu oyunu yap: https://example.com/d/quillmoor.pdf", "https://example.com/d/quillmoor.pdf"],
+    ["https://example.com/files/Quillmoor_GDD.md'deki oyunu yap", "https://example.com/files/Quillmoor_GDD.md"],
+  ])("%s → the document it names, %s, not the repository's other design", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it.each([
+    // "the GDD" itself, and a word built on it, are no name.
+    ["Build the game in the GDD", { kind: "gdd-from-docs" }],
+    ["GDD'deki oyunu yap", { kind: "gdd-from-docs" }],
+    ["Build the game following the GDD/TDD split", { kind: "gdd-from-docs" }],
+    // A link beside an idea is a reference, like a path.
+    [
+      "Build this game from scratch: a lantern city where the fog retreats from every lit street; mood board at https://example.com/board",
+      { kind: "idea", ideaText: "Build this game from scratch: a lantern city where the fog retreats from every lit street; mood board at https://example.com/board" },
+    ],
+  ])("%s → no named document", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it.each([

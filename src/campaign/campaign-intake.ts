@@ -154,7 +154,7 @@ function unreadDocumentIn(msg: IncomingMessage): Extract<CampaignIntent, { kind:
  * The opening quote stands after a space so a Turkish suffix apostrophe
  * ("GDD'li … docs/x.md'yi") is not read as one.
  */
-const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))["'`”’]/giu;
+const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx))["'`”’]/giu;
 
 /**
  * A document path the message names: relative, absolute (/x, C:\x) or from
@@ -163,7 +163,32 @@ const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.
  * extracted at all, and the campaign discovered whichever design docs/ held.
  */
 const DOCUMENT_PATH_RE =
-  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))(?=$|[\s"'`),.:;!?”’])/giu;
+  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx))(?=$|[\s"'`),.:;!?”’])/giu;
+
+/** A link, which the manager refuses by name rather than reading another design in its place. */
+const LINK_RE = /(?:^|[\s"'`(:“‘<])((?:https?|ftp|file):\/\/[^\s"'`<>()“”‘’]+?)(?=[.,;:!?]*(?:$|[\s"'`<>)”’]))/giu;
+
+/**
+ * A name with GDD in it and no extension the path pattern reads — "docs/Foo_GDD",
+ * "FooGDD", "Foo_GDD.html". It was a bare "the GDD", and discovery built
+ * another document.
+ */
+const NAME_TOKEN_RE =
+  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/]|~[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]*[\p{L}\p{N}_~-])(?=$|[\s"'`),.:;!?”’])/giu;
+const GDD_ENDS_NAME_RE = /[\p{L}\p{N}][_-]?(?:gdd|game[_-]*design[_-]*doc(?:ument)?)s?(?:[_-]?v?\d+)?$|^(?:gdd|game[_-]*design[_-]*doc(?:ument)?)s?_/iu;
+
+/** A file name that says GDD — not "the GDD" itself, a word built on it ("GDD-driven"), nor "GDD/TDD". */
+function isGddName(token: string): boolean {
+  const file = token.split(/[\\/]/).pop()!;
+  if (!refersToGdd(file)) return false;
+  return file !== token || /\.[\p{L}\p{N}]{1,8}$/u.test(file) || GDD_ENDS_NAME_RE.test(file);
+}
+
+/** A link names a document when its last segment does: an extension the path pattern reads, or GDD. */
+function linkNamesDocument(link: string): boolean {
+  const last = link.replace(/[?#].*$/, "").split("/").pop() ?? "";
+  return /\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx)$/i.test(last) || refersToGdd(last);
+}
 
 /** Documents that sit beside a design — a style sheet, a changelog, a readme — and are not it when the message names it too. */
 const SUPPORT_DOCUMENT_WORDS = new Set(["style", "styles", "stylesheet", "styleguide", "stil", "changelog", "readme", "license", "licence", "contributing"]);
@@ -196,14 +221,30 @@ function namedDocumentsIn(text: string): NamedDocument[] {
     const at = m.index + m[0].length - 1 - m[1]!.length;
     named.push({ path: m[1]!, at, end: at + m[1]!.length });
   }
-  // Quoted spans blanked to the same length, so every position still holds.
-  const unquoted = text.replace(QUOTED_DOCUMENT_PATH_RE, (span) => " ".repeat(span.length));
-  for (const m of unquoted.matchAll(DOCUMENT_PATH_RE)) {
+  // Each span found is blanked to the same length, so every position still
+  // holds and no later pattern reads a part of it again.
+  const blank = (s: string, spans: readonly NamedDocument[]): string =>
+    spans.reduce((acc, span) => acc.slice(0, span.at) + " ".repeat(span.end - span.at) + acc.slice(span.end), s);
+  let unread = blank(text, named);
+  const links: NamedDocument[] = [];
+  for (const m of unread.matchAll(LINK_RE)) {
+    const end = m.index + m[0].length;
+    links.push({ path: m[1]!, at: end - m[1]!.length, end });
+  }
+  named.push(...links.filter((link) => linkNamesDocument(link.path)));
+  unread = blank(unread, links);
+  const paths: NamedDocument[] = [];
+  for (const m of unread.matchAll(DOCUMENT_PATH_RE)) {
     const end = m.index + m[0].length;
     let at = end - m[1]!.length;
-    const head = /[\\/]/.test(m[1]!) ? null : SPLIT_PATH_HEAD_RE.exec(unquoted.slice(0, at));
+    const head = /[\\/]/.test(m[1]!) ? null : SPLIT_PATH_HEAD_RE.exec(unread.slice(0, at));
     if (head) at = head.index + head[0].indexOf(head[1]!);
-    named.push({ path: text.slice(at, end), at, end });
+    paths.push({ path: text.slice(at, end), at, end });
+  }
+  named.push(...paths);
+  for (const m of blank(unread, paths).matchAll(NAME_TOKEN_RE)) {
+    const end = m.index + m[0].length;
+    if (isGddName(m[1]!)) named.push({ path: m[1]!, at: end - m[1]!.length, end });
   }
   return named.sort((a, b) => a.at - b.at);
 }

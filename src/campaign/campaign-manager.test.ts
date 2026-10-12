@@ -10328,6 +10328,82 @@ describe("CampaignManager", () => {
       expect(told("chat-idea")).not.toContain("Building from");
     });
 
+    /**
+     * A GDD named with no extension, as a .pptx or .html, or by a link was a
+     * bare "the GDD", and discovery started an immediate build of
+     * docs/Game_GDD.md — another document.
+     */
+    describe("a design named without a readable extension, or by a link", () => {
+      const refusedWithoutBuilding = (chatId: string): string => {
+        const said = told(chatId);
+        expect(said).not.toContain("Building from");
+        expect(storage.hasActiveForChat(chatId)).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+        return said;
+      };
+
+      it.each([
+        ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD.md"],
+        ["Build the game in QuillmoorGDD", "docs/QuillmoorGDD.md"],
+        ["Quillmoor_GDD'deki oyunu yap", "docs/Quillmoor_GDD.md"],
+        // A file that is called exactly that is that file.
+        ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD"],
+      ])("%s builds %s, the document with that name", async (text, rel) => {
+        writeFileSync(join(projectRoot, rel), DESIGN);
+        // Older than the repository's own GDD, which discovery would take instead.
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(join(projectRoot, rel), hourAgo, hourAgo);
+        expect(await say("chat-stem", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-stem");
+        expect(campaign?.gddPath).toBe(rel);
+        expect(campaign?.gddText).toBe(DESIGN);
+        expect(told("chat-stem")).toContain(`Building from \`${rel}\``);
+      });
+
+      it("names every document the name could be, and builds none of them", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.txt"), DESIGN);
+        expect(await say("chat-two", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        const said = refusedWithoutBuilding("chat-two");
+        expect(said).toContain("`docs/Quillmoor_GDD.md`");
+        expect(said).toContain("`docs/Quillmoor_GDD.txt`");
+      });
+
+      it("says a name with no document behind it could not be read", async () => {
+        expect(await say("chat-none", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        expect(refusedWithoutBuilding("chat-none")).toContain("could not read `docs/Quillmoor_GDD`");
+      });
+
+      it("does not read a file with no extension as the design when it is not text", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00]));
+        expect(await say("chat-binary", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        expect(refusedWithoutBuilding("chat-binary")).toContain("could not read `docs/Quillmoor_GDD`");
+      });
+
+      it("refuses a link in so many words", async () => {
+        expect(await say("chat-link", "Build this game: https://example.com/files/Quillmoor_GDD.md")).toBe(true);
+        expect(refusedWithoutBuilding("chat-link")).toContain("`https://example.com/files/Quillmoor_GDD.md` is a link");
+      });
+
+      it("refuses a format no design is read from, even when the file is there", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.html"), `<html><body>${DESIGN}</body></html>`);
+        expect(await say("chat-html", "Build this game: docs/Quillmoor_GDD.html")).toBe(true);
+        expect(refusedWithoutBuilding("chat-html")).toContain("`docs/Quillmoor_GDD.html` is not a format I read a design from");
+      });
+
+      it("reads a named PowerPoint deck through the document extractor", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pptx"), "not a deck");
+        expect(await say("chat-pptx", "Build this game: docs/Quillmoor_GDD.pptx")).toBe(true);
+        expect(refusedWithoutBuilding("chat-pptx")).toContain("`docs/Quillmoor_GDD.pptx`, but no text could be read from it");
+      });
+
+      // A drive letter names no place on this machine unless it is Windows — and there, not this project.
+      it("refuses a drive-letter path as outside the project", async () => {
+        expect(await say("chat-drive", "Build the game in C:\\Games\\Quillmoor_GDD.odt")).toBe(true);
+        expect(refusedWithoutBuilding("chat-drive")).toContain("is outside this project");
+      });
+    });
+
     it("says a named document that is not there could not be read, and builds no other design", async () => {
       expect(await say("chat-missing", "Build this game: docs/Missing_GDD.md")).toBe(true);
       const said = told("chat-missing");

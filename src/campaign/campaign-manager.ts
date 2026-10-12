@@ -25,7 +25,7 @@ import {
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
@@ -10368,14 +10368,31 @@ export class CampaignManager {
   private readNamedGdd(named: string): { text: string; path: string | undefined; source: string } | { refusal: string } {
     const notInstead = "I am not starting from another design in the repo in its place.";
     const located = locateNamedGdd(this.projectRoot, named);
-    if (!("path" in located)) {
+    if ("link" in located) {
+      return { refusal: `\`${named}\` is a link, and I build only from a design inside this project — download it into docs/, or share the file here. ${notInstead}` };
+    }
+    if ("outside" in located) {
       return { refusal: `\`${named}\` is outside this project, and I build only from a design inside it — copy it into docs/, or share the file here. ${notInstead}` };
     }
-    const source = located.path;
+    if ("several" in located) {
+      return {
+        refusal: `\`${named}\` could be any of ${located.several.map((rel) => `\`${rel}\``).join(", ")} — name the one to build from. ${notInstead}`,
+      };
+    }
     const unreadable = { refusal: `I could not read \`${named}\` — check the path, or share the document and I'll build from that. ${notInstead}` };
-    if (!RICH_DOCUMENT_EXTENSIONS.some((ext) => source.toLowerCase().endsWith(ext))) {
+    if ("missing" in located) return unreadable;
+    const source = located.path;
+    const extension = extname(source).toLowerCase();
+    if (extension === "" || NAMED_TEXT_EXTENSIONS.includes(extension)) {
       const text = readGddFile(this.projectRoot, source);
-      return text ? { text, path: source, source } : unreadable;
+      // A file with no extension is read as text only when it is text.
+      return text && !text.includes("\u0000") ? { text, path: source, source } : unreadable;
+    }
+    if (!RICH_DOCUMENT_EXTENSIONS.some((ext) => ext === extension)) {
+      return {
+        refusal:
+          `\`${source}\` is not a format I read a design from — Markdown, TXT, PDF, Word, ODT, RTF or PowerPoint. Save it as one of those, or paste the design into the message. ${notInstead}`,
+      };
     }
     const raw = readGddBytes(this.projectRoot, source);
     if (!raw) return unreadable;
@@ -10383,7 +10400,7 @@ export class CampaignManager {
     if (!text?.trim()) {
       return {
         refusal:
-          `I found \`${named}\`, but no text could be read from it — paste the design into the message, or keep it as Markdown, TXT or a PDF with selectable text. ${notInstead}`,
+          `I found \`${source}\`, but no text could be read from it — paste the design into the message, or keep it as Markdown, TXT or a PDF with selectable text. ${notInstead}`,
       };
     }
     return { text, path: this.persistSuppliedGdd(text, basename(source)), source };
@@ -11170,17 +11187,45 @@ function sha256Of(text: string): string {
  * root is compared in both spellings (/var against /private/var on macOS). A
  * relative name that is not where it says but is in docs/ is that one —
  * "with or without docs/".
+ *
+ * A NAME WITHOUT AN EXTENSION A DESIGN IS READ FROM IS THE FILE THAT NAME
+ * STARTS. "docs/Foo_GDD" and "FooGDD" were a bare "the GDD", and discovery
+ * built docs/Game_GDD.md — another document. The name is the one there with
+ * a design extension; none is missing, several are named back to the user.
+ * A link is not a place in the project at all.
  */
-function locateNamedGdd(projectRoot: string, named: string): { path: string } | { outside: true } {
+function locateNamedGdd(
+  projectRoot: string,
+  named: string,
+): { path: string } | { outside: true } | { link: true } | { missing: true } | { several: string[] } {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(named)) return { link: true };
   const spelled = /^~[\\/]/.test(named) ? join(homedir(), named.slice(2)) : named;
   // A drive-letter path names no place on this machine unless it is Windows;
   // elsewhere it resolves as a folder called "C:" inside the project.
   if (/^[a-z]:[\\/]/i.test(spelled) && process.platform !== "win32") return { outside: true };
-  let rel = projectRelativeTarget(projectRoot, spelled);
+  const rel = projectRelativeTarget(projectRoot, spelled);
   if (rel === undefined) return { outside: true };
-  if (!isAbsolute(spelled) && !existsSync(join(projectRoot, rel)) && existsSync(join(projectRoot, "docs", rel))) rel = `docs/${rel}`;
-  return pathIsInsideProject(projectRoot, rel) ? { path: rel } : { outside: true };
+  const places = isAbsolute(spelled) ? [rel] : [rel, `docs/${rel}`];
+  const isFile = (path: string): boolean => {
+    try {
+      return statSync(join(projectRoot, path)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const inside = (path: string): { path: string } | { outside: true } =>
+    pathIsInsideProject(projectRoot, path) ? { path } : { outside: true };
+  const exact = places.find(isFile);
+  if (exact !== undefined) return inside(exact);
+  if (NAMED_DESIGN_EXTENSIONS.includes(extname(rel).toLowerCase())) return { missing: true };
+  const found = places.flatMap((place) => NAMED_DESIGN_EXTENSIONS.map((ext) => `${place}${ext}`)).filter(isFile);
+  if (found.length > 1) return { several: found };
+  return found.length === 1 ? inside(found[0]!) : { missing: true };
 }
+
+/** What a design named in chat is read from: text as it is, the rest through the document extractor. */
+const NAMED_TEXT_EXTENSIONS: readonly string[] = [".md", ".markdown", ".txt"];
+const NAMED_DESIGN_EXTENSIONS: readonly string[] = [...NAMED_TEXT_EXTENSIONS, ".docx", ".odt", ".rtf", ".pdf", ".pptx"];
 
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
   return readGddBytes(projectRoot, gddPath)?.toString("utf8");
