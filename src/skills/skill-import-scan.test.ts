@@ -55,7 +55,7 @@ describe("findOutsideImports", () => {
     expect(scan('const m = await import("./" + name);')).toEqual(["import() with a computed specifier"]);
     expect(scan("const m = await import(`./${name}.js`);")).toEqual(["import() with a computed specifier"]);
     expect(scan("const m = require(name);")).toEqual(["require() with a computed specifier"]);
-    expect(scan('import { createRequire } from "node:module";\nconst r = createRequire(import.meta.url);')).toEqual(["createRequire()", '"node:module"']);
+    expect(scan('import { createRequire } from "node:module";\nconst r = createRequire(import.meta.url);')).toEqual(['"node:module"']);
   });
 
   it("exempts type-only imports (erased before anything runs), but not inline type modifiers", () => {
@@ -161,7 +161,7 @@ describe("findOutsideImports", () => {
     expect(scan('require.call(null, "evil-pkg");')).toEqual(asValue);
     expect(scan('require?.call(null, "evil-pkg");')).toEqual(asValue);
     expect(scan('[\\u0072equire][0]("evil-pkg");')).toEqual(asValue);
-    expect(scan('const m = module["require"]("evil-pkg");')).toEqual(asValue);
+    expect(scan('const m = module["require"]("evil-pkg");')).toEqual(["module[…]", ...asValue]);
   });
 
   // Comments and strings are read as code too. A word after `require` on the
@@ -229,13 +229,37 @@ describe("findOutsideImports", () => {
   });
 
   it("refuses the loader's internals and the node:module built-in that hands them out", () => {
-    expect(scan('module.constructor._load("evil-pkg", module);')).toEqual(["_load()"]);
-    expect(scan('import { Module } from "node:module";\nModule._load("evil-pkg");')).toEqual(['"node:module"', "_load()"]);
+    expect(scan('module.constructor._load("evil-pkg", module);')).toEqual(["module.constructor"]);
+    expect(scan('import { Module } from "node:module";\nModule._load("evil-pkg");')).toEqual(['"node:module"']);
     expect(scan('const { Module } = require("module");')).toEqual(['"module"']);
     expect(scan('process.dlopen(module, "/abs/evil.node");')).toEqual(["dlopen()"]);
-    expect(scan('process.getBuiltinModule("module").createRequire(__filename)("evil-pkg");')).toEqual(['"module"', "createRequire()"]);
+    expect(scan('process.getBuiltinModule("module").createRequire(__filename)("evil-pkg");')).toEqual(['"module"']);
     expect(scan("process.getBuiltinModule(name);")).toEqual(["getBuiltinModule() with a computed specifier"]);
     expect(scan('const fs = process.getBuiltinModule("node:fs");')).toEqual([]);
+  });
+
+  // In CommonJS `module.constructor` is the Module object, whose loader entry
+  // points take a path decided at run time. Rather than name them, no
+  // property of `module` is read but `exports` and `require` (which is
+  // `require`, checked like it).
+  it("reads no property of module but exports and require: none leads to the Module object", () => {
+    const viaConstructor = ["module.constructor"];
+    expect(scan('new module.constructor("x").load(__dirname + "/../../outside/evil.js");')).toEqual(viaConstructor);
+    expect(scan("module.constructor._resolveFilename = (request) => request;")).toEqual(viaConstructor);
+    expect(scan("module.constructor.registerHooks({ resolve: hook });")).toEqual(viaConstructor);
+    expect(scan('module.constructor._extensions[".js"](target, file);')).toEqual(viaConstructor);
+    expect(scan("module.constructor.runMain(file);")).toEqual(viaConstructor);
+    expect(scan("module /* c */ ?. /* c */ constructor.runMain(file);")).toEqual(viaConstructor);
+    expect(scan("\\u006dodule.c\\u006fnstructor.runMain(file);")).toEqual(viaConstructor);
+    expect(scan('module["constructor"].runMain(file);')).toEqual(["module[…]"]);
+    expect(scan('module?.["constructor"].runMain(file);')).toEqual(["module[…]"]);
+    expect(scan("module.parent.constructor.runMain(file);")).toEqual(["module.parent"]);
+    expect(scan("module.load(file);")).toEqual(["module.load"]);
+    // As code, a comment ending in "module." followed by a code line reads `module.export`.
+    expect(scan("// helpers for this module.\nexport const tools = [];")).toEqual(["module.export"]);
+    expect(scan('module.exports = { tools: [] };\nconst e = module?.exports;\nmodule.require("./lib/a.js");')).toEqual([]);
+    expect(scan("// this module exports the tools\nexport const tools = [];")).toEqual([]);
+    expect(scan("/**\n * Helpers for this module.\n * Kept apart from the tools.\n */\nexport const tools = [];")).toEqual([]);
   });
 
   // The hash skips .git/, so a file there can change without invalidating the

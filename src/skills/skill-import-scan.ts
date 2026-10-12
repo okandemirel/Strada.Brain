@@ -22,13 +22,16 @@
 // rule: CommonJS follows it for a directory specifier (`require("./lib")`).
 // `require` appears only called that way: `(0, require)(…)`, `require.call(…)`
 // or `const r = require` hand the loader to code that calls it with a name the
-// scan never sees. The loader's internals (`createRequire`, `Module._load`,
-// `process.dlopen`), the `node:module` built-in that hands them out, and the
-// JSX pragmas that make tsx add an import (`@jsxRuntime`, `@jsxImportSource`)
-// do not appear at all. Dependencies must be vendored into the skill directory
-// and imported by relative path, or bundled into it. Type-only imports
-// (`import type`) and declaration files are exempt: they are erased before
-// anything runs.
+// scan never sees. The Module object loads by a path decided at run time
+// through more entry points than a list can hold (`load`, `_resolveFilename`,
+// `registerHooks`, `runMain`, …), so it is not reached by name at all: the
+// `node:module` built-in is refused, and no property of the CommonJS `module`
+// variable is read but `exports` and `require` (not `module.constructor`, not
+// `module[…]`). `process.dlopen` and the JSX pragmas that make tsx add an
+// import (`@jsxRuntime`, `@jsxImportSource`) do not appear at all.
+// Dependencies must be vendored into the skill directory and imported by
+// relative path, or bundled into it. Type-only imports (`import type`) and
+// declaration files are exempt: they are erased before anything runs.
 //
 // This is a static text scan, and deliberately conservative: it reads the raw
 // source, comments and strings included, so text that merely looks like a
@@ -44,9 +47,11 @@
 // text, so it applies only where the scan can place the statement in code with
 // certainty (maskCertainCode). It covers the module graph Node and tsx resolve
 // on the skill's behalf; it is not a sandbox — code that reaches the loader or
-// other files through a name computed at run time (`module[name]`,
-// `arguments[1]`, `eval`) does so in plain sight in the source the user
-// approves.
+// other files through a name computed at run time (`arguments[1]`, `eval`),
+// or through `module` handed on as a value (`const m = module`), does so in
+// plain sight in the source the user approves. The word `module` is too common
+// in prose for the scan to refuse it as a value: that refused one source file
+// in ten in this repository; refusing its properties refuses one in a hundred.
 // ---------------------------------------------------------------------------
 
 import { isBuiltin } from "node:module";
@@ -92,8 +97,13 @@ const LOADING_FUNCTIONS: ReadonlySet<string> = new Set(["import", "require", "ge
  * pair is a syntax error, so nothing runs.
  */
 const EXPRESSION_WORDS: ReadonlySet<string> = new Set(["in", "instanceof", "of", "as", "satisfies", "implements"]);
-/** The loader's internals: they load by a name or path decided at run time, so they may not appear at all. */
-const LOADER_INTERNALS: ReadonlySet<string> = new Set(["createRequire", "_load", "dlopen"]);
+/**
+ * The properties code may read from the CommonJS `module` variable. Others
+ * lead to the Module object (`constructor`, or `parent` and its own) or load
+ * by a path decided at run time themselves (`load`, `_compile`).
+ * `module.require` is `require`, whose call the scan checks.
+ */
+const MODULE_PROPERTIES: ReadonlySet<string> = new Set(["exports", "require"]);
 /** Comment pragmas that make esbuild (tsx) add `import … from "<source>/jsx-runtime"` to a JSX file. */
 const JSX_RUNTIME_PRAGMAS: ReadonlySet<string> = new Set(["jsxRuntime", "jsxImportSource"]);
 /** Directory names excluded from the trust hash (skill-trust.ts). `node_modules` is NOT here (round 7 #10). */
@@ -210,11 +220,20 @@ export function findOutsideImports(skillRoot: string, file: string, source: stri
   };
   for (const match of code.matchAll(IDENTIFIER)) {
     let name = identifierName(match[0]);
-    if (LOADER_INTERNALS.has(name)) found.add(`${name}()`);
+    if (name === "dlopen") found.add("dlopen()");
     if (JSX_RUNTIME_PRAGMAS.has(name)) found.add(`@${name}`);
-    if (name !== "from" && !LOADING_FUNCTIONS.has(name)) continue;
+    if (name !== "from" && name !== "module" && !LOADING_FUNCTIONS.has(name)) continue;
     const end = match.index + match[0].length;
     let at = skipGap(end);
+    if (name === "module") {
+      // `module.x`, `module?.x`, `module[…]`, `module?.[…]`; a dot followed
+      // by anything else is a syntax error (prose: "this module.").
+      const member = code.startsWith("?.", at) ? skipGap(at + 2) : code[at] === "." ? skipGap(at + 1) : at;
+      const property = member === at ? undefined : identifierAt(code, member);
+      if (property !== undefined && !MODULE_PROPERTIES.has(property.name)) found.add(`module.${property.name}`);
+      else if (property === undefined && code[member] === "[") found.add("module[…]");
+      continue;
+    }
     if (name === "from" || name === "import") {
       // `… from "x"` (static import / re-export) and side-effect `import "x"`.
       const literal = literalAt(code, at);

@@ -692,7 +692,8 @@ function outsideImportRefusal(found: readonly string[]): string {
     "Workspace skill loads code from outside its directory, or from a file the scan does not read, which the approval cannot cover " +
     "(only node: built-ins other than node:module, and literal relative imports that never climb out of the skill directory " +
     "or into .git and name a JavaScript/TypeScript, extensionless, .json or .node file, can be approved; require may appear " +
-    'only as a direct call with a literal, and comments and strings are read too; a package.json "main" is held to the same rule; ' +
+    "only as a direct call with a literal, no property of module but exports and require is read, and comments and strings " +
+    'are read too; a package.json "main" is held to the same rule; ' +
     `vendor or bundle dependencies into the skill): ${shown.join(", ")}`
   );
 }

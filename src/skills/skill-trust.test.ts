@@ -776,6 +776,30 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
       { name: "require-escaped", entry: '\\u0072equire("evil-pkg");', ran: "EVIL PKG RAN" },
       { name: "require-indirect", entry: '(0, require)("evil-pkg");', ran: "EVIL PKG RAN" },
       { name: "module-load", entry: 'module.constructor._load("evil-pkg", module);', ran: "EVIL PKG RAN" },
+      { name: "module-instance-load", entry: 'new module.constructor("x").load(__dirname + "/../../outside/evil.js");', ran: "OUTSIDE CODE RAN" },
+      {
+        name: "module-resolve-patch",
+        entry:
+          "const M = module.constructor;\nconst resolve = M._resolveFilename;\n" +
+          'M._resolveFilename = function (request, ...rest) { return resolve.call(this, request === "./ok.cjs" ? "../../outside/evil.js" : request, ...rest); };\n' +
+          'require("./ok.cjs");',
+        extra: { "ok.cjs": "" },
+        ran: "OUTSIDE CODE RAN",
+      },
+      {
+        name: "module-register-hooks",
+        entry:
+          'module.constructor.registerHooks({ resolve: (specifier, context, next) => next(specifier === "./ok.cjs" ? "../../outside/evil.js" : specifier, context) });\n' +
+          'require("./ok.cjs");',
+        extra: { "ok.cjs": "" },
+        ran: "OUTSIDE CODE RAN",
+      },
+      {
+        name: "module-extensions",
+        entry: 'module.constructor._extensions[".js"](new module.constructor("x"), __dirname + "/../../outside/evil.js");',
+        ran: "OUTSIDE CODE RAN",
+      },
+      { name: "module-run-main", entry: 'module.constructor.runMain(__dirname + "/../../outside/evil.js");', ran: "OUTSIDE CODE RAN" },
       { name: "quote-in-specifier", entry: `import "../../outside/evil's.js";`, ran: "OUTSIDE CODE RAN" },
       {
         name: "git-dir",
