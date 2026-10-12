@@ -1,13 +1,16 @@
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { parseTestRun } from "./nunit-results.js";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { beforeAll, afterEach, describe, expect, it } from "vitest";
 import { createLogger } from "../../utils/logger.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { ModuleCreateTool } from "../../agents/tools/strada/module-create.js";
 import { ComponentCreateTool } from "../../agents/tools/strada/component-create.js";
 import { SystemCreateTool } from "../../agents/tools/strada/system-create.js";
+import { MediatorCreateTool } from "../../agents/tools/strada/mediator-create.js";
+import { CORE_INSTALL_PATH } from "../../agents/tools/strada/module-folders.js";
 import { AnalyzeProjectTool } from "../../agents/tools/strada/analyze-project.js";
 import { StradaAnalyzer } from "../../intelligence/strada-analyzer.js";
 import type { ToolContext } from "../../agents/tools/tool.interface.js";
@@ -20,18 +23,9 @@ type UnityInstall = {
   version: string;
 };
 
-const unityCandidates: UnityInstall[] = [
-  {
-    executable:
-      process.env["UNITY_PATH"] ??
-      "/Applications/Unity/Hub/Editor/6000.0.67f1/Unity.app/Contents/MacOS/Unity",
-    version: process.env["UNITY_VERSION"] ?? "6000.0.67f1",
-  },
-  {
-    executable: "/Applications/Unity/Hub/Editor/6000.0.58f2/Unity.app/Contents/MacOS/Unity",
-    version: "6000.0.58f2",
-  },
-];
+// The editors Unity Hub installs. Pinned versions here named editors no machine
+// had, so the fixture could not run anywhere it was asked to (cso-071).
+const HUB_EDITORS = "/Applications/Unity/Hub/Editor";
 
 beforeAll(() => {
   createLogger("error", "/tmp/strada-unity-fixture-test.log");
@@ -55,7 +49,7 @@ describe.skipIf(!runLocalUnityFixtureTests)(
       const projectPath = await mkdtemp(join(tmpdir(), "strada-unity-fixture-"));
       tempDirs.push(projectPath);
 
-      await createMinimalUnityProject(projectPath, stradaCorePath, unity.version);
+      await createMinimalUnityProject(projectPath, stradaCorePath, unity);
 
       const context: ToolContext = {
         projectPath,
@@ -78,10 +72,16 @@ describe.skipIf(!runLocalUnityFixtureTests)(
           namespace: "Game.Modules.Combat",
           include_system: true,
           include_service: true,
+          include_controller: true,
+          include_data: true,
+          include_view: true,
         },
         context,
       );
-      expect(moduleResult.isError).toBeUndefined();
+      expect(moduleResult.isError, String(moduleResult.content)).toBeUndefined();
+      // The module is written from the vendored Core's own templates, not
+      // Brain's fallback: that is what this compile is meant to prove.
+      expect(moduleResult.metadata?.["templates"]).toBe("core");
 
       const positionResult = await componentTool.execute(
         {
@@ -140,6 +140,17 @@ describe.skipIf(!runLocalUnityFixtureTests)(
       );
       expect(burstSystemResult.isError).toBeUndefined();
 
+      const mediatorResult = await new MediatorCreateTool().execute(
+        {
+          name: "Combat",
+          view_type: "CombatView",
+          path: "Assets/Modules/CombatModule/Scripts/Views/CombatMediator.cs",
+          namespace: "Game.Modules.Combat",
+        },
+        context,
+      );
+      expect(mediatorResult.isError, String(mediatorResult.content)).toBeUndefined();
+
       await writeFile(
         join(projectPath, "Assets", "Tests", "EditMode", "Strada.Brain.UnityFixture.EditModeTests.asmdef"),
         buildFixtureTestAsmdef(),
@@ -189,24 +200,52 @@ describe.skipIf(!runLocalUnityFixtureTests)(
   },
 );
 
+/** UNITY_PATH, or the newest Unity 6000 editor Unity Hub installed. */
 async function resolveUnityInstall(): Promise<UnityInstall> {
-  for (const candidate of unityCandidates) {
+  const explicit = process.env["UNITY_PATH"];
+  if (explicit) {
+    await access(explicit);
+    const version = process.env["UNITY_VERSION"] ?? /Editor\/([^/]+)\//.exec(explicit)?.[1];
+    if (!version) throw new Error(`Set UNITY_VERSION: no editor version in UNITY_PATH ${explicit}`);
+    return { executable: explicit, version };
+  }
+  const installed = (await readdir(HUB_EDITORS).catch(() => [] as string[]))
+    .filter((v) => /^6000\./.test(v))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .reverse();
+  for (const version of installed) {
+    const executable = join(HUB_EDITORS, version, "Unity.app", "Contents", "MacOS", "Unity");
     try {
-      await access(candidate.executable);
-      return candidate;
+      await access(executable);
+      return { executable, version };
     } catch {
       continue;
     }
   }
 
   throw new Error(
-    "Unity executable not found. Set UNITY_PATH to a Unity 6000 editor binary before running this test.",
+    `No Unity 6000 editor under ${HUB_EDITORS}. Set UNITY_PATH to a Unity 6000 editor binary before running this test.`,
   );
+}
+
+/** The checkout beside this repo — the main checkout's sibling when run from a worktree. */
+function siblingCoreCheckouts(): string[] {
+  const out = [join(process.cwd(), "..", "Strada.Core")];
+  try {
+    const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: process.cwd(),
+    }).toString().trim();
+    out.push(join(dirname(common), "..", "Strada.Core"));
+  } catch {
+    // Not a git checkout: the cwd sibling is all there is.
+  }
+  return out;
 }
 
 async function resolveStradaCorePath(): Promise<string> {
   const candidates = [
     process.env["STRADA_CORE_PATH"],
+    ...siblingCoreCheckouts(),
     "/tmp/Strada.Core-audit",
     "/tmp/Strada.Core-ci",
   ].filter((value): value is string => typeof value === "string" && value.length > 0);
@@ -229,13 +268,22 @@ async function resolveStradaCorePath(): Promise<string> {
 async function createMinimalUnityProject(
   projectPath: string,
   stradaCorePath: string,
-  unityVersion: string,
+  unity: UnityInstall,
 ): Promise<void> {
   await mkdir(join(projectPath, "Assets", "Editor"), { recursive: true });
   await mkdir(join(projectPath, "Assets", "Modules"), { recursive: true });
   await mkdir(join(projectPath, "Assets", "Tests", "EditMode"), { recursive: true });
   await mkdir(join(projectPath, "Packages"), { recursive: true });
   await mkdir(join(projectPath, "ProjectSettings"), { recursive: true });
+
+  // Vendored where a Strada project carries it, which is where the generators
+  // read its layout and templates from; referenced in place, strada_create_module
+  // found no framework and refused. A copy, so the editor's import never writes
+  // into the checkout.
+  await cp(stradaCorePath, join(projectPath, ...CORE_INSTALL_PATH.split("/")), {
+    recursive: true,
+    filter: (source) => ![".git", "bin", "obj"].includes(basename(source)),
+  });
 
   const manifest = JSON.parse(
     await readFile(join(stradaCorePath, "manifest.json"), "utf-8"),
@@ -255,8 +303,8 @@ async function createMinimalUnityProject(
       {
         dependencies: {
           ...moduleDependencies,
-          "com.strada.core": `file:${stradaCorePath}`,
-          "com.unity.test-framework": "1.1.33",
+          "com.strada.core": `file:${CORE_INSTALL_PATH.replace(/^Packages\//, "")}`,
+          "com.unity.test-framework": await bundledTestFrameworkVersion(unity.executable),
         },
       },
       null,
@@ -267,9 +315,22 @@ async function createMinimalUnityProject(
 
   await writeFile(
     join(projectPath, "ProjectSettings", "ProjectVersion.txt"),
-    `m_EditorVersion: ${unityVersion}\n`,
+    `m_EditorVersion: ${unity.version}\n`,
     "utf-8",
   );
+}
+
+/** The Test Framework version the editor ships with, so nothing has to be downloaded. */
+async function bundledTestFrameworkVersion(unityExecutable: string): Promise<string> {
+  const manifest = join(
+    dirname(dirname(unityExecutable)),
+    "Resources", "PackageManager", "BuiltInPackages", "com.unity.test-framework", "package.json",
+  );
+  try {
+    return (JSON.parse(await readFile(manifest, "utf-8")) as { version: string }).version;
+  } catch {
+    return "1.6.0";
+  }
 }
 
 async function runUnityFixture(projectPath: string, unityExecutable: string): Promise<{
@@ -345,12 +406,17 @@ function tail(content: string, lineCount: number): string {
 }
 
 function buildFixtureTestAsmdef(): string {
+  // The test-assembly form the module's own Tests/Editor assembly uses;
+  // optionalUnityReferences is the pre-2019 spelling.
   return JSON.stringify(
     {
       name: "Strada.Brain.UnityFixture.EditModeTests",
-      references: ["Game.Modules.Combat"],
+      references: ["Game.Modules.Combat", "Strada.Core", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
       includePlatforms: ["Editor"],
-      optionalUnityReferences: ["TestAssemblies"],
+      overrideReferences: true,
+      precompiledReferences: ["nunit.framework.dll"],
+      autoReferenced: false,
+      defineConstraints: ["UNITY_INCLUDE_TESTS"],
     },
     null,
     2,
@@ -371,16 +437,22 @@ namespace StradaFixture.Tests
             var validatedTypes = new[]
             {
                 typeof(CombatModuleConfig),
+                typeof(ICombatService),
+                typeof(CombatService),
+                typeof(CombatController),
+                typeof(CD_Combat),
+                typeof(CombatConfig),
+                typeof(CombatView),
+                typeof(CombatMediator),
                 typeof(CombatSystem),
                 typeof(MovementSystem),
                 typeof(MovementJobSystem),
                 typeof(MovementBurstSystem),
                 typeof(PositionComponent),
                 typeof(VelocityComponent),
-                typeof(CombatService),
             };
 
-            Assert.That(validatedTypes, Has.Length.EqualTo(8));
+            Assert.That(validatedTypes, Has.Length.EqualTo(14));
         }
     }
 }
