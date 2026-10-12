@@ -1563,8 +1563,9 @@ export function isPlannedMilestone(id: string): boolean {
  *
  * Rows already owned or excluded are left as they are. A waived row keeps its
  * status and waiver, and is given an owner only when it has none (a replan or
- * a move released it): the owner is what judges the row again if an
- * amendment lifts the waiver. The input is not mutated.
+ * a move released it) and the plan does not exclude its heading: the owner is
+ * what judges the row again if an amendment lifts the waiver. The input is
+ * not mutated.
  */
 export function assignOwners(
   rows: readonly RequirementRow[],
@@ -1578,10 +1579,17 @@ export function assignOwners(
   const queued: string[] = [];
   const excluded: string[] = [];
 
+  const exclusionOf = (row: RequirementRow): { item: string } | undefined => {
+    const headings = [...(row.sectionPath ?? []), row.section].filter((h) => h !== "");
+    return row.kind === "claim" ? undefined : exclusions.find((e) => headings.some((h) => exclusionNames(e.head, h)));
+  };
+
   const owned = rows.map((row): RequirementRow => {
     if (row.status === "waived") {
-      // A person's decision: no plan exclusion applies, and the row joins no milestone's count.
-      const owner = row.owner === undefined ? ownerOf(row, planned, finalId) : undefined;
+      // A person's decision: its status stays, and the row joins no milestone's count. No owner
+      // under a heading the plan excludes: once an amendment lifts the waiver, the owner would
+      // judge a row the plan does not build, where an ownerless one is excluded like its siblings.
+      const owner = row.owner === undefined && exclusionOf(row) === undefined ? ownerOf(row, planned, finalId) : undefined;
       return owner === undefined ? row : { ...row, owner: owner.milestoneId, ownership: [...row.ownership, { ...owner, atMs: options.atMs }] };
     }
     if (row.status === "excluded") {
@@ -1592,8 +1600,7 @@ export function assignOwners(
       (byMilestone[row.owner] ??= []).push(row.rid);
       return row;
     }
-    const headings = [...(row.sectionPath ?? []), row.section].filter((h) => h !== "");
-    const exclusion = row.kind === "claim" ? undefined : exclusions.find((e) => headings.some((h) => exclusionNames(e.head, h)));
+    const exclusion = exclusionOf(row);
     if (exclusion !== undefined) {
       excluded.push(row.rid);
       return { ...row, status: "excluded", excludedBecause: `${PLAN_EXCLUSION_PREFIX}${exclusion.item}` };

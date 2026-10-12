@@ -189,6 +189,33 @@ describe("reownLedger", () => {
     ], { atMs: 5_000 });
     expect(byLabel(reread.ledger.rows, "TK-1")).toMatchObject({ status: "open", owner: "m2" });
   });
+
+  it("a waived row under a heading the new plan excludes is given no owner, so lifting the waiver leaves it excluded", () => {
+    const watch = DOC.replace(
+      "## 3. Extras",
+      "### 2.1 Night Watch\nTK-7: The keeper must light the fog lamp at dusk.\nTK-8: The fog lamp must stay lit for 40 seconds.\n\n## 3. Extras",
+    );
+    const ledger = buildLedger(gddOf(watch, 1), LADDER, options)!.ledger;
+    const tk7 = byLabel(ledger.rows, "TK-7");
+    expect(tk7.owner).toBe("m1");
+    tk7.status = "waived";
+    tk7.waiver = { userId: "owner", atMs: 5, reason: "deferred" };
+    const replan = { atMs: 4_000, excluded: ["Night Watch: after launch"] };
+
+    const replanned = reownLedger(ledger, LADDER, replan);
+
+    expect(byLabel(replanned.rows, "TK-7")).toMatchObject({ status: "waived", waiver: { reason: "deferred" } });
+    expect.soft(byLabel(replanned.rows, "TK-7").owner).toBeUndefined();
+    expect(byLabel(replanned.rows, "TK-8")).toMatchObject({ status: "excluded" });
+
+    // The amendment changes what TK-7 asks, so its waiver no longer applies: the plan's exclusion does.
+    const amended = watch.replace("TK-7: The keeper must light the fog lamp at dusk.", "TK-7: The keeper must light the fog lamp an hour before dusk.");
+    const reread = rereadLedger({ ...ledger, rows: replanned.rows }, amended, { gddSha256: "9".repeat(64), gddRevision: 2 }, LADDER, { ...replan, atMs: 5_000 });
+    const lifted = byLabel(reread.ledger.rows, "TK-7");
+    expect(lifted.status).toBe("excluded");
+    expect(lifted.owner).toBeUndefined();
+    expect(byLabel(reread.ledger.rows, "TK-8")).toMatchObject({ status: "excluded" });
+  });
 });
 
 describe("rereadLedger and a waived row that moved", () => {
