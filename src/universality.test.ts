@@ -135,3 +135,36 @@ describe("universality: nothing of a test vehicle in the repository", () => {
     expect([...hits], `passages of a confidential document in publishable files:\n${[...hits].join("\n")}`).toEqual([]);
   });
 });
+
+/**
+ * How the guard reads a file, shown on an invented document: the real one may
+ * not be written here. Each line of a wrapped passage below is shorter than a
+ * shingle, so only reading through the wrapping finds it — as a passage of
+ * the real document was once found by hand, after the guard had passed it.
+ */
+describe("universality: a passage is found through the syntax that wraps it", () => {
+  const index = quoteIndex([
+    "# Harbor rules\n\nEvery lantern keeper polishes the brass hood before the tide turns the harbor silver at dusk.\n",
+  ]);
+
+  it.each([
+    ["a JSDoc block", "/**\n * Every lantern keeper polishes\n * the brass hood before the tide\n */\n"],
+    ["line comments", "// Every lantern keeper polishes\n// the brass hood before the tide\n"],
+    ["hash comments", "# Every lantern keeper polishes\n# the brass hood before the tide\n"],
+    ["string concatenation", 'const rule =\n  "Every lantern keeper polishes " +\n  "the brass hood before the tide";\n'],
+    ["a list joined into one text", 'const rule = [\n  "Every lantern keeper polishes",\n  "the brass hood before the tide",\n].join(" ");\n'],
+    ["joined template literals", "const rule = `Every lantern keeper polishes ` +\n  `the brass hood before the tide`;\n"],
+    ["a newline escape", '{ "note": "Every lantern keeper polishes\\nthe brass hood before the tide" }\n'],
+    ["a backslash line continuation", 'echo "Every lantern keeper polishes \\\nthe brass hood before the tide"\n'],
+  ])("across %s", (_form, text) => {
+    expect(quotedLines(text, index)).not.toEqual([]);
+  });
+
+  it("names the line the passage starts on", () => {
+    expect(quotedLines("/**\n * Every lantern keeper polishes\n * the brass hood before the tide\n */\n", index)).toEqual([2]);
+  });
+
+  it("does not join the same words in another order into the passage", () => {
+    expect(quotedLines('const rule =\n  "the brass hood before the tide " +\n  "Every lantern keeper polishes";\n', index)).toEqual([]);
+  });
+});

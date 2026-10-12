@@ -17,22 +17,39 @@ export function lineAt(text: string, offset: number): number {
 }
 
 /**
+ * What carries one sentence across lines or literals without being part of
+ * it: the comment marker opening a continued line (`*`, `//`, `#`, `--`, a
+ * `>` quote), the joint between two string literals (`" +` and `"` on the
+ * next line, `", "` in a list joined into one text), a backslash line
+ * continuation, a newline escape. A passage wrapped in any of them had a
+ * marker inside every window that spanned the wrap, and passed the guard.
+ */
+const WRAP_SYNTAX = /^[ \t]*(?:(?:\/\/+|\/\*+|\*+\/?|#+|-{2,}|>+)[ \t]*)+|["'`]\s*[+,]?\s*["'`]|\\(?:\r?\n|[nrt])/gm;
+
+/**
  * The text as the char codes a matcher reads, each with the offset it came
- * from: "alnum" keeps lowercase letters and digits only; "prose" lowercases
- * and collapses each whitespace run to one space, the way the owner's
- * shingle scan reads a document.
+ * from: "alnum" keeps lowercase letters and digits only; "prose" lowercases,
+ * reads WRAP_SYNTAX as whitespace, and collapses each whitespace run to one
+ * space, the way the owner's shingle scan reads a document.
  */
 export function project(text: string, mode: "alnum" | "prose"): { codes: Uint16Array; origin: Int32Array } {
+  // Blanked to as many spaces, so every offset still points into `text`.
+  const read = mode === "prose" ? text.replace(WRAP_SYNTAX, (syntax) => " ".repeat(syntax.length)) : text;
   const codes = new Uint16Array(text.length);
   const origin = new Int32Array(text.length);
   let n = 0;
-  for (let i = 0; i < text.length; i++) {
-    let c = text.charCodeAt(i);
+  for (let i = 0; i < read.length; i++) {
+    let c = read.charCodeAt(i);
     if (c >= 65 && c <= 90) c += 32;
     if (mode === "alnum") {
       if (!((c >= 97 && c <= 122) || (c >= 48 && c <= 57))) continue;
     } else if (c === 32 || (c >= 9 && c <= 13) || c === 0xa0) {
-      if (n > 0 && codes[n - 1] === 32) continue;
+      // A run counts from where it ends: blanked markers stretch it back over
+      // earlier lines, and a window opening on it starts at the next word.
+      if (n > 0 && codes[n - 1] === 32) {
+        origin[n - 1] = i;
+        continue;
+      }
       c = 32;
     }
     codes[n] = c;
