@@ -221,7 +221,7 @@ import {
   type SceneWiringIo,
 } from "./scene-wiring.js";
 import { cachedReadFile, forEachFileText, snapshotTree, type TreeSnapshot } from "./project-walk.js";
-import { COMPILABLE_EXT, MUTATION_TOOLS, STRADA_GENERATOR_TOOLS, extractFilePaths } from "./constants.js";
+import { COMPILABLE_EXT, MUTATION_TOOLS, STRADA_GENERATOR_TOOLS, extractFilePaths, generatorWrittenFiles } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
 import { STRADA_WORK_DIVISION } from "../context/strada-work-division.js";
@@ -626,9 +626,18 @@ function debugLog(message: string, meta: Record<string, unknown>): void {
 }
 
 export class StradaConformanceGuard {
-  private touchedFrameworkCode = false;
   private consultedAuthoritativeSource = false;
-  private usedFrameworkGenerator = false;
+  /**
+   * Framework code this run wrote by hand, and what Strada generators wrote.
+   * A generator writes the framework's own shape, so its files need no review;
+   * a run-wide "a generator was used" flag also waved through every later hand
+   * edit, and came to cover MCP generators whose output does not compile
+   * against Core.
+   */
+  private readonly frameworkWrites = new Set<string>();
+  private readonly generatedFiles = new Set<string>();
+  /** A generator call failed and none has succeeded since: the agent is writing framework code some other way. */
+  private generatorFailed = false;
   /** Whether this run tried to run the game, not only to build it. */
   private attemptedPlaymodeVerification = false;
   /** Whether this run asked what art the user already owns. */
@@ -708,6 +717,7 @@ export class StradaConformanceGuard {
     input: Record<string, unknown>,
     isError = false,
     output = "",
+    metadata?: Readonly<Record<string, unknown>>,
   ): void {
     this.generation += 1;
     if (!hasAuthoritativeSource(this.deps)) {
@@ -737,9 +747,18 @@ export class StradaConformanceGuard {
       }
 
       if (STRADA_GENERATOR_TOOLS.has(executedTool.toolName)) {
-        this.touchedFrameworkCode = true;
+        this.generatorFailed = executedTool.isError;
         if (!executedTool.isError) {
-          this.usedFrameworkGenerator = true;
+          // Only a call that was not expanded out of a batch carries its own metadata.
+          const written = [
+            ...extractFilePaths(executedTool.input).filter(isCompilableFile),
+            ...generatorWrittenFiles(executedTool, executedTool.toolName === toolName ? metadata : undefined),
+          ];
+          for (const file of written) {
+            this.generatedFiles.add(this.writeKey(file));
+            const root = moduleRootFor(file);
+            if (root) this.touchedModuleRoots.add(root);
+          }
           // The generator is the RECOMMENDED way to make a module, and this
           // branch used to `continue` straight past the module-root recording
           // below — so a run that followed the advice recorded no module roots,
@@ -785,7 +804,7 @@ export class StradaConformanceGuard {
             isInsideFrameworkPath(filePath, this.deps) ||
             (isInsideAssets(filePath) && this.writesFrameworkApi(executedTool.input, filePath))
           ) {
-            this.touchedFrameworkCode = true;
+            this.frameworkWrites.add(this.writeKey(filePath));
           }
         }
       }
@@ -962,13 +981,18 @@ export class StradaConformanceGuard {
     return this.writtenSources.has(resolvePath(file));
   }
 
+  /** One spelling per file, so a generator's relative path and an edit's absolute one meet. */
+  private writeKey(filePath: string): string {
+    const projectPath = this.opts?.projectPath;
+    return projectPath ? resolvePath(projectPath, filePath) : filePath.replace(/\\/g, "/");
+  }
+
   needsConformanceReview(): boolean {
     if (this.opts?.enabled === false) return false;
     return (
       hasAuthoritativeSource(this.deps) &&
-      this.touchedFrameworkCode &&
-      !this.usedFrameworkGenerator &&
-      !this.consultedAuthoritativeSource
+      !this.consultedAuthoritativeSource &&
+      (this.generatorFailed || [...this.frameworkWrites].some((file) => !this.generatedFiles.has(file)))
     );
   }
 

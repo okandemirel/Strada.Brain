@@ -14,6 +14,9 @@ import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { StradaConformanceGuard } from "./strada-conformance.js";
 import { SelfVerification } from "./self-verification.js";
+import { trackAndRecordToolResults } from "../orchestrator-tool-execution.js";
+import { AgentPhase } from "../agent-state.js";
+import type { ExecutionJournal } from "./execution-journal.js";
 import { MUTATION_TOOLS, STRADA_GENERATOR_TOOLS, stallClassOf } from "./constants.js";
 import { NODE_CORE_TOOLS, NODE_SCOPE_MARKER, selectNodeTools } from "./node-tool-offer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -65,6 +68,98 @@ describe("a module made through an MCP generator is a module the rules read", ()
       expect(guard.needsConformanceReview()).toBe(false);
     });
   }
+});
+
+describe("a generator exempts what it wrote from the conformance review, not the rest of the run", () => {
+  // A successful generator call used to switch the review off for the whole
+  // run, so a later hand edit of framework code made without reading the
+  // source passed — now also after MCP generators whose output does not
+  // compile against Core.
+  const SERVICE_DIR = "Assets/Modules/HarborModule/Scripts/Services";
+  const SERVICE_FILE = `${SERVICE_DIR}/HarborService.cs`;
+  // A file inside the installed Core, spelled the way DEPS names Core.
+  const CORE_FILE = `${DEPS.corePath}/Runtime/Patterns/Service.cs`;
+  const generate =(guard: StradaConformanceGuard, tool: string) =>
+    guard.trackToolCall(
+      tool,
+      { name: "HarborService", namespace: "Game.Modules.Harbor", path: SERVICE_DIR },
+      false,
+      `Created service HarborService (Service) at ${SERVICE_FILE}`,
+      { filesAffected: [SERVICE_FILE] },
+    );
+
+  for (const tool of [...MCP_GENERATORS, "strada_create_module"]) {
+    it(`${tool}: a later hand edit of framework code still needs the review`, () => {
+      const guard = new StradaConformanceGuard(DEPS, { projectPath: "/proj", listDir: () => [] });
+      generate(guard, tool);
+      expect(guard.needsConformanceReview()).toBe(false);
+
+      guard.trackToolCall("file_edit", { path: CORE_FILE }, false, "ok");
+      expect(guard.needsConformanceReview()).toBe(true);
+    });
+  }
+
+  it("where all code counts as framework code: editing what the generator wrote is exempt, another file is not", () => {
+    const guard = new StradaConformanceGuard(DEPS, { projectPath: "/proj", frameworkPathsOnly: false, listDir: () => [] });
+    generate(guard, "strada_create_service");
+
+    guard.trackToolCall("file_edit", { path: SERVICE_FILE }, false, "ok");
+    expect(guard.needsConformanceReview()).toBe(false);
+
+    guard.trackToolCall("file_write", { path: `${SERVICE_DIR}/HarborQueue.cs` }, false, "ok");
+    expect(guard.needsConformanceReview()).toBe(true);
+  });
+
+  it("a hand edit before the generator is not covered by it either", () => {
+    const guard = new StradaConformanceGuard(DEPS, { projectPath: "/proj", listDir: () => [] });
+    guard.trackToolCall("file_edit", { path: CORE_FILE }, false, "ok");
+    generate(guard, "strada_create_controller");
+    expect(guard.needsConformanceReview()).toBe(true);
+  });
+
+  it("the tool loop hands the guard the result's metadata: a file the module call kept is not its work", () => {
+    // strada_create_module's text lists kept files beside created ones; only
+    // its metadata tells them apart.
+    const kept = `${SERVICE_DIR}/HarborQueue.cs`;
+    const guard = new StradaConformanceGuard(DEPS, { projectPath: "/proj", frameworkPathsOnly: false, listDir: () => [] });
+    const call = (id: string, name: string, input: Record<string, unknown>, content: string, metadata?: Record<string, unknown>) =>
+      trackAndRecordToolResults({
+        chatId: "c",
+        toolCalls: [{ id, name, input: input as never }],
+        toolResults: [{ toolCallId: id, content, isError: false, ...(metadata ? { metadata } : {}) }],
+        taskPlanner: { trackToolCall: () => {}, recordError: () => {} } as never,
+        selfVerification: { track: () => {}, ingestWorkerResult: () => {} },
+        stradaConformance: guard,
+        errorRecovery: { analyze: () => null },
+        executionJournal: { recordToolBatch: () => {} } as unknown as ExecutionJournal,
+        agentPhase: AgentPhase.EXECUTING,
+        providerName: "test",
+        emitToolResult: () => {},
+      });
+
+    call(
+      "m",
+      "strada_create_module",
+      { name: "Harbor" },
+      `Module 'Harbor' completed\n\nCreated files:\n  ${SERVICE_FILE}\n\nKept (already existed, left unchanged):\n  ${kept}`,
+      { createdFiles: [SERVICE_FILE], keptFiles: [kept] },
+    );
+    call("e", "file_edit", { path: kept }, "ok");
+    expect(guard.needsConformanceReview()).toBe(true);
+  });
+
+  it("a generator that failed still asks for the review until one succeeds", () => {
+    const guard = new StradaConformanceGuard(DEPS, { projectPath: "/proj", listDir: () => [] });
+    guard.trackToolCall("strada_create_system", { name: "Tide" }, true, "Error: query_components is required");
+    expect(guard.needsConformanceReview()).toBe(true);
+    guard.trackToolCall(
+      "strada_create_system",
+      { name: "Tide", path: "Assets/Modules/TideModule/Scripts/Systems/TideSystem.cs" },
+      false,
+      "System 'TideSystem' created at: Assets/Modules/TideModule/Scripts/Systems/TideSystem.cs",
+    );
+    expect(guard.needsConformanceReview()).toBe(false);
+  });
 });
 
 describe("one list of generators, shared", () => {

@@ -20,7 +20,13 @@ interface SelfVerificationLike {
 
 /** Minimal interface for StradaConformanceGuard methods used by tracking. */
 interface StradaConformanceLike {
-  trackToolCall(name: string, input: unknown, isError: boolean, content: string): void;
+  trackToolCall(
+    name: string,
+    input: unknown,
+    isError: boolean,
+    content: string,
+    metadata?: Readonly<Record<string, unknown>>,
+  ): void;
 }
 
 /** Minimal interface for ErrorRecoveryEngine methods used by tracking. */
@@ -189,7 +195,8 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       selfVerification.ingestWorkerResult(delegatedWorkerResult);
       workerCollector?.childWorkerResults.push(delegatedWorkerResult);
     }
-    stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
+    // The metadata names what a generator wrote, which its input does not.
+    stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content, tr.metadata);
 
     if (workerCollector) {
       workerCollector.toolTrace.push({
