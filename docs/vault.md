@@ -23,6 +23,7 @@ A SQLite-backed per-project index (`<project>/.strada/vault/index.db`) that:
 3. Serves ranked, token-budget-aware retrieval through a hybrid query pipeline.
 4. Updates itself via a chokidar watcher, a write-hook, or manual `/vault sync`.
 5. Indexes Strada.Brain's own source automatically via **SelfVault**, so the agent can introspect its own code.
+6. Indexes the frameworks as **framework vaults**: Strada.Core, Strada.Modules and Strada.MCP, each from the copy the project compiles against or, when the project lacks it, from the upstream checkout found beside the install (`STRADA_CORE_PATH` / `STRADA_MODULES_PATH`, or `../Strada.<Name>`). A framework vault indexes only `Runtime/`, `Editor/`, `Documentation~/` and READMEs (Strada.MCP also `src/`); `dist/`, `notes/`, `docs/`, `analysis/`, `plans/`, `reports/` and `SecurityReports/` are left out at the package root, test folders at any depth. Its index lives under the app home (`<STRADA_HOME>/vaults/framework/<name>-<hash>/`), never inside the package or the checkout. Agents read it (`vault_search` with vaultId `"Strada.Modules"`, the name it was registered under) and never write it: `vault_write_note` refuses a framework vault, any vault outside the project, a path inside a framework package, and a change to the Strada lines of `Packages/manifest.json`.
 
 The vault is opt-in (`config.vault.enabled = false` by default). Once enabled it boots alongside the agent and exposes tools, HTTP APIs, and a portal page.
 
