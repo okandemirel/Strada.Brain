@@ -195,6 +195,20 @@ describe("findOutsideImports", () => {
     expect(scan("const m = await import(`./x\n.js`);")).toEqual(['"./x\n.js"']);
   });
 
+  // The scan compares a specifier as written; V8 decodes its escapes and
+  // drops its line continuations first. A built-in name is no exception:
+  // "node:\x6dodule" is node:module to Node.
+  it("refuses a built-in specifier spelled with an escape or a line break", () => {
+    expect(scan('import M from "node:\\x6dodule";')).toEqual(['"node:\\x6dodule"']);
+    expect(scan('const M = require("node:\\u{6d}odule");')).toEqual(['"node:\\u{6d}odule"']);
+    expect(scan('const M = process.getBuiltinModule("node:mod\\\nule");')).toEqual(['"node:mod\\\nule"']);
+    expect(scan('import fs from "node:\\u0066s";')).toEqual(['"node:\\u0066s"']);
+    expect(scan('const os = await import("os\\\r\n");')).toEqual(['"os\\\r\n"']);
+    expect(scan("const fs = require(`node:fs\n`);")).toEqual(['"node:fs\n"']);
+    expect(specifierLeavesSkill(root, entry, "node:fs\u2028")).toBe(true);
+    expect(specifierLeavesSkill(root, entry, "node:fs")).toBe(false);
+  });
+
   it("checks import.source() and import.defer() like import(), and lets import.meta pass", () => {
     expect(scan('const m = await import.source("../../outside/evil.wasm");')).toEqual(['"../../outside/evil.wasm"']);
     expect(scan('const m = await import /* c */ . /* c */ source("evil-pkg");')).toEqual(['"evil-pkg"']);

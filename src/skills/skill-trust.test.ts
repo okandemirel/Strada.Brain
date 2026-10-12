@@ -785,6 +785,16 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
       },
       { name: "string-line-continuation", entry: 'export * from "../../outside/evil\\\n.js";', ran: "OUTSIDE CODE RAN" },
       {
+        name: "escaped-builtin-import",
+        entry: 'import M from "node:\\x6dodule";\nimport { fileURLToPath } from "node:url";\nnew M("x").load(fileURLToPath(new URL("../../outside/evil.js", import.meta.url)));',
+        ran: "OUTSIDE CODE RAN",
+      },
+      {
+        name: "escaped-builtin-require",
+        entry: 'const M = require("node:\\u{6d}odule");\nnew M("x").load(__dirname + "/../../outside/evil.js");',
+        ran: "OUTSIDE CODE RAN",
+      },
+      {
         name: "import-source",
         entry: 'const m = await import.source("../../outside/evil.wasm");\nif (new WebAssembly.Instance(m).exports.f() === 42) console.log("OUTSIDE WASM RAN");',
         ran: "OUTSIDE WASM RAN",

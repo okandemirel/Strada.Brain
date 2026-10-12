@@ -99,11 +99,12 @@ const JSX_RUNTIME_PRAGMAS: ReadonlySet<string> = new Set(["jsxRuntime", "jsxImpo
 /** Directory names excluded from the trust hash (skill-trust.ts). `node_modules` is NOT here (round 7 #10). */
 export const HASH_EXCLUDED_DIRS: ReadonlySet<string> = new Set([".git"]);
 /**
- * Refused rather than interpreted: the raw text is scanned, so escapes are
- * not decoded, and URL parsing (ESM) reads `%`, `?`, `#`, `\` and control
- * characters differently from a path (CommonJS).
+ * Refused rather than interpreted, in any specifier, built-in names included:
+ * the raw text is scanned, so escapes and line continuations are not decoded
+ * (`"node:\x6dodule"` is node:module to V8), and URL parsing (ESM) reads `%`,
+ * `?`, `#`, `\` and control characters differently from a path (CommonJS).
  */
-const UNCHECKED_CHARACTER = /[\\%?#\u0000-\u001f\u007f]/;
+const UNCHECKED_CHARACTER = /[\\%?#\u0000-\u001f\u007f\u2028\u2029]/;
 /** `./…`, `../…`, `.` or `..`: the only specifiers resolved from the importer alone. */
 const RELATIVE_SPECIFIER = /^\.\.?(?:\/|$)/;
 /** A JSON string token, or any other single character (valid JSON only). */
@@ -124,12 +125,13 @@ export function isSkillCodeFile(name: string): boolean {
  * a file the scan does not read, or to the loader itself)?
  */
 export function specifierLeavesSkill(skillRoot: string, fromFile: string, specifier: string): boolean {
+  if (UNCHECKED_CHARACTER.test(specifier)) return true;
   if (specifier === "module" || specifier === "node:module") return true;
   if (specifier.startsWith("node:") || isBuiltin(specifier)) return false;
   // A package name (the skill's own name included), a `#` import-map entry,
   // an absolute path or a URL is resolved through lookups or locations the
   // skill directory does not decide.
-  if (!RELATIVE_SPECIFIER.test(specifier) || UNCHECKED_CHARACTER.test(specifier)) return true;
+  if (!RELATIVE_SPECIFIER.test(specifier)) return true;
   const from = relative(skillRoot, dirname(fromFile));
   if (isAbsolute(from) || from === ".." || from.startsWith(`..${sep}`)) return true;
   // Never above the skill root, not even on the way back in: Node resolves
