@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AutoUpdater, spawnWithTimeout } from "./auto-updater.js";
@@ -373,6 +373,39 @@ describe("a rollback never discards uncommitted work", () => {
 
     expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.pre);
     expect(readUpdateHistory(repo.checkout).at(-1)).toMatchObject({ kind: "rolled-back" });
+  });
+
+  // The opted-in stash named the updater's lock as an :(exclude), and git
+  // refuses a pathspec naming an ignored path that exists: this checkout's
+  // .gitignore lists the lock, and the update holds it the whole time. The
+  // refusal came after the stash was saved, so every cycle failed with the
+  // changes still in the tree and one more stray stash entry behind. Where
+  // the lock is NOT ignored, the exclude must stay: `-u` would stash it away.
+  it.each([
+    ["ignores", ".strada/\n.strada-update.lock\nnode_modules/\n"],
+    ["does not ignore", ".strada/\nnode_modules/\n"],
+  ])("stashes and restores local changes when the operator opts in, and the checkout %s the lock the update holds", async (_how, gitignore) => {
+    const repo = behindCheckout();
+    const edit = "# app\nhalf-done edit\n";
+    writeFileSync(join(repo.checkout, ".gitignore"), gitignore);
+    writeFileSync(join(repo.checkout, "README.md"), edit);
+    writeFileSync(join(repo.checkout, "notes.md"), "an untracked note\n");
+    vi.stubEnv("STRADA_AUTO_UPDATE_STASH", "1");
+    let lockAtPull: boolean | undefined;
+    const u = realUpdater(repo.checkout, [], {
+      beforeGit: (args) => {
+        if (args[0] === "pull") lockAtPull = existsSync(join(repo.checkout, ".strada-update.lock"));
+      },
+    });
+
+    await expect(u.performUpdate()).resolves.toBe(true);
+
+    expect(lockAtPull).toBe(true); // never stashed out from under the update
+    expect(git(repo.checkout, "rev-parse", "HEAD")).toBe(repo.next);
+    expect(readFileSync(join(repo.checkout, "README.md"), "utf8")).toBe(edit);
+    expect(readFileSync(join(repo.checkout, "notes.md"), "utf8")).toBe("an untracked note\n");
+    expect(readFileSync(join(repo.checkout, ".gitignore"), "utf8")).toBe(gitignore);
+    expect(git(repo.checkout, "stash", "list")).toBe("");
   });
 });
 

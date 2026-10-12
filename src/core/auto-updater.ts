@@ -1083,9 +1083,29 @@ export class AutoUpdater {
         }
         return false;
       }
+      // git refuses a pathspec, :(exclude) ones included, that names an
+      // ignored path which exists ("The following paths are ignored…",
+      // exit 1), and it refused AFTER saving the stash: this checkout's
+      // .gitignore lists the lock, and the update holds it throughout. `-u`
+      // never stashes an ignored file, so only an unignored lock needs the
+      // exclude. An answer that does not name the lock (exit 1 is "not
+      // ignored") keeps it.
+      const lockIgnored = (
+        await this.runCommand(
+          "git",
+          ["check-ignore", "--no-index", "--", ".strada-update.lock"],
+          VERSION_CHECK_TIMEOUT,
+          this.installRoot,
+        ).catch(() => "")
+      )
+        .split("\n")
+        .some((line) => line.trim() === ".strada-update.lock");
       await this.runCommand(
         "git",
-        ["stash", "push", "-u", "-m", "auto-updater: stash before pull", "--", ".", ":(exclude).strada-update.lock"],
+        [
+          "stash", "push", "-u", "-m", "auto-updater: stash before pull", "--", ".",
+          ...(lockIgnored ? [] : [":(exclude).strada-update.lock"]),
+        ],
         VERSION_CHECK_TIMEOUT,
         this.installRoot,
       );
