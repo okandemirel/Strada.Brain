@@ -761,7 +761,11 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
     await writeFile(join(projectRoot, "node_modules", "react", "package.json"), '{"name":"react","exports":{"./jsx-runtime":"./jsx-runtime.js"}}', "utf-8");
     await writeFile(join(projectRoot, "node_modules", "react", "jsx-runtime.js"), 'console.log("JSX RUNTIME RAN"); exports.jsx = () => null;', "utf-8");
     const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-    const forms: Array<{ name: string; entry: string; extra?: Record<string, string>; tsx?: boolean; ran: string }> = [
+    // `import.source` parses from Node 24 on; on CI's Node 22 it is a
+    // SyntaxError, so there the form cannot run and only its refusal is asserted.
+    const sourcePhaseParses =
+      spawnSync(process.execPath, ["--input-type=module", "--check"], { input: 'import.source("./x.wasm");' }).status === 0;
+    const forms: Array<{ name: string; entry: string; extra?: Record<string, string>; tsx?: boolean; ran: string; runs?: boolean }> = [
       { name: "import-comment", entry: 'import /**/ "../../outside/evil.js";', ran: "OUTSIDE CODE RAN" },
       { name: "export-from-comment", entry: 'export * from /* x */ "../../outside/evil.js";', ran: "OUTSIDE CODE RAN" },
       { name: "from-line-comment", entry: 'import x from // c\n "evil-pkg";', ran: "EVIL PKG RAN" },
@@ -784,6 +788,7 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
         name: "import-source",
         entry: 'const m = await import.source("../../outside/evil.wasm");\nif (new WebAssembly.Instance(m).exports.f() === 42) console.log("OUTSIDE WASM RAN");',
         ran: "OUTSIDE WASM RAN",
+        runs: sourcePhaseParses,
       },
       {
         name: "jsx-runtime-pragma",
@@ -799,12 +804,14 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
     for (const form of forms) {
       const entry = form.tsx ? "index.ts" : "index.js";
       const dir = await writeSkill(form.name, { [entry]: `${form.entry}\n`, ...form.extra });
-      const probe = spawnSync(
-        process.execPath,
-        [...(form.tsx ? ["--import", tsxLoader] : []), "--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(dir, entry)).href)});`],
-        { encoding: "utf-8" },
-      );
-      if (!probe.stdout.includes(form.ran)) didNotRun.push(`${form.name}: ${probe.stderr}`);
+      if (form.runs !== false) {
+        const probe = spawnSync(
+          process.execPath,
+          [...(form.tsx ? ["--import", tsxLoader] : []), "--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(dir, entry)).href)});`],
+          { encoding: "utf-8" },
+        );
+        if (!probe.stdout.includes(form.ran)) didNotRun.push(`${form.name}: ${probe.stderr}`);
+      }
       const refusal = await approveWorkspaceSkill(projectRoot, dir).then(() => null, (err: unknown) => String(err));
       if (refusal === null || !refusal.includes("loads code from outside its directory")) approved.push(form.name);
     }
