@@ -179,9 +179,11 @@ describe("globPatternProblem", () => {
   // compiles what brace expansion makes of it, and brace-expansion unescapes
   // `\.` once the pattern holds a `{...}`: each `**` + `/.\./a/b/` became a
   // `**/../a/b/` that minimatch's preprocessing doubles, so twelve ran 2-5 s
-  // per tool call and thirteen 5-20 s in minimatch alone, synchronously. A
-  // segment without wildcards is walked unescaped, so `.\.` and `[.].` are
-  // `..` to glob even without braces.
+  // per tool call and thirteen 5-20 s in minimatch alone, synchronously.
+  // glob's parser also reads a segment without wildcards as the literal it
+  // matches, so an escaped dot and a class or range of one dot are each '.'
+  // to it: every pairing below is a '..' that glob walks to the parent, and
+  // under '**' re-walks the tree per repeat (4.9 s, then out of memory).
   it.each([
     `${String.raw`**/.\./a/b/`.repeat(12)}*.{cs,x}`,
     ".{.,x}/Assets/*.cs",
@@ -190,6 +192,15 @@ describe("globPatternProblem", () => {
     "{C:/Temp,Assets}/*.cs",
     String.raw`Assets/Scripts/.\./Shaders/*.shader`,
     "Assets/Scripts/[.]./Shaders/*.shader",
+    String.raw`Assets/Scripts/[\.]./Shaders/*.shader`,
+    String.raw`Assets/Scripts/.[\.]/Shaders/*.shader`,
+    String.raw`Assets/Scripts/[\.]\./Shaders/*.shader`,
+    String.raw`Assets/Scripts/\.[\.]/Shaders/*.shader`,
+    "Assets/Scripts/[.][.]/Shaders/*.shader",
+    "Assets/Scripts/[.-.]./Shaders/*.shader",
+    "Assets/Scripts/.[.-.]/Shaders/*.shader",
+    String.raw`Assets/x{,}/[\\\.]./Shaders/*.shader`,
+    String.raw`[\C]:/Temp/*.cs`,
   ])("refuses %j, which reaches '..' or an absolute path as glob compiles it", (pattern) => {
     expect(globPatternProblem(pattern)).toMatch(/^file_pattern must not contain '\.\.' or absolute paths/);
   });
@@ -199,11 +210,14 @@ describe("globPatternProblem", () => {
     expect(globPatternProblem("**/.{config,hidden}/*.json")).toBeUndefined();
     expect(globPatternProblem("Assets/{Scripts,Shaders}/**/*.{cs,shader}")).toBeUndefined();
     expect(globPatternProblem("**/Wave{1..3}.cs")).toBeUndefined();
+    expect(globPatternProblem("**/[.]config/*")).toBeUndefined();
+    expect(globPatternProblem(String.raw`Assets/[\.]hidden/*.cs`)).toBeUndefined();
   });
 
-  // The guard reads patterns with minimatch's braceExpand and unescape and
-  // trusts that glob compiles them with the same code; a lockfile that nested
-  // another minimatch under glob would desynchronise the two silently.
+  // The guard reads patterns with minimatch's braceExpand and Minimatch parser
+  // and trusts that glob compiles them with the same code; a lockfile that
+  // nested another minimatch under glob would desynchronise the two silently.
+  // glob exports no Minimatch, but escape and unescape come from the same module.
   it("reads patterns with the minimatch glob compiles them with", () => {
     const desync = "glob resolves another minimatch than the one file-pattern.ts imports";
     expect(globEscape, desync).toBe(minimatchEscape);

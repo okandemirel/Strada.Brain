@@ -73,6 +73,11 @@ describe("grep_search and glob_search bound what a glob may cost", () => {
     // brace-expansion unescapes `\.`, so each repeat is a `**/../a/b/` that
     // minimatch's preprocessing doubles: 2-5 s per call before glob walked.
     [`${String.raw`**/.\./a/b/`.repeat(12)}*.{cs,x}`, /must not contain '\.\.' or absolute paths/],
+    // glob parses a class or escape of one dot as '.', so each repeat is a
+    // '**/../' that sends its walk back up the tree: four took 4.9 s over 72
+    // files with the event loop blocked for 2 s, and five ran out of memory.
+    [`${String.raw`**/[\.]./`.repeat(4)}**/*.cs`, /must not contain '\.\.' or absolute paths/],
+    [`${"**/[.][.]/".repeat(4)}**/*.cs`, /must not contain '\.\.' or absolute paths/],
   ];
 
   it.each(backtracking)("glob_search refuses %j without walking the tree, saying why", async (pattern, why) => {

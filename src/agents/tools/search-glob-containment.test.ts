@@ -67,9 +67,15 @@ describe("glob patterns stay inside the project root", () => {
     expect(await globInsideProject(expand(pattern), root)).toEqual([]);
   });
 
-  // glob walks a segment without wildcards unescaped, so these are '..' to it
-  // although the pattern never spells one.
-  it.each([String.raw`Assets/.\./Assets/*.cs`, "Assets/[.]./Assets/*.cs"])(
+  // glob's parser reads a segment without wildcards as the literal it
+  // matches, so these are '..' to it although the pattern never spells one.
+  it.each([
+    String.raw`Assets/.\./Assets/*.cs`,
+    "Assets/[.]./Assets/*.cs",
+    String.raw`Assets/[\.]./Assets/*.cs`,
+    "Assets/[.][.]/Assets/*.cs",
+    "Assets/[.-.]./Assets/*.cs",
+  ])(
     "glob reads %j as a '..', and the tools refuse it",
     async (pattern) => {
       expect(await globInsideProject(pattern, root)).toEqual(["Assets/Player.cs"]);
@@ -79,6 +85,32 @@ describe("glob patterns stay inside the project root", () => {
       expect(grepped.content).toMatch(refusal);
     },
   );
+
+  // The class, not a list: each '.' spelled every way a pattern can name one
+  // literal dot, paired, bare and inside a brace alternative. glob itself is
+  // the oracle for which of them it walks to the parent ('Assets/<x>/Assets'
+  // finds Player.cs only through '..'); the tools must refuse every one.
+  it("refuses every spelling of '..' that glob walks to the parent", async () => {
+    const dots = [".", String.raw`\.`, "[.]", String.raw`[\.]`, "[.-.]", String.raw`[\.-\.]`];
+    const walked: string[] = [];
+    for (const first of dots) {
+      for (const second of dots) {
+        for (const pattern of [`Assets/${first}${second}/Assets/*.cs`, `Assets/{${first}${second},x}/Assets/*.cs`]) {
+          if ((await globInsideProject(pattern, root)).includes("Assets/Player.cs")) walked.push(pattern);
+        }
+      }
+    }
+    expect(walked).toEqual(expect.arrayContaining([String.raw`Assets/[\.]./Assets/*.cs`, "Assets/[.][.]/Assets/*.cs"]));
+    expect(walked.length).toBeGreaterThanOrEqual(dots.length ** 2);
+
+    const accepted: string[] = [];
+    for (const pattern of walked) {
+      const globbed = await new GlobSearchTool().execute({ pattern }, ctx);
+      const grepped = await new GrepSearchTool().execute({ pattern: "class", file_pattern: pattern }, ctx);
+      if (!refusal.test(globbed.content) || !refusal.test(grepped.content)) accepted.push(pattern);
+    }
+    expect(accepted).toEqual([]);
+  });
 
   // An extglob the guard missed is read literally, not compiled into a
   // RegExp: '+(Player).cs' names that file, not 'Player.cs'.

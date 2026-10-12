@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { braceExpand, unescape } from "minimatch";
+import { braceExpand, Minimatch } from "minimatch";
 
 /**
  * SearchOptions.filePattern as a predicate over an indexed file path.
@@ -99,7 +99,12 @@ const MAX_GLOB_MULTI_STAR_COST = 8;
  * filePatternProblem and ran 30 s. It unescapes `\.` too, so the tools'
  * raw-pattern '..' check (isSafeGlobPattern) is repeated here: each `.\.` became
  * a `**` + `/../` that minimatch's preprocessing doubles, about four times the
- * time per repeat (5-20 s for thirteen, before glob walked anything).
+ * time per repeat (5-20 s for thirteen, before glob walked anything). glob's
+ * parser then reads a part without wildcards as the literal it matches, where
+ * `[\.]`, `[.-.]` and `\.` are each '.', and walks that '..' to the parent:
+ * `**` + `/[\.]./` four times and `**` + `/*.cs` sent each walk back up the
+ * tree, 4.9 s over 72 files, and five ran out of memory. So the check reads
+ * every alternative with glob's own parser too (see globReadsOutside).
  */
 export function globPatternProblem(pattern: string, label = "file_pattern"): string | undefined {
   const problem = filePatternProblem(pattern, label);
@@ -109,9 +114,8 @@ export function globPatternProblem(pattern: string, label = "file_pattern"): str
   if (alternatives.reduce((total, alternative) => total + alternative.length, 0) > MAX_EXPANDED_LENGTH) {
     return expandsTooLong(label);
   }
-  // glob preprocesses the alternatives as they are and walks a segment
-  // without wildcards unescaped, where `.\.` and `[.].` are `..` as well.
-  if (alternatives.some((alternative) => escapesGlobRoot(alternative) || escapesGlobRoot(unescape(alternative)))) {
+  // glob preprocesses the alternatives as written, then walks what its parser reads.
+  if (alternatives.some((alternative) => escapesGlobRoot(alternative) || globReadsOutside(alternative))) {
     return `${label} must not contain '..' or absolute paths, also once glob expands its {a,b} alternatives and escapes`;
   }
   if (alternatives.some(hasExtglob)) return extglobRefused(label);
@@ -144,6 +148,32 @@ export function globPatternProblem(pattern: string, label = "file_pattern"): str
 /** Does `pattern` spell a way out of the directory it is matched under: a '..', or an absolute path? */
 export function escapesGlobRoot(pattern: string): boolean {
   return pattern.includes("..") || pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern);
+}
+
+/**
+ * Does glob, having parsed `alternative` (one braceExpand result), walk out of
+ * the directory it starts in? Its parser resolves escapes and one-character
+ * classes, so a part that reads as a literal holding '..' is one however the
+ * text spells it, and a literal first part can name a root. The options are
+ * glob's own (globInsideProject sets noext; the braces are already expanded)
+ * except optimizationLevel 0, which leaves out the preprocessing that
+ * multiplies '..' parts.
+ */
+function globReadsOutside(alternative: string): boolean {
+  const parsed = new Minimatch(alternative, {
+    nobrace: true,
+    nocomment: true,
+    nonegate: true,
+    noext: true,
+    optimizationLevel: 0,
+    platform: process.platform,
+  });
+  return parsed.set.some((parts) => {
+    const [first] = parts;
+    if (first === "" && parts.length > 1) return true;
+    if (typeof first === "string" && /^[a-zA-Z]:/.test(first)) return true;
+    return parts.some((part) => typeof part === "string" && part.includes(".."));
+  });
 }
 
 function tooManyAlternatives(label: string): string {
