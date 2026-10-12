@@ -126,6 +126,18 @@ function internals(manager: CampaignManager) {
     readonly acceptanceAuthor: AcceptanceAuthor | null;
     readonly runAcceptanceSuite?: AcceptanceSuiteRunner;
     readonly maxRequirementRows?: number;
+    readonly planner: { readonly options: { readonly streamingEnabled?: boolean } };
+    readonly styleAnalysis?: { readonly options: { readonly streamingEnabled?: boolean } };
+  };
+}
+
+/** What each model caller the stage builds for the campaign was told about streaming. */
+function streamingFlags(manager: CampaignManager) {
+  const parts = internals(manager);
+  return {
+    writer: (parts.acceptanceAuthor as unknown as { streaming?: boolean } | null)?.streaming,
+    planner: parts.planner.options.streamingEnabled,
+    style: parts.styleAnalysis?.options.streamingEnabled,
   };
 }
 
@@ -160,20 +172,20 @@ describe("production construction wires the scope gate (GDD-drift W15)", () => {
     );
     const author = internals(manager).acceptanceAuthor;
     expect(author).toBeInstanceOf(AcceptanceAuthor);
-    expect((author as unknown as { streaming?: boolean }).streaming).toBe(true);
+    expect(streamingFlags(manager)).toEqual({ writer: true, planner: true, style: true });
     const picked = author!.pickWriter(["a-worker-model"]);
     expect(providers.listExecutionCandidates).toHaveBeenCalled();
     expect(providers.getProviderByName).toHaveBeenCalledWith("invented-writer", "quill-1");
     expect(picked?.writer).toEqual({ provider: "invented-writer", model: "quill-1", independence: "different-model" });
   });
 
-  it("the writer streams only when the daemon does: STREAMING_ENABLED=false reaches it as false", async () => {
+  it("the campaign streams only when the daemon does: STREAMING_ENABLED=false reaches the writer, the planner and the style analysis", async () => {
     // The boot above streams, so a site that hardcoded `streaming: true` passed
-    // it; the value has to follow the config in both directions.
+    // it; the value has to follow the config in both directions, for every
+    // model caller the same construction call builds.
     const { manager } = await boot({ scopeGate: "shadow", maxRequirementRows: 400 }, { registry: toolRegistry(), streamingEnabled: false });
-    const author = internals(manager).acceptanceAuthor;
-    expect(author).toBeInstanceOf(AcceptanceAuthor);
-    expect((author as unknown as { streaming?: boolean }).streaming).toBe(false);
+    expect(internals(manager).acceptanceAuthor).toBeInstanceOf(AcceptanceAuthor);
+    expect(streamingFlags(manager)).toEqual({ writer: false, planner: false, style: false });
   });
 
   it("the acceptance run is W08's filtered unity_playmode_verify call through the daemon's tool registry", async () => {
