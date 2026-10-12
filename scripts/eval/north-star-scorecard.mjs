@@ -202,11 +202,11 @@ const UNGATED_KINDS = new Set(["aspiration", "judgement"]);
 
 export const inScope = (row) => !OUT_OF_SCOPE_STATUSES.has(row.status) && !UNGATED_KINDS.has(row.kind);
 
-function ownerOf(row) {
-  if (typeof row.owner === "string" && row.owner !== "") return row.owner;
-  const last = Array.isArray(row.ownership) ? row.ownership.at(-1) : undefined;
-  return isRecord(last) && typeof last.milestoneId === "string" ? last.milestoneId : null;
-}
+// `owner` only, as production reads it (scope-report.ts ownedRows/queuedRows):
+// absent means queued. `ownership` is history that reownLedger keeps across a
+// replan whose new plan reuses the ids m1…mN, so its last entry can name a
+// milestone of the current plan for a row nobody owns.
+const ownerOf = (row) => (typeof row.owner === "string" && row.owner !== "" ? row.owner : null);
 
 function toCampaign(row) {
   const ms = parseJson(row.milestones_json ?? "[]");

@@ -656,6 +656,35 @@ describe("north-star scorecard: rung 1 judges the newest boot", () => {
   });
 });
 
+describe("north-star scorecard: who owns a ledger row", () => {
+  it("counts a queued row as unowned, whatever owners its history names", () => {
+    const home = join(work, "home");
+    const memory = join(home, ".strada-memory");
+    mkdirSync(memory, { recursive: true });
+    // reownLedger drops `owner` and keeps `ownership` across a replan, and the
+    // new plan reuses the ids m1…mN: the history names a milestone still in it.
+    const queued = { ...row("R2", "rule", null), ownership: [{ milestoneId: "m2", reason: "covered-section", atMs: T0 }] };
+    const storage = new CampaignStorage(join(memory, "campaigns.db"));
+    try {
+      storage.save(
+        campaign({
+          id: "campaign_q",
+          ideaText: "an invented puzzle about lanterns",
+          milestones: [milestone("m1"), milestone("m2", { status: "pending" })],
+          requirements: ledger([row("R1", "input", "m1"), queued]) as Campaign["requirements"],
+        }),
+      );
+    } finally {
+      storage.close();
+    }
+    const card = scoreNorthStar({ home, brainRoot }) as Card;
+    expect(rung(card, 3).verdict).toBe(VERDICT.FAIL);
+    expect(rung(card, 3).checks[1]).toEqual({ ok: false, text: "campaign_q: 1 of 2 in-scope rows owned by a milestone of its plan" });
+    expect(rung(card, 4).checks[0]!.text).toMatch(/, 1 an owner$/);
+    expect(criterion(card, "C").checks[0]).toEqual({ ok: false, text: "1 of 2 in-scope rows have an owner in the plan" });
+  });
+});
+
 describe("north-star scorecard: the measured state", () => {
   function todayHome() {
     const home = join(work, "home");
