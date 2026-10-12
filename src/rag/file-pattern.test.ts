@@ -174,6 +174,32 @@ describe("globPatternProblem", () => {
     expect(globPatternProblem(pattern)).toMatch(/^file_pattern uses extglob syntax/);
   });
 
+  // The tools refuse '..' and absolute paths in the raw pattern, but glob
+  // compiles what brace expansion makes of it, and brace-expansion unescapes
+  // `\.` once the pattern holds a `{...}`: each `**` + `/.\./a/b/` became a
+  // `**/../a/b/` that minimatch's preprocessing doubles, so twelve ran 2-5 s
+  // per tool call and thirteen 5-20 s in minimatch alone, synchronously. A
+  // segment without wildcards is walked unescaped, so `.\.` and `[.].` are
+  // `..` to glob even without braces.
+  it.each([
+    `${String.raw`**/.\./a/b/`.repeat(12)}*.{cs,x}`,
+    ".{.,x}/Assets/*.cs",
+    "**/Player{.,}.cs",
+    "{/tmp,Assets}/*.cs",
+    "{C:/Temp,Assets}/*.cs",
+    String.raw`Assets/Scripts/.\./Shaders/*.shader`,
+    "Assets/Scripts/[.]./Shaders/*.shader",
+  ])("refuses %j, which reaches '..' or an absolute path as glob compiles it", (pattern) => {
+    expect(globPatternProblem(pattern)).toMatch(/^file_pattern must not contain '\.\.' or absolute paths/);
+  });
+
+  it("still takes dots, escapes and sequences that stay inside the project", () => {
+    expect(globPatternProblem(String.raw`**/*\.cs`)).toBeUndefined();
+    expect(globPatternProblem("**/.{config,hidden}/*.json")).toBeUndefined();
+    expect(globPatternProblem("Assets/{Scripts,Shaders}/**/*.{cs,shader}")).toBeUndefined();
+    expect(globPatternProblem("**/Wave{1..3}.cs")).toBeUndefined();
+  });
+
   it("bounds the length of the alternatives glob compiles, not file-pattern's", () => {
     // One 239-character alternative to file-pattern's parser; 64 of about 210 to glob.
     expect(globPatternProblem(`**/${"x".repeat(200)}${"{a},b}".repeat(6)}`)).toMatch(

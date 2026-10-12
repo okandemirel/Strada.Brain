@@ -5,22 +5,19 @@ import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { nearbyNames } from "./nearby-names.js";
 import { RegexTimeoutError, WorkerLineMatcher, type LineMatchResult } from "./regex-line-matcher.js";
-import { globPatternProblem } from "../../rag/file-pattern.js";
+import { escapesGlobRoot, globPatternProblem } from "../../rag/file-pattern.js";
 
 /**
  * Reject glob patterns that could escape the project directory.
  *
- * A fast, readable refusal for the obvious cases only: glob expands braces
- * AFTER this check, so an alternative can still be absolute or assemble a
- * `..` from pieces. Containment is enforced on what glob walks and returns
- * (see globInsideProject), not here.
+ * A fast, readable refusal for the pattern as written: glob expands braces
+ * and escapes AFTER this check, so an alternative can still be absolute or
+ * assemble a `..` from pieces. globPatternProblem repeats the check on those,
+ * and containment is enforced on what glob walks and returns (see
+ * globInsideProject).
  */
 export function isSafeGlobPattern(pattern: string): boolean {
-  // Reject patterns with path traversal
-  if (pattern.includes("..")) return false;
-  // Reject absolute paths
-  if (pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern)) return false;
-  return true;
+  return !escapesGlobRoot(pattern);
 }
 
 /** Does `candidate` (absolute or relative to `root`) resolve outside `root`? The root itself is not outside. */
@@ -34,7 +31,7 @@ function isOutsideRoot(root: string, candidate: string): boolean {
  * walked, and a match outside it is never returned, whatever the pattern
  * expands to.
  */
-async function globInsideProject(pattern: string, projectPath: string): Promise<string[]> {
+export async function globInsideProject(pattern: string, projectPath: string): Promise<string[]> {
   const root = resolve(projectPath);
   const outside = (p: Path): boolean => isOutsideRoot(root, p.fullpath());
   const matches = await glob(pattern, {

@@ -70,6 +70,9 @@ describe("grep_search and glob_search bound what a glob may cost", () => {
     // for 30 s over the ordinary tree in review, answering 'No files found'.
     ["**/{+,@}(?|??|???)#", /extglob/],
     ["**/+{,}(?|??)#", /extglob/],
+    // brace-expansion unescapes `\.`, so each repeat is a `**/../a/b/` that
+    // minimatch's preprocessing doubles: 2-5 s per call before glob walked.
+    [`${String.raw`**/.\./a/b/`.repeat(12)}*.{cs,x}`, /must not contain '\.\.' or absolute paths/],
   ];
 
   it.each(backtracking)("glob_search refuses %j without walking the tree, saying why", async (pattern, why) => {

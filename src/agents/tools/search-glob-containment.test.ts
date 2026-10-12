@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { GlobSearchTool, GrepSearchTool } from "./search.js";
+import { GlobSearchTool, GrepSearchTool, globInsideProject } from "./search.js";
 import type { ToolContext } from "./tool.interface.js";
 
 /**
@@ -32,15 +32,20 @@ describe("glob patterns stay inside the project root", () => {
   // `<base>` is replaced with the (absolute) directory holding the project.
   const escapes = ["{.,x}{.,y}/*", "{.,x}{.,y}/*.cs", "{<base>,x}/*"];
   const expand = (pattern: string): string => pattern.replace("<base>", base.replace(/\\/g, "/"));
+  const refusal = /must not contain '\.\.' or absolute paths/;
 
-  it.each(escapes)("glob_search %j returns nothing outside the root", async (pattern) => {
+  // The tools now refuse these up front (globPatternProblem checks what the
+  // expansion makes), so the containment below is measured on glob directly.
+  it.each(escapes)("glob_search refuses %j and returns nothing outside the root", async (pattern) => {
     const result = await new GlobSearchTool().execute({ pattern: expand(pattern) }, ctx);
+    expect(result.content).toMatch(refusal);
+    expect(result.isError).toBe(true);
     expect(result.content).not.toContain("outside-");
-    expect(result.content).not.toMatch(/Found \d+ file/);
   });
 
   it("an absolute brace alternative lists no system files", async () => {
     const result = await new GlobSearchTool().execute({ pattern: "{/etc,x}/host*" }, ctx);
+    expect(result.content).toMatch(refusal);
     expect(result.content).not.toMatch(/hosts|hostname/);
   });
 
@@ -49,11 +54,31 @@ describe("glob patterns stay inside the project root", () => {
       { pattern: "OutsideSecret", file_pattern: expand(filePattern) },
       ctx,
     );
+    expect(result.content).toMatch(refusal);
     expect(result.content).not.toContain("outside-");
     expect(result.content).not.toMatch(/Found \d+ match/);
     // Files outside the root are not even counted as skipped.
     expect(result.content).not.toMatch(/were NOT searched/);
   });
+
+  // What a pattern the guard missed would reach: glob neither walks nor
+  // returns anything past the root.
+  it.each([...escapes, "{/etc,x}/host*", String.raw`.\./*`])("glob itself keeps %j inside the root", async (pattern) => {
+    expect(await globInsideProject(expand(pattern), root)).toEqual([]);
+  });
+
+  // glob walks a segment without wildcards unescaped, so these are '..' to it
+  // although the pattern never spells one.
+  it.each([String.raw`Assets/.\./Assets/*.cs`, "Assets/[.]./Assets/*.cs"])(
+    "glob reads %j as a '..', and the tools refuse it",
+    async (pattern) => {
+      expect(await globInsideProject(pattern, root)).toEqual(["Assets/Player.cs"]);
+      const globbed = await new GlobSearchTool().execute({ pattern }, ctx);
+      expect(globbed.content).toMatch(refusal);
+      const grepped = await new GrepSearchTool().execute({ pattern: "class", file_pattern: pattern }, ctx);
+      expect(grepped.content).toMatch(refusal);
+    },
+  );
 
   it("braces that stay inside the project still work", async () => {
     const result = await new GlobSearchTool().execute({ pattern: "Assets/*.{cs,shader}" }, ctx);

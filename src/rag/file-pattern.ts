@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { braceExpand } from "minimatch";
+import { braceExpand, unescape } from "minimatch";
 
 /**
  * SearchOptions.filePattern as a predicate over an indexed file path.
@@ -96,7 +96,10 @@ const MAX_GLOB_MULTI_STAR_COST = 8;
  * ten `{a},b}` passed as one segment that glob compiled into 1024. Expansion
  * also assembles extglobs the raw pattern does not spell (`{+,@}(` or `+{,}(`)
  * and unescapes them (`\\\+(` becomes `\\+(`): `**` + `/{+,@}(?|??|???)#` passed
- * filePatternProblem and ran 30 s.
+ * filePatternProblem and ran 30 s. It unescapes `\.` too, so the tools'
+ * raw-pattern '..' check (isSafeGlobPattern) is repeated here: each `.\.` became
+ * a `**` + `/../` that minimatch's preprocessing doubles, about four times the
+ * time per repeat (5-20 s for thirteen, before glob walked anything).
  */
 export function globPatternProblem(pattern: string, label = "file_pattern"): string | undefined {
   const problem = filePatternProblem(pattern, label);
@@ -105,6 +108,11 @@ export function globPatternProblem(pattern: string, label = "file_pattern"): str
   if (alternatives.length > MAX_BRACE_ALTERNATIVES) return tooManyAlternatives(label);
   if (alternatives.reduce((total, alternative) => total + alternative.length, 0) > MAX_EXPANDED_LENGTH) {
     return expandsTooLong(label);
+  }
+  // glob preprocesses the alternatives as they are and walks a segment
+  // without wildcards unescaped, where `.\.` and `[.].` are `..` as well.
+  if (alternatives.some((alternative) => escapesGlobRoot(alternative) || escapesGlobRoot(unescape(alternative)))) {
+    return `${label} must not contain '..' or absolute paths, also once glob expands its {a,b} alternatives and escapes`;
   }
   if (alternatives.some(hasExtglob)) return extglobRefused(label);
   let cost = 0;
@@ -131,6 +139,11 @@ export function globPatternProblem(pattern: string, label = "file_pattern"): str
     );
   }
   return undefined;
+}
+
+/** Does `pattern` spell a way out of the directory it is matched under: a '..', or an absolute path? */
+export function escapesGlobRoot(pattern: string): boolean {
+  return pattern.includes("..") || pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern);
 }
 
 function tooManyAlternatives(label: string): string {
