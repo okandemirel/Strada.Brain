@@ -974,6 +974,30 @@ describe("the final milestone (scope gate on, W09)", () => {
   }, 60_000);
 });
 
+describe("partial delivery (scope gate on, W09)", () => {
+  it("a parked milestone counts as settled: a spent coverage sprint leads to the final proof sprint, not a stop", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    const stored = h.storage.get(campaign.id)!;
+    const [m1, m2, m3] = stored.milestones;
+    Object.assign(m1!, { status: "failed", attempts: 2, parked: { atMs: Date.now(), reasons: [], queued: [] } });
+    Object.assign(m2!, { status: "green" });
+    Object.assign(m3!, { status: "green" });
+    h.tasks.set("task_mcov", { id: "task_mcov", status: "executing", createdAt: Date.now(), updatedAt: Date.now() });
+    stored.milestones.push({ id: "mcov1", title: "Coverage completion 1.1 — dock menu", prompt: "- The dock menu must show a Launch button.", status: "running", attempts: 2, taskId: "task_mcov" });
+    stored.currentMilestone = 3;
+    stored.pendingCoverageGaps = undefined;
+    h.storage.save(stored);
+    completeSprint(h, { status: "failed", error: "still no Launch button", result: "still no Launch button", key: "max_steps_reached" });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const now = h.storage.get(campaign.id)!;
+    expect(now.state).toBe("executing");
+    expect(now.milestones.at(-1)!.id).toMatch(/^mfinal/);
+    expect(now.currentMilestone).toBe(now.milestones.length - 1);
+    expect(h.submitted[1]).toContain("FINAL DELIVERY PROOFS");
+  }, 60_000);
+});
+
 describe("a check the independent review called weak (scope gate on, W09 + W13)", () => {
   const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
   const reviewText = (weakChecks: Array<{ rid: string; why: string }>): string =>
@@ -1205,6 +1229,26 @@ describe("the time box (scope gate on, W09)", () => {
     expect(m1.prompt).toContain("EF-2");
     expect(m1.prompt).not.toMatch(/report precisely what remains/);
     expect(m1.prompt).toContain("time-box split 1");
+  }, 60_000);
+
+  it("a third overrun parks a milestone that owns rows instead of stopping the campaign, and the ladder moves on", async () => {
+    const h = build("on", { milestoneTimeBoxMs: 60_000, failing: (label) => label === "EF-2" });
+    const campaign = await start(h);
+    const stored = h.storage.get(campaign.id)!;
+    // Past two narrowings already, with no attempt left.
+    Object.assign(stored.milestones[0]!, { startedAtMs: Date.now() - 5 * 3_600_000, timeBoxEscalations: 2, attempts: 2 });
+    h.storage.save(stored);
+    completeSprint(h, { status: "failed", error: "ran out of steps", result: "ran out of steps", key: "max_steps_reached" });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const now = h.storage.get(campaign.id)!;
+    const m1 = now.milestones[0]!;
+    expect(now.state).toBe("executing");
+    expect(now.currentMilestone).toBe(1);
+    expect(m1.status).toBe("failed");
+    expect(m1.parked?.queued.length).toBe(3);
+    const queued = (now.pendingCoverageGaps ?? []).map((g) => decodeRequirement(g).identity?.id).sort();
+    expect(queued).toEqual(["EF-1", "EF-2", "EF-3"].map((label) => byLabel(now, label).rid).sort());
+    expect(h.messages.some((m) => m.includes("PARKED") && m.includes("time box"))).toBe(true);
   }, 60_000);
 
   it("never splits the last planned milestone into one after it: its rows stay, half of them first", async () => {
