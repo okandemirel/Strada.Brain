@@ -11,7 +11,7 @@
 import type { IAIProvider, ProviderResponse, ResponseSchema } from "../../agents/providers/provider.interface.js";
 import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy, ConsensusUsageEntry } from "./routing-types.js";
 import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
-import { recordBareProviderOutcome } from "../../agents/orchestrator-runtime-utils.js";
+import { holdsNoAnswer, recordBareProviderOutcome } from "../../agents/orchestrator-runtime-utils.js";
 import { getLogger } from "../../utils/logger.js";
 
 export interface ConsensusConfig {
@@ -452,6 +452,12 @@ export class ConsensusManager {
     if (spent) {
       const entry = usageEntryOf(response, provider.name);
       if (entry) spent.push(entry);
+    }
+    // An empty 200 reviewed nothing, as the chain judges it. Parsed, it was a
+    // "second model ... disagreed" objection with nothing after the colon, and
+    // a reasoning block cut off before its verdict read as an approval.
+    if (holdsNoAnswer(response)) {
+      throw new Error(`Consensus reviewer "${provider.name}" returned an empty response (no text or tool calls)`);
     }
     return response;
   }

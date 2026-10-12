@@ -59,6 +59,13 @@ describe("parseSupervisorVerificationVerdict", () => {
     }
   });
 
+  it("a closed reasoning block with nothing after it is no review, not a flag quoting nothing", () => {
+    const verdict = parseSupervisorVerificationVerdict("<think>\nchecking the handler first\n</think>\n", "opencode");
+    expect(verdict).toMatchObject({ verdict: "skipped", unanswered: "reasoning-only", verifierProvider: "opencode" });
+    expect(verdict.issues?.[0]).toContain("Verifier produced no verdict");
+    expect(verdict.issues?.[0]).not.toContain("checking the handler");
+  });
+
   it("still finds the verdict after a terminated reasoning block", () => {
     const text = '<reasoning>\nlet me think {not json}\n</reasoning>\n{"verdict":"approve"}';
     expect(parseSupervisorVerificationVerdict(text, "opencode")).toEqual({

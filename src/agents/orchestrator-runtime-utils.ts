@@ -7,6 +7,7 @@ import { BATCH_DISPATCH_TOOLS } from "./autonomy/batch-write-gate.js";
 import { QUOTA_EXHAUSTED_PHRASE, parseResetDurationMs } from "../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./providers/codex-model-rejection.js";
 import { MODEL_UNSUPPORTED_RE, httpStatusOf, reportsHttpStatus } from "./providers/provider-error-status.js";
+import { stripLeakedReasoning } from "./leaked-reasoning.js";
 
 /**
  * Cross-boundary recogniser for a HARD QUOTA STOP surfaced on a NON-chain (direct) provider
@@ -278,6 +279,20 @@ export function isEmptyProviderResponse(response: ProviderResponse): boolean {
 }
 
 /**
+ * FallbackChainProvider's judgment of a reply that resolved: one with no
+ * visible text and no tool calls answered nothing, and the chain fails the
+ * member over it. Reasoning spliced into `text` is not an answer: a thinking
+ * model that spent its whole budget reasoning returns only that block, and the
+ * user sees nothing once downstream strips it.
+ */
+export function holdsNoAnswer(response: ProviderResponse): boolean {
+  const visible = typeof response.text === "string" ? stripLeakedReasoning(response.text) : undefined;
+  const hasText = visible !== undefined && !visible.reasoningOnly && visible.text.length > 0;
+  const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
+  return !hasText && !hasToolCalls;
+}
+
+/**
  * Detect synthetic empty responses from silentStream provider failures.
  * Returns "abort" when the failure limit is reached, "warn_continue" for
  * intermediate failures, and "ok" for real responses.
@@ -399,8 +414,11 @@ export function recordBareProviderOutcome(
     if ("error" in outcome) {
       const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
       recordProviderHealthFailure(registry, provider.name, message, { isSingleProvider: true, error: outcome.error });
-    } else if (!isEmptyProviderResponse(outcome.response)) {
-      // As the chain judges it: an empty answer heals nothing.
+    } else if (holdsNoAnswer(outcome.response)) {
+      // As the chain judges it: an empty 200 is the member failing. Recorded
+      // as nothing, an empty reviewer was asked again on every critical step.
+      registry.recordFailure(provider.name, `Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+    } else {
       registry.recordSuccess(provider.name);
     }
   } catch {

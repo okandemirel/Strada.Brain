@@ -43,16 +43,21 @@ export function parseSupervisorVerificationVerdict(
   // Here's a thinking process:" and ended mid-sentence at the token cap.
   // Each was pasted, 240 chars of it, as a "VERIFIER FLAG" on a node that
   // nobody had reviewed. A terminated block is stripped so a verdict after it
-  // still parses; an unterminated one is named for what it is.
+  // still parses; an unterminated one is named for what it is. A closed block
+  // with nothing after it is no answer either (the chain fails a member over
+  // it); it fell through to a "prose, not a verdict" flag with nothing quoted.
   const { text: withoutReasoning, reasoningOnly } = stripLeakedReasoning(trimmed);
-  if (reasoningOnly) {
+  if (reasoningOnly || !withoutReasoning) {
     return {
       verdict: "skipped",
       unanswered: "reasoning-only",
       issues: [
-        `Verifier produced no verdict: its reply was an unterminated reasoning block (${trimmed.length} chars) ` +
-          `cut off before any JSON — the token cap or a thinking model leaking its block (${verifierProvider}). ` +
-          "This node was not reviewed.",
+        reasoningOnly
+          ? `Verifier produced no verdict: its reply was an unterminated reasoning block (${trimmed.length} chars) ` +
+            `cut off before any JSON — the token cap or a thinking model leaking its block (${verifierProvider}). ` +
+            "This node was not reviewed."
+          : `Verifier produced no verdict: its reply was a reasoning block (${trimmed.length} chars) with nothing ` +
+            `after it (${verifierProvider}). This node was not reviewed.`,
       ],
       verifierProvider,
     };

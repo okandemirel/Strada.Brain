@@ -121,15 +121,16 @@ beforeEach(() => {
 /**
  * Seats that answer the way the real registry builds them: every call is
  * logged in `served`, a seat down at call time throws (`callError`, a 503 by
- * default), one down at build time cannot be created, a bare seat may carry
- * its display label as createProvider gives it, and a chain falls over member
- * by member as FallbackChainProvider does after skipping the members it could
- * not create.
+ * default), one down at build time cannot be created, a seat in `replies`
+ * answers 200 with that text, a bare seat may carry its display label as
+ * createProvider gives it, and a chain falls over member by member as
+ * FallbackChainProvider does after skipping the members it could not create.
  */
 function liveSeats(down: {
   atCall?: string[];
   atBuild?: string[];
   callError?: (name: string) => Error;
+  replies?: Record<string, string>;
   labels?: Record<string, string>;
 }): { served: string[] } {
   const served: string[] = [];
@@ -141,7 +142,7 @@ function liveSeats(down: {
         served.push(name);
         if (down.atCall?.includes(name)) throw down.callError?.(name) ?? new Error(`${name}: 503 service unavailable`);
         return {
-          text: '{"verdict":"approve","approved":true,"reasoning":"looks right"}',
+          text: down.replies?.[name] ?? '{"verdict":"approve","approved":true,"reasoning":"looks right"}',
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
@@ -369,6 +370,46 @@ describe("a bare reviewer that fails at call time", () => {
   });
 });
 
+/**
+ * An empty 200 is a failure of the seat as FallbackChainProvider judges it:
+ * the chain throws "returned an empty response" and records the member, and
+ * reasoning spliced into the text with no answer after it is no answer. Called
+ * bare, the reviewer's empty reply was recorded as nothing and parsed as
+ * agreed:false, so every critical step drew "[CONSENSUS REVIEWER OBJECTION] A
+ * second model reviewed the last critical step and disagreed: " with nothing
+ * after it, and the seat stayed available to be asked again.
+ */
+describe("a bare reviewer that answers with nothing", () => {
+  it.each([
+    ["an empty reply", ""],
+    ["a reasoning block cut off before any verdict", "<reasoning>Do I agree with the endpoint change? First the retry path"],
+  ])("%s is no review, and repeated ones bench the seat as a chain would", async (_label, text) => {
+    const { served } = liveSeats({ replies: { openai: text }, labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+    const ctx = { providerManager: m } as any;
+
+    const reviewers: Array<string | undefined> = [];
+    const checks: Array<Awaited<ReturnType<typeof consensusOn>>> = [];
+    for (let check = 0; check < 3; check += 1) {
+      const reviewer = resolveConsensusReviewAssignment(ctx, executor, executor, "chat:web:1");
+      reviewers.push(reviewer?.providerName);
+      checks.push(await consensusOn(executor, reviewer));
+    }
+
+    expect(checks.map((c) => c.verdict)).toEqual([undefined, undefined, undefined]);
+    expect(checks.flatMap((c) => c.outcomes)).toEqual([
+      { providerName: "openai", status: "failed" },
+      { providerName: "openai", status: "failed" },
+    ]);
+    // The empty answer still cost tokens, booked to the seat that spent them.
+    expect(checks[0]!.usages).toEqual([expect.objectContaining({ provider: "openai", inputTokens: 10, outputTokens: 5 })]);
+    expect(served).toEqual(["openai", "openai"]);
+    expect(reviewers).toEqual(["openai", "openai", undefined]);
+    expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
+  });
+});
+
 describe("the reviewer's spend is booked to the seat that served it", () => {
   it("a bare reviewer named by its display label is booked under its canonical seat, which the cost table knows", async () => {
     liveSeats({ labels: { openai: "OpenAI" } });
@@ -452,6 +493,18 @@ describe("the node verifier never calls the worker's own seat independent", () =
 
     expect(first).toMatchObject({ verdict: "skipped", unanswered: "threw", verifierProvider: "openai" });
     expect(served.filter((name) => name === "openai")).toEqual(["openai"]);
+    expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
+  });
+
+  it("a verifier that answers with nothing is benched after repeated empties, as a chain benches its member", async () => {
+    const { served } = liveSeats({ replies: { openai: "" }, labels: { openai: "OpenAI" } });
+    const verify = createSupervisorNodeVerifier(manager(["anthropic", "openai"], true));
+
+    const verdicts = [];
+    for (let n = 0; n < 3; n += 1) verdicts.push(await verify(node("claude"), { chatId: "chat:web:1" } as any));
+
+    expect(verdicts[0]).toMatchObject({ verdict: "skipped", unanswered: "empty", verifierProvider: "openai" });
+    expect(served.filter((name) => name === "openai")).toEqual(["openai", "openai"]);
     expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
   });
 

@@ -13,12 +13,11 @@ import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
-import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
+import { QUOTA_LIMIT_RE, holdsNoAnswer } from "../orchestrator-runtime-utils.js";
 import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep, parseResetDurationMs } from "../../common/fetch-with-retry.js";
 import type { BackoffInfo } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
 import { MODEL_UNSUPPORTED_RE, httpStatusOf, reportsHttpStatus } from "./provider-error-status.js";
-import { stripLeakedReasoning } from "../leaked-reasoning.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -215,16 +214,6 @@ const FIRST_RESPONSE_STALL_RETRY_DELAY_MS = 2_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 /** A provider saying the FREE tier's own cap is spent — a quota, not congestion. */
 const FREE_TIER_LIMIT_RE = /FreeUsageLimit|free[- ]?tier[^.]{0,20}(limit|quota)|free usage limit/i;
-
-function isEmptyProviderResponse(response: ProviderResponse): boolean {
-  // Reasoning spliced into `text` is not an answer: a thinking model that spent
-  // its whole budget reasoning returns only that block, and the user sees
-  // nothing once downstream strips it.
-  const visible = typeof response.text === "string" ? stripLeakedReasoning(response.text) : undefined;
-  const hasText = visible !== undefined && !visible.reasoningOnly && visible.text.length > 0;
-  const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
-  return !hasText && !hasToolCalls;
-}
 
 /**
  * Thrown by the per-attempt first-response timeout. Distinct type so the catch
@@ -945,7 +934,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // the next healthy provider is tried. Detection is by content only — the
         // token count is deliberately ignored (a dropped usage frame must not be
         // mistaken for an empty answer; audit #18).
-        if (isEmptyProviderResponse(response)) {
+        if (holdsNoAnswer(response)) {
           // Falling through is the better answer when there is somewhere to fall
           // to. When there is not, "retryable" has to mean something: measured
           // 2026-08-22, run 39 died on six empty answers in nine seconds from
@@ -969,7 +958,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           const discarded = response.usage;
           if (discarded) lostUsage = mergeTokenUsage(lostUsage, discarded);
           response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
-          if (isEmptyProviderResponse(response)) {
+          if (holdsNoAnswer(response)) {
             // Twice running is not a blip; a provider with nothing to say twice
             // really has nothing to say.
             if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
