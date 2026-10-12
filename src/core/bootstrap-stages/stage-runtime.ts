@@ -419,6 +419,10 @@ export async function initializeTaskRuntimeStage(
     const { CampaignManager, CampaignPlanner, CampaignStorage } = await import("../../campaign/index.js");
     const campaignStorage = new CampaignStorage(join(params.config.memory.dbPath, "campaigns.db"));
     const { StyleAnalysis } = await import("../../agents/style/style-analysis.js");
+    const { AcceptanceAuthor } = await import("../../campaign/acceptance-author.js");
+    // A Config built without the campaign section (older fixtures) is the
+    // gate's default, off — not a TypeError that takes the campaign layer down.
+    const scope = params.config.campaign as Config["campaign"] | undefined;
     campaignManager = new CampaignManager({
       storage: campaignStorage,
       planner: new CampaignPlanner(params.providerManager.getProvider(""), {
@@ -487,6 +491,23 @@ export async function initializeTaskRuntimeStage(
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider(""), {
         streamingEnabled: params.config.streamingEnabled,
       }),
+      // The scope gate (GDD-drift W15). Built whatever the mode: construction
+      // calls no provider and no tool, and the manager decides nothing with
+      // them while CAMPAIGN_SCOPE_GATE is off, so off stays today's behaviour.
+      // Each part was tested alone while this site passed none, and the gate
+      // stayed off whatever the flag said.
+      scopeGateMode: scope?.scopeGate,
+      ...(scope?.maxRequirementRows === undefined ? {} : { maxRequirementRows: scope.maxRequirementRows }),
+      // The checks are written by a model that did not work on the milestone
+      // when one is healthy, chosen from the same provider manager the workers use.
+      acceptanceAuthor: new AcceptanceAuthor({
+        providers: params.providerManager,
+        ...(scope?.acceptanceWriter ? { configured: scope.acceptanceWriter } : {}),
+        streaming: params.config.streamingEnabled,
+      }),
+      // The acceptance batch is the campaign's own PlayMode run, narrowed to the
+      // test names it owns. No registry: the run is not admitted, never a pass.
+      runAcceptanceSuite: params.toolRegistry ? makeRunPlaymodeSuite(params.toolRegistry) : undefined,
     });
     campaignManager.attachEvents();
     // Each campaign task's runs are held to its own GDD; without this their
