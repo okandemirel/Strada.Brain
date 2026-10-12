@@ -453,6 +453,105 @@ describeIfHnsw("HNSWVectorStore", () => {
       expect(store.count()).toBe(200);
     });
 
+    // Review of the fix: only upsert's wait for the save was pinned, and
+    // putting the other writes back to waiting for a rebuild alone still
+    // passed. The remove below stays under the compaction ratio, so no
+    // rebuild runs and the save is the only thing to wait for.
+    it.each([
+      { write: "removeByFile", run: (s: HNSWVectorStore) => s.removeByFile("/test/b.cs") },
+      { write: "remove", run: (s: HNSWVectorStore, b: VectorEntry[]) => s.remove(b.map((e) => e.id)) },
+      { write: "replaceAll", run: (s: HNSWVectorStore) => s.replaceAll(fileEntries("c", 100)) },
+    ])("a $write that arrives while a save is writing waits for the save", async ({ run }) => {
+      const a = fileEntries("a", 100);
+      const b = fileEntries("b", 40);
+      await store.upsert([...a, ...b]);
+
+      // Hold the save open after the native write: hnsw.index already holds
+      // "a" and "b", and the metadata the save writes next must name both.
+      const index = (store as unknown as { hnswIndex: { writeIndex(file: string): Promise<boolean> } }).hnswIndex;
+      const write = index.writeIndex.bind(index);
+      let written!: () => void;
+      const indexWritten = new Promise<void>((resolve) => (written = resolve));
+      Object.defineProperty(index, "writeIndex", {
+        value: async (file: string) => {
+          const ok = await write(file);
+          written();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return ok;
+        },
+      });
+      const save = store.saveIndex(tempDir);
+      await indexWritten;
+      await run(store, b);
+      await save;
+
+      // Otherwise the metadata, read after the native write, names what the
+      // write left behind, over a hnsw.index that still holds "a" and "b".
+      const reopened = await reopen();
+      try {
+        expect(reopened.count()).toBe(140);
+        const missing: string[] = [];
+        for (const entry of [...a, ...b]) {
+          if ((await reopened.search(entry.vector, 1))[0]?.id !== entry.id) missing.push(entry.id);
+        }
+        expect(missing).toEqual([]);
+      } finally {
+        await reopened.shutdown();
+      }
+      expect(store.count()).toBe(100);
+    });
+
+    // AgentDB's stores quantize by default (scalar), and there an update
+    // awaits between entries before the inserts land, so upsert counts its
+    // whole body as a write in flight. Every test above runs unquantized,
+    // where that loop never awaits, and dropping the count still passed.
+    it("a shutdown during a scalar-quantized update-upsert saves all of it", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "hnsw-scalar-"));
+      const config = {
+        dimensions, maxElements: 1000, M: 8, efConstruction: 50, efSearch: 32, metric: "cosine" as const, quantization: "scalar" as const,
+      };
+      try {
+        const quantized = await createHNSWVectorStore(dir, config);
+        await quantized.upsert(fileEntries("u", 200));
+        const updates = fileEntries("u", 200).map((e) => ({ ...e, chunk: { ...e.chunk, content: "v2" } }));
+        // Pin the native write as above: capture the index the moment the
+        // save writes it, then stay open long enough for the updates to end.
+        const index = (quantized as unknown as {
+          hnswIndex: { writeIndex(file: string): Promise<boolean>; writeIndexSync(file: string): void };
+        }).hnswIndex;
+        Object.defineProperty(index, "writeIndex", {
+          value: async (file: string) => {
+            index.writeIndexSync(file);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return true;
+          },
+        });
+        let updated = false;
+        const upsert = quantized.upsert(updates).then(() => { updated = true; });
+        await Promise.resolve();
+        // The race this test is about: the updates are still under way.
+        expect(updated).toBe(false);
+
+        await quantized.shutdown();
+        await upsert;
+
+        const reopened = await createHNSWVectorStore(dir, config);
+        try {
+          expect(reopened.count()).toBe(200);
+          const stale: string[] = [];
+          for (const entry of updates) {
+            const hit = (await reopened.search(entry.vector, 1))[0];
+            if (hit?.id !== entry.id || hit.chunk.content !== "v2") stale.push(entry.id);
+          }
+          expect(stale).toEqual([]);
+        } finally {
+          await reopened.shutdown();
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it.each([
       { first: "the shutdown", saved: 300 },
       { first: "the upsert", saved: 600 },
