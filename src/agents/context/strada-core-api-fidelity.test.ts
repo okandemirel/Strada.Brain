@@ -78,6 +78,11 @@ interface CoreSurface {
    * injection (`[Inject]`) after construction; none on a Core that never runs it.
    */
   memberInjecting: Set<string>;
+  /**
+   * When what a JobSystemBase's jobs record in its EntityCommandBuffer is
+   * played back: at the start of the system's next update, or in this one.
+   */
+  commandBufferPlayback?: "next update" | "same update";
 }
 
 /**
@@ -160,6 +165,21 @@ function listCoreFiles(root: string, walk: Pick<GlobOptions, "platform" | "fs"> 
   return globSync(CORE_PACKAGE_CONFIG.fileGlob, { cwd: root, ignore: CORE_PACKAGE_CONFIG.ignoreGlobs, posix: true, ...walk });
 }
 
+/** The methods declared directly in the type whose body opens at `open`, with their bodies. */
+function* methodsIn(code: string, depth: Int32Array, open: number, close: number): Generator<{ name: string; body: string }> {
+  const inner = depth[open]! + 1;
+  const header = /\b(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{;=]*(\{|=>)/g;
+  header.lastIndex = open + 1;
+  for (let m = header.exec(code); m && m.index < close; m = header.exec(code)) {
+    const start = m.index + m[0].length - m[2]!.length;
+    if (depth[start] !== inner) continue;
+    const block = m[2] === "{";
+    let end = start + m[2]!.length;
+    while (end < close && !(block ? code[end] === "}" && depth[end] === inner + 1 : code[end] === ";" && depth[end] === inner)) end++;
+    yield { name: m[1]!, body: code.slice(start, end) };
+  }
+}
+
 function readCoreSurface(root: string): CoreSurface {
   const files = listCoreFiles(root);
   const surface: CoreSurface = {
@@ -235,14 +255,18 @@ function readCoreSurface(root: string): CoreSurface {
 
       // A registration runs [Inject] when its body asks the container to
       // (`RegisterWithMemberInjection`); RegisterModel forwarding to Register does not.
-      if (!type.bases.has("IModuleBuilder")) continue;
-      for (const mm of body.matchAll(/\b(Register\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{;=]*(\{|=>)/g)) {
-        const start = open + 1 + mm.index! + mm[0].length - mm[2]!.length;
-        if (depth[start] !== inner) continue;
-        const block = mm[2] === "{";
-        let end = start + mm[2]!.length;
-        while (end < code.length && !(block ? code[end] === "}" && depth[end] === inner + 1 : code[end] === ";" && depth[end] === inner)) end++;
-        if (/\bRegisterWithMemberInjection\b/u.test(code.slice(start, end))) surface.memberInjecting.add(mm[1]!);
+      if (type.bases.has("IModuleBuilder")) {
+        for (const method of methodsIn(code, depth, open, close)) {
+          if (method.name.startsWith("Register") && /\bRegisterWithMemberInjection\b/u.test(method.body)) surface.memberInjecting.add(method.name);
+        }
+      }
+      // Whether a job system plays its command buffer back before it schedules
+      // this update's jobs, which defers what those jobs record to the next one.
+      if (m[2] === "JobSystemBase") {
+        const update = [...methodsIn(code, depth, open, close)].find((method) => method.name === "OnUpdate")?.body ?? "";
+        const playback = update.indexOf(".Playback(");
+        const schedule = update.indexOf("OnSchedule(");
+        if (playback >= 0 && schedule >= 0) surface.commandBufferPlayback = playback < schedule ? "next update" : "same update";
       }
     }
     for (const m of code.matchAll(delegateRe)) {
@@ -545,6 +569,17 @@ describe("Brain's Strada.Core knowledge names only APIs Strada.Core has", () => 
     expect(problems, `says [Inject] runs where Strada.Core does not run it:\n${problems.join("\n")}`).toEqual([]);
   });
 
+  it.skipIf(!CORE_ROOT)(`when the framework block says an EntityCommandBuffer plays back${SKIPPED}`, () => {
+    expect(core!.commandBufferPlayback, "JobSystemBase.OnUpdate neither plays back nor schedules").toBeDefined();
+    const line = STRADA_STATIC_FRAMEWORK_KNOWLEDGE.split("\n").find((l) => l.includes("`EntityCommandBuffer`")) ?? "";
+
+    // Core plays the buffer back at the start of the system's next update, so a
+    // structural change recorded this frame is not visible later in it.
+    expect(/\bnext update\b/u.test(line), `Core plays back in the ${core!.commandBufferPlayback}: ${line}`).toBe(
+      core!.commandBufferPlayback === "next update",
+    );
+  });
+
   it.skipIf(!CORE_ROOT)(`the way the deps context and the FILE TOO LONG gate divide work${SKIPPED}`, () => {
     expect(workDivisionProblems(core!, STRADA_WORK_DIVISION)).toEqual([]);
   });
@@ -618,6 +653,19 @@ const SMALL_CORE = {
     "}",
   ].join("\n"),
   "Runtime/ECS/Systems/SystemBase.cs": "namespace Strada.Core.ECS.Systems { public abstract class SystemBase { } }",
+  "Runtime/ECS/Systems/JobSystemBase.cs": [
+    "namespace Strada.Core.ECS.Systems {",
+    "  public abstract class JobSystemBase : SystemBase {",
+    "    protected sealed override void OnUpdate(float deltaTime)",
+    "    {",
+    "      _lastJobHandle.Complete();",
+    "      if (_commandBufferCreated) { _commandBuffer.Playback(EntityManager); }",
+    "      _lastJobHandle = OnSchedule(deltaTime, _lastJobHandle);",
+    "    }",
+    "    protected abstract JobHandle OnSchedule(float deltaTime, JobHandle dependency);",
+    "  }",
+    "}",
+  ].join("\n"),
   "Runtime/Modules/ModuleBuilder.cs": [
     "namespace Strada.Core.Modules {",
     "  public interface IModuleBuilder { }",
@@ -737,6 +785,20 @@ describe("what the checks read in a prompt block", () => {
       expect(injectProblems(core, "t", "`[Inject]` runs for `RegisterController<T>()`")).toEqual([
         expect.stringContaining("this Core never runs [Inject]"),
       ]);
+    });
+  });
+
+  it("reads when a job system plays back its command buffer from the order of its update", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      // Playback, then this update's jobs: what they record waits a frame.
+      expect(readCoreSurface(root).commandBufferPlayback).toBe("next update");
+    });
+    const scheduleFirst = SMALL_CORE["Runtime/ECS/Systems/JobSystemBase.cs"].replace(
+      "      if (_commandBufferCreated) { _commandBuffer.Playback(EntityManager); }\n      _lastJobHandle = OnSchedule(deltaTime, _lastJobHandle);",
+      "      _lastJobHandle = OnSchedule(deltaTime, _lastJobHandle);\n      _lastJobHandle.Complete(); _commandBuffer.Playback(EntityManager);",
+    );
+    await withTree({ ...SMALL_CORE, "Runtime/ECS/Systems/JobSystemBase.cs": scheduleFirst }, (root) => {
+      expect(readCoreSurface(root).commandBufferPlayback).toBe("same update");
     });
   });
 });

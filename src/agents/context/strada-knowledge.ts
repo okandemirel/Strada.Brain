@@ -215,7 +215,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based, up to 8 components)
 - Filtered iteration: \`Query().Filter<T1>().Also<T2>().None<T3>().ForEach(...)\`. \`Query()\` returns a \`QueryBuilder\`; \`Filter<T>()\` starts a \`FilteredQueryBuilder\` (up to 3 components) where \`Also<T>()\` requires another component and \`None<T>()\` excludes one; \`Query().Select<T1, T2>()\` returns an \`EntityQuery<T1, T2>\`
 - \`IJobComponent\`: Burst-compatible per-entity job interface
-- \`EntityCommandBuffer\`: Deferred structural changes (add/remove entities/components), recorded through \`JobSystemBase.CommandBuffer\` and played back on the main thread after the system's update
+- \`EntityCommandBuffer\`: Deferred structural changes (add/remove entities/components), recorded through \`JobSystemBase.CommandBuffer\` and played back on the main thread at the start of the system's next update, once its previous jobs complete and before it schedules new ones: a change recorded this frame is not visible until then
 - Generic variants: \`SystemBase<T1>\` through \`SystemBase<T1,...,T8>\` with \`OnUpdateEntity()\`
 - Requires \`using Strada.Core.ECS;\` and \`using Strada.Core.ECS.Systems;\`
 
