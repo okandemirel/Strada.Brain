@@ -1151,6 +1151,12 @@ describe("SetupWizard path validation", () => {
       JSON.stringify({ dependencies: {} }),
       "utf-8",
     );
+    // The report reads the copy this install would load; beside a real
+    // Strada.MCP checkout (the usual developer layout) that is the sibling, not
+    // the copy just installed. The install goes where nothing sits beside it.
+    const isolatedInstall = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-install-"));
+    tmpDirs.push(isolatedInstall);
+    process.env["STRADA_INSTALL_ROOT"] = path.join(isolatedInstall, "Strada.Brain");
 
     installStradaMcpSubmoduleMock.mockImplementation(async (projectPath: string, target: "assets" | "packages") => {
       const submodulePath = target === "packages"

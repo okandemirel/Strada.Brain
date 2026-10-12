@@ -27,6 +27,41 @@ const TEST_STRADA_CONFIG = {
   mcpRepoUrl: "https://example.com/Strada.MCP.git",
 };
 
+// Sibling discovery looks beside the install. Run from a checkout that has the
+// real Strada.Core/Modules/MCP next to it (the usual developer layout), every
+// test here found those instead of the copies it built, so the install is put
+// where nothing sits beside it. A test about siblings passes its own root.
+let isolatedInstall: string;
+let installRootBefore: string | undefined;
+beforeEach(() => {
+  installRootBefore = process.env["STRADA_INSTALL_ROOT"];
+  isolatedInstall = join(tmpdir(), `strada-deps-install-${Date.now()}-${Math.random().toString(36).slice(2)}`, "Strada.Brain");
+  mkdirSync(isolatedInstall, { recursive: true });
+  process.env["STRADA_INSTALL_ROOT"] = isolatedInstall;
+});
+afterEach(() => {
+  if (installRootBefore === undefined) delete process.env["STRADA_INSTALL_ROOT"];
+  else process.env["STRADA_INSTALL_ROOT"] = installRootBefore;
+  rmSync(join(isolatedInstall, ".."), { recursive: true, force: true });
+});
+
+describe("the install root sibling discovery reads", () => {
+  it("is the launcher's STRADA_INSTALL_ROOT when it is set", () => {
+    const project = join(isolatedInstall, "..", "Game");
+    mkdirSync(join(project, "Packages"), { recursive: true });
+    const sibling = join(isolatedInstall, "..", "Strada.MCP");
+    mkdirSync(join(sibling, "node_modules"), { recursive: true });
+    mkdirSync(join(sibling, "dist"), { recursive: true });
+    writeFileSync(join(sibling, "package.json"), JSON.stringify({ name: "strada-mcp", version: "4.5.6" }));
+    writeFileSync(join(sibling, "dist", "index.js"), "");
+
+    const result = checkStradaDeps(project, TEST_STRADA_CONFIG);
+
+    expect(result.mcpPath).toBe(sibling);
+    expect(result.mcpSource).toBe("sibling-checkout");
+  });
+});
+
 describe("checkStradaDeps", () => {
   let testDir: string;
 

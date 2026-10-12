@@ -179,8 +179,15 @@ function resolveStradaDependencyConfig(
   };
 }
 
-/** This install's root: the sibling checkouts live next to it. */
+/**
+ * This install's root: the sibling checkouts live next to it. The launcher's
+ * STRADA_INSTALL_ROOT first, as resolveRuntimePaths reads it, so discovery and
+ * the rest of the runtime agree on which install this is (and a test can put
+ * the install where no sibling checkout sits).
+ */
 function defaultInstallRoot(): string {
+  const configured = process.env["STRADA_INSTALL_ROOT"]?.trim();
+  if (configured) return configured;
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
