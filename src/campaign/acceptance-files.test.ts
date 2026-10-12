@@ -895,6 +895,24 @@ describe("scanForeignAcceptanceNamespace reads names as the compiler does", () =
     put(root, "Assets/Scripts/Fine.cs", "namespace Game { public class Variant { int var = 0; } public class Dynamics { } }");
     expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/Dyn.cs", "Assets/Scripts/Native.cs", "Assets/Scripts/Var.cs"]);
   });
+
+  it("leaves a delegate's return type and a nested type alone: neither is a type a check's var could find", () => {
+    const root = project();
+    // The name is what follows the return type; nint and dynamic here are what the delegates return.
+    put(root, "Assets/Scripts/Interop.cs", "namespace Game.Native { public delegate nint Allocate(int size); public delegate dynamic Peek<T>(T key); }");
+    // A nested type is in scope only inside its outer type, which a check never is.
+    put(
+      root,
+      "Assets/Scripts/Nested.cs",
+      "namespace Game { public class Kiln { class var { } public struct nint { } public delegate void dynamic(); public void Fire() { var heat = 3; } } }",
+    );
+    put(root, "Assets/Scripts/FileScoped.cs", "namespace Game.Kilns;\npublic class Shelf { public record nuint(int Slots); }");
+    // Still a type so named, at namespace level: a delegate named var, generic or not, and one in a file-scoped namespace.
+    put(root, "Assets/Scripts/NamedVar.cs", "public delegate nint var<T>(T value);");
+    put(root, "Assets/Scripts/FileScopedTop.cs", "namespace Strada;\npublic class Kiln { }\npublic struct nint { }");
+    put(root, "Assets/Scripts/AfterNested.cs", "namespace Strada { public class Kiln { class Ember { } } public class var { } }");
+    expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/AfterNested.cs", "Assets/Scripts/FileScopedTop.cs", "Assets/Scripts/NamedVar.cs"]);
+  });
 });
 
 // =============================================================================

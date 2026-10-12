@@ -1995,7 +1995,32 @@ const ACCEPTANCE_NAME_LITERAL_RE = /"\s*Strada\s*\.\s*Acceptance\s*\./g;
  * these names bind to a type in scope before their own meaning, wherever in
  * Strada or the global namespace it sits.
  */
-const TYPE_LIKE_DECLARATION_RE = /\b(?:class|struct|interface|enum|record|delegate\b[^;{}()]*?)\s+(?:var|dynamic|nint|nuint)\b/;
+const TYPE_LIKE_DECLARATION_RE = /\b(?:class|struct|interface|enum|record)\s+(?:var|dynamic|nint|nuint)\b/;
+/** A delegate's name is the one before its parameters (and type parameters); the words before it are its return type. */
+const TYPE_LIKE_DELEGATE_RE = /\bdelegate\b[^;{}]*?\b(?:var|dynamic|nint|nuint)\s*(?:<[^;{}()]*>)?\s*\(/;
+
+/**
+ * Whether the code declares such a type directly in a namespace or the global
+ * one. A nested type is in scope only inside the type around it, and a check
+ * is never inside a worker's type, so it cannot answer a check's `var`.
+ */
+function declaresTypeLikeName(code: string): boolean {
+  // Per open brace: whether it opened a namespace's body.
+  const opened: boolean[] = [];
+  let segment = "";
+  for (const c of code) {
+    if (c !== "{" && c !== "}" && c !== ";") {
+      segment += c;
+      continue;
+    }
+    const inNamespace = opened.every((namespace) => namespace);
+    if (inNamespace && c !== "}" && (TYPE_LIKE_DECLARATION_RE.test(segment) || TYPE_LIKE_DELEGATE_RE.test(segment))) return true;
+    if (c === "{") opened.push(inNamespace && /\bnamespace\s+[\w.]+\s*$/.test(segment));
+    else if (c === "}") opened.pop();
+    segment = "";
+  }
+  return false;
+}
 
 /**
  * Identifiers as the compiler reads them: a verbatim `@Strada`, one spelled
@@ -2057,7 +2082,7 @@ export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
         // The scan keeps a literal's quotes and blanks comments, so a quote that survives it opens a string.
         const named = [...text.matchAll(ACCEPTANCE_NAME_LITERAL_RE)].some((m) => code[m.index] === '"');
         const spelled = identifierSpelling(withoutDirectives(code));
-        if (named || FOREIGN_NAMESPACE_RE.test(spelled) || TYPE_LIKE_DECLARATION_RE.test(spelled)) hits.push(rel);
+        if (named || FOREIGN_NAMESPACE_RE.test(spelled) || declaresTypeLikeName(spelled)) hits.push(rel);
       },
       insideAcceptanceDir,
     );
