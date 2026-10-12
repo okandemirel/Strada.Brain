@@ -65,10 +65,15 @@ interface CoreSurface {
    * is held to where it is declared instead.
    */
   external: Set<string>;
+  /** Namespaces Core's generators give game code: `Game.Modules`. */
+  generatedNamespaces: Set<string>;
 }
 
-/** C# source without comments, string/char literals or preprocessor lines. */
-function stripCode(src: string): string {
+/**
+ * C# source without comments, string/char literals or preprocessor lines;
+ * with `keepStrings`, string literals stay, for the defaults Core writes in them.
+ */
+function stripCode(src: string, keepStrings = false): string {
   let out = "";
   let i = 0;
   let lineStart = true;
@@ -91,17 +96,19 @@ function stripCode(src: string): string {
     }
     const verbatim = /^(?:@\$?|\$@)"/.exec(src.slice(i, i + 3));
     if (verbatim) {
+      const start = i;
       i += verbatim[0].length;
       while (i < src.length && !(src[i] === '"' && src[i + 1] !== '"')) i += src[i] === '"' ? 2 : 1;
       i++;
-      out += '""';
+      out += keepStrings ? src.slice(start, i) : '""';
       continue;
     }
     if (c === '"') {
+      const start = i;
       i++;
       while (i < src.length && src[i] !== '"' && src[i] !== "\n") i += src[i] === "\\" ? 2 : 1;
       i++;
-      out += '""';
+      out += keepStrings ? src.slice(start, i) : '""';
       continue;
     }
     if (c === "'") {
@@ -151,6 +158,7 @@ function readCoreSurface(root: string): CoreSurface {
     extensions: new Map(),
     attributeUses: new Set(),
     external: new Set(),
+    generatedNamespaces: new Set(),
   };
   const words = new Set<string>();
   const typeRe = new RegExp(
@@ -165,7 +173,12 @@ function readCoreSurface(root: string): CoreSurface {
   const delegateRe = new RegExp(String.raw`\bdelegate\s+[\w<>\[\],.?\s]+?\s(\w+)\s*(?:${GENERIC})?\s*\(`, "g");
 
   for (const file of files) {
-    const code = stripCode(readFileSync(join(root, file), "utf8"));
+    const source = readFileSync(join(root, file), "utf8");
+    // The module generator's default: `Namespace = "Game.Modules"`.
+    for (const m of stripCode(source, true).matchAll(/\b\w*[Nn]amespace\s*=\s*"([A-Za-z_][\w.]*)"/g)) {
+      surface.generatedNamespaces.add(m[1]!);
+    }
+    const code = stripCode(source);
     for (const m of code.matchAll(/\b[A-Za-z_]\w*\b/g)) words.add(m[0]);
     for (const m of code.matchAll(/\bnamespace\s+([\w.]+)/g)) surface.namespaces.add(m[1]!);
     for (const m of code.matchAll(/\[\s*(?:\w+\s*:\s*)?([A-Z]\w*)\s*[\](,]/g)) surface.attributeUses.add(m[1]!);
@@ -261,10 +274,24 @@ function ownersIn(core: CoreSurface, texts: readonly string[]): string[] {
 /** Prose names a type only in code shape: `EventBus`, `MediatR`, `IServiceLocator`, not "Every" or "IDs". */
 const isCodeShaped = (name: string): boolean => /^[A-Z][a-z0-9]+[A-Z]/u.test(name) || /^I[A-Z][a-z]\w+$/u.test(name);
 
+/** A namespace and what goes under it: `Strada.Core.*`, `Game.Modules.<name>`. */
+const NAMESPACE_SPAN = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(?:\*|<\w+>)$/u;
+const atOrAbove = (names: Iterable<string>, name: string): boolean =>
+  [...names].some((n) => n === name || n.startsWith(`${name}.`));
+
 function problemsIn(core: CoreSurface, claim: Claim, owners: readonly string[]): string[] {
   const problems: string[] = [];
   const say = (what: string) => problems.push(`${claim.where}: ${what}  ← ${JSON.stringify(claim.text.trim().slice(0, 140))}`);
   const ownedBy = (name: string) => owners.some((o) => hasMember(core, o, name));
+
+  const namespace = claim.code ? NAMESPACE_SPAN.exec(claim.text.trim())?.[1] : undefined;
+  if (namespace) {
+    if (!atOrAbove(core.namespaces, namespace) && !atOrAbove(core.generatedNamespaces, namespace)) {
+      say(`namespace ${namespace} is neither declared in Strada.Core nor the one its module generator gives game code`);
+    }
+    return problems;
+  }
+
   // typeof(X) names the caller's own type.
   let text = claim.text.replace(/typeof\([^)]*\)/gu, "typeof()");
 
@@ -332,8 +359,9 @@ function sectionClaims(source: string, block: string, prose: boolean): Array<{ c
     // A fenced block in these prompts is a directory tree, not code.
     const body = section.replace(/```[\s\S]*?```/gu, " ");
     const rest = body.replace(/`([^`]+)`/gu, (_m, span: string) => {
-      // Paths and file globs (Assets/Modules/, *ModuleConfig, .asmdef) are not APIs.
-      if (!/[/*]|^\./u.test(span) || /\(/u.test(span)) spans.push(span);
+      // Paths and file globs (Assets/Modules/, *ModuleConfig, .asmdef) are not
+      // APIs; a namespace with a wildcard (`Strada.Core.*`) is.
+      if (NAMESPACE_SPAN.test(span) || !/[/*]|^\./u.test(span) || /\(/u.test(span)) spans.push(span);
       return " ";
     });
     for (const span of spans) claims.push({ where, text: span, code: true });
@@ -444,6 +472,48 @@ async function withTree(files: Record<string, string>, use: (root: string) => un
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+/** A Core small enough to read in a test, with a module generator. */
+const SMALL_CORE = {
+  "Runtime/Communication/EventBus.cs":
+    "namespace Strada.Core.Communication { public sealed class EventBus { public void Publish<T>(T message) { } } }",
+  "Editor/ModuleGenerator/ModuleDefinition.cs":
+    'namespace Strada.Core.Editor.ModuleGenerator { public class ModuleDefinition { public string Namespace = "Game.Modules"; } }',
+};
+
+/** What the checks report for a prompt block read against `core`. */
+function problemsOf(core: CoreSurface, block: string): string[] {
+  return sectionClaims("block", block, false).flatMap(({ claims, texts }) =>
+    claims.flatMap((claim) => problemsIn(core, claim, ownersIn(core, texts))),
+  );
+}
+
+describe("what the checks read in a prompt block", () => {
+  it("holds a namespace with a wildcard to the namespaces Core declares", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      const core = readCoreSurface(root);
+
+      expect(problemsOf(core, "- Namespace: `Strada.Core.*` for framework")).toEqual([]);
+      // The measured defect: workers were told to put game code in a
+      // namespace nobody uses, and a span with a "*" was skipped as a glob.
+      expect(problemsOf(core, "- Namespace: `Strada.Core.*` for framework, `YourGame.*` for game code")).toEqual([
+        expect.stringContaining("namespace YourGame is neither declared"),
+      ]);
+      expect(problemsOf(core, "- `Strada.Kernel.*`")).toEqual([expect.stringContaining("namespace Strada.Kernel is neither declared")]);
+    });
+  });
+
+  it("accepts the namespace Core's module generator gives game code, and no other", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      const core = readCoreSurface(root);
+
+      expect(problemsOf(core, "- game code: `Game.Modules.<name>`")).toEqual([]);
+      expect(problemsOf(core, "- game code: `Studio.Modules.<name>`")).toEqual([
+        expect.stringContaining("namespace Studio.Modules is neither declared"),
+      ]);
+    });
+  });
+});
 
 /** Core's API beside its test suites and its root build tooling. */
 const API_AND_TOOLING = {
