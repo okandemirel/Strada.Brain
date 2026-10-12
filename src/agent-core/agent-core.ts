@@ -308,8 +308,9 @@ export class AgentCore {
       switch (decision.action) {
         case "execute":
           if (decision.goal) {
-            if (!answersActionableWork(ranked, decision.batchObservationIds, effectivePriorityThreshold)) {
-              this.refuseInformationalGoal(decision.action, decision.goal, ranked);
+            const refusal = whyNotActionableWork(ranked, decision.batchObservationIds);
+            if (refusal) {
+              this.refuseGoal(decision.action, decision.goal, refusal, ranked);
               break;
             }
             const task = this.taskManager.submit(
@@ -368,8 +369,9 @@ export class AgentCore {
 
         case "batch":
           if (decision.batchObservationIds && decision.batchObservationIds.length > 0 && decision.goal) {
-            if (!answersActionableWork(ranked, decision.batchObservationIds, effectivePriorityThreshold)) {
-              this.refuseInformationalGoal(decision.action, decision.goal, ranked);
+            const refusal = whyNotActionableWork(ranked, decision.batchObservationIds);
+            if (refusal) {
+              this.refuseGoal(decision.action, decision.goal, refusal, ranked);
               break;
             }
             const idSet = new Set(decision.batchObservationIds);
@@ -631,8 +633,13 @@ export class AgentCore {
    * Nothing is submitted and nothing is marked handled: the informational observations are
    * dropped by the requeue after the switch, and any actionable ones beside them come back.
    */
-  private refuseInformationalGoal(action: "execute" | "batch", goal: string, ranked: readonly AgentObservation[]): void {
-    this.logger.info("AgentCore: refused a goal that answers only informational observations", {
+  private refuseGoal(
+    action: "execute" | "batch",
+    goal: string,
+    cause: string,
+    ranked: readonly AgentObservation[],
+  ): void {
+    this.logger.info(`AgentCore: refused a goal that ${cause}`, {
       action,
       goal: goal.slice(0, 200),
       topObservation: ranked[0]?.summary.slice(0, 120),
@@ -722,29 +729,33 @@ export class AgentCore {
 }
 
 /**
- * Whether a goal answers anything that is work: the observations it names, or — naming none in
- * this batch — the batch itself. A trigger fire the heartbeat already turned into its own task or
- * approval is marked actionable:false, and a goal built only on it ran that work a second time
- * (review of 254fa61a: one deploy fire, one reasoning call, one task submitted against its label —
- * the run heartbeat-loop stopped starting on 2026-09-02).
+ * Why a goal does not answer work in this batch, or undefined when it does: it answers the
+ * observations it names, or — naming none — the batch itself. A trigger fire the heartbeat already
+ * turned into its own task or approval is marked actionable:false, and a goal built only on it ran
+ * that work a second time (review of 254fa61a: one deploy fire, one reasoning call, one task
+ * submitted against its label — the run heartbeat-loop stopped starting on 2026-09-02).
  *
- * A goal that names nothing in the batch cannot say which observation it answers, so a batch that
- * also holds an informational observation loud enough to have prompted it is refused: judged
- * against the whole batch, "Deploy now" beside a real build failure was submitted, the fire's
- * work ran a second time, and the failure was marked handled and dropped. The requeue brings the
- * actionable observations back without the fire. One the threshold already silenced did not prompt
- * the goal, and does not hold back the batch's work.
+ * A goal that names nothing cannot say which observation it answers, so beside any informational
+ * observation it is refused: judged against the whole batch, "Deploy now" beside a real build
+ * failure was submitted, the fire's work ran a second time, and the failure was marked handled and
+ * dropped. No score exempts one — the model is shown every ranked observation, and the threshold
+ * and a source's score are both moved by its own 'adjust' (review of e54153db). The refusal costs
+ * one round: the requeue drops the informational observations and brings the actionable ones back.
+ * Ids that are all outside the batch name nothing here either, and submitted a goal that marked
+ * nothing handled, so the same work came back to be submitted again.
  */
-function answersActionableWork(
-  ranked: ReadonlyArray<{ id: string; actionable: boolean; priority: number }>,
+function whyNotActionableWork(
+  ranked: ReadonlyArray<{ id: string; actionable: boolean }>,
   namedIds: readonly string[] | undefined,
-  threshold: number,
-): boolean {
+): string | undefined {
   const named = new Set(namedIds ?? []);
   const answered = ranked.filter((o) => named.has(o.id));
-  if (answered.length > 0) return answered.some((o) => o.actionable);
-  if (ranked.some((o) => !o.actionable && o.priority >= threshold)) return false;
-  return ranked.some((o) => o.actionable);
+  if (answered.length > 0) {
+    return answered.some((o) => o.actionable) ? undefined : "answers only informational observations";
+  }
+  if (named.size > 0) return "names only observations outside this batch";
+  if (ranked.some((o) => !o.actionable)) return "names no observation beside an informational one it may answer";
+  return ranked.length > 0 ? undefined : "has no observation to answer";
 }
 
 /**

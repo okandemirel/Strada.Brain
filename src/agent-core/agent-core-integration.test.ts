@@ -696,7 +696,11 @@ describe("AgentCore — a trigger fire does not become a second task", () => {
   // approval); TriggerObserver marks the observation actionable:false for exactly that reason.
   // Review of 254fa61a: nothing read the flag, so a provider answering "execute" submitted the
   // trigger's work a second time — the deploy fire the heartbeat stopped submitting on 2026-09-02.
-  function setup(answer: (prompt: string) => Record<string, unknown>, extra: AgentObservation[] = []) {
+  function setup(
+    answer: (prompt: string) => Record<string, unknown>,
+    extra: AgentObservation[] = [],
+    config: Record<string, unknown> = {},
+  ) {
     const registry = new TriggerRegistry();
     registry.register({
       metadata: { name: "deploy-ready", type: "deploy", description: "Deployment readiness detection" },
@@ -725,7 +729,7 @@ describe("AgentCore — a trigger fire does not become a second task", () => {
       { sendText: vi.fn().mockResolvedValue(undefined) } as any,
       { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) },
       undefined,
-      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10, ...config },
     );
     return { bus, engine, provider, submit, core, prompts };
   }
@@ -811,21 +815,81 @@ describe("AgentCore — a trigger fire does not become a second task", () => {
     }
   });
 
-  it("an informational observation under the threshold does not hold back a goal that names nothing", async () => {
-    // What the threshold already silenced did not prompt the goal; the failure is the batch's work.
+  // Review of e54153db: an informational observation under the threshold was exempted as one that
+  // "did not prompt the goal", but every ranked observation is in the prompt, and the threshold and
+  // the fire's score both move (config, the model's own 'adjust'). With the fire at 60 under a
+  // threshold of 70, "Deploy now" was submitted and the build failure was dropped as handled.
+  it.each<{ way: string; config?: Record<string, unknown>; adjust?: Record<string, unknown> }>([
+    { way: "a configured threshold of 70", config: { minObservationPriority: 70 } },
+    { way: "a threshold the model raised", adjust: { priorityThreshold: 75 } },
+    { way: "a trigger source the model demoted", adjust: { sourceBoost: { source: "trigger", delta: -40 } } },
+  ])("…and still refused when the fire scores under $way", async ({ config, adjust }) => {
+    const answers: Array<Record<string, unknown>> = [
+      ...(adjust ? [{ action: "adjust", adjustments: adjust, reasoning: "tune" }] : []),
+      { action: "execute", goal: "Deploy now", reasoning: "ready" },
+    ];
+    const warmup = adjust ? [createObservation("git", "3 uncommitted change(s)", { priority: 50 })] : [];
+    const { bus, engine, submit, core } = setup(() => answers.shift()!, warmup, config);
+    if (adjust) await core.tick();
+    const deferred = vi.spyOn(engine, "defer");
+    engine.inject(createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 }));
+    bus.emit("daemon:trigger_fired", { triggerName: "deploy-ready", timestamp: Date.now() });
+
+    await core.tick();
+
+    expect(answers).toEqual([]);
+    expect(submit).not.toHaveBeenCalled();
+    expect(deferred.mock.calls.map(([obs]) => obs.source)).toEqual(["build"]);
+  });
+
+  // With every observation actionable, a goal naming no id of this batch was submitted with nothing
+  // marked handled (a batch goal with an empty context), and the whole batch came back for the same
+  // work to be submitted again.
+  it.each(["execute", "batch"] as const)("'%s' naming only ids outside the batch answers nothing in it", async (action) => {
     const failure = createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
-    const idle = createObservation("user", "User has been idle for 20 minutes", { priority: 10, actionable: false });
     const { engine, submit, core } = setup(
-      () => ({ action: "execute", goal: "Fix the build", reasoning: "broken" }),
-      [failure, idle],
+      () => ({ action, goal: "Fix the build", batchObservationIds: ["obs-not-in-this-batch"], reasoning: "broken" }),
+      [failure],
     );
     const deferred = vi.spyOn(engine, "defer");
 
     await core.tick();
 
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit.mock.calls[0]![2]).toBe("Fix the build");
-    expect(deferred).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    expect(deferred.mock.calls.map(([obs]) => obs.source)).toEqual(["build"]);
+  });
+
+  it("beside even a quiet informational report, a goal names what it answers or waits one round for the report to drop", async () => {
+    const idle = () => createObservation("user", "User has been idle for 20 minutes", { priority: 10, actionable: false });
+    const failure = () => createObservation("build", "Build failed with 2 pending file(s)", { priority: 85 });
+
+    // Named: submitted at once, and the report is not requeued.
+    const named = setup(
+      (prompt) => ({ action: "execute", goal: "Fix the build", batchObservationIds: [idOf(prompt, "build")], reasoning: "broken" }),
+      [failure(), idle()],
+    );
+    const namedDeferred = vi.spyOn(named.engine, "defer");
+    await named.core.tick();
+    expect(named.submit).toHaveBeenCalledTimes(1);
+    expect(named.submit.mock.calls[0]![2]).toBe("Fix the build");
+    expect(namedDeferred).not.toHaveBeenCalled();
+
+    // Unnamed: refused, the report is dropped, and the failure comes back alone a minute later.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const unnamed = setup(() => ({ action: "execute", goal: "Fix the build", reasoning: "broken" }), [failure(), idle()]);
+      const deferred = vi.spyOn(unnamed.engine, "defer");
+      await unnamed.core.tick();
+      expect(unnamed.submit).not.toHaveBeenCalled();
+      expect(deferred.mock.calls.map(([obs]) => obs.source)).toEqual(["build"]);
+
+      vi.setSystemTime(Date.now() + 61_000);
+      await unnamed.core.tick();
+      expect(unnamed.submit).toHaveBeenCalledTimes(1);
+      expect(unnamed.submit.mock.calls[0]![2]).toBe("Fix the build");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
