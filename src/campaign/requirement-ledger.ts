@@ -60,6 +60,19 @@ export function syncRequirementIds(milestones: CampaignMilestone[], rows: readon
 }
 
 /**
+ * A cosmetic rewording is the row a running prompt showed, under a new id
+ * (`LedgerAmendment.renamed`), so the attempt stays judged on it. A changed
+ * ask or a new row keeps no such link: that prompt never showed it.
+ */
+export function carryPromptedIds(milestones: CampaignMilestone[], renamed: ReadonlyMap<string, string>): void {
+  if (renamed.size === 0) return;
+  for (const milestone of milestones) {
+    if (milestone.promptedRequirementIds === undefined) continue;
+    milestone.promptedRequirementIds = milestone.promptedRequirementIds.map((rid) => renamed.get(rid) ?? rid);
+  }
+}
+
+/**
  * The rows owned by a NEW ladder. A replan under an existing ledger reuses the
  * ids m1…mN for different sprints, so an owner from the old ladder would claim
  * rows for a sprint that never planned them, and an exclusion from the old
@@ -146,6 +159,8 @@ export interface LedgerAmendment {
   readonly unchanged: number;
   /** Reworded with the same content: its result, test, owner and waiver carried. */
   readonly cosmetic: number;
+  /** Each cosmetic rewording's old id → its new one. */
+  readonly renamed: ReadonlyMap<string, string>;
   /** Reworded with a changed ask — a number, a clause: open again, its test superseded. */
   readonly reopened: RequirementRow[];
   /** Reopened rows a person had waived: the waiver was for the old ask. */
@@ -240,6 +255,7 @@ export function rereadLedger(
   const claimed = new Set<string>();
   const reopened: RequirementRow[] = [];
   const waiversDropped: RequirementRow[] = [];
+  const renamed = new Map<string, string>();
   let unchanged = 0;
   let cosmetic = 0;
   let added = 0;
@@ -260,6 +276,7 @@ export function rereadLedger(
     claimed.add(predecessor.rid);
     if (contentFingerprint(predecessor.text) === contentFingerprint(row.text)) {
       cosmetic += 1;
+      renamed.set(predecessor.rid, row.rid);
       return carried(row, predecessor);
     }
     const open = reopenedFrom(row, predecessor, options.atMs);
@@ -295,6 +312,7 @@ export function rereadLedger(
     },
     unchanged,
     cosmetic,
+    renamed,
     reopened: owned.filter((r) => changedAsk.has(r.rid) && r.status !== "excluded"),
     waiversDropped,
     added,

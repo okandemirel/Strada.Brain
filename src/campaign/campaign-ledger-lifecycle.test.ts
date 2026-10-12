@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rowsJudgedFor } from "./acceptance-prompt.js";
 import { CampaignManager, repairsForRequirement, type CampaignManagerOptions } from "./campaign-manager.js";
 import { splitGddSections, type CampaignPlanner } from "./campaign-planner.js";
 import { CampaignStorage } from "./campaign-storage.js";
@@ -157,6 +158,10 @@ const ensureLedger = (manager: CampaignManager, campaign: Campaign): Promise<{ c
 
 const persist = (manager: CampaignManager, campaign: Campaign): boolean =>
   (manager as unknown as { persist(c: Campaign): boolean }).persist(campaign);
+
+/** The milestone's next attempt, as a bounce or a resubmit sends it. */
+const submitNow = (manager: CampaignManager, campaign: Campaign): void =>
+  (manager as unknown as { submitCurrentMilestone(c: Campaign): void }).submitCurrentMilestone(campaign);
 
 const byLabel = (rows: readonly RequirementRow[], label: string): RequirementRow => {
   const row = rows.find((r) => r.label === label);
@@ -420,6 +425,77 @@ describe("an in-flight campaign gets its ledger once, at the next revive (W11)",
     expect(after.requirements!.modelPassRevision).toBeUndefined();
     expect(after.requirements!.rows.some((r) => r.source === "llm-added")).toBe(false);
     expect(messages.some((m) => m.includes("add-only pass over the GDD added"))).toBe(false);
+  });
+
+  it("a row the add-only pass gives the running sprint after its submit is not judged on that attempt; the next submit shows it", async () => {
+    const line = "A lighthouse glows on the harbour menu's far shore.";
+    const doc = APPROVED.replace("The harbour menu must show a Cast Off button.", `The harbour menu must show a Cast Off button.\n${line}`);
+    const reply = JSON.stringify({ rows: [{ requirement: "a lighthouse glows on the harbour menu far shore", quote: line }] });
+    const { manager, storage, root, submitted, messages } = build("on", {}, async () => reply);
+    writeFileSync(join(root, "docs", "GDD.md"), doc);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.gddText = doc;
+    storage.save(seed);
+
+    expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+
+    const campaign = storage.get(seed.id)!;
+    const running = campaign.milestones[1]!;
+    const added = campaign.requirements!.rows.find((r) => r.text === line)!;
+    expect(added).toMatchObject({ source: "llm-added", owner: "m2" });
+    // The prompt the sprint runs on was built before the pass read the row…
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).not.toContain(line);
+    // …so this attempt is judged on what that prompt showed, and the chat says why the row waits.
+    const judged = rowsJudgedFor(campaign.requirements!, running).map((r) => r.rid);
+    expect(judged).not.toContain(added.rid);
+    expect(judged.length).toBeGreaterThan(0);
+    expect(messages.some((m) => m.includes("not judged on them") && m.includes(running.title))).toBe(true);
+
+    // The next submit shows the row, and from then on the sprint is judged on it.
+    submitNow(manager, storage.get(seed.id)!);
+    expect(submitted[1]).toContain(line);
+    expect(rowsJudgedFor(storage.get(seed.id)!.requirements!, storage.get(seed.id)!.milestones[1]!).map((r) => r.rid)).toContain(added.rid);
+  });
+
+  it("an amendment read while the sprint runs: a cosmetic rewording stays judged, a changed ask and a new row wait for the next prompt", async () => {
+    const castOff = "The harbour menu must show a Cast Off button.";
+    const docks = "The harbour menu must list 3 docks.";
+    const doc = APPROVED.replace(castOff, `${castOff}\n${docks}`);
+    const amended = doc
+      .replace(castOff, "The harbour menu MUST show a Cast Off button!")
+      .replace(docks, "The harbour menu must list 5 docks.\nThe harbour menu must ring a bell when a raft docks.");
+    const { manager, storage, root, submitted, messages } = build("shadow");
+    writeFileSync(join(root, "docs", "GDD.md"), doc);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.gddText = doc;
+    storage.save(seed);
+    expect(await manager.reviveByCommand(ctx.chatId)).toBe(true);
+    const before = storage.get(seed.id)!.requirements!.rows;
+    const shownCastOff = before.find((r) => r.text === castOff)!;
+    expect(shownCastOff.owner).toBe("m2");
+    expect(submitted[0]).toContain(castOff);
+    expect(submitted[0]).toContain(docks);
+
+    writeFileSync(join(root, "docs", "GDD.md"), amended);
+    expect(await manager.tryHandleAmendment(ctx.chatId, "amend gdd", ctx.userId)).toBe(true);
+
+    const campaign = storage.get(seed.id)!;
+    const rows = campaign.requirements!.rows;
+    const reworded = rows.find((r) => r.text === "The harbour menu MUST show a Cast Off button!")!;
+    const fiveDocks = rows.find((r) => r.text === "The harbour menu must list 5 docks.")!;
+    const bell = rows.find((r) => r.text === "The harbour menu must ring a bell when a raft docks.")!;
+    expect(reworded.rid).not.toBe(shownCastOff.rid);
+    for (const row of [reworded, fiveDocks, bell]) expect(row.owner).toBe("m2");
+    const judged = rowsJudgedFor(campaign.requirements!, campaign.milestones[1]!).map((r) => r.rid);
+    // The same ask the prompt showed, under a new id…
+    expect(judged).toContain(reworded.rid);
+    // …while a changed ask and a new sentence were never on it.
+    expect(judged).not.toContain(fiveDocks.rid);
+    expect(judged).not.toContain(bell.rid);
+    const told = messages.find((m) => m.startsWith("GDD amendment acknowledged")) ?? "";
+    expect(told).toContain("2 row(s) of **Sprint m2** were not in the prompt its running attempt was sent with");
+    expect(told).toContain("not judged on them");
   });
 
   it("off: the revive is today's — no ledger, no model call, no counter touched", async () => {

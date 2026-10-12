@@ -107,9 +107,10 @@ import type { RequirementLedger, RequirementRow } from "./scope-types.js";
 import { rowBlocks } from "./scope-report.js";
 import { closesByLedger } from "./scope-verdict.js";
 import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
-import { acceptancePromptFor } from "./acceptance-prompt.js";
+import { acceptancePromptFor, promptedRequirementIds, rowsAwaitingPrompt } from "./acceptance-prompt.js";
 import {
   buildLedger,
+  carryPromptedIds,
   completeLedgerByModel,
   describeAmendment,
   describeLedgerRead,
@@ -3046,6 +3047,11 @@ export class CampaignManager {
     // (cross-references included) would sit in the prompt that section-
     // reference ownership reads. "" with the gate off or no ledger.
     const acceptance = acceptancePromptFor(campaign, milestone, this.scopeGateMode);
+    // …AND THE ATTEMPT IS JUDGED ON WHAT IT SHOWED (rowsJudgedFor): a row
+    // owned after this line — the add-only pass that follows a revive's
+    // submit — waits for the next submit instead of failing a sprint that
+    // was never told it.
+    milestone.promptedRequirementIds = promptedRequirementIds(campaign, milestone, this.scopeGateMode);
     const task = this.taskManager.submit(
       campaign.chatId,
       campaign.channelType,
@@ -6755,7 +6761,9 @@ export class CampaignManager {
     // with no ledger yet gets one, from this text, at its next settle.
     const rows = campaign.requirements !== undefined ? this.readLedger(campaign) : undefined;
     this.persist(campaign);
-    return { hash: campaign.gddSha256, ...(rows?.amendment ? { note: describeAmendment(rows.amendment) } : {}) };
+    // A row the amendment opened or added for the running sprint is not on the prompt it runs on.
+    const note = rows?.amendment ? [describeAmendment(rows.amendment), this.awaitingPromptNote(campaign)].filter((line) => line !== undefined).join("\n") : undefined;
+    return { hash: campaign.gddSha256, ...(note ? { note } : {}) };
   }
 
   /**
@@ -6833,6 +6841,7 @@ export class CampaignManager {
       await this.tell(held, this.ledgerFailed(held, err));
       return;
     }
+    let waiting: string | undefined;
     if (pass.changed && held.requirements !== undefined) {
       if (!this.storage.isOpen()) return;
       const now = this.storage.get(campaignId);
@@ -6843,12 +6852,32 @@ export class CampaignManager {
       now.requirements = held.requirements;
       syncRequirementIds(now.milestones, held.requirements.rows);
       if (!this.persist(now)) return;
+      // The running prompt was built before the pass: a row it gave that sprint waits for its next attempt.
+      waiting = this.awaitingPromptNote(now);
     }
     const lines = [
       ...(pass.added ? [`📋 The add-only pass over the GDD added ${pass.added} row(s), each quoting it verbatim.`] : []),
+      ...(waiting !== undefined ? [waiting] : []),
       ...(pass.note ? [pass.note] : []),
     ];
     if (lines.length > 0) await this.tell(held, lines.join("\n"));
+  }
+
+  /**
+   * The chat's line for rows the running sprint owns that the prompt it was
+   * sent with did not list (`rowsAwaitingPrompt`): its attempt is not judged
+   * on them, and saying nothing would read as a row dropped.
+   */
+  private awaitingPromptNote(campaign: Campaign): string | undefined {
+    const running = campaign.milestones[campaign.currentMilestone];
+    if (campaign.state !== "executing" || running?.status !== "running" || campaign.requirements === undefined) return undefined;
+    const waiting = rowsAwaitingPrompt(campaign.requirements, running);
+    if (waiting.length === 0) return undefined;
+    return (
+      `${waiting.length} row(s) of **${running.title}** were not in the prompt its running attempt was sent with ` +
+      `(${waiting.slice(0, 6).map(rowRef).join(", ")}${waiting.length > 6 ? `, …and ${waiting.length - 6} more` : ""}): ` +
+      "this attempt is not judged on them; the next attempt whose prompt lists them is."
+    );
   }
 
   /** What the chat is told about a read of the ledger: the build, or the amendment. */
@@ -6949,6 +6978,7 @@ export class CampaignManager {
     );
     campaign.requirements = amendment.ledger;
     syncRequirementIds(campaign.milestones, amendment.ledger.rows);
+    carryPromptedIds(campaign.milestones, amendment.renamed);
     getLoggerSafe().info("Requirement ledger re-read from the amended GDD", {
       id: campaign.id,
       revision: amendment.ledger.gddRevision,

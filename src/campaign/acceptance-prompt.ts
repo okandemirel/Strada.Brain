@@ -43,13 +43,13 @@ function clip(text: string, max: number): string {
 }
 
 /**
- * The rows this milestone is judged on, in the order the milestone lists them.
- * A row it lists stays unless the row itself names another owner (a time-box
- * split moved it); a row naming this milestone counts even when the list
- * missed it. Showing one row too many costs a sentence; hiding a row the
- * sprint is judged on is the defect this block exists to close.
+ * The rows this milestone's next prompt shows, in the order the milestone
+ * lists them. A row it lists stays unless the row itself names another owner
+ * (a time-box split moved it); a row naming this milestone counts even when
+ * the list missed it. Showing one row too many costs a sentence; hiding a row
+ * the sprint is judged on is the defect this block exists to close.
  */
-export function rowsJudgedFor(
+export function rowsToShowFor(
   ledger: RequirementLedger,
   milestone: Pick<CampaignMilestone, "id" | "requirementIds">,
 ): RequirementRow[] {
@@ -67,6 +67,50 @@ export function rowsJudgedFor(
   for (const rid of milestone.requirementIds ?? []) take(byRid.get(rid));
   for (const row of ledger.rows) if (row.owner === milestone.id) take(row);
   return out;
+}
+
+/**
+ * The rows the milestone's CURRENT attempt is judged on: those its prompt was
+ * built with. A row owned after the prompt was sent — by the add-only pass
+ * that follows a revive's submit, or an amendment read mid-sprint — waits for
+ * the next submit, which shows it; judging it now would hold the sprint to a
+ * rule nobody told it. An attempt with no record is judged on its rows as owned.
+ */
+export function rowsJudgedFor(
+  ledger: RequirementLedger,
+  milestone: Pick<CampaignMilestone, "id" | "requirementIds" | "promptedRequirementIds">,
+): RequirementRow[] {
+  const rows = rowsToShowFor(ledger, milestone);
+  const prompted = milestone.promptedRequirementIds;
+  if (prompted === undefined) return rows;
+  const shown = new Set(prompted);
+  return rows.filter((row) => shown.has(row.rid));
+}
+
+/** The rows the next submit shows and the current attempt's prompt did not: what `rowsJudgedFor` holds back, for the chat. */
+export function rowsAwaitingPrompt(
+  ledger: RequirementLedger,
+  milestone: Pick<CampaignMilestone, "id" | "requirementIds" | "promptedRequirementIds">,
+): RequirementRow[] {
+  const prompted = milestone.promptedRequirementIds;
+  if (prompted === undefined) return [];
+  const shown = new Set(prompted);
+  return rowsToShowFor(ledger, milestone).filter((row) => !shown.has(row.rid));
+}
+
+/**
+ * What a submit records as its prompt's rows (`promptedRequirementIds`). None
+ * when the gate is off or the campaign holds no ledger: no block was shown,
+ * so a ledger built or a gate turned on mid-attempt holds that attempt to
+ * nothing it was not told.
+ */
+export function promptedRequirementIds(
+  campaign: { readonly requirements?: RequirementLedger },
+  milestone: Pick<CampaignMilestone, "id" | "requirementIds">,
+  mode: ScopeGateMode,
+): string[] {
+  if (mode === "off" || campaign.requirements === undefined) return [];
+  return rowsToShowFor(campaign.requirements, milestone).map((row) => row.rid);
 }
 
 /**
@@ -231,7 +275,7 @@ export function acceptancePromptFor(
   if (mode === "off" || campaign.requirements === undefined) return "";
   const block = acceptanceBlock({
     mode,
-    rows: rowsJudgedFor(campaign.requirements, milestone),
+    rows: rowsToShowFor(campaign.requirements, milestone),
     gddPath: campaign.gddPath,
     unbound: unboundRowsOf(milestone),
   });

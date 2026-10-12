@@ -342,6 +342,14 @@ export interface CampaignMilestone {
    * order. Its green has to come from these passing (GDD-drift plan M3).
    */
   requirementIds?: string[];
+  /**
+   * The rows the CURRENT attempt's prompt was built with, recorded at every
+   * submit while the gate is not off: the only rows that attempt is judged on
+   * (`rowsJudgedFor`). A row owned after the prompt was sent waits for the
+   * next submit, which shows it. Undefined for an attempt submitted before
+   * this was recorded: it is judged on the rows as owned.
+   */
+  promptedRequirementIds?: string[];
   /** Project-relative path of this milestone's acceptance file, under ACCEPTANCE_DIR. */
   acceptanceFile?: string;
   /** The scope gate's last verdict on this milestone; in shadow it is recorded and not acted on. */
