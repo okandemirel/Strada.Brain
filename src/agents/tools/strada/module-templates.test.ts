@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { CORE_TEMPLATES_SOURCE } from "./core-templates-fixture.js";
@@ -217,9 +217,14 @@ describe("the real Strada.Core templates", () => {
   const lookup = available ? readTemplatesAt(CORE_ROOT) : null;
 
   // Skipping is for machines without a checkout. A run that named one and does
-  // not have it is misconfigured, and must say so instead of passing silently.
-  it.runIf(CORE_PATH_FROM_ENV !== undefined)("finds them in the checkout STRADA_CORE_PATH names", () => {
-    expect(available, `${join(CORE_ROOT, TEMPLATE_DECLARATION_FILE)} does not exist`).toBe(true);
+  // not have one there is misconfigured, and must say so instead of passing
+  // silently. A Core from before ModuleSourceTemplates.cs (GitHub main, which CI
+  // clones, until the templates land there) is a Core all the same: the
+  // generator writes Brain's own templates for it, and the two tests below skip.
+  it.runIf(CORE_PATH_FROM_ENV !== undefined)("finds a Strada.Core checkout where STRADA_CORE_PATH points", () => {
+    const manifest = join(CORE_ROOT, "package.json");
+    const name = existsSync(manifest) ? (JSON.parse(readFileSync(manifest, "utf8")) as { name?: unknown }).name : undefined;
+    expect(name, `${CORE_ROOT} is not a Strada.Core checkout`).toBe("com.strada.core");
   });
 
   it.skipIf(!available)("are read", () => {
