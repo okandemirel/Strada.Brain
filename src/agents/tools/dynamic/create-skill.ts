@@ -204,7 +204,15 @@ export class CreateSkillTool implements ITool {
             `(status: ${entry.status}) and the session keeps that one. The new file is on disk only — ` +
             "choose another name, or remove the existing skill first.";
         } else if (entry.status === "active") {
-          hotLoadOutcome = "The skill has been hot-loaded and is available in the current session.";
+          // Named from the verdict: the tools this run now holds, not what the
+          // directory carries (a name the registry or this run already had is
+          // not the skill's tool here).
+          const toolNames = entry.tools?.map((t) => t.name) ?? [];
+          hotLoadOutcome =
+            "The skill has been hot-loaded and is available in the current session." +
+            (toolNames.length > 0
+              ? ` Its tools can be called now, directly or in batch_execute: ${toolNames.join(", ")}.`
+              : "");
         } else {
           hotLoadOutcome =
             `Hot-load registered the skill with status '${entry.status}'` +

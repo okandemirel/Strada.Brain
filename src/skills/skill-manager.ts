@@ -34,8 +34,12 @@ export class SkillManager {
   private readonly entries = new Map<string, SkillEntry>();
   private entriesCache: SkillEntry[] | null = null;
 
-  /** Callback to register tools into the app-level ToolRegistry. */
-  private toolRegistrar?: (tools: ITool[]) => void;
+  /**
+   * Callback to register tools into the app-level ToolRegistry. Returns the
+   * ones the registry took: a name it already holds resolves to that tool,
+   * not the skill's.
+   */
+  private toolRegistrar?: (tools: ITool[]) => readonly ITool[] | void;
   /** Callback to remove tools by name from the app-level ToolRegistry. */
   private toolRemover?: (toolNames: string[]) => void;
   /** App-level config that `requires.config` dot-paths are resolved against. */
@@ -56,7 +60,7 @@ export class SkillManager {
    * Called once during bootstrap before `loadAll`.
    */
   setToolRegistrar(
-    registrar: (tools: ITool[]) => void,
+    registrar: (tools: ITool[]) => readonly ITool[] | void,
     remover: (toolNames: string[]) => void,
   ): void {
     this.toolRegistrar = registrar;
@@ -282,8 +286,11 @@ export class SkillManager {
    * so its module body runs with the environment it declares — and comes off
    * again on every outcome that is not "active", a throwing import and a
    * throwing gate included.
+   *
+   * An "active" load hands back, as `tools`, the ones the registrar took (see
+   * SkillHotLoadVerdict): the run that asked for the load has to hold them.
    */
-  async loadSingle(skillPath: string): Promise<SkillEntry | null> {
+  async loadSingle(skillPath: string): Promise<(SkillEntry & { readonly tools?: readonly ITool[] }) | null> {
     const logger = getLoggerSafe();
 
     const skillMdPath = join(skillPath, "SKILL.md");
@@ -398,8 +405,9 @@ export class SkillManager {
       }
 
       // Register tools immediately
+      let registered: readonly ITool[] = [];
       if (this.toolRegistrar && tools.length > 0) {
-        this.toolRegistrar(tools);
+        registered = this.toolRegistrar(tools) ?? [];
       }
 
       const unevaluatedGate = gateResult.unevaluated?.length ? gateResult.unevaluated.join("; ") : undefined;
@@ -419,7 +427,8 @@ export class SkillManager {
       } else {
         logger.warn(`Skill "${name}" loaded without tools — missing entry point`);
       }
-      return entry;
+      // Not stored on the entry: getEntries() feeds the dashboard and the prompt.
+      return registered.length > 0 ? { ...entry, tools: registered } : entry;
     } catch (err) {
       // Anything thrown out of this path (a gate, the trust read, a registrar)
       // must not leave the skill's environment applied behind it.

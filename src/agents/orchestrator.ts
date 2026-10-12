@@ -2504,6 +2504,29 @@ export class Orchestrator {
   }
 
   /**
+   * Hot-load the skill create_skill just wrote, and hold the tools the
+   * registry took for it.
+   *
+   * The loader registers them in the ToolRegistry only. A direct call reaches
+   * this.tools, and batch_execute, which resolves through the registry, is
+   * refused an operation this run does not hold (heldOperationsOnly): a skill
+   * create_skill reported "available in the current session" could be called
+   * by neither route. Held, it is offered, callable both ways, and judged by
+   * the registry's metadata for it, as a run built after the load judges it.
+   */
+  private async hotLoadSkill(skillPath: string): Promise<SkillHotLoadVerdict | null> {
+    const verdict = await this.onSkillCreated!(skillPath);
+    if (!verdict?.tools?.length) return verdict;
+    const held = verdict.tools.filter((tool) => {
+      // A name this run already holds (a delegation tool, which the registry
+      // never has) keeps its tool: the skill's would replace what was offered.
+      if (!this.tools.has(tool.name)) this.addTool(tool, this.liveToolMetadata?.get(tool.name));
+      return this.tools.get(tool.name) === tool;
+    });
+    return { ...verdict, tools: held };
+  }
+
+  /**
    * Set the task manager reference for inline goal detection submission.
    * Uses lazy setter pattern to avoid circular dependency (same as BackgroundExecutor).
    */
@@ -4962,8 +4985,8 @@ export class Orchestrator {
    * live ToolRegistry, while every judge here (dispatchesInTurn,
    * isWriteOperation) reads this.tools. A per-agent or delegated orchestrator
    * is built from a snapshot of the registry and never holds a chain
-   * synthesized after that, and no orchestrator holds a hot-loaded skill's
-   * tools: judged here, such a name was a read, and a chained file_delete or
+   * synthesized after that, and only the run that hot-loaded a skill holds
+   * its tools: judged here, such a name was a read, and a chained file_delete or
    * `rm -r` in a batch ran with no review and no prompt. What this run cannot
    * call directly it does not reach through a dispatcher either.
    */
@@ -5268,7 +5291,7 @@ export class Orchestrator {
         return false;
       },
       lookupTool: (name) => this.tools.get(name),
-      onSkillCreated: this.onSkillCreated,
+      onSkillCreated: this.onSkillCreated ? (skillPath) => this.hotLoadSkill(skillPath) : undefined,
       vaultRegistry: this.vaultRegistry,
       signal: options.signal,
       parentRun: options.parentRun,

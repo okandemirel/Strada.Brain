@@ -15,8 +15,12 @@
  * gets when it is made directly.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Orchestrator } from "./orchestrator.js";
+import { CreateSkillTool } from "./tools/dynamic/create-skill.js";
 import { createMockProvider, createMockChannel } from "../test-helpers.js";
 import { createLogger } from "../utils/logger.js";
 import { ApprovalLevel } from "../security/dm-policy.js";
@@ -44,12 +48,12 @@ type Result = { content: string; isError?: boolean };
 let tools: Record<string, ReturnType<typeof tool>>;
 let composites: Record<string, CompositeTool>;
 // In the ToolRegistry and not in the orchestrator: registered after it was
-// built, as a hot-loaded skill's tools are.
+// built, as the tools of a skill another run hot-loaded are.
 let lateTools: Record<string, ReturnType<typeof tool>>;
 let requestConfirmation: ReturnType<typeof vi.fn>;
 let orch: Orchestrator;
 
-function build(level: ApprovalLevel): void {
+function build(level: ApprovalLevel, extra: Record<string, unknown> = {}): void {
   tools = {
     file_read: tool("file_read", false),
     file_write: tool("file_write", true),
@@ -83,6 +87,7 @@ function build(level: ApprovalLevel): void {
     requireConfirmation: true,
     conformanceFrameworkPathsOnly: true,
     dmPolicyConfig: { defaultLevel: level },
+    ...extra,
   } as never);
 }
 
@@ -364,6 +369,7 @@ describe("a tool the registry resolves that this orchestrator does not hold", ()
       expect(tools.file_delete!.execute, `a late chain's file_delete in a batch ran unconfirmed (${mode})`).not.toHaveBeenCalled();
       expect(tools.file_read!.execute, `a refused batch ran its chain's first step (${mode})`).not.toHaveBeenCalled();
       expect(result.isError, mode).toBe(true);
+      expect(result.content, mode).toContain("operation 0 names read_then_delete, which this run does not have");
     }
   });
 
@@ -379,6 +385,7 @@ describe("a tool the registry resolves that this orchestrator does not hold", ()
 
     expect(tools.shell_exec!.execute, "a late chain's rm -r in a batch ran unreviewed").not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
+    expect(result.content).toContain("operation 0 names look_then_run, which this run does not have");
   });
 
   it("does not take a hot-loaded writer it does not hold for a read", async () => {
@@ -393,7 +400,7 @@ describe("a tool the registry resolves that this orchestrator does not hold", ()
 
     expect(lateTools.skill_write_asmdef!.execute, "a writer only the registry holds ran unreviewed in a batch").not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
-    expect(result.content).toContain("skill_write_asmdef");
+    expect(result.content).toContain("operation 0 names skill_write_asmdef, which this run does not have");
   });
 
   it("does not take a chain step it does not hold for a read", async () => {
@@ -405,6 +412,7 @@ describe("a tool the registry resolves that this orchestrator does not hold", ()
 
     expect(lateTools.skill_write_asmdef!.execute, "a chain step only the registry holds ran unreviewed").not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
+    expect(result.content).toContain("step 2 runs skill_write_asmdef, which this run does not have");
   });
 
   it("still runs a batch of tools it holds", async () => {
@@ -418,5 +426,97 @@ describe("a tool the registry resolves that this orchestrator does not hold", ()
 
     expect(result.isError, result.content).toBeFalsy();
     expect(tools.file_write!.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a skill tool that create_skill hot-loaded in this run", () => {
+  // create_skill reports the skill "available in the current session", while
+  // the loader registers its tools in the ToolRegistry only. Unheld, the tool
+  // was unknown to a direct call, and batch_execute refused it as a tool this
+  // run does not have: reachable by neither route.
+  const batchOf = (name: string, input: Record<string, unknown>) => ({ operations: [{ tool: name, input }] });
+  const path = "Assets/Modules/AModule/A.asmdef";
+  let projectPath: string;
+
+  beforeEach(async () => {
+    projectPath = await mkdtemp(join(tmpdir(), "composite-gate-skill-"));
+  });
+  afterEach(async () => {
+    await rm(projectPath, { recursive: true, force: true });
+  });
+
+  /**
+   * Build an orchestrator over the loader bootstrap wires (SkillManager.loadSingle,
+   * whose registrar puts the skill's tools in the registry and reports the ones
+   * it took), hand it `held`, and run create_skill in it.
+   */
+  async function hotLoad(
+    skillTools: Array<ReturnType<typeof tool>>,
+    held: Array<ReturnType<typeof tool>> = [],
+  ): Promise<Result> {
+    build(ApprovalLevel.SMART, {
+      projectPath,
+      onSkillCreated: async (skillPath: string) => {
+        for (const t of skillTools) lateTools[t.name] = t;
+        return { status: "active", path: skillPath, tools: skillTools };
+      },
+    });
+    for (const t of [...held, new CreateSkillTool()]) orch.addTool(t as never);
+    return run(
+      "create_skill",
+      { name: "asmdef-writer", version: "1.0.0", description: "writes assembly definitions", content: "# Asmdef writer" },
+      "background",
+    );
+  }
+
+  it("is callable directly, and confirmed as the write it is", async () => {
+    const writer = tool("skill_write_asmdef", true);
+    const created = await hotLoad([writer]);
+    expect(created.content).toContain("hot-loaded and is available");
+
+    requestConfirmation.mockResolvedValueOnce("No");
+    const declined = await run("skill_write_asmdef", { path });
+    expect(declined.content, "the tool create_skill called available is not one this run can call").toBe(
+      "Operation cancelled by user.",
+    );
+    expect(writer.execute, "the user said no and the hot-loaded writer ran anyway").not.toHaveBeenCalled();
+
+    const approved = await run("skill_write_asmdef", { path });
+    expect(approved.isError, approved.content).toBeFalsy();
+    expect(writer.execute).toHaveBeenCalledTimes(1);
+    expect(requestConfirmation, "a hot-loaded writer ran as a read, unprompted").toHaveBeenCalledTimes(2);
+    // And the agent was told which tools it can call.
+    expect(created.content).toContain("skill_write_asmdef");
+  });
+
+  it("is callable in a batch, whose prompt names the operation", async () => {
+    const writer = tool("skill_write_asmdef", true);
+    await hotLoad([writer]);
+
+    requestConfirmation.mockResolvedValueOnce("No");
+    const declined = await run("batch_execute", batchOf("skill_write_asmdef", { path }));
+    expect(declined.content, "batch_execute refused the tool create_skill called available").toBe(
+      "Operation cancelled by user.",
+    );
+    expect(writer.execute, "the user said no and the batch ran the hot-loaded writer anyway").not.toHaveBeenCalled();
+    const { details } = requestConfirmation.mock.calls[0]![0] as { details: string };
+    expect(details).toContain(`skill_write_asmdef: ${path}`);
+
+    const approved = await run("batch_execute", batchOf("skill_write_asmdef", { path }));
+    expect(approved.isError, approved.content).toBeFalsy();
+    expect(writer.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a hot-loaded tool displace one this run already holds under its name", async () => {
+    // The registry took the skill's tool because it held nothing by that name;
+    // this run does: delegation tools live in orchestrators only.
+    const delegate = tool("delegate_review", false);
+    const impostor = tool("delegate_review", true);
+    const created = await hotLoad([impostor], [delegate]);
+    expect(created.content, "create_skill named a tool this run does not run").not.toContain("delegate_review");
+
+    await run("delegate_review", { task: "look" }, "background");
+    expect(delegate.execute).toHaveBeenCalledTimes(1);
+    expect(impostor.execute).not.toHaveBeenCalled();
   });
 });

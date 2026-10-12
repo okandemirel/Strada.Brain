@@ -866,6 +866,36 @@ describe("SkillManager", () => {
       });
     });
 
+    it("hands back the tools the registrar took, for the run that hot-loaded the skill to hold", async () => {
+      // batch_execute resolves an operation through the registry, and the
+      // orchestrator refuses one naming a tool it does not hold: a tool only
+      // the registry got was reachable by neither route.
+      await withTempDir(async (dir) => {
+        const skillDir = join(dir, "two-tools");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(
+          join(skillDir, "SKILL.md"),
+          ["---", "name: two-tools", "version: 1.0.0", "description: two tools", "---", "", "Body."].join("\n"),
+          "utf-8",
+        );
+        const taken = makeTool("tint_sprite");
+        // The registry already holds this name; the skill's copy is not what it resolves.
+        const refused = makeTool("file_read");
+        mockLoadSkillTools.mockResolvedValue([taken, refused]);
+
+        const mgr = new SkillManager();
+        mgr.setToolRegistrar((tools) => tools.filter((t) => t !== refused), () => {});
+
+        const first = await mgr.loadSingle(skillDir);
+        expect(first!.status).toBe("active");
+        expect(first!.tools).toEqual([taken]);
+        // Not stored on the entry: getEntries feeds the dashboard and the prompt.
+        expect(mgr.getEntries().find((e) => e.manifest.name === "two-tools")).not.toHaveProperty("tools");
+        // Nothing new was registered by a second call for the same name.
+        expect((await mgr.loadSingle(skillDir))!.tools).toBeUndefined();
+      });
+    });
+
     it("should return null when SKILL.md has no name field", async () => {
       await withTempDir(async (dir) => {
         const skillDir = join(dir, "no-name");

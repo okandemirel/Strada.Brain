@@ -19,6 +19,13 @@ export interface SkillHotLoadVerdict {
   /** Directory the loaded entry came from — not necessarily the one just written. */
   readonly path: string;
   readonly gateReason?: string | undefined;
+  /**
+   * The tools this load registered in the app's ToolRegistry. batch_execute
+   * resolves an operation there, but a run judges and calls only the tools it
+   * holds, so the run that hot-loaded the skill takes these as well; the
+   * verdict it hands create_skill lists the ones it now holds.
+   */
+  readonly tools?: readonly IToolBase[] | undefined;
 }
 
 export interface IToolBase {

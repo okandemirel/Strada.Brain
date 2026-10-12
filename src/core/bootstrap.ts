@@ -1334,12 +1334,16 @@ async function bootstrapImpl(
   const skillManager = new SkillManager();
   skillManager.setToolRegistrar(
     (tools) => {
+      const registered: typeof tools = [];
       for (const tool of tools) {
         try {
           // Skill tools (including agent-authored ones via create_skill) were
           // stamped readOnly:true, bypassing the write heuristic. Classify
           // instead of asserting (audited 2026-09-02).
           toolRegistry.register(tool, classifyRuntimeToolMetadata(tool, "custom"));
+          // Only a tool the registry now resolves to: READ_ONLY_MODE withholds
+          // one without throwing. A hot-load hands these to the run that asked.
+          if (toolRegistry.get(tool.name) === tool) registered.push(tool);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           // Only a duplicate-name collision is expected/benign here; anything
@@ -1355,6 +1359,7 @@ async function bootstrapImpl(
           });
         }
       }
+      return registered;
     },
     (toolNames) => {
       for (const name of toolNames) {

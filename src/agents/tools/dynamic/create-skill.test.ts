@@ -339,6 +339,25 @@ describe("CreateSkillTool hot-load verdict", () => {
     });
   });
 
+  it("names the tools the hot-load handed this run, and only those", async () => {
+    await withTempDir(async (dir) => {
+      const handed = { name: "tint_sprite", description: "tint", inputSchema: {}, execute: async () => ({ content: "" }) };
+      const ctx = createToolContext({
+        projectPath: dir,
+        workingDirectory: dir,
+        onSkillCreated: async (skillPath) => ({ status: "active", path: skillPath, tools: [handed] }),
+      });
+
+      const result = await tool.execute(
+        { name: "tinter", version: "1.0.0", description: "tints", content: "# Tint" },
+        ctx,
+      );
+
+      expect(result.content).toContain("hot-loaded and is available");
+      expect(result.content).toContain("Its tools can be called now, directly or in batch_execute: tint_sprite.");
+    });
+  });
+
   it("reports a loader that returned no entry instead of claiming a hot-load", async () => {
     await withTempDir(async (dir) => {
       const ctx = createToolContext({
