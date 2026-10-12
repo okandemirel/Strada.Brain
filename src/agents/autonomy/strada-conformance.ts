@@ -238,7 +238,16 @@ const AUTHORITATIVE_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   "glob_search",
   "code_search",
   "shell_exec",
+  "vault_search",
 ]);
+
+/** C# that calls into the framework: a `using Strada.Core…` or a qualified `Strada.Modules.X`. */
+const FRAMEWORK_API_USE = /\busing\s+(?:static\s+)?Strada\.(?:Core|Modules)\b|\bStrada\.(?:Core|Modules)\.[A-Za-z_]/;
+
+/** The paths a vault_search answer cites (`--- [1] <path>:<from>-<to> (vault=…`), lower-cased. */
+function vaultHitPaths(output: string): string[] {
+  return [...output.matchAll(/^--- \[\d+\] (.+?):\d+-\d+ \(vault=/gm)].map((m) => m[1]!.toLowerCase().replace(/\\/g, "/"));
+}
 
 function hasAuthoritativeSource(deps?: StradaDepsStatus): boolean {
   return Boolean(deps?.coreInstalled || deps?.modulesInstalled || deps?.mcpInstalled);
@@ -774,7 +783,14 @@ export class StradaConformanceGuard {
           logGuardWrite(executedTool.toolName, filePath);
         }
         if (filePath && isCompilableFile(filePath)) {
-          if (this.opts?.frameworkPathsOnly === false || isInsideFrameworkPath(filePath, this.deps)) {
+          // Game code written against the framework's API is what the review
+          // is for (WP-1.2). A write into a framework package was the only
+          // trigger under frameworkPathsOnly, and such writes are refused now.
+          if (
+            this.opts?.frameworkPathsOnly === false ||
+            isInsideFrameworkPath(filePath, this.deps) ||
+            (isInsideAssets(filePath) && this.writesFrameworkApi(executedTool.input, filePath))
+          ) {
             this.touchedFrameworkCode = true;
           }
         }
@@ -796,7 +812,33 @@ export class StradaConformanceGuard {
 
       if (authoritativeHints.some((hint) => normalizedInput.includes(hint))) {
         this.consultedAuthoritativeSource = true;
+      } else if (
+        // The prompt sends workers to the framework through the vault: a
+        // search the project's vault answered from a framework package is a
+        // look at the source. Judged by the cited paths only — a game file's
+        // own `using Strada.Core;` is not the framework.
+        executedTool.toolName === "vault_search" &&
+        vaultHitPaths(executedTool.output).some((p) => authoritativeHints.some((hint) => p.includes(hint)))
+      ) {
+        this.consultedAuthoritativeSource = true;
       }
+    }
+  }
+
+  /**
+   * Whether a write leaves game code that uses Strada.Core or Strada.Modules:
+   * by the text it wrote, else by the file on disk (an edit's new text need
+   * not name the framework the file already uses).
+   */
+  private writesFrameworkApi(input: Record<string, unknown>, filePath: string): boolean {
+    const written = [input["content"], input["new_string"]].filter((s): s is string => typeof s === "string").join("\n");
+    if (FRAMEWORK_API_USE.test(written)) return true;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return false;
+    try {
+      return FRAMEWORK_API_USE.test(readFileSync(resolvePath(projectPath, filePath), "utf8"));
+    } catch {
+      return false;
     }
   }
 
