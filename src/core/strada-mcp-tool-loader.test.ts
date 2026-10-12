@@ -6,6 +6,7 @@ import type { Config } from "../config/config.js";
 import {
   pathKey,
   fileBasedAlternative,
+  loadInstalledStradaMcpRuntime,
   loadInstalledStradaMcpTools,
   projectPathEscape,
   registerStradaMcpTools,
@@ -287,6 +288,9 @@ export function bootstrap() {
   it("is not imported until the operator opts in", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "strada-mcp-project-"));
     tempDirs.push(projectDir);
+    // No other copy anywhere: the refusal is the whole answer. The real
+    // install root would find a checkout beside this repository.
+    const isolated = { installRoot: join(projectDir, "no-install", "Strada.Brain") };
     const pkgRoot = join(projectDir, "Packages", "Submodules", "Strada.MCP");
     const probe = `__stradaMcpProbe_${Date.now()}`;
     writeProjectLocalMcp(pkgRoot, probe);
@@ -297,15 +301,49 @@ export function bootstrap() {
       security: { readOnlyMode: false },
       strada: {},
     } as unknown as Config;
-    await expect(loadInstalledStradaMcpTools(config)).rejects.toBeInstanceOf(StradaMcpUntrustedError);
-    await expect(loadInstalledStradaMcpTools(config)).rejects.toThrow("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    await expect(loadInstalledStradaMcpTools(config, isolated)).rejects.toBeInstanceOf(StradaMcpUntrustedError);
+    await expect(loadInstalledStradaMcpTools(config, isolated)).rejects.toThrow("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
     expect(globals[probe], "the project-local bootstrap ran").toBeUndefined();
 
     const optedIn = { ...config, strada: { mcpAllowProjectLocal: true } } as unknown as Config;
-    const result = await loadInstalledStradaMcpTools(optedIn);
+    const result = await loadInstalledStradaMcpTools(optedIn, isolated);
     expect(result?.source.path).toBe(pkgRoot);
     expect(globals[probe]).toBe(true);
     delete globals[probe];
+  });
+
+  // WP-0.1: the refusal alone left a run with zero Unity tools while a trusted
+  // checkout sat beside the install. The project copy is still never imported.
+  it("loads the trusted sibling checkout instead, and names the copy it refused", async () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-mcp-fallback-"));
+    tempDirs.push(root);
+    const projectDir = join(root, "Game");
+    const projectCopy = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+    const sibling = join(root, "Strada.MCP");
+    const projectProbe = `__stradaMcpProjectProbe_${Date.now()}`;
+    const siblingProbe = `__stradaMcpSiblingProbe_${Date.now()}`;
+    writeProjectLocalMcp(projectCopy, projectProbe);
+    writeProjectLocalMcp(sibling, siblingProbe);
+    const globals = globalThis as Record<string, unknown>;
+    const config = {
+      unityProjectPath: projectDir,
+      security: { readOnlyMode: false },
+      strada: {},
+    } as unknown as Config;
+
+    const runtime = await loadInstalledStradaMcpRuntime(config, { installRoot: join(root, "Strada.Brain") });
+    try {
+      expect(runtime?.source.path).toBe(sibling);
+      expect(globals[projectProbe], "the project copy was imported").toBeUndefined();
+      expect(globals[siblingProbe]).toBe(true);
+      const status = runtime!.getStatus();
+      expect(status.installSource).toBe("sibling-checkout");
+      expect(status.refusedCopy?.path).toBe(projectCopy);
+      expect(status.refusedCopy?.reason).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    } finally {
+      runtime?.shutdown();
+      delete globals[siblingProbe];
+    }
   });
 });
 

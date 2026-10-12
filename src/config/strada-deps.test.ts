@@ -763,9 +763,69 @@ describe("assessStradaMcpLoadTrust", () => {
     const installPath = join(projectDir, "Packages", "Submodules", "Strada.MCP");
     mkdirSync(installPath, { recursive: true });
     writeFileSync(join(installPath, "package.json"), JSON.stringify({ name: "strada-mcp", version: "1.0.0" }));
-    const install = detectStradaMcp(TEST_STRADA_CONFIG, projectDir);
+    // No checkout beside this (isolated) install: the refused copy is the answer.
+    const install = detectStradaMcp(TEST_STRADA_CONFIG, projectDir, { installRoot: join(root, "Brain", "Strada.Brain") });
     expect(install.path).toBe(installPath);
     expect(assessStradaMcpLoadTrust(install.path!, projectDir, TEST_STRADA_CONFIG).trusted).toBe(false);
+  });
+
+  /**
+   * WP-0.1: the trust gate refused the project's copy and the run went on with
+   * zero Unity tools, while a trusted checkout sat beside the install.
+   */
+  describe("when the project's copy is refused", () => {
+    const writeMcp = (dir: string, version = "1.0.0"): void => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "strada-mcp", version }));
+    };
+
+    it("falls back to the sibling checkout and names the copy it refused", () => {
+      const projectCopy = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+      const sibling = join(root, "Strada.MCP");
+      writeMcp(projectCopy);
+      writeMcp(sibling, "1.4.0");
+
+      const install = detectStradaMcp(TEST_STRADA_CONFIG, projectDir, { installRoot: join(root, "Strada.Brain") });
+
+      expect(install).toMatchObject({ installed: true, path: sibling, version: "1.4.0", source: "sibling-checkout" });
+      expect(install.refused?.path).toBe(projectCopy);
+      expect(install.refused?.reason).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+      expect(assessStradaMcpLoadTrust(install.path!, projectDir, TEST_STRADA_CONFIG).trusted).toBe(true);
+      // The project scan reports what the loader will load.
+      const deps = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot: join(root, "Strada.Brain") });
+      expect(deps.mcpPath).toBe(sibling);
+    });
+
+    it("falls back past a STRADA_MCP_PATH that points into the project", () => {
+      const projectCopy = join(projectDir, "Assets", "Strada.MCP");
+      const sibling = join(root, "Strada.MCP");
+      writeMcp(projectCopy);
+      writeMcp(sibling);
+
+      const install = detectStradaMcp(
+        { ...TEST_STRADA_CONFIG, mcpPath: projectCopy },
+        projectDir,
+        { installRoot: join(root, "Strada.Brain") },
+      );
+
+      expect(install.path).toBe(sibling);
+      expect(install.refused?.path).toBe(projectCopy);
+    });
+
+    it("keeps the project's copy, and refuses nothing, once the operator trusts it", () => {
+      const projectCopy = join(projectDir, "Packages", "Submodules", "Strada.MCP");
+      writeMcp(projectCopy);
+      writeMcp(join(root, "Strada.MCP"));
+
+      const install = detectStradaMcp(
+        { ...TEST_STRADA_CONFIG, mcpAllowProjectLocal: true },
+        projectDir,
+        { installRoot: join(root, "Strada.Brain") },
+      );
+
+      expect(install.path).toBe(projectCopy);
+      expect(install.refused ?? null).toBeNull();
+    });
   });
 });
 

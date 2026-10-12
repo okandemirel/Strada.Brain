@@ -53,6 +53,8 @@ export interface StradaDepsStatus {
   readonly mcpPath: string | null;
   readonly mcpVersion: string | null;
   readonly mcpSource?: StradaDepInstallSource | null;
+  /** A Strada.MCP copy the trust gate refused, passed over for the one at mcpPath. */
+  readonly mcpRefused?: { readonly path: string; readonly reason: string } | null;
   readonly warnings: string[];
 }
 
@@ -101,6 +103,8 @@ export interface StradaMcpInstall {
   readonly path: string | null;
   readonly version: string | null;
   readonly source?: StradaDepInstallSource | null;
+  /** A copy found first and refused by the trust gate, which this one replaced. */
+  readonly refused?: { readonly path: string; readonly reason: string } | null;
 }
 
 const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core", "Submodules/Strada.Core"] as const;
@@ -323,7 +327,7 @@ export function checkStradaDeps(
     }
     if (coreCheckout) warnings.push(describeFrameworkCheckout("core", coreCheckout));
     if (modulesCheckout) warnings.push(describeFrameworkCheckout("modules", modulesCheckout));
-    const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
+    const mcp = detectStradaMcp(resolvedConfig, unityProjectPath, { installRoot });
     return {
       coreInstalled: false,
       corePath: null,
@@ -339,6 +343,7 @@ export function checkStradaDeps(
       mcpPath: mcp.path,
       mcpVersion: mcp.version,
       mcpSource: mcp.source ?? null,
+      mcpRefused: mcp.refused ?? null,
       warnings,
     };
   }
@@ -391,7 +396,7 @@ export function checkStradaDeps(
   if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
     warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
   }
-  const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
+  const mcp = detectStradaMcp(resolvedConfig, unityProjectPath, { installRoot });
 
   return {
     coreInstalled,
@@ -412,6 +417,7 @@ export function checkStradaDeps(
     mcpPath: mcp.path,
     mcpVersion: mcp.version,
     mcpSource: mcp.source ?? null,
+    mcpRefused: mcp.refused ?? null,
     warnings,
   };
 }
@@ -519,55 +525,58 @@ export async function installStradaMcpSubmodule(
 /**
  * Detect Strada.MCP installation.
  * Checks: 1) configured STRADA_MCP_PATH
- *         2) sibling directory ../Strada.MCP relative to project root
- *         3) global npm install via `which strada-mcp`
+ *         2) a copy inside the Unity project
+ *         3) sibling directory ../Strada.MCP next to this install
+ *         4) global npm install via `which strada-mcp`
+ *
+ * The first copy the trust gate lets the loader import wins. A copy it
+ * refuses (inside the project, without STRADA_MCP_ALLOW_PROJECT_LOCAL) is
+ * passed over for a trusted one further down and named in `refused`:
+ * stopping at it left a run with zero Unity tools while a trusted checkout
+ * sat beside the install. With no trusted copy anywhere the refused one is
+ * returned, so the loader and the doctor still say why nothing loaded.
  */
 export function detectStradaMcp(
   config?: Partial<StradaDependencyConfig>,
   unityProjectPath?: string,
+  options?: StradaDepsCheckOptions,
 ): StradaMcpInstall {
   const resolvedConfig = resolveStradaDependencyConfig(config);
-  if (resolvedConfig.mcpPath) {
-    const configuredInstall = readStradaMcpInstall(resolvedConfig.mcpPath, "configured-path");
-    if (configuredInstall) {
-      return configuredInstall;
+  const installRoot = options?.installRoot ?? defaultInstallRoot();
+  const candidates: Array<() => StradaMcpInstall | null> = [
+    () => (resolvedConfig.mcpPath ? readStradaMcpInstall(resolvedConfig.mcpPath, "configured-path") : null),
+    () => (unityProjectPath ? readProjectLocalStradaMcpInstall(unityProjectPath) : null),
+    () => readStradaMcpInstall(join(installRoot, "..", "Strada.MCP"), "sibling-checkout"),
+    readGlobalStradaMcpInstall,
+  ];
+
+  let firstRefused: { install: StradaMcpInstall; reason: string } | null = null;
+  for (const candidate of candidates) {
+    const install = candidate();
+    if (!install?.path) continue;
+    const trust = assessStradaMcpLoadTrust(install.path, unityProjectPath, resolvedConfig);
+    if (trust.trusted) {
+      return firstRefused
+        ? { ...install, refused: { path: firstRefused.install.path!, reason: firstRefused.reason } }
+        : install;
     }
+    firstRefused ??= { install, reason: trust.reason ?? "" };
   }
+  return firstRefused?.install ?? { installed: false, path: null, version: null, source: null };
+}
 
-  if (unityProjectPath) {
-    const projectInstall = readProjectLocalStradaMcpInstall(unityProjectPath);
-    if (projectInstall) {
-      return projectInstall;
-    }
-  }
-
-  // 1. Check sibling directory relative to Strada.Brain project root
-  const brainRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const siblingPath = join(brainRoot, "..", "Strada.MCP");
-  const siblingInstall = readStradaMcpInstall(siblingPath, "sibling-checkout");
-  if (siblingInstall) {
-    return siblingInstall;
-  }
-
-  // 2. Check global npm install
+function readGlobalStradaMcpInstall(): StradaMcpInstall | null {
   try {
     const which = execFileSync("which", ["strada-mcp"], {
       encoding: "utf-8",
       timeout: 3000,
     }).trim().replace(/[\r\n]/g, "");
-    if (which) {
-      const binDir = dirname(which);
-      const globalPkgPath = join(binDir, "..", "lib", "node_modules", "strada-mcp");
-      const globalInstall = readStradaMcpInstall(globalPkgPath, "global-install");
-      if (globalInstall) {
-        return globalInstall;
-      }
-    }
+    if (!which) return null;
+    return readStradaMcpInstall(join(dirname(which), "..", "lib", "node_modules", "strada-mcp"), "global-install");
   } catch {
     // `which` failed — strada-mcp not on PATH
+    return null;
   }
-
-  return { installed: false, path: null, version: null, source: null };
 }
 
 export function buildMcpRecommendation(
@@ -1252,6 +1261,7 @@ function evaluateMcpTrustRow(
   mcpPath: string | null,
   projectPath: string,
   config: Partial<StradaDependencyConfig> | undefined,
+  refused: StradaDepsStatus["mcpRefused"] = null,
 ): ProjectMatrixRow {
   const base = {
     id: "strada-mcp-trusted",
@@ -1280,7 +1290,8 @@ function evaluateMcpTrustRow(
     status: "ok",
     detail: config?.mcpAllowProjectLocal === true
       ? `${mcpPath} is loaded in-process; STRADA_MCP_ALLOW_PROJECT_LOCAL=true trusts copies inside the project.`
-      : `${mcpPath} is outside the Unity project, so the agent's project writes cannot change it.`,
+      : `${mcpPath} is outside the Unity project, so the agent's project writes cannot change it.` +
+        (refused ? ` The copy inside the project at ${refused.path} was passed over: it is not trusted.` : ""),
   };
 }
 
@@ -1407,7 +1418,7 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
     ...(scanned
       ? [
           evaluateMcpRuntimeRow(deps.mcpInstalled, deps.mcpPath),
-          evaluateMcpTrustRow(deps.mcpInstalled, deps.mcpPath, projectPath, opts.config),
+          evaluateMcpTrustRow(deps.mcpInstalled, deps.mcpPath, projectPath, opts.config, deps.mcpRefused ?? null),
         ]
       : []),
     evaluateEditorBinaryRow(opts.unityEditorPath),

@@ -2,7 +2,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
-import { assessStradaMcpLoadTrust, detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
+import {
+  assessStradaMcpLoadTrust,
+  detectStradaMcp,
+  type StradaDepInstallSource,
+  type StradaDepsCheckOptions,
+  type StradaMcpInstall,
+} from "../config/strada-deps.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import type { ToolCategory as BrainToolCategory, ToolMetadata as BrainToolMetadata } from "./tool-registry-types.js";
 import { getLogger } from "../utils/logger.js";
@@ -229,6 +235,10 @@ export interface StradaMcpRuntimeStatus {
   readonly lastError?: string;
   readonly bridgeProtocolVersion?: string;
   readonly bridgeCapabilityMethodCount?: number;
+  /** How the loaded copy was found (configured path, sibling checkout, ...). */
+  readonly installSource?: StradaDepInstallSource | null;
+  /** A copy inside the project the trust gate refused; the loaded one replaced it. */
+  readonly refusedCopy?: { readonly path: string; readonly reason: string } | null;
 }
 
 interface ToolRegistryLike {
@@ -782,6 +792,8 @@ export class StradaMcpRuntime {
       lastError: this.lastError,
       bridgeProtocolVersion: this.bridgeCapabilities?.protocolVersion,
       bridgeCapabilityMethodCount: this.bridgeCapabilities?.supportedMethods?.length ?? 0,
+      installSource: this.source.source ?? null,
+      refusedCopy: this.source.refused ?? null,
     };
   }
 
@@ -970,8 +982,11 @@ export class StradaMcpUntrustedError extends Error {
   override readonly name = "StradaMcpUntrustedError";
 }
 
-export async function loadInstalledStradaMcpRuntime(config: Config): Promise<StradaMcpRuntime | null> {
-  const install = detectStradaMcp(config.strada, config.unityProjectPath);
+export async function loadInstalledStradaMcpRuntime(
+  config: Config,
+  options?: StradaDepsCheckOptions,
+): Promise<StradaMcpRuntime | null> {
+  const install = detectStradaMcp(config.strada, config.unityProjectPath, options);
   if (!install.installed || !install.path) {
     return null;
   }
@@ -1061,8 +1076,11 @@ export async function loadInstalledStradaMcpRuntime(config: Config): Promise<Str
   return runtime;
 }
 
-export async function loadInstalledStradaMcpTools(config: Config): Promise<StradaMcpToolLoadResult | null> {
-  const runtime = await loadInstalledStradaMcpRuntime(config);
+export async function loadInstalledStradaMcpTools(
+  config: Config,
+  options?: StradaDepsCheckOptions,
+): Promise<StradaMcpToolLoadResult | null> {
+  const runtime = await loadInstalledStradaMcpRuntime(config, options);
   if (!runtime) {
     return null;
   }
