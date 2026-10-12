@@ -1,7 +1,7 @@
 /**
  * The prompts the worker sees (GDD-drift plan W10, M3).
  *
- * In campaign 18d4t no sprint was ever shown the GDD sentences its milestone
+ * In the measured campaign no sprint was ever shown the GDD sentences its milestone
  * would be judged on: the planner told it that its "deliverables" were what
  * the sprint "can be measured against" (nothing ever read them), and the
  * final sprint was told not to re-read the GDD at all. A worker cannot build

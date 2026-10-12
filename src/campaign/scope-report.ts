@@ -2,7 +2,7 @@
  * What the scope gate's ledger and verdicts say, in words a person reads, and
  * the decisions only a person may make about them (GDD-drift plan W14).
  *
- * In campaign 18d4t six of six milestones went green on prose, and nothing a
+ * In the measured campaign six of six milestones went green on prose, and nothing a
  * person read — the delivery report, `/campaign` — said which GDD rows any of
  * them had been judged on. Here every milestone's rows are counted by status,
  * a parked milestone says so in its line, and each verdict names its basis and

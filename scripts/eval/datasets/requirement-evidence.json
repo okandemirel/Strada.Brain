@@ -31,7 +31,7 @@
     "  (src/campaign/scope-verdict.ts), the rule that closes a requirement row only when its own",
     "  check passed on the revision being judged. Each row carries the row's ledger state and that",
     "  revision. They are kept OUT of `rows`, so the word-matcher arm above and its oracles are",
-    "  unchanged: the probe-* rows are the 18d4t trace's shapes (a labelled rule, a feature, a player",
+    "  unchanged: the probe-* rows are the drift trace's shapes (a labelled rule, a feature, a player",
     "  input and an architecture guardrail, each held against a commit that names a file sharing a",
     "  word with it), in INVENTED wording, and today's word matcher closes three of the four. The",
     "  harness reports that count beside the ledger arm's rates; it is disclosure, not a budget.",
@@ -535,7 +535,7 @@
       },
       "expected": "not_proven",
       "rationale": "The rule's own check failed on this revision. The commit names a system file that shares the rule's noun, which is the whole of what the word match saw: a file exists, not that it obeys the rule.",
-      "source": "GDD-drift plan W12/W16, probe 1 of the 18d4t trace (a labelled rule closed by a system file's name); wording invented"
+      "source": "GDD-drift plan W12/W16, probe 1 of the drift trace (a labelled rule closed by a system file's name); wording invented"
     },
     {
       "id": "probe-feature-by-service-file",
@@ -548,7 +548,7 @@
       },
       "expected": "not_proven",
       "rationale": "The check written for the feature never ran, so nothing measured the once-per-run limit or the end of the run. A service named after the feature is not the feature's behaviour.",
-      "source": "GDD-drift plan W12/W16, probe 2 of the 18d4t trace (a feature closed by a service file's name); wording invented"
+      "source": "GDD-drift plan W12/W16, probe 2 of the drift trace (a feature closed by a service file's name); wording invented"
     },
     {
       "id": "probe-input-by-input-service",
@@ -563,7 +563,7 @@
       },
       "expected": "not_proven",
       "rationale": "The harness tapped the shrine and it stayed unlit. An input service existing says nothing about whether a player's tap reaches the shrine.",
-      "source": "GDD-drift plan W12/W16, probe 3 of the 18d4t trace (a player input held against an input service); wording invented"
+      "source": "GDD-drift plan W12/W16, probe 3 of the drift trace (a player input held against an input service); wording invented"
     },
     {
       "id": "probe-guardrail-by-interface-file",
@@ -577,7 +577,7 @@
       },
       "expected": "not_proven",
       "rationale": "The only check passed, and the independent review called it weak: counting an interface's methods proves the interface exists, not that gameplay reads the grid only through it.",
-      "source": "GDD-drift plan W12/W16, probe 4 of the 18d4t trace (an architecture guardrail closed by its interface file); wording invented"
+      "source": "GDD-drift plan W12/W16, probe 4 of the drift trace (an architecture guardrail closed by its interface file); wording invented"
     },
     {
       "id": "ledger-pass-on-an-older-revision",

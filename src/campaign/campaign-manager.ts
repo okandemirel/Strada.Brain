@@ -7915,7 +7915,7 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). 18d4t went green six
+    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). The measured campaign went green six
     // times on prose and no line here said which GDD rows any sprint had been
     // held to. A campaign the scope gate never saw reads exactly as before.
     const scopeMode = this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
@@ -9066,7 +9066,7 @@ export class CampaignManager {
    * `/campaign rejudge [campaign id]`: replay the scope judge on every settled
    * milestone, from its stored verdict's input or rebuilt from the record.
    * Read-only: nothing is stored, sent or changed, so a finished campaign
-   * (18d4t) can be judged again without touching it.
+   * (the measured campaign) can be judged again without touching it.
    */
   rejudgeByCommand(chatId?: string, campaignId?: string): string | undefined {
     const id = campaignId?.trim();

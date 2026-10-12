@@ -2,7 +2,7 @@
  * The GDD rows a sprint is judged on, in the prompt it is submitted with
  * (GDD-drift plan W10, M3).
  *
- * In campaign 18d4t no sprint was shown the GDD sentences its milestone would
+ * In the measured campaign no sprint was shown the GDD sentences its milestone would
  * be judged on. It was told its "deliverables" were what it would be
  * measured against (nothing read them), and it graded itself with its own
  * tests. Once the scope gate runs, a milestone is decided by system-written
