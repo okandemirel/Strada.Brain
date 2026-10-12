@@ -66,6 +66,57 @@ describe("readPlaymodeRun — red only by its failed tests (GDD-drift W09)", () 
     write({ total: 9, passed: 9, failed: 0, skipped: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true, redOnlyByFailures: false });
   });
+
+  // The record exactly as Strada.MCP's writePlaymodeRunRecord writes it for a
+  // red run: Unity exits 2 when tests failed, the verdict reason says so, and
+  // a measured NUnit file states the run's result as "Failed(Child)".
+  const mcpRed = (fields: Record<string, unknown> = {}): Record<string, unknown> => ({
+    measuredAt: new Date().toISOString(),
+    result: "Failed(Child)",
+    total: 9,
+    passed: 8,
+    failed: 1,
+    skipped: 0,
+    failedNames: ["A.B.C"],
+    filter: null,
+    categories: null,
+    exceptions: 0,
+    exitCode: 2,
+    reason: "tests-failed",
+    unfiltered: true,
+    ...fields,
+  });
+
+  it("reads the producer's own red record — Unity's tests-failed exit, a 'Failed(Child)' result — as red only by its failures", () => {
+    write(mcpRed());
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false, redOnlyByFailures: true });
+    write(mcpRed({ result: "Failed" }));
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: false, redOnlyByFailures: true });
+  });
+
+  it("every other way the producer's record can end stays red on its own account", () => {
+    for (const other of [
+      // the game threw beside the failures (MCP keeps "tests-failed" as the reason)
+      { exceptions: 1 },
+      // killed at its allowance, or any exit that is not Unity's tests-failed one
+      { exitCode: -1 },
+      { exitCode: 1 },
+      { exitCode: 3, reason: "run-failed" },
+      // exit 2 under a reason that is not the failures'
+      { reason: "threw" },
+      { reason: "process-failed" },
+      // exit 2 with no failure counted is not a run red by its failures
+      { failed: 0, passed: 9, failedNames: [] },
+      { result: "Inconclusive" },
+      { result: "Failed(Error)" },
+    ]) {
+      write(mcpRed(other));
+      expect(readPlaymodeRun(root, 0).redOnlyByFailures, JSON.stringify(other)).toBe(false);
+    }
+    // …and the tests-failed exit never turns a record green.
+    write(mcpRed({ failed: 0, passed: 9, failedNames: [], result: "Passed" }));
+    expect(readPlaymodeRun(root, 0).green).toBe(false);
+  });
 });
 
 describe("readPlaymodeRun", () => {

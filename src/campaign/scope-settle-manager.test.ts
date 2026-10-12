@@ -325,12 +325,28 @@ function completeSprint(
   return taskId;
 }
 
-/** The NUnit record the worker's own run left in the project, as the verification tool writes it. */
+/**
+ * The NUnit record the worker's own red run left in the project, exactly as
+ * Strada.MCP's writePlaymodeRunRecord writes it: Unity exits 2 when tests
+ * failed, the verdict reason says so, a measured NUnit file states the run's
+ * result as "Failed(Child)", and `unfiltered` is derived from the filters.
+ */
 function workerRecord(h: Harness, fields: Record<string, unknown>): void {
   mkdirSync(join(h.root, "Recordings", "tests"), { recursive: true });
+  const record: Record<string, unknown> = {
+    measuredAt: new Date().toISOString(),
+    result: "Failed(Child)",
+    skipped: 0,
+    filter: null,
+    categories: null,
+    exceptions: 0,
+    exitCode: 2,
+    reason: "tests-failed",
+    ...fields,
+  };
   writeFileSync(
     join(h.root, "Recordings", "tests", "playmode-last.json"),
-    JSON.stringify({ measuredAt: new Date().toISOString(), result: "Failed", skipped: 0, filter: null, categories: null, unfiltered: true, ...fields }),
+    JSON.stringify({ ...record, unfiltered: record.filter === null && record.categories === null }, null, 2),
   );
 }
 
@@ -493,10 +509,26 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     expect(verdict.failedTests).toBeUndefined();
     workerRecord(h, { total: 9, passed: 8, failed: 1, failedNames: [acceptance] });
     completeSprint(h, { verification: { ...verdict } });
-    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1), { timeout: 20_000 });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
     const m1 = h.storage.get(campaign.id)!.milestones[0]!;
     expect(m1.prompt).not.toMatch(/Tests were RED at completion/);
     expect(m1.attempts).toBe(1);
+    expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1);
+    expect(m1.scopeVerdict?.green).toBe(true);
+    expect(m1.status).toBe("green");
+  }, 60_000);
+
+  it("no prose verdict, and the producer's record red only on acceptance checks (exit 2, 'Failed(Child)'): the sprint is the gate's to judge", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    workerRecord(h, { total: 9, passed: 8, failed: 1, failedNames: ["Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa"] });
+    completeSprint(h);
+    // The next sprint, or this one again when it was charged: either way a second submit.
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.prompt).not.toMatch(/Tests were RED at completion/);
+    expect(m1.attempts).toBe(1);
+    expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1);
     expect(m1.scopeVerdict?.green).toBe(true);
     expect(m1.status).toBe("green");
   }, 60_000);
@@ -518,7 +550,7 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     const verdict = deriveTestVerdict([
       { toolName: "unity_playmode_verify", content: "PlayMode verification FAILED: 3 of 9 tests failed (unfiltered — the whole PlayMode suite)." },
     ]);
-    workerRecord(h, { total: 2, passed: 1, failed: 1, failedNames: [acceptance], unfiltered: false, filter: acceptance });
+    workerRecord(h, { total: 2, passed: 1, failed: 1, failedNames: [acceptance], filter: acceptance });
     completeSprint(h, { verification: { ...verdict } });
     await vi.waitFor(() => expect(h.storage.get(campaign.id)!.milestones[0]!.prompt).toMatch(/Tests were RED at completion: PlayMode verification FAILED: 3 of 9/), { timeout: 20_000 });
     m1 = h.storage.get(campaign.id)!.milestones[0]!;

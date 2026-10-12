@@ -27,9 +27,11 @@ export interface PlaymodeRunEvidence {
   green?: boolean;
   /**
    * Red only because tests failed: read as passes, the failures would leave a
-   * green record. A runtime exception, a failed process, a runner verdict
-   * other than "Failed", a suite that mostly never ran or counts that do not
-   * add up are reds of their own, which no reading of the failed names waives.
+   * green record. Unity's tests-failed exit (2) and a "Failed"/"Failed(Child)"
+   * result are what such a run looks like. A runtime exception, any other
+   * exit, any other runner verdict, a suite that mostly never ran or counts
+   * that do not add up are reds of their own, which no reading of the failed
+   * names waives.
    */
   redOnlyByFailures?: boolean;
   found: boolean;
@@ -184,6 +186,15 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
   const processFailed = raw.exitCode !== undefined && exitCode !== 0;
   const overallSaysPass = overall === "" || /^(?:passed|success|succeeded|ok)$/i.test(overall);
   const exceptions = num(raw.exceptions) ?? 0;
+  // A RED RUN'S OWN SIGNATURE is not a red of its own beside its failures:
+  // Unity exits 2 when tests failed (the producer's reason "tests-failed")
+  // and states the run "Failed(Child)" when a child test failed. Read as red
+  // by those alone, every record of a run red only on its failures was red
+  // for another reason too. Any other exit — a kill at the allowance, a run
+  // error, a crash — and any other reason are the process's own.
+  const reason = typeof raw.reason === "string" ? raw.reason.trim() : undefined;
+  const exitOfFailures = exitCode === 2 && (reason === undefined || reason === "tests-failed");
+  const resultOfFailures = overallSaysPass || /^failed(?:\(child\))?$/i.test(overall);
   // A SUITE MOST OF WHICH NEVER RAN is not a whole-suite pass, whatever the
   // unfiltered flag says: 1 passed and 99 skipped of 100 was green.
   const mostlySkipped = skipped > passed;
@@ -219,7 +230,7 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     green:
       consistent && failed === 0 && passed > 0 && overallSaysPass && exceptions === 0 && !mostlySkipped && !processFailed,
     redOnlyByFailures:
-      consistent && failed > 0 && (overallSaysPass || /^failed$/i.test(overall)) && exceptions === 0 && !processFailed && skipped <= passed + failed,
+      consistent && failed > 0 && resultOfFailures && exceptions === 0 && (!processFailed || exitOfFailures) && skipped <= passed + failed,
     total,
     passed,
     failed,
