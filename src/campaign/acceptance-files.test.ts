@@ -18,6 +18,7 @@ import {
   ACCEPTANCE_ASMDEF_PATH,
   ACCEPTANCE_FIXTURE_PATH,
   ACCEPTANCE_FIXTURE_SOURCE,
+  ACCEPTANCE_HARNESS_MEMBERS,
   acceptanceFilePath,
   acceptanceGuid,
   acceptanceIdent,
@@ -34,6 +35,7 @@ import {
   renderAcceptanceFile,
   restoreAcceptance,
   scanForeignAcceptanceNamespace,
+  unrootedNames,
   type AcceptanceHarness,
 } from "./acceptance-files.js";
 import { ACCEPTANCE_DIR, isAcceptanceTestName, type AcceptanceCheckBody, type AcceptanceSource, type RequirementRow } from "./scope-types.js";
@@ -110,10 +112,16 @@ function storedSource(mid: string, tests: Array<{ row: RequirementRow; check: Ac
   };
 }
 
+/** NUnit's and Strada.Core's names as a check spells them: from the root. */
+const NUNIT = "global::NUnit.Framework";
+const OUTCOME = "global::Strada.Core.Play.PlaythroughOutcome";
+/** The assertion a tamper test weakens. */
+const WON = `${NUNIT}.Is.EqualTo(${OUTCOME}.Won)`;
+
 const goodRuleCheck: AcceptanceCheckBody = {
   rid: "req-007-a1b2c3d4e5f6",
   setup: "yield return StartSessionForSetup(1);",
-  body: "yield return Until(() => Driver.Outcome != PlaythroughOutcome.None, 95f);\nAssert.That(Driver.Outcome, Is.EqualTo(PlaythroughOutcome.Won));",
+  body: `yield return Until(() => Driver.Outcome != ${OUTCOME}.None, 95f);\n${NUNIT}.Assert.That(Driver.Outcome, ${WON});`,
 };
 
 // =============================================================================
@@ -132,16 +140,11 @@ describe("renderAcceptanceFile", () => {
         '// Strada acceptance checks for milestone "m1".',
         "// System-owned: Strada.Brain writes this file from the approved GDD and restores the",
         "// stored bytes before every commit and measurement. Edits are reverted and reported.",
+        "// Every type is spelled from the root (global::); the file imports only LINQ's extension methods.",
         "",
         "namespace Strada.Acceptance.M1",
         "{",
-        "    using global::System.Collections;",
-        "    using global::System.Collections.Generic;",
-        "    using global::System.Linq;",
-        "    using global::NUnit.Framework;",
-        "    using global::UnityEngine;",
-        "    using global::UnityEngine.TestTools;",
-        "    using global::Strada.Core.Play;",
+        "    using static global::System.Linq.Enumerable;",
         "",
         '    [global::NUnit.Framework.TestFixture, global::NUnit.Framework.Category("StradaAcceptance")]',
         "    public sealed class Acceptance_M1 : global::Strada.Acceptance.AcceptanceFixture",
@@ -152,8 +155,8 @@ describe("renderAcceptanceFile", () => {
         "        {",
         "            yield return Boot();",
         "            yield return StartSessionForSetup(1);",
-        "            yield return Until(() => Driver.Outcome != PlaythroughOutcome.None, 95f);",
-        "            Assert.That(Driver.Outcome, Is.EqualTo(PlaythroughOutcome.Won));",
+        "            yield return Until(() => Driver.Outcome != global::Strada.Core.Play.PlaythroughOutcome.None, 95f);",
+        "            global::NUnit.Framework.Assert.That(Driver.Outcome, global::NUnit.Framework.Is.EqualTo(global::Strada.Core.Play.PlaythroughOutcome.Won));",
         "        }",
         "    }",
         "}",
@@ -172,10 +175,10 @@ describe("renderAcceptanceFile", () => {
       rid: "req-012-0123456789ab",
       setup: "yield return StartSessionForSetup(1);",
       // The model's own numbers inside its observation must not become the assertion.
-      observe: "Service<Game.Movement.IJumpRules>().CoyoteSeconds * 1.0",
+      observe: "Service<global::Game.Movement.IJumpRules>().CoyoteSeconds * 1.0",
     };
     const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check }]);
-    expect(source).toContain("            var observed = (double)(Service<Game.Movement.IJumpRules>().CoyoteSeconds * 1.0);");
+    expect(source).toContain("            double observed = (double)(Service<global::Game.Movement.IJumpRules>().CoyoteSeconds * 1.0);");
     expect(source).toContain(
       '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
     );
@@ -183,45 +186,50 @@ describe("renderAcceptanceFile", () => {
     expect(source.match(/Assert\./g)).toHaveLength(1);
   });
 
-  it("keeps every using inside the milestone's namespace and spells the system's own lines from the root, so no type outside the folder can answer for them", () => {
-    // The acceptance assembly references every game runtime assembly. A worker's `Assert`/`Is` declared in the global
-    // namespace or in `Strada` is found before a file-level using's type, and would turn the system's assertion into a no-op.
+  it("spells every name the system writes from the root, so no type a worker declares and no game namespace can answer for a check", () => {
+    // The acceptance assembly references every game runtime assembly. C# looks a bare name up in the enclosing namespaces
+    // (Strada.Acceptance.M2, Strada.Acceptance, Strada, the global one) and in every using's namespace: a worker's `Assert`,
+    // `Is` or `var` there would judge the row, and a game namespace named like an imported type would stop the file compiling.
     const check: AcceptanceCheckBody = {
       rid: "req-012-0123456789ab",
       // A local named after NUnit's class must not take the system's assertion over either.
-      setup: "var Is = 3;",
-      observe: "Service<Game.Movement.IJumpRules>().CoyoteSeconds",
+      setup: "int Is = 3;",
+      observe: "Service<global::Game.Movement.IJumpRules>().CoyoteSeconds",
     };
-    const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check }], { usings: ["Game.Movement"] });
-    const lines = source.split("\n");
-    const ns = lines.indexOf("namespace Strada.Acceptance.M2");
-    expect(ns).toBeGreaterThan(0);
-    expect(lines.slice(0, ns).filter((l) => /^\s*using\b/.test(l))).toEqual([]);
-    const usings = lines.filter((l) => /^\s*using\b/.test(l));
-    expect(usings).toContain("    using global::NUnit.Framework;");
-    expect(usings).toContain("    using global::Game.Movement;");
-    // `using NUnit.Framework;` inside the namespace would still resolve `NUnit` through a worker's `Strada.NUnit`.
-    for (const using of usings) expect(using).toMatch(/^ {4}using global::[A-Za-z_][\w.]*;$/);
+    const rule: AcceptanceCheckBody = { ...goodRuleCheck, rid: "req-020-feedfacecafe" };
+    const { source } = renderAcceptanceFile("m2", [
+      { row: constantRow(), check },
+      { row: row({ rid: "req-020-feedfacecafe", span: { start: 900, end: 950 } }), check: rule },
+    ]);
+    // Walked as the compiler reads it: nothing but keywords, the file's own declarations, the harness's members and global::.
+    expect(unrootedNames(source, { allowed: ACCEPTANCE_HARNESS_MEMBERS })).toEqual([]);
+    // No using brings in a type name: only LINQ's extension methods, which bind here before any a worker declares outside.
+    expect(source.split("\n").filter((l) => /^\s*using\b/.test(l))).toEqual(["    using static global::System.Linq.Enumerable;"]);
+    // The observation is a `double`, not a `var`: a worker's `class var` cannot type it.
+    expect(source).toContain("            double observed = (double)(Service<global::Game.Movement.IJumpRules>().CoyoteSeconds);");
     expect(source).toContain(
       '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
     );
-    expect(source).toContain('    [global::NUnit.Framework.TestFixture, global::NUnit.Framework.Category("StradaAcceptance")]');
-    expect(source).toContain("        [global::UnityEngine.TestTools.UnityTest, global::NUnit.Framework.Timeout(120000)]");
-    expect(source).toContain("        public global::System.Collections.IEnumerator R012_012345()");
+    // The walk sees what a bare name would be, wherever it stands.
+    const walk = (text: string) => unrootedNames(text, { allowed: ACCEPTANCE_HARNESS_MEMBERS });
+    expect(walk(source.replace("global::NUnit.Framework.Assert.That(observed", "Assert.That(observed"))).toEqual(["Assert"]);
+    expect(walk(source.replace("double observed", "var observed"))).toEqual(["var"]);
+    expect(walk(source.replace("[global::UnityEngine.TestTools.UnityTest,", "[UnityTest,"))).toEqual(["UnityTest"]);
+    expect(walk(source.replace(": global::Strada.Acceptance.AcceptanceFixture", ": AcceptanceFixture"))).toEqual(["AcceptanceFixture"]);
   });
 
   it("closes the observation on its own line when it ends in a comment, so the comment cannot swallow the closing parenthesis", () => {
-    const commented: AcceptanceCheckBody = { rid: "req-012-0123456789ab", observe: "Service<Game.IJumpRules>().CoyoteSeconds // seconds" };
+    const commented: AcceptanceCheckBody = { rid: "req-012-0123456789ab", observe: "Service<global::Game.IJumpRules>().CoyoteSeconds // seconds" };
     expect(lintAcceptanceBody(constantRow(), commented)).toEqual({ ok: true, problems: [] });
     const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check: commented }]);
-    expect(source).toContain("            var observed = (double)(Service<Game.IJumpRules>().CoyoteSeconds // seconds\n            );\n");
+    expect(source).toContain("            double observed = (double)(Service<global::Game.IJumpRules>().CoyoteSeconds // seconds\n            );\n");
     // Read as the compiler reads it: with comments gone, the observation still closes before the system's assertion.
-    const multi: AcceptanceCheckBody = { ...commented, observe: "Service<Game.IJumpRules>()\n    .CoyoteSeconds /* raw */ // seconds" };
+    const multi: AcceptanceCheckBody = { ...commented, observe: "Service<global::Game.IJumpRules>()\n    .CoyoteSeconds /* raw */ // seconds" };
     const code = renderAcceptanceFile("m2", [{ row: constantRow(), check: multi }]).source.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(code).toMatch(/var observed = \(double\)\(Service<Game\.IJumpRules>\(\)\s*\.CoyoteSeconds\s*\);\s*global::NUnit\.Framework\.Assert\.That\(observed,/);
+    expect(code).toMatch(/double observed = \(double\)\(Service<global::Game\.IJumpRules>\(\)\s*\.CoyoteSeconds\s*\);\s*global::NUnit\.Framework\.Assert\.That\(observed,/);
     // Two slashes inside a string are not a comment: the observation stays on one line.
-    const quoted: AcceptanceCheckBody = { ...commented, observe: 'Service<Game.ILinks>().Count("a//b")' };
-    expect(renderAcceptanceFile("m2", [{ row: constantRow(), check: quoted }]).source).toContain('            var observed = (double)(Service<Game.ILinks>().Count("a//b"));\n');
+    const quoted: AcceptanceCheckBody = { ...commented, observe: 'Service<global::Game.ILinks>().Count("a//b")' };
+    expect(renderAcceptanceFile("m2", [{ row: constantRow(), check: quoted }]).source).toContain('            double observed = (double)(Service<global::Game.ILinks>().Count("a//b"));\n');
   });
 
   it("writes exact values with the row's tolerance and one-sided or exclusive bounds as NUnit constraints", () => {
@@ -229,9 +237,9 @@ describe("renderAcceptanceFile", () => {
     const atLeast = row({ rid: "req-002-bbbbbbbbbbbb", kind: "range", text: "At least 3 lives.", bounds: { kind: "range", lo: 3 } });
     const below = row({ rid: "req-003-cccccccccccc", kind: "range", text: "Under 2 s, over 1 s.", bounds: { kind: "range", lo: 1, hi: 2, loExclusive: true, hiExclusive: true } });
     const { source } = renderAcceptanceFile("m3", [
-      { row: exact, check: { rid: exact.rid, observe: "Service<Game.IRates>().Fire" } },
-      { row: atLeast, check: { rid: atLeast.rid, observe: "Service<Game.ILives>().Count" } },
-      { row: below, check: { rid: below.rid, observe: "Service<Game.ITimer>().Seconds" } },
+      { row: exact, check: { rid: exact.rid, observe: "Service<global::Game.IRates>().Fire" } },
+      { row: atLeast, check: { rid: atLeast.rid, observe: "Service<global::Game.ILives>().Count" } },
+      { row: below, check: { rid: below.rid, observe: "Service<global::Game.ITimer>().Seconds" } },
     ]);
     expect(source).toContain("Is.EqualTo(12d).Within(0.01d)");
     expect(source).toContain("Is.GreaterThanOrEqualTo(3d)");
@@ -245,7 +253,7 @@ describe("renderAcceptanceFile", () => {
       text: 'Speed "max" is 5\\s\nline two Assert.Pass();',
       bounds: { kind: "exact", value: 5, tolerance: 0 },
     });
-    const { source } = renderAcceptanceFile("m4", [{ row: tricky, check: { rid: tricky.rid, observe: "Service<Game.ISpeed>().Max" } }]);
+    const { source } = renderAcceptanceFile("m4", [{ row: tricky, check: { rid: tricky.rid, observe: "Service<global::Game.ISpeed>().Max" } }]);
     // Every line of the verbatim text stays a comment line.
     expect(source).toContain('        // REQ req-004-dddddddddddd — Speed "max" is 5\\s\n        //     line two\n        //     Assert.Pass();');
     expect(source).toContain('"req-004-dddddddddddd: Speed \\"max\\" is 5\\\\s\\nline two\\u2028Assert.Pass();"');
@@ -256,8 +264,8 @@ describe("renderAcceptanceFile", () => {
     const a = row({ rid: "req-010-abcdef000001", span: { start: 10, end: 20 } });
     const b = row({ rid: "req-010-abcdef000002", span: { start: 30, end: 40 } });
     const tests = [
-      { row: b, check: { rid: b.rid, body: "Assert.That(Driver.IsSessionActive, Is.False);" } },
-      { row: a, check: { rid: a.rid, body: "Assert.That(Driver.IsSessionActive, Is.False);" } },
+      { row: b, check: { rid: b.rid, body: `${NUNIT}.Assert.That(Driver.IsSessionActive, ${NUNIT}.Is.False);` } },
+      { row: a, check: { rid: a.rid, body: `${NUNIT}.Assert.That(Driver.IsSessionActive, ${NUNIT}.Is.False);` } },
     ];
     const first = renderAcceptanceFile("m5-tb1", tests);
     const second = renderAcceptanceFile("m5-tb1", [...tests].reverse());
@@ -275,7 +283,7 @@ describe("renderAcceptanceFile", () => {
   });
 
   it("refuses to render what it cannot make honest: a numeric row with no observation, a mismatched id, a duplicate", () => {
-    expect(() => renderAcceptanceFile("m1", [{ row: constantRow(), check: { rid: constantRow().rid, body: "Assert.That(1, Is.EqualTo(1));" } }])).toThrow(/observe/);
+    expect(() => renderAcceptanceFile("m1", [{ row: constantRow(), check: { rid: constantRow().rid, body: `${NUNIT}.Assert.That(1, ${NUNIT}.Is.EqualTo(1));` } }])).toThrow(/observe/);
     expect(() => renderAcceptanceFile("m1", [{ row: row(), check: { ...goodRuleCheck, rid: "req-999-000000000000" } }])).toThrow(/rid/);
     expect(() => renderAcceptanceFile("m1", [{ row: row(), check: goodRuleCheck }, { row: row(), check: goodRuleCheck }])).toThrow(/twice/);
   });
@@ -286,6 +294,12 @@ describe("renderAcceptanceFile", () => {
 // =============================================================================
 
 describe("lintAcceptanceBody", () => {
+  /** Refused, for the reason given, and not because a name was spelled bare. */
+  const refusedOnlyFor = (result: { ok: boolean; problems: string[] }, why: RegExp): void => {
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(why);
+    expect(result.problems.filter((p) => /from the root/.test(p))).toEqual([]);
+  };
   const lint = (body: string, over: Partial<RequirementRow> = {}, extra: Partial<AcceptanceCheckBody> = {}) =>
     lintAcceptanceBody(row(over), { rid: row(over).rid, body, ...extra });
 
@@ -300,80 +314,147 @@ describe("lintAcceptanceBody", () => {
   });
 
   it("rejects reflection laundered through a local, a type-name comparison, and a literal-only assertion", () => {
-    expect(lint("var n = typeof(Game.IX).GetInterfaces().Length;\nAssert.That(n, Is.GreaterThan(0));").ok).toBe(false);
-    expect(lint('Assert.AreEqual("Mover", Service<Game.IMover>().GetType().Name);').ok).toBe(false);
-    expect(lint("Assert.IsTrue(typeof(Game.IMover).IsAssignableFrom(Service<Game.IMover>().GetType()));").ok).toBe(false);
-    const literal = lint("Assert.That(2 + 2, Is.EqualTo(4));");
-    expect(literal.ok).toBe(false);
-    expect(literal.problems.join("\n")).toMatch(/literal/);
+    refusedOnlyFor(lint(`var n = typeof(global::Game.IX).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.AreEqual("Mover", Service<global::Game.IMover>().GetType().Name);`), /reflection/);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.IsTrue(typeof(global::Game.IMover).IsAssignableFrom(Service<global::Game.IMover>().GetType()));`), /reflection/);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.That(2 + 2, ${NUNIT}.Is.EqualTo(4));`), /literal/);
+    // Spelled from the root, as a check must be, the same shapes are read the same way.
+    refusedOnlyFor(lint(`global::System.Int32 n = typeof(global::Game.IX).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`var m = typeof(global::Game.IX).GetMethods().Length;\n${NUNIT}.Assert.That((global::System.Int64)m, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.That(global::System.Type.GetType("Game.Mover").GetMethods().Length, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.That(global::System.Int32.MaxValue - global::UnityEngine.Mathf.PI, ${NUNIT}.Is.GreaterThan(0));`), /literal/);
   });
 
   it.each([
-    ["Assert.Pass", "Assert.Pass();"],
-    ["Assert.Ignore", 'Assert.Ignore("later");'],
-    ["Assert.Inconclusive", "Assert.Inconclusive();"],
-    ["Assume", "Assume.That(Driver.IsSessionActive);\nAssert.That(Driver.IsSessionActive);"],
-    ["catch", "try { Assert.That(Driver.IsSessionActive); } catch (System.Exception) { }"],
-    ["#if", "#if UNITY_EDITOR\nAssert.That(Driver.IsSessionActive);\n#endif"],
-    ["System.IO", 'System.IO.File.WriteAllText("x", "y");\nAssert.That(Driver.IsSessionActive);'],
-    ["Process", 'System.Diagnostics.Process.Start("sh");\nAssert.That(Driver.IsSessionActive);'],
-    [".Act(", "Service<Game.IDriverLike>().Act();\nAssert.That(Driver.Outcome, Is.EqualTo(PlaythroughOutcome.Won));"],
-    ["IPlaythroughDriver", "var d = Service<IPlaythroughDriver>();\nAssert.That(d.Phase, Is.EqualTo(\"Playing\"));"],
-    ["[Category]", '[Category("x")] void Local() { }\nAssert.That(Driver.IsSessionActive);'],
-    ["[Ignore]", '[NUnit.Framework.Ignore("x")] void Local() { }\nAssert.That(Driver.IsSessionActive);'],
-    ["yield break", "if (!Driver.IsSessionActive) yield break;\nAssert.That(Driver.IsSessionActive);"],
-    ["ignoreFailingMessages", "UnityEngine.TestTools.LogAssert.ignoreFailingMessages = true;\nAssert.That(Driver.IsSessionActive);"],
+    ["Assert.Pass", `${NUNIT}.Assert.Pass();`],
+    ["Assert.Ignore", `${NUNIT}.Assert.Ignore("later");`],
+    ["Assert.Inconclusive", `${NUNIT}.Assert.Inconclusive();`],
+    ["Assume", `${NUNIT}.Assume.That(Driver.IsSessionActive);\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["catch", `try { ${NUNIT}.Assert.That(Driver.IsSessionActive); } catch (global::System.Exception) { }`],
+    ["#if", `#if UNITY_EDITOR\n${NUNIT}.Assert.That(Driver.IsSessionActive);\n#endif`],
+    ["System.IO", `global::System.IO.File.WriteAllText("x", "y");\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["Process", `global::System.Diagnostics.Process.Start("sh");\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    [".Act(", `Service<global::Game.IDriverLike>().Act();\n${NUNIT}.Assert.That(Driver.Outcome, ${WON});`],
+    ["IPlaythroughDriver", `var d = Service<global::Strada.Core.Play.IPlaythroughDriver>();\n${NUNIT}.Assert.That(d.Phase, ${NUNIT}.Is.EqualTo("Playing"));`],
+    ["[Category]", `[global::NUnit.Framework.Category("x")] void Local() { }\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["[Ignore]", `[global::NUnit.Framework.Ignore("x")] void Local() { }\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["yield break", `if (!Driver.IsSessionActive) yield break;\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["ignoreFailingMessages", `global::UnityEngine.TestTools.LogAssert.ignoreFailingMessages = true;\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
     // What Assert.Pass and Assert.Ignore throw ends the test the same way.
-    ["SuccessException", 'if (Driver.IsSessionActive) throw new NUnit.Framework.SuccessException("ok");\nAssert.That(Driver.IsSessionActive);'],
-    ["IgnoreException", 'throw new IgnoreException("later");'],
-    ["UnityEditor", "UnityEditor.EditorApplication.isPlaying = false;\nAssert.That(Driver.IsSessionActive);"],
+    ["SuccessException", `if (Driver.IsSessionActive) throw new global::NUnit.Framework.SuccessException("ok");\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
+    ["IgnoreException", `throw new global::NUnit.Framework.IgnoreException("later");`],
+    ["UnityEditor", `global::UnityEditor.EditorApplication.isPlaying = false;\n${NUNIT}.Assert.That(Driver.IsSessionActive);`],
   ])("rejects %s", (_name, body) => {
     const result = lint(body);
     expect(result.ok, body).toBe(false);
+    // Refused for the construct, not for a name spelled bare.
+    expect(result.problems.filter((p) => /from the root/.test(p)), body).toEqual([]);
   });
 
   it("does not mistake a forbidden word inside a string or a comment for code", () => {
-    const result = lint('// Assert.Pass would be wrong here; catch nothing\nAssert.That(Driver.Phase, Is.Not.EqualTo("Assert.Pass catch #if"));');
+    const result = lint(`// Assert.Pass would be wrong here; catch nothing\n${NUNIT}.Assert.That(Driver.Phase, ${NUNIT}.Is.Not.EqualTo("Assert.Pass catch #if"));`);
     expect(result).toEqual({ ok: true, problems: [] });
   });
 
   it("rejects a body that escapes its method or does not assert at all", () => {
-    expect(lint("Assert.That(Driver.IsSessionActive); }\n[UnityTest] public System.Collections.IEnumerator Extra() { yield return null;").ok).toBe(false);
+    refusedOnlyFor(lint(`${NUNIT}.Assert.That(Driver.IsSessionActive); }\n[global::UnityEngine.TestTools.UnityTest] public global::System.Collections.IEnumerator Extra() { yield return null;`), /balance/);
     const none = lint("yield return Frames(3);");
     expect(none.ok).toBe(false);
     expect(none.problems.join("\n")).toMatch(/assert/i);
   });
 
   it("rejects a harness coroutine that is called but not yielded (it would never run)", () => {
-    const result = lint("TapViewport(0.5f, 0.5f);\nAssert.That(Driver.IsSessionActive);", { kind: "input" });
+    const result = lint(`TapViewport(0.5f, 0.5f);\n${NUNIT}.Assert.That(Driver.IsSessionActive);`, { kind: "input" });
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toMatch(/TapViewport.*yield return/);
   });
 
   it("an input row must act through the harness's Tap/Drag/Press, and must not start the session itself", () => {
     const input = { kind: "input" as const, text: "The player taps to jump." };
-    const noTap = lint("Service<Game.IJumper>().Jump();\nyield return Frames(2);\nAssert.That(Service<Game.IJumper>().Airborne);", input);
+    const noTap = lint(`Service<global::Game.IJumper>().Jump();\nyield return Frames(2);\n${NUNIT}.Assert.That(Service<global::Game.IJumper>().Airborne);`, input);
     expect(noTap.ok).toBe(false);
     expect(noTap.problems.join("\n")).toMatch(/Tap/);
-    const starts = lint("yield return StartSessionForSetup(1);\nyield return TapViewport(0.5f, 0.5f);\nAssert.That(Service<Game.IJumper>().Airborne);", input);
+    const starts = lint(`yield return StartSessionForSetup(1);\nyield return TapViewport(0.5f, 0.5f);\n${NUNIT}.Assert.That(Service<global::Game.IJumper>().Airborne);`, input);
     expect(starts.ok).toBe(false);
     expect(starts.problems.join("\n")).toMatch(/StartSession/);
-    const good = lint("yield return TapViewport(0.5f, 0.5f);\nyield return Frames(2);\nAssert.That(Service<Game.IJumper>().Airborne, Is.True);", input);
+    const good = lint(`yield return TapViewport(0.5f, 0.5f);\nyield return Frames(2);\n${NUNIT}.Assert.That(Service<global::Game.IJumper>().Airborne, ${NUNIT}.Is.True);`, input);
     expect(good).toEqual({ ok: true, problems: [] });
   });
 
   it("a numeric row takes an observation only; its observation must read the game", () => {
     const r = constantRow();
-    expect(lintAcceptanceBody(r, { rid: r.rid, observe: "Service<Game.IJumpRules>().CoyoteSeconds" })).toEqual({ ok: true, problems: [] });
-    expect(lintAcceptanceBody(r, { rid: r.rid, body: "Assert.That(Service<Game.IJumpRules>().CoyoteSeconds, Is.EqualTo(0.3));" }).ok).toBe(false);
+    expect(lintAcceptanceBody(r, { rid: r.rid, observe: "Service<global::Game.IJumpRules>().CoyoteSeconds" })).toEqual({ ok: true, problems: [] });
+    refusedOnlyFor(lintAcceptanceBody(r, { rid: r.rid, body: `${NUNIT}.Assert.That(Service<global::Game.IJumpRules>().CoyoteSeconds, ${NUNIT}.Is.EqualTo(0.3));` }), /observe/);
     expect(lintAcceptanceBody(r, { rid: r.rid, observe: "0.3" }).ok).toBe(false);
-    expect(lintAcceptanceBody(r, { rid: r.rid, observe: "1; Assert.Pass(); var x = (0" }).ok).toBe(false);
+    expect(lintAcceptanceBody(r, { rid: r.rid, observe: `1; ${NUNIT}.Assert.Pass(); var x = (0` }).ok).toBe(false);
+  });
+
+  it("refuses a bare type or namespace — a worker's type or a game namespace could take the name — and accepts the check's own names", () => {
+    // Spelled bare, each could be a type a worker declared in Strada or the global namespace.
+    // A type in call shape is a type too: a constructor, a positional pattern.
+    const bare = lint("Assert.That(Time.timeScale, Is.EqualTo(0f));\nvar v = new Vector2(1f, 2f);\nif (Service<global::Game.IShapes>().Last is Corner(1, 2)) { }");
+    expect(bare.ok).toBe(false);
+    const problem = bare.problems.find((p) => /from the root/.test(p)) ?? "";
+    for (const name of ["Assert", "Is", "Time", "Vector2", "Corner"]) expect(problem).toContain(`\`${name}\``);
+    // A bare call is the check's own function, a harness member, or a method every class has.
+    expect(lint(`bool Lit() => Service<global::Game.IShapes>().Lit;\nyield return Until(Lit);\n${NUNIT}.Assert.That(Lit().ToString(), ${NUNIT}.Is.EqualTo(true.ToString()));`).ok).toBe(true);
+    expect(lint(`${NUNIT}.Assert.That(Shapes().Count, ${NUNIT}.Is.GreaterThan(0));`).problems.join("\n")).toContain("`Shapes`");
+    // As the compiler reads it: an escape or a soft hyphen inside a name does not make it another name.
+    expect(lint("As\\u0073ert.That(Driver.IsSessionActive);").problems.join("\n")).toContain("`Assert`");
+    expect(lint("As\u00ADsert.That(Driver.IsSessionActive);").problems.join("\n")).toContain("`Assert`");
+    // Its own names are never looked up: locals, out and pattern variables, lambda, foreach and query variables,
+    // named arguments, initializer members, and the harness's members.
+    const own = lint(
+      [
+        "var board = Service<global::Game.Grid.IBoard>();",
+        "int before = board.Columns;",
+        "global::Game.Grid.Cell first = board.Cells.First(c => c.IsEmpty);",
+        "yield return Until(() => board.Cells.Any((global::Game.Grid.Cell c) => c.IsLit), timeoutSeconds: 5f);",
+        "foreach (var cell in board.Cells) { if (cell.IsEmpty) before--; }",
+        "if (board.TryFind(3, out var found) && found is global::Game.Grid.Cell lit) { before += lit.Weight; }",
+        "var weights = from c in board.Cells where c.IsLit select c.Weight;",
+        "var spot = new global::Game.Grid.Spot { Row = 1, Column = 2 };",
+        "if (board.TryFind(4, out _)) { before -= board.Cells.Count(static c => c.IsLit); }",
+        `string kind = Driver.Outcome switch { ${OUTCOME}.Won => "won", _ => "other" };`,
+        "PlaythroughView view = Driver;",
+        `${NUNIT}.Assert.That(before + weights.Count() + spot.Row + first.Weight + kind.Length, ${NUNIT}.Is.GreaterThan(BootSeconds - view.Phase.Length));`,
+      ].join("\n"),
+    );
+    expect(own).toEqual({ ok: true, problems: [] });
   });
 
   it("caps a body at 80 lines", () => {
-    const long = Array.from({ length: 80 }, () => "yield return Frames(1);").join("\n") + "\nAssert.That(Driver.IsSessionActive);";
-    expect(lint(long).ok).toBe(false);
+    const long = Array.from({ length: 80 }, () => "yield return Frames(1);").join("\n") + `\n${NUNIT}.Assert.That(Driver.IsSessionActive);`;
+    refusedOnlyFor(lint(long), /at most 80/);
   });
+});
+
+// =============================================================================
+// A GAME NAMESPACE NAMED LIKE A FRAMEWORK TYPE
+// =============================================================================
+
+describe("a game whose root namespace shares a framework type's name", () => {
+  it.each(["Grid", "Input", "Physics", "Camera", "Random", "Debug", "Is", "Has"])(
+    "checks a game namespace named %s: the surface prints it from the root, and nothing in the acceptance file can take the name",
+    (ns) => {
+      const root = project();
+      put(root, `Assets/${ns}Game/${ns}Game.asmdef`, asmdef(`${ns}Game.Runtime`));
+      put(root, `Assets/${ns}Game/Board.cs`, `namespace ${ns}\n{\n    public interface IBoard\n    {\n        int Columns { get; }\n    }\n}\n`);
+      const digest = publicSurfaceDigest(root, requirementTokens("The board has eight columns."));
+      expect(digest).toContain(`public interface global::${ns}.IBoard`);
+      const r = constantRow();
+      const check: AcceptanceCheckBody = { rid: r.rid, observe: `Service<global::${ns}.IBoard>().Columns` };
+      expect(lintAcceptanceBody(r, check)).toEqual({ ok: true, problems: [] });
+      // Spelled bare, the name is whatever a using imports under it, or a worker's type.
+      const bare = lintAcceptanceBody(r, { rid: r.rid, observe: `Service<${ns}.IBoard>().Columns` });
+      expect(bare.problems.find((p) => /from the root/.test(p))).toContain(`\`${ns}\``);
+      // No using imports a type that could share the game namespace's name, so the shared assembly compiles whatever the game calls it.
+      const { source } = renderAcceptanceFile("m1", [{ row: r, check }]);
+      expect(source.split("\n").filter((l) => /^\s*using\b/.test(l))).toEqual(["    using static global::System.Linq.Enumerable;"]);
+      expect(unrootedNames(source, { allowed: ACCEPTANCE_HARNESS_MEMBERS })).toEqual([]);
+      expect(ACCEPTANCE_FIXTURE_SOURCE.split("\n").filter((l) => /^\s*using\b/.test(l))).toEqual([]);
+    },
+  );
 });
 
 // =============================================================================
@@ -393,9 +474,9 @@ describe("the harness", () => {
       "IReadOnlyList<string> ActiveScreens()",
       "string InputInjectable",
       "IEnumerator TapViewport(float x, float y)",
-      "IEnumerator TapScreen(Vector2 position)",
-      "IEnumerator TapObject(GameObject target)",
-      "IEnumerator Drag(Vector2 from, Vector2 to, float seconds = 0.25f)",
+      "IEnumerator TapScreen(global::UnityEngine.Vector2 position)",
+      "IEnumerator TapObject(global::UnityEngine.GameObject target)",
+      "IEnumerator Drag(global::UnityEngine.Vector2 from, global::UnityEngine.Vector2 to, float seconds = 0.25f)",
       "IEnumerator Press(string key)",
     ]) {
       expect(ACCEPTANCE_FIXTURE_SOURCE, member).toContain(member);
@@ -403,8 +484,15 @@ describe("the harness", () => {
     }
     // The read-only driver view never offers the driver's own action.
     expect(ACCEPTANCE_FIXTURE_SOURCE).not.toMatch(/\.Act\s*\(/);
-    expect(ACCEPTANCE_FIXTURE_SOURCE).toContain("GameBootstrapper.Services");
-    expect(ACCEPTANCE_FIXTURE_SOURCE).toContain("SceneManager.LoadSceneAsync(0, LoadSceneMode.Single)");
+    expect(ACCEPTANCE_FIXTURE_SOURCE).toContain("global::Strada.Core.Bootstrap.GameBootstrapper.Services");
+    expect(ACCEPTANCE_FIXTURE_SOURCE).toContain(
+      "global::UnityEngine.SceneManagement.SceneManager.LoadSceneAsync(0, global::UnityEngine.SceneManagement.LoadSceneMode.Single)",
+    );
+    // What the writer may name bare is what the harness declares for it, and the writer is told each one.
+    for (const member of ACCEPTANCE_HARNESS_MEMBERS) {
+      expect(ACCEPTANCE_FIXTURE_SOURCE, member).toMatch(new RegExp(`\\bprotected\\b[^;{]*\\b${member}\\b`));
+      expect(harnessApiDoc(), member).toMatch(new RegExp(`\\b${member}\\b`));
+    }
   });
 
   it("every conditional symbol the harness compiles on is one its assembly defines", () => {
@@ -419,31 +507,28 @@ describe("the harness", () => {
 
   it("routes injected input to the game though a test run has no focused Game View, and puts the project's settings back", () => {
     // Measured in a Unity 6000.3 PlayMode run: without this every injected tap, drag and key press was dropped.
-    const boot = ACCEPTANCE_FIXTURE_SOURCE.slice(ACCEPTANCE_FIXTURE_SOURCE.indexOf("protected IEnumerator Boot()"));
+    const boot = ACCEPTANCE_FIXTURE_SOURCE.slice(ACCEPTANCE_FIXTURE_SOURCE.indexOf("protected global::System.Collections.IEnumerator Boot()"));
     expect(boot.indexOf("EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView")).toBeGreaterThan(0);
     expect(boot.indexOf("EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView")).toBeLessThan(boot.indexOf("LoadSceneAsync"));
     expect(boot).toContain("InputSettings.BackgroundBehavior.IgnoreFocus");
     // The project's settings asset is swapped for a copy, never edited.
     expect(boot).toContain("UnityEngine.Object.Instantiate(current)");
-    expect(ACCEPTANCE_FIXTURE_SOURCE).toMatch(/\[TearDown\]\s*public void RestoreHarnessState\(\)[\s\S]*InputSystem\.settings = _projectInputSettingsAsset;/);
+    expect(ACCEPTANCE_FIXTURE_SOURCE).toMatch(/\[global::NUnit\.Framework\.TearDown\]\s*public void RestoreHarnessState\(\)[\s\S]*InputSystem\.settings = _projectInputSettingsAsset;/);
     // A scene that never loads is the harness's fault, not a test timeout.
     expect(boot).toContain('HarnessFault("no-scene", "build scene 0 did not finish loading in "');
   });
 
-  it("keeps its usings inside its namespace and spells its own verdicts from the root, so no type outside the folder can answer for them", () => {
-    const lines = ACCEPTANCE_FIXTURE_SOURCE.split("\n");
-    const ns = lines.indexOf("namespace Strada.Acceptance");
-    expect(ns).toBeGreaterThan(0);
-    expect(lines.slice(0, ns).filter((l) => /^\s*using\b/.test(l))).toEqual([]);
-    const usings = lines.filter((l) => /^\s*using\b/.test(l));
-    expect(usings).toContain("    using global::NUnit.Framework;");
-    for (const using of usings) expect(using).toMatch(/^ {4}using global::[A-Za-z_][\w.]*;$/);
-    // Code only: string and comment text may name what it likes.
-    const code = ACCEPTANCE_FIXTURE_SOURCE.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/\/\/.*$/gm, "");
-    expect(code).toMatch(/global::NUnit\.Framework\.Assert\.Fail\(/);
-    expect(code.match(/(?<!global::NUnit\.Framework\.)\b(?:Assert|Is)\s*\./g)).toBeNull();
-    // A namespace the harness spells out itself starts at the root: a worker's `Strada.UnityEngine` cannot take it.
-    expect(code.match(/(?<![\w.:])UnityEngine\s*\./g)).toBeNull();
+  it("imports nothing and spells every type it names from the root, so no type outside the folder can answer for its verdicts or its data", () => {
+    // The harness sits in namespace Strada.Acceptance: C# finds a type a worker declares there, in Strada or in the global
+    // namespace before any using's. Its data path (GameBootstrapper.Services, the driver) and its verdicts are the checks'.
+    expect(ACCEPTANCE_FIXTURE_SOURCE.split("\n").filter((l) => /^\s*using\b/.test(l))).toEqual([]);
+    // Walked as the compiler reads it, every #if branch included: keywords, its own declarations and global:: only.
+    expect(unrootedNames(ACCEPTANCE_FIXTURE_SOURCE)).toEqual([]);
+    // The walk would see the reviewer's case: the service locator named bare.
+    const bare = ACCEPTANCE_FIXTURE_SOURCE.replace(/global::Strada\.Core\.Bootstrap\.GameBootstrapper\.Services/g, "GameBootstrapper.Services");
+    expect(unrootedNames(bare)).toEqual(["GameBootstrapper"]);
+    expect(unrootedNames(ACCEPTANCE_FIXTURE_SOURCE.replace("[global::NUnit.Framework.TearDown]", "[TearDown]"))).toEqual(["TearDown"]);
+    expect(unrootedNames(ACCEPTANCE_FIXTURE_SOURCE.replace("float deadline =", "var deadline ="))).toEqual(["var"]);
   });
 
   it("stamps its own bytes, so the next Brain version's restore knows them for the system's", () => {
@@ -565,7 +650,7 @@ describe("restoreAcceptance", () => {
 
   it("restores a tampered file and reports it", () => {
     const { root, source, harness } = setUp();
-    writeFileSync(join(root, source.path), source.source.replace("Is.EqualTo(PlaythroughOutcome.Won)", "Is.Not.Null"));
+    writeFileSync(join(root, source.path), source.source.replace(WON, `${NUNIT}.Is.Not.Null`));
     writeFileSync(join(root, ACCEPTANCE_FIXTURE_PATH), "// emptied by a worker\n");
     const result = restoreAcceptance(root, [source], "committed", harness);
     expect(result.tamper.sort()).toEqual([ACCEPTANCE_FIXTURE_PATH, source.path].sort());
@@ -609,7 +694,7 @@ describe("restoreAcceptance", () => {
     // A harness from another Brain version: stamped, so the system's own.
     writeFileSync(join(root, ACCEPTANCE_FIXTURE_PATH), stampedLike("// an older harness\nnamespace Strada.Acceptance { public abstract class AcceptanceFixture { } }\n"));
     // The check as it was rendered before a regeneration.
-    const before = storedSource("m1", [{ row: row(), check: { ...goodRuleCheck, body: "Assert.That(Driver.Outcome, Is.Not.EqualTo(PlaythroughOutcome.Lost));" } }]);
+    const before = storedSource("m1", [{ row: row(), check: { ...goodRuleCheck, body: `${NUNIT}.Assert.That(Driver.Outcome, ${NUNIT}.Is.Not.EqualTo(${OUTCOME}.Lost));` } }]);
     writeFileSync(join(root, source.path), before.source);
     // The assembly as planned before the game gained a module.
     writeFileSync(join(root, ACCEPTANCE_ASMDEF_PATH), renderAcceptanceAsmdef(["Strada.Core", "UnityEngine.TestRunner"]));
@@ -645,14 +730,14 @@ describe("restoreAcceptance", () => {
     expect(older.deleted).toEqual([waived.path]);
 
     // An edit is tamper whatever its line endings.
-    writeFileSync(join(root, source.path), crlf(source.source.replace("Is.EqualTo(PlaythroughOutcome.Won)", "Is.Not.Null")));
+    writeFileSync(join(root, source.path), crlf(source.source.replace(WON, `${NUNIT}.Is.Not.Null`)));
     expect(restoreAcceptance(root, [source], "committed", harness).tamper).toEqual([source.path]);
   });
 
   it("still calls an edit tamper when the editor kept the stamp line, or hand-wrote an asmdef", () => {
     const { root, source, harness } = setUp();
     // The stamp line kept, the assertion weakened under it.
-    writeFileSync(join(root, source.path), source.source.replace("Is.EqualTo(PlaythroughOutcome.Won)", "Is.Not.Null"));
+    writeFileSync(join(root, source.path), source.source.replace(WON, `${NUNIT}.Is.Not.Null`));
     writeFileSync(join(root, ACCEPTANCE_ASMDEF_PATH), JSON.stringify({ name: "Strada.Acceptance", references: [], defineConstraints: ["NEVER_DEFINED"] }));
     const result = restoreAcceptance(root, [source], "committed", harness);
     expect(result.tamper).toEqual([ACCEPTANCE_ASMDEF_PATH, source.path].sort());
@@ -668,6 +753,23 @@ describe("restoreAcceptance", () => {
     expect(result.tamper).toEqual([]);
     expect(result.written).toEqual([ACCEPTANCE_ASMDEF_PATH]);
     expect(JSON.parse(readFileSync(join(root, ACCEPTANCE_ASMDEF_PATH), "utf8")).references).toEqual(["Strada.Core", "UnityEngine.TestRunner", "Game.Combat", "Game.Runtime"]);
+  });
+
+  it("reports what outside the folder could answer for a check as tamper on every restore, and leaves the worker's files where they are", () => {
+    const { root, source, harness } = setUp();
+    // A worker's type in the harness's namespace, and an assembly reference that compiles a worker folder into the checks' assembly.
+    put(root, "Assets/Game/Shadow.cs", "namespace Strada.Acceptance { public static class GameBootstrapper { } }");
+    put(root, "Assets/Game/Into.asmref", JSON.stringify({ reference: "Strada.Acceptance" }));
+    const first = restoreAcceptance(root, [source], "committed", harness);
+    expect(first.tamper).toEqual(["Assets/Game/Into.asmref", "Assets/Game/Shadow.cs"]);
+    expect(first.written).toEqual([]);
+    expect(first.deleted).toEqual([]);
+    expect(existsSync(join(root, "Assets/Game/Shadow.cs"))).toBe(true);
+    // Restore cannot put a worker's file right, so it stays tamper, in either mode, until the worker removes it.
+    expect(restoreAcceptance(root, [source], "ephemeral", harness).tamper).toEqual(["Assets/Game/Into.asmref", "Assets/Game/Shadow.cs"]);
+    rmSync(join(root, "Assets/Game/Shadow.cs"));
+    rmSync(join(root, "Assets/Game/Into.asmref"));
+    expect(restoreAcceptance(root, [source], "committed", harness).tamper).toEqual([]);
   });
 
   it("restores a .meta Unity or a worker changed without calling it tamper", () => {
@@ -773,6 +875,28 @@ describe("scanForeignAcceptanceNamespace", () => {
   });
 });
 
+describe("scanForeignAcceptanceNamespace reads names as the compiler does", () => {
+  it("drops a soft hyphen or a zero-width character inside a name, raw or escaped", () => {
+    const root = project();
+    put(root, "Assets/Scripts/SoftHyphen.cs", "namespace Stra\u00ADda.Acceptance.M1 { public static class Assert { } }");
+    put(root, "Assets/Scripts/EscapedSoftHyphen.cs", "namespace Stra\\u00ADda.Acceptance { public static class GameBootstrapper { } }");
+    put(root, "Assets/Scripts/ZeroWidth.cs", "namespace Strada\u200B.Acc\u200Deptance { public static class Is { } }");
+    // One name, not the acceptance namespace.
+    put(root, "Assets/Scripts/Other.cs", "namespace Strada\u00ADGame { }");
+    expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/EscapedSoftHyphen.cs", "Assets/Scripts/SoftHyphen.cs", "Assets/Scripts/ZeroWidth.cs"]);
+  });
+
+  it("finds a type named var, dynamic, nint or nuint: C# would give it every check's var locals", () => {
+    const root = project();
+    put(root, "Assets/Scripts/Var.cs", "public class var { public static implicit operator var(int n) { return new var(); } }");
+    put(root, "Assets/Scripts/Dyn.cs", "namespace Strada { public struct d\u00ADynamic { } }");
+    put(root, "Assets/Scripts/Native.cs", "namespace Game { public record \\u006Eint(int Value); }");
+    // A member or a type that only starts like one is not a type so named.
+    put(root, "Assets/Scripts/Fine.cs", "namespace Game { public class Variant { int var = 0; } public class Dynamics { } }");
+    expect(scanForeignAcceptanceNamespace(root)).toEqual(["Assets/Scripts/Dyn.cs", "Assets/Scripts/Native.cs", "Assets/Scripts/Var.cs"]);
+  });
+});
+
 // =============================================================================
 // WHAT THE WRITER IS SHOWN
 // =============================================================================
@@ -819,18 +943,17 @@ describe("publicSurfaceDigest", () => {
     put(root, "Assets/Scripts/Loose.cs", "namespace Game { public class AssemblyCSharpMarker { } }");
 
     const digest = publicSurfaceDigest(root, requirementTokens("Jump rules"));
-    expect(digest).toContain("public interface Game.Jump.IJumpRules");
+    expect(digest).toContain("public interface global::Game.Jump.IJumpRules");
     expect(digest).toContain("float CoyoteSeconds { get; }");
     expect(digest).toContain("bool TryJump(int playerId)");
-    expect(digest).toContain("public sealed class Game.Jump.JumpRules : IJumpRules");
+    expect(digest).toContain("public sealed class global::Game.Jump.JumpRules : IJumpRules");
     expect(digest).toContain("public int Jumps { get; }");
-    expect(digest).toContain("public enum Game.Jump.JumpState { Grounded, Airborne }");
-    expect(digest).toContain("public record Game.Jump.JumpEvent(int PlayerId, float Height)");
+    expect(digest).toContain("public enum global::Game.Jump.JumpState { Grounded, Airborne }");
+    expect(digest).toContain("public record global::Game.Jump.JumpEvent(int PlayerId, float Height)");
     expect(digest).toContain("  public static readonly int[] PerLevel\n");
-    expect(digest).toContain("public delegate void Game.Jump.Landed(int playerId, float height)");
+    expect(digest).toContain("public delegate void global::Game.Jump.Landed(int playerId, float height)");
     expect(digest).toContain("  public void PlayLevel(int level)\n  public static string[] Keys()\n  public int[] Defaults { get; }\n");
-    expect(digest).toContain("Strada.Core.Play");
-    expect(digest).toContain("PlaythroughOutcome");
+    expect(digest).toContain("public enum global::Strada.Core.Play.PlaythroughOutcome");
     for (const absent of ["SECRET_BODY", "_secret", "Hidden", "WorkerTestMarker", "EditorMarker", "AssemblyCSharpMarker", "0.3f"]) {
       expect(digest, absent).not.toContain(absent);
     }

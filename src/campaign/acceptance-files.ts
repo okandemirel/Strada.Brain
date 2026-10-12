@@ -14,8 +14,13 @@
  *   cannot fail (Assert.Pass, catch, #if, an assertion on reflection or on
  *   literals: the shape of 18d4t's P1 guardrail) before a single run;
  * - the harness the bodies call, which knows no game — `ACCEPTANCE_FIXTURE_SOURCE`;
+ * - what every name in a check means: the system's code and the writer's
+ *   spell each type from the root (global::) and import none, so neither a
+ *   type a worker declares nor a game namespace named like a framework type
+ *   (Grid, Input, Is) can answer one — `unrootedNames`;
  * - the bytes on disk: restored from the stored copy before every commit and
- *   every measurement, foreign files deleted, differences reported as tamper.
+ *   every measurement, foreign files deleted, differences reported as tamper,
+ *   and what outside the folder could answer for a check reported with them.
  *
  * No LLM call and no clock live here. The writer (W06), the run (W08) and the
  * settle path (W09) build on these.
@@ -345,7 +350,7 @@ function matchingClose(code: string, open: number): number {
   return -1;
 }
 
-/** Where a `<` that opens a type-argument list (`Service<Game.IScore>()`) closes, or -1 for a less-than. */
+/** Where a `<` that opens a type-argument list (`Service<global::Game.IScore>()`) closes, or -1 for a less-than. */
 function typeArgumentsEnd(code: string, open: number): number {
   let depth = 0;
   for (let i = open; i < code.length; i++) {
@@ -357,7 +362,8 @@ function typeArgumentsEnd(code: string, open: number): number {
         const after = code.slice(i + 1).trimStart()[0];
         return after === undefined || "().,];?>".includes(after) ? i : -1;
       }
-    } else if (!/[\w\s.,[\]?]/.test(c)) return -1;
+    } else if (c === ":" && code[i + 1] === ":") i++;
+    else if (!/[\w\s.,[\]?]/.test(c)) return -1;
   }
   return -1;
 }
@@ -409,7 +415,8 @@ function splitTopLevel(code: string, on: "commas" | "operators"): string[] {
       continue;
     }
     const two = code.slice(i, i + 2);
-    if (two === "=>" || two === "?." || two === "?[") {
+    // `global::Game.X` is one name, not a conditional's colon.
+    if (two === "=>" || two === "?." || two === "?[" || two === "::") {
       i += 2;
       continue;
     }
@@ -434,6 +441,210 @@ function splitTopLevel(code: string, on: "commas" | "operators"): string[] {
   }
   parts.push(code.slice(start));
   return parts;
+}
+
+// =============================================================================
+// NAMES THE COMPILER LOOKS UP
+// =============================================================================
+
+/** C#'s reserved words: nothing can be declared under one, so a bare one means what C# says. */
+const CS_KEYWORDS = new Set(
+  (
+    "abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event " +
+    "explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null " +
+    "object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string " +
+    "struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual void volatile while"
+  ).split(" "),
+);
+/** Reserved words that name a type: one before a name declares it. */
+const CS_TYPE_KEYWORDS = new Set("bool byte sbyte char decimal double float int uint long ulong short ushort object string void".split(" "));
+/** Contextual words that are syntax where they stand (`yield return`, `where T :`, query clauses, accessors, patterns). */
+const CS_CONTEXTUAL = new Set(
+  "add and ascending async await by descending equals from get global group init into join let nameof not notnull on or orderby partial record remove select set unmanaged when where with yield".split(" "),
+);
+/** Contextual names C# binds to a type in scope before its own meaning: a `class var` would type every `var` local. */
+const CS_TYPE_LIKE_CONTEXTUAL = new Set(["var", "dynamic", "nint", "nuint"]);
+/** What the compiler ignores inside an identifier: a soft hyphen or a zero-width joiner does not make `Strada` another name. */
+const FORMATTING_CHARS = /\p{Cf}/gu;
+const CS_TOKEN_RE = /@?[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*|\d[\p{L}\p{Nd}_]*(?:\.\d[\p{L}\p{Nd}_]*)?|::|\?\.|=>|==|!=|<=|>=|&&|\|\||\?\?=?|->|\+\+|--|[-+*/%&|^]=|\S/gu;
+
+interface CSharpToken {
+  readonly text: string;
+  /** An identifier (`@` dropped); a verbatim one (`@class`) is never a keyword. */
+  readonly id: boolean;
+  readonly verbatim: boolean;
+  /** Whitespace before it: `int?` is a nullable type, `a ? b : c` a conditional. */
+  readonly spaced: boolean;
+}
+
+/** Code (comments, literal text and directives already blanked) as C# reads its tokens: escapes decoded, formatting characters dropped. */
+function csTokens(code: string): CSharpToken[] {
+  const decoded = code
+    .replace(/\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})/g, (escape, four?: string, eight?: string) => {
+      const cp = parseInt(four ?? eight ?? "", 16);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : escape;
+    })
+    .replace(FORMATTING_CHARS, "");
+  const tokens: CSharpToken[] = [];
+  let last = 0;
+  for (const match of decoded.matchAll(CS_TOKEN_RE)) {
+    const raw = match[0];
+    const id = /^@?[\p{L}\p{Nl}_]/u.test(raw);
+    tokens.push({ text: id ? raw.replace(/^@/, "") : raw, id, verbatim: raw.startsWith("@") && id, spaced: match.index > last });
+    last = match.index + raw.length;
+  }
+  return tokens;
+}
+
+const isKeyword = (t: CSharpToken | undefined): boolean => t !== undefined && t.id && !t.verbatim && CS_KEYWORDS.has(t.text);
+const isContextual = (t: CSharpToken | undefined): boolean => t !== undefined && t.id && !t.verbatim && CS_CONTEXTUAL.has(t.text);
+/** Ends a declared name: `T name =`, `T name;`, `(T name)`, `foreach (T name in`, `out T name`, `is T name &&`, `T Method(`. */
+const DECLARATION_ENDS = new Set(["=", ";", ",", ")", "in", ":", "&&", "||", "when", "{", "(", "=>", "<", "?"]);
+
+/** Whether the token before a name is a type, so the name is being declared. */
+function typeBefore(tokens: readonly CSharpToken[], i: number): boolean {
+  const prev = tokens[i - 1];
+  if (!prev) return false;
+  if (prev.id) return prev.verbatim || CS_TYPE_KEYWORDS.has(prev.text) || CS_TYPE_LIKE_CONTEXTUAL.has(prev.text) || (!CS_KEYWORDS.has(prev.text) && !CS_CONTEXTUAL.has(prev.text));
+  if (prev.text === ">" || prev.text === "]") return true;
+  // `int? name`, not the `?` of a conditional.
+  return prev.text === "?" && !prev.spaced && (tokens[i - 2]?.id === true || tokens[i - 2]?.text === ">" || tokens[i - 2]?.text === "]");
+}
+
+/** The index of the bracket token closing the one at `open` (forward), or -1. */
+function closingToken(tokens: readonly CSharpToken[], open: number): number {
+  const pairs: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+  const stack: string[] = [];
+  for (let i = open; i < tokens.length; i++) {
+    const t = tokens[i]!.text;
+    if (pairs[t]) stack.push(pairs[t]!);
+    else if (t === ")" || t === "]" || t === "}") {
+      if (stack.pop() !== t) return -1;
+      if (stack.length === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** The index of the `(` that opens the group a `)` closes (backward), or -1. */
+function openingToken(tokens: readonly CSharpToken[], close: number): number {
+  let depth = 0;
+  for (let i = close; i >= 0; i--) {
+    const t = tokens[i]!.text;
+    if (t === ")") depth++;
+    else if (t === "(" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Where a `<` that opens type arguments closes (`Service<global::Game.IScore>`), or -1 for a less-than. */
+function typeArgumentsClose(tokens: readonly CSharpToken[], open: number): number {
+  let depth = 0;
+  for (let i = open; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t.text === "<") depth++;
+    else if (t.text === ">") {
+      if (--depth === 0) return i;
+    } else if (!t.id && ![".", "::", ",", "?", "[", "]"].includes(t.text)) return -1;
+  }
+  return -1;
+}
+
+/** Locals, parameters, members and types the code itself declares: found before any namespace, so never a worker's. */
+function declaredNames(tokens: readonly CSharpToken[]): Set<string> {
+  const declared = new Set<string>();
+  const switchBraces = new Set<number>();
+  const open: number[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    const next = tokens[i + 1];
+    if (t.text === "{") {
+      if (tokens[i - 1]?.text === "switch") switchBraces.add(i);
+      open.push(i);
+    } else if (t.text === "}") open.pop();
+    if (!t.id || isKeyword(t)) {
+      if (t.text === "=>" && tokens[i - 1]?.text === ")" && !switchBraces.has(open[open.length - 1] ?? -1)) {
+        // `(a, b) =>` and `(int a, Game.X b) =>`: the last name of each parameter.
+        const from = openingToken(tokens, i - 1);
+        for (let k = from + 1; k < i - 1; k++) {
+          const after = tokens[k + 1]?.text;
+          if (tokens[k]!.id && (after === "," || after === ")")) declared.add(tokens[k]!.text);
+        }
+      }
+      continue;
+    }
+    const prev = tokens[i - 1];
+    if (prev && !prev.verbatim && ["class", "struct", "interface", "enum", "record", "delegate", "from", "join", "let", "into"].includes(prev.text)) declared.add(t.text);
+    else if (prev?.text === "where" && next?.text === ":") declared.add(t.text);
+    else if (next?.text === "=>" && !switchBraces.has(open[open.length - 1] ?? -1) && (!prev || ["(", ",", "=", "return", "?", ":", "??", "&&", "||", "static", "async"].includes(prev.text))) declared.add(t.text);
+    else if (next && DECLARATION_ENDS.has(next.text) && typeBefore(tokens, i)) declared.add(t.text);
+    if (declared.has(t.text) && next?.text === "<") {
+      // A generic method's or type's own type parameters.
+      const close = typeArgumentsClose(tokens, i + 1);
+      for (let k = i + 2; k < close; k++) if (tokens[k]!.id) declared.add(tokens[k]!.text);
+    }
+    if (t.text === "var" && next?.text === "(") {
+      // `var (a, b) = …`
+      const close = closingToken(tokens, i + 1);
+      for (let k = i + 2; k < close; k++) if (tokens[k]!.id && [",", ")"].includes(tokens[k + 1]?.text ?? "")) declared.add(tokens[k]!.text);
+    }
+    if (prev?.text === "enum" && next?.text === "{") {
+      const close = closingToken(tokens, i + 1);
+      for (let k = i + 2; k < close; k++) if (tokens[k]!.id && [",", "}", "="].includes(tokens[k + 1]?.text ?? "")) declared.add(tokens[k]!.text);
+    }
+  }
+  return declared;
+}
+
+export interface UnrootedNamesOptions {
+  /** Names in scope from elsewhere: the harness's members, for code inside a fixture that derives from it. */
+  readonly allowed?: Iterable<string>;
+  /** `var` and its kin as types; a worker's type so named is reported by `scanForeignAcceptanceNamespace`. */
+  readonly varAllowed?: boolean;
+  /** Names a bare call (`Name(…)`) may use and nothing else may: methods every class inherits, a using static's methods. */
+  readonly calls?: Iterable<string>;
+}
+
+/** What a check may call bare besides its own functions and the harness's: object's methods and Enumerable's statics. */
+const INHERITED_CALLS = ["ToString", "Equals", "GetHashCode", "ReferenceEquals", "Range", "Repeat", "Empty"];
+
+/**
+ * Every name C# would look up by searching namespaces: a bare type or
+ * namespace that is not spelled from the root (`global::`), not a keyword, and
+ * not something the code or the harness declares. C# searches the enclosing
+ * namespaces (`Strada.Acceptance`, `Strada`, the global one) and every using's
+ * namespace for such a name, so a type a worker declares there — or a game
+ * namespace sharing the name — would answer it. The checks' code must name
+ * none.
+ */
+export function unrootedNames(source: string, opts: UnrootedNamesOptions = {}): string[] {
+  const tokens = csTokens(withoutDirectives(scanCSharp(source).code));
+  const declared = declaredNames(tokens);
+  // A discard (`out _`) names nothing.
+  declared.add("_");
+  for (const name of opts.allowed ?? []) declared.add(name);
+  const calls = new Set(opts.calls ?? []);
+  const found = new Set<string>();
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (!t.id || isKeyword(t)) continue;
+    const prev = tokens[i - 1];
+    const next = tokens[i + 1];
+    if (prev && [".", "?.", "::", "->"].includes(prev.text)) continue;
+    if (prev?.text === "namespace" && !prev.verbatim) continue;
+    if (t.text === "global" && next?.text === "::") continue;
+    if (isContextual(t) && next?.text !== "." && next?.text !== "::") continue;
+    if (!t.verbatim && CS_TYPE_LIKE_CONTEXTUAL.has(t.text) && opts.varAllowed && (next?.id || next?.text === "(")) continue;
+    // Assigned (`x = …`, an initializer's `Member = …`) or labelled (`name: …`): a value or a member, never a type.
+    if (next?.text === "=") continue;
+    if (next?.text === ":" && prev && ["(", ",", "{"].includes(prev.text)) continue;
+    if (declared.has(t.text)) continue;
+    // A call, not a type in call shape: `new Point(…)`, a positional pattern `is Point(…)`.
+    const call = next?.text === "(" || (next?.text === "<" && tokens[typeArgumentsClose(tokens, i + 1) + 1]?.text === "(");
+    if (call && calls.has(t.text) && !["new", "stackalloc", "is", "case", "not", "and", "or"].includes(prev?.text ?? "")) continue;
+    found.add(t.text);
+  }
+  return [...found].sort();
 }
 
 // =============================================================================
@@ -466,6 +677,32 @@ export function checkBodySha(check: AcceptanceCheckBody): string {
  */
 const NUNIT = "global::NUnit.Framework";
 
+/**
+ * What a check may name bare besides its own locals: the harness's protected
+ * members. C# finds a member of the fixture's base class before it searches
+ * any namespace, so no type a worker declares can stand in for one.
+ */
+export const ACCEPTANCE_HARNESS_MEMBERS: readonly string[] = [
+  "Boot",
+  "Frames",
+  "Seconds",
+  "Until",
+  "Driver",
+  "PlaythroughView",
+  "StartSessionForSetup",
+  "Service",
+  "AnyAudioPlaying",
+  "ActiveScreens",
+  "InputInjectable",
+  "TapViewport",
+  "TapScreen",
+  "TapObject",
+  "Drag",
+  "Press",
+  "BootSeconds",
+  "SessionStartSeconds",
+];
+
 /** The NUnit constraint for a row's bounds; the numbers come from the GDD, never from a model. */
 function boundsConstraint(bounds: RequirementBounds): string {
   if (bounds.kind === "exact") return `${NUNIT}.Is.EqualTo(${csDouble(bounds.value)}).Within(${csDouble(Math.abs(bounds.tolerance))})`;
@@ -494,20 +731,12 @@ export interface RenderedAcceptanceFile {
 }
 
 /**
- * What the writer's statements may name unqualified. They are emitted inside
- * the milestone's namespace and from the root, so they are searched before
- * `Strada` and the global namespace, and a worker's `Strada.NUnit` cannot
- * stand in for `NUnit`.
+ * The file's one using. It brings in no type name — a namespace import would
+ * put `Grid`, `Input` or `Is` ahead of a game namespace so named and stop the
+ * shared assembly compiling — only LINQ's extension methods, which then bind
+ * inside the milestone's namespace before any a worker declares outside it.
  */
-const FILE_USINGS = [
-  "System.Collections",
-  "System.Collections.Generic",
-  "System.Linq",
-  "NUnit.Framework",
-  "UnityEngine",
-  "UnityEngine.TestTools",
-  "Strada.Core.Play",
-];
+const FILE_USING = "using static global::System.Linq.Enumerable;";
 
 /**
  * One milestone's acceptance file. Tests are in GDD order; each boots the
@@ -517,11 +746,7 @@ const FILE_USINGS = [
  * (throws): a numeric row with no observation, a check for another row, a
  * row twice.
  */
-export function renderAcceptanceFile(
-  milestoneId: string,
-  tests: readonly AcceptanceTestInput[],
-  opts: { readonly usings?: readonly string[] } = {},
-): RenderedAcceptanceFile {
+export function renderAcceptanceFile(milestoneId: string, tests: readonly AcceptanceTestInput[]): RenderedAcceptanceFile {
   const ident = acceptanceIdent(milestoneId);
   const className = `Acceptance_${ident}`;
   const namespace = `${ACCEPTANCE_TEST_NAMESPACE}.${ident}`;
@@ -536,12 +761,6 @@ export function renderAcceptanceFile(
   const ordered = [...tests].sort((a, b) => a.row.span.start - b.row.span.start || (a.row.rid < b.row.rid ? -1 : a.row.rid > b.row.rid ? 1 : 0));
   const narrow = ordered.map((t) => testMethodName(t.row.rid, false));
   const methods = ordered.map((t, i) => (narrow.filter((n) => n === narrow[i]).length > 1 ? testMethodName(t.row.rid, true) : narrow[i]!));
-
-  const usings = [...FILE_USINGS];
-  for (const extra of opts.usings ?? []) {
-    if (!/^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$/.test(extra)) throw new Error(`not a namespace: ${JSON.stringify(extra)}`);
-    if (!usings.includes(extra)) usings.push(extra);
-  }
 
   const inner = "            ";
   const body: string[] = [];
@@ -561,7 +780,8 @@ export function renderAcceptanceFile(
       const last = observe[observe.length - 1] ?? "";
       const lastCode = scanCSharp(observe.join("\n")).code.split("\n").pop() ?? "";
       const close = lastCode.trimEnd().length < last.trimEnd().length ? `\n${inner});` : ");";
-      body.push(`${inner}var observed = (double)(${observe.join(`\n${inner}    `)}${close}`);
+      // `double`, not `var`: a worker's `class var` in Strada or the global namespace would type a `var` local.
+      body.push(`${inner}double observed = (double)(${observe.join(`\n${inner}    `)}${close}`);
       body.push(`${inner}${NUNIT}.Assert.That(observed, ${boundsConstraint(row.bounds!)}, ${csString(`${row.rid}: ${row.text}`)});`);
     } else {
       if (check.act?.trim()) body.push(...indentPart(check.act, inner));
@@ -575,10 +795,11 @@ export function renderAcceptanceFile(
       `// Strada acceptance checks for milestone ${commentSafe(JSON.stringify(milestoneId).replace(CS_LINE_BREAKS, " "))}.`,
       "// System-owned: Strada.Brain writes this file from the approved GDD and restores the",
       "// stored bytes before every commit and measurement. Edits are reverted and reported.",
+      "// Every type is spelled from the root (global::); the file imports only LINQ's extension methods.",
       "",
       `namespace ${namespace}`,
       "{",
-      ...usings.map((u) => `    using global::${u};`),
+      `    ${FILE_USING}`,
       "",
       `    [${NUNIT}.TestFixture, ${NUNIT}.Category(${csString(ACCEPTANCE_TEST_CATEGORY)})]`,
       `    public sealed class ${className} : global::${ACCEPTANCE_TEST_NAMESPACE}.AcceptanceFixture`,
@@ -634,48 +855,33 @@ export const ACCEPTANCE_FIXTURE_SOURCE = stampCSharp(`// Strada acceptance harne
 // commit and measurement. Edits are reverted and reported.
 // It knows no game: it boots build scene 0, reads the game through Strada.Core's contracts,
 // and injects input the way a player's device does.
-// Usings sit inside the namespace and start at the root: a type a game declares in Strada or
-// the global namespace is then never found before the framework's.
+// It imports nothing and spells every type from the root (global::): C# looks a bare name up
+// in Strada.Acceptance, Strada and the global namespace first, and code outside this folder
+// can declare a type in any of them.
 
 namespace ${ACCEPTANCE_TEST_NAMESPACE}
 {
-    using global::System;
-    using global::System.Collections;
-    using global::System.Collections.Generic;
-    using global::NUnit.Framework;
-    using global::Strada.Core.Bootstrap;
-    using global::Strada.Core.Play;
-    using global::UnityEngine;
-    using global::UnityEngine.SceneManagement;
-#if STRADA_ACCEPTANCE_UGUI
-    using global::UnityEngine.EventSystems;
-#endif
-#if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-    using global::UnityEngine.InputSystem;
-    using global::UnityEngine.InputSystem.LowLevel;
-#endif
-
     public abstract class AcceptanceFixture
     {
         protected const float BootSeconds = 30f;
         protected const float SessionStartSeconds = 10f;
 
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-        private InputSettings _runInputSettings;
-        private InputSettings _projectInputSettingsAsset;
-        private InputSettings.EditorInputBehaviorInPlayMode _savedEditorBehavior;
-        private InputSettings.BackgroundBehavior _savedBackgroundBehavior;
+        private global::UnityEngine.InputSystem.InputSettings _runInputSettings;
+        private global::UnityEngine.InputSystem.InputSettings _projectInputSettingsAsset;
+        private global::UnityEngine.InputSystem.InputSettings.EditorInputBehaviorInPlayMode _savedEditorBehavior;
+        private global::UnityEngine.InputSystem.InputSettings.BackgroundBehavior _savedBackgroundBehavior;
 #endif
 
         /// <summary>Puts back what Boot() changed for the run; the project's own settings asset is never edited.</summary>
-        [TearDown]
+        [global::NUnit.Framework.TearDown]
         public void RestoreHarnessState()
         {
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
             if (_projectInputSettingsAsset != null)
             {
                 // The Input System destroys the run's HideAndDontSave copy as it takes the asset back.
-                InputSystem.settings = _projectInputSettingsAsset;
+                global::UnityEngine.InputSystem.InputSystem.settings = _projectInputSettingsAsset;
             }
             else if (_runInputSettings != null)
             {
@@ -690,15 +896,15 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         // ------------------------------------------------------------------ time
 
         /// <summary>Loads build scene 0 and waits until GameBootstrapper.Services is published.</summary>
-        protected IEnumerator Boot()
+        protected global::System.Collections.IEnumerator Boot()
         {
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
             // A test run has no focused Game View, and the Input System hands pointer and keyboard
             // events to whatever has focus: without this, every injected tap is dropped (measured).
             if (_runInputSettings == null)
             {
-                var current = InputSystem.settings;
-                if (current.hideFlags == HideFlags.HideAndDontSave)
+                global::UnityEngine.InputSystem.InputSettings current = global::UnityEngine.InputSystem.InputSystem.settings;
+                if (current.hideFlags == global::UnityEngine.HideFlags.HideAndDontSave)
                 {
                     // The Input System's own temporary (no settings asset): no file behind it to edit.
                     _runInputSettings = current;
@@ -709,51 +915,51 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
                 {
                     _projectInputSettingsAsset = current;
                     _runInputSettings = global::UnityEngine.Object.Instantiate(current);
-                    _runInputSettings.hideFlags = HideFlags.HideAndDontSave;
-                    InputSystem.settings = _runInputSettings;
+                    _runInputSettings.hideFlags = global::UnityEngine.HideFlags.HideAndDontSave;
+                    global::UnityEngine.InputSystem.InputSystem.settings = _runInputSettings;
                 }
-                _runInputSettings.editorInputBehaviorInPlayMode = InputSettings.EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView;
-                _runInputSettings.backgroundBehavior = InputSettings.BackgroundBehavior.IgnoreFocus;
+                _runInputSettings.editorInputBehaviorInPlayMode = global::UnityEngine.InputSystem.InputSettings.EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView;
+                _runInputSettings.backgroundBehavior = global::UnityEngine.InputSystem.InputSettings.BackgroundBehavior.IgnoreFocus;
             }
 #endif
-            if (SceneManager.sceneCountInBuildSettings < 1)
+            if (global::UnityEngine.SceneManagement.SceneManager.sceneCountInBuildSettings < 1)
                 HarnessFault("no-scene", "the build settings list no scene, so there is no entry scene to boot");
-            var load = SceneManager.LoadSceneAsync(0, LoadSceneMode.Single);
+            global::UnityEngine.AsyncOperation load = global::UnityEngine.SceneManagement.SceneManager.LoadSceneAsync(0, global::UnityEngine.SceneManagement.LoadSceneMode.Single);
             if (load == null)
                 HarnessFault("no-scene", "build scene 0 could not be loaded");
             // Bounded, so a scene that never loads is the harness's fault, not the test's timeout.
-            var deadline = Time.realtimeSinceStartup + BootSeconds;
-            while (!load.isDone && Time.realtimeSinceStartup < deadline)
+            float deadline = global::UnityEngine.Time.realtimeSinceStartup + BootSeconds;
+            while (!load.isDone && global::UnityEngine.Time.realtimeSinceStartup < deadline)
                 yield return null;
             if (!load.isDone)
                 HarnessFault("no-scene", "build scene 0 did not finish loading in " + BootSeconds + " s");
-            deadline = Time.realtimeSinceStartup + BootSeconds;
-            while (GameBootstrapper.Services == null && Time.realtimeSinceStartup < deadline)
+            deadline = global::UnityEngine.Time.realtimeSinceStartup + BootSeconds;
+            while (global::Strada.Core.Bootstrap.GameBootstrapper.Services == null && global::UnityEngine.Time.realtimeSinceStartup < deadline)
                 yield return null;
-            if (GameBootstrapper.Services == null)
+            if (global::Strada.Core.Bootstrap.GameBootstrapper.Services == null)
                 HarnessFault("no-boot", "GameBootstrapper.Services stayed null for " + BootSeconds + " s after build scene 0 loaded");
             yield return null;
         }
 
-        protected IEnumerator Frames(int count)
+        protected global::System.Collections.IEnumerator Frames(int count)
         {
-            for (var i = 0; i < count; i++)
+            for (int i = 0; i < count; i++)
                 yield return null;
         }
 
         /// <summary>Real time: a paused game (timeScale 0) cannot stall the wait.</summary>
-        protected IEnumerator Seconds(float seconds)
+        protected global::System.Collections.IEnumerator Seconds(float seconds)
         {
-            var end = Time.realtimeSinceStartup + seconds;
-            while (Time.realtimeSinceStartup < end)
+            float end = global::UnityEngine.Time.realtimeSinceStartup + seconds;
+            while (global::UnityEngine.Time.realtimeSinceStartup < end)
                 yield return null;
         }
 
         /// <summary>Waits until the condition holds or the time runs out; it never fails by itself.</summary>
-        protected IEnumerator Until(Func<bool> condition, float timeoutSeconds = 10f)
+        protected global::System.Collections.IEnumerator Until(global::System.Func<bool> condition, float timeoutSeconds = 10f)
         {
-            var end = Time.realtimeSinceStartup + timeoutSeconds;
-            while (!condition() && Time.realtimeSinceStartup < end)
+            float end = global::UnityEngine.Time.realtimeSinceStartup + timeoutSeconds;
+            while (!condition() && global::UnityEngine.Time.realtimeSinceStartup < end)
                 yield return null;
         }
 
@@ -762,33 +968,32 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         /// <summary>The game's play-through driver, read-only: what it reports, never what it does.</summary>
         protected sealed class PlaythroughView
         {
-            private readonly IPlaythroughDriver _driver;
-            internal PlaythroughView(IPlaythroughDriver driver) { _driver = driver; }
+            private readonly global::Strada.Core.Play.IPlaythroughDriver _driver;
+            internal PlaythroughView(global::Strada.Core.Play.IPlaythroughDriver driver) { _driver = driver; }
             public string Phase { get { return _driver.Phase; } }
-            public PlaythroughOutcome Outcome { get { return _driver.Outcome; } }
+            public global::Strada.Core.Play.PlaythroughOutcome Outcome { get { return _driver.Outcome; } }
             public bool IsSessionActive { get { return _driver.IsSessionActive; } }
         }
 
         protected PlaythroughView Driver { get { return new PlaythroughView(ResolveDriver()); } }
 
         /// <summary>Starts a session for a check whose subject is not how play starts.</summary>
-        protected IEnumerator StartSessionForSetup(int index)
+        protected global::System.Collections.IEnumerator StartSessionForSetup(int index)
         {
-            var driver = ResolveDriver();
+            global::Strada.Core.Play.IPlaythroughDriver driver = ResolveDriver();
             global::NUnit.Framework.Assert.That(driver.StartSession(index), global::NUnit.Framework.Is.True, "the game refused StartSession(" + index + ")");
-            var end = Time.realtimeSinceStartup + SessionStartSeconds;
-            while (!driver.IsSessionActive && Time.realtimeSinceStartup < end)
+            float end = global::UnityEngine.Time.realtimeSinceStartup + SessionStartSeconds;
+            while (!driver.IsSessionActive && global::UnityEngine.Time.realtimeSinceStartup < end)
                 yield return null;
             global::NUnit.Framework.Assert.That(driver.IsSessionActive, global::NUnit.Framework.Is.True, "no session was active " + SessionStartSeconds + " s after StartSession(" + index + ")");
         }
 
         protected T Service<T>() where T : class
         {
-            var services = GameBootstrapper.Services;
-            if (services == null)
+            if (global::Strada.Core.Bootstrap.GameBootstrapper.Services == null)
                 HarnessFault("no-boot", "GameBootstrapper.Services is null: the game is not booted");
             T service;
-            if (!services.TryGet(out service) || service == null)
+            if (!global::Strada.Core.Bootstrap.GameBootstrapper.Services.TryGet(out service) || service == null)
                 HarnessFault("no-service", "the game registers no " + typeof(T).FullName);
             return service;
         }
@@ -796,7 +1001,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         protected bool AnyAudioPlaying()
         {
 #if STRADA_ACCEPTANCE_AUDIO
-            foreach (var source in global::UnityEngine.Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None))
+            foreach (global::UnityEngine.AudioSource source in global::UnityEngine.Object.FindObjectsByType<global::UnityEngine.AudioSource>(global::UnityEngine.FindObjectsSortMode.None))
                 if (source != null && source.isPlaying)
                     return true;
 #endif
@@ -804,30 +1009,30 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         }
 
         /// <summary>Active root canvases, their active children, and active UI documents, by name.</summary>
-        protected IReadOnlyList<string> ActiveScreens()
+        protected global::System.Collections.Generic.IReadOnlyList<string> ActiveScreens()
         {
-            var names = new List<string>();
+            global::System.Collections.Generic.List<string> names = new global::System.Collections.Generic.List<string>();
 #if STRADA_ACCEPTANCE_UI_MODULE
-            foreach (var canvas in global::UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+            foreach (global::UnityEngine.Canvas canvas in global::UnityEngine.Object.FindObjectsByType<global::UnityEngine.Canvas>(global::UnityEngine.FindObjectsSortMode.None))
             {
                 if (canvas == null || !canvas.isActiveAndEnabled || !canvas.isRootCanvas)
                     continue;
                 names.Add(canvas.gameObject.name);
-                var root = canvas.transform;
-                for (var i = 0; i < root.childCount; i++)
+                global::UnityEngine.Transform root = canvas.transform;
+                for (int i = 0; i < root.childCount; i++)
                 {
-                    var child = root.GetChild(i).gameObject;
+                    global::UnityEngine.GameObject child = root.GetChild(i).gameObject;
                     if (child.activeInHierarchy)
                         names.Add(child.name);
                 }
             }
 #endif
 #if STRADA_ACCEPTANCE_UIELEMENTS
-            foreach (var document in global::UnityEngine.Object.FindObjectsByType<global::UnityEngine.UIElements.UIDocument>(FindObjectsSortMode.None))
+            foreach (global::UnityEngine.UIElements.UIDocument document in global::UnityEngine.Object.FindObjectsByType<global::UnityEngine.UIElements.UIDocument>(global::UnityEngine.FindObjectsSortMode.None))
                 if (document != null && document.isActiveAndEnabled)
                     names.Add(document.gameObject.name);
 #endif
-            names.Sort(StringComparer.Ordinal);
+            names.Sort(global::System.StringComparer.Ordinal);
             return names;
         }
 
@@ -836,109 +1041,109 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         /// <summary>"input-system" (device events), "event-system" (EventSystem pointer events) or "none".</summary>
         protected string InputInjectable { get { return CurrentRoute(); } }
 
-        protected IEnumerator TapViewport(float x, float y)
+        protected global::System.Collections.IEnumerator TapViewport(float x, float y)
         {
-            return TapScreen(new Vector2(x * Screen.width, y * Screen.height));
+            return TapScreen(new global::UnityEngine.Vector2(x * global::UnityEngine.Screen.width, y * global::UnityEngine.Screen.height));
         }
 
-        protected IEnumerator TapScreen(Vector2 position)
+        protected global::System.Collections.IEnumerator TapScreen(global::UnityEngine.Vector2 position)
         {
             RequireInputRoute("TapScreen");
             DeviceHover(position);
             yield return null;
-            DevicePointer(position, Vector2.zero, true, PointerStage.Begin);
-            var ui = UiBegin(position);
+            DevicePointer(position, global::UnityEngine.Vector2.zero, true, PointerStage.Begin);
+            object ui = UiBegin(position);
             yield return null;
-            DevicePointer(position, Vector2.zero, false, PointerStage.End);
+            DevicePointer(position, global::UnityEngine.Vector2.zero, false, PointerStage.End);
             UiEnd(ui, position);
             yield return null;
             yield return null;
         }
 
-        protected IEnumerator TapObject(string name)
+        protected global::System.Collections.IEnumerator TapObject(string name)
         {
-            var target = GameObject.Find(name);
+            global::UnityEngine.GameObject target = global::UnityEngine.GameObject.Find(name);
             if (target == null)
                 global::NUnit.Framework.Assert.Fail("TapObject: no active GameObject is named '" + name + "'");
             return TapObject(target);
         }
 
-        protected IEnumerator TapObject(Component target)
+        protected global::System.Collections.IEnumerator TapObject(global::UnityEngine.Component target)
         {
             if (target == null)
                 global::NUnit.Framework.Assert.Fail("TapObject: the target is null or destroyed");
             return TapObject(target.gameObject);
         }
 
-        protected IEnumerator TapObject(GameObject target)
+        protected global::System.Collections.IEnumerator TapObject(global::UnityEngine.GameObject target)
         {
             if (target == null)
                 global::NUnit.Framework.Assert.Fail("TapObject: the target is null or destroyed");
             if (!target.activeInHierarchy)
                 global::NUnit.Framework.Assert.Fail("TapObject: " + target.name + " is not active");
-            Vector2 point;
+            global::UnityEngine.Vector2 point;
             string why;
             if (!ScreenPointOf(target, out point, out why))
                 global::NUnit.Framework.Assert.Fail("TapObject: " + target.name + " " + why);
             return TapScreen(point);
         }
 
-        protected IEnumerator Drag(Vector2 from, Vector2 to, float seconds = 0.25f)
+        protected global::System.Collections.IEnumerator Drag(global::UnityEngine.Vector2 from, global::UnityEngine.Vector2 to, float seconds = 0.25f)
         {
             RequireInputRoute("Drag");
             DeviceHover(from);
             yield return null;
-            DevicePointer(from, Vector2.zero, true, PointerStage.Begin);
-            var ui = UiBegin(from);
+            DevicePointer(from, global::UnityEngine.Vector2.zero, true, PointerStage.Begin);
+            object ui = UiBegin(from);
             yield return null;
-            var steps = Mathf.Max(2, Mathf.CeilToInt(seconds * 30f));
-            var start = Time.realtimeSinceStartup;
-            var last = from;
-            for (var i = 1; i <= steps; i++)
+            int steps = global::UnityEngine.Mathf.Max(2, global::UnityEngine.Mathf.CeilToInt(seconds * 30f));
+            float start = global::UnityEngine.Time.realtimeSinceStartup;
+            global::UnityEngine.Vector2 last = from;
+            for (int i = 1; i <= steps; i++)
             {
-                var point = Vector2.Lerp(from, to, (float)i / steps);
+                global::UnityEngine.Vector2 point = global::UnityEngine.Vector2.Lerp(from, to, (float)i / steps);
                 DevicePointer(point, point - last, true, PointerStage.Move);
                 UiMove(ui, point);
                 last = point;
-                var stepEnd = start + seconds * i / steps;
+                float stepEnd = start + seconds * i / steps;
                 do
                     yield return null;
-                while (Time.realtimeSinceStartup < stepEnd);
+                while (global::UnityEngine.Time.realtimeSinceStartup < stepEnd);
             }
-            DevicePointer(to, Vector2.zero, false, PointerStage.End);
+            DevicePointer(to, global::UnityEngine.Vector2.zero, false, PointerStage.End);
             UiEnd(ui, to);
             yield return null;
             yield return null;
         }
 
         /// <summary>Presses and releases a keyboard key, by UnityEngine.InputSystem.Key name.</summary>
-        protected IEnumerator Press(string key)
+        protected global::System.Collections.IEnumerator Press(string key)
         {
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-            Key parsed;
-            if (!Enum.TryParse(key, true, out parsed) || parsed == Key.None)
+            global::UnityEngine.InputSystem.Key parsed;
+            if (!global::System.Enum.TryParse(key, true, out parsed) || parsed == global::UnityEngine.InputSystem.Key.None)
                 HarnessFault("no-input-route", "Press('" + key + "'): not a UnityEngine.InputSystem.Key name");
-            var keyboard = Enabled(Keyboard.current != null ? Keyboard.current : InputSystem.AddDevice<Keyboard>());
-            InputSystem.QueueStateEvent(keyboard, new KeyboardState(parsed));
+            global::UnityEngine.InputSystem.Keyboard keyboard = Enabled(global::UnityEngine.InputSystem.Keyboard.current != null ? global::UnityEngine.InputSystem.Keyboard.current : global::UnityEngine.InputSystem.InputSystem.AddDevice<global::UnityEngine.InputSystem.Keyboard>());
+            global::UnityEngine.InputSystem.InputSystem.QueueStateEvent(keyboard, new global::UnityEngine.InputSystem.LowLevel.KeyboardState(parsed));
             yield return null;
-            InputSystem.QueueStateEvent(keyboard, new KeyboardState());
+            global::UnityEngine.InputSystem.InputSystem.QueueStateEvent(keyboard, new global::UnityEngine.InputSystem.LowLevel.KeyboardState());
             yield return null;
             yield return null;
 #elif STRADA_ACCEPTANCE_UGUI
-            var events = EventSystem.current;
+            global::UnityEngine.EventSystems.EventSystem events = global::UnityEngine.EventSystems.EventSystem.current;
             if (events == null)
                 HarnessFault("no-input-route", "Press('" + key + "'): no Input System, and no EventSystem in the scene");
-            var name = key.Trim().ToLowerInvariant();
-            var selected = events.currentSelectedGameObject;
+            string name = key.Trim().ToLowerInvariant();
+            global::UnityEngine.GameObject selected = events.currentSelectedGameObject;
             if (name == "enter" || name == "return" || name == "space" || name == "submit")
             {
                 if (selected != null)
-                    ExecuteEvents.Execute(selected, new BaseEventData(events), ExecuteEvents.submitHandler);
+                    global::UnityEngine.EventSystems.ExecuteEvents.Execute(selected, new global::UnityEngine.EventSystems.BaseEventData(events), global::UnityEngine.EventSystems.ExecuteEvents.submitHandler);
             }
             else if (name == "escape" || name == "cancel")
             {
                 if (selected != null)
-                    ExecuteEvents.Execute(selected, new BaseEventData(events), ExecuteEvents.cancelHandler);
+                    global::UnityEngine.EventSystems.ExecuteEvents.Execute(selected, new global::UnityEngine.EventSystems.BaseEventData(events), global::UnityEngine.EventSystems.ExecuteEvents.cancelHandler);
             }
             else
                 HarnessFault("no-input-route", "Press('" + key + "'): without the Input System only Enter/Space (submit) and Escape (cancel) reach the selected UI element");
@@ -957,13 +1162,12 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
             global::NUnit.Framework.Assert.Fail("[${HARNESS_FAULT_TAG}:" + code + "] " + detail);
         }
 
-        private static IPlaythroughDriver ResolveDriver()
+        private static global::Strada.Core.Play.IPlaythroughDriver ResolveDriver()
         {
-            var services = GameBootstrapper.Services;
-            if (services == null)
+            if (global::Strada.Core.Bootstrap.GameBootstrapper.Services == null)
                 HarnessFault("no-boot", "GameBootstrapper.Services is null: the game is not booted");
-            IPlaythroughDriver driver;
-            if (!services.TryGet(out driver) || driver == null)
+            global::Strada.Core.Play.IPlaythroughDriver driver;
+            if (!global::Strada.Core.Bootstrap.GameBootstrapper.Services.TryGet(out driver) || driver == null)
                 HarnessFault("no-driver", "the game registers no Strada.Core.Play.IPlaythroughDriver");
             return driver;
         }
@@ -973,7 +1177,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
             return "input-system";
 #elif STRADA_ACCEPTANCE_UGUI
-            return EventSystem.current != null ? "event-system" : "none";
+            return global::UnityEngine.EventSystems.EventSystem.current != null ? "event-system" : "none";
 #else
             return "none";
 #endif
@@ -985,59 +1189,59 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
                 HarnessFault("no-input-route", what + ": no input can be injected: the project has no Input System package with the new input handling enabled, and the scene has no EventSystem");
         }
 
-        private static bool OnScreen(Vector2 point, out string why)
+        private static bool OnScreen(global::UnityEngine.Vector2 point, out string why)
         {
-            if (point.x < 0f || point.y < 0f || point.x > Screen.width || point.y > Screen.height)
+            if (point.x < 0f || point.y < 0f || point.x > global::UnityEngine.Screen.width || point.y > global::UnityEngine.Screen.height)
             {
-                why = "is off screen at (" + point.x + ", " + point.y + ") on a " + Screen.width + "x" + Screen.height + " screen";
+                why = "is off screen at (" + point.x + ", " + point.y + ") on a " + global::UnityEngine.Screen.width + "x" + global::UnityEngine.Screen.height + " screen";
                 return false;
             }
             why = null;
             return true;
         }
 
-        private static bool ScreenPointOf(GameObject target, out Vector2 point, out string why)
+        private static bool ScreenPointOf(global::UnityEngine.GameObject target, out global::UnityEngine.Vector2 point, out string why)
         {
 #if STRADA_ACCEPTANCE_UI_MODULE
-            var rect = target.transform as RectTransform;
-            var canvas = rect != null ? target.GetComponentInParent<Canvas>() : null;
+            global::UnityEngine.RectTransform rect = target.transform as global::UnityEngine.RectTransform;
+            global::UnityEngine.Canvas canvas = rect != null ? target.GetComponentInParent<global::UnityEngine.Canvas>() : null;
             if (canvas != null)
             {
-                var root = canvas.rootCanvas;
-                Camera uiCamera = null;
-                if (root.renderMode != RenderMode.ScreenSpaceOverlay)
-                    uiCamera = root.worldCamera != null ? root.worldCamera : Camera.main;
-                point = RectTransformUtility.WorldToScreenPoint(uiCamera, rect.TransformPoint(rect.rect.center));
+                global::UnityEngine.Canvas root = canvas.rootCanvas;
+                global::UnityEngine.Camera uiCamera = null;
+                if (root.renderMode != global::UnityEngine.RenderMode.ScreenSpaceOverlay)
+                    uiCamera = root.worldCamera != null ? root.worldCamera : global::UnityEngine.Camera.main;
+                point = global::UnityEngine.RectTransformUtility.WorldToScreenPoint(uiCamera, rect.TransformPoint(rect.rect.center));
                 return OnScreen(point, out why);
             }
 #endif
-            var camera = Camera.main;
+            global::UnityEngine.Camera camera = global::UnityEngine.Camera.main;
             if (camera == null)
             {
-                point = Vector2.zero;
+                point = global::UnityEngine.Vector2.zero;
                 why = "has no screen position: no camera is tagged MainCamera";
                 return false;
             }
-            var world = target.transform.position;
-            var renderer = target.GetComponentInChildren<Renderer>();
+            global::UnityEngine.Vector3 world = target.transform.position;
+            global::UnityEngine.Renderer renderer = target.GetComponentInChildren<global::UnityEngine.Renderer>();
             if (renderer != null)
                 world = renderer.bounds.center;
 #if STRADA_ACCEPTANCE_PHYSICS
-            else if (target.GetComponentInChildren<Collider>() != null)
-                world = target.GetComponentInChildren<Collider>().bounds.center;
+            else if (target.GetComponentInChildren<global::UnityEngine.Collider>() != null)
+                world = target.GetComponentInChildren<global::UnityEngine.Collider>().bounds.center;
 #endif
 #if STRADA_ACCEPTANCE_PHYSICS2D
-            else if (target.GetComponentInChildren<Collider2D>() != null)
-                world = target.GetComponentInChildren<Collider2D>().bounds.center;
+            else if (target.GetComponentInChildren<global::UnityEngine.Collider2D>() != null)
+                world = target.GetComponentInChildren<global::UnityEngine.Collider2D>().bounds.center;
 #endif
-            var screen = camera.WorldToScreenPoint(world);
+            global::UnityEngine.Vector3 screen = camera.WorldToScreenPoint(world);
             if (screen.z < 0f)
             {
-                point = Vector2.zero;
+                point = global::UnityEngine.Vector2.zero;
                 why = "is behind the main camera";
                 return false;
             }
-            point = new Vector2(screen.x, screen.y);
+            point = new global::UnityEngine.Vector2(screen.x, screen.y);
             return OnScreen(point, out why);
         }
 
@@ -1045,60 +1249,60 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
 
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
         /// <summary>The touchscreen when it is the only pointer, else the mouse (one is added in a headless run).</summary>
-        private static Pointer InjectionPointer()
+        private static global::UnityEngine.InputSystem.Pointer InjectionPointer()
         {
-            if (Touchscreen.current != null && Mouse.current == null)
-                return Enabled(Touchscreen.current);
-            return Enabled(Mouse.current != null ? (Pointer)Mouse.current : InputSystem.AddDevice<Mouse>());
+            if (global::UnityEngine.InputSystem.Touchscreen.current != null && global::UnityEngine.InputSystem.Mouse.current == null)
+                return Enabled(global::UnityEngine.InputSystem.Touchscreen.current);
+            return Enabled(global::UnityEngine.InputSystem.Mouse.current != null ? (global::UnityEngine.InputSystem.Pointer)global::UnityEngine.InputSystem.Mouse.current : global::UnityEngine.InputSystem.InputSystem.AddDevice<global::UnityEngine.InputSystem.Mouse>());
         }
 
         /// <summary>A device disabled while the run had no focus ignores the events queued for it.</summary>
-        private static T Enabled<T>(T device) where T : InputDevice
+        private static T Enabled<T>(T device) where T : global::UnityEngine.InputSystem.InputDevice
         {
             if (!device.enabled)
-                InputSystem.EnableDevice(device);
+                global::UnityEngine.InputSystem.InputSystem.EnableDevice(device);
             return device;
         }
 #endif
 
-        private static void DeviceHover(Vector2 position)
+        private static void DeviceHover(global::UnityEngine.Vector2 position)
         {
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-            var mouse = InjectionPointer() as Mouse;
+            global::UnityEngine.InputSystem.Mouse mouse = InjectionPointer() as global::UnityEngine.InputSystem.Mouse;
             if (mouse != null)
-                InputSystem.QueueStateEvent(mouse, new MouseState { position = position });
+                global::UnityEngine.InputSystem.InputSystem.QueueStateEvent(mouse, new global::UnityEngine.InputSystem.LowLevel.MouseState { position = position });
 #endif
         }
 
-        private static void DevicePointer(Vector2 position, Vector2 delta, bool pressed, PointerStage stage)
+        private static void DevicePointer(global::UnityEngine.Vector2 position, global::UnityEngine.Vector2 delta, bool pressed, PointerStage stage)
         {
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
-            var pointer = InjectionPointer();
-            var touch = pointer as Touchscreen;
+            global::UnityEngine.InputSystem.Pointer pointer = InjectionPointer();
+            global::UnityEngine.InputSystem.Touchscreen touch = pointer as global::UnityEngine.InputSystem.Touchscreen;
             if (touch != null)
             {
-                var phase = stage == PointerStage.Begin ? global::UnityEngine.InputSystem.TouchPhase.Began
+                global::UnityEngine.InputSystem.TouchPhase phase = stage == PointerStage.Begin ? global::UnityEngine.InputSystem.TouchPhase.Began
                     : stage == PointerStage.Move ? global::UnityEngine.InputSystem.TouchPhase.Moved
                     : global::UnityEngine.InputSystem.TouchPhase.Ended;
-                InputSystem.QueueStateEvent(touch, new TouchState { touchId = 1, phase = phase, position = position, delta = delta });
+                global::UnityEngine.InputSystem.InputSystem.QueueStateEvent(touch, new global::UnityEngine.InputSystem.LowLevel.TouchState { touchId = 1, phase = phase, position = position, delta = delta });
                 return;
             }
-            InputSystem.QueueStateEvent((Mouse)pointer, new MouseState { position = position, delta = delta }.WithButton(MouseButton.Left, pressed));
+            global::UnityEngine.InputSystem.InputSystem.QueueStateEvent((global::UnityEngine.InputSystem.Mouse)pointer, new global::UnityEngine.InputSystem.LowLevel.MouseState { position = position, delta = delta }.WithButton(global::UnityEngine.InputSystem.LowLevel.MouseButton.Left, pressed));
 #endif
         }
 
 #if STRADA_ACCEPTANCE_UGUI
         private sealed class UiPress
         {
-            public PointerEventData Data;
-            public GameObject Target;
+            public global::UnityEngine.EventSystems.PointerEventData Data;
+            public global::UnityEngine.GameObject Target;
         }
 
-        private static GameObject RaycastTop(EventSystem events, PointerEventData data)
+        private static global::UnityEngine.GameObject RaycastTop(global::UnityEngine.EventSystems.EventSystem events, global::UnityEngine.EventSystems.PointerEventData data)
         {
             if (events == null)
                 return null;
-            var hits = new List<RaycastResult>();
+            global::System.Collections.Generic.List<global::UnityEngine.EventSystems.RaycastResult> hits = new global::System.Collections.Generic.List<global::UnityEngine.EventSystems.RaycastResult>();
             events.RaycastAll(data, hits);
             if (hits.Count == 0)
                 return null;
@@ -1108,7 +1312,7 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
 
         private static bool UiNeedsDirectEvents()
         {
-            var events = EventSystem.current;
+            global::UnityEngine.EventSystems.EventSystem events = global::UnityEngine.EventSystems.EventSystem.current;
             if (events == null)
                 return false;
 #if STRADA_ACCEPTANCE_INPUT_SYSTEM && ENABLE_INPUT_SYSTEM
@@ -1120,79 +1324,79 @@ namespace ${ACCEPTANCE_TEST_NAMESPACE}
         }
 #endif
 
-        private static object UiBegin(Vector2 position)
+        private static object UiBegin(global::UnityEngine.Vector2 position)
         {
 #if STRADA_ACCEPTANCE_UGUI
             if (!UiNeedsDirectEvents())
                 return null;
-            var events = EventSystem.current;
-            var data = new PointerEventData(events)
+            global::UnityEngine.EventSystems.EventSystem events = global::UnityEngine.EventSystems.EventSystem.current;
+            global::UnityEngine.EventSystems.PointerEventData data = new global::UnityEngine.EventSystems.PointerEventData(events)
             {
                 position = position,
                 pressPosition = position,
-                button = PointerEventData.InputButton.Left,
+                button = global::UnityEngine.EventSystems.PointerEventData.InputButton.Left,
                 eligibleForClick = true,
                 clickCount = 1,
             };
-            var target = RaycastTop(events, data);
+            global::UnityEngine.GameObject target = RaycastTop(events, data);
             if (target == null)
                 return null;
             data.pointerPressRaycast = data.pointerCurrentRaycast;
-            ExecuteEvents.ExecuteHierarchy(target, data, ExecuteEvents.pointerEnterHandler);
-            var pressed = ExecuteEvents.ExecuteHierarchy(target, data, ExecuteEvents.pointerDownHandler);
-            data.pointerPress = pressed != null ? pressed : ExecuteEvents.GetEventHandler<IPointerClickHandler>(target);
+            global::UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(target, data, global::UnityEngine.EventSystems.ExecuteEvents.pointerEnterHandler);
+            global::UnityEngine.GameObject pressed = global::UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(target, data, global::UnityEngine.EventSystems.ExecuteEvents.pointerDownHandler);
+            data.pointerPress = pressed != null ? pressed : global::UnityEngine.EventSystems.ExecuteEvents.GetEventHandler<global::UnityEngine.EventSystems.IPointerClickHandler>(target);
             data.rawPointerPress = target;
-            data.pointerDrag = ExecuteEvents.GetEventHandler<IDragHandler>(target);
+            data.pointerDrag = global::UnityEngine.EventSystems.ExecuteEvents.GetEventHandler<global::UnityEngine.EventSystems.IDragHandler>(target);
             if (data.pointerDrag != null)
-                ExecuteEvents.Execute(data.pointerDrag, data, ExecuteEvents.initializePotentialDrag);
+                global::UnityEngine.EventSystems.ExecuteEvents.Execute(data.pointerDrag, data, global::UnityEngine.EventSystems.ExecuteEvents.initializePotentialDrag);
             return new UiPress { Data = data, Target = target };
 #else
             return null;
 #endif
         }
 
-        private static void UiMove(object state, Vector2 position)
+        private static void UiMove(object state, global::UnityEngine.Vector2 position)
         {
 #if STRADA_ACCEPTANCE_UGUI
-            var press = state as UiPress;
+            UiPress press = state as UiPress;
             if (press == null)
                 return;
-            var data = press.Data;
+            global::UnityEngine.EventSystems.PointerEventData data = press.Data;
             data.delta = position - data.position;
             data.position = position;
             if (data.pointerDrag == null)
                 return;
             if (!data.dragging)
             {
-                ExecuteEvents.Execute(data.pointerDrag, data, ExecuteEvents.beginDragHandler);
+                global::UnityEngine.EventSystems.ExecuteEvents.Execute(data.pointerDrag, data, global::UnityEngine.EventSystems.ExecuteEvents.beginDragHandler);
                 data.dragging = true;
                 data.eligibleForClick = false;
             }
-            ExecuteEvents.Execute(data.pointerDrag, data, ExecuteEvents.dragHandler);
+            global::UnityEngine.EventSystems.ExecuteEvents.Execute(data.pointerDrag, data, global::UnityEngine.EventSystems.ExecuteEvents.dragHandler);
 #endif
         }
 
-        private static void UiEnd(object state, Vector2 position)
+        private static void UiEnd(object state, global::UnityEngine.Vector2 position)
         {
 #if STRADA_ACCEPTANCE_UGUI
-            var press = state as UiPress;
+            UiPress press = state as UiPress;
             if (press == null)
                 return;
-            var data = press.Data;
+            global::UnityEngine.EventSystems.PointerEventData data = press.Data;
             data.position = position;
             if (data.pointerPress != null)
-                ExecuteEvents.Execute(data.pointerPress, data, ExecuteEvents.pointerUpHandler);
-            var clicked = ExecuteEvents.GetEventHandler<IPointerClickHandler>(press.Target);
+                global::UnityEngine.EventSystems.ExecuteEvents.Execute(data.pointerPress, data, global::UnityEngine.EventSystems.ExecuteEvents.pointerUpHandler);
+            global::UnityEngine.GameObject clicked = global::UnityEngine.EventSystems.ExecuteEvents.GetEventHandler<global::UnityEngine.EventSystems.IPointerClickHandler>(press.Target);
             if (data.eligibleForClick && clicked != null && clicked == data.pointerPress)
-                ExecuteEvents.Execute(clicked, data, ExecuteEvents.pointerClickHandler);
+                global::UnityEngine.EventSystems.ExecuteEvents.Execute(clicked, data, global::UnityEngine.EventSystems.ExecuteEvents.pointerClickHandler);
             if (data.dragging && data.pointerDrag != null)
             {
-                var over = RaycastTop(EventSystem.current, data);
+                global::UnityEngine.GameObject over = RaycastTop(global::UnityEngine.EventSystems.EventSystem.current, data);
                 if (over != null)
-                    ExecuteEvents.ExecuteHierarchy(over, data, ExecuteEvents.dropHandler);
-                ExecuteEvents.Execute(data.pointerDrag, data, ExecuteEvents.endDragHandler);
+                    global::UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(over, data, global::UnityEngine.EventSystems.ExecuteEvents.dropHandler);
+                global::UnityEngine.EventSystems.ExecuteEvents.Execute(data.pointerDrag, data, global::UnityEngine.EventSystems.ExecuteEvents.endDragHandler);
             }
-            ExecuteEvents.ExecuteHierarchy(press.Target, data, ExecuteEvents.pointerExitHandler);
+            global::UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(press.Target, data, global::UnityEngine.EventSystems.ExecuteEvents.pointerExitHandler);
 #endif
         }
     }
@@ -1541,6 +1745,8 @@ export interface AcceptanceSyncResult {
    * Files that differed from the stored bytes, were not stored, or (committed
    * checks) were missing — all put right. Not metas, and not a file the system
    * itself wrote in another version (its stamp matches): those are refreshed.
+   * From `restoreAcceptance`, also files outside the folder that could answer
+   * for a check: left as they are, and reported until they are gone.
    */
   readonly tamper: string[];
   /** Every path written, metas included. */
@@ -1749,6 +1955,9 @@ export function materialize(
  * any file that differs, delete what is not stored, and say what was found.
  * A missing file is tamper only for committed checks — ephemeral ones are
  * removed after every run on purpose, and are kept out of git when restored.
+ * What outside the folder could answer for a check
+ * (`scanForeignAcceptanceNamespace`) is tamper too, on every restore until the
+ * worker removes it: the system does not rewrite or delete a worker's file.
  */
 export function restoreAcceptance(
   projectRoot: string,
@@ -1759,7 +1968,9 @@ export function restoreAcceptance(
   const root = unityRoot(projectRoot);
   const files = acceptanceFileSet(root, sources, harness);
   setEphemeralExclude(root, mode === "ephemeral");
-  return syncAcceptance(root, files, mode === "committed");
+  const synced = syncAcceptance(root, files, mode === "committed");
+  const foreign = scanForeignAcceptanceNamespace(root);
+  return foreign.length === 0 ? synced : { ...synced, tamper: [...new Set([...synced.tamper, ...foreign])].sort() };
 }
 
 /** Remove ephemeral checks and their exclude lines. */
@@ -1779,13 +1990,25 @@ const FOREIGN_NAMESPACE_RE = /\bnamespace\s+Strada\s*\.\s*Acceptance\b|\bnamespa
 /** A string that names a test into the namespace: NUnit's TestName/SetName on a fixture in the global namespace. */
 const ACCEPTANCE_NAME_LITERAL_RE = /"\s*Strada\s*\.\s*Acceptance\s*\./g;
 
-/** Identifiers as the compiler reads them: a verbatim `@Strada`, or one spelled with Unicode escapes, is `Strada`. */
+/**
+ * A type C# would give a check's `var` local (or `dynamic`, `nint`, `nuint`):
+ * these names bind to a type in scope before their own meaning, wherever in
+ * Strada or the global namespace it sits.
+ */
+const TYPE_LIKE_DECLARATION_RE = /\b(?:class|struct|interface|enum|record|delegate\b[^;{}()]*?)\s+(?:var|dynamic|nint|nuint)\b/;
+
+/**
+ * Identifiers as the compiler reads them: a verbatim `@Strada`, one spelled
+ * with Unicode escapes, or one carrying a soft hyphen or a zero-width
+ * character (Roslyn drops formatting characters from a name) is `Strada`.
+ */
 function identifierSpelling(code: string): string {
   return code
     .replace(/\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})/g, (escape, four?: string, eight?: string) => {
       const cp = parseInt(four ?? eight ?? "", 16);
       return cp <= 0x10ffff ? String.fromCodePoint(cp) : escape;
     })
+    .replace(FORMATTING_CHARS, "")
     .replace(/@(?=[A-Za-z_])/g, "");
 }
 
@@ -1808,9 +2031,11 @@ function targetsAcceptanceAssembly(text: string): boolean {
  * What outside the system's folder could answer for an acceptance test: C#
  * that declares the acceptance namespace or names a test into it (a test
  * carrying an acceptance test's full name from an assembly the system does
- * not own), and an .asmref that compiles its folder into the acceptance
- * assembly itself, where its types are found before the framework's. Each hit
- * is tamper; restore cannot put it right, because the file is the worker's.
+ * not own), C# that declares a type a check's `var` would bind to, and an
+ * .asmref that compiles its folder into the acceptance assembly itself, where
+ * its types are found even before a name spelled from the root. Each hit is
+ * tamper — `restoreAcceptance` reports it — but restore cannot put it right,
+ * because the file is the worker's.
  */
 export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
   const root = resolve(projectRoot);
@@ -1831,7 +2056,8 @@ export function scanForeignAcceptanceNamespace(projectRoot: string): string[] {
         const code = scanCSharp(text).code;
         // The scan keeps a literal's quotes and blanks comments, so a quote that survives it opens a string.
         const named = [...text.matchAll(ACCEPTANCE_NAME_LITERAL_RE)].some((m) => code[m.index] === '"');
-        if (named || FOREIGN_NAMESPACE_RE.test(identifierSpelling(withoutDirectives(code)))) hits.push(rel);
+        const spelled = identifierSpelling(withoutDirectives(code));
+        if (named || FOREIGN_NAMESPACE_RE.test(spelled) || TYPE_LIKE_DECLARATION_RE.test(spelled)) hits.push(rel);
       },
       insideAcceptanceDir,
     );
@@ -1885,11 +2111,15 @@ const SUBJECT_ARGS: Record<string, number> = {
 };
 const NO_SUBJECT = new Set(["Fail", "Throws", "ThrowsAsync", "Catch", "CatchAsync", "DoesNotThrow", "DoesNotThrowAsync", "Multiple", "MultipleAsync"]);
 
+// A check spells types from the root, so `global::System.Int32.MaxValue` and `global::UnityEngine.Mathf.PI` are the literals `int.MaxValue` and `Mathf.PI` are.
 const LITERAL_RE =
-  /^(?:@?\$?@?"[^"{}]*"|'[^']*'|(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|(?:\d[\d_]*)?\.?\d[\d_]*(?:[eE][+-]?\d+)?)(?:[fFdDmM]|[uU][lL]?|[lL][uU]?)?|true|false|null|default|(?:string|String|int|float|double|long|short|byte|decimal|char|Mathf)\s*\.\s*\w+)$/;
+  /^(?:@?\$?@?"[^"{}]*"|'[^']*'|(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|(?:\d[\d_]*)?\.?\d[\d_]*(?:[eE][+-]?\d+)?)(?:[fFdDmM]|[uU][lL]?|[lL][uU]?)?|true|false|null|default|(?:string|int|float|double|long|short|byte|decimal|char|(?:global\s*::\s*)?(?:System\s*\.\s*)?(?:String|Int16|Int32|Int64|Single|Double|Decimal|Byte|Char)|(?:global\s*::\s*UnityEngine\s*\.\s*)?Mathf)\s*\.\s*\w+)$/;
 const REFLECTION_CALL_RE =
   /\.\s*(?:GetType|GetMethods?|GetInterfaces?|IsAssignableFrom|IsSubclassOf|IsInstanceOfType|GetPropert(?:y|ies)|GetFields?|GetMembers?|GetCustomAttributes?|IsDefined|GetConstructors?|GetEvents?|GetNestedTypes?|GetGenericArguments)\s*\(/;
-const LOCAL_RE = /(?:^|[;{}])\s*(?:var|[A-Za-z_][\w.]*(?:<[\w\s.,<>[\]?]*>)?(?:\[\s*\])*\??)\s+([A-Za-z_]\w*)\s*=(?![=>])([^;]*);/g;
+/** A type as a check spells it: from the root, generic, array, nullable. */
+const TYPE_SPELLING = String.raw`(?:global\s*::\s*)?[A-Za-z_][\w.]*(?:<[\w\s.,<>[\]?:]*>)?(?:\[\s*\])*\??`;
+const LOCAL_RE = new RegExp(String.raw`(?:^|[;{}])\s*(?:var|${TYPE_SPELLING})\s+([A-Za-z_]\w*)\s*=(?![=>])([^;]*);`, "g");
+const CAST_RE = new RegExp(String.raw`^\(\s*${TYPE_SPELLING}\s*\)\s*`);
 
 type SubjectKind = "literal" | "reflection" | "observation";
 
@@ -1905,7 +2135,7 @@ function operandKind(operand: string, locals: ReadonlyMap<string, string>, depth
   while (/^[!~+-]/.test(s)) s = s.slice(1).trim();
   if (s === "" || depth > 6) return "literal";
   if (s.startsWith("(") && matchingClose(s, 0) === s.length - 1) return subjectKind(s.slice(1, -1), locals, depth + 1);
-  const cast = /^\(\s*[A-Za-z_][\w.]*(?:<[\w\s.,<>[\]?]*>)?(?:\[\s*\])*\??\s*\)\s*/.exec(s);
+  const cast = CAST_RE.exec(s);
   if (cast && /^[\w(@"'$!]/.test(s.slice(cast[0].length))) return operandKind(s.slice(cast[0].length), locals, depth + 1);
   if (LITERAL_RE.test(s) || /^nameof\s*\(/.test(s) || /^@?"[^"{}]*"\s*\./.test(s)) return "literal";
   const flat = blankGroups(s);
@@ -1962,6 +2192,16 @@ export function lintAcceptanceBody(row: RequirementRow, check: AcceptanceCheckBo
 
   for (const { re, why } of FORBIDDEN) if (re.test(code)) add(why);
 
+  const bare = unrootedNames(parts.map((p) => p.raw).join("\n"), { allowed: ACCEPTANCE_HARNESS_MEMBERS, varAllowed: true, calls: INHERITED_CALLS });
+  if (bare.length > 0) {
+    const named = bare.slice(0, 8).map((n) => `\`${n}\``).join(", ") + (bare.length > 8 ? ", …" : "");
+    add(
+      `${named}: a bare name may only be a local, a lambda parameter or a harness member — spell every type and namespace from the root ` +
+        "(global::NUnit.Framework.Is, global::UnityEngine.Vector2, the game's global::Namespace.Type): a game namespace or a type declared " +
+        "outside the system's folder could answer a bare one",
+    );
+  }
+
   const lines = parts.reduce((n, p) => n + p.raw.split(CS_LINE_BREAK).length, 0);
   if (lines > MAX_ACCEPTANCE_BODY_LINES) add(`the check is ${lines} lines; at most ${MAX_ACCEPTANCE_BODY_LINES}`);
 
@@ -1999,7 +2239,7 @@ export function lintAcceptanceBody(row: RequirementRow, check: AcceptanceCheckBo
       add(`${match[1]}.${method}(…) asserts on reflection only (typeof, GetType(), GetMethods(), GetInterfaces, IsAssignableFrom …): that code is shaped a way is not that the game behaves the GDD's way`);
     }
   }
-  if (!numeric && assertions === 0) add("the body asserts nothing: every check ends in an NUnit assertion about the game (Assert.That(…))");
+  if (!numeric && assertions === 0) add("the body asserts nothing: every check ends in an NUnit assertion about the game (global::NUnit.Framework.Assert.That(…))");
 
   if (row.kind === "input") {
     if (/\bStartSession\w*\s*\(/.test(code)) add("an input row judges what the player's input does: the session must start from that input, not from StartSession");
@@ -2016,10 +2256,10 @@ export function lintAcceptanceBody(row: RequirementRow, check: AcceptanceCheckBo
 /** The framework contracts a check reads the game through, whatever the game. */
 const STRADA_PLAY_SURFACE = [
   "// Strada.Core.Play (assembly Strada.Core): the game's own report; read the driver through the harness's Driver",
-  "public enum Strada.Core.Play.PlaythroughOutcome { None, Won, Lost, Ended }",
-  "public interface Strada.Core.Play.IActiveSession  // Service<Strada.Core.Play.IActiveSession>(), when the game registers it",
+  "public enum global::Strada.Core.Play.PlaythroughOutcome { None, Won, Lost, Ended }",
+  "public interface global::Strada.Core.Play.IActiveSession  // Service<global::Strada.Core.Play.IActiveSession>(), when the game registers it",
   "  int ActiveSession { get; }",
-  "public interface Strada.Core.Play.ISessionCatalog  // Service<Strada.Core.Play.ISessionCatalog>(), when the game registers it",
+  "public interface global::Strada.Core.Play.ISessionCatalog  // Service<global::Strada.Core.Play.ISessionCatalog>(), when the game registers it",
   "  int SessionCount { get; }",
 ].join("\n");
 
@@ -2090,7 +2330,7 @@ function publicTypesOf(source: string): SurfaceType[] {
       public: outerPublic && /\bpublic\b/.test(header.slice(0, decl.index)),
       interface: /interface/.test(decl[1]!),
       enumeration: decl[1] === "enum",
-      header: header.replace(new RegExp(`\\b${decl[1]!.replace(/\s+/g, "\\s+")}\\s+${name}\\b`), `${decl[1]} ${fullName}`),
+      header: header.replace(new RegExp(`\\b${decl[1]!.replace(/\s+/g, "\\s+")}\\s+${name}\\b`), `${decl[1]} global::${fullName}`),
       members: [],
     };
     types.push(ctx);
@@ -2158,7 +2398,7 @@ function publicTypesOf(source: string): SurfaceType[] {
         const name = delegate[1]!;
         const scope = scopeName();
         const at = delegate.index + delegate[0].lastIndexOf(name);
-        types.push({ kind: "type", fullName: scope === "" ? name : `${scope}.${name}`, public: true, interface: false, enumeration: false, header: `${decl.slice(0, at)}${scope === "" ? "" : `${scope}.`}${decl.slice(at)}`, members: [] });
+        types.push({ kind: "type", fullName: scope === "" ? name : `${scope}.${name}`, public: true, interface: false, enumeration: false, header: `${decl.slice(0, at)}global::${scope === "" ? "" : `${scope}.`}${decl.slice(at)}`, members: [] });
       }
       if (parent?.kind !== "type") return;
     }
@@ -2235,7 +2475,7 @@ export function publicSurfaceDigest(projectRoot: string, rankTokens: readonly st
 
   const head = [
     "// Public surface of the game's runtime assemblies: signatures only, no bodies.",
-    "// Fully qualify every game type in a check (Namespace.Type).",
+    "// Spell every type in a check from the root, as printed here: global::Namespace.Type.",
     "",
     STRADA_PLAY_SURFACE,
   ].join("\n");
@@ -2270,9 +2510,14 @@ export function harnessApiDoc(injection?: InputInjection): string {
     "The system wraps every check you return; you write statements, never a method or a class:",
     `  namespace ${ACCEPTANCE_TEST_NAMESPACE}.<Milestone> { [TestFixture, Category("${ACCEPTANCE_TEST_CATEGORY}")] class Acceptance_<Milestone> : AcceptanceFixture {`,
     `    [UnityTest, Timeout(${ACCEPTANCE_TEST_TIMEOUT_MS})] public IEnumerator R<ordinal>_<id>() { yield return Boot(); <setup> <act> <body | the system's assertion> } } }`,
-    "A part is C# 9 statements inside a Unity PlayMode iterator method. The file's usings are:",
-    `  ${FILE_USINGS.join(", ")}.`,
-    "Fully qualify every game type (Namespace.Type), as the public surface spells it; one in no namespace as global::Type.",
+    "A part is C# 9 statements inside a Unity PlayMode iterator method.",
+    "",
+    "Names: the file imports no namespace, only LINQ's extension methods (.Any(), .Count(), .Contains() …). Spell every type and",
+    "namespace from the root with global:: — global::NUnit.Framework.Assert.That(x, global::NUnit.Framework.Is.EqualTo(3)),",
+    "global::UnityEngine.Time.timeScale, global::Strada.Core.Play.PlaythroughOutcome.Won, and the game's types as the public surface",
+    "prints them (global::Namespace.Type). A bare name may only be a local or lambda parameter your check declares, or a harness",
+    "member below: a game may name a namespace Grid, Input or Is, and code outside the system's folder may declare a type of any",
+    "name, so a bare type name could mean either instead of the type you meant.",
     "",
     "Rows with GDD numbers (constant, range): return `observe` only — one C# expression whose value, in the row's unit,",
     "is what the game does (plus an optional `setup`). The system casts it to double and asserts it against the bounds",
@@ -2283,18 +2528,20 @@ export function harnessApiDoc(injection?: InputInjection): string {
     "  IEnumerator Boot()                                     loads build scene 0, waits for GameBootstrapper.Services (already called first)",
     "  IEnumerator Frames(int count)                          waits frames",
     "  IEnumerator Seconds(float seconds)                     waits real time",
-    "  IEnumerator Until(System.Func<bool> condition, float timeoutSeconds = 10f)   waits until it holds or times out; never fails by itself",
-    "  PlaythroughView Driver                                 read-only: Driver.Phase (string), Driver.Outcome (PlaythroughOutcome), Driver.IsSessionActive (bool)",
+    "  IEnumerator Until(global::System.Func<bool> condition, float timeoutSeconds = 10f)   waits until it holds or times out; never fails by itself",
+    "  PlaythroughView Driver                                 read-only: Driver.Phase (string), Driver.Outcome (global::Strada.Core.Play.PlaythroughOutcome),",
+    "                                                         Driver.IsSessionActive (bool)",
     "  IEnumerator StartSessionForSetup(int index)            starts a session, for a check whose subject is not how play starts",
     "  T Service<T>() where T : class                         a service the game registered; fails when it is not registered",
     "  bool AnyAudioPlaying()                                 any AudioSource playing",
     "  IReadOnlyList<string> ActiveScreens()                  active root canvases, their active children, active UI documents, by name",
     "  string InputInjectable                                 \"input-system\", \"event-system\" or \"none\"",
     "  IEnumerator TapViewport(float x, float y)              tap at viewport coordinates (0..1, origin bottom-left)",
-    "  IEnumerator TapScreen(Vector2 position)                tap at screen pixels",
-    "  IEnumerator TapObject(GameObject target)               tap where the object is on screen (also TapObject(Component), TapObject(string name))",
-    "  IEnumerator Drag(Vector2 from, Vector2 to, float seconds = 0.25f)   press, move, release, in screen pixels",
+    "  IEnumerator TapScreen(global::UnityEngine.Vector2 position)   tap at screen pixels",
+    "  IEnumerator TapObject(global::UnityEngine.GameObject target)  tap where the object is on screen (also TapObject(Component), TapObject(string name))",
+    "  IEnumerator Drag(global::UnityEngine.Vector2 from, global::UnityEngine.Vector2 to, float seconds = 0.25f)   press, move, release, in screen pixels",
     "  IEnumerator Press(string key)                          press and release a keyboard key (a UnityEngine.InputSystem.Key name)",
+    "  float BootSeconds, SessionStartSeconds                 how long Boot() and StartSessionForSetup() wait",
     "",
     input,
     "",
@@ -2302,6 +2549,8 @@ export function harnessApiDoc(injection?: InputInjection): string {
     "  - no Assert.Pass, Assert.Ignore, Assert.Inconclusive, Assert.Warn, Assume, Warn.If, or the exceptions they throw;",
     "    no [Ignore], [Explicit], [Category]; no catch; no preprocessor directives (#if …); no System.IO, Process, UnityEditor,",
     "    Application.Quit, LogAssert.ignoreFailingMessages; no yield break",
+    "  - every type and namespace is spelled from the root (global::…); bare names are your own locals and lambda parameters,",
+    "    and the harness's members",
     "  - never IPlaythroughDriver and never .Act( — the driver's own action is not the player's; no reflection invocation",
     "  - an assertion's subject must be something the game reports: not literals only, and not reflection only",
     "    (typeof, GetType(), GetMethods(), GetInterfaces, IsAssignableFrom …) — the shape of code is not the behaviour of the game",
