@@ -86,6 +86,16 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("unity_place_prefab");
   });
 
+  it("does not keep the final sprint away from the GDD (GDD-drift trace M4)", () => {
+    // "Do not re-read the whole GDD" was read as "do not consult it": the
+    // delivered game drifted from rules the sprint was told not to look up.
+    // The measurement replaces an audit of the tree, not the design.
+    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.");
+    expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
+    expect(prompt).toContain("read the GDD sections your change implements");
+    expect(prompt).toContain("re-audit the landed modules");
+  });
+
   it("replaces the previous block instead of stacking a stale one", () => {
     const root = emptyGameProject();
     let prompt = attach(root, "Sprint 7.");

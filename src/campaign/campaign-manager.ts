@@ -104,6 +104,7 @@ import {
   rowRef,
 } from "./scope-report.js";
 import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
+import { acceptancePromptFor } from "./acceptance-prompt.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
 export type CampaignMessenger = (chatId: string, markdown: string) => Promise<void>;
@@ -2496,6 +2497,8 @@ export class CampaignManager {
         textForPlanning,
         campaign.gddPath,
         styleSummary.trim() || undefined,
+        // The gate's own mode, so the prompts it plans name only checks that exist (GDD-drift W10).
+        { scopeGate: this.scopeGateMode },
       );
       campaign.milestones = ladder.milestones.map((m, i) => ({
         id: `m${i + 1}`,
@@ -2889,10 +2892,16 @@ export class CampaignManager {
     // milestone.prompt, so it cannot accumulate.
     const prevTaskId = milestone.taskId as TaskId | undefined;
     const priorProgress = prevTaskId ? this.taskManager.priorProgressSummary?.(prevTaskId) ?? "" : "";
+    // THE GDD ROWS THIS SPRINT IS JUDGED ON (GDD-drift W10), rebuilt from the
+    // ledger on every submit and, like the progress block, never persisted:
+    // a stored copy would go stale between settles, and its verbatim GDD text
+    // (cross-references included) would sit in the prompt that section-
+    // reference ownership reads. "" with the gate off or no ledger.
+    const acceptance = acceptancePromptFor(campaign, milestone, this.scopeGateMode);
     const task = this.taskManager.submit(
       campaign.chatId,
       campaign.channelType,
-      priorProgress ? `${milestone.prompt}${priorProgress}` : milestone.prompt,
+      `${milestone.prompt}${acceptance}${priorProgress}`,
       {
         userId: campaign.userId,
         conversationId: campaign.conversationId,
@@ -7313,9 +7322,14 @@ export class CampaignManager {
       // the landed modules" first, hit the decomposition node cap, and left
       // "Produce real art-backed presentation and asset bindings" UNEXPANDED.
       // It never reached the work it had correctly identified.
+      // …BUT THE MEASUREMENT REPLACES AN AUDIT OF THE TREE, NOT THE DESIGN.
+      // "Do not re-read the whole GDD" was read as "do not consult it", and the
+      // delivered game drifted from rules no sprint looked up (GDD-drift
+      // trace M4, 2026-10-11).
       "DO NOT AUDIT. Counting or listing what exists is not the task, and an inventory will be " +
-      "rejected. Do not re-read the whole GDD or re-audit the landed modules before acting: this " +
-      "measurement is that audit, already done. Spend the sprint on the change itself — open the " +
+      "rejected. Do not re-audit the landed modules before acting: this measurement is that audit, " +
+      "already done. It is not the design: read the GDD sections your change implements and build " +
+      "what they specify. Spend the sprint on the change itself — open the " +
       "entry scene, place the named prefabs in it (unity_place_prefab), bind real sprites to their " +
       "renderers (unity_bind_sprite) instead of engine primitives, save the scene, and let a captured frame and the " +
       "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +

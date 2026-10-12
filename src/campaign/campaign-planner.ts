@@ -17,6 +17,7 @@ import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { milestoneLadderSchema } from "./types.js";
 import type { MilestoneLadder, PlannedLadder } from "./types.js";
 import { measureGddScope, uncoveredSections, type GddScope } from "./gdd-scope.js";
+import { ACCEPTANCE_DIR, DEFAULT_SCOPE_GATE_MODE, type ScopeGateMode } from "./scope-types.js";
 import {
   decodeIdentities,
   decodeRequirement,
@@ -45,8 +46,10 @@ const GDD_OUTLINE_CHARS = 20_000;
  * The planner's instructions, sized by the GDD's measured scope (see gdd-scope.ts).
  * `gddSaved` is false for a design no file in the project holds: its sprints
  * cannot point at the document, so they carry what they need of it.
+ * `scopeGate` is the campaign's CAMPAIGN_SCOPE_GATE mode: while the gate runs,
+ * a sprint's verification bar includes the system's checks of its GDD rows.
  */
-export function plannerSystem(scope: GddScope, gddSaved = true): string {
+export function plannerSystem(scope: GddScope, gddSaved = true, scopeGate: ScopeGateMode = DEFAULT_SCOPE_GATE_MODE): string {
   const asks: string[] = [];
   if (scope.asks.ui) asks.push("UI/screen flow (every screen the GDD names, wired Home → play → result)");
   if (scope.asks.audio) asks.push("audio (music and SFX bound to AudioSources in the shipped scenes)");
@@ -67,6 +70,11 @@ export function plannerSystem(scope: GddScope, gddSaved = true): string {
     ? "Reference the GDD by its project-relative path (given below) rather than restating it."
     : "This GDD is NOT saved in the project, so no agent can open it: restate in the prompt, in the GDD's own words and numbers, everything the milestone needs from it (elements, rules, values, screens, art direction), and never send an agent to look for a GDD file — one found in the repo is another document.";
   const promptWords = gddSaved ? "150-600 words" : "150-1000 words, the restated GDD content included";
+  // With the gate off there are no such checks, so the bar must not name them.
+  const acceptanceBar =
+    scopeGate === "off"
+      ? ""
+      : `the campaign's acceptance checks for this milestone's GDD rows pass (${ACCEPTANCE_DIR}, system-owned), `;
   return `You are a campaign planner for an autonomous game-development system.
 
 You receive a game design document (GDD) for a Unity project built with the Strada.Core framework, and you produce the MILESTONE LADDER: the ordered list of sprints that builds the whole game, start to finish.
@@ -76,9 +84,9 @@ ${counted}
 Rules:
 - ${scope.minMilestones} to ${scope.maxMilestones} milestones (sized from the scope above), ordered strictly by dependency: foundations first (project scaffolding, core simulation), then mechanics/elements in the GDD's own groupings, then content (levels), then the non-code areas the GDD asks for, then integration.
 - Every milestone returns "coveredSections": the GDD section headings it covers, spelled EXACTLY as the document's headings — the union over the ladder must cover every section of the document that describes work; a section you leave out is reported as unplanned.
-- Every milestone returns "deliverables": the concrete things it leaves behind (scenes, prefabs, systems, screens, clips, data), so the sprint can be measured against them.
+- Every milestone returns "deliverables": the concrete things it leaves behind (scenes, prefabs, systems, screens, clips, data).
 - The whole shipping list is planned unless the GDD explicitly excludes an item — then it goes in "excluded" with the GDD's own reason. This GDD asks for: ${asks.length > 0 ? asks.join("; ") : "no non-code areas beyond the core game (verify against the document)"}.
-- Each milestone's "prompt" is the COMPLETE kick prompt an agent will execute without you in the room. It must name: its scope (the GDD sections/elements it covers), the architecture pattern to follow (the project's existing module pattern — reference it by name once foundations exist), the verification bar (headless compile green, the relevant PlayMode tests green and UNFILTERED, a captured frame proving something renders), commit discipline (commit per logical unit), and what to produce at the end of the sprint.
+- Each milestone's "prompt" is the COMPLETE kick prompt an agent will execute without you in the room. It must name: its scope (the GDD sections/elements it covers), the architecture pattern to follow (the project's existing module pattern — reference it by name once foundations exist), the verification bar (headless compile green, the relevant PlayMode tests green and UNFILTERED, ${acceptanceBar}a captured frame proving something renders), commit discipline (commit per logical unit), and what to produce at the end of the sprint.
 - The FINAL milestone is always integration + delivery: full PlayMode suite green with no filter, the assembled scene actually running the game, and a DELIVERY REPORT summarizing what was built against the GDD.
 - The FINAL milestone also owns BUILD HYGIENE: the FIRST enabled scene in Build Settings must be the entry scene a person opens to play the game, and every scene enabled after it must be one the game itself loads (menu, levels, results) — a game that spans several scenes keeps them. Every verification/scaffolding scene the campaign created (InitTestScene*, *Verification, *Verified, *Showcase, *Boundary, Assembled*) must be DISABLED in Build Settings — not deleted: the write-back carries only deletions of files the system itself wrote — and its report must name the entry scene and list what it disabled.
 - Every element the GDD schedules must end its milestone with a real, BOUND visual: source it with unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) first, generate it when nothing fits — unity_generate_sprite for pixel-canvas pieces, unity_generate_mesh for dimensional ones (stages, characters) — both use the machine's installed open-weights model automatically and SAY when they fell back to a procedural placeholder; a placeholder is not the element's visual, unity_prerender_frames to turn a 3D prefab into 2D angle frames in the project's own style when the GDD wants 2D rendered from 3D — and bind it into the element's prefab. Code for an element without its visual is a milestone that is not done.
@@ -282,12 +290,17 @@ export class CampaignPlanner {
    * — a campaign that cannot plan must not silently degrade into one giant
    * sprint, which is exactly the failure mode the ladder exists to prevent).
    */
-  async planMilestones(gddText: string, gddPath: string | undefined, styleNote?: string): Promise<PlannedLadder> {
+  async planMilestones(
+    gddText: string,
+    gddPath: string | undefined,
+    styleNote?: string,
+    opts: { readonly scopeGate?: ScopeGateMode } = {},
+  ): Promise<PlannedLadder> {
     if (!this.provider) {
       throw new Error("campaign planning requires an LLM provider");
     }
     const scope = measureGddScope(gddText);
-    const system = plannerSystem(scope, gddPath !== undefined);
+    const system = plannerSystem(scope, gddPath !== undefined, opts.scopeGate);
     const planning = await this.gddForPlanning(gddText);
 
     // NO FILE, NO PATH: a supplied design that could not be saved into the
