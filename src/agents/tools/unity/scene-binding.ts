@@ -444,8 +444,13 @@ export function placePrefab(
 
 // ─── Tools ────────────────────────────────────────────────────────────────
 
-async function checked(context: ToolContext, rel: string): Promise<{ ok: true; full: string } | { ok: false; error: string }> {
-  const r = await validatePath(context.projectPath, rel, { allowMissingParents: false });
+/** `write`: this tool edits the file (the target, a scene, a sprite's .meta), not only reads it. */
+async function checked(
+  context: ToolContext,
+  rel: string,
+  write = false,
+): Promise<{ ok: true; full: string } | { ok: false; error: string }> {
+  const r = await validatePath(context.projectPath, rel, { allowMissingParents: false, write });
   return r.valid ? { ok: true, full: r.fullPath } : { ok: false, error: r.error ?? "path validation failed" };
 }
 
@@ -481,9 +486,9 @@ export class BindSpriteTool implements ITool {
     const spriteRel = String(input["sprite"] ?? "").replace(/\\/g, "/");
     if (!/\.(prefab|unity)$/i.test(targetRel)) return { content: "Error: target must be a .prefab or .unity file", isError: true };
     if (!/\.(png|jpg|jpeg|psd|tga)$/i.test(spriteRel)) return { content: "Error: sprite must be a texture file (png/jpg/psd/tga)", isError: true };
-    const target = await checked(context, targetRel);
+    const target = await checked(context, targetRel, true);
     if (!target.ok) return { content: `Error: ${target.error}`, isError: true };
-    const sprite = await checked(context, spriteRel);
+    const sprite = await checked(context, spriteRel, true);
     if (!sprite.ok) return { content: `Error: ${sprite.error}`, isError: true };
     if (!existsSync(target.full)) return { content: `Error: ${targetRel} does not exist`, isError: true };
     if (!existsSync(sprite.full)) return { content: `Error: ${spriteRel} does not exist`, isError: true };
@@ -542,7 +547,7 @@ export class PlacePrefabTool implements ITool {
     const prefabRel = String(input["prefab"] ?? "").replace(/\\/g, "/");
     if (!/\.unity$/i.test(sceneRel)) return { content: "Error: scene must be a .unity file", isError: true };
     if (!/\.prefab$/i.test(prefabRel)) return { content: "Error: prefab must be a .prefab file", isError: true };
-    const scene = await checked(context, sceneRel);
+    const scene = await checked(context, sceneRel, true);
     if (!scene.ok) return { content: `Error: ${scene.error}`, isError: true };
     const prefab = await checked(context, prefabRel);
     if (!prefab.ok) return { content: `Error: ${prefab.error}`, isError: true };

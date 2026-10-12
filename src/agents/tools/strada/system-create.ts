@@ -171,7 +171,7 @@ export class SystemCreateTool implements ITool {
     }
 
     // Validate path
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }

@@ -136,6 +136,7 @@ export class ModuleCreateTool implements ITool {
     // deepest EXISTING ancestor and proves it sits inside the project root.
     const pathCheck = await validatePath(context.projectPath, modulePath, {
       allowMissingParents: true,
+      write: true,
     });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };

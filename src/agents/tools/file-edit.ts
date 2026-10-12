@@ -69,7 +69,7 @@ export class FileEditTool implements ITool {
       };
     }
 
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
     if (!pathCheck.valid) {
       return {
         content: `Error: ${pathCheck.error} (path="${relPath}")`,

@@ -71,7 +71,7 @@ export class FileDeleteTool implements ITool {
       return { content: "Error: 'path' is required", isError: true };
     }
 
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
@@ -207,7 +207,7 @@ export class FileRenameTool implements ITool {
     if (!oldPath) return { content: "Error: 'old_path' is required", isError: true };
     if (!newPath) return { content: "Error: 'new_path' is required", isError: true };
 
-    const oldCheck = await validatePath(context.projectPath, oldPath);
+    const oldCheck = await validatePath(context.projectPath, oldPath, { write: true });
     if (!oldCheck.valid) {
       return { content: `Error (old_path): ${oldCheck.error}`, isError: true };
     }
@@ -216,6 +216,7 @@ export class FileRenameTool implements ITool {
     // oldPath above must still resolve to something real.
     const newCheck = await validatePath(context.projectPath, newPath, {
       allowMissingParents: true,
+      write: true,
     });
     if (!newCheck.valid) {
       return { content: `Error (new_path): ${newCheck.error}`, isError: true };
@@ -349,7 +350,7 @@ export class FileDeleteDirectoryTool implements ITool {
       return { content: "Error: cannot delete the project root", isError: true };
     }
 
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }

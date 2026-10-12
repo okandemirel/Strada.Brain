@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path, { basename, resolve, sep, isAbsolute, join, relative } from "node:path";
+import { frameworkPackageWriteRefusal } from "./framework-package-path.js";
 
 /**
  * Sensitive file patterns that should never be accessed through tools,
@@ -175,6 +176,12 @@ export interface ValidatePathOptions {
    * Off by default so read paths keep their existing semantics.
    */
   readonly allowMissingParents?: boolean;
+  /**
+   * The caller is about to write, rename or delete the target. A write into a
+   * Strada framework package (Packages/Submodules/Strada.*, an embedded
+   * Strada package, Assets/Strada.MCP) is refused; reading one is not.
+   */
+  readonly write?: boolean;
 }
 
 /**
@@ -477,6 +484,15 @@ export async function validatePath(
         fullPath: realFullPath,
         error: "Access to sensitive files is not permitted",
       };
+    }
+  }
+
+  // Judged where the write lands as well as how it was spelled: a link inside
+  // the project that leads into a package is the package.
+  if (options.write) {
+    for (const rel of [relative(resolve(projectRoot), rawFullPath), relative(realRoot, realTarget)]) {
+      const refusal = frameworkPackageWriteRefusal(rel);
+      if (refusal) return { valid: false, fullPath: realFullPath, error: refusal };
     }
   }
 

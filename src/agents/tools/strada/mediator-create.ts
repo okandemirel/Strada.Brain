@@ -103,7 +103,7 @@ export class MediatorCreateTool implements ITool {
     }
 
     // Validate path with symlink resolution and sensitive file blocking
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }

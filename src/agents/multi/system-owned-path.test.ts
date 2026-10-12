@@ -159,4 +159,12 @@ describe("systemOwnedDeletionReason never applies a deletion of a check", () => 
     expect(await systemOwnedDeletionReason(campaignOnly, link, "Assets/Scripts/Shortcut/M1/Acceptance_M1.cs")).toBeUndefined();
     expect(await systemOwnedDeletionReason(campaignOnly, link, "Assets/Scripts/Leftover.cs")).toContain("system's own");
   });
+
+  // WP-1.2: a Strada framework package is upstream's folder. Even a file only
+  // campaign commits ever touched there is not the worker's to delete.
+  it("declines a deletion inside a Strada framework package", async () => {
+    const root = project();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, "Packages/Submodules/Strada.Core/docs/sprint-report.md")).toBeUndefined();
+    expect(await systemOwnedDeletionReason(campaignOnly, root, join("Packages", "Submodules", "Strada.MCP", "notes", "run.md"))).toBeUndefined();
+  });
 });

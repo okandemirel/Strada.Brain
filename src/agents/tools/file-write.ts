@@ -62,6 +62,7 @@ export class FileWriteTool implements ITool {
     // folder structure.
     const pathCheck = await validatePath(context.projectPath, relPath, {
       allowMissingParents: true,
+      write: true,
     });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };

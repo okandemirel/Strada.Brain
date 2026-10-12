@@ -60,7 +60,7 @@ function frameworkRepo(): string {
 }
 
 /** A project carrying that framework as a local-path submodule, fully committed. */
-function projectWithLocalSubmodule(framework: string): string {
+function projectWithLocalSubmodule(framework: string, subPath = "Packages/Submodules/Strada.Core"): string {
   const root = mkdtempSync(join(os.tmpdir(), "lease-localsub-"));
   mkdirSync(join(root, "Assets"), { recursive: true });
   writeFileSync(join(root, "Assets", "Game.cs"), "// game\n");
@@ -75,7 +75,7 @@ function projectWithLocalSubmodule(framework: string): string {
     "add",
     "-q",
     framework,
-    "Packages/Submodules/Strada.Core",
+    subPath,
   );
   // Committed: syncUncommittedState has nothing to copy, so the submodule
   // checkout is the only way the framework can reach the workspace.
@@ -85,10 +85,12 @@ function projectWithLocalSubmodule(framework: string): string {
 }
 
 describe("commits the agent makes inside a submodule reach the project (2026-09-10)", () => {
+  // A package of the game's own, developed beside it. A Strada framework
+  // package is the exception (WP-1.2), below.
   it("replays them into the project's submodule and leaves its git pointer intact", async () => {
     const framework = frameworkRepo();
-    const root = projectWithLocalSubmodule(framework);
-    const sub = join("Packages", "Submodules", "Strada.Core");
+    const root = projectWithLocalSubmodule(framework, "Packages/Submodules/LevelTools");
+    const sub = join("Packages", "Submodules", "LevelTools");
     const projectPointer = git(root, "-C", join(root, sub), "rev-parse", "--git-dir").trim();
 
     const manager = new WorkspaceLeaseManager({
@@ -105,7 +107,7 @@ describe("commits the agent makes inside a submodule reach the project (2026-09-
 
     const result = await lease.commit();
     // Reported under git's own name for the submodule, as .gitmodules spells it.
-    expect(result.commitsReplayed?.submodules).toEqual([{ path: "Packages/Submodules/Strada.Core", replayed: 1 }]);
+    expect(result.commitsReplayed?.submodules).toEqual([{ path: "Packages/Submodules/LevelTools", replayed: 1 }]);
     // The project's submodule now holds the commit, and its working tree the file.
     expect(git(join(root, sub), "rev-parse", "HEAD").trim()).toBe(leaseHead);
     expect(git(join(root, sub), "log", "--oneline", "-1")).toContain("fix(framework): module config null check");
@@ -114,6 +116,36 @@ describe("commits the agent makes inside a submodule reach the project (2026-09-
     expect(git(root, "-C", join(root, sub), "rev-parse", "--git-dir").trim()).toBe(projectPointer);
     // The parent sees the pointer move as an uncommitted change.
     expect(git(root, "status", "--porcelain", "--", sub)).toMatch(/^ M /);
+    await lease.release();
+  });
+
+  // WP-1.2: a Strada framework package is upstream's code at a recorded
+  // commit. An agent's commit in it is neither replayed nor copied back; the
+  // project's submodule stays where it was, and the report says why.
+  it("does not replay or copy back an agent's commit inside a Strada framework submodule", async () => {
+    const framework = frameworkRepo();
+    const root = projectWithLocalSubmodule(framework);
+    const sub = join("Packages", "Submodules", "Strada.Core");
+    const projectHead = git(join(root, sub), "rev-parse", "HEAD").trim();
+
+    const manager = new WorkspaceLeaseManager({
+      projectRoot: root,
+      leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-root-")),
+    });
+    const lease = await manager.acquireLease({ preferGitWorktree: true });
+    const leaseSub = join(lease.path, sub);
+    writeFileSync(join(leaseSub, "Runtime", "Fix.cs"), "// a framework patch made during the sprint\n");
+    git(leaseSub, "add", "-A");
+    git(leaseSub, "commit", "-qm", "fix(framework): patch it locally");
+
+    const result = await lease.commit();
+
+    expect(result.commitsReplayed?.submodules).toEqual([
+      { path: "Packages/Submodules/Strada.Core", replayed: 0, note: expect.stringContaining("framework package") },
+    ]);
+    expect(git(join(root, sub), "rev-parse", "HEAD").trim()).toBe(projectHead);
+    expect(existsSync(join(root, sub, "Runtime", "Fix.cs"))).toBe(false);
+    expect(result.refusedFrameworkPackage).toEqual([join(sub, "Runtime", "Fix.cs")]);
     await lease.release();
   });
 });

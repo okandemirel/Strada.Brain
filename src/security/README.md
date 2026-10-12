@@ -94,13 +94,14 @@ When rate limiting is enabled, an unset limit takes the built-in default (`DEFAU
 
 ## Path Guard (`path-guard.ts`)
 
-`validatePath(projectRoot, relativePath, { allowMissingParents? })`:
+`validatePath(projectRoot, relativePath, { allowMissingParents?, write? })`:
 
 1. Reject null bytes
 2. Resolve symlinks with `realpath()` on both root and target, and judge containment in that real form only, so a path written as `/private/var/…` is inside a root handed over as `/var/…` (every macOS lease)
 3. Trailing separator check (prevents `/project-evil` matching `/project`)
 4. For new files: walk up to first existing ancestor, validate it's within root. With `allowMissingParents` (write tools that `mkdir -p`) a missing parent chain is accepted once the deepest existing ancestor is proven inside the root.
 5. Block sensitive patterns on every accepted path, including the missing-parent case and, for a new file, both the spelled and the real form: `.env` and any `.env.*` suffix chain, `.git/config`, `.git/credentials`, SSH keys, `.pem`, `.key`, certificates, `node_modules/`, service account files, and home-directory credential stores (`~/.aws/credentials|config`, `~/.git-credentials`, `git/credentials`, `~/.docker/config.json`, `~/.kube/config`, `gh/hosts.yml`, `~/.pgpass`, `~/.codex/auth.json`, `opencode/auth.json`, `.strada/locks/*.operator.json`)
+6. With `write` (the file tools, the Strada generators, `unity_bind_sprite` / `unity_place_prefab` targets) refuse a target inside a Strada framework package — `Packages/Submodules/Strada.*`, an embedded `Packages/(com.)strada.*` package, `Assets/Strada.MCP` — judged in the spelled and the real form (`framework-package-path.ts`). Reading one stays allowed. The workspace lease applies the same rule at write-back, which covers shell commands, Strada.MCP tools and commits: such files are quarantined and reported as `refusedFrameworkPackage`, never published or replayed.
 
 The blocklist matches names, not content. It is a per-tool guardrail, so each tool that can reach a file by another route consults `isSensitivePath()` itself: `shell_exec` checks the paths a command names (best-effort, `src/agents/tools/shell-sensitive-paths.ts`), `git_commit` refuses to stage or commit a blocklisted file (a deletion is allowed; the lease manager's own `.strada-lease-owner.json` / `.strada-lease-seed.json` at the repository's top level are left unstaged instead), and `git_diff` compares commits only (no `<rev>:<path>`, blob or tree) and leaves blocklisted files out of its output.
 
@@ -168,6 +169,7 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | `auth-hardened.ts` | JWT, sessions, MFA, brute force, password hashing, static role table (only `BruteForceProtection` is used) |
 | `rate-limiter.ts` | Per-user message and budget rate limiting |
 | `path-guard.ts` | Directory traversal prevention + sensitive-file blocklist |
+| `framework-package-path.ts` | Which project paths are Strada framework packages agents may read but not write |
 | `user-authorized-paths.ts` | User-named files readable outside the project |
 | `secret-patterns.ts` | 26-pattern credential masking core (dependency-free) |
 | `secret-sanitizer.ts` | Configurable sanitizer class over `secret-patterns.ts` |

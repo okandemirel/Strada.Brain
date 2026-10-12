@@ -9,6 +9,7 @@ import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
 import { appendLeaseLedger, isSystemOwnedCheckPath, systemOwnedDeletionReason } from "./system-owned-path.js";
+import { isFrameworkPackagePath } from "../../security/framework-package-path.js";
 import { isDerivedBuildOutput } from "./derived-build-output.js";
 import {
   changeReviewDir,
@@ -57,6 +58,12 @@ export interface WorkspaceCommitResult {
    * runs them, never publishes them. Absent when there were none.
    */
   readonly refusedSystemOwned?: string[];
+  /**
+   * The part of `conflicts` the agent wrote into a Strada framework package
+   * (Packages/Submodules/Strada.*, see framework-package-path.ts): upstream's
+   * code, read by a lease, never published from one. Absent when there were none.
+   */
+  readonly refusedFrameworkPackage?: string[];
   /**
    * Paths the agent deleted inside its workspace that still exist in the
    * project. They are LEFT IN PLACE — removing a user's files is not something a
@@ -1708,6 +1715,8 @@ export class WorkspaceLeaseManager {
           // plan W07). A git path cannot pass through a link, so its spelling
           // decides.
           if (isSystemOwnedCheckPath(rel)) continue;
+          // Nor a framework package edit (WP-1.2), even one taken back later.
+          if (isFrameworkPackagePath(rel)) continue;
           if (!this.shouldCommitEntry(workspacePath, join(workspacePath, rel))) continue;
           if (entry.status === "D") {
             if (deletedRels.has(rel)) removes.push(posixPath);
@@ -1882,6 +1891,13 @@ export class WorkspaceLeaseManager {
       const leaseHead = (await run(leaseSub, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
       const projectHead = (await run(projectSub, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
       if (!leaseHead || !projectHead || leaseHead === projectHead) continue;
+      // A framework submodule is upstream's code at a recorded commit: an
+      // agent's commits in it are not moved into the project (WP-1.2).
+      if (isFrameworkPackagePath(subPath)) {
+        out.push({ path: subPath, replayed: 0, note: "a Strada framework package — agent commits in it are not replayed" });
+        getLoggerSafe().warn("Lease submodule commits NOT replayed — a Strada framework package", { submodule: subPath });
+        continue;
+      }
       const ahead = await run(leaseSub, ["rev-list", "--reverse", `${projectHead}..${leaseHead}`]);
       const shas = ahead.exitCode === 0 ? ahead.stdout.split(/\s+/).filter(Boolean) : [];
       if (shas.length === 0) {
@@ -2079,7 +2095,7 @@ export class WorkspaceLeaseManager {
     // it by stripping " (reason)" off the report string, which cut a name such
     // as "Hero (1).png (EACCES)" down to "Hero" and let its .meta travel alone
     // (report 2026-09-10 #34).
-    type FileOutcome = { written?: string; conflict?: string; systemOwned?: true; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string; targetExisted: boolean } };
+    type FileOutcome = { written?: string; conflict?: string; systemOwned?: true; frameworkOwned?: true; failed?: string; failedRel?: string; write?: { rel: string; full: string; target: string; targetExisted: boolean } };
     const outcomes: Array<FileOutcome | undefined> = [];
 
     const quarantine = async (rel: string, full: string): Promise<void> => {
@@ -2136,6 +2152,17 @@ export class WorkspaceLeaseManager {
             if ((await pathExists(target)) && (await sameContent(target, full))) return {};
             await quarantine(rel, full);
             return { conflict: rel, systemOwned: true };
+          }
+
+          // THE FRAMEWORK PACKAGES ARE UPSTREAM'S (WP-1.2). The file tools
+          // refuse such a write up front; this is the boundary for a shell
+          // command, a Strada.MCP tool or a commit. Runs left their reports
+          // in the vendored packages and patched them locally, and the
+          // framework vaults served the reports back as the framework.
+          if (isFrameworkPackagePath(rel)) {
+            if ((await pathExists(target)) && (await sameContent(target, full))) return {};
+            await quarantine(rel, full);
+            return { conflict: rel, frameworkOwned: true };
           }
 
           // Quarantine-only mode (orphan salvage): nothing is written into the
@@ -2512,11 +2539,13 @@ export class WorkspaceLeaseManager {
     clearCommitLedger(workspacePath);
 
     const refusedSystemOwned: string[] = [];
+    const refusedFrameworkPackage: string[] = [];
     for (const outcome of outcomes) {
       if (!outcome) continue;
       if (outcome.written !== undefined) written.push(outcome.written);
       if (outcome.conflict !== undefined) conflicts.push(outcome.conflict);
       if (outcome.conflict !== undefined && outcome.systemOwned) refusedSystemOwned.push(outcome.conflict);
+      if (outcome.conflict !== undefined && outcome.frameworkOwned) refusedFrameworkPackage.push(outcome.conflict);
       if (outcome.failed !== undefined) failed.push(outcome.failed);
       if (outcome.failedRel !== undefined) failedRels.push(outcome.failedRel);
     }
@@ -2661,6 +2690,12 @@ export class WorkspaceLeaseManager {
         sample: refusedSystemOwned.slice(0, 5),
       });
     }
+    if (refusedFrameworkPackage.length > 0) {
+      getLoggerSafe().warn("Workspace commit refused writes into Strada framework packages", {
+        count: refusedFrameworkPackage.length,
+        sample: refusedFrameworkPackage.slice(0, 5),
+      });
+    }
 
     // The copy-back above just added this run's captures to the project;
     // the same step retires the oldest so Recordings/ stays a recent window,
@@ -2752,6 +2787,7 @@ export class WorkspaceLeaseManager {
       written,
       conflicts,
       ...(refusedSystemOwned.length > 0 ? { refusedSystemOwned } : {}),
+      ...(refusedFrameworkPackage.length > 0 ? { refusedFrameworkPackage } : {}),
       removed,
       deleted,
       failed,

@@ -22,6 +22,7 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "n
 import { isScaffoldingScene } from "../../agents/autonomy/built-as-specified.js";
 import { findModuleTwin } from "../../agents/orchestrator.js";
 import { ACCEPTANCE_DIR } from "../../campaign/scope-types.js";
+import { isFrameworkPackagePath } from "../../security/framework-package-path.js";
 
 /**
  * Every path a lease commit ever wrote into this project, one per line. This
@@ -87,6 +88,9 @@ export async function systemOwnedDeletionReason(
   // (GDD-drift plan W07). Every commit that touched one IS a campaign: commit,
   // so on a project without the ledger the history rule below applied it.
   if (isSystemOwnedCheckPath(bare, sourceRoot)) return undefined;
+  // Nor is a file in a Strada framework package, even one an earlier lease
+  // wrote there: upstream's folder is not the worker's to change (WP-1.2).
+  if (isFrameworkPackagePath(bare)) return undefined;
   const ledger = readLeaseLedger(sourceRoot);
   // Present but unreadable: the one record of what the system wrote cannot be
   // consulted, so nothing that depends on it may call a file the system's.
