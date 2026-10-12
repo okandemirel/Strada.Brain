@@ -206,6 +206,13 @@ export interface RowResult {
   detail: string;
   /** Its check compiled in an earlier run: one that did and no longer does is a fail, not a check fault. */
   compiledBefore?: boolean;
+  /**
+   * The system's bytes the check last compiled from (its file and the
+   * harness, hashed together). Only while the bytes in the project are still
+   * these did it "compile before": a file the system rewrote since — revised,
+   * regenerated, rebound, or a sibling rendered into it — answers for itself.
+   */
+  checkSha?: string;
 }
 
 export interface RequirementRow {

@@ -14,7 +14,7 @@
 
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -67,6 +67,8 @@ const LADDER = {
 };
 
 const WRITER: AcceptanceWriter = { provider: "checker", model: "checker-model-1", independence: "different-model" };
+/** A name no game declares: a check body that uses it does not compile. */
+const DOES_NOT_COMPILE = "FerryPierThatDoesNotExist";
 const WORKER_MODEL = "worker-model-1";
 
 interface FakeTask {
@@ -95,7 +97,15 @@ function gitIn(root: string, ...args: string[]): string {
 }
 
 /** A fake test writer: a body for every row it is asked about, unless told otherwise. */
-function fakeAuthor(opts: { writer?: AcceptanceWriter; unbound?: (row: RequirementRow) => string | undefined; faulted?: (row: RequirementRow) => string | undefined } = {}) {
+function fakeAuthor(
+  opts: {
+    writer?: AcceptanceWriter;
+    unbound?: (row: RequirementRow) => string | undefined;
+    faulted?: (row: RequirementRow) => string | undefined;
+    /** The body a repair returns, when not the default one. */
+    repaired?: (row: RequirementRow) => string | undefined;
+  } = {},
+) {
   const writer = opts.writer ?? WRITER;
   const bodyFor = (row: RequirementRow): AcceptanceCheckBody => ({
     rid: row.rid,
@@ -115,7 +125,7 @@ function fakeAuthor(opts: { writer?: AcceptanceWriter; unbound?: (row: Requireme
     return { checks, unbound, faulted, writer, calls: 1 };
   });
   const repair = vi.fn(async (row: RequirementRow): Promise<AcceptanceWriteResult> => ({
-    checks: [{ ...bodyFor(row), body: `${bodyFor(row).body} // repaired` }],
+    checks: [{ ...bodyFor(row), body: opts.repaired?.(row) ?? `${bodyFor(row).body} // repaired` }],
     unbound: [],
     faulted: [],
     writer,
@@ -132,7 +142,18 @@ function fakeAuthor(opts: { writer?: AcceptanceWriter; unbound?: (row: Requireme
   return { author, write, repair };
 }
 
-function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> & { failing?: (label: string) => boolean; message?: (label: string) => string; runnerCalls?: string[]; ladder?: typeof LADDER; git?: boolean } = {}) {
+function build(
+  mode: ScopeGateMode,
+  extra: Partial<CampaignManagerOptions> & {
+    failing?: (label: string) => boolean;
+    message?: (label: string) => string;
+    runnerCalls?: string[];
+    ladder?: typeof LADDER;
+    git?: boolean;
+    /** The worker's change leaves the checks' unchanged bytes unable to compile. */
+    workerBroke?: () => boolean;
+  } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "strada-scope-settle-"));
   dirs.push(dir);
   const root = join(dir, "project");
@@ -198,6 +219,28 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> & { f
   const runner: AcceptanceSuiteRunner = async (projectRoot, runId, filter) => {
     const names = (filter.testFilter ?? "").split(";").filter((n) => n !== "");
     runnerCalls.push(filter.testFilter ?? "");
+    // A check file that does not compile: the editor leaves the whole
+    // acceptance assembly out of the run, and says why in its output.
+    const folder = join(projectRoot, ...ACCEPTANCE_DIR.split("/"));
+    const workerBroke = extra.workerBroke?.() === true;
+    const broken = existsSync(folder)
+      ? readdirSync(folder).filter(
+          (f) => f.endsWith(".cs") && (readFileSync(join(folder, f), "utf8").includes(DOES_NOT_COMPILE) || (workerBroke && f.startsWith("Acceptance_"))),
+        )
+      : [];
+    if (broken.length > 0) {
+      mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
+      writeFileSync(
+        join(projectRoot, "Recordings", "tests", "playmode-last.json"),
+        JSON.stringify({ measuredAt: new Date().toISOString(), runId, result: "Passed", total: 0, passed: 0, failed: 0, skipped: 0, failedNames: [], filter: filter.testFilter ?? null, categories: null }),
+      );
+      return {
+        content: [
+          "PlayMode verification FAILED: no test executed, because the project does not compile — the test assembly was never built. Fix these first:",
+          ...broken.map((f) => `  ${ACCEPTANCE_DIR}/${f}(12,9): error CS0103: The name '${DOES_NOT_COMPILE}' does not exist in the current context`),
+        ].join("\n"),
+      };
+    }
     const failed = names.filter((n) => extra.failing?.(labelOfTest(n) ?? "") === true);
     mkdirSync(join(projectRoot, "Recordings", "tests"), { recursive: true });
     writeFileSync(
@@ -218,7 +261,7 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> & { f
     const content = failed.length > 0 ? ["PlayMode verification FAILED", "", "Failed:", ...failed.flatMap((n) => [`  ${n}`, `      ${extra.message?.(labelOfTest(n) ?? "") ?? "Expected: True  But was: False"}`])].join("\n") : "PlayMode verification passed";
     return { content };
   };
-  const { failing: _failing, message: _message, runnerCalls: _calls, ladder: _ladder, git: _git, ...options } = extra;
+  const { failing: _failing, message: _message, runnerCalls: _calls, ladder: _ladder, git: _git, workerBroke: _broke, ...options } = extra;
   const manager = new CampaignManager({
     storage,
     planner,
@@ -562,6 +605,72 @@ describe("the system repairs its own checks, never charged (W09)", () => {
     const m1 = h.storage.get(campaign.id)!.milestones[0]!;
     expect(m1.status).toBe("green");
     expect(m1.writerRepairs?.disputes).toBe(1);
+  }, 60_000);
+
+  it("a file the system rewrote that no longer compiles is the system's fault: never charged, and its good siblings are not rebound", async () => {
+    const author = fakeAuthor({ repaired: (row) => `global::NUnit.Framework.Assert.That(${DOES_NOT_COMPILE} != null, "${row.label ?? row.rid}");` });
+    const h = build("on", {
+      acceptanceAuthor: author.author,
+      failing: (label) => label === "EF-2" && (author.author.revise as ReturnType<typeof vi.fn>).mock.calls.length === 0,
+    });
+    const campaign = await start(h);
+    const testName = (): string => {
+      const ref = byLabel(h.storage.get(campaign.id)!, "EF-2").checks.find((x) => x.kind === "test");
+      return ref?.kind === "test" ? ref.testName : "";
+    };
+    // EF-2 fails on checks that compiled, EF-1 and EF-3 pass: one free bounce.
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    let now = h.storage.get(campaign.id)!;
+    expect(byLabel(now, "EF-1").last?.outcome).toBe("pass");
+    expect(now.milestones[0]!.scopeBounces).toBe(1);
+    // The worker disputes EF-2; the writer's revision of it does not compile,
+    // and every check in the file it shares is left out of the next run.
+    completeSprint(h, { result: `Built the boarding rule.\nACCEPTANCE DISPUTE ${testName()}: a rider may board from a pier being lit` });
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(3), { timeout: 40_000 });
+    now = h.storage.get(campaign.id)!;
+    const m1 = now.milestones[0]!;
+    expect(author.author.revise).toHaveBeenCalledTimes(1);
+    expect(m1.scopeVerdict?.green).toBe(false);
+    // Nothing the worker did broke these bytes: no row is red, and nothing is charged.
+    expect(m1.scopeVerdict?.reasons.filter((r) => r.reasonClass === "red")).toEqual([]);
+    for (const label of ["EF-1", "EF-2", "EF-3"]) {
+      expect(byLabel(now, label).last?.outcome, label).toBe("check-fault");
+      expect(byLabel(now, label).last?.compiledBefore, label).toBe(false);
+    }
+    // A fault that survived its one repair parks the milestone for a person; the worker is not sent back for it.
+    expect(m1.status).toBe("failed");
+    expect(m1.parked?.reasons.filter((r) => r.reasonClass === "red")).toEqual([]);
+    expect(m1.parked?.queued).toEqual([]);
+    expect(byLabel(now, "EF-1").status).toBe("check-fault");
+    expect(h.submitted[2]).not.toContain("THE MILESTONE IS NOT GREEN");
+    // The checks that passed were not rebound to a surface that never changed.
+    expect(author.author.rebind).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it("the other direction: bytes that compiled and that the worker's change broke are rebound, and the rebound check decides", async () => {
+    const author = fakeAuthor();
+    const rebound = (): number => (author.author.rebind as ReturnType<typeof vi.fn>).mock.calls.length;
+    let refactored = false;
+    const h = build("on", {
+      acceptanceAuthor: author.author,
+      failing: (label) => label === "EF-2" && !refactored,
+      workerBroke: () => refactored && rebound() === 0,
+    });
+    const campaign = await start(h);
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    const bytes = h.storage.listAcceptance(campaign.id)[0]!.sha256;
+    // The worker's refactor removes what the unchanged checks name.
+    refactored = true;
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1), { timeout: 40_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(rebound()).toBeGreaterThan(0);
+    expect(author.author.repairCompile).not.toHaveBeenCalled();
+    expect(h.storage.listAcceptance(campaign.id)[0]!.sha256).not.toBe(bytes);
+    expect(m1.status).toBe("green");
+    expect(m1.attempts).toBe(1);
   }, 60_000);
 });
 

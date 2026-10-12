@@ -133,6 +133,7 @@ import { parseRunIntegrity, type TaskRunIntegrity } from "../tasks/test-verdict.
 import { acceptancePromptFor, promptedRequirementIds, rowsAwaitingPrompt, rowsJudgedFor } from "./acceptance-prompt.js";
 import { acceptanceWriteContext } from "./acceptance-author.js";
 import {
+  ACCEPTANCE_FIXTURE_SOURCE,
   acceptanceFilePath,
   harnessFaultOf,
   materialize,
@@ -605,6 +606,15 @@ interface ScopeMeasurement {
   readonly revision: string;
   /** Failure messages by test name, for the bounce. */
   readonly failures: ReadonlyMap<string, string>;
+}
+
+/**
+ * The system's bytes a check compiles from: its file and the harness every
+ * fixture derives from. Test names come from the row id and survive a
+ * rewrite, so only these say whether a check is still the one that compiled.
+ */
+function checkBytesSha(file: AcceptanceSource): string {
+  return createHash("sha256").update(`${file.sha256}\n${ACCEPTANCE_FIXTURE_SOURCE}`, "utf8").digest("hex");
 }
 
 /** A row's current system test, if it has one. */
@@ -6141,6 +6151,7 @@ export class CampaignManager {
     const faults = ctx.checks?.faults ?? new Map<string, ScopeFault>();
     const expected: ExpectedAcceptanceTest[] = [];
     const testOf = new Map<string, string>();
+    const bytesOf = new Map<string, string>();
     const compiledBefore = new Set<string>();
     for (const row of [...own, ...regression]) {
       if (faults.has(row.rid)) continue;
@@ -6148,8 +6159,14 @@ export class CampaignManager {
       if (found === undefined) continue;
       expected.push({ testName: found.test.testName, path: found.file.path });
       testOf.set(row.rid, found.test.testName);
-      const last = row.last?.outcome;
-      if (row.last?.compiledBefore === true || last === "pass" || last === "fail" || last === "flaky") compiledBefore.add(found.test.testName);
+      // THE BYTES, NOT THE NAME. A check the system rewrote since it last
+      // compiled — revised after a dispute, regenerated, rebound, or a sibling
+      // rendered into its file — that does not compile is the system's fault:
+      // read by the row's last result, it was a fail charged to the worker,
+      // and every passing sibling in the file was rebound for nothing.
+      const bytes = checkBytesSha(found.file);
+      bytesOf.set(found.test.testName, bytes);
+      if (row.last?.checkSha === bytes) compiledBefore.add(found.test.testName);
     }
     let measured: AcceptanceMeasurement | undefined;
     if (expected.length > 0) {
@@ -6180,6 +6197,10 @@ export class CampaignManager {
       }
       const attributed = measured?.tests[testName];
       if (attributed === undefined) continue;
+      // A check that ran compiled from these bytes; one that compiled before
+      // from them keeps that. A run that never reached it says nothing.
+      const ran =attributed.compiledBefore === undefined && (attributed.outcome === "pass" || attributed.outcome === "fail" || attributed.outcome === "flaky");
+      const checkSha = ran || compiledBefore.has(testName) ? bytesOf.get(testName) : undefined;
       let outcome = attributed.outcome;
       let detail = attributed.detail;
       // THE HARNESS SAYS WHOSE FAULT IT IS: a check that bound to a service
@@ -6203,6 +6224,7 @@ export class CampaignManager {
         outcome,
         detail,
         ...(attributed.compiledBefore === undefined ? {} : { compiledBefore: attributed.compiledBefore }),
+        ...(checkSha === undefined ? {} : { checkSha }),
       };
     }
     // Asked once: a row the previous verdict already named as unobservable is the game's now.
