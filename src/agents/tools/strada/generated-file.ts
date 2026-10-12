@@ -30,6 +30,19 @@ export async function createGeneratedFile(
   }
 }
 
+/**
+ * The refusal a single-file generator gives for a path that is not a .cs file,
+ * or null when it is one. Unity compiles only .cs files: a mediator written to
+ * `…/EnemyMediator` was reported created and never existed as a type.
+ */
+export function notCsFile(kind: string, relPath: string, className: string): string | null {
+  if (/\.cs$/i.test(relPath)) return null;
+  return (
+    `Error: path must name the .cs file the ${kind} goes in (e.g., '…/${className}.cs'); ` +
+    `'${relPath}' is not one, and Unity compiles only .cs files. No ${kind} was generated.`
+  );
+}
+
 /** The refusal a single-file generator gives for a path that is already taken. */
 export function alreadyExists(kind: string, relPath: string): string {
   return (

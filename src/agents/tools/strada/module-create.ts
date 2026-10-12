@@ -108,8 +108,9 @@ export class ModuleCreateTool implements ITool {
     // Anchored: "Modulator" keeps its tail.
     const rawName = String(input["name"] ?? "");
     const name = /.Module$/.test(rawName) ? rawName.replace(/Module$/, "") : rawName;
-    const modulePath = String(input["path"] ?? `Assets/Modules/${name}Module`);
-    const namespace = String(input["namespace"] ?? `Game.Modules.${name}`);
+    // "" is a field the model filled, not a path or namespace it chose.
+    const modulePath = String(input["path"] || `Assets/Modules/${name}Module`);
+    const namespace = String(input["namespace"] || `Game.Modules.${name}`);
     const includeSystem = input["include_system"] !== false;
     const includeService = input["include_service"] !== false;
 

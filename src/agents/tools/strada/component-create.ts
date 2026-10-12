@@ -1,5 +1,5 @@
 import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../../security/path-guard.js";
-import { alreadyExists, createGeneratedFile } from "./generated-file.js";
+import { alreadyExists, createGeneratedFile, notCsFile } from "./generated-file.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
@@ -21,7 +21,7 @@ export class ComponentCreateTool implements ITool {
       path: {
         type: "string",
         description:
-          "Relative file path (e.g., 'Assets/Modules/Combat/Components/Health.cs')",
+          "Relative path of the .cs file, in the module strada_create_module made (e.g., 'Assets/Modules/CombatModule/Scripts/Components/HealthComponent.cs'). Missing folders are created.",
       },
       namespace: {
         type: "string",
@@ -77,6 +77,8 @@ export class ComponentCreateTool implements ITool {
         isError: true,
       };
     }
+    const notCs = notCsFile("component", relPath, name);
+    if (notCs) return { content: notCs, isError: true };
 
     // Validate C# identifiers to prevent code injection
     if (!isValidCSharpIdentifier(name)) {
@@ -101,8 +103,9 @@ export class ComponentCreateTool implements ITool {
       }
     }
 
-    // Validate path with symlink resolution and sensitive file blocking
-    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
+    // Validate path with symlink resolution and sensitive file blocking. Missing
+    // parents are accepted: the write makes the folder chain (see system-create).
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true, allowMissingParents: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }

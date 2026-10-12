@@ -1,5 +1,5 @@
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
-import { alreadyExists, createGeneratedFile } from "./generated-file.js";
+import { alreadyExists, createGeneratedFile, notCsFile } from "./generated-file.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 import { getFrameworkSchemaProvider } from "../../../intelligence/framework/framework-schema-provider.js";
@@ -20,7 +20,7 @@ export class SystemCreateTool implements ITool {
       },
       path: {
         type: "string",
-        description: "Relative file path (e.g., 'Assets/Modules/Combat/Systems/DamageSystem.cs')",
+        description: "Relative path of the .cs file, in the module strada_create_module made (e.g., 'Assets/Modules/CombatModule/Scripts/Systems/DamageSystem.cs'). Missing folders are created.",
       },
       namespace: {
         type: "string",
@@ -33,7 +33,7 @@ export class SystemCreateTool implements ITool {
       },
       burst_component_count: {
         type: "number",
-        description: "Number of component type args for generic BurstSystem (1-4). When set, generates a BurstSystem<TJob, T1, ...> instead of the base_class. Requires query_components to match the count.",
+        description: "Number of component type args for generic BurstSystem (1-4). When set, generates a BurstSystem<TJob, T1, ...> instead of the base_class. Requires query_components to match the count. Omit it (or pass 0) for any other system.",
       },
       query_components: {
         type: "array",
@@ -91,10 +91,17 @@ export class SystemCreateTool implements ITool {
     const name = rawName.endsWith("System") ? rawName : rawName + "System";
     const relPath = String(input["path"] ?? "");
     const namespace = String(input["namespace"] ?? "");
-    const baseClass = String(input["base_class"] ?? "SystemBase");
+    // An optional field the model fills with its zero value ("" or 0) means it
+    // was not chosen. Measured live: four of four failed calls carried
+    // burst_component_count: 0, read as "a BurstSystem of no components" and
+    // refused, when the caller wanted no BurstSystem at all.
+    const baseClass = String(input["base_class"] || "SystemBase");
     const queryComponents = (input["query_components"] as string[]) ?? [];
     const injectServices = (input["inject_services"] as string[]) ?? [];
-    const burstComponentCount = typeof input["burst_component_count"] === "number" ? input["burst_component_count"] : undefined;
+    const burstComponentCount =
+      typeof input["burst_component_count"] === "number" && input["burst_component_count"] !== 0
+        ? input["burst_component_count"]
+        : undefined;
     const systemOrder = typeof input["system_order"] === "number" ? input["system_order"] : 0;
     const updatePhase = String(input["update_phase"] ?? "");
     const runBefore = (input["run_before"] as string[]) ?? [];
@@ -107,6 +114,8 @@ export class SystemCreateTool implements ITool {
         isError: true,
       };
     }
+    const notCs = notCsFile("system", relPath, name);
+    if (notCs) return { content: notCs, isError: true };
 
     // Validate identifiers
     if (!isValidCSharpIdentifier(name)) {
@@ -173,8 +182,10 @@ export class SystemCreateTool implements ITool {
       }
     }
 
-    // Validate path
-    const pathCheck = await validatePath(context.projectPath, relPath, { write: true });
+    // Validate path. Missing parents are accepted: the write lays down its own
+    // folder chain, and a system usually goes into a module folder this run has
+    // not made yet. Containment is still proven on the deepest existing ancestor.
+    const pathCheck = await validatePath(context.projectPath, relPath, { write: true, allowMissingParents: true });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
