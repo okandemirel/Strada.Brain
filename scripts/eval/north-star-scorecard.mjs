@@ -1055,16 +1055,45 @@ function rung5(ctx) {
   const title = RUNG_TITLES[4];
   const cause = campaignsCause(ctx);
   if (cause) return blocked(5, title, cause);
-  const greens = ctx.store.campaigns.flatMap((c) => greenMilestones(c).map((m) => ({ c, m })));
-  const proven = greens.filter(({ c, m }) => gateProof(ctx.store, c, m).proven);
+  const all = ctx.store.campaigns;
   const byMode = { off: 0, shadow: 0, on: 0 };
-  const scopedIds = new Set(ctx.store.campaigns.map((c) => c.id));
+  const scopedIds = new Set(all.map((c) => c.id));
   for (const j of ctx.store.judgements ?? []) if (scopedIds.has(j.campaignId)) byMode[j.mode] = (byMode[j.mode] ?? 0) + 1;
   const table = ctx.store.judgements ? `judgements: off ${byMode.off}, shadow ${byMode.shadow}, on ${byMode.on}` : "campaigns.db has no campaign_judgements table";
-  const text = `${proven.length} of ${greens.length} green milestones were judged green on a proven basis by the scope gate in mode on (${table})`;
-  return item(5, title, [greens.length > 0 && proven.length === greens.length ? pass(text) : fail(text)], {
-    measured: { greenMilestones: greens.length, provenByGate: proven.length, judgements: byMode },
-  });
+  const greensOf = (campaigns) => campaigns.flatMap((c) => greenMilestones(c).map((m) => ({ c, m })));
+  const provenOf = (greens) => greens.filter(({ c, m }) => gateProof(ctx.store, c, m).proven).length;
+  const verdict = (greens, proven, text) => (greens.length > 0 && proven === greens.length ? pass(text) : fail(text));
+  if (ctx.campaignFilter) {
+    // One campaign, scored on its own (the proof run), is held to every green it has.
+    const greens = greensOf(all);
+    const proven = provenOf(greens);
+    const text = `${proven} of ${greens.length} green milestones were judged green on a proven basis by the scope gate in mode on (${table})`;
+    return item(5, title, [verdict(greens, proven, text)], { measured: { greenMilestones: greens.length, provenByGate: proven, judgements: byMode } });
+  }
+  // Across every campaign, the rung asks what the gate did once it decided.
+  // Greens that predate it are left out: those of campaigns created before it
+  // first decided anywhere (the earliest scope_gate_since) and never run under
+  // it, and those production itself marked legacy when the ledger was first
+  // built. Every other green counts, so one that bypassed the gate, or a later
+  // campaign run with the gate off, still fails the rung.
+  const gated = all.filter((c) => c.scopeGateSince !== null);
+  const since = gated.length > 0 ? Math.min(...gated.map((c) => Number(c.scopeGateSince))) : null;
+  const before = all.filter((c) => c.scopeGateSince === null && (since === null || c.createdAt < since));
+  const inScope = all.filter((c) => !before.includes(c));
+  const counted = greensOf(inScope).filter(({ m }) => m.judgementBasis !== "legacy");
+  const legacy = greensOf(inScope).length - counted.length;
+  const earlier = greensOf(before);
+  const proven = provenOf(counted);
+  const notes = [
+    `${plural(legacy + earlier.length, "green milestone")} not counted: ${legacy} marked legacy (green before the ledger), ${earlier.length} in ${plural(before.length, "campaign")} from before the gate first decided`,
+  ];
+  const measured = { greenMilestones: counted.length, provenByGate: proven, legacyGreens: legacy, greensBeforeGate: earlier.length, gatedCampaigns: gated.length, judgements: byMode };
+  if (gated.length === 0) {
+    const text = `no campaign ran under the scope gate in mode on (scope_gate_since is unset on all ${plural(all.length, "campaign")}); ${provenOf(earlier)} of ${earlier.length} green milestones were judged green on a proven basis by the scope gate in mode on (${table})`;
+    return item(5, title, [fail(text)], { notes, measured });
+  }
+  const text = `${proven} of ${counted.length} green milestones in ${plural(inScope.length, "campaign")} since the scope gate first decided were judged green on a proven basis by the scope gate in mode on (${table})`;
+  return item(5, title, [verdict(counted, proven, text)], { notes, measured });
 }
 
 function projectCause(ctx) {

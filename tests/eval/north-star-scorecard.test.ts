@@ -531,7 +531,7 @@ describe("north-star scorecard: a run that did everything", () => {
     );
     expect(rung(card, 2).checks[0]!.text).toBe("1 of 1 campaigns started from idea_text; 1 of them reached a plan");
     expect(rung(card, 3).checks[1]!.text).toBe(`${PROOF_ID}: 2 of 2 in-scope rows owned by a milestone of its plan`);
-    expect(rung(card, 5).checks[0]!.text).toContain("2 of 2 green milestones were judged green on a proven basis by the scope gate in mode on");
+    expect(rung(card, 5).checks[0]!.text).toContain("2 of 2 green milestones in 1 campaign since the scope gate first decided were judged green on a proven basis by the scope gate in mode on");
     expect(rung(card, 9).checks.map((c) => c.text)).toEqual([
       "1 of 1 retrievals returned anything",
       "1 of 1 exposures showed a lesson to a later run than the one that learned it",
@@ -611,6 +611,72 @@ describe("north-star scorecard: a run that did everything", () => {
     const r9 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 9);
     expect(r9.verdict).toBe(VERDICT.FAIL);
     expect(r9.checks[1]).toEqual({ ok: false, text: "0 of 1 exposures showed a lesson to a later run than the one that learned it" });
+  });
+
+  /** Adds campaigns to the proof home's store, each older than the proof run. */
+  function addCampaigns(memory: string, campaigns: Campaign[], judgements: Array<{ campaignId: string; milestoneId: string; mode: string; green: boolean }> = []): void {
+    const storage = new CampaignStorage(join(memory, "campaigns.db"));
+    try {
+      for (const c of campaigns) storage.save(c);
+      for (const j of judgements) {
+        storage.appendJudgement({
+          campaignId: j.campaignId,
+          attemptKey: `${j.milestoneId}#1`,
+          atMs: T0 - 50 * HOUR,
+          input: { milestoneId: j.milestoneId, mode: j.mode, revision: "rev-old", run: RUN, sources: [{ writer: WRITER }] } as never,
+          judgement: { green: j.green, basis: "proven", caveats: [] },
+        });
+      }
+    } finally {
+      storage.close();
+    }
+  }
+
+  it("scopes rung 5 to campaigns under the scope gate when no --campaign is given, as rungs 2, 3 and 10 are", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    // Greens from before the gate existed: no scope_gate_since, judged in shadow at most.
+    addCampaigns(
+      memory,
+      [campaign({ id: "campaign_before_gate", state: "done", createdAt: T0 - 100 * HOUR, updatedAt: T0 - 60 * HOUR, milestones: [milestone("m1"), milestone("m2")] })],
+      [{ campaignId: "campaign_before_gate", milestoneId: "m1", mode: "shadow", green: true }],
+    );
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    expect(rung(card, 5).verdict).toBe(VERDICT.PASS);
+    expect(rung(card, 5).checks[0]!.text).toBe(
+      "2 of 2 green milestones in 1 campaign since the scope gate first decided were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 1, on 2)",
+    );
+    expect(rung(card, 5).notes).toEqual(["2 green milestones not counted: 0 marked legacy (green before the ledger), 2 in 1 campaign from before the gate first decided"]);
+    // One campaign, scored on its own, is held to every green it has.
+    const legacy = scoreNorthStar({ home, project, upstream, brainRoot, campaign: "campaign_before_gate" }) as Card;
+    expect(rung(legacy, 5).verdict).toBe(VERDICT.FAIL);
+    expect(rung(legacy, 5).checks[0]!.text).toBe(
+      "0 of 2 green milestones were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 1, on 0)",
+    );
+  });
+
+  it("still fails rung 5 on a green the gate never proved in a campaign under the gate, and counts only legacy greens out", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    addCampaigns(memory, [
+      campaign({
+        id: "campaign_gated_bypass",
+        createdAt: T0 - 100 * HOUR,
+        scopeGateSince: T0 - 90 * HOUR,
+        milestones: [milestone("m1", { judgementBasis: "legacy" } as Partial<CampaignMilestone>), milestone("m2")],
+      }),
+    ]);
+    const r5 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 5);
+    expect(r5.verdict).toBe(VERDICT.FAIL);
+    expect(r5.checks[0]!.text).toMatch(/^2 of 3 green milestones in 2 campaigns since the scope gate first decided were judged green/);
+    expect(r5.notes).toEqual(["1 green milestone not counted: 1 marked legacy (green before the ledger), 0 in 0 campaigns from before the gate first decided"]);
+  });
+
+  it("counts the greens of a campaign created after the gate first decided that never ran under it", () => {
+    const { home, memory, project, upstream } = proofHome({ lessonOrigin: "run-1" });
+    // The proof run's gate decided at T0; this one started later with the gate off.
+    addCampaigns(memory, [campaign({ id: "campaign_gate_off", createdAt: T0 + 5 * HOUR, milestones: [milestone("m1")] })]);
+    const r5 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 5);
+    expect(r5.verdict).toBe(VERDICT.FAIL);
+    expect(r5.checks[0]!.text).toMatch(/^2 of 3 green milestones in 2 campaigns since the scope gate first decided/);
   });
 
   it("refuses an unknown --campaign", () => {
@@ -754,7 +820,7 @@ describe("north-star scorecard: the measured state", () => {
     expect(rung(card, 2).checks[0]!.text).toBe("0 of 2 campaigns started from idea_text; 0 of them reached a plan");
     expect(rung(card, 3).checks[0]!.text).toBe("0 of 2 campaigns carry a requirement ledger");
     expect(rung(card, 5).checks[0]!.text).toBe(
-      "0 of 2 green milestones were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 2, on 0)",
+      "no campaign ran under the scope gate in mode on (scope_gate_since is unset on all 2 campaigns); 0 of 2 green milestones were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 2, on 0)",
     );
     expect(rung(card, 9).checks[0]!.text).toBe("0 of 3 retrievals returned anything");
     expect(rung(card, 10).checks[0]!.text).toBe("2 campaigns, 1 done; 0 delivered with every milestone judged green on a proven basis by the scope gate in mode on");
