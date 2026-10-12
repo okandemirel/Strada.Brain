@@ -36,8 +36,9 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import Database from "better-sqlite3";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -362,7 +363,14 @@ function readLearning(src) {
 
 // ─── daemon log ─────────────────────────────────────────────────────────────
 
+// bootstrap.ts writes BOOT_STARTED first on every boot; tool-registry.ts then
+// writes MCP_LOADED, or one of MCP_NOT_LOADED, or nothing at all when no
+// install was found; stage-finalization.ts closes the boot with BOOT_REPORT.
+const BOOT_STARTED = "Bootstrapping Strada Brain";
 const MCP_LOADED = "Loaded Strada.MCP tools into main toolchain";
+const MCP_NOT_LOADED = new Set(["Failed to load Strada.MCP tools", "Refused to load Strada.MCP from inside the Unity project"]);
+const BOOT_REPORT = "Boot report";
+const LOG_MESSAGES = new Set([BOOT_STARTED, MCP_LOADED, ...MCP_NOT_LOADED, BOOT_REPORT]);
 
 function parseLogTime(raw) {
   if (typeof raw !== "string") return NaN;
@@ -371,16 +379,71 @@ function parseLogTime(raw) {
   return Date.parse(local);
 }
 
-function readLog(path) {
-  const text = readText(path);
-  if (text === null) return { cause: `daemon log not found at ${path}` };
-  const loads = [];
-  for (const line of text.split("\n")) {
-    if (!line.includes(MCP_LOADED)) continue;
-    const parsed = parseJson(line.trim());
-    if (isRecord(parsed.value) && parsed.value.message === MCP_LOADED) loads.push(parsed.value);
+/**
+ * The log and the archives the logger rotated it into, oldest first. The file
+ * transport is tailable with zipped archives (logger.ts): <name>1<ext>.gz is
+ * the newest archive and the highest number the oldest.
+ */
+function logFiles(path) {
+  const ext = extname(path);
+  const base = basename(path, ext);
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const archive = new RegExp(`^${escape(base)}(\\d+)${escape(ext)}(\\.gz)?$`);
+  let names = [];
+  try {
+    names = readdirSync(dirname(path));
+  } catch {
+    /* no directory: no archives */
   }
-  return { loads };
+  const archives = names
+    .map((name) => ({ name, m: archive.exec(name) }))
+    .filter((a) => a.m)
+    .map((a) => ({ path: join(dirname(path), a.name), n: Number(a.m[1]), gz: a.m[2] !== undefined }))
+    .sort((a, b) => b.n - a.n);
+  return [...archives, { path, n: 0, gz: false }];
+}
+
+function readLog(path) {
+  if (!existsSync(path)) return { cause: `daemon log not found at ${path}` };
+  const files = [];
+  const boots = [];
+  let boot = null;
+  for (const file of logFiles(path)) {
+    let text;
+    try {
+      text = file.gz ? gunzipSync(readFileSync(file.path)).toString("utf8") : readFileSync(file.path, "utf8");
+    } catch (err) {
+      files.push({ path: file.path, cause: message(err) });
+      continue;
+    }
+    files.push({ path: file.path, cause: null });
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("{")) continue;
+      const parsed = parseJson(line.trim());
+      const entry = parsed.value;
+      if (!isRecord(entry) || !LOG_MESSAGES.has(entry.message)) continue;
+      if (entry.message === BOOT_STARTED) {
+        boot = { at: entry.timestamp ?? null, file: files.length - 1, loads: [], refusals: [], reported: false };
+        boots.push(boot);
+      } else if (boot === null) {
+        // The boot it belongs to rotated out of the oldest archive.
+        continue;
+      } else if (entry.message === MCP_LOADED) boot.loads.push(entry);
+      else if (entry.message === BOOT_REPORT) boot.reported = true;
+      else boot.refusals.push(entry);
+    }
+  }
+  return { files, boots };
+}
+
+/** Why rung 1 cannot name the newest boot, or null when it can. */
+function newestBootUnknown(log, logPath) {
+  const newest = log.boots.at(-1);
+  // A file that could not be read and is newer than the newest boot read may hold a newer one.
+  const after = log.files.filter((f, i) => f.cause && (newest === undefined || i > newest.file));
+  if (after.length > 0) return `the newest boot may be in ${after.map((f) => `${f.path}, which could not be read (${f.cause})`).join("; ")}`;
+  if (newest === undefined) return `no boot marker ("${BOOT_STARTED}") in ${logPath} or its rotated archives`;
+  return null;
 }
 
 function headCommitMs(brainRoot) {
@@ -859,23 +922,39 @@ function campaignsCause(ctx) {
 function rung1(ctx) {
   const title = RUNG_TITLES[0];
   if (ctx.log.cause) return blocked(1, title, ctx.log.cause);
-  const loads = ctx.log.loads;
-  if (loads.length === 0) return item(1, title, [fail(`${ctx.logPath} records no boot that loaded Strada.MCP tools`)]);
-  const last = loads.at(-1);
-  const registered = Number(last.registered ?? 0);
-  const bootMs = parseLogTime(last.timestamp);
-  const connected = loads.filter((l) => l.bridgeState === "connected").length;
-  const checks = [
-    registered > 0
-      ? pass(`the newest boot (${last.timestamp}) registered ${registered} Unity tools from ${last.sourcePath ?? "an unnamed source"}`)
-      : fail(`the newest boot (${last.timestamp}) registered 0 Unity tools`),
-    last.bridgeState === "connected"
-      ? pass("the editor bridge was connected at that boot")
-      : fail(`the editor bridge was ${last.bridgeState ?? "unreported"} at that boot (connected at ${connected} of ${loads.length} boots in this log)`),
-  ];
+  const unknown = newestBootUnknown(ctx.log, ctx.logPath);
+  if (unknown) return blocked(1, title, unknown);
+  // The newest BOOT, not the newest load: a later boot that loaded nothing
+  // writes no load line, so the newest load can belong to a boot long gone.
+  const boots = ctx.log.boots;
+  const newest = boots.at(-1);
+  const withTools = boots.filter((b) => b.loads.length > 0);
+  const connected = withTools.filter((b) => b.loads.at(-1).bridgeState === "connected").length;
+  const load = newest.loads.at(-1);
+  const measured = { boots: boots.length, bootsWithTools: withTools.length, bridgeConnected: connected, registered: Number(load?.registered ?? 0), bootAt: newest.at };
+  const checks = [];
+  if (load === undefined) {
+    const refusal = newest.refusals.at(-1);
+    const why = refusal
+      ? `${refusal.message}${refusal.error ? ` (${refusal.error})` : ""}`
+      : newest.reported
+        ? "it reached its boot report without a Strada.MCP load line (no install was found)"
+        : "no Strada.MCP load line and no boot report follow it (it is still starting, or it stopped)";
+    checks.push(fail(`the newest boot (${newest.at}) loaded no Strada.MCP tools: ${why}`));
+  } else {
+    checks.push(
+      measured.registered > 0
+        ? pass(`the newest boot (${newest.at}) registered ${measured.registered} Unity tools from ${load.sourcePath ?? "an unnamed source"}`)
+        : fail(`the newest boot (${newest.at}) registered 0 Unity tools`),
+      load.bridgeState === "connected"
+        ? pass("the editor bridge was connected at that boot")
+        : fail(`the editor bridge was ${load.bridgeState ?? "unreported"} at that boot (connected at ${connected} of ${boots.length} boots in the log and its archives)`),
+    );
+  }
+  const bootMs = parseLogTime(newest.at);
   const head = headCommitMs(ctx.brainRoot);
   if (head.cause) checks.push(unmeasured(head.cause));
-  else if (!Number.isFinite(bootMs)) checks.push(unmeasured(`the boot's timestamp "${last.timestamp}" could not be read`));
+  else if (!Number.isFinite(bootMs)) checks.push(unmeasured(`the boot's timestamp "${newest.at}" could not be read`));
   else {
     checks.push(
       bootMs >= head.ms
@@ -883,7 +962,7 @@ function rung1(ctx) {
         : fail(`the boot predates HEAD (committed ${isoOf(head.ms)}): nothing on HEAD has booted`),
     );
   }
-  return item(1, title, checks, { measured: { boots: loads.length, bridgeConnected: connected, registered, bootAt: last.timestamp ?? null } });
+  return item(1, title, checks, { measured });
 }
 
 function rung2(ctx) {
@@ -1551,7 +1630,9 @@ export function scoreNorthStar(opts = {}) {
         campaignsDb: describe(campaignsSrc, { campaigns: store?.all.length ?? 0 }),
         tasksDb: describe(tasksSrc, {}),
         learningDb: describe(learningSrc, {}),
-        log: ctx.log.cause ? { path: logPath, read: false, cause: ctx.log.cause } : { path: logPath, read: true, mcpLoads: ctx.log.loads.length },
+        log: ctx.log.cause
+          ? { path: logPath, read: false, cause: ctx.log.cause }
+          : { path: logPath, read: true, files: ctx.log.files.length, boots: ctx.log.boots.length, mcpLoads: ctx.log.boots.filter((b) => b.loads.length > 0).length },
         project: !ctx.projectPath
           ? { path: null, read: false, cause: "no --project was given" }
           : project.cause
@@ -1643,7 +1724,7 @@ const HELP = `north-star-scorecard.mjs — the ten north-star rungs and the proo
                           framework vaults under <project>/Packages are found by themselves)
   --upstream <dir>        directory holding the Strada.Core / Strada.Modules / Strada.MCP checkouts,
                           to tell vendored framework files from notes runs wrote into them
-  --log <path>            daemon log for rung 1 (default <home>/strada-brain.log)
+  --log <path>            daemon log for rung 1, read with its rotated archives (default <home>/strada-brain.log)
   --brain-root <dir>      Brain checkout whose HEAD rung 1 compares the boot with (default: this repository)
   --campaign <id>         measure one campaign only (the proof run)
   --json                  machine-readable output

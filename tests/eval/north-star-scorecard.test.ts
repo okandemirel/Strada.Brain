@@ -12,8 +12,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import Database from "better-sqlite3";
 import {
   EXIT,
@@ -432,8 +433,34 @@ function seedVault(projectRoot: string, files: string[]): void {
   }
 }
 
-const logLine = (fields: Record<string, unknown>): string =>
-  `${JSON.stringify({ level: "info", message: "Loaded Strada.MCP tools into main toolchain", service: "strada-brain", ...fields })}\n`;
+// The daemon log as the logger's file transport writes it: one JSON object a line.
+const logEntry = (message: string, timestamp: string, fields: Record<string, unknown> = {}): string =>
+  `${JSON.stringify({ level: "info", message, service: "strada-brain", timestamp, ...fields })}\n`;
+/** bootstrap.ts: the first line every boot writes. */
+const booted = (at: string): string => logEntry("Bootstrapping Strada Brain", at, { channel: "cli", projectPath: "/invented/project", readOnly: false });
+/** tool-registry.ts: the line a boot writes once Strada.MCP's tools are registered. */
+const mcpLoaded = (at: string, fields: Record<string, unknown> = {}): string =>
+  logEntry("Loaded Strada.MCP tools into main toolchain", at, { sourcePath: "/invented/Strada.MCP", registered: 111, bridgeState: "connected", ...fields });
+/** stage-finalization.ts: the last line of a boot that finished. */
+const bootReport = (at: string): string => logEntry("Boot report", at, { summary: "Boot report clean." });
+/** One boot that loaded Strada.MCP: its marker, the load, its report. */
+const goodBoot = (day: string, fields: Record<string, unknown> = {}): string =>
+  `${booted(`${day} 00:00:00`)}${mcpLoaded(`${day} 00:00:05`, fields)}${bootReport(`${day} 00:00:09`)}`;
+
+/**
+ * A Brain checkout of its own, so rung 1 compares the boot with a HEAD the test
+ * chose and never needs this repository's .git (a tree from `git archive` has none).
+ */
+function brainCheckout(root: string, committedAt = "2050-01-01T00:00:00Z"): string {
+  mkdirSync(root, { recursive: true });
+  const env = { ...process.env, GIT_AUTHOR_DATE: committedAt, GIT_COMMITTER_DATE: committedAt };
+  const git = (...args: string[]): string => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env });
+  git("init", "-q");
+  writeFileSync(join(root, "README.md"), "invented checkout\n");
+  git("add", "README.md");
+  git("-c", "user.name=invented", "-c", "user.email=invented@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "head");
+  return root;
+}
 
 function hashDir(dir: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -442,8 +469,10 @@ function hashDir(dir: string): Record<string, string> {
 }
 
 let work: string;
+let brainRoot: string;
 beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "ns-scorecard-"));
+  brainRoot = brainCheckout(join(work, "brain"));
 });
 afterEach(() => {
   rmSync(work, { recursive: true, force: true });
@@ -455,7 +484,7 @@ describe("north-star scorecard: a run that did everything", () => {
     const memory = join(home, ".strada-memory");
     mkdirSync(memory, { recursive: true });
     seedProof(memory, opts);
-    writeFileSync(join(home, "strada-brain.log"), logLine({ registered: 111, bridgeState: "connected", sourcePath: "/invented/Strada.MCP", timestamp: "2099-01-01 00:00:00" }));
+    writeFileSync(join(home, "strada-brain.log"), goodBoot("2099-01-01"));
     const project = join(work, "BeaconKeeper");
     cleanProject(project);
     seedVault(project, [
@@ -472,7 +501,7 @@ describe("north-star scorecard: a run that did everything", () => {
 
   it("passes all ten rungs, each on a measured number", () => {
     const { home, project, upstream } = proofHome();
-    const card = scoreNorthStar({ home, project, upstream }) as Card;
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(card.rungs.map((r) => [r.id, r.verdict, r.cause])).toEqual(
       Array.from({ length: 10 }, (_, i) => [i + 1, VERDICT.PASS, null]),
     );
@@ -489,7 +518,7 @@ describe("north-star scorecard: a run that did everything", () => {
 
   it("judges the proof criteria from records, and keeps what no record holds as not measured", () => {
     const { home, project, upstream } = proofHome();
-    const card = scoreNorthStar({ home, project, upstream }) as Card;
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     const verdicts = Object.fromEntries(card.criteria.map((c) => [c.id, c.verdict]));
     expect(verdicts).toEqual({
       A: VERDICT.NOT_MEASURED,
@@ -515,15 +544,15 @@ describe("north-star scorecard: a run that did everything", () => {
 
   it("fails rung 10 when the owner wrote to the campaign's chat while it ran", () => {
     const { home, project, upstream } = proofHome({ ownerMessageDuringRun: true });
-    const card = scoreNorthStar({ home, project, upstream }) as Card;
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(rung(card, 10).verdict).toBe(VERDICT.FAIL);
     expect(rung(card, 10).checks[1]).toMatchObject({ ok: false, text: expect.stringMatching(/^1 owner message in the campaign's chat/) });
   });
 
   it("fails rung 1 on a boot older than HEAD", () => {
     const { home, project, upstream } = proofHome();
-    writeFileSync(join(home, "strada-brain.log"), logLine({ registered: 111, bridgeState: "connected", timestamp: "2000-01-02 03:04:05" }));
-    const card = scoreNorthStar({ home, project, upstream }) as Card;
+    writeFileSync(join(home, "strada-brain.log"), goodBoot("2000-01-02"));
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(rung(card, 1).verdict).toBe(VERDICT.FAIL);
     expect(rung(card, 1).checks[2]!.text).toMatch(/^the boot predates HEAD/);
   });
@@ -531,13 +560,13 @@ describe("north-star scorecard: a run that did everything", () => {
   it("opens every database read-only: not one byte of the memory directory changes", () => {
     const { home, memory, project, upstream } = proofHome();
     const before = hashDir(memory);
-    scoreNorthStar({ home, project, upstream });
+    scoreNorthStar({ home, project, upstream, brainRoot });
     expect(hashDir(memory)).toEqual(before);
   });
 
   it("prints JSON from the command line", () => {
     const { home, project, upstream } = proofHome();
-    const res = spawnSync(process.execPath, [CLI, "--home", home, "--project", project, "--upstream", upstream, "--json"], { encoding: "utf8", cwd: REPO_ROOT });
+    const res = spawnSync(process.execPath, [CLI, "--home", home, "--project", project, "--upstream", upstream, "--brain-root", brainRoot, "--json"], { encoding: "utf8", cwd: REPO_ROOT });
     expect(res.status, res.stderr).toBe(EXIT.MEASURED);
     const card = JSON.parse(res.stdout) as Card;
     expect(card.score.rungs).toEqual({ pass: 10, fail: 0, notMeasured: 0 });
@@ -552,13 +581,88 @@ describe("north-star scorecard: a run that did everything", () => {
   });
 });
 
+describe("north-star scorecard: rung 1 judges the newest boot", () => {
+  function logHome(files: Record<string, string | Buffer>): string {
+    const home = join(work, "home");
+    mkdirSync(home, { recursive: true });
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(home, name), body);
+    return home;
+  }
+  const rung1 = (home: string) => rung(scoreNorthStar({ home, brainRoot }) as Card, 1);
+
+  it.each([
+    ["failed to load it", "Failed to load Strada.MCP tools"],
+    ["refused to load it", "Refused to load Strada.MCP from inside the Unity project"],
+  ])("fails when a later boot %s, whatever an older boot loaded", (_label, failure) => {
+    const home = logHome({
+      "strada-brain.log":
+        goodBoot("2099-01-01") +
+        booted("2099-01-02 00:00:00") +
+        logEntry(failure, "2099-01-02 00:00:04", { level: "error", error: "Cannot find package 'invented-dep'" }) +
+        bootReport("2099-01-02 00:00:09"),
+    });
+    const r = rung1(home);
+    expect(r.verdict).toBe(VERDICT.FAIL);
+    expect(r.checks[0]).toEqual({
+      ok: false,
+      text: `the newest boot (2099-01-02 00:00:00) loaded no Strada.MCP tools: ${failure} (Cannot find package 'invented-dep')`,
+    });
+    expect(r.measured).toMatchObject({ boots: 2, bootsWithTools: 1, bootAt: "2099-01-02 00:00:00" });
+  });
+
+  it("fails when a later boot found no Strada.MCP install and so logged nothing about it", () => {
+    const home = logHome({ "strada-brain.log": goodBoot("2099-01-01") + booted("2099-01-02 00:00:00") + bootReport("2099-01-02 00:00:09") });
+    const r = rung1(home);
+    expect(r.verdict).toBe(VERDICT.FAIL);
+    expect(r.checks[0]!.text).toBe(
+      "the newest boot (2099-01-02 00:00:00) loaded no Strada.MCP tools: it reached its boot report without a Strada.MCP load line (no install was found)",
+    );
+  });
+
+  it("reads the rotated archives, oldest first, when the current file holds no boot", () => {
+    const noise = logEntry("Heartbeat", "2099-01-03 00:00:00");
+    const passing = rung1(logHome({ "strada-brain.log": noise, "strada-brain1.log.gz": gzipSync(goodBoot("2099-01-02")) }));
+    expect(passing.verdict).toBe(VERDICT.PASS);
+    expect(passing.checks[0]!.text).toBe("the newest boot (2099-01-02 00:00:00) registered 111 Unity tools from /invented/Strada.MCP");
+
+    rmSync(join(work, "home"), { recursive: true });
+    // strada-brain2 is older than strada-brain1 (the logger rotates tailable).
+    const failing = rung1(
+      logHome({
+        "strada-brain.log": noise,
+        "strada-brain1.log.gz": gzipSync(booted("2099-01-02 00:00:00") + bootReport("2099-01-02 00:00:09")),
+        "strada-brain2.log.gz": gzipSync(goodBoot("2099-01-01")),
+      }),
+    );
+    expect(failing.verdict).toBe(VERDICT.FAIL);
+    expect(failing.checks[0]!.text).toMatch(/^the newest boot \(2099-01-02 00:00:00\) loaded no Strada\.MCP tools/);
+  });
+
+  it("is not measured when no file holds a boot marker, not failed for a boot that rotated away", () => {
+    const r = rung1(logHome({ "strada-brain.log": mcpLoaded("2099-01-02 00:00:05") }));
+    expect(r.verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(r.cause).toBe(`no boot marker ("Bootstrapping Strada Brain") in ${join(work, "home", "strada-brain.log")} or its rotated archives`);
+  });
+
+  it("is not measured when the newest boot may sit in an archive that cannot be read", () => {
+    const home = logHome({
+      "strada-brain.log": logEntry("Heartbeat", "2099-01-03 00:00:00"),
+      "strada-brain1.log.gz": Buffer.from("not gzip"),
+      "strada-brain2.log.gz": gzipSync(goodBoot("2099-01-01")),
+    });
+    const r = rung1(home);
+    expect(r.verdict).toBe(VERDICT.NOT_MEASURED);
+    expect(r.cause).toMatch(new RegExp(`^the newest boot may be in ${join(home, "strada-brain1.log.gz").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}, which could not be read`));
+  });
+});
+
 describe("north-star scorecard: the measured state", () => {
   function todayHome() {
     const home = join(work, "home");
     const memory = join(home, ".strada-memory");
     mkdirSync(memory, { recursive: true });
     seedToday(memory);
-    writeFileSync(join(home, "strada-brain.log"), logLine({ registered: 111, bridgeState: "disconnected", timestamp: "2000-01-02 03:04:05" }));
+    writeFileSync(join(home, "strada-brain.log"), goodBoot("2000-01-02", { bridgeState: "disconnected" }));
     const project = join(work, "Orchard");
     brokenProject(project);
     const upstream = join(work, "upstream");
@@ -575,7 +679,7 @@ describe("north-star scorecard: the measured state", () => {
 
   it("fails every rung with the number that failed it", () => {
     const { home, project, upstream } = todayHome();
-    const card = scoreNorthStar({ home, project, upstream }) as Card;
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(card.score.rungs).toEqual({ pass: 0, fail: 10, notMeasured: 0 });
     expect(rung(card, 1).checks.map((c) => c.ok)).toEqual([true, false, false]);
     expect(rung(card, 2).checks[0]!.text).toBe("0 of 2 campaigns started from idea_text; 0 of them reached a plan");
@@ -589,7 +693,7 @@ describe("north-star scorecard: the measured state", () => {
 
   it("measures Strada.Core conformance in the game's own code", () => {
     const { home, project, upstream } = todayHome();
-    const r6 = rung(scoreNorthStar({ home, project, upstream }) as Card, 6);
+    const r6 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 6);
     expect(r6.checks).toEqual([
       { ok: true, text: "the game declares 1 ModuleConfig subclass" },
       { ok: false, text: "1 type name declared in two or more modules (OrchardService)" },
@@ -600,7 +704,7 @@ describe("north-star scorecard: the measured state", () => {
     ]);
     // A Core namespace named only in a comment or a string is no reference.
     expect(r6.measured).toMatchObject({ gameFiles: 7, filesWithoutCore: 1 });
-    const r7 = rung(scoreNorthStar({ home, project, upstream }) as Card, 7);
+    const r7 = rung(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, 7);
     expect(r7.checks.map((c) => c.text)).toEqual([
       "Strada.Modules is not installed in the project (no Packages folder or manifest entry)",
       "0 of 7 game files reference Strada.Modules",
@@ -609,9 +713,9 @@ describe("north-star scorecard: the measured state", () => {
 
   it("finds notes a run wrote into a framework copy, and only with upstream to compare", () => {
     const { home, project, upstream } = todayHome();
-    const withUpstream = criterion(scoreNorthStar({ home, project, upstream }) as Card, "K");
+    const withUpstream = criterion(scoreNorthStar({ home, project, upstream, brainRoot }) as Card, "K");
     expect(withUpstream.checks.at(-1)).toEqual({ ok: false, text: "1 indexed notes sit inside framework folders and are not in upstream" });
-    const without = criterion(scoreNorthStar({ home, project }) as Card, "K");
+    const without = criterion(scoreNorthStar({ home, project, brainRoot }) as Card, "K");
     expect(without.checks.at(-1)).toEqual({
       ok: null,
       text: "2 indexed notes inside framework folders cannot be told from upstream docs without --upstream",
@@ -623,7 +727,7 @@ describe("north-star scorecard: what it cannot read", () => {
   it("reports every rung as not measured, naming the missing source", () => {
     const home = join(work, "empty-home");
     mkdirSync(home);
-    const card = scoreNorthStar({ home }) as Card;
+    const card = scoreNorthStar({ home, brainRoot }) as Card;
     expect(card.score.rungs).toEqual({ pass: 0, fail: 0, notMeasured: 10 });
     const memory = join(home, ".strada-memory");
     expect(rung(card, 1).cause).toBe(`daemon log not found at ${join(home, "strada-brain.log")}`);

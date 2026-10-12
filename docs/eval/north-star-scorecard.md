@@ -19,7 +19,7 @@ node scripts/eval/north-star-scorecard.mjs --campaign <id> --upstream ~/Document
 | `--campaigns-db`, `--tasks-db`, `--learning-db <path>` | `<memory-dir>/<name>.db` |
 | `--vault <index.db>` (repeatable) | `<project>/.strada/vault/index.db` and framework vaults under `<project>/Packages` |
 | `--upstream <dir>` | none. This is the folder that holds the `Strada.Core`, `Strada.Modules` and `Strada.MCP` checkouts. Without it, the scorecard cannot tell upstream framework docs from notes that a run wrote into a vendored copy. |
-| `--log <path>` | `<home>/strada-brain.log` |
+| `--log <path>` | `<home>/strada-brain.log`; the archives the logger rotated it into beside it are read too |
 | `--brain-root <dir>` | this repository. Rung 1 compares the newest boot with this checkout's HEAD. |
 | `--campaign <id>` | all campaigns. With an id, the scorecard measures only that campaign, which is how a proof run is scored. |
 
@@ -41,7 +41,7 @@ A mechanism with no store at all is a **fail**, not `not measured`. Assumption r
 
 | # | Source | Passes when |
 |---|---|---|
-| 1 | daemon log, the newest `Loaded Strada.MCP tools` line | at least 1 Unity tool registered, the bridge connected, and the boot is not older than HEAD |
+| 1 | daemon log and its rotated archives (`strada-brain1.log.gz` … `strada-brain4.log.gz`), the newest `Bootstrapping Strada Brain` line and the Strada.MCP line that follows it | that boot registered at least 1 Unity tool, the bridge was connected, and the boot is not older than HEAD. A newer boot that logged `Failed to load…`, `Refused to load…` or no Strada.MCP line at all fails, whatever an older boot loaded. No boot marker in any file, or an unreadable archive that may hold the newest boot, is `not measured`. |
 | 2 | `campaigns.idea_text` | a campaign started from one sentence reached a plan |
 | 3 | `campaigns.requirements_json` | a ledger exists, and every in-scope row is owned by a milestone of the plan |
 | 4 | the ledger's `construct` field | every in-scope row names an owner and a framework construct |
