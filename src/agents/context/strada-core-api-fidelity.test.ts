@@ -67,6 +67,8 @@ interface CoreSurface {
   external: Set<string>;
   /** Namespaces Core's generators give game code: `Game.Modules`. */
   generatedNamespaces: Set<string>;
+  /** The folders of Core's module layout, relative to the module: `Scripts/Systems`. */
+  moduleFolders: Set<string>;
 }
 
 /**
@@ -159,6 +161,7 @@ function readCoreSurface(root: string): CoreSurface {
     attributeUses: new Set(),
     external: new Set(),
     generatedNamespaces: new Set(),
+    moduleFolders: new Set(),
   };
   const words = new Set<string>();
   const typeRe = new RegExp(
@@ -174,10 +177,12 @@ function readCoreSurface(root: string): CoreSurface {
 
   for (const file of files) {
     const source = readFileSync(join(root, file), "utf8");
-    // The module generator's default: `Namespace = "Game.Modules"`.
-    for (const m of stripCode(source, true).matchAll(/\b\w*[Nn]amespace\s*=\s*"([A-Za-z_][\w.]*)"/g)) {
-      surface.generatedNamespaces.add(m[1]!);
-    }
+    // The module generator's default, `Namespace = "Game.Modules"`, and its
+    // layout table, `new FolderEntry { Path = "Scripts/Systems", … }`. A
+    // migration's list of retired folders is not written that way.
+    const withStrings = stripCode(source, true);
+    for (const m of withStrings.matchAll(/\b\w*[Nn]amespace\s*=\s*"([A-Za-z_][\w.]*)"/g)) surface.generatedNamespaces.add(m[1]!);
+    for (const m of withStrings.matchAll(/\bnew\s+FolderEntry\s*\{\s*Path\s*=\s*"([^"]+)"/g)) surface.moduleFolders.add(m[1]!);
     const code = stripCode(source);
     for (const m of code.matchAll(/\b[A-Za-z_]\w*\b/g)) words.add(m[0]);
     for (const m of code.matchAll(/\bnamespace\s+([\w.]+)/g)) surface.namespaces.add(m[1]!);
@@ -260,6 +265,8 @@ interface Claim {
   text: string;
   /** Code (a backtick span, a STRADA_API value) or prose around it. */
   code: boolean;
+  /** A folder a directory tree puts inside a module, relative to it: `Scripts/Systems`. */
+  moduleFolder?: true;
 }
 
 /** Core types a passage names: the owners its unqualified calls must belong to. */
@@ -276,13 +283,18 @@ const isCodeShaped = (name: string): boolean => /^[A-Z][a-z0-9]+[A-Z]/u.test(nam
 
 /** A namespace and what goes under it: `Strada.Core.*`, `Game.Modules.<name>`. */
 const NAMESPACE_SPAN = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(?:\*|<\w+>)$/u;
-const atOrAbove = (names: Iterable<string>, name: string): boolean =>
-  [...names].some((n) => n === name || n.startsWith(`${name}.`));
+const atOrAbove = (names: Iterable<string>, name: string, separator = "."): boolean =>
+  [...names].some((n) => n === name || n.startsWith(`${name}${separator}`));
 
 function problemsIn(core: CoreSurface, claim: Claim, owners: readonly string[]): string[] {
   const problems: string[] = [];
   const say = (what: string) => problems.push(`${claim.where}: ${what}  ← ${JSON.stringify(claim.text.trim().slice(0, 140))}`);
   const ownedBy = (name: string) => owners.some((o) => hasMember(core, o, name));
+
+  if (claim.moduleFolder) {
+    if (!atOrAbove(core.moduleFolders, claim.text, "/")) say(`Strada.Core's module layout has no ${claim.text}/ folder`);
+    return problems;
+  }
 
   const namespace = claim.code ? NAMESPACE_SPAN.exec(claim.text.trim())?.[1] : undefined;
   if (namespace) {
@@ -347,6 +359,32 @@ function problemsIn(core: CoreSurface, claim: Claim, owners: readonly string[]):
 }
 
 /**
+ * A directory tree's folders inside a module (`Assets/Modules/<Module>/…`),
+ * relative to the module, and the notes in parentheses beside its entries.
+ */
+function treeClaims(where: string, tree: string): Claim[] {
+  const claims: Claim[] = [];
+  const open: string[] = [];
+  for (const line of tree.split("\n")) {
+    // "│   ├── Systems/      (SystemBase)": four columns per level, then the
+    // entry (several on a line are siblings), then a note.
+    const m = /^((?:[│ ] {3})*)([├└]── )?(.*?)\s*(?:\((.*)\))?\s*$/u.exec(line);
+    if (!m?.[3]) continue;
+    const depth = m[1]!.length / 4 + (m[2] ? 1 : 0);
+    for (const entry of m[3].split(/\s{2,}/u)) {
+      if (!entry.endsWith("/")) continue;
+      open[depth] = entry.slice(0, -1);
+      open.length = depth + 1;
+      if (open[0] === "Assets" && open[1] === "Modules" && open.length > 3) {
+        claims.push({ where, text: open.slice(3).join("/"), code: true, moduleFolder: true });
+      }
+    }
+    if (m[4]) claims.push({ where, text: m[4], code: false });
+  }
+  return claims;
+}
+
+/**
  * Split a prompt block into `##`/`###` sections, each with its code spans and,
  * where the block describes the API itself, its prose.
  */
@@ -357,7 +395,10 @@ function sectionClaims(source: string, block: string, prose: boolean): Array<{ c
     const claims: Claim[] = [];
     const spans: string[] = [];
     // A fenced block in these prompts is a directory tree, not code.
-    const body = section.replace(/```[\s\S]*?```/gu, " ");
+    const body = section.replace(/```[^\n]*\n([\s\S]*?)```/gu, (_m, tree: string) => {
+      claims.push(...treeClaims(where, tree));
+      return " ";
+    });
     const rest = body.replace(/`([^`]+)`/gu, (_m, span: string) => {
       // Paths and file globs (Assets/Modules/, *ModuleConfig, .asmdef) are not
       // APIs; a namespace with a wildcard (`Strada.Core.*`) is.
@@ -398,6 +439,8 @@ describe("Brain's Strada.Core knowledge names only APIs Strada.Core has", () => 
     // Tools/ holds benchmark fixtures named T0..T4 and adapters for other DI
     // containers; read as Core, they made type parameters and foreign APIs "exist".
     expect(core!.files.filter((f) => /^(?:Tests|Tools)\//u.test(f))).toEqual([]);
+    // The table the preamble's directory tree is held to.
+    expect(core!.moduleFolders.size, "Core declares no `new FolderEntry { Path = … }` module layout").toBeGreaterThan(0);
   });
 
   it.skipIf(!CORE_ROOT)(`the static framework block and the code conventions${SKIPPED}`, () => {
@@ -479,6 +522,15 @@ const SMALL_CORE = {
     "namespace Strada.Core.Communication { public sealed class EventBus { public void Publish<T>(T message) { } } }",
   "Editor/ModuleGenerator/ModuleDefinition.cs":
     'namespace Strada.Core.Editor.ModuleGenerator { public class ModuleDefinition { public string Namespace = "Game.Modules"; } }',
+  "Editor/ModuleGenerator/ModuleLayout.cs": [
+    "namespace Strada.Core.Editor.ModuleGenerator {",
+    "  public class FolderEntry { public string Path; }",
+    "  public static class ModuleLayout {",
+    '    public static FolderEntry[] DefaultEntries() => new[] { new FolderEntry { Path = "Scripts" }, new FolderEntry { Path = "Scripts/Systems" }, new FolderEntry { Path = "Tests/Runtime" } };',
+    "  }",
+    "}",
+  ].join("\n"),
+  "Runtime/ECS/Systems/SystemBase.cs": "namespace Strada.Core.ECS.Systems { public abstract class SystemBase { } }",
 };
 
 /** What the checks report for a prompt block read against `core`. */
@@ -510,6 +562,32 @@ describe("what the checks read in a prompt block", () => {
       expect(problemsOf(core, "- game code: `Game.Modules.<name>`")).toEqual([]);
       expect(problemsOf(core, "- game code: `Studio.Modules.<name>`")).toEqual([
         expect.stringContaining("namespace Studio.Modules is neither declared"),
+      ]);
+    });
+  });
+
+  it("holds a module tree's folders to Core's module layout and its notes to Core's types", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      const core = readCoreSurface(root);
+      const tree = (...module: string[]) =>
+        ["### Layout", "```", "Assets/", "└── Modules/", "    └── CombatModule/", ...module, "```"].join("\n");
+
+      expect(problemsOf(core, tree(
+        "        ├── Scripts/",
+        "        │   └── Systems/",
+        "        │       └── DamageSystem.cs        (SystemBase)",
+        "        └── Tests/                         (own assemblies)",
+        "            └── Runtime/",
+      ))).toEqual([]);
+      // The tree taught a Commands/ folder, which Core's layout has dropped,
+      // and a fenced block was skipped whole.
+      expect(problemsOf(core, tree(
+        "        └── Scripts/",
+        "            ├── Commands/",
+        "            └── Systems/                   (SystemTicker)",
+      ))).toEqual([
+        expect.stringContaining("module layout has no Scripts/Commands/ folder"),
+        expect.stringContaining("SystemTicker is not a Strada.Core type"),
       ]);
     });
   });
