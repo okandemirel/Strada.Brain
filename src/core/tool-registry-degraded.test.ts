@@ -128,10 +128,35 @@ describe("the notice a broken toolchain produces", () => {
     }
     const { ToolRegistry: Fresh } = await import("./tool-registry.js");
     const notices: string[] = [];
-    await new Fresh().initialize(configWithBrokenMcp(), { onDegraded: (n: string) => notices.push(n) });
+    const registry = new Fresh();
+    await registry.initialize(configWithBrokenMcp(), { onDegraded: (n: string) => notices.push(n) });
 
     expect(notices[0]).toContain("was not loaded");
     expect(notices[0]).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
     expect(notices[0]).not.toContain("npm install");
+    // WP-0.1: kept for the boot report, which otherwise read "not installed".
+    expect(registry.getStradaMcpLoadFailure()).toEqual({
+      refused: true,
+      detail: expect.stringContaining("STRADA_MCP_ALLOW_PROJECT_LOCAL=true"),
+    });
+  });
+
+  it("keeps a load that threw, as not refused, for the boot report", async () => {
+    vi.resetModules();
+    vi.doMock("./strada-mcp-tool-loader.js", () => ({
+      loadInstalledStradaMcpRuntime: () => Promise.reject(new Error("Cannot find package 'zod'")),
+      registerStradaMcpTools: () => ({ registered: 0, skipped: 0, shadowed: [] }),
+    }));
+    const freshLogger = await import("../utils/logger.js");
+    try {
+      freshLogger.createLogger("error", "/tmp/strada-tool-registry-degraded.log");
+    } catch {
+      // Already initialized in this graph.
+    }
+    const { ToolRegistry: Fresh } = await import("./tool-registry.js");
+    const registry = new Fresh();
+    await registry.initialize(configWithBrokenMcp(), {});
+
+    expect(registry.getStradaMcpLoadFailure()).toEqual({ refused: false, detail: "Cannot find package 'zod'" });
   });
 });

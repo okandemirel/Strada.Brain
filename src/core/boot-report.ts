@@ -10,6 +10,7 @@ import type {
   CapabilityTruth,
 } from "../common/capability-contract.js";
 import type { Config } from "../config/config.js";
+import { describeFrameworkCheckout, type StradaDepsStatus } from "../config/strada-deps.js";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
 
 interface EmbeddingStatusLike {
@@ -38,6 +39,8 @@ interface StradaMcpRuntimeStatusLike {
   editorDiscoveryCount?: number;
   bridgeUnavailableReason?: string;
   lastError?: string;
+  installSource?: string | null;
+  refusedCopy?: { path: string; reason: string } | null;
 }
 
 export interface CapabilitySnapshotOptions {
@@ -52,6 +55,15 @@ export interface CapabilitySnapshotOptions {
   alertingWired?: boolean;
   backupWired?: boolean;
   stradaMcpRuntime?: StradaMcpRuntimeStatusLike;
+  /**
+   * Why no Strada.MCP runtime exists although one was found: the trust gate
+   * refused it, or loading it threw. Without this a refusal read "Install
+   * Strada.MCP" — the fix for a different problem.
+   */
+  stradaMcpLoadFailure?: { refused: boolean; detail: string } | null;
+  /** The boot's dependency scan; undefined when the caller did not scan. */
+  stradaDeps?: Pick<StradaDepsStatus, "modulesInstalled" | "modulesPath"> &
+    Partial<Pick<StradaDepsStatus, "modulesVersion" | "modulesIncomplete" | "modulesUnreferenced" | "modulesCheckout">>;
   primaryProviderSupportsStreaming?: boolean;
   /**
    * Whether a SupervisorBrain was actually constructed.
@@ -138,6 +150,36 @@ function hasRequiredPentestScripts(installRoot: string): boolean {
   return REQUIRED_PENTEST_SCRIPTS.every((path) => existsSync(join(installRoot, path)));
 }
 
+/**
+ * Strada.Modules, said one of four ways: installed in the project, present but
+ * not loaded by Unity, available beside the install, or nowhere. It had no
+ * line, so a checkout one directory away was invisible in the report.
+ */
+function buildModulesCapability(deps: CapabilitySnapshotOptions["stradaDeps"]): CapabilityDescriptor {
+  const make = (status: CapabilityStatus, truth: CapabilityTruth, detail: string) =>
+    createCapability("strada-modules", "Strada.Modules", "Unity", "beta", status, truth, detail, false);
+  if (!deps) return make("inactive", "declared-only", "Strada.Modules was not looked for: this caller ran no dependency scan.");
+  if (deps.modulesInstalled) {
+    return make(
+      "active",
+      "wired",
+      `Strada.Modules is installed in the project${deps.modulesPath ? ` at ${deps.modulesPath}` : ""}${deps.modulesVersion ? ` (v${deps.modulesVersion})` : ""}.`,
+    );
+  }
+  const notLoaded = deps.modulesIncomplete ?? deps.modulesUnreferenced ?? null;
+  const parts = [
+    notLoaded ? `Strada.Modules is not installed: ${notLoaded}.` : "",
+    deps.modulesCheckout ? `${describeFrameworkCheckout("modules", deps.modulesCheckout)}.` : "",
+  ].filter(Boolean);
+  return make(
+    "inactive",
+    "wired",
+    parts.length > 0
+      ? parts.join(" ")
+      : "Strada.Modules is not installed in the project, and no checkout was found (STRADA_MODULES_PATH, or ../Strada.Modules beside this install).",
+  );
+}
+
 export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): CapabilityDescriptor[] {
   const installRoot = options.installRoot ?? resolveRuntimePaths({ moduleUrl: import.meta.url }).installRoot;
   const nodemailerInstalled = hasPackageDependency(installRoot, "nodemailer");
@@ -184,8 +226,16 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
     : stradaMcpInstalled
       ? "wired"
       : "declared-only";
+  const mcpLoadFailure = stradaMcpInstalled ? null : options.stradaMcpLoadFailure ?? null;
+  const mcpAbsence = mcpLoadFailure
+    ? `Strada.MCP ${mcpLoadFailure.refused ? "was refused at load" : "failed to load"} (see Strada.MCP Runtime)`
+    : null;
+  const unlockText = (what: string): string =>
+    mcpAbsence ? `${mcpAbsence}; it is what unlocks ${what}.` : `Install Strada.MCP to unlock ${what}.`;
   const unityBridgeDetail = !stradaMcpInstalled
-    ? "Strada.MCP is not installed, so live Unity bridge features are unavailable."
+    ? mcpAbsence
+      ? `${mcpAbsence}, so live Unity bridge features are unavailable.`
+      : "Strada.MCP is not installed, so live Unity bridge features are unavailable."
     : stradaMcpRuntime?.bridgeConnected
       ? `Unity bridge is connected (${stradaMcpRuntime.bridgeState})${stradaMcpRuntime.activeEditorProjectName ? ` to ${stradaMcpRuntime.activeEditorProjectName}` : ""}${stradaMcpRuntime.activeEditorPort ? ` on port ${stradaMcpRuntime.activeEditorPort}` : ""}${stradaMcpRuntime.editorSelectionSource ? ` via ${stradaMcpRuntime.editorSelectionSource}` : ""}.`
       : stradaMcpRuntime?.bridgeUnavailableReason
@@ -207,13 +257,21 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       "Strada.MCP Runtime",
       "Unity",
       "beta",
-      stradaMcpInstalled ? "active" : "inactive",
-      stradaMcpInstalled ? "wired" : "declared-only",
+      stradaMcpInstalled ? "active" : mcpLoadFailure ? "degraded" : "inactive",
+      stradaMcpInstalled || mcpLoadFailure ? "wired" : "declared-only",
       stradaMcpInstalled
-        ? `Strada.MCP is installed with ${stradaMcpRuntime?.toolCount ?? 0} tools, ${stradaMcpRuntime?.resourceCount ?? 0} resources, and ${stradaMcpRuntime?.promptCount ?? 0} prompts${typeof stradaMcpRuntime?.editorDiscoveryCount === "number" ? ` across ${stradaMcpRuntime.editorDiscoveryCount} discovered Unity editor instance(s)` : ""}.`
-        : "Install Strada.MCP to expose the Unity runtime surface inside Brain.",
+        ? `Strada.MCP is installed with ${stradaMcpRuntime?.toolCount ?? 0} tools, ${stradaMcpRuntime?.resourceCount ?? 0} resources, and ${stradaMcpRuntime?.promptCount ?? 0} prompts${typeof stradaMcpRuntime?.editorDiscoveryCount === "number" ? ` across ${stradaMcpRuntime.editorDiscoveryCount} discovered Unity editor instance(s)` : ""}.` +
+          (stradaMcpRuntime?.refusedCopy
+            ? ` Loaded from ${stradaMcpRuntime.sourcePath} (${stradaMcpRuntime.installSource ?? "unrecorded source"}); the copy inside the project at ${stradaMcpRuntime.refusedCopy.path} was refused: ${stradaMcpRuntime.refusedCopy.reason}`
+            : "")
+        : mcpLoadFailure?.refused
+          ? `Strada.MCP was found but REFUSED, not missing: ${mcpLoadFailure.detail} None of its Unity tools are registered.`
+          : mcpLoadFailure
+            ? `Strada.MCP was found but failed to load: ${mcpLoadFailure.detail}. None of its Unity tools are registered.`
+            : "Install Strada.MCP to expose the Unity runtime surface inside Brain.",
       true,
     ),
+    buildModulesCapability(options.stradaDeps),
     createCapability(
       "unity-bridge",
       "Unity Bridge",
@@ -235,7 +293,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Live Unity console reads and error analysis are available."
             : "Live bridge console access is unavailable until the bridge connects; static console snapshot and analysis can still fall back to local project diagnostics.")
-        : "Install Strada.MCP to unlock live Unity console reads and analysis.",
+        : unlockText("live Unity console reads and analysis"),
       true,
     ),
     createCapability(
@@ -249,7 +307,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Multi-platform Unity build execution is available through the live bridge."
             : "Unity build pipeline tools are installed but unavailable until the live bridge connects.")
-        : "Install Strada.MCP to unlock Unity build execution.",
+        : unlockText("Unity build execution"),
       false,
     ),
     createCapability(
@@ -263,7 +321,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Unity Package Manager operations are available through the live bridge."
             : "Unity Package Manager tools are installed but unavailable until the live bridge connects.")
-        : "Install Strada.MCP to unlock Unity package management.",
+        : unlockText("Unity package management"),
       false,
     ),
     createCapability(
@@ -277,7 +335,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Typed Unity project and player/build/quality settings access is available."
             : "File-based project settings reads remain available; typed player, build, and quality settings tools require a live bridge.")
-        : "Install Strada.MCP to unlock live Unity settings control.",
+        : unlockText("live Unity settings control"),
       false,
     ),
     createCapability(
@@ -291,7 +349,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Unity EditorPrefs/Preferences access is available."
             : "Unity editor preference tools are installed but unavailable until the live bridge connects.")
-        : "Install Strada.MCP to unlock Unity editor preferences control.",
+        : unlockText("Unity editor preferences control"),
       false,
     ),
     createCapability(

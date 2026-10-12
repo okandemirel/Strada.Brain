@@ -589,3 +589,104 @@ describe("multi-agent and delegation report what a boot built, not what config a
     expect(unmeasured.find((c) => c.id === "delegation")?.detail).toBe("Delegation is enabled in current config.");
   });
 });
+
+/**
+ * WP-0.1: a refused Strada.MCP read "Install Strada.MCP" — the report said
+ * "not installed" for a copy that was on disk and turned away by the trust
+ * gate, which sends an operator to the wrong fix. And Strada.Modules had no
+ * line at all, so "available beside the install, not installed" was nowhere.
+ */
+describe("the Strada.MCP and Strada.Modules lines name what happened (WP-0.1)", () => {
+  type SnapshotOptions = Parameters<typeof buildCapabilitySnapshot>[0];
+  const snapshot = (extra: Partial<SnapshotOptions>) =>
+    buildCapabilitySnapshot({ config: makeConfig(), installRoot: process.cwd(), channelType: "web", ...extra });
+  const mcpLine = (extra: Partial<SnapshotOptions>) => snapshot(extra).find((c) => c.id === "strada-mcp-runtime")!;
+  const modulesLine = (extra: Partial<SnapshotOptions>) => snapshot(extra).find((c) => c.id === "strada-modules");
+
+  const refusal =
+    "Strada.MCP at /games/test/Packages/Submodules/Strada.MCP is inside the Unity project, which the agent can modify, so it was not loaded into the Brain process. Set STRADA_MCP_ALLOW_PROJECT_LOCAL=true to trust this copy.";
+
+  it("says REFUSED, with the reason and the opt-in, for a copy the trust gate turned away", () => {
+    const line = mcpLine({ stradaMcpLoadFailure: { refused: true, detail: refusal } });
+
+    expect(line.status).toBe("degraded");
+    expect(line.detail).toMatch(/refused/i);
+    expect(line.detail).toContain("STRADA_MCP_ALLOW_PROJECT_LOCAL=true");
+    expect(line.detail).not.toContain("Install Strada.MCP");
+    // The surfaces that depend on it say why they are off, not "install it".
+    const bridge = snapshot({ stradaMcpLoadFailure: { refused: true, detail: refusal } }).find((c) => c.id === "unity-bridge")!;
+    expect(bridge.detail).toMatch(/refused/i);
+    expect(bridge.detail).not.toContain("not installed");
+  });
+
+  it("says it failed to load, not that it is missing, for a copy that threw", () => {
+    const line = mcpLine({ stradaMcpLoadFailure: { refused: false, detail: "Cannot find package 'zod'" } });
+
+    expect(line.status).toBe("degraded");
+    expect(line.detail).toContain("failed to load");
+    expect(line.detail).toContain("Cannot find package 'zod'");
+  });
+
+  it("says not installed only when nothing was found (guard)", () => {
+    const line = mcpLine({});
+
+    expect(line.status).toBe("inactive");
+    expect(line.detail).toContain("Install Strada.MCP");
+  });
+
+  it("names the copy it loaded and the copy it refused when it fell back", () => {
+    const line = mcpLine({
+      stradaMcpRuntime: {
+        installed: true,
+        sourcePath: "/work/Strada.MCP",
+        version: "1.0.0",
+        toolCount: 111,
+        resourceCount: 3,
+        promptCount: 2,
+        bridgeConfigured: true,
+        bridgeConnected: false,
+        bridgeState: "disconnected",
+        availableToolCount: 40,
+        unavailableToolCount: 71,
+        installSource: "sibling-checkout",
+        refusedCopy: { path: "/games/test/Packages/Submodules/Strada.MCP", reason: refusal },
+      },
+    });
+
+    expect(line.status).toBe("active");
+    expect(line.detail).toContain("111 tools");
+    expect(line.detail).toContain("/work/Strada.MCP (sibling-checkout)");
+    expect(line.detail).toContain("/games/test/Packages/Submodules/Strada.MCP was refused");
+  });
+
+  it("reports Strada.Modules as available beside the install, not installed in the project", () => {
+    const line = modulesLine({
+      stradaDeps: {
+        modulesInstalled: false,
+        modulesPath: null,
+        modulesCheckout: { path: "/work/Strada.Modules", source: "sibling-checkout", version: "1.0.0", commit: "abc1234" },
+      },
+    });
+
+    expect(line).toBeDefined();
+    expect(line!.status).toBe("inactive");
+    expect(line!.detail).toContain("available (sibling abc1234), not installed in the project");
+    expect(line!.detail).toContain("/work/Strada.Modules");
+  });
+
+  it("reports Strada.Modules installed, absent, or not looked for — three different lines", () => {
+    const installed = modulesLine({
+      stradaDeps: { modulesInstalled: true, modulesPath: "/games/test/Packages/Submodules/Strada.Modules", modulesVersion: "1.0.0" },
+    })!;
+    expect(installed).toMatchObject({ status: "active", truth: "wired" });
+    expect(installed.detail).toContain("installed in the project");
+
+    const absent = modulesLine({ stradaDeps: { modulesInstalled: false, modulesPath: null } })!;
+    expect(absent.status).toBe("inactive");
+    expect(absent.detail).toContain("no checkout");
+
+    const unmeasured = modulesLine({})!;
+    expect(unmeasured.truth).toBe("declared-only");
+    expect(unmeasured.detail).toContain("not looked for");
+  });
+});

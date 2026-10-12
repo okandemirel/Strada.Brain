@@ -161,6 +161,8 @@ export class ToolRegistry {
   private readonly categories = new Map<ToolCategory, Set<string>>();
   private readonly pluginLoader?: PluginLoader;
   private stradaMcpRuntime: import("./strada-mcp-tool-loader.js").StradaMcpRuntime | null = null;
+  /** Why Strada.MCP did not load this boot, for the boot report; null when it loaded or was absent. */
+  private stradaMcpLoadFailure: { refused: boolean; detail: string } | null = null;
   private initialized = false;
   /**
    * READ_ONLY_MODE, fixed by initialize(). While set, a tool whose metadata
@@ -252,6 +254,7 @@ export class ToolRegistry {
       // A refused location is an operator decision to make, not a broken
       // install: say which, so the fix offered is the right one.
       const untrusted = error instanceof Error && error.name === "StradaMcpUntrustedError";
+      this.stradaMcpLoadFailure = { refused: untrusted, detail };
       logger.error(
         untrusted ? "Refused to load Strada.MCP from inside the Unity project" : "Failed to load Strada.MCP tools",
         { error: detail },
@@ -481,6 +484,10 @@ export class ToolRegistry {
 
   getStradaMcpRuntimeStatus(): import("./strada-mcp-tool-loader.js").StradaMcpRuntimeStatus | null {
     return this.stradaMcpRuntime?.getStatus() ?? null;
+  }
+
+  getStradaMcpLoadFailure(): { refused: boolean; detail: string } | null {
+    return this.stradaMcpLoadFailure;
   }
 
   /** On-demand Unity bridge reconnect; resolves to the resulting connected state. */

@@ -286,6 +286,49 @@ describe("buildDepsContext", () => {
     expect(result).toContain("strada.mcp: NOT INSTALLED");
     expect(result).not.toContain("first-class part of the Strada toolchain");
   });
+
+  /**
+   * WP-1.2: every worker prompt said "Strada.Modules is not available. Do not
+   * reference Strada.Modules APIs" while a checkout of it sat beside the
+   * install and the same prompt listed its classes from a cached clone. A
+   * worker told never to use a ready module hand-rolls its own.
+   */
+  describe("Strada.Modules that is not installed in the project", () => {
+    const checkout = {
+      path: "/work/Strada.Modules",
+      source: "sibling-checkout" as const,
+      version: "1.0.0",
+      commit: "abc1234",
+    };
+
+    it("says it is available, where, and how it would be installed — not that it does not exist", () => {
+      const result = buildDepsContext(makeDepsStatus({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout }));
+
+      expect(result).not.toContain("Strada.Modules is not available");
+      expect(result).not.toContain("Do not reference Strada.Modules APIs");
+      expect(result).toContain("available (sibling abc1234), not installed in the project");
+      expect(result).toContain("/work/Strada.Modules");
+      expect(result).toContain("Packages/Submodules/Strada.Modules");
+      expect(result).toContain('"com.strada.modules": "file:Submodules/Strada.Modules"');
+      // Not installed still means the project cannot compile against it yet.
+      expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
+    });
+
+    it("with no checkout either, still says how it would be installed instead of forbidding it", () => {
+      const result = buildDepsContext(makeDepsStatus({ modulesInstalled: false, modulesPath: null }));
+
+      expect(result).not.toContain("Do not reference Strada.Modules APIs");
+      expect(result).toContain("Packages/Submodules/Strada.Modules");
+      expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
+    });
+
+    it("says nothing of the kind when it is installed (guard)", () => {
+      const result = buildDepsContext(makeDepsStatus());
+
+      expect(result).toContain("strada.modules: INSTALLED (/packages/strada.modules)");
+      expect(result).not.toMatch(/until it is installed/);
+    });
+  });
 });
 
 

@@ -452,7 +452,7 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
-import type { StradaDepsStatus } from "../../config/strada-deps.js";
+import { describeFrameworkCheckout, describeFrameworkInstall, type StradaDepsStatus } from "../../config/strada-deps.js";
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { createProjectScopeFingerprint } from "../../learning/project-scope.js";
@@ -840,7 +840,15 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
     lines.push("\nWARNING: Strada.Core is not installed. Limited assistance available.");
   }
   if (!status.modulesInstalled) {
-    lines.push("\nNote: Strada.Modules is not available. Do not reference Strada.Modules APIs.");
+    // Not "not available, do not reference": that ban stood beside a
+    // checkout of it and its own class list from a cached clone, and workers
+    // hand-rolled what a ready module already does.
+    lines.push(
+      status.modulesCheckout
+        ? `\nNote: ${describeFrameworkCheckout("modules", status.modulesCheckout)}. Its source there may be read for reference.`
+        : "\nNote: Strada.Modules is not installed in this project.",
+      `Project code cannot call its APIs until it is installed. To use one of its modules, it would be ${describeFrameworkInstall("modules")}.`,
+    );
   }
   lines.push("\n## Framework Source Authority");
   if (status.coreInstalled && status.corePath) {

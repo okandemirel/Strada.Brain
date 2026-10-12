@@ -239,6 +239,15 @@ export function describeFrameworkCheckout(
   return `${spec.label}: available (${origin}${commit}), not installed in the project — checkout at ${checkout.path}`;
 }
 
+/** How the package would be installed into a project, the way installStradaDep does it. */
+export function describeFrameworkInstall(kind: keyof typeof FRAMEWORK_CHECKOUTS): string {
+  const { name, reference } = DEP_MANIFEST_ENTRIES[kind];
+  return (
+    `installed under ${TARGET_PATHS[kind]} (a git submodule) with "${name}": "${reference}" in Packages/manifest.json; ` +
+    "its package.json lists the packages it needs in turn"
+  );
+}
+
 export interface StradaMcpLoadTrust {
   readonly trusted: boolean;
   /** Why it was refused and how the operator opts in; set when not trusted. */
@@ -1176,15 +1185,14 @@ function evaluatePackageRow(
       found.unreferenced ? `${spec.label} is not installed: ${found.unreferenced}.` : "",
       found.kind && found.checkout ? `${describeFrameworkCheckout(found.kind, found.checkout)}.` : "",
     ].filter(Boolean);
-    const manifest = found.kind ? DEP_MANIFEST_ENTRIES[found.kind] : null;
     return {
       id: spec.id,
       label: spec.label,
       requirement: spec.requirement,
       status: "missing",
       detail: `${parts.join(" ")} Without it, ${spec.withoutIt}.`,
-      fix: manifest
-        ? `Install it under ${TARGET_PATHS[found.kind!]} (git submodule) and add "${manifest.name}": "${manifest.reference}" to Packages/manifest.json; its package.json lists the packages it needs in turn.`
+      fix: found.kind
+        ? `It is ${describeFrameworkInstall(found.kind)}.`
         : `Add ${spec.label} to the Unity project (git submodule under Packages/Submodules + a Packages/manifest.json dependency).`,
     };
   }

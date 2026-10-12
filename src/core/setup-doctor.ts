@@ -404,6 +404,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
             : "Strada.MCP is not installed.",
         };
       })(),
+      stradaDeps,
       config: configResult.value,
       installRoot,
       channelType: "doctor",

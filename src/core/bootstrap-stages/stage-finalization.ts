@@ -279,6 +279,10 @@ export async function finalizeChannelStartupStage(params: {
   alertingWired: boolean;
   backupWired: boolean;
   stradaMcpRuntime?: ReturnType<ToolRegistry["getStradaMcpRuntimeStatus"]>;
+  /** Why Strada.MCP did not load (refused by the trust gate, or threw). */
+  stradaMcpLoadFailure?: ReturnType<ToolRegistry["getStradaMcpLoadFailure"]>;
+  /** The boot's dependency scan, for the Strada.Modules line. */
+  stradaDeps?: StradaDepsStatus;
   primaryProviderSupportsStreaming?: boolean;
   /** Whether a SupervisorBrain was actually constructed this boot. */
   supervisorWired?: boolean;
@@ -338,6 +342,8 @@ export async function finalizeChannelStartupStage(params: {
     alertingWired: params.alertingWired,
     backupWired: params.backupWired,
     stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
+    stradaMcpLoadFailure: params.stradaMcpLoadFailure ?? null,
+    ...(params.stradaDeps ? { stradaDeps: params.stradaDeps } : {}),
     primaryProviderSupportsStreaming: params.primaryProviderSupportsStreaming,
     supervisorWired: params.supervisorWired,
     multiAgentWired: params.multiAgentWired,

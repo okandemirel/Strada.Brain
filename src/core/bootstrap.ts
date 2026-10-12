@@ -2404,6 +2404,10 @@ async function bootstrapImpl(
     alertingWired: false,
     backupWired: false,
     stradaMcpRuntime: toolRegistry.getStradaMcpRuntimeStatus(),
+    // A refused or broken Strada.MCP and the Strada.Modules state are named
+    // in the report, not folded into "not installed" (WP-0.1).
+    stradaMcpLoadFailure: toolRegistry.getStradaMcpLoadFailure(),
+    stradaDeps,
     primaryProviderSupportsStreaming: primaryProviderStreaming,
     supervisorWired: Boolean(supervisorBrain),
     multiAgentWired: Boolean(agentManager),

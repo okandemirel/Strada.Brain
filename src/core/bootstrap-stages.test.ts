@@ -354,6 +354,62 @@ describe("bootstrap-stages", () => {
     );
   });
 
+  // WP-0.1 construction site: the boot report can only name a refused
+  // Strada.MCP and the Strada.Modules state if the boot hands both over.
+  it("puts a refused Strada.MCP and the Strada.Modules state into the boot report", async () => {
+    const logger = createMockLogger();
+    const channel = { connect: vi.fn(async () => {}), isHealthy: vi.fn(() => true) } as any;
+
+    const bootReport = await finalizeChannelStartupStage({
+      channel,
+      logger,
+      config: makeConfig(),
+      channelType: "web",
+      daemonMode: false,
+      providerHealthy: true,
+      embeddingStatus: { state: "active", ragEnabled: true, configuredProvider: "auto", verified: true, usingHashFallback: false },
+      deploymentWired: false,
+      alertingWired: false,
+      backupWired: false,
+      multiAgentWired: false,
+      delegationWired: false,
+      stradaMcpLoadFailure: { refused: true, detail: "inside the Unity project; set STRADA_MCP_ALLOW_PROJECT_LOCAL=true" },
+      stradaDeps: {
+        coreInstalled: true,
+        corePath: "/games/test/Packages/Submodules/Strada.Core",
+        modulesInstalled: false,
+        modulesPath: null,
+        modulesCheckout: { path: "/work/Strada.Modules", source: "sibling-checkout", version: "1.0.0", commit: "abc1234" },
+        mcpInstalled: true,
+        mcpPath: "/games/test/Packages/Submodules/Strada.MCP",
+        mcpVersion: "1.0.0",
+        warnings: [],
+      },
+      startupNotices: [],
+      moduleUrl: import.meta.url,
+    });
+
+    const mcp = bootReport.capabilities.find((c) => c.id === "strada-mcp-runtime");
+    expect(mcp?.status).toBe("degraded");
+    expect(mcp?.detail).toMatch(/refused/i);
+    expect(bootReport.capabilities.find((c) => c.id === "strada-modules")?.detail).toContain(
+      "available (sibling abc1234), not installed in the project",
+    );
+  });
+
+  it("is handed the Strada.MCP load failure and the dependency scan by bootstrap", async () => {
+    // Slice the call, not the file: a mention elsewhere would pass while the
+    // boot report never received either.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(join(import.meta.dirname, "bootstrap.ts"), "utf8");
+    const at = source.indexOf("await finalizeChannelStartupStage({");
+    const call = source.slice(at, source.indexOf("});", at));
+
+    expect(at, "bootstrap never finalizes the boot report").toBeGreaterThan(-1);
+    expect(call).toContain("stradaMcpLoadFailure: toolRegistry.getStradaMcpLoadFailure()");
+    expect(call).toMatch(/\bstradaDeps[,:]/);
+  });
+
   it("says multi-agent was skipped when the daemon-off boot never built it", async () => {
     // Multi-agent is constructed only in daemon mode; the boot said nothing
     // and the report called it active while chats ran single-agent.
