@@ -11,6 +11,7 @@ import {
   adoptInFlightIdentities,
   buildLedger,
   completeLedgerByModel,
+  describeAmendment,
   modelPassOwed,
   reownLedger,
   rereadLedger,
@@ -76,6 +77,28 @@ describe("rereadLedger", () => {
     expect(result.ledger.rows.some((r) => r.label === "TK-3")).toBe(false);
     expect(result.cosmetic).toBe(1);
     expect(result.reopened.map((r) => r.label)).toEqual(["TK-2"]);
+  });
+
+  it("does not count a changed row the plan still excludes as reopened: it stays out of judgement", () => {
+    const excluded = { ...options, excluded: ["Rules: after launch"] };
+    const ledger = buildLedger(gddOf(DOC, 1), LADDER, excluded)!.ledger;
+    expect(byLabel(ledger.rows, "TK-2").status).toBe("excluded");
+    const amended = DOC.replace("TK-2: A full lamp must burn for 90 seconds.", "TK-2: A full lamp must burn for 120 seconds.").replace(
+      "The fog horn must sound when a ship is within 2 tiles.",
+      "The fog horn must sound when a ship is within 4 tiles.",
+    );
+
+    const result = rereadLedger(ledger, amended, { gddSha256: "d".repeat(64), gddRevision: 2 }, LADDER, { ...excluded, atMs: 2_000 });
+
+    const tk2 = byLabel(result.ledger.rows, "TK-2");
+    expect(tk2.text).toBe("TK-2: A full lamp must burn for 120 seconds.");
+    expect(tk2.status).toBe("excluded");
+    expect(result.reopened.map((r) => r.rid)).not.toContain(tk2.rid);
+    expect(describeAmendment(result)).not.toContain("TK-2");
+    // A changed row the plan does own is reopened, and reported as it now stands.
+    const horn = result.ledger.rows.find((r) => r.text.startsWith("The fog horn"))!;
+    expect(result.reopened).toEqual([horn]);
+    expect(horn).toMatchObject({ status: "open", owner: "m2" });
   });
 
   it("keeps a model-added row whose quote is still in the document, bound to the new revision, and owes the model pass again", async () => {

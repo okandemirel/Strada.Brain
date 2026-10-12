@@ -278,13 +278,16 @@ export function rereadLedger(
     else kept.push(rebound(old, gddText, at, gdd));
   }
 
+  const owned = ownRows([...rows, ...kept], milestones, options);
+  // Reopened as the ownership pass left them: a changed row the plan still excludes stays out of judgement, not open again.
+  const changedAsk = new Set(reopened.map((r) => r.rid));
   return {
     ledger: {
       version: 1,
       gddSha256: gdd.gddSha256,
       gddRevision: gdd.gddRevision,
       extractedAtMs: options.atMs,
-      rows: ownRows([...rows, ...kept], milestones, options),
+      rows: owned,
       overflow: extracted.overflow,
       numberingGaps: extracted.numberingGaps,
       llmAdded: kept.filter((r) => r.source === "llm-added").length,
@@ -292,7 +295,7 @@ export function rereadLedger(
     },
     unchanged,
     cosmetic,
-    reopened,
+    reopened: owned.filter((r) => changedAsk.has(r.rid) && r.status !== "excluded"),
     waiversDropped,
     added,
     retired,
